@@ -4,6 +4,8 @@ Every MCS component answers through this listener; view/modal objects
 carry no business logic (plan §5). Custom-ID namespaces:
 
 - ``mcs:a:<token32>``  card action button (toggle/view/nav/modal-open)
+- ``mcs:menu``         card 他の操作 select — the chosen value is the
+  token, dispatched exactly like an ``mcs:a:<token>`` click
 - ``mcs:m:<modal_id>`` modal submission (opaque id -> pending_modals)
 - ``mcs:c:<confirm_id>[:cancel]`` preview confirmation
 
@@ -21,7 +23,7 @@ from typing import Any
 
 from hermes_plugin import projects
 from adapters.common import envelopes, paths, registry, text
-from .cards import no_pings
+from .cards import MENU_ID, no_pings
 
 ACTION_PREFIX = "mcs:a:"
 MODAL_PREFIX = "mcs:m:"
@@ -142,6 +144,7 @@ class Actions:
                  reg: registry.Registry, log) -> None:
         self._bot = bot
         self._settings = settings
+        self._root = root
         self._dirs = paths.notify_dirs(root)
         self._reg = reg
         self._log = log
@@ -178,6 +181,16 @@ class Actions:
         allowed = {str(r) for r in self._settings.get("allowed_role_ids")
                    or ()}
         return allowed & {str(r) for r in role_ids or ()}
+
+    async def _interactive(self) -> bool:
+        """The runner flags still route interactive cards to Discord
+        (as Slack ``_interactive`` and LINE WORKS ``_allowed``)."""
+        flags = await asyncio.to_thread(paths.read_flags, self._root)
+        epoch = self._settings.get("route_epoch")
+        return (flags.get("interactive") is True
+                and flags.get("transport", "discord") == "discord"
+                and not flags.get("restore_pending")
+                and (epoch is None or flags.get("route_epoch") == epoch))
 
     def _deny_reason(self, interaction, denial: str) -> None:
         """The user only sees 「権限がありません。」— the reason stays
@@ -239,6 +252,11 @@ class Actions:
             if custom_id.startswith(ACTION_PREFIX):
                 await self._on_action(interaction,
                                       custom_id[len(ACTION_PREFIX):])
+            elif custom_id == MENU_ID:
+                values = data.get("values")
+                if isinstance(values, list) and len(values) == 1 \
+                        and isinstance(values[0], str):
+                    await self._on_action(interaction, values[0])
             elif custom_id.startswith(MODAL_PREFIX):
                 await self._on_modal(interaction,
                                      custom_id[len(MODAL_PREFIX):])
@@ -594,7 +612,10 @@ class Actions:
                 interaction,
                 "確認を開始した場所と送信元が一致しません。")
             return
-        # decided before the first await: a racing cancel sees in_flight
+        if suffix != "cancel" and scope_denial is None \
+                and not await self._interactive():
+            scope_denial = "interactive_off"
+        # decided before the publish await: a racing cancel sees in_flight
         taken = self._reg.take_confirm(confirm_id, suffix == "cancel",
                                        allowed=scope_denial is None)
         if taken == "gone":           # expired since the lookup above
@@ -653,6 +674,8 @@ class Actions:
         result = await self._wait_result(cid, HUMAN_WAIT_S)
         if result is None:
             return                        # supervisor sweeps followups
+        if self._reg.followup(cid) is None:
+            return                        # the sweep already delivered it
         self._reg.drop_followup(cid)
         self._result_log(interaction, payload.get("cmd"), result)
         await self._followup(interaction, text.ja(result))
@@ -693,6 +716,8 @@ class Actions:
             if result is None or (rec.get("request_id") is not None
                                   and result.get("request_id") != rec["request_id"]):
                 continue
+            if self._reg.followup(cid) is None:
+                continue                 # the inline wait delivered it
             self._reg.drop_followup(cid)
             try:
                 hook = discord.Webhook.partial(
@@ -714,8 +739,11 @@ class Actions:
                 # and 📋 transition tokens must land before their buttons
                 await self._register_tokens(result)
                 for msg, tasks in answer:
+                    # an all-done list has no buttons: _task_view → None,
+                    # and an explicit view=None is a TypeError
+                    view = _task_view(tasks) if tasks else None
                     await send(msg, ephemeral=True, **(
-                        {"view": _task_view(tasks)} if tasks else {}))
+                        {"view": view} if view is not None else {}))
             except Exception as e:
                 self._log("followup_failed", error=type(e).__name__)
 

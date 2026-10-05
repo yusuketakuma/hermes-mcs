@@ -878,7 +878,8 @@ def test_slack_update_rewrites_the_earlier_reply_of_a_changed_chunk(led):
     assert out == {"result": "delivered", "remote_id": our_ts}
     assert len(w.client.thread_posts) == posted
     assert _updates(w) == [{"channel": SCOPE["channel_id"], "ts": our_ts,
-                            "text": "変更後の本文", "link_names": False}]
+                            "text": "変更後の本文", "link_names": False,
+                            "mrkdwn": False}]
     assert replies[0]["text"] == "変更後の本文"
 
 
@@ -1222,11 +1223,15 @@ def test_slack_attachment_unavailable_stays_disclosed(led, tmp_path):
     asyncio.run(_granted_card(w.worker, led, w.root))
     row = _parts(led, _latest_render(led)["delivery_id"])[
         f"attach:{aid:04d}"]
-    # a terminally unavailable source file is disclosed, never
-    # attempted, never counted as sent
-    assert row["state"] == "not_sent"
-    assert row["error_code"] == "attachment_unavailable"
+    # a terminally unavailable source file is never uploaded — its
+    # runner caption is posted as plain text in the thread instead
+    assert row["state"] == "delivered"
     assert not w.client.upload_calls
+    caption = next(p for p in json.loads(
+        _latest_render(led)["spec_json"])["parts"]["manifest"]
+        if p["part_id"] == f"attach:{aid:04d}")["caption"]
+    assert any(p["text"] == caption and p["mrkdwn"] is False
+               for p in w.client.thread_posts)
 
 
 def test_slack_thread_part_needs_the_proven_card_root(led):
@@ -1309,3 +1314,59 @@ def test_rebuilt_slack_app_takes_over_from_live_predecessor(tmp_path,
         new.unload()
         await new._task
     asyncio.run(scenario())
+
+
+def _hand_spec():
+    return {"op": "create", "delivery": {}, "parts": {}}
+
+
+def _hand_ctx():
+    return {"thread_id": "1790000000.000001", "history": None,
+            "consumed": set()}
+
+
+def test_slack_thread_reply_is_not_parsed_as_mrkdwn(led):
+    _seed_thread(led)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    assert asyncio.run(w.sender.bind())
+    out = asyncio.run(w.worker._body_part(
+        _hand_spec(), "*太字* _斜_ <@U1> & ~消~", _hand_ctx()))
+    assert out["result"] == "delivered"
+    (post,) = w.client.thread_posts
+    assert post["mrkdwn"] is False and post["link_names"] is False
+    assert post["text"] == "*太字* _斜_ &lt;@U1&gt; &amp; ~消~"
+
+
+def test_slack_attachment_caption_and_unavailable_caption(led, tmp_path):
+    import hashlib
+    _seed_thread(led)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    assert asyncio.run(w.sender.bind())
+    blob = b"synthetic-bytes"
+    f = tmp_path / "a.jpg"
+    f.write_bytes(blob)
+    part = {"part_id": "attach:0001", "kind": "attachment_part",
+            "attachment_id": 1, "name": "a.jpg", "path": str(f),
+            "sha256": hashlib.sha256(blob).hexdigest(), "bytes": len(blob),
+            "caption": "📎 a.jpg — 合成様 10-01 09:40 <合成>"}
+    out = asyncio.run(w.worker._attachment_part(_hand_spec(), part,
+                                                _hand_ctx()))
+    assert out["result"] == "delivered"
+    assert w.client.upload_calls[0]["initial_comment"] == \
+        "📎 a.jpg — 合成様 10-01 09:40 &lt;合成&gt;"
+    gone = {"part_id": "attach:0002", "kind": "attachment_part",
+            "attachment_id": 2, "name": "b.jpg", "unavailable": True,
+            "caption": "📎 b.jpg — 取得失敗"}
+    out = asyncio.run(w.worker._attachment_part(_hand_spec(), gone,
+                                                _hand_ctx()))
+    assert out["result"] == "delivered"
+    assert [p["text"] for p in w.client.thread_posts] == ["📎 b.jpg — 取得失敗"]
+    # already posted earlier — never a second caption post
+    again = asyncio.run(w.worker._attachment_part(
+        _hand_spec(), {**gone, "prior_remote_id": "1790000000.000042"},
+        _hand_ctx()))
+    assert again == {"result": "delivered",
+                     "remote_id": "1790000000.000042"}
+    assert len(w.client.thread_posts) == 1 and len(w.client.upload_calls) == 1

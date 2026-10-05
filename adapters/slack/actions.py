@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from html import escape
 import os
 import re
@@ -12,7 +13,7 @@ from adapters.common import envelopes, paths, registry
 from adapters.common.text import (MODAL_ACTIONS, MODAL_TITLES, SEARCH_EMPTY,
                                  digest_inputs,
                                  ja, modal_fields, preview_text,
-                                 search_query, task_list_text, view_answer)
+                                 search_query, split_body, view_answer)
 from .cards import LINK_ACTION, MENU_ACTION, _sections, render_parts
 
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
@@ -64,14 +65,34 @@ def _modal_blocks(fields):
     return blocks
 
 
+_TASK_MARKS = {"open": "⬜", "in_progress": "⏳", "done": "✅"}
+
+
+def _task_text(task, today):
+    """One task as plain text: status, #id, title, then 担当/期限."""
+    head = (f"{_TASK_MARKS.get(task.get('status'), '⬜')} "
+            f"#{task['request_id']} {task['title']}")
+    due = task.get("due_date")
+    if due and task.get("status") != "done" and str(due) < today:
+        head = "⚠ 期限切れ " + head
+    meta = [f"{k}: {task[f]}" for k, f in (("担当", "assignee"),
+                                          ("期限", "due_date"))
+            if task.get(f)]
+    return head + ("\n" + " ・ ".join(meta) if meta else "")
+
+
 def _task_blocks(items):
-    """Block Kit view of a task list — the shared list text plus one
-    actions row per task, carrying the runner-minted transition tokens
-    in the same mcs:a: namespace as card buttons. Transition buttons
-    cap at 25 like the Discord view (12 rows x <=2 cannot reach it)."""
-    blocks = _sections(task_list_text(items))
+    """Block Kit view of a task list — one section per task, each
+    immediately followed by its own actions row carrying the
+    runner-minted transition tokens in the same mcs:a: namespace as
+    card buttons. Transition buttons cap at 25 like the Discord view."""
+    # JST day computed here: the Hermes card worker never imports
+    # _mcs_path, so flat mcs modules (notify_render) are not importable
+    today = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
+    blocks = _sections("📋 タスク（このスレッド）")
     count = 0
     for task in items:
+        blocks.extend(_sections(_task_text(task, today)))
         elements = []
         for to, tr in (task.get("transitions") or {}).items():
             if count >= 25:
@@ -100,6 +121,15 @@ def origin(body, action, *, team_id, application_id, channel_id,
     channel = body.get("channel")
     user = body.get("user")
     message = body.get("message")
+    container = body.get("container")
+    if (message is None and isinstance(container, dict)
+            and container.get("type") == "message"
+            and container.get("is_ephemeral") is True
+            and isinstance(channel, dict)
+            and container.get("channel_id") == channel.get("id")):
+        # an ephemeral click (📋 list) carries its ts only in container;
+        # _card still pins non-task_status tokens to the card ts
+        message = {"ts": container.get("message_ts")}
     if (not isinstance(team, dict)
             or not isinstance(channel, dict)
             or not isinstance(user, dict)
@@ -143,19 +173,23 @@ def _parts_blocks(result) -> list | None:
     return blocks if 0 < len(blocks) <= 50 else None
 
 
+_EPHEMERAL_MAX = 3000          # characters (Slack counts text in chars)
+
+
 def _ephemeral_chunks(text):
-    """Escape source text without splitting entities or Slack's byte budget."""
-    chunk, size = [], 0
-    for char in text:
-        escaped = escape(char, quote=False)
-        width = len(escaped.encode("utf-8"))
-        if size + width > 4000:
-            yield "".join(chunk)
-            chunk, size = [], 0
-        chunk.append(escaped)
-        size += width
-    if chunk or not text:
-        yield "".join(chunk)
+    """Escape source text, split at line boundaries into chunks of at
+    most _EPHEMERAL_MAX characters — an entity is never cut and a
+    "（1/N）" heading line stays whole at the top of its chunk."""
+    for chunk in split_body(text, _EPHEMERAL_MAX, max_chunks=None):
+        out, cur = [], ""
+        for char in chunk:
+            escaped = escape(char, quote=False)
+            if len(cur) + len(escaped) > _EPHEMERAL_MAX:
+                out.append(cur)
+                cur = ""
+            cur += escaped
+        yield from out
+        yield cur
 
 
 class Actions:
@@ -573,12 +607,15 @@ class Actions:
             await self._say(origin["channel_id"], user, _EXPIRED)
             return
         payload = pending["payload"]
-        # project scope (card and payload) gates only 確定 — a 取消 drops
-        # the actor's own preview and queues nothing
-        allowed = bool(self._pinned(pending["token"],
-                                    {**origin, "actor": actor}, actor)) \
-            and projects.project_allowed(self._settings, payload["project_id"])
-        # decided before the first await: a racing cancel sees in_flight
+        # project scope (card and payload) and the interactive route gate
+        # only 確定 — a 取消 drops the actor's own preview and queues nothing
+        allowed = bool(cancel) or (await self._interactive()
+                                   and bool(self._pinned(
+                                       pending["token"],
+                                       {**origin, "actor": actor}, actor))
+                                   and projects.project_allowed(
+                                       self._settings, payload["project_id"]))
+        # decided before the publish await: a racing cancel sees in_flight
         taken = self._reg.take_confirm(confirm_id, bool(cancel),
                                        allowed=allowed)
         if taken == "gone":           # expired since the lookup above
@@ -676,7 +713,7 @@ class Actions:
                 continue
             answer = view_answer(
                 result, lambda pid: projects.project_allowed(
-                    self._settings, pid), markdown=False)
+                    self._settings, pid), markdown=False, plain=True)
             if answer is not None:
                 # 📋 transition tokens must land before their buttons
                 token_ctx = result.get("token_ctx") or {}

@@ -297,6 +297,7 @@ class DeliveryWorker(_BaseWorker):
                     "error_code": "thread_root_missing"}
         # Slack parses explicit mentions even without automatic name linking.
         # Use the same escaped wire text for both sends and remote verification.
+        # mrkdwn=False: user-authored *bold*/_x_/~y~ stay literal text.
         text = escape(text, quote=False)
         if spec["op"] == "update" or spec["delivery"].get("thread_id"):
             # writing into an existing thread — an identical reply
@@ -320,7 +321,7 @@ class DeliveryWorker(_BaseWorker):
             response = await sender.chat_postMessage(
                 channel=self._settings["channel_id"],
                 thread_ts=thread_ts, text=text, link_names=False,
-                unfurl_links=False, unfurl_media=False)
+                mrkdwn=False, unfurl_links=False, unfurl_media=False)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -359,7 +360,7 @@ class DeliveryWorker(_BaseWorker):
         try:
             response = await sender.chat_update(
                 channel=self._settings["channel_id"], ts=prior, text=text,
-                link_names=False)
+                link_names=False, mrkdwn=False)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -385,6 +386,17 @@ class DeliveryWorker(_BaseWorker):
         the SDK lacks the upload edge the part stays explicitly
         not_sent(sdk_capability_missing): visible incompleteness,
         never a faked completion."""
+        if part.get("unavailable"):
+            # no file to send — its caption ("📎 name — 取得失敗") is the
+            # visible line, posted and deduped like a body chunk
+            if not part.get("caption"):
+                return {"result": "not_sent",
+                        "error_code": "attachment_unavailable"}
+            if part.get("prior_remote_id"):
+                # already posted — never a second caption post
+                return {"result": "delivered",
+                        "remote_id": str(part["prior_remote_id"])}
+            return await self._body_part(spec, part["caption"], ctx, part)
         thread_ts = ctx.get("thread_id")
         if not thread_ts:
             return {"result": "not_sent",
@@ -410,11 +422,15 @@ class DeliveryWorker(_BaseWorker):
             return {"result": "not_sent",
                     "error_code": "attachment_mismatch"}
         name = part.get("name") or "file"
+        extra = {}
+        if part.get("caption"):
+            # the file's visible line: 📎 name — patient/post
+            extra["initial_comment"] = escape(part["caption"], quote=False)
         try:
             response = await upload(
                 channel=self._settings["channel_id"],
                 thread_ts=thread_ts, file=blob,
-                filename=name, title=name)
+                filename=name, title=name, **extra)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

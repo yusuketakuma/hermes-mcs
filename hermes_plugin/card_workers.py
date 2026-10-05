@@ -105,8 +105,11 @@ def _slack_adapter_settings(ctx) -> dict[str, Any] | None:
         return None
     users = _config_ids(ctx.get_config("slack_allowed_user_ids", None),
                         projects=False)
-    projects = _config_ids(ctx.get_config("project_ids", None),
-                           projects=True)
+    auto = ctx.get_config("project_ids_auto", None) is True
+    raw_projects = ctx.get_config("project_ids", None)
+    # same rule as _settings: auto allows an empty static list
+    projects = (frozenset() if auto and raw_projects == []
+                else _config_ids(raw_projects, projects=True))
     if users is None or projects is None:
         return None
     data_root = ctx.get_config("data_root", None)
@@ -129,7 +132,7 @@ def _slack_adapter_settings(ctx) -> dict[str, Any] | None:
     inbox = ctx.get_config("inbox", None)
     if isinstance(inbox, str) and inbox.strip():
         settings["inbox"] = inbox.strip()
-    if ctx.get_config("project_ids_auto", None) is True:
+    if auto:
         settings["project_ids_auto"] = True
     return settings
 
@@ -145,6 +148,8 @@ def make_slack_factory(ctx):
                 or flags.get("transport") != "slack" \
                 or flags.get("runtime_mode") == "standalone":
             return None
+        # /mcs commands gate on the published route epoch
+        settings["route_epoch"] = flags.get("route_epoch")
         from .mcs_slack.tasks import Supervisor
         supervisor = Supervisor(ctx=ctx, app=native, adapter=adapter,
                                 settings=settings,

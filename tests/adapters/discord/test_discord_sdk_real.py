@@ -73,19 +73,26 @@ def test_layout_view_serializes_components_v2():
     assert [c["type"] for c in comps] == [17]
     assert comps[0]["accent_color"] == cards._ACCENTS["signal"]
     inner = comps[0]["components"]
-    # merged TextDisplay=10 then ActionRow=1; meta is never displayed
-    assert [c["type"] for c in inner] == [10, 1]
-    assert all(b["type"] == 2 for b in inner[-1]["components"])
-    assert all(b["custom_id"].startswith("mcs:a:")
-               for b in inner[-1]["components"])
+    # body TextDisplay=10, Separator=14, footer, Separator, the primary
+    # button row and the 他の操作 select row; meta is never displayed
+    assert [c["type"] for c in inner] == [10, 14, 10, 14, 1, 1]
+    assert all(c["divider"] and c["spacing"] == 1
+               for c in inner if c["type"] == 14)
+    assert inner[2]["content"] == "-# mcs notify"
+    buttons = inner[-2]["components"]
+    assert [b["type"] for b in buttons] == [2]
+    assert buttons[0]["custom_id"] == "mcs:a:" + "ab" * 16
+    (menu,) = inner[-1]["components"]
+    assert (menu["type"], menu["custom_id"]) == (3, "mcs:menu")
+    assert [(o["label"], o["value"]) for o in menu["options"]] == [
+        ("棄却", "ef" * 16)]
     # multi-byte labels/contents survive the wire unchanged
     assert "患者A" in inner[0]["content"]
     # '>>>' would swallow the rest of the merged display — the quote
     # must use the per-line '>' form
     assert "> 発言: 嘔気が続く" in inner[0]["content"]
     assert ">>>" not in inner[0]["content"]
-    assert inner[-1]["components"][0]["style"] \
-        == discord.ButtonStyle.success.value
+    assert buttons[0]["style"] == discord.ButtonStyle.success.value
 
 
 def test_layout_view_marks_v2_flag_for_send_and_edit():
@@ -179,7 +186,7 @@ def test_validator_matches_nested_components_budget():
     view = cards.build_view(spec)
     # text merges inside the Container — the 10-child cap is never hit
     inner = view.to_components()[0]["components"]
-    assert len(inner) == 2          # one merged TextDisplay + one row
+    assert len(inner) == 3          # merged TextDisplay, Separator, row
     spec["parts"]["containers"].append({"type": "text", "text": "overflow"})
     with pytest.raises(ValueError, match="component_budget"):
         spec_mod.validate(spec)

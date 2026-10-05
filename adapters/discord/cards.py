@@ -14,7 +14,7 @@ import functools
 import re
 from typing import BinaryIO
 
-from adapters.common.spec import MAX_TEXT
+from adapters.common.spec import MAX_COMPONENTS, MAX_TEXT, PRIMARY_ACTIONS
 
 # discord.py releases whose HTTPClient.request retry loop and private
 # aiohttp session (``_HTTPClient__session``) the single-post guard was
@@ -34,11 +34,34 @@ _POSTS: contextvars.ContextVar[list[int | None] | None] = contextvars.ContextVar
 # kind (notice op) leaves the container unaccented
 _ACCENTS = {"thread": 0x5865F2, "signal": 0xF0A233, "digest": 0xF0A233}
 
+MENU_ID = "mcs:menu"              # the 他の操作 select — value = token
+_MENU_PLACEHOLDER = "他の操作…"
+_MENU_MAX = 25                    # options per select
+# kept verbatim: runner footer mentions (pings stay off via
+# allowed_mentions) and URLs (a substitution would break the link)
+_MD_KEEP = re.compile(r"(<@[!&]?\w+>|https?://\S+)")
+# same-length look-alikes, so escaping never moves a text budget
+_MD_INLINE = str.maketrans("*_~|`[]<\\", "＊＿～｜｀［］＜＼")
+_MD_LINE = re.compile(r"^([ \t]*)(?:(\d+)\.|([#>+-]))", re.M)
+_MD_LEAD = str.maketrans("#>+-", "＃＞＋－")
+
+
+def escape_md(text: str) -> str:
+    """User-authored text as literal Discord text with the same length:
+    inline markup (``* _ ~ | ` [ ] < \\`` — no masked link, no tag)
+    and the block markers at a line start (``#``/``-#`` headings, ``>``
+    quote, ``-``/``+``/``1.`` lists) become fullwidth look-alikes."""
+    text = "".join(part if i % 2 else part.translate(_MD_INLINE)
+                   for i, part in enumerate(_MD_KEEP.split(text)))
+    return _MD_LINE.sub(
+        lambda m: m.group(1) + (f"{m.group(2)}．" if m.group(2)
+                                else m.group(3).translate(_MD_LEAD)), text)
+
 
 def _text_chunks(lines, limit=MAX_TEXT):
     """Pack rendered lines into TextDisplay-sized chunks — a Container
-    caps at 10 children and each display at ``limit`` chars, so the
-    merged face must be split rather than emitted per container."""
+    caps at 10 children and each display at ``limit`` chars, so a zone
+    is merged and split rather than emitted per container."""
     chunks, cur = [], ""
     for ln in lines:
         while len(ln) > limit:                   # single oversized line
@@ -57,58 +80,116 @@ def _text_chunks(lines, limit=MAX_TEXT):
     return chunks
 
 
-def build_view(spec: dict):
-    """spec -> discord.ui.LayoutView. Called only after validate()."""
-    import discord  # SDK required only inside the handler boundary
+_CONTAINER_MAX = 10               # children of one Container
 
-    # timeout=None: dispatch lives on the on_interaction listener keyed
-    # by custom_id, not on view-local callbacks — the view itself never
-    # expires and holds no business logic
-    view = discord.ui.LayoutView(timeout=None)
-    # The whole face lives inside one Container — bare TextDisplays on
-    # a LayoutView render as flat message text with no card look.
-    lines = []
+
+def _zones(spec: dict, esc) -> tuple:
+    """Card face as text zones: a container with ``rule`` and the footer
+    each start a new zone (a Separator is drawn between zones)."""
+    zones, cur = [], []
     for c in spec["parts"]["containers"]:
         t = c["type"]
+        if t == "meta":
+            continue                       # correlation — not displayed
+        if c.get("rule") and cur:
+            zones.append(cur)
+            cur = []
         if t == "heading":
-            lines.append(f"## {c['text']}")
+            cur.append(f"## {esc(c['text'])}")
         elif t == "field":
-            lines.append(f"**{c['name']}**: {c['value']}")
+            cur.append(f"**{esc(c['name'])}**: {esc(c['value'])}")
         elif t == "quote":
             # '>>>' swallows to the end of the TextDisplay — merged
             # lines must use the per-line '>' form
-            lines.extend(f"> {ln}" for ln in c["text"].splitlines())
-        elif t == "meta":
-            continue                       # correlation — not displayed
+            cur.extend(f"> {esc(ln)}" for ln in c["text"].splitlines())
         else:
-            lines.append(c["text"])
+            cur.append(esc(c["text"]))
+    if cur:
+        zones.append(cur)
     # every footer line gets the subtext prefix — one footer item may
     # hold several lines (the open-task list)
-    lines.extend(f"-# {ln}"
-                 for c in spec["parts"].get("footer") or []
-                 if c.get("type") == "text"
-                 for ln in c["text"].splitlines())
-    children = [discord.ui.TextDisplay(chunk)
-                for chunk in _text_chunks(lines)]
+    footer = [f"-# {esc(ln)}"
+              for c in spec["parts"].get("footer") or []
+              if c.get("type") == "text"
+              for ln in c["text"].splitlines()]
+    return zones, footer
+
+
+def build_view(spec: dict):
+    """spec -> discord.ui.LayoutView. Called only after validate().
+    Face: text zones split by Separators, a Separator, then one row of
+    primary buttons (+ link) and one row holding the 他の操作 select."""
+    import discord  # SDK required only inside the handler boundary
+
+    zones, footer = _zones(spec, escape_md)
+
+    def separator():
+        return discord.ui.Separator(
+            visible=True, spacing=discord.SeparatorSpacing.small)
+
+    primary, menu = discord.ui.ActionRow(), []
+    links = []
     for row in spec["parts"].get("action_rows") or []:
-        ar = discord.ui.ActionRow()
         for b in row:
             if b.get("ui") == "link":
-                ar.add_item(discord.ui.Button(
+                links.append(discord.ui.Button(
                     style=discord.ButtonStyle.link, label=b["label"],
                     url=b["url"]))
-                continue
-            btn = discord.ui.Button(
-                style=getattr(discord.ButtonStyle,
-                              b.get("style", "secondary")),
-                label=b["label"],
-                custom_id=f"mcs:a:{b['token']}")
-            # no callback — the native on_interaction listener is the
-            # single dispatch point (plan §5)
-            ar.add_item(btn)
-        children.append(ar)
+            elif b.get("id") in PRIMARY_ACTIONS:
+                # no callback — the native on_interaction listener is
+                # the single dispatch point (plan §5)
+                primary.add_item(discord.ui.Button(
+                    style=getattr(discord.ButtonStyle,
+                                  b.get("style", "secondary")),
+                    label=b["label"],
+                    custom_id=f"mcs:a:{b['token']}"))
+            else:
+                menu.append(discord.SelectOption(label=b["label"],
+                                                 value=b["token"]))
+    for link in links:
+        primary.add_item(link)
+    rows = []
+    if primary.children:
+        rows.append(primary)
+    if menu:
+        select_row = discord.ui.ActionRow()
+        select_row.add_item(discord.ui.Select(
+            custom_id=MENU_ID, placeholder=_MENU_PLACEHOLDER,
+            min_values=1, max_values=1, options=menu[:_MENU_MAX]))
+        rows.append(select_row)
+
+    def face(groups):
+        out = []
+        for lines in groups:
+            if out:
+                out.append(separator())
+            out.extend(discord.ui.TextDisplay(chunk)
+                       for chunk in _text_chunks(lines))
+        return out
+
+    def layout(groups):
+        children = face(groups)
+        if footer:
+            if children:
+                children.append(separator())
+            children.extend(discord.ui.TextDisplay(chunk)
+                            for chunk in _text_chunks(footer))
+        if rows:
+            if children:
+                children.append(separator())
+            children.extend(rows)
+        return children
+
+    children = layout(zones)
+    # the Container, its children and every row's items count
+    if len(children) > _CONTAINER_MAX or 1 + len(children) + sum(
+            len(r.children) for r in rows) > MAX_COMPONENTS:
+        # too many rule zones: one text zone (no rule lines — the text
+        # must stay within the validator's budget)
+        children = layout([[ln for z in zones for ln in z]])
     if not children:
         children.append(discord.ui.TextDisplay("—"))
+    view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.Container(
         *children, accent_color=_ACCENTS.get(spec.get("kind"))))
     return view
@@ -122,14 +203,17 @@ def no_pings():
     return discord.AllowedMentions.none()
 
 
-async def send_attachment(target, path: str | BinaryIO, name: str):
+async def send_attachment(target, path: str | BinaryIO, name: str,
+                          content: str | None = None):
     """File upload for a durable attachment part — kept here so
     delivery.py stays SDK-free (only cards/actions may import
-    discord.py, and only inside functions)."""
+    discord.py, and only inside functions). ``content`` is the file's
+    visible caption line, sent in the same message."""
     import discord  # SDK required only inside the handler boundary
+    kwargs = {"content": content} if content else {}
     return await target.send(
         file=discord.File(path, filename=name),
-        allowed_mentions=discord.AllowedMentions.none())
+        allowed_mentions=discord.AllowedMentions.none(), **kwargs)
 
 
 class RetryPolicyUnknown(RuntimeError):

@@ -353,7 +353,7 @@ def test_real_spec_validates_and_builds(world):
     kinds = [type(i).__name__ for i in inner]
     assert "TextDisplay" in kinds and "ActionRow" in kinds
     buttons = [b for i in inner if hasattr(i, "children")
-               for b in i.children]
+               for b in i.children if not hasattr(b, "options")]
     ids = [b.custom_id for b in buttons if b.url is None]
     assert ids and all(i.startswith("mcs:a:") for i in ids)
     assert all(len(i) == 38 for i in ids)      # "mcs:a:" + 32 hex
@@ -2725,9 +2725,10 @@ def test_card_posts_and_edits_never_ping(world):
     asyncio.run(_deliver(world, worker))
     assert msg.edits == 1 and msg.allowed_mentions.roles is False
     assert "-# ✅ 確認: <@1001>" in _face(msg)
-    labels = [b.label for row in msg.view.items[0].children
-              if hasattr(row, "children") for b in row.children]
-    assert "✅ 確認済み" in labels and "⏸ 保留" not in labels
+    labels = [x.label for row in msg.view.items[0].children
+              if hasattr(row, "children") for b in row.children
+              for x in getattr(b, "options", [b])]
+    assert "確認する" in labels and "⏸ 保留" not in labels
 
 
 def test_role_member_can_click_and_others_are_told(world):
@@ -2834,7 +2835,7 @@ def test_task_modal_roster_prefill_confirm_and_footer(world):
     assert tuple(row) == ("残薬を確認", "山田 花子（みどり薬局）", "2026-10-01")
     _, spec2 = world.spec()
     footer = "\n".join(f.get("text", "") for f in spec2["parts"]["footer"])
-    assert "📝 残薬を確認 — 担当 山田 花子（みどり薬局） — 期限 2026-10-01" \
+    assert "📝 タスク 1件" \
         in footer
     assert any(b["id"] == "tasks" for row in spec2["parts"]["action_rows"]
                for b in row)
@@ -2850,7 +2851,7 @@ def test_summary_click_answers_ephemeral(world):
                          message_id=msg.id)
     asyncio.run(world.interact(act, ix))
     sent = "\n".join(m["content"] for m in ix.followup.sent)
-    assert "患者サマリー（暫定集約）" in sent and "集約資料がまだありません" in sent
+    assert "患者の記録まとめ（暫定集約）" in sent and "集約資料がまだありません" in sent
     assert all(m["ephemeral"] for m in ix.followup.sent)
 
 
@@ -2925,7 +2926,7 @@ def test_my_tasks_uses_display_name_and_project_scope(world):
     asyncio.run(world.interact(act, ix))
     out = "\n".join(m["content"] for m in ix.followup.sent)
     assert all(m["ephemeral"] for m in ix.followup.sent)
-    assert "📋 自分のタスク（担当: 山田 花子）" in out
+    assert "自分のタスク（担当: 山田 花子）" in out
     assert "⚠ 期限切れ" in out and "残薬確認" in out
     # project 2 is outside this deployment's scope; 佐藤 is not the clicker
     assert "範囲外の件" not in out and "他人の件" not in out
@@ -3034,3 +3035,31 @@ def test_dismiss_reason_code_select_reaches_the_ledger(world):
         "ORDER BY artifact_id DESC LIMIT 1").fetchone()[0])
     assert (row["state"], row["dismiss_reason_code"], row["dismiss_reason"]) \
         == ("dismissed", "duplicate", "重複")
+
+
+def test_menu_select_dispatches_like_the_button(world):
+    """The 他の操作 select (custom_id mcs:menu, value = token) runs the
+    same gated dispatch as an mcs:a:<token> click."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot, spec = _delivered(world)
+    msg = bot.channels[42].sent[0]
+    act = world.mkactions(reg, bot)
+    token = world.token(spec, "summary")
+    button = FakeInteraction(f"mcs:a:{token}", message_id=msg.id)
+    asyncio.run(world.interact(act, button))
+    menu = FakeInteraction("mcs:menu", message_id=msg.id)
+    menu.data["values"] = [token]
+    asyncio.run(world.interact(act, menu))
+    assert menu.followup.sent and [m["content"] for m in menu.followup.sent] \
+        == [m["content"] for m in button.followup.sent]
+    outsider = FakeInteraction("mcs:menu", message_id=msg.id, user_id=9999)
+    outsider.data["values"] = [token]
+    asyncio.run(world.interact(act, outsider))
+    assert "権限がありません。" in str(outsider.response.__dict__) \
+        + str(outsider.followup.sent)
+    # a malformed select payload is ignored silently
+    bad = FakeInteraction("mcs:menu", message_id=msg.id)
+    bad.data["values"] = [token, token]
+    asyncio.run(world.interact(act, bad))
+    assert not bad.followup.sent

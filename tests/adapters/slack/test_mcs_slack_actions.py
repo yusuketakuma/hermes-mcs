@@ -65,8 +65,11 @@ def _no_modal_wait(monkeypatch):
 
 def fixture(tmp_path, *, kind="body", project_ids=frozenset({123})):
     dirs = notify_dirs(str(tmp_path))
-    for key in ("state", "cmd_int", "cmd_results"):
+    for key in ("state", "cmd_int", "cmd_results", "flags"):
         Path(dirs[key]).mkdir(exist_ok=True)
+    # 確定 re-checks the runner flags, as the other interactive actions do
+    Path(dirs["flags"], "notify.json").write_text(
+        json.dumps({"interactive": True, "transport": "slack"}), encoding="utf-8")
     reg = registry.Registry(dirs["state"], scope=SCOPE)
     reg.put_tokens({TOKEN: {
         "action": kind, "team_id": SCOPE["team_id"],
@@ -726,7 +729,8 @@ def test_my_tasks_sends_the_name_and_filters_scope(tmp_path):
         text_ = "\n".join(m["text"] for m in app.client.messages)
         assert [m["user"] for m in app.client.messages] == ["U_OPERATOR"]
         assert "範囲内" in text_ and "範囲外" not in text_
-        assert "**" not in text_ and "*📋 自分のタスク" in text_
+        # Slack answers are plain text — no markup characters at all
+        assert "*" not in text_ and "📋 自分のタスク" in text_
     asyncio.run(scenario())
 
 
@@ -900,3 +904,54 @@ def test_ephemeral_source_text_is_literal_and_every_chunk_fits_wire_budget(tmp_p
         assert all(message["user"] == "U_OPERATOR" and message["link_names"] is False
                    for message in app.client.messages)
     asyncio.run(scenario())
+
+
+def test_task_blocks_pair_each_task_with_its_own_buttons():
+    tasks = [
+        {"request_id": 1, "status": "open", "title": "残薬確認",
+         "assignee": "合成 太郎", "due_date": "2000-01-01",
+         "transitions": {"in_progress": {"label": "対応中", "token": "a" * 32},
+                         "done": {"label": "完了", "token": "b" * 32}}},
+        {"request_id": 2, "status": "done", "title": "完了済み",
+         "due_date": "2000-01-01", "transitions": {}},
+        {"request_id": 3, "status": "in_progress", "title": "先の予定",
+         "due_date": "2999-12-31",
+         "transitions": {"done": {"label": "完了", "token": "c" * 32}}}]
+    blocks = slack_actions._task_blocks(tasks)
+    dumped = json.dumps(blocks, ensure_ascii=False)
+    assert "**" not in dumped
+    kinds = [b["type"] for b in blocks]
+    assert kinds == ["section", "section", "actions", "section",
+                     "section", "actions"]
+    texts = [b["text"]["text"] for b in blocks if b["type"] == "section"]
+    assert texts[1] == ("⚠ 期限切れ ⬜ #1 残薬確認\n"
+                        "担当: 合成 太郎 ・ 期限: 2000-01-01")
+    assert texts[2] == "✅ #2 完了済み\n期限: 2000-01-01"
+    assert texts[3].startswith("⏳ #3 先の予定")
+    assert [e["value"] for e in blocks[2]["elements"]] == ["a" * 32, "b" * 32]
+    assert [e["value"] for e in blocks[5]["elements"]] == ["c" * 32]
+
+
+def test_ephemeral_chunks_split_by_characters_at_line_boundaries():
+    # a Japanese answer of 1900 chars is one message (was 2 by bytes)
+    one = "本文（1/2）\n" + "合" * 1890
+    assert list(slack_actions._ephemeral_chunks(one)) == [one]
+    lines = ["行" * 1000 + "<&>"] * 5
+    chunks = list(slack_actions._ephemeral_chunks("\n".join(lines)))
+    assert all(len(c) <= 3000 for c in chunks)
+    assert len(chunks) == 3
+    assert all(c.startswith("行") for c in chunks)
+    assert "".join(chunks).count("&lt;&amp;&gt;") == 5
+
+
+def test_plain_answers_carry_no_markup():
+    from hermes_plugin.mcs_delivery import text
+    body = text.view_answer({"outcome": "applied", "action": "body",
+                             "title": "合成", "body": "本文"},
+                            lambda _p: True, markdown=False)
+    assert body == [("合成\n本文", None)]
+    tasks = text.view_answer({"outcome": "applied", "action": "tasks",
+                              "tasks": [{"request_id": 1, "status": "open",
+                                         "title": "t"}]},
+                             lambda _p: True, markdown=False)
+    assert "*" not in tasks[0][0]

@@ -278,22 +278,24 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   4. 次の tick で照合が再実行され、tainted が無くなれば marker が外れる。
      残った hold は `ops.card_resolve`（operator 検証済みの rebind/resume）で解除し、
      gateway を起動し直す。
-- ボタンは `mcs:a:`、モーダルは `mcs:m:`、確認は `mcs:c:` の custom_id のみを
-  処理し、他の interaction は一切応答しない。actor・application・guild・channel
+- ボタンは `mcs:a:`、他の操作セレクトは `mcs:menu`（値が token）、モーダルは `mcs:m:`、
+  確認は `mcs:c:` の custom_id のみを処理し、他の interaction は一切応答しない。actor・application・guild・channel
   （modal submit では message も）は各段階で再検証する。
   通知操作の `command_id` は重複適用を防ぐ固定 ID、`request_id` はクリック／
   フォーム送信ごとの応答 ID。過去の結果ファイルを今回の承認や本文閲覧に使わない。
-- ボタンは状態表示を兼ねる（`☐ 確認`⇄`✅ 確認済み`、`👤 担当する`⇄
-  `👤 担当中`）。ラベル・スタイルは runner が render ごとに決め、同じ操作を
-  押し直すと取消・担当解除になる（古い表示での二度押しは吸収）。フッターの
+- ボタンのラベルは固定（`確認する`・`担当する`・`タスク作成`）で、状態は
+  フッターの名前とボタンのスタイルで示す。スタイルは runner が render ごとに
+  決め、同じ操作を押し直すと取消・担当解除になる（古い表示での二度押しは吸収）。
+  主操作（`adapters.common.spec.PRIMARY_ACTIONS` とリンク）以外は Slack の
+  `操作を選ぶ…`、Discord の `他の操作…` セレクトにまとめ、同じ token で処理する。フッターの
   人名は `<@id>` メンション。Discord はカードの送信・編集・スレッド本文の
   すべてを `allowed_mentions=none` で送るので名前表示のみで通知は鳴らない。
   Slack には allowed_mentions が無いので、worker が `<@U…>` を
   `users.info` の表示名（取得できない・`users:read` scope が無い場合は
   「メンバー」）に置き換え、フッターを plain_text で送る — Slack の
-  カードはメンション構文を一切含まず、再投稿でも通知は鳴らない。`🔗 MCSで開く` は
+  カードはメンション構文を一切含まず、再投稿でも通知は鳴らない。`MCSで開く` は
   DiscordではURLボタン、Slackではカード下部のテキストリンク。いずれもtokenを持たず、状態を変更しない。
-- `📝 タスク作成`/`🚫 却下`/`⚠ 抽出の誤りを報告` は runner が返す pin 済み
+- `タスク作成`/`却下`/`誤りを報告` は runner が返す pin 済み
   params + render context から `request.create` / `ops.signal_dismiss` /
   `ops.extract_feedback` を組み立て、preview → 本人確認
   → enqueue の順で、既存の human_confirmed ゲートを通す。📝 のフォームは
@@ -316,7 +318,7 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   対象外 / その他）＋任意メモ。`ops.signal_dismiss` に `reason_code` を付け、
   メモが空なら区分名を `reason` にする。更新前に開いたフォーム（自由記述の
   `reason` だけ）は従来どおり `reason_code` なしで送る。
-- 4行目の `📋 自分のタスク`・`🗂 未確認一覧`・`🔎 この患者を検索` は view 操作
+- `自分のタスク`・`未確認一覧`・`この患者を検索` は view 操作
   （ephemeral 応答のみ、状態を変えない）。runner は `action:"list"` と
   `list`（`title`/`head`/`items[{project_id, group?, text}]`/`more`/`empty`/
   `notes`）を返し、plugin は `items` を `project_ids`（`project_ids_auto`）で

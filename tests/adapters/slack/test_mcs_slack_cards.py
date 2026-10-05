@@ -94,8 +94,9 @@ def test_select_click_resolves_the_same_token_as_a_button():
 
 
 def test_full_card_is_one_compact_row():
-    """Every action of a busy card fits one actions block: the two
-    toggles as buttons and the rest as options of a single select."""
+    """Every action of a busy card fits one actions block: the primary
+    actions (ack/assign/request) as buttons and the rest as options of
+    a single select."""
     spec = _spec()
     ids = ("ack", "assign", "request", "tasks_done", "summary", "report",
            "mytasks", "unacked", "search", "prev", "next")
@@ -108,8 +109,8 @@ def test_full_card_is_one_compact_row():
     actions = [b for b in blocks if b["type"] == "actions"]
     assert len(actions) == 1
     kinds = [e["type"] for e in actions[0]["elements"]]
-    assert kinds == ["button", "button", "static_select"]
-    assert len(actions[0]["elements"][2]["options"]) == len(ids) - 2
+    assert kinds == ["button", "button", "button", "static_select"]
+    assert len(actions[0]["elements"][3]["options"]) == len(ids) - 3
 
 
 def test_link_label_and_query_escape_slack_markup_without_changing_link():
@@ -143,3 +144,26 @@ def test_link_url_escape_expansion_obeys_context_budget():
         "url": "https://example.invalid/?" + "&" * 480}]]
     with pytest.raises(ValueError, match="slack_link_budget"):
         render(spec)
+
+
+def test_rules_and_footer_get_dividers_and_body_sections_expand():
+    spec = _spec()
+    spec["parts"]["containers"] = [
+        {"type": "heading", "text": "合成カード"},
+        {"type": "text", "text": "文脈"},
+        {"type": "text", "text": "10-01 09:40 合成さん", "rule": True},
+        {"type": "text", "text": "📋 要約\n・合成"}]
+    _, blocks = render(spec)
+    kinds = [b["type"] for b in blocks]
+    assert kinds == ["header", "section", "divider", "section", "section",
+                     "divider", "context", "divider", "actions"]
+    assert all(b.get("expand") is True for b in blocks
+               if b["type"] == "section")
+
+
+def test_no_footer_means_no_footer_divider():
+    spec = _spec()
+    spec["parts"]["footer"] = []
+    _, blocks = render(spec)
+    assert [b["type"] for b in blocks] == ["header", "section", "divider",
+                                           "actions"]

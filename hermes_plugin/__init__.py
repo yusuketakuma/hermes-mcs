@@ -174,7 +174,10 @@ def _settings(ctx) -> dict[str, Any] | None:
         return None
     users = _config_ids(raw["allowed_user_ids"], projects=False)
     chats = _config_ids(raw["allowed_chat_ids"], projects=False)
-    projects = _config_ids(raw["project_ids"], projects=True)
+    auto = ctx.get_config("project_ids_auto", None) is True
+    # project_ids_auto=true allows an empty static list (standalone config)
+    projects = (frozenset() if auto and raw["project_ids"] == []
+                else _config_ids(raw["project_ids"], projects=True))
     if users is None or chats is None or projects is None:
         return None
     settings = {
@@ -182,7 +185,7 @@ def _settings(ctx) -> dict[str, Any] | None:
         "allowed_user_ids": users, "allowed_chat_ids": chats,
         "project_ids": projects,
     }
-    if ctx.get_config("project_ids_auto", None) is True:
+    if auto:
         settings["project_ids_auto"] = True
     # receipt scoping can only compare fields we actually know — the
     # interactive card config is optional for the /mcs surface

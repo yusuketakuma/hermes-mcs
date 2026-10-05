@@ -1930,3 +1930,59 @@ def test_newer_render_tokens_survive_an_older_update_prune(
     reg.prune_card_tokens(spec_mod.token_map(spec))
     assert reg.token("newer-ack") is not None
     assert reg.token("old-ack") is None and reg.token("new-ack")
+
+
+def _part_ctx(thread):
+    return {"thread": thread, "thread_id": str(thread.id),
+            "history": None, "consumed": set()}
+
+
+def test_thread_body_is_posted_as_literal_text(tmp_path):
+    w, _reg, _bot = _mkworker(tmp_path)
+    spec = _spec(["**太字** [x](https://e.invalid)\n# 見出し\n> 引用"])
+    thread = FakeThread(7001)
+    part = {"part_id": "body:1", "kind": "body_part", "index": 2}
+    out = asyncio.run(w._perform_part(_claim(spec), part, _part_ctx(thread)))
+    assert out["result"] == "delivered"
+    assert thread.sent[0].content == (
+        "＊＊太字＊＊ ［x］(https://e.invalid)\n＃ 見出し\n＞ 引用")
+
+
+def test_attachment_caption_rides_with_the_file(tmp_path, monkeypatch):
+    from hermes_plugin.mcs_discord import cards
+    blob = b"sealed-synthetic"
+    path = tmp_path / "a.bin"
+    path.write_bytes(blob)
+    w, _reg, _bot = _mkworker(tmp_path)
+    seen = []
+
+    async def send(target, source, name, content=None):
+        seen.append(content)
+        return await target.send(content)
+
+    monkeypatch.setattr(cards, "send_attachment", send)
+    part = {"part_id": "attach:0001", "kind": "attachment_part", "index": 2,
+            "attachment_id": 1, "name": "a.bin", "path": str(path),
+            "sha256": hashlib.sha256(blob).hexdigest(), "bytes": len(blob),
+            "caption": "📎 a.bin — 合成様 10-01 09:40 合成さん"}
+    out = asyncio.run(w._perform_part(_claim(_spec([])), part,
+                                      _part_ctx(FakeThread(7001))))
+    assert out["result"] == "delivered"
+    assert seen == ["📎 a.bin — 合成様 10-01 09:40 合成さん"]
+
+
+def test_unavailable_attachment_posts_its_caption_once(tmp_path):
+    w, _reg, _bot = _mkworker(tmp_path)
+    thread = FakeThread(7001)
+    part = {"part_id": "attach:0002", "kind": "attachment_part", "index": 2,
+            "attachment_id": 2, "name": "b.jpg", "unavailable": True,
+            "caption": "📎 b.jpg — 取得失敗"}
+    out = asyncio.run(w._perform_part(_claim(_spec([])), part,
+                                      _part_ctx(thread)))
+    assert out["result"] == "delivered"
+    assert [m.content for m in thread.sent] == ["📎 b.jpg — 取得失敗"]
+    again = asyncio.run(w._perform_part(
+        _claim(_spec([])), {**part, "prior_remote_id": "6001"},
+        _part_ctx(thread)))
+    assert again == {"result": "delivered", "remote_id": "6001"}
+    assert len(thread.sent) == 1

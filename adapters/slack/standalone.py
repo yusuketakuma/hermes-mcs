@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager, suppress
+from html import escape
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
@@ -348,13 +349,19 @@ async def send(root, target, payload):
         if not await _identity(client, settings):
             return {"result": "not_sent", "error_code": "slack_identity_unverified"}
         try:
+            # Slack parses explicit <!channel>/<@U…> even with parse=none.
             response = _payload(await client.chat_postMessage(
-                channel=settings["channel_id"], text=payload["text"],
+                channel=settings["channel_id"],
+                text=escape(payload["text"], quote=False),
                 unfurl_links=False, unfurl_media=False, link_names=False,
                 parse="none", mrkdwn=False))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            # current() runs in _verify() before any HTTP I/O: provably unsent.
+            if isinstance(exc, ValueError) \
+                    and str(exc) == "slack_configuration_changed_restart_required":
+                return {"result": "not_sent", "error_code": str(exc)}
             return _failed(exc, "create", None)
         from .delivery import _TS
         message_id = response.get("ts")

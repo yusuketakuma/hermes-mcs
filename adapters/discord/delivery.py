@@ -96,35 +96,24 @@ class DeliveryWorker(worker.DeliveryWorker):
         if thread is None:
             thread = await self._channel(ctx["thread_id"])
             ctx["thread"] = thread
+        if part["kind"] == "attachment_part" and part.get("unavailable"):
+            # no file to send — its caption is the visible line
+            if not part.get("caption"):
+                return {"result": "not_sent",
+                        "error_code": "attachment_unavailable"}
+            if part.get("prior_remote_id"):
+                # already posted — never a second caption post
+                return {"result": "delivered",
+                        "remote_id": str(part["prior_remote_id"])}
+            return await self._text_part(
+                spec, thread, part, cards.escape_md(part["caption"]), ctx)
         if part["kind"] == "body_part":
             i = int(part["part_id"].rsplit(":", 1)[1]) - 1
-            body = spec["parts"]["thread_body_parts"][i]
-            if spec["op"] == "update" or spec["delivery"].get("thread_id"):
-                # writing into a pre-existing thread — a chunk whose
-                # text is already remote binds to that message id
-                # instead of posting a duplicate (remote-verified)
-                mid = await self._remote_match(thread, body, ctx)
-                if mid is not None:
-                    return {"result": "delivered",
-                            "remote_id": str(mid)}
-                # the chunk's text changed since it was first posted
-                # (the extraction arrived, a reply joined): rewrite that
-                # post so the thread keeps one post per chunk
-                mid = await self._rewrite_prior(
-                    thread, part.get("prior_remote_id"), body, ctx)
-                if mid is not None:
-                    return {"result": "delivered",
-                            "remote_id": str(mid)}
-            sent = await cards.single_post(
-                self._bot, partial(thread.send, body,
-                                   allowed_mentions=cards.no_pings()))
-            rid = getattr(sent, "id", None)
-            if not rid:
-                # the wire call completed but carries no provable
-                # identity — honest unknown, never a bare 'delivered'
-                return {"result": "unknown",
-                        "error_code": "missing_remote_id"}
-            return {"result": "delivered", "remote_id": str(rid)}
+            # user-authored text renders literally, never as markdown;
+            # the escaped text is also what remote matching compares
+            body = cards.escape_md(
+                spec["parts"]["thread_body_parts"][i])
+            return await self._text_part(spec, thread, part, body, ctx)
         if part["kind"] == "attachment_part":
             mid = await self._reuse_prior_file(
                 thread, part.get("prior_remote_id"), ctx)
@@ -135,16 +124,50 @@ class DeliveryWorker(worker.DeliveryWorker):
             if blob is None:
                 return {"result": "not_sent",
                         "error_code": "attachment_mismatch"}
+            # the caption is the file's visible line, in the same message
+            extra = ({"content": cards.escape_md(part["caption"])}
+                     if part.get("caption") else {})
             with io.BytesIO(blob) as source:
                 sent = await cards.single_post(self._bot, partial(
                     cards.send_attachment, thread, source,
-                    part.get("name") or "file"))
+                    part.get("name") or "file", **extra))
             rid = getattr(sent, "id", None)
             if not rid:
                 return {"result": "unknown",
                         "error_code": "missing_remote_id"}
             return {"result": "delivered", "remote_id": str(rid)}
         return {"result": "not_sent", "error_code": "unsupported_part"}
+
+    async def _text_part(self, spec: dict, thread, part: dict, body: str,
+                         ctx: dict) -> dict:
+        """Post one text message into the thread — deduped against this
+        bot's history and rewritten in place when its text changed."""
+        if spec["op"] == "update" or spec["delivery"].get("thread_id"):
+            # writing into a pre-existing thread — a chunk whose
+            # text is already remote binds to that message id
+            # instead of posting a duplicate (remote-verified)
+            mid = await self._remote_match(thread, body, ctx)
+            if mid is not None:
+                return {"result": "delivered",
+                        "remote_id": str(mid)}
+            # the chunk's text changed since it was first posted
+            # (the extraction arrived, a reply joined): rewrite that
+            # post so the thread keeps one post per chunk
+            mid = await self._rewrite_prior(
+                thread, part.get("prior_remote_id"), body, ctx)
+            if mid is not None:
+                return {"result": "delivered",
+                        "remote_id": str(mid)}
+        sent = await cards.single_post(
+            self._bot, partial(thread.send, body,
+                               allowed_mentions=cards.no_pings()))
+        rid = getattr(sent, "id", None)
+        if not rid:
+            # the wire call completed but carries no provable
+            # identity — honest unknown, never a bare 'delivered'
+            return {"result": "unknown",
+                    "error_code": "missing_remote_id"}
+        return {"result": "delivered", "remote_id": str(rid)}
 
     async def _thread_part(self, claim: dict, part: dict,
                            ctx: dict) -> dict:

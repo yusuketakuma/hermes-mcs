@@ -5,6 +5,7 @@ import re
 from html import escape
 from urllib.parse import urlsplit
 
+from adapters.common.spec import PRIMARY_ACTIONS
 from adapters.common.spec import validate as validate_v1
 
 _SECTION_MAX = 3000
@@ -15,10 +16,7 @@ _FALLBACK = "MCS 確認カード"
 SCHEMA = "mcs-card-render/v2"
 LINK_ACTION = "mcs:link"          # URL buttons still post an action — acked
 MENU_ACTION = "mcs:menu"          # the compact 操作 select — value = token
-# Buttons kept as buttons on Slack; every other action goes into one
-# select so the card stays a single compact row on mobile, where each
-# button of an actions block is otherwise drawn full width.
-QUICK_ACTIONS = ("ack", "assign")
+_DIVIDER = {"type": "divider"}
 _MENU_PLACEHOLDER = "操作を選ぶ…"
 _MENTION = re.compile(r"<@[UW][A-Z0-9]{1,30}>")
 
@@ -60,8 +58,9 @@ def validate(spec):
 
 
 def _sections(text):
+    # expand: body text is never folded behind "see more"
     return [
-        {"type": "section",
+        {"type": "section", "expand": True,
          "text": {"type": "plain_text", "text": text[i:i + _SECTION_MAX]}}
         for i in range(0, len(text), _SECTION_MAX)
     ]
@@ -75,6 +74,8 @@ def render_parts(parts, names=None, silent=False) -> list:
         kind = item["type"]
         if kind == "meta":
             continue
+        if item.get("rule") and blocks:
+            blocks.append(dict(_DIVIDER))
         if kind == "heading" and len(item["text"]) <= _HEADER_MAX:
             blocks.append({
                 "type": "header",
@@ -87,9 +88,10 @@ def render_parts(parts, names=None, silent=False) -> list:
             text = f"引用: {text}"
         blocks.extend(_sections(text))
 
-    for item in parts.get("footer") or []:
-        if item["type"] != "text":
-            continue
+    footer = [i for i in parts.get("footer") or [] if i["type"] == "text"]
+    if footer and blocks:
+        blocks.append(dict(_DIVIDER))
+    for item in footer:
         text = _names(item["text"], names) if silent else item["text"]
         blocks.extend(
             {"type": "context",
@@ -112,7 +114,9 @@ def render(spec, names=None):
                 raise ValueError("slack_button_label")
             if button.get("ui") == "link":
                 links.append(button)
-            elif button.get("id") in QUICK_ACTIONS:
+            elif button.get("id") in PRIMARY_ACTIONS:
+                # buttons; every other action goes into one select so the
+                # card stays one compact row on mobile
                 quick.append(button)
             else:
                 menu.append(button)
@@ -134,6 +138,8 @@ def render(spec, names=None):
             "options": [{"text": {"type": "plain_text", "text": b["label"]},
                          "value": b["token"]} for b in menu]})
     if elements:
+        if blocks:
+            blocks.append(dict(_DIVIDER))
         blocks.append({"type": "actions", "elements": elements})
     for button in links:
         # a text link, not a button — it costs no row on mobile

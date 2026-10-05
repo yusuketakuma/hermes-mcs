@@ -74,6 +74,10 @@ def _fake_discord():
             self.required = required
             self.min_values, self.max_values = min_values, max_values
 
+    class Separator:
+        def __init__(self, visible=True, spacing=None):
+            self.visible, self.spacing = visible, spacing
+
     class Label:
         def __init__(self, text=None, component=None, **_):
             self.text, self.component = text, component
@@ -135,8 +139,10 @@ def _fake_discord():
                              Container=Container,
                              Button=Button, Modal=Modal,
                              TextInput=TextInput, Select=Select,
+                             Separator=Separator,
                              Label=Label)
     mod.SelectOption = SelectOption
+    mod.SeparatorSpacing = SimpleNamespace(small=1, large=2)
     mod.AllowedMentions = AllowedMentions
     mod.ButtonStyle = SimpleNamespace(primary=1, secondary=2, success=3,
                                       danger=4, link=5)
