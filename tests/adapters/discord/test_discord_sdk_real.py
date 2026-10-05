@@ -200,3 +200,60 @@ def test_field_text_budget_counts_markdown_wrapper(wire_length):
     else:
         with pytest.raises(ValueError, match="text_budget"):
             spec_mod.validate(spec)
+
+
+def test_real_sdk_send_history_fetch_and_edit_preserve_remote_message_id(monkeypatch):
+    """The testkit's receipt/history identity follows actual SDK message decoding."""
+    import asyncio
+
+    async def scenario():
+        bot = discord.Client(intents=discord.Intents.none())
+        await bot._async_setup_hook()
+        remote = {"id": "7001", "channel_id": "42", "content": "合成本文",
+                  "author": {"id": "4242", "username": "MCS", "discriminator": "0000",
+                             "avatar": None, "bot": True},
+                  "timestamp": "2026-10-01T00:00:00+00:00", "edited_timestamp": None,
+                  "tts": False, "mention_everyone": False, "mentions": [],
+                  "mention_roles": [], "attachments": [], "embeds": [], "pinned": False,
+                  "type": 0, "flags": 0}
+
+        class Channel(discord.abc.Messageable):
+            id, guild, _state = 42, None, bot._connection
+
+            async def _get_channel(self):
+                return self
+
+        async def send(channel_id, *, params):
+            assert channel_id == 42
+            remote["content"] = params.payload["content"]
+            return dict(remote)
+
+        async def fetch(channel_id, message_id):
+            assert (channel_id, message_id) == (42, 7001)
+            return dict(remote)
+
+        async def history(channel_id, limit, **kwargs):
+            assert channel_id == 42 and limit == 1
+            return [dict(remote)]
+
+        async def edit(channel_id, message_id, *, params):
+            assert (channel_id, message_id) == (42, 7001)
+            remote["content"] = params.payload["content"]
+            return dict(remote)
+
+        monkeypatch.setattr(bot.http, "send_message", send)
+        monkeypatch.setattr(bot.http, "get_message", fetch)
+        monkeypatch.setattr(bot.http, "logs_from", history)
+        monkeypatch.setattr(bot.http, "edit_message", edit)
+        try:
+            channel = Channel()
+            sent = await channel.send("合成本文", allowed_mentions=discord.AllowedMentions.none())
+            listed = [m async for m in channel.history(limit=1)]
+            fetched = await channel.fetch_message(sent.id)
+            updated = await fetched.edit(content="合成更新", allowed_mentions=discord.AllowedMentions.none())
+            assert isinstance(sent, discord.Message)
+            assert sent.id == listed[0].id == fetched.id == updated.id == 7001
+            assert updated.content == "合成更新" and listed[0].author.id == 4242
+        finally:
+            await bot.close()
+    asyncio.run(scenario())

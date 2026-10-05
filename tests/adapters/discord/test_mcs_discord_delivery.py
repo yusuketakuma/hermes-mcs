@@ -565,6 +565,18 @@ def test_remote_match_never_binds_foreign_content(tmp_path):
         assert row["remote_id"] == str(th.sent[1 + i].id)
 
 
+@pytest.mark.parametrize("identity", [None, types.SimpleNamespace()])
+def test_remote_match_without_bot_identity_never_proves_foreign_delivery(tmp_path, identity):
+    w, reg, bot = _mkworker(tmp_path)
+    bot.user = identity
+    th = FakeThread(7700)
+    body = "架空の同一本文"
+    th.sent.append(_HistMsg(7001, body, author=FOREIGN_USER))
+    ctx = {"history": None, "consumed": set()}
+    assert asyncio.run(w._remote_match(th, body, ctx)) is None
+    assert ctx["consumed"] == set()
+
+
 # ---------- in-place rewrite of a changed chunk ------------------------------
 
 def _prior_thread(tmp_path, old_texts):

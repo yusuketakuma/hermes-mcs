@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from html import escape
 import re
 import time
 from collections.abc import Mapping
@@ -294,6 +295,9 @@ class DeliveryWorker(_BaseWorker):
         if not thread_ts:
             return {"result": "not_sent",
                     "error_code": "thread_root_missing"}
+        # Slack parses explicit mentions even without automatic name linking.
+        # Use the same escaped wire text for both sends and remote verification.
+        text = escape(text, quote=False)
         if spec["op"] == "update" or spec["delivery"].get("thread_id"):
             # writing into an existing thread — an identical reply
             # authored by this bot binds the part to its real ts
@@ -315,7 +319,7 @@ class DeliveryWorker(_BaseWorker):
         try:
             response = await sender.chat_postMessage(
                 channel=self._settings["channel_id"],
-                thread_ts=thread_ts, text=text,
+                thread_ts=thread_ts, text=text, link_names=False,
                 unfurl_links=False, unfurl_media=False)
         except asyncio.CancelledError:
             raise
@@ -354,7 +358,8 @@ class DeliveryWorker(_BaseWorker):
             return None
         try:
             response = await sender.chat_update(
-                channel=self._settings["channel_id"], ts=prior, text=text)
+                channel=self._settings["channel_id"], ts=prior, text=text,
+                link_names=False)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -452,7 +457,14 @@ class DeliveryWorker(_BaseWorker):
                         and f.get("size") != part["bytes"]:
                     continue
                 rsha = f.get("sha256")
-                if not want_sha or rsha != want_sha:
+                # Slack does not promise a file hash in replies. A sealed
+                # earlier receipt can instead prove these same bytes, but
+                # only for this bot's still-present immutable hosted upload.
+                proven_prior = (rsha is None and fid == part.get("prior_remote_id")
+                                and f.get("mode") == "hosted"
+                                and f.get("is_external") is False
+                                and f.get("editable") is False)
+                if not want_sha or (rsha != want_sha and not proven_prior):
                     continue
                 ctx["consumed"].add(fid)
                 return fid
@@ -492,4 +504,9 @@ class DeliveryWorker(_BaseWorker):
         if data.get("ok") is not True or not isinstance(msgs, list) \
                 or not all(isinstance(m, dict) for m in msgs):
             raise RuntimeError("reply_history_unverified")
+        metadata = data.get("response_metadata", {})
+        if not isinstance(metadata, dict):
+            raise RuntimeError("reply_history_unverified")
+        if data.get("has_more") or metadata.get("next_cursor"):
+            raise RuntimeError("reply_history_incomplete")
         return msgs

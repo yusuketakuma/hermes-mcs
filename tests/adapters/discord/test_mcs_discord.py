@@ -2245,7 +2245,7 @@ def test_thread_body_send_failure_only_logs(world, monkeypatch):
     async def run():
         original = FakeThread.send
 
-        async def boom(self, content):
+        async def boom(self, content, allowed_mentions=None):
             raise FakeHTTP(500)
         monkeypatch.setattr(FakeThread, "send", boom)
         sent = await _deliver(world, worker)
@@ -2268,12 +2268,22 @@ def test_thread_body_send_failure_only_logs(world, monkeypatch):
     render = world.led.db.execute(
         "SELECT parts_state FROM notification_renders").fetchone()
     assert render["parts_state"] == "incomplete"
+    errors = [r["error_code"] for r in world.led.db.execute(
+        "SELECT error_code FROM notification_render_parts WHERE kind='body_part'")]
+    assert errors and set(errors) == {"http_500"}
+    before = world.led.db.execute("SELECT count(*) FROM notification_renders").fetchone()[0]
+    notify_cards.apply_refresh(world.led, {
+        "command_id": "00000000-0000-4000-8000-00000000f001", "actor": "discord:1001",
+        "origin": {"profile": "mcs", "application_id": "1", "guild_id": "7",
+                   "channel_id": "42", "message_id": world.card()["message_id"]}}, CFG)
+    assert world.led.db.execute("SELECT count(*) FROM notification_renders").fetchone()[0] == before
+    assert len(bot.channels[42].sent) == 1
 
 
 def test_update_backfills_body_into_existing_thread(world, monkeypatch):
     """A card whose thread was created before the in-thread body —
-    here simulated by a failed body post — gets the text on the next
-    update render. Content dedupe keeps further updates silent."""
+    here simulated by a definitive 400 body rejection — gets the text
+    on the next update. Unknown outcomes remain held, never retried."""
     world.seed()
     world.dispatch()
     worker, reg, bot = world.mkworker()
@@ -2281,8 +2291,8 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
     async def run():
         original = FakeThread.send
 
-        async def boom(self, content):
-            raise FakeHTTP(500)
+        async def boom(self, content, allowed_mentions=None):
+            raise FakeHTTP(400)
         monkeypatch.setattr(FakeThread, "send", boom)
         sent = await _deliver(world, worker)
         assert len(sent) == 1
@@ -2292,6 +2302,10 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         monkeypatch.setattr(FakeThread, "send", original)
         thread = sent[0].threads[0][1]
         assert not thread.sent
+        assert {r["state"] for r in world.led.db.execute(
+            "SELECT state FROM notification_render_parts WHERE kind='body_part'")}
+        assert all(r["state"] == "not_sent" for r in world.led.db.execute(
+            "SELECT state FROM notification_render_parts WHERE kind='body_part'"))
         # source drifts -> update render on the same message
         world.led.db.execute(
             "UPDATE messages SET body_text='追記あり',content_hash=? "
@@ -2313,7 +2327,7 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         await worker._deliver_parts(
             claim2, str(spec2["delivery"]["message_id"]))
         assert len(thread.sent) == n
-        # a changed body posts the new version (latest text lands last)
+        # a changed body rewrites its proven earlier post in place
         world.led.db.execute(
             "UPDATE messages SET body_text='さらに追記',content_hash=? "
             "WHERE message_id=101", ("f" * 64,))
@@ -2321,8 +2335,9 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         notify_cards.sweep(world.led, CFG)
         await _deliver(world, worker)
         world.drain()
-        assert len(thread.sent) == n + 1
-        assert "さらに追記" in thread.sent[-1]
+        assert len(thread.sent) == n
+        assert "さらに追記" in "\n".join(thread.sent)
+        assert sum(message.edits for message in thread.messages) == 1
 
     asyncio.run(run())
 

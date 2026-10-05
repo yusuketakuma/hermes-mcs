@@ -832,6 +832,42 @@ def test_unverified_slack_history_never_posts_or_uploads_again(
     assert len(w.client.upload_calls) == uploaded
 
 
+@pytest.mark.parametrize("kind", ["body_part", "attachment_part"])
+@pytest.mark.parametrize("pagination", [
+    {"has_more": True}, {"response_metadata": {"next_cursor": "synthetic-next"}}],
+    ids=["has_more", "next_cursor"])
+def test_incomplete_slack_history_never_authorizes_resend(
+        led, monkeypatch, kind, pagination):
+    w, spec, _ = _rewrite_world(led)
+    spec["delivery_id"] = "00000000-0000-4000-8000-00000000fade"
+    posted, uploaded = len(w.client.thread_posts), len(w.client.upload_calls)
+
+    async def partial_replies(self, **kwargs):
+        assert kwargs["limit"] == 200
+        return {"ok": True, "messages": [], **pagination}
+
+    monkeypatch.setattr(FakeClient, "conversations_replies", partial_replies)
+    part = {"part_id": "body:0001" if kind == "body_part" else "file:0001",
+            "kind": kind, "name": "synthetic.txt", "bytes": 1,
+            "sha256": "a" * 64}
+    claim = {"spec": spec, "payload_hash": envelopes.payload_hash(spec)}
+    ctx = {"card_message_id": ROOT_TS, "thread_id": ROOT_TS,
+           "history": None, "consumed": set()}
+
+    async def scenario():
+        await w.worker._attempt_part(claim, part, ctx)
+        records = w.worker._jview.refresh()
+        rows = records[envelopes.part_attempt_id(spec["delivery_id"], part["part_id"])]
+        outcome = next(r for r in rows if r["phase"] == "result")
+        assert outcome["result"] == "unknown"
+        assert outcome["error_code"] == "runtimeerror"
+        await w.worker._drive_parts(claim, [part], ctx, records)
+
+    asyncio.run(scenario())
+    assert len(w.client.thread_posts) == posted
+    assert len(w.client.upload_calls) == uploaded
+
+
 def test_slack_update_rewrites_the_earlier_reply_of_a_changed_chunk(led):
     """The chunk's text changed after its first post (the extraction
     arrived): the update rewrites that reply — one reply per chunk, the
@@ -842,8 +878,39 @@ def test_slack_update_rewrites_the_earlier_reply_of_a_changed_chunk(led):
     assert out == {"result": "delivered", "remote_id": our_ts}
     assert len(w.client.thread_posts) == posted
     assert _updates(w) == [{"channel": SCOPE["channel_id"], "ts": our_ts,
-                            "text": "変更後の本文"}]
+                            "text": "変更後の本文", "link_names": False}]
     assert replies[0]["text"] == "変更後の本文"
+
+
+def test_slack_body_special_characters_are_literal_and_dedupe_after_restart(led):
+    from html import unescape
+    w, spec, _ = _rewrite_world(led)
+    body = "BP<90 & >60 <!channel> <@U0OP>"
+    ctx = {"thread_id": ROOT_TS, "history": None, "consumed": set()}
+    first = asyncio.run(w.worker._body_part(spec, body, ctx))
+    posted = len(w.client.thread_posts)
+    wire = w.client.thread_posts[-1]["text"]
+    assert "<!channel>" not in wire and "<@U0OP>" not in wire
+    assert unescape(wire) == body
+    assert w.client.thread_posts[-1]["link_names"] is False
+    again = asyncio.run(w.worker._body_part(
+        spec, body, {"thread_id": ROOT_TS, "history": None, "consumed": set()}))
+    assert again == first and len(w.client.thread_posts) == posted
+
+
+def test_slack_rewrite_keeps_special_characters_literal_and_reuses_same_id(led):
+    from html import unescape
+    w, spec, replies = _rewrite_world(led)
+    prior = replies[0]["ts"]
+    body = "変更: <@U0OP> <!here> A&B <90"
+    posted = len(w.client.thread_posts)
+    out = _rewrite(w, spec, body, prior)
+    assert out == {"result": "delivered", "remote_id": prior}
+    update = _updates(w)[-1]
+    assert "<!here>" not in update["text"] and "<@U0OP>" not in update["text"]
+    assert unescape(update["text"]) == body and update["link_names"] is False
+    assert _rewrite(w, spec, body, prior) == out
+    assert len(_updates(w)) == 1 and len(w.client.thread_posts) == posted
 
 
 def test_slack_rewrite_never_touches_a_foreign_or_missing_reply(led):
@@ -1046,6 +1113,62 @@ def test_slack_attachment_update_binds_remote_file(led, tmp_path):
     # the same file already remote binds its real id — no re-upload
     assert out["result"] == "delivered" and out["remote_id"] == fid
     assert len(w.client.upload_calls) == uploads
+
+
+@pytest.mark.parametrize("editable", [False, True])
+def test_slack_sealed_prior_file_without_remote_hash_reuses_only_immutable_upload(
+        led, tmp_path, editable):
+    _seed_thread(led)
+    _attach(led, tmp_path)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    asyncio.run(_granted_card(w.worker, led, w.root))
+    uploads = len(w.client.upload_calls)
+    spec = json.loads(_latest_render(led)["spec_json"])
+    part = next(p for p in spec["parts"]["manifest"]
+                if p["kind"] == "attachment_part")
+    remote = w.client.replies[ROOT_TS][-1]["files"][0]
+    fid = remote["id"]
+    remote.pop("sha256")  # Slack's documented file object has no sha256 promise
+    remote.update(mode="hosted", is_external=False, editable=editable)
+    # This id comes from an earlier delivered receipt for these sealed bytes.
+    part["prior_remote_id"] = fid
+    ctx = {"thread_id": ROOT_TS, "history": None, "consumed": set()}
+    out = asyncio.run(w.worker._attachment_part({**spec, "op": "update"}, part, ctx))
+    assert out["result"] == "delivered"
+    assert len(w.client.upload_calls) == uploads + int(editable)
+    if not editable:
+        assert out["remote_id"] == fid
+        assert fid in ctx["consumed"]
+
+
+@pytest.mark.parametrize("invalid_proof", ["foreign", "external", "hash_conflict", "no_receipt"])
+def test_slack_prior_file_receipt_never_bypasses_remote_proof(led, tmp_path, invalid_proof):
+    _seed_thread(led)
+    _attach(led, tmp_path)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    asyncio.run(_granted_card(w.worker, led, w.root))
+    uploads = len(w.client.upload_calls)
+    spec = json.loads(_latest_render(led)["spec_json"])
+    part = next(p for p in spec["parts"]["manifest"] if p["kind"] == "attachment_part")
+    message = w.client.replies[ROOT_TS][-1]
+    remote = message["files"][0]
+    remote.pop("sha256")
+    remote.update(mode="hosted", is_external=False, editable=False)
+    part["prior_remote_id"] = remote["id"]
+    if invalid_proof == "foreign":
+        message["bot_id"] = "B_FOREIGN"
+    elif invalid_proof == "external":
+        remote["is_external"] = True
+    elif invalid_proof == "hash_conflict":
+        remote["sha256"] = "0" * 64
+    else:
+        part.pop("prior_remote_id")
+    out = asyncio.run(w.worker._attachment_part({**spec, "op": "update"}, part,
+        {"thread_id": ROOT_TS, "history": None, "consumed": set()}))
+    assert out["result"] == "delivered" and out["remote_id"] != remote["id"]
+    assert len(w.client.upload_calls) == uploads + 1
 
 
 def test_slack_attachment_foreign_file_never_binds(led, tmp_path):

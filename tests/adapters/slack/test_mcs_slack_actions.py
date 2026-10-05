@@ -882,3 +882,21 @@ def test_modal_opened_before_upgrade_still_submits(tmp_path, kind, fields,
         assert {k: payload[k] for k in expect} == expect
         assert validate_human(payload) is None
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("body", ["BP<90 & >60 <!channel> <@U0OP>", "&<漢" * 1900],
+                         ids=["literal_mentions", "utf8_entity_expansion"])
+def test_ephemeral_source_text_is_literal_and_every_chunk_fits_wire_budget(tmp_path, body):
+    from html import unescape
+
+    async def scenario():
+        actions, app, _, _ = fixture(tmp_path)
+        await actions._say(SCOPE["channel_id"], "U_OPERATOR", body)
+        wire = [message["text"] for message in app.client.messages]
+        assert wire and all(len(chunk.encode("utf-8")) <= 4000 for chunk in wire)
+        assert all("<!channel>" not in chunk and "<@U0OP>" not in chunk for chunk in wire)
+        # Decode each chunk separately: an entity must not straddle messages.
+        assert "".join(unescape(chunk) for chunk in wire) == body
+        assert all(message["user"] == "U_OPERATOR" and message["link_names"] is False
+                   for message in app.client.messages)
+    asyncio.run(scenario())

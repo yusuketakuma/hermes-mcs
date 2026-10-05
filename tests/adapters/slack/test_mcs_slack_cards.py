@@ -110,3 +110,36 @@ def test_full_card_is_one_compact_row():
     kinds = [e["type"] for e in actions[0]["elements"]]
     assert kinds == ["button", "button", "static_select"]
     assert len(actions[0]["elements"][2]["options"]) == len(ids) - 2
+
+
+def test_link_label_and_query_escape_slack_markup_without_changing_link():
+    from html import unescape
+    spec = _spec()
+    url = "https://example.invalid/?a=1&b=2"
+    label = "開く & <@U0OP>"
+    spec["parts"]["action_rows"] = [[{"ui": "link", "id": "link", "url": url,
+                                         "label": label}]]
+    _, blocks = render(spec)
+    wire = blocks[-1]["elements"][0]["text"]
+    assert wire.count("<") == wire.count(">") == 1
+    wire_url, wire_label = wire[1:-1].split("|")
+    assert unescape(wire_url) == url and unescape(wire_label) == label
+
+
+@pytest.mark.parametrize("url", ["https://", "https://example.invalid/>|<!channel>",
+                                  "https://example.invalid/\n<@U0OP>"])
+def test_link_url_with_missing_host_or_slack_delimiter_is_rejected(url):
+    spec = _spec()
+    spec["parts"]["action_rows"] = [[{"ui": "link", "id": "link", "url": url,
+                                         "label": "開く"}]]
+    with pytest.raises(ValueError, match="slack_link_url"):
+        render(spec)
+
+
+def test_link_url_escape_expansion_obeys_context_budget():
+    spec = _spec()
+    spec["parts"]["action_rows"] = [[{
+        "ui": "link", "id": "link", "label": "開く",
+        "url": "https://example.invalid/?" + "&" * 480}]]
+    with pytest.raises(ValueError, match="slack_link_budget"):
+        render(spec)

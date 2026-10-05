@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from html import escape
 import os
 import re
 import time
@@ -140,6 +141,21 @@ def _parts_blocks(result) -> list | None:
     except (KeyError, TypeError):
         return None
     return blocks if 0 < len(blocks) <= 50 else None
+
+
+def _ephemeral_chunks(text):
+    """Escape source text without splitting entities or Slack's byte budget."""
+    chunk, size = [], 0
+    for char in text:
+        escaped = escape(char, quote=False)
+        width = len(escaped.encode("utf-8"))
+        if size + width > 4000:
+            yield "".join(chunk)
+            chunk, size = [], 0
+        chunk.append(escaped)
+        size += width
+    if chunk or not text:
+        yield "".join(chunk)
 
 
 class Actions:
@@ -285,11 +301,14 @@ class Actions:
             self._log("followup_failed", error="retry_policy_unknown")
             return
         try:
-            kwargs = {"channel": channel, "user": user,
-                      "text": text, "link_names": False}
-            if blocks:
-                kwargs["blocks"] = blocks
-            await client.chat_postEphemeral(**kwargs)
+            for index, chunk in enumerate(_ephemeral_chunks(text)):
+                if not self._active:
+                    return
+                kwargs = {"channel": channel, "user": user,
+                          "text": chunk, "link_names": False}
+                if blocks and index == 0:
+                    kwargs["blocks"] = blocks
+                await client.chat_postEphemeral(**kwargs)
         except Exception as exc:
             self._log("followup_failed", error=type(exc).__name__)
 
