@@ -321,16 +321,19 @@ F-2のルール緊急度問題は1.0.13で是正予定。#17と#19（残件、�
 
 **目的**: シグナルの実際の有用性を、内部の人手行動だけで評価し、閾値・文言を人が見直す材料にする。検知条件への自動フィードバックはしない（`mcs_signals.py:14-17`）。外部送信なし、zaitaku-calender への逆流なし（ROADMAP §6）。
 
-**現状（2026-10-04のコード照合）**
+**現状（2026-10-05のコード照合）**
 - signal_v1はappend-onlyで、dismissedは同証拠の間は抑止し、証拠変化で再openする。
-  resolvedの原因・signal↔requestの採用関係は未記録で、ackは完了/採用の証明ではない。
+  resolvedには記録上の除外根拠を`resolution.cause`として残す。根拠を分類できない旧行は補完しない。
+  signal↔requestの明示的な採用関係は未記録で、ackは完了/採用の証明ではない。
 - 却下の自由文とは別に任意の`reason_code`が既にある。`_v_signal_dismiss`（mcs_operations.py）が
   `DISMISS_REASON_CODES`で検査し、signal_dismissが`dismiss_reason_code`として保存する。コード未指定の旧データを理由判明済みとして補完しない。
 - feedback集計（mcs_stats.py `st_signal_feedback`、理由別件数は mcs_signals.py `dismiss_reason_counts`）は
-  open/resolved/dismissedと理由別件数を扱う。
+  解消原因・再open・配送済みページの確認・証拠投稿に結び付く依頼登録を分母付きで扱い、
+  小標本の率・区間・時間統計を抑制する。依頼登録は採用の代理指標で、因果や臨床完了を証明しない。
+  actor・自由文は出力せず、履歴欠落や期間境界を跨ぐ抑制記録をゼロとして補完しない。
   「理由が自由文だけ」「集計がない」という旧記述は現状と異なる。
-- 残件は解消原因・採用の根拠・再open率/分母・小標本抑制・actor非出力・検知非干渉。
-  既存コード/集計を再実装せず、以下の追加設計をこの残件へ適用する。
+- 残件は明示的な採用関係・人手ラベル・privacyの最小群判断・校正と実運用評価。
+  以下の設計は当時の段階案として保持し、既存コード/集計を再実装しない。
 - digestのページ確認と個別signalの却下を区別する。新しい却下UIの対象は#19-D1で決める。
   signals.notify/実機の利用状態は今回未検証で、既定設定と稼働設定を混同しない。
 - resolved/dismissedや新しい統計のexportは、既存allowlistの条件を維持してfail-closedとする。
