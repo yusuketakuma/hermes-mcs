@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "REVIEWED": 647,
+      "REVIEWED": 670,
       "EXCLUDED": 25,
-      "PARTIAL": 38,
+      "PARTIAL": 17,
       "UNSEEN": 196
     },
-    "candidate_tracked": 904
+    "candidate_tracked": 906
   },
   "files": [
     {
@@ -734,7 +734,7 @@
       "lines": 535,
       "module": "README.md",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "Parent complete bounded read; README truncated middle reread351–440. Contract/docs/20criteria cross-check pending; no complete review inferred from reading alone.",
         "Core6全4395行・7module×20criterionを親が確認。READMEはP全文と親mode限定1文deltaのみ、その他5文書は現I SHA一致。"
@@ -743,26 +743,14 @@
       "full_content_read": true,
       "read_ranges": [
         [
-          101,
-          280
-        ],
-        [
-          281,
-          440
-        ],
-        [
-          441,
-          535
-        ],
-        [
           1,
-          100
+          536
         ]
       ],
       "read_sha256": "15953da31f91eedf229e30c2f5634f489d808208e7c12bef8ac81565271a822b",
-      "reviewed_sha256": "ba4b06a566fcb8c644cbf9d18a3dc4743454d88d9fe22b390ad008828be2b6c7",
-      "reviewed_lines": 535,
-      "review_packet": "docs/development/maintenance-core-packet6-evidence.json",
+      "reviewed_sha256": "02b6a6156b8aea5bbae590387b55b6a474b701b9fa6bd506566f3f707c5a8f19",
+      "reviewed_lines": 536,
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
       "responsibility": "現在mainの利用入口・3channel表示・mode/導入・安全・生成release要約。",
       "callers": [
         "利用者/installer導線",
@@ -833,7 +821,7 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "02b6a6156b8aea5bbae590387b55b6a474b701b9fa6bd506566f3f707c5a8f19",
-      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
+      "parent_delta_reviewed": true
     },
     {
       "path": "SECURITY.md",
@@ -7807,21 +7795,25 @@
       "lines": 786,
       "module": "docs",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
         [
-          489,
-          500
+          1,
+          791
         ]
       ],
       "packet": "docs/development/maintenance-notify-evidence.json",
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "2573b5fc9d9a74b080234f56de4040a977b6852c85882192a9b71ceee6b0ab93",
-      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
+      "reviewed_sha256": "2573b5fc9d9a74b080234f56de4040a977b6852c85882192a9b71ceee6b0ab93",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
+      "parent_delta_reviewed": true,
+      "full_content_read": true,
+      "reviewed_lines": 791
     },
     {
       "path": "docs/guides/LINEWORKS.md",
@@ -7887,21 +7879,25 @@
       "lines": 540,
       "module": "docs",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
         [
-          75,
-          125
+          1,
+          572
         ]
       ],
       "packet": "docs/development/maintenance-notify-evidence.json",
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "e79a23cdeeabd500c53839ac06adc1ba9d29b150b77dd0f25663f04b4c00cdc5",
-      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
+      "reviewed_sha256": "e79a23cdeeabd500c53839ac06adc1ba9d29b150b77dd0f25663f04b4c00cdc5",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
+      "parent_delta_reviewed": true,
+      "full_content_read": true,
+      "reviewed_lines": 572
     },
     {
       "path": "docs/releases/archive/CHANGELOG-before-format.md",
@@ -8250,15 +8246,15 @@
       "lines": null,
       "module": "docs",
       "kind": "binary",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
       "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
-      "reviewed_sha256": "d290c1b3822e6671acba3bb97d782873488a4ec94c1f3ef822d289ac991ffc29",
+      "reviewed_sha256": "1f8099668d5572847dd5e488f599f4cb9b7da72e66d68018d30130631ab95529",
       "reviewed_lines": null,
       "full_content_read": false,
-      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
       "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
       "callers": [
         ".github/workflows/release-notes.yml:49-51",
@@ -8341,7 +8337,9 @@
       "classification_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。",
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "400c265b65f22fae8e796ae6dd83f67b1284c2f617397fde8d731b1f0d1c4b19",
-      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
+      "parent_delta_reviewed": true,
+      "generated_binary_verified": true,
+      "visual_review": "Actual synthetic PNG artifact inspected by parent after final canonical generation; no text overlap/cropping."
     },
     {
       "path": "docs/screenshots/lineworks-gallery/01-delivery.svg",
@@ -8350,15 +8348,15 @@
       "lines": 70,
       "module": "docs",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
       "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
-      "reviewed_sha256": "1e1243ff6bddbf0d6fb58b1b5392c64f5851df96a0a8c0721c7555a4f5b4b8d6",
-      "reviewed_lines": 70,
+      "reviewed_sha256": "355bdfdf884e684673e397c0cfc7c1d4dfc0c54fca685ebccc42881a0b53093d",
+      "reviewed_lines": 74,
       "full_content_read": true,
-      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
       "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
       "callers": [
         ".github/workflows/release-notes.yml:49-51",
@@ -8371,7 +8369,7 @@
       "read_ranges": [
         [
           1,
-          70
+          74
         ]
       ],
       "criteria": {
@@ -8438,7 +8436,7 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "7da5f985adb7d861f56610c2d29953b85c5d136edc4cece086e45cb1d047b275",
-      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
+      "parent_delta_reviewed": true
     },
     {
       "path": "docs/screenshots/lineworks-gallery/02-task-confirm.png",
@@ -8638,15 +8636,15 @@
       "lines": 38,
       "module": "docs",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
       "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
-      "reviewed_sha256": "7e04de4357258ebe14084b723fc1e0420326497bf4df8e2be92becd265920224",
-      "reviewed_lines": 38,
+      "reviewed_sha256": "cb668d0492d7a9d51b0fd780ed2af64d382aa586e426d6bb5e0d64b811e41a79",
+      "reviewed_lines": 39,
       "full_content_read": true,
-      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
       "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
       "callers": [
         ".github/workflows/release-notes.yml:49-51",
@@ -8659,7 +8657,7 @@
       "read_ranges": [
         [
           1,
-          38
+          39
         ]
       ],
       "criteria": {
@@ -8726,7 +8724,7 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "cb668d0492d7a9d51b0fd780ed2af64d382aa586e426d6bb5e0d64b811e41a79",
-      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
+      "parent_delta_reviewed": true
     },
     {
       "path": "docs/screenshots/lineworks-gallery/assets.json",
@@ -8735,15 +8733,15 @@
       "lines": 10,
       "module": "docs",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
       "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
-      "reviewed_sha256": "08d9f139b7346e3ef2b5e7d410e05a118b72e59dd0a49685c1e08a7fcaeac96d",
+      "reviewed_sha256": "da48b13171877b988ac8fafca869a0f2826d0d6b6138b40325183d9dc731e208",
       "reviewed_lines": 10,
       "full_content_read": true,
-      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
       "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
       "callers": [
         ".github/workflows/release-notes.yml:49-51",
@@ -8823,7 +8821,7 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "c906530317c16602454f9b28e5e6e2b87dce8be0277775298264a1b79458e5db",
-      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
+      "parent_delta_reviewed": true
     },
     {
       "path": "docs/screenshots/signals-cli.svg",
@@ -9209,15 +9207,15 @@
       "lines": null,
       "module": "docs",
       "kind": "binary",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
       "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
-      "reviewed_sha256": "c61b4e8854947d8a96bdd1d95e3f65604938d5a7f56dcefbdf4e266defbd6680",
+      "reviewed_sha256": "09aa7da49906ccd7ed882909bb9df22fd370ae0c24b97235fff39fb89ce5e40a",
       "reviewed_lines": null,
       "full_content_read": false,
-      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
       "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
       "callers": [
         ".github/workflows/release-notes.yml:49-51",
@@ -9300,7 +9298,9 @@
       "classification_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。",
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "08cec0361bb9ad611b018372c96c413bdbc8377646faa43d72aa47e50a8ad3a8",
-      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
+      "parent_delta_reviewed": true,
+      "generated_binary_verified": true,
+      "visual_review": "Actual synthetic PNG artifact inspected by parent after final canonical generation; no text overlap/cropping."
     },
     {
       "path": "docs/screenshots/slack-gallery/02-notification.svg",
@@ -9309,15 +9309,15 @@
       "lines": 45,
       "module": "docs",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
       "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
-      "reviewed_sha256": "a84a13417a607b1ee1d59e875d837dcfe8f283fc005f2e622387f9c1d6bafe0d",
-      "reviewed_lines": 45,
+      "reviewed_sha256": "5ad43600957479344a9d77f24ba383c7624241caf8ee102600e3b5740c329b4e",
+      "reviewed_lines": 52,
       "full_content_read": true,
-      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
       "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
       "callers": [
         ".github/workflows/release-notes.yml:49-51",
@@ -9330,7 +9330,7 @@
       "read_ranges": [
         [
           1,
-          45
+          52
         ]
       ],
       "criteria": {
@@ -9397,7 +9397,7 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "b9bb11a982ccafbd58df5a7dd55e87034564641789782ac5958aff3c051b0560",
-      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
+      "parent_delta_reviewed": true
     },
     {
       "path": "docs/screenshots/slack-gallery/03-actions.png",
@@ -10361,15 +10361,15 @@
       "lines": 44,
       "module": "docs",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
       "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
-      "reviewed_sha256": "056e36341de45f8b34e6dc728bac76fee58728202d1c49b0723d176542b6b50b",
+      "reviewed_sha256": "78abe12fe831955465a7202abc3bf2030f8fdf8d8f2d4b7fbfc5dbaa23b2c765",
       "reviewed_lines": 44,
       "full_content_read": true,
-      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
       "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
       "callers": [
         ".github/workflows/release-notes.yml:49-51",
@@ -10449,7 +10449,7 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "78abe12fe831955465a7202abc3bf2030f8fdf8d8f2d4b7fbfc5dbaa23b2c765",
-      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
+      "parent_delta_reviewed": true
     },
     {
       "path": "docs/screenshots/slack-gallery/assets.json",
@@ -10458,15 +10458,15 @@
       "lines": 30,
       "module": "docs",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
       "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
-      "reviewed_sha256": "dbbbdf2df5ad799dcc316bca69c3d89e37c9cdff032e398428276afad1bfa362",
+      "reviewed_sha256": "462760f03a63c7f7c04f114c8a10cdb4f7007a210178f62cdba682316e6909d4",
       "reviewed_lines": 30,
       "full_content_read": true,
-      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
       "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
       "callers": [
         ".github/workflows/release-notes.yml:49-51",
@@ -10546,7 +10546,7 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "09d13b1e9ab5b7f980c81fcac39b63ad44834121288fd1effbe97f7706d30692",
-      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
+      "parent_delta_reviewed": true
     },
     {
       "path": "docs/screenshots/slack-thread.svg",
@@ -13115,7 +13115,7 @@
       "lines": 2986,
       "module": "mcs/notify",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
       ],
@@ -13123,61 +13123,13 @@
       "read_ranges": [
         [
           1,
-          230
-        ],
-        [
-          231,
-          465
-        ],
-        [
-          466,
-          700
-        ],
-        [
-          701,
-          920
-        ],
-        [
-          921,
-          1160
-        ],
-        [
-          1161,
-          1390
-        ],
-        [
-          1391,
-          1630
-        ],
-        [
-          1631,
-          1870
-        ],
-        [
-          1871,
-          2110
-        ],
-        [
-          2111,
-          2350
-        ],
-        [
-          2351,
-          2590
-        ],
-        [
-          2591,
-          2800
-        ],
-        [
-          2801,
-          2986
+          2990
         ]
       ],
       "packet": "docs/development/maintenance-notify-evidence.json",
-      "reviewed_sha256": "4da262ffadfdff40160dcf59847923ed7cd74d0b88d3bf609bb07486e692def0",
-      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
-      "responsibility": "カード・意図coverage・token/manifest・配送計画の永続化、操作認可、復旧・GC",
+      "reviewed_sha256": "e41caa907dbf06ab263f422097b11f9d7a880a867ac57a53298b0639493ebd0d",
+      "review_packet": "docs/development/maintenance-stamps-evidence.json",
+      "responsibility": "render発行・sealed manifest・世代・grant/receipt・本文post identityのライフサイクル。",
       "callers_or_consumers": [
         "notify_flush.flush",
         "run_check._deliver",
@@ -13188,7 +13140,31 @@
       "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。",
       "current_delta_sha256": "e41caa907dbf06ab263f422097b11f9d7a880a867ac57a53298b0639493ebd0d",
       "current_delta_commit": "6eff3df",
-      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
+      "reviewed_lines": 2990,
+      "full_content_read": true,
+      "callers": "notify_flush dispatch、notify_cmds dispatch、各adapter workerのtransport/part receipts",
+      "criteria": {
+        "C01": "packet_criteria.C01",
+        "C02": "packet_criteria.C02",
+        "C03": "packet_criteria.C03",
+        "C04": "packet_criteria.C04",
+        "C05": "packet_criteria.C05",
+        "C06": "packet_criteria.C06",
+        "C07": "packet_criteria.C07",
+        "C08": "packet_criteria.C08",
+        "C09": "packet_criteria.C09",
+        "C10": "packet_criteria.C10",
+        "C11": "packet_criteria.C11",
+        "C12": "packet_criteria.C12",
+        "X01": "packet_criteria.X01",
+        "X02": "packet_criteria.X02",
+        "X03": "packet_criteria.X03",
+        "X04": "packet_criteria.X04",
+        "X05": "packet_criteria.X05",
+        "X06": "packet_criteria.X06",
+        "X07": "packet_criteria.X07",
+        "X08": "packet_criteria.X08"
+      }
     },
     {
       "path": "mcs/notify/notify_cmds.py",
@@ -13335,32 +13311,20 @@
       "lines": 797,
       "module": "mcs/notify",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
       ],
       "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
-      "reviewed_sha256": "f42d1837ccada87b926d397976f56fe21bb02888e9c06dfdf406f2b0fb22838e",
-      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "reviewed_sha256": "b6afa5e00db92d2a1fcceb27815718d6effdcc7ea1deca6b239fb92e5cb11948",
+      "review_packet": "docs/development/maintenance-stamps-evidence.json",
       "read_ranges": [
         [
           1,
-          210
-        ],
-        [
-          211,
-          400
-        ],
-        [
-          401,
-          610
-        ],
-        [
-          611,
-          797
+          804
         ]
       ],
-      "responsibility": "共通表示モデル・lossless本文・pagination/予算・source fingerprint・確認footer",
+      "responsibility": "カード/各投稿の読み取り専用表示モデルとsource/presentation fingerprint。",
       "callers_or_consumers": [
         "notify_cards._build_spec",
         "notify_views",
@@ -13370,7 +13334,31 @@
       "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。",
       "current_delta_sha256": "b6afa5e00db92d2a1fcceb27815718d6effdcc7ea1deca6b239fb92e5cb11948",
       "current_delta_commit": "6eff3df",
-      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
+      "reviewed_lines": 804,
+      "full_content_read": true,
+      "callers": "notify_cards._issue_render/_build_part_manifest、notify_views.unacked_view、Slack/Discord/LINE WORKSカード変換",
+      "criteria": {
+        "C01": "packet_criteria.C01",
+        "C02": "packet_criteria.C02",
+        "C03": "packet_criteria.C03",
+        "C04": "packet_criteria.C04",
+        "C05": "packet_criteria.C05",
+        "C06": "packet_criteria.C06",
+        "C07": "packet_criteria.C07",
+        "C08": "packet_criteria.C08",
+        "C09": "packet_criteria.C09",
+        "C10": "packet_criteria.C10",
+        "C11": "packet_criteria.C11",
+        "C12": "packet_criteria.C12",
+        "X01": "packet_criteria.X01",
+        "X02": "packet_criteria.X02",
+        "X03": "packet_criteria.X03",
+        "X04": "packet_criteria.X04",
+        "X05": "packet_criteria.X05",
+        "X06": "packet_criteria.X06",
+        "X07": "packet_criteria.X07",
+        "X08": "packet_criteria.X08"
+      }
     },
     {
       "path": "mcs/notify/notify_transport.py",
@@ -13451,23 +13439,44 @@
       ],
       "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
       "reviewed_sha256": "d7231b1733636131875d47d4608e82b3099ed96ff9414a06e2dc940f3209dc2d",
-      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "review_packet": "docs/development/maintenance-stamps-evidence.json",
       "read_ranges": [
         [
           1,
-          160
-        ],
-        [
-          161,
-          371
+          376
         ]
       ],
-      "responsibility": "clicker範囲の患者サマリー・自分のタスク・未確認一覧・患者内検索",
+      "responsibility": "scope内の読み取り専用未確認/依頼/要約一覧。変更不要。",
       "callers_or_consumers": [
         "notify_cards._act_view",
         "hermes_plugin:private response renderers"
       ],
-      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。"
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。",
+      "reviewed_lines": 376,
+      "full_content_read": true,
+      "callers": "各adapterのclicker-scoped list UI、shared card_reaction_lines",
+      "criteria": {
+        "C01": "packet_criteria.C01",
+        "C02": "packet_criteria.C02",
+        "C03": "packet_criteria.C03",
+        "C04": "packet_criteria.C04",
+        "C05": "packet_criteria.C05",
+        "C06": "packet_criteria.C06",
+        "C07": "packet_criteria.C07",
+        "C08": "packet_criteria.C08",
+        "C09": "packet_criteria.C09",
+        "C10": "packet_criteria.C10",
+        "C11": "packet_criteria.C11",
+        "C12": "packet_criteria.C12",
+        "X01": "packet_criteria.X01",
+        "X02": "packet_criteria.X02",
+        "X03": "packet_criteria.X03",
+        "X04": "packet_criteria.X04",
+        "X05": "packet_criteria.X05",
+        "X06": "packet_criteria.X06",
+        "X07": "packet_criteria.X07",
+        "X08": "packet_criteria.X08"
+      }
     },
     {
       "path": "mcs/ops/brain_export.py",
@@ -15309,7 +15318,7 @@
       "lines": 313,
       "module": "mcs/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending",
         "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
@@ -15319,20 +15328,38 @@
       "read_ranges": [
         [
           1,
-          313
+          327
         ]
       ],
-      "reviewed_sha256": "b1f0ffe7349af80381c7ff4cfa15a0afbcbb646799d193bbdf42e97075257ddc",
-      "reviewed_lines": 313,
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
-      "responsibility": "Capture/shadow metadata observations and exact-self target/reaction context; no inference of clinical completion.",
-      "callers": [
-        "mcs_view.View/read/main",
-        "hermes_plugin.__init__ / mcs/notify render consumers"
-      ],
+      "reviewed_sha256": "8f3ffcf8ed22cab2725152050c87ef35b7a0fa47a7d50ca83bd67daf6f96de30",
+      "reviewed_lines": 327,
+      "review_packet": "docs/development/maintenance-stamps-evidence.json",
+      "responsibility": "capture観測値と独立した氏名一覧を、取得状態・自己ID・上限付きで表示する。",
+      "callers": "notify_render._message_post、notify_render.card_reaction_lines、mcs_view evidence/snapshot consumer",
       "current_delta_sha256": "8f3ffcf8ed22cab2725152050c87ef35b7a0fa47a7d50ca83bd67daf6f96de30",
       "current_delta_commit": "6eff3df",
-      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
+      "criteria": {
+        "C01": "packet_criteria.C01",
+        "C02": "packet_criteria.C02",
+        "C03": "packet_criteria.C03",
+        "C04": "packet_criteria.C04",
+        "C05": "packet_criteria.C05",
+        "C06": "packet_criteria.C06",
+        "C07": "packet_criteria.C07",
+        "C08": "packet_criteria.C08",
+        "C09": "packet_criteria.C09",
+        "C10": "packet_criteria.C10",
+        "C11": "packet_criteria.C11",
+        "C12": "packet_criteria.C12",
+        "X01": "packet_criteria.X01",
+        "X02": "packet_criteria.X02",
+        "X03": "packet_criteria.X03",
+        "X04": "packet_criteria.X04",
+        "X05": "packet_criteria.X05",
+        "X06": "packet_criteria.X06",
+        "X07": "packet_criteria.X07",
+        "X08": "packet_criteria.X08"
+      }
     },
     {
       "path": "mcs/views/metadata_report.py",
@@ -16231,15 +16258,15 @@
       "lines": 180,
       "module": "scripts",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
       "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
-      "reviewed_sha256": "5d9c64a3ad63e024fb0ad4c889326842a9f90e27c3833bf57f76c08b4aef9ea1",
-      "reviewed_lines": 180,
+      "reviewed_sha256": "b485c814506ed62c88e9ad1babf75a6a73c26c121db07b872c59c3734e1508b9",
+      "reviewed_lines": 187,
       "full_content_read": true,
-      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
       "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
       "callers": [
         ".github/workflows/release-notes.yml:49-51",
@@ -16252,7 +16279,7 @@
       "read_ranges": [
         [
           1,
-          180
+          187
         ]
       ],
       "criteria": {
@@ -16319,7 +16346,7 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "2eca00b354a4410c9c4b030698e6dc734abc23695eeda46cd825d111e4a6d95b",
-      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
+      "parent_delta_reviewed": true
     },
     {
       "path": "scripts/development/generate_slack_gallery.py",
@@ -16328,15 +16355,15 @@
       "lines": 366,
       "module": "scripts",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
       "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
-      "reviewed_sha256": "7dd0af58daafc8c562719a7c8735e69a0925ebae8e381524d617ddb4015f1928",
-      "reviewed_lines": 369,
+      "reviewed_sha256": "42b54c8eb02f082699099b274ea069e05106c4b30a0d099e3397340e8897d63e",
+      "reviewed_lines": 376,
       "full_content_read": true,
-      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
       "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
       "callers": [
         ".github/workflows/release-notes.yml:49-51",
@@ -16349,11 +16376,7 @@
       "read_ranges": [
         [
           1,
-          185
-        ],
-        [
-          186,
-          366
+          376
         ]
       ],
       "criteria": {
@@ -16420,7 +16443,7 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "6b8554f716b88b7c4459d5bd0db5d31a20644e6e4c8a1fc293152e43c919bb83",
-      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
+      "parent_delta_reviewed": true
     },
     {
       "path": "scripts/development/probe_message_metadata.py",
@@ -21209,24 +21232,20 @@
       "lines": 330,
       "module": "tests/notify",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
       ],
       "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
-      "reviewed_sha256": "07f6f3c1c90dc1e3a2e1bcd3cae318008018067c28455518d3a57b17daa325bd",
-      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "reviewed_sha256": "06152bbdfc38a2d00cb6ef1b4a1fa04b8c8cbc420099aee466def7f236ead4ef",
+      "review_packet": "docs/development/maintenance-stamps-evidence.json",
       "read_ranges": [
         [
           1,
-          175
-        ],
-        [
-          176,
           330
         ]
       ],
-      "responsibility": "summary・stamp・専門職metadata順/省略/3チャネル表示",
+      "responsibility": "完全合成temp ledger/snapshotとstubによる表示・scope・receipt・自己ID・未取得/不正/臨床非完了の動作回帰。",
       "callers_or_consumers": [
         "scripts/run_tests.sh",
         "pytest（一時Ledger/journal、socket/実サービス遮断）"
@@ -21234,7 +21253,31 @@
       "W_review": "P=WのSHA一致により全文確認を再利用。",
       "current_delta_sha256": "06152bbdfc38a2d00cb6ef1b4a1fa04b8c8cbc420099aee466def7f236ead4ef",
       "current_delta_commit": "6eff3df",
-      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
+      "reviewed_lines": 330,
+      "full_content_read": true,
+      "callers": "scripts/run_tests.sh / pytest guarded collection",
+      "criteria": {
+        "C01": "packet_criteria.C01",
+        "C02": "packet_criteria.C02",
+        "C03": "packet_criteria.C03",
+        "C04": "packet_criteria.C04",
+        "C05": "packet_criteria.C05",
+        "C06": "packet_criteria.C06",
+        "C07": "packet_criteria.C07",
+        "C08": "packet_criteria.C08",
+        "C09": "packet_criteria.C09",
+        "C10": "packet_criteria.C10",
+        "C11": "packet_criteria.C11",
+        "C12": "packet_criteria.C12",
+        "X01": "packet_criteria.X01",
+        "X02": "packet_criteria.X02",
+        "X03": "packet_criteria.X03",
+        "X04": "packet_criteria.X04",
+        "X05": "packet_criteria.X05",
+        "X06": "packet_criteria.X06",
+        "X07": "packet_criteria.X07",
+        "X08": "packet_criteria.X08"
+      }
     },
     {
       "path": "tests/notify/test_notification_reliability.py",
@@ -21269,64 +21312,20 @@
       "lines": 2727,
       "module": "tests/notify",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
       ],
       "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
-      "reviewed_sha256": "22ddb5ebb351f50cc68970a999db5b6968f5e0d84404f2a79736ceabdce959e6",
-      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "reviewed_sha256": "83d59373977422159cdf814915b0d491c544dbaa9f4e08e99379406b8be85ce2",
+      "review_packet": "docs/development/maintenance-stamps-evidence.json",
       "read_ranges": [
         [
           1,
-          240
-        ],
-        [
-          241,
-          480
-        ],
-        [
-          481,
-          715
-        ],
-        [
-          716,
-          955
-        ],
-        [
-          956,
-          1195
-        ],
-        [
-          1196,
-          1425
-        ],
-        [
-          1426,
-          1665
-        ],
-        [
-          1666,
-          1905
-        ],
-        [
-          1906,
-          2145
-        ],
-        [
-          2146,
-          2385
-        ],
-        [
-          2386,
-          2615
-        ],
-        [
-          2616,
           2727
         ]
       ],
-      "responsibility": "カード状態・route/source/権限・冪等・fanout・復旧・旧schema・notice全経路",
+      "responsibility": "完全合成temp ledger/snapshotとstubによる表示・scope・receipt・自己ID・未取得/不正/臨床非完了の動作回帰。",
       "callers_or_consumers": [
         "scripts/run_tests.sh",
         "pytest（一時Ledger/journal、socket/実サービス遮断）"
@@ -21334,7 +21333,31 @@
       "W_review": "P=WのSHA一致により全文確認を再利用。",
       "current_delta_sha256": "83d59373977422159cdf814915b0d491c544dbaa9f4e08e99379406b8be85ce2",
       "current_delta_commit": "6eff3df",
-      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
+      "reviewed_lines": 2727,
+      "full_content_read": true,
+      "callers": "scripts/run_tests.sh / pytest guarded collection",
+      "criteria": {
+        "C01": "packet_criteria.C01",
+        "C02": "packet_criteria.C02",
+        "C03": "packet_criteria.C03",
+        "C04": "packet_criteria.C04",
+        "C05": "packet_criteria.C05",
+        "C06": "packet_criteria.C06",
+        "C07": "packet_criteria.C07",
+        "C08": "packet_criteria.C08",
+        "C09": "packet_criteria.C09",
+        "C10": "packet_criteria.C10",
+        "C11": "packet_criteria.C11",
+        "C12": "packet_criteria.C12",
+        "X01": "packet_criteria.X01",
+        "X02": "packet_criteria.X02",
+        "X03": "packet_criteria.X03",
+        "X04": "packet_criteria.X04",
+        "X05": "packet_criteria.X05",
+        "X06": "packet_criteria.X06",
+        "X07": "packet_criteria.X07",
+        "X08": "packet_criteria.X08"
+      }
     },
     {
       "path": "tests/notify/test_notify_digest.py",
@@ -21791,24 +21814,20 @@
       "lines": 344,
       "module": "tests/notify",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
       ],
       "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
-      "reviewed_sha256": "b756e9eb2cea75b23a6102fb01f4720968932543b121f72a0e2125abded29a2f",
-      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "reviewed_sha256": "36ccfc459a9b355202c74b42063b0be18cdb2aa1ac55f16241f0b9306e52b25a",
+      "review_packet": "docs/development/maintenance-stamps-evidence.json",
       "read_ranges": [
         [
           1,
-          180
-        ],
-        [
-          181,
-          344
+          621
         ]
       ],
-      "responsibility": "stampと確認の区別、ID主体、取得coverage、表示順・長文",
+      "responsibility": "完全合成temp ledger/snapshotとstubによる表示・scope・receipt・自己ID・未取得/不正/臨床非完了の動作回帰。",
       "callers_or_consumers": [
         "scripts/run_tests.sh",
         "pytest（一時Ledger/journal、socket/実サービス遮断）"
@@ -21816,7 +21835,31 @@
       "W_review": "P=WのSHA一致により全文確認を再利用。",
       "current_delta_sha256": "36ccfc459a9b355202c74b42063b0be18cdb2aa1ac55f16241f0b9306e52b25a",
       "current_delta_commit": "6eff3df",
-      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
+      "reviewed_lines": 621,
+      "full_content_read": true,
+      "callers": "scripts/run_tests.sh / pytest guarded collection",
+      "criteria": {
+        "C01": "packet_criteria.C01",
+        "C02": "packet_criteria.C02",
+        "C03": "packet_criteria.C03",
+        "C04": "packet_criteria.C04",
+        "C05": "packet_criteria.C05",
+        "C06": "packet_criteria.C06",
+        "C07": "packet_criteria.C07",
+        "C08": "packet_criteria.C08",
+        "C09": "packet_criteria.C09",
+        "C10": "packet_criteria.C10",
+        "C11": "packet_criteria.C11",
+        "C12": "packet_criteria.C12",
+        "X01": "packet_criteria.X01",
+        "X02": "packet_criteria.X02",
+        "X03": "packet_criteria.X03",
+        "X04": "packet_criteria.X04",
+        "X05": "packet_criteria.X05",
+        "X06": "packet_criteria.X06",
+        "X07": "packet_criteria.X07",
+        "X08": "packet_criteria.X08"
+      }
     },
     {
       "path": "tests/notify/test_summary_rendering_regressions.py",
@@ -27058,12 +27101,12 @@
       "lines": 225,
       "module": "tests/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "reviewed_sha256": "7885f64b9ff1ee619be2c6b4054728b282b93f3f009fdf5314273c732b40ea84",
+      "reviewed_sha256": "aad8fc281dc90e9e16b3933c48576ba0921c9d6a22c8feba6ace16273d68a6a2",
       "reviewed_lines": 225,
       "full_content_read": true,
       "read_ranges": [
@@ -27072,14 +27115,33 @@
           225
         ]
       ],
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
-      "responsibility": "Synthetic public consumer/fixture for response_observation; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
-      "callers": [
-        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
-      ],
+      "review_packet": "docs/development/maintenance-stamps-evidence.json",
+      "responsibility": "完全合成temp ledger/snapshotとstubによる表示・scope・receipt・自己ID・未取得/不正/臨床非完了の動作回帰。",
+      "callers": "scripts/run_tests.sh / pytest guarded collection",
       "current_delta_sha256": "aad8fc281dc90e9e16b3933c48576ba0921c9d6a22c8feba6ace16273d68a6a2",
       "current_delta_commit": "6eff3df",
-      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
+      "criteria": {
+        "C01": "packet_criteria.C01",
+        "C02": "packet_criteria.C02",
+        "C03": "packet_criteria.C03",
+        "C04": "packet_criteria.C04",
+        "C05": "packet_criteria.C05",
+        "C06": "packet_criteria.C06",
+        "C07": "packet_criteria.C07",
+        "C08": "packet_criteria.C08",
+        "C09": "packet_criteria.C09",
+        "C10": "packet_criteria.C10",
+        "C11": "packet_criteria.C11",
+        "C12": "packet_criteria.C12",
+        "X01": "packet_criteria.X01",
+        "X02": "packet_criteria.X02",
+        "X03": "packet_criteria.X03",
+        "X04": "packet_criteria.X04",
+        "X05": "packet_criteria.X05",
+        "X06": "packet_criteria.X06",
+        "X07": "packet_criteria.X07",
+        "X08": "packet_criteria.X08"
+      }
     },
     {
       "path": "tests/views/test_response_observation_view.py",
@@ -27427,10 +27489,38 @@
       "kind": "task-created",
       "module": "changes",
       "evidence": [],
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "current_delta_sha256": "25af2ccfdd01aae6e7284dc9f93e8b9c6ac2223bdcc9af3db226e22db13055f3",
       "current_delta_commit": "6eff3df",
-      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
+      "reviewed_sha256": "25af2ccfdd01aae6e7284dc9f93e8b9c6ac2223bdcc9af3db226e22db13055f3",
+      "bytes": 2043,
+      "reviewed_lines": 18,
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
+      "structured_record_reviewed": true
+    },
+    {
+      "path": "docs/development/maintenance-stamps-evidence.json",
+      "kind": "run_record",
+      "module": "docs",
+      "evidence": [],
+      "status": "REVIEWED",
+      "reviewed_sha256": "0611a836a0bf65c9a572105b61c2d4a930d4e66c9289719e1f86c2837c5e002a",
+      "bytes": 44553,
+      "reviewed_lines": 974,
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
+      "structured_record_reviewed": true
+    },
+    {
+      "path": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
+      "kind": "run_record",
+      "module": "docs",
+      "evidence": [],
+      "status": "REVIEWED",
+      "reviewed_sha256": "900b09199ac3efddb1acf60027770cabd934f49e1caa41d04fcbec82f209e44a",
+      "bytes": 6463,
+      "reviewed_lines": 153,
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
+      "structured_record_reviewed": true
     }
   ],
   "protected_or_derived_groups": [
@@ -27568,5 +27658,13 @@
     "records": 9,
     "artifacts": 145,
     "proof": "docs/development/full-maintenance-20261005/parent-run-records-evidence.json"
+  },
+  "last_stamp_import": {
+    "worker_behavior_commit": "50a661b513bf4f58cd0242e29aef4b31b2abf856",
+    "worker_report_commit": "5cb18d56dc33c36dee0a1a8e597f082b5879400f",
+    "20criteria_accepted": true,
+    "current_owned_SHA_match": 8,
+    "parent_doc_gallery_delta_paths": 13,
+    "proof": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json"
   }
 }
