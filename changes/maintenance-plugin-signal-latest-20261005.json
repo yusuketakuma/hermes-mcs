@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "壊れた最新シグナルを古い未対応記録で承認しない",
+  "summary": "Discord・Slack・LINE WORKSのシグナル確認操作は、最新記録を読めないときに古い未対応記録を使わず拒否します。確認前後に記録が変わった場合も、操作を待機キューへ登録しません。",
+  "upgrade": "1.0.13への更新で適用します。Hermes接続では更新後にgatewayを再起動してください。独立接続では使用するアダプターを再起動してください。今回の作業では実機の再起動は行っていません。",
+  "details": [
+    "previewとconfirmで同じキーの最新artifactを先に選び、壊れたJSON・深さ過大・配列等の非objectをsignal_changedとして拒否する。",
+    "正常な最新記録では、actor・人承認・artifact IDを固定した確認キューを維持する。"
+  ],
+  "refs": ["hermes_plugin/__init__.py", "tests/plugin/test_hermes_plugin_signal_staleness.py"]
+}
