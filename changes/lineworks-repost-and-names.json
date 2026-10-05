@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "LINE WORKSでスレッド本文が更新のたびに再投稿される問題などを修正",
+  "summary": "確認・担当・スタンプの変化やページ移動のたびに、スレッドの本文がすべてトークルームへ再投稿されていた問題を修正しました。本文は原文か要約が変わったときだけ投稿し直します。確認者・担当者が常に「不明なユーザー」と表示される問題も修正し、設定した名前（未設定なら「メンバー」）を表示します。カード本文が1000字で行の途中から切れる問題も直し、行の区切りで「↓ 続き」として次の投稿へ続けます。更新されたカードには「🔄 更新版」を表示します。",
+  "upgrade": "LINE WORKSの独立アダプターの再起動が必要です。名前を表示するには、config.json の notify.lineworks.user_names に {\"LINE WORKSのuserId\": \"表示名\"} を追加します（任意）。LINE WORKSのボタンを押すと、仕様上そのボタン名がトークルームに投稿されます。",
+  "details": ["LINE WORKSのスレッド投稿からスタンプ行を除外（編集できないため）。actions#N の追加操作投稿を廃止し、その他の操作は1:1トークへ。"],
+  "refs": ["adapters/lineworks/delivery.py", "mcs/notify/notify_cards.py", "mcs/notify/notify_render.py"]
+}

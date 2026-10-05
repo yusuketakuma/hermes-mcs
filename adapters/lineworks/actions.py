@@ -98,8 +98,12 @@ class Actions:
             if context is None:
                 await self._say(user, "この操作は無効です。最新のカードでやり直してください。")
                 return
-            if source.get("channelId") != self.settings["channel_id"] \
-                    and context.get("action") != "task_status":
+            if source.get("channelId") == self.settings["channel_id"]:
+                if context.get("action") == "more":
+                    await self._more(user, context)
+                    return
+            elif not (context.get("action") == "task_status"
+                      or (source.get("channelId") is None and context.get("via_more"))):
                 return
             origin = {key: self.settings[key] for key in
                       ("transport", "profile", "application_id", "team_id", "channel_id")}
@@ -132,6 +136,17 @@ class Actions:
         match = CONFIRM.fullmatch(postback)
         if match and source.get("channelId") is None:
             await self._confirm(match[1], bool(match[2]), user, actor)
+
+    async def _more(self, user, context):
+        """「その他の操作」: the card's secondary buttons, privately in the 1:1 talk."""
+        actions = [{"type": "message", "label": item["label"], "postback": "mcs:a:" + item["token"]}
+                   for item in context.get("menu") or []]
+        if not actions:
+            await self._say(user, "この操作は無効です。最新のカードでやり直してください。")
+            return
+        head = context.get("heading") or "その他の操作"
+        for i in range(0, len(actions), 10):
+            await self._say(user, head, actions[i:i + 10])
 
     async def _summary(self, user, rest):
         """DM「サマリー <scope> [name:名前]」 — the 📊 summary from the

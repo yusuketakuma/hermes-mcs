@@ -84,8 +84,9 @@ def test_discord_view_renders_link_and_every_footer_line(monkeypatch):
     inner = view.items[0].children
     face = "\n".join(c.content for c in inner if hasattr(c, "content"))
     assert "-# ✅ 確認: <@1001>・<@U0AB12CD>" in face
-    assert "-# 📝 一件目 — 担当 山田\n-# 📝 他1件 & <b>" in face
-    link = inner[-1].children[0]
+    assert "-# 📝 一件目 — 担当 山田\n-# 📝 他1件 & ＜b>" in face
+    # the link button closes the primary row
+    link = inner[-1].children[-1]
     assert (link.style, link.url, link.custom_id) == (
         5, LINK["url"], None)
     none = discord_cards.no_pings()
@@ -254,3 +255,65 @@ def test_list_messages_filters_scope_and_caps():
     empty = text.list_messages({"list": {**result["list"], "items": [],
                                          "more": 0}}, lambda pid: True)
     assert "なし" in empty[0] and "他" not in empty[0]
+
+
+def _layout_spec():
+    spec = _spec()
+    parts = spec["parts"]
+    parts["containers"] = [
+        {"type": "heading", "text": "💬 合成 花子 様"},
+        {"type": "text", "text": "10-01 09:40 合成さん", "rule": True},
+        {"type": "text", "text": "**太字** [x](https://e.invalid) # 見出し"},
+        {"type": "text", "text": "10-01 10:00 合成さん", "rule": True},
+        {"type": "text", "text": "📋 要約\n・合成"}]
+    parts["action_rows"] = [[
+        {"id": i, "ui": "button", "style": "secondary", "label": f"L{i}",
+         "token": f"{n:032x}"}
+        for n, i in enumerate(("ack", "assign", "request", "body"))],
+        [{"id": "summary", "ui": "button", "style": "secondary",
+          "label": "Lsummary", "token": "f" * 32}, dict(LINK)]]
+    return spec
+
+
+def test_discord_view_zones_separators_and_menu(monkeypatch):
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    inner = discord_cards.build_view(_layout_spec()).items[0].children
+    kinds = [type(c).__name__ for c in inner]
+    # heading | message 1 | message 2 | footer | rows
+    assert kinds == ["TextDisplay", "Separator", "TextDisplay", "Separator",
+                     "TextDisplay", "Separator", "TextDisplay",
+                     "Separator", "ActionRow", "ActionRow"]
+    assert all(c.visible and c.spacing == 1 for c in inner
+               if type(c).__name__ == "Separator")
+    assert inner[6].content.startswith("-# ")
+    primary, menu_row = inner[-2].children, inner[-1].children
+    assert [b.custom_id for b in primary[:3]] == [
+        f"mcs:a:{n:032x}" for n in range(3)]
+    assert primary[-1].url == LINK["url"]
+    (menu,) = menu_row
+    assert menu.custom_id == "mcs:menu"
+    assert [(o.label, o.value) for o in menu.options] == [
+        ("Lbody", f"{3:032x}"), ("Lsummary", "f" * 32)]
+
+
+def test_discord_escape_is_literal_and_length_preserving():
+    raw = ("# 見出し\n-# 小\n> 引用\n- 項目\n1. 番号\n"
+           "**太** _斜_ ~~消~~ ||伏|| `c` [x](https://e.invalid/a_b) "
+           "<@1001> <t:1:R>")
+    out = discord_cards.escape_md(raw)
+    assert len(out) == len(raw)
+    assert out.splitlines()[:5] == ["＃ 見出し", "－# 小", "＞ 引用",
+                                    "－ 項目", "1． 番号"]
+    for ch in "*_~|`[]":
+        assert ch not in out.replace("https://e.invalid/a_b", "")
+    # URLs and runner mentions stay usable; other tags are inert
+    assert "https://e.invalid/a_b" in out and "<@1001>" in out
+    assert "＜t:1:R>" in out
+
+
+def test_discord_card_text_is_escaped_but_prefixes_are_not(monkeypatch):
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    inner = discord_cards.build_view(_layout_spec()).items[0].children
+    face = "\n".join(c.content for c in inner if hasattr(c, "content"))
+    assert face.startswith("## 💬")
+    assert "＊＊太字＊＊ ［x］(https://e.invalid) # 見出し" in face

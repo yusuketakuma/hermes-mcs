@@ -44,7 +44,9 @@ def api_lock(root):
             if not isinstance(until, int | float) or isinstance(until, bool) or not math.isfinite(until):
                 raise ValueError
             if until > time.time():
-                raise ClientError("rate_limited", 429)
+                exc = ClientError("rate_limited", 429)
+                exc.until = until  # local preflight: nothing went on the wire
+                raise exc
         except FileNotFoundError:
             pass
         except (ValueError, KeyError, TypeError, RecursionError):
@@ -54,10 +56,38 @@ def api_lock(root):
         except ClientError as exc:
             if exc.status == 429:
                 # Cross-process CLI/worker cooldown; the official maximum reset is 60 s.
-                paths.atomic_write(cooldown, json.dumps({"until": time.time() + 60}).encode(), mode=0o600)
+                exc.until = time.time() + 60
+                paths.atomic_write(cooldown, json.dumps({"until": exc.until}).encode(), mode=0o600)
             raise
     finally:
         os.close(fd)
+
+
+SENDER_BUSY_TRIES, SENDER_BUSY_WAIT = 10, 0.5
+COOLDOWN_TRIES = 5  # each wait is at most the 60 s official reset
+
+
+async def locked(fn, *args, wait_cooldown=False):
+    """Run a lock-taking Sender call, waiting out a brief api.lock hold.
+
+    sender_busy is a local preflight (nothing sent), so retrying cannot duplicate;
+    a journaled part result is terminal, so failing at once would drop the part.
+    With wait_cooldown (parts), a 429 — the shared cooldown preflight or a wire
+    rejection, both proving nothing committed — is waited out and retried too."""
+    busy = cooled = 0
+    while True:
+        try:
+            return await asyncio.to_thread(fn, *args)
+        except ClientError as exc:
+            until = getattr(exc, "until", None)
+            if wait_cooldown and until is not None and cooled < COOLDOWN_TRIES - 1:
+                cooled += 1
+                await asyncio.sleep(min(max(until - time.time(), 0), 60) + 0.05)
+                continue
+            busy += 1
+            if exc.error_code != "sender_busy" or busy == SENDER_BUSY_TRIES:
+                raise
+        await asyncio.sleep(SENDER_BUSY_WAIT)
 
 
 def failure(exc):
@@ -70,6 +100,28 @@ def failure(exc):
         return {"result": "not_sent" if rejected or exc.error_code in local else "unknown",
                 "error_code": exc.error_code}
     return {"result": "unknown", "error_code": type(exc).__name__.lower()}
+
+
+POST_PART = re.compile(r"([ms]:[^#]+)#([1-9][0-9]*)")
+
+
+def chunk_text(spec, name, chunk):
+    """A body chunk as posted: thread posts carry their own ↳ line, so only
+    multi-chunk posts get （k/n）; card overflow is marked as continuation."""
+    if name.startswith("display#"):
+        return "↳ 続き\n" + chunk
+    post = POST_PART.fullmatch(name)
+    if not post:
+        return chunk
+    n = sum(1 for p in spec["parts"].get("manifest") or []
+            if str(p.get("name") or "").startswith(post[1] + "#"))
+    k = int(post[2])
+    if n <= 1:
+        return chunk
+    if k > 1:
+        return f"↳ 続き（{k}/{n}）\n" + chunk
+    first, sep, rest = chunk.partition("\n")
+    return f"{first}（{k}/{n}）{sep}{rest}"
 
 
 class Sender:
@@ -98,9 +150,10 @@ class Sender:
                 or not self.route_current(spec):
             return {"result": "not_sent", "error_code": "scope_mismatch"}
         try:
-            content = ({"type": "text", "text": "このMCSカードは取り下げ済みです。"}
+            content = ({"type": "text",
+                        "text": "\n".join(filter(None, ("⛔ 取り下げ済み", cards.heading(spec))))}
                        if spec["op"] == "revoke" else cards.render(spec))
-            await asyncio.to_thread(self.send, content)
+            await locked(self.send, content)
         except ValueError:
             return {"result": "not_sent", "error_code": "bad_render"}
         except Exception as exc:
@@ -112,7 +165,9 @@ class Sender:
             route = {"delivery": {"route_epoch": self.settings["route_epoch"]}}
             if not self.route_current(route):
                 raise ClientError("scope_mismatch")
-            fid = self.client.upload_file(blob, name)
+            # Same rule as notify_flush: client.valid_filename rejects / \\ " and controls.
+            fid = self.client.upload_file(
+                blob, re.sub(r'[\x00-\x1f\x7f"\\/]', "_", os.path.basename(name or "")) or "file")
             if not self.route_current(route):
                 raise ClientError("scope_mismatch")
             result = self.client.send_message(
@@ -156,10 +211,19 @@ class DeliveryWorker(BaseWorker):
         self._reg.retire_card_tokens(spec["card_key"])
         outcome = await self._sender.perform(claim["spec"])
         if outcome["result"] == "delivered" and claim["spec"]["op"] != "revoke":
-            self._reg.put_tokens({token: {**context, **self.scope(),
-                                         "route_epoch": claim["spec"]["delivery"]["route_epoch"],
-                                         "message_id": outcome["message_id"]}
-                                  for token, context in token_map(claim["spec"]).items()})
+            tokens = {token: {**context, **self.scope(),
+                              "route_epoch": spec["delivery"]["route_epoch"],
+                              "message_id": outcome["message_id"]}
+                      for token, context in token_map(spec).items()}
+            if any(c["action"] == "more" for c in tokens.values()):
+                # 「その他の操作」 re-offers the secondary siblings in the presser's 1:1 talk.
+                menu = [{"token": b["token"], "label": b["label"]} for b in cards.secondary(spec)]
+                for token, context in tokens.items():
+                    if context["action"] == "more":
+                        context.update(menu=menu, heading=cards.heading(spec))
+                    elif any(item["token"] == token for item in menu):
+                        context["via_more"] = True
+            self._reg.put_tokens(tokens)
             self._reg.save(immediate=True)
         return outcome
 
@@ -172,30 +236,36 @@ class DeliveryWorker(BaseWorker):
             return {"result": "delivered", "remote_id": ctx["card_message_id"]}
         try:
             if part["kind"] == "body_part":
+                if part.get("prior_remote_id"):
+                    # The runner proved this post byte-identical to the delivered one.
+                    return {"result": "delivered", "remote_id": part["prior_remote_id"]}
                 index = int(part["part_id"].rsplit(":", 1)[1]) - 1
                 chunks = spec["parts"].get("thread_body_parts") or []
                 if not 0 <= index < len(chunks):
                     return {"result": "not_sent", "error_code": "body_part_missing"}
-                heading = f"MCS {ctx['card_message_id'][3:11]}（{index + 1}/{len(chunks)}）\n"
-                group = re.fullmatch(r"actions#([1-9][0-9]*)", part.get("name") or "")
-                if group:
-                    start = int(group[1]) * 10
-                    content = cards.buttons(heading + chunks[index],
-                                            cards.action_buttons(spec)[start:start + 10])
-                else:
-                    content = {"type": "text", "text": heading + chunks[index]}
-                await asyncio.to_thread(self._sender.send, content)
+                text = chunk_text(spec, part.get("name") or "", chunks[index])
+                await locked(self._sender.send, {"type": "text", "text": text}, wait_cooldown=True)
                 rid = "lw:" + hashlib.sha256(
                     (spec["delivery_id"] + part["part_id"]).encode()).hexdigest()[:32]
             elif part["kind"] == "attachment_part":
+                if part.get("unavailable"):
+                    if not part.get("caption"):
+                        return {"result": "not_sent", "error_code": "attachment_unavailable"}
+                    if part.get("prior_remote_id"):
+                        # Its 取得失敗 line is already in the room — never repeat it.
+                        return {"result": "delivered", "remote_id": part["prior_remote_id"]}
+                    await locked(self._sender.send, {"type": "text", "text": part["caption"]},
+                                 wait_cooldown=True)
+                    return {"result": "delivered", "remote_id": "lw:" + hashlib.sha256(
+                        (spec["delivery_id"] + part["part_id"]).encode()).hexdigest()[:32]}
                 if part.get("prior_remote_id"):
                     return {"result": "delivered", "remote_id": part["prior_remote_id"]}
                 blob = await asyncio.to_thread(paths.read_verified_attachment,
                                                part.get("path"), part)
                 if blob is None:
                     return {"result": "not_sent", "error_code": "attachment_mismatch"}
-                rid = await asyncio.to_thread(self._sender.attachment, blob,
-                                              part.get("name") or "file")
+                rid = await locked(self._sender.attachment, blob, part.get("name") or "file",
+                                   wait_cooldown=True)
             else:
                 return {"result": "not_sent", "error_code": "unsupported_part"}
         except Exception as exc:

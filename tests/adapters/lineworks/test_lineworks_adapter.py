@@ -19,6 +19,7 @@ from adapters.lineworks import __main__ as cli
 from adapters.lineworks import actions, cards, config, delivery, server
 from adapters.lineworks.client import ClientError
 from hermes_plugin.mcs_delivery import envelopes, paths, registry
+from notify_render import display_text, lineworks_card_split
 from notify_testkit import NOW, _dispatch, _intent, _latest_render, _seed_thread
 from slack_card_testkit import _spec
 
@@ -415,68 +416,85 @@ def test_verified_attachment_mapping_and_corruption_never_sends(tmp_path):
     assert w.client.calls == []
 
 
-def overflow_spec(*, sealed=True):
+SECONDARY = ("body", "tasks", "summary", "report", "dismiss", "prev", "next",
+             "digest", "mytasks", "unacked", "search")
+PRIMARY = (("more", "その他の操作"), ("link", "MCSで開く"), ("request", "タスク作成"),
+           ("assign", "担当する"), ("ack", "確認する"))
+
+
+def _button(i, ident, label):
+    if ident == "link":
+        return {"id": "link", "ui": "link", "label": label, "url": "https://example.invalid/mcs"}
+    return {"id": ident, "ui": "button", "style": "secondary", "label": label, "token": f"{i:032x}"}
+
+
+def _seal(spec, chunks, names):
+    parts = spec["parts"]
+    payload = envelopes.canonical({k: parts[k] for k in ("containers", "footer", "action_rows")})
+    parts["thread_body_parts"] = list(chunks)
+    parts["manifest"] = [{"part_id": "card", "kind": "card", "index": 0, "bytes": len(payload),
+                          "sha256": hashlib.sha256(payload).hexdigest()}] + [
+        {"part_id": f"body:{i:04d}", "kind": "body_part", "index": i, "name": name,
+         "bytes": len(chunk.encode()), "sha256": hashlib.sha256(chunk.encode()).hexdigest()}
+        for i, (name, chunk) in enumerate(zip(names, chunks, strict=True), 1)]
+    return spec
+
+
+def overflow_spec():
+    """A synthetic LINE WORKS card: secondary actions first, primaries scrambled at the end."""
     spec = copy.deepcopy(_spec())
     spec["schema"] = "mcs-card-render/v3"
     spec["delivery"].pop("guild_id")
     spec["delivery"].update(SCOPE)
-    buttons = [{"id": "body", "ui": "button", "style": "secondary", "label": f"合成操作{i}",
-                "token": f"{i:032x}"} for i in range(1, 13)]
-    spec["parts"]["action_rows"] = [buttons[i:i + 4] for i in range(0, 12, 4)]
-    if sealed:
-        parts = spec["parts"]
-        payload = envelopes.canonical({k: parts[k] for k in ("containers", "footer", "action_rows")})
-        chunk = "MCS 追加操作"
-        parts["thread_body_parts"] = [chunk]
-        parts["manifest"] = [
-            {"part_id": "card", "kind": "card", "index": 0, "bytes": len(payload),
-             "sha256": hashlib.sha256(payload).hexdigest()},
-            {"part_id": "body:0001", "kind": "body_part", "index": 1, "name": "actions#1",
-             "bytes": len(chunk.encode()), "sha256": hashlib.sha256(chunk.encode()).hexdigest()}]
-    return spec
+    spec["parts"]["containers"][0]["text"] = "💬 合成 患者 様（合成）\n合成2行目"
+    spec["parts"]["context"] = {"project_id": 1, "source_message_id": 100}
+    labels = [(ident, f"合成{ident}") for ident in SECONDARY] + list(PRIMARY)
+    buttons = [_button(i, ident, label) for i, (ident, label) in enumerate(labels, 1)]
+    spec["parts"]["action_rows"] = [buttons[i:i + 4] for i in range(0, len(buttons), 4)]
+    return _seal(spec, ["↳ 合成 患者 様 · 10-01 09:40 合成さん\n合成本文"], ["m:100#1"])
 
 
-def test_overflow_actions_are_all_delivered_as_journaled_groups(tmp_path):
-    w = world(tmp_path)
+def test_card_shows_only_primary_link_and_more_in_fixed_order():
     spec = overflow_spec()
-    cards.validate(spec)
-    worker = delivery.DeliveryWorker(sender=w.sender, settings=w.settings, root=str(w.data),
-                                     reg=w.reg, worker_id="synthetic", log=lambda *a, **kw: None)
-
-    async def scenario():
-        outcome = await w.sender.perform(spec)
-        assert outcome["result"] == "delivered"
-        part = spec["parts"]["manifest"][1]
-        result = await worker._perform_part({"spec": spec}, part,
-                                          {"card_message_id": outcome["message_id"]})
-        assert result["result"] == "delivered"
-
-    asyncio.run(scenario())
-    assert [len(c[1]["actions"]) for c in w.client.calls] == [10, 2]
-    sent = [action["postback"] for c in w.client.calls for action in c[1]["actions"]]
-    assert sent == [f"mcs:a:{i:032x}" for i in range(1, 13)]
+    cards.validate(spec)  # no actions#N parts are planned any more
+    content = cards.render(spec)
+    assert [a["label"] for a in content["actions"]] == [
+        "確認する", "担当する", "タスク作成", "MCSで開く", "その他の操作"]
+    assert content["actions"][3] == {"type": "uri", "label": "MCSで開く",
+                                     "uri": "https://example.invalid/mcs"}
+    assert [b["id"] for b in cards.secondary(spec)] == list(SECONDARY)
 
 
-def test_overflow_actions_without_sealed_followup_parts_are_rejected():
-    with pytest.raises(ValueError):
-        cards.validate(overflow_spec(sealed=False))
+_THREAD_PART = {"part_id": "thread", "kind": "thread", "index": 99, "name": "合成",
+                "sha256": hashlib.sha256("合成".encode()).hexdigest()}
 
 
-def test_display_overflow_rejects_a_validly_sealed_but_truncated_tail():
+def _display_overflow_spec():
     spec = overflow_spec()
     parts = spec["parts"]
-    parts["containers"][1]["text"] = "x" * 1600
-    payload = envelopes.canonical({k: parts[k] for k in ("containers", "footer", "action_rows")})
-    parts["manifest"][0].update(bytes=len(payload), sha256=hashlib.sha256(payload).hexdigest())
-    tail = ("合成カード\n" + "x" * 1600 + "\n合成フッター")[1000:]
-    parts["thread_body_parts"].append(tail)
-    followup = {"part_id": "body:0002", "kind": "body_part", "index": 2, "name": "display#1",
-                "bytes": len(tail.encode()), "sha256": hashlib.sha256(tail.encode()).hexdigest()}
-    parts["manifest"].append(followup)
+    parts["containers"][1]["text"] = "\n".join(["合成行" + "x" * 95] * 16)
+    head, rest = lineworks_card_split(display_text(parts))
+    tails = notify_cards._split_body_chunks(rest)
+    _seal(spec, tails, [f"display#{i}" for i in range(1, len(tails) + 1)])
+    parts["manifest"].append(_THREAD_PART)
+    return spec, head, tails
+
+
+def test_display_overflow_uses_line_boundary_split_and_exact_tail():
+    spec, head, tails = _display_overflow_spec()
     cards.validate(spec)
-    parts["thread_body_parts"][1] = tail[:-1]
-    followup.update(bytes=len(tail[:-1].encode()), sha256=hashlib.sha256(tail[:-1].encode()).hexdigest())
+    assert cards.render(spec)["contentText"] == head and head.endswith("\n↓ 続き")
+    assert len(head) <= 1000
+    parts = spec["parts"]
+    parts["thread_body_parts"][0] = tails[0][:-1]
+    parts["manifest"][1].update(bytes=len(tails[0][:-1].encode()),
+                                sha256=hashlib.sha256(tails[0][:-1].encode()).hexdigest())
     with pytest.raises(ValueError, match="lineworks_display_overflow_mismatch"):
+        cards.validate(spec)
+    del parts["manifest"][1:]
+    del parts["thread_body_parts"][:]
+    parts["manifest"].append(_THREAD_PART)
+    with pytest.raises(ValueError, match="lineworks_display_overflow_missing"):
         cards.validate(spec)
 
 
@@ -677,10 +695,12 @@ def test_runner_grant_delivers_complete_card_body_with_logical_binding(tmp_path,
         asyncio.run(scenario())
         assert w.client.calls[0][1]["type"] == "button_template"
         assert body not in json.dumps(w.client.calls[0], ensure_ascii=False)
-        sent_chunks = [c[1]["text"].split("\n", 1)[1] for c in w.client.calls
-                       if c[1]["type"] == "text"]
-        assert sent_chunks == spec["parts"]["thread_body_parts"]
-        assert body in "".join(sent_chunks)
+        sent_chunks = [c[1]["text"] for c in w.client.calls if c[1]["type"] == "text"]
+        names = [p["name"] for p in spec["parts"]["manifest"] if p["kind"] == "body_part"]
+        assert sent_chunks == [delivery.chunk_text(spec, name, chunk) for name, chunk
+                               in zip(names, spec["parts"]["thread_body_parts"], strict=True)]
+        assert sent_chunks[0].startswith("↳ ")
+        assert body in "".join(spec["parts"]["thread_body_parts"])
         row = led.db.execute("SELECT delivery_state,thread_state FROM notification_cards").fetchone()
         assert row[:] == ("delivered", "created")
         assert _latest_render(led)["parts_state"] == "complete"
@@ -725,3 +745,66 @@ def test_card_lost_ack_is_journaled_unknown_and_never_reposted(tmp_path, monkeyp
         asyncio.run(scenario())
     finally:
         led.close()
+
+
+def _worker(w):
+    return delivery.DeliveryWorker(sender=w.sender, settings=w.settings, root=str(w.data),
+                                   reg=w.reg, worker_id="synthetic", log=lambda *a, **kw: None)
+
+
+def test_body_chunks_mark_only_multi_chunk_posts_and_card_continuations():
+    spec = overflow_spec()
+    spec["parts"]["manifest"] += [{"name": "m:7#1"}, {"name": "m:7#2"}]
+    assert delivery.chunk_text(spec, "m:100#1", "↳ 合成\n本文") == "↳ 合成\n本文"
+    assert delivery.chunk_text(spec, "m:7#1", "↳ 合成\n本文") == "↳ 合成（1/2）\n本文"
+    assert delivery.chunk_text(spec, "m:7#2", "続き本文") == "↳ 続き（2/2）\n続き本文"
+    assert delivery.chunk_text(spec, "display#1", "残り") == "↳ 続き\n残り"
+    assert delivery.chunk_text(spec, "truncated#1", "省略") == "省略"
+
+
+def test_identical_body_post_and_unavailable_attachment_caption(tmp_path):
+    w = world(tmp_path)
+    spec = overflow_spec()
+    part = {**spec["parts"]["manifest"][1], "prior_remote_id": "lw:" + "e" * 32}
+    ctx = {"card_message_id": "lw:" + "c" * 32}
+    assert asyncio.run(_worker(w)._perform_part({"spec": spec}, part, ctx)) == {
+        "result": "delivered", "remote_id": "lw:" + "e" * 32}
+    assert w.client.calls == []
+    gone = {"part_id": "attachment:1", "kind": "attachment_part", "name": "合成.jpg",
+            "unavailable": True, "caption": "📎 合成.jpg — 取得失敗"}
+    assert asyncio.run(_worker(w)._perform_part({"spec": spec}, gone, ctx))["result"] == "delivered"
+    assert w.client.calls == [("message", {"type": "text", "text": "📎 合成.jpg — 取得失敗"},
+                               {"user_id": None, "channel_id": SCOPE["channel_id"]})]
+
+
+def test_revoke_notice_names_the_card(tmp_path):
+    w = world(tmp_path)
+    spec = {**overflow_spec(), "op": "revoke"}
+    assert asyncio.run(w.sender.perform(spec))["result"] == "delivered"
+    assert w.client.calls[0][1] == {"type": "text", "text": "⛔ 取り下げ済み\n💬 合成 患者 様（合成）"}
+
+
+def test_more_opens_secondary_actions_in_dm_and_only_they_run_from_dm(tmp_path):
+    w = world(tmp_path)
+    spec = overflow_spec()
+    assert asyncio.run(_worker(w)._perform({"spec": spec}))["result"] == "delivered"
+    by_action = {ctx["action"]: t for t, ctx in w.reg._data["tokens"].items() if "card_key" in ctx}
+    w.client.calls.clear()
+
+    async def scenario():
+        await w.actions.handle(event(postback="mcs:a:" + by_action["more"]))
+        assert command_files(w) == []
+        menus = [c[1] for c in w.client.calls]
+        assert all(c[2] == {"user_id": "operator", "channel_id": None} for c in w.client.calls)
+        assert [m["contentText"] for m in menus] == ["💬 合成 患者 様（合成）"] * 2
+        offered = [a["postback"] for m in menus for a in m["actions"]]
+        assert [len(m["actions"]) for m in menus] == [10, 1]
+        assert offered == ["mcs:a:" + by_action[a] for a in SECONDARY]
+        # A primary token pressed from the 1:1 talk stays room-only.
+        await w.actions.handle(event(postback="mcs:a:" + by_action["ack"], channel=None))
+        assert command_files(w) == []
+        await w.actions.handle(event(postback="mcs:a:" + by_action["tasks"], channel=None))
+        commands = command_files(w)
+        assert len(commands) == 1 and commands[0]["token"] == by_action["tasks"]
+
+    asyncio.run(scenario())

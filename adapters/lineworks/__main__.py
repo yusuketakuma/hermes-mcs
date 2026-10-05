@@ -11,6 +11,8 @@ import signal
 import sys
 import tempfile
 import threading
+import time
+from contextlib import ExitStack
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -22,7 +24,8 @@ from mcs_util import HOME
 from .actions import Actions
 from .client import ClientError, Credentials, _sign, _text, valid_filename
 from .config import credentials_path, destination, load_credentials, settings
-from .delivery import DeliveryWorker, Sender, api_lock, notify_dirs
+from .delivery import (SENDER_BUSY_TRIES, SENDER_BUSY_WAIT, DeliveryWorker, Sender, api_lock,
+                       failure, notify_dirs)
 from .server import CallbackInbox, callback_result, callback_server
 
 
@@ -145,40 +148,64 @@ async def serve(root, port):
             loop.remove_signal_handler(sig)
 
 
+def _wait_api_lock(root):
+    """Enter api_lock, waiting out a brief adapter hold as delivery.locked does."""
+    for attempt in range(SENDER_BUSY_TRIES):
+        stack = ExitStack()
+        try:
+            stack.enter_context(api_lock(root))
+            return stack
+        except ClientError as exc:
+            if exc.error_code != "sender_busy" or attempt == SENDER_BUSY_TRIES - 1:
+                raise
+        time.sleep(SENDER_BUSY_WAIT)
+
+
 def send(root, target):
-    scope = settings(root, require_interactive=False)
-    destination(target, scope)
-    client, _ = load_credentials(root, scope)
-    raw = sys.stdin.buffer.read(8 * 1024 * 1024 + 1)
-    if len(raw) > 8 * 1024 * 1024:
-        raise ClientError("validation_invalid")
+    """Send one text (+ sealed files); failures that provably sent nothing carry not_sent."""
+    stage = "local"
     try:
-        payload = json.loads(raw.decode("utf-8"))
-        content = payload["text"]
-        files = payload.get("files", [])
-        if not isinstance(content, str) or not 0 < len(content) <= 2000 \
-                or not isinstance(files, list) or len(files) > 10:
-            raise ValueError("payload")
-        blobs = []
-        for item in files:
-            if not isinstance(item, dict) or not valid_filename(item.get("name")):
-                raise ValueError("attachment_name")
-            path = Path(item["path"]).resolve(strict=True)
-            if not path.is_relative_to(Path(root).resolve() / "data" / "attachments"):
-                raise ValueError("attachment_path")
-            blob = paths.read_verified_attachment(str(path), item)
-            if blob is None or len(blob) > client.max_upload_bytes:
-                raise ValueError("attachment_mismatch")
-            blobs.append((blob, item["name"]))
-    except (ValueError, KeyError, TypeError, UnicodeError, OSError, RecursionError):
-        raise ClientError("validation_invalid") from None
-    # The collector journals its in-flight marker before invoking this single attempt.
-    with api_lock(scope["data_root"]):
-        client.send_message({"type": "text", "text": content}, channel_id=scope["channel_id"])
-        for blob, name in blobs:
-            fid = client.upload_file(blob, name)
-            client.send_message({"type": "file", "fileId": fid}, channel_id=scope["channel_id"])
-    return 0
+        scope = settings(root, require_interactive=False)
+        destination(target, scope)
+        client, _ = load_credentials(root, scope)
+        raw = sys.stdin.buffer.read(8 * 1024 * 1024 + 1)
+        if len(raw) > 8 * 1024 * 1024:
+            raise ClientError("validation_invalid")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+            content = payload["text"]
+            files = payload.get("files", [])
+            if not isinstance(content, str) or not 0 < len(content) <= 2000 \
+                    or not isinstance(files, list) or len(files) > 10:
+                raise ValueError("payload")
+            blobs = []
+            for item in files:
+                if not isinstance(item, dict) or not valid_filename(item.get("name")):
+                    raise ValueError("attachment_name")
+                path = Path(item["path"]).resolve(strict=True)
+                if not path.is_relative_to(Path(root).resolve() / "data" / "attachments"):
+                    raise ValueError("attachment_path")
+                blob = paths.read_verified_attachment(str(path), item)
+                if blob is None or len(blob) > client.max_upload_bytes:
+                    raise ValueError("attachment_mismatch")
+                blobs.append((blob, item["name"]))
+        except (ValueError, KeyError, TypeError, UnicodeError, OSError, RecursionError):
+            raise ClientError("validation_invalid") from None
+        # The collector journals its in-flight marker before invoking this single attempt.
+        with _wait_api_lock(scope["data_root"]):
+            stage = "first"
+            client.send_message({"type": "text", "text": content}, channel_id=scope["channel_id"])
+            stage = "accepted"
+            for blob, name in blobs:
+                fid = client.upload_file(blob, name)
+                client.send_message({"type": "file", "fileId": fid}, channel_id=scope["channel_id"])
+        return 0
+    except (ClientError, OSError, ValueError) as exc:
+        # Before any wire call, or a definitive reject of the first post, nothing
+        # was accepted; once the text is accepted the outcome stays unknown.
+        if stage == "local" or (stage == "first" and failure(exc)["result"] == "not_sent"):
+            exc.not_sent = True
+        raise
 
 
 def main(argv=None):
@@ -222,7 +249,8 @@ def main(argv=None):
     except (ClientError, OSError, ValueError) as exc:
         # Never echo native exceptions: they can embed local paths or secret values.
         print(getattr(exc, "error_code", "local_configuration_error"), file=sys.stderr)
-        return 1
+        # EX_TEMPFAIL: provably nothing was accepted, so the collector may retry.
+        return 75 if getattr(exc, "not_sent", False) else 1
 
 
 if __name__ == "__main__":
