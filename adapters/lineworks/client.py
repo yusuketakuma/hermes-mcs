@@ -7,6 +7,7 @@ import hmac
 import json
 import math
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -75,6 +76,25 @@ def _validate_content(content):
         valid = False
     if not valid:
         raise ClientError("validation_invalid")
+
+
+def _silent_content(content):
+    # LINE WORKS evaluates <m userId="..."> in text and button bodies.
+    # A fullwidth opening bracket stays readable without emitting a
+    # native mention or growing the provider's character budget.
+    def literal(value):
+        return re.sub(r"<(?=m(?:\s|/?>))", "＜", value, flags=re.IGNORECASE)
+
+    out = dict(content)
+    for key in ("text", "contentText"):
+        if isinstance(out.get(key), str):
+            out[key] = literal(out[key])
+    for key, text_key in (("i18nTexts", "text"), ("i18nContentTexts", "contentText")):
+        if isinstance(out.get(key), list):
+            out[key] = [dict(row, **{text_key: literal(row[text_key])})
+                        if isinstance(row, dict) and isinstance(row.get(text_key), str)
+                        else row for row in out[key]]
+    return out
 
 
 @dataclass(frozen=True, repr=False)
@@ -333,7 +353,7 @@ class LineWorksClient:
         url = (f"{API_BASE}/bots/{self.credentials.bot_id}/{kind}/"
                f"{urllib.parse.quote(target, safe='')}/messages")
         try:
-            body = json.dumps({"content": content}, ensure_ascii=False,
+            body = json.dumps({"content": _silent_content(content)}, ensure_ascii=False,
                               allow_nan=False, separators=(",", ":")).encode("utf-8")
         except (ValueError, TypeError, UnicodeError, RecursionError):
             raise ClientError("validation_invalid") from None
