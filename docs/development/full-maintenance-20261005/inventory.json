@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "REVIEWED": 644,
+      "REVIEWED": 647,
       "EXCLUDED": 25,
-      "PARTIAL": 39,
+      "PARTIAL": 38,
       "UNSEEN": 196
     },
-    "candidate_tracked": 902
+    "candidate_tracked": 904
   },
   "files": [
     {
@@ -7357,11 +7357,17 @@
       "lines": 344,
       "module": "docs",
       "kind": "run_record",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "origin": "new maintenance record",
       "evidence": [
-        "JSON parsed and patch inspected; final path/evidence reconciliation pending."
-      ]
+        "JSON parsed and patch inspected; final path/evidence reconciliation pending.",
+        "Historical status/limits preserved; classification accepted independently of current source and final-I execution."
+      ],
+      "reviewed_sha256": "8d76772bd12fd5fb56c825cc43cc5da27260604ed6f14b5caea41c14d18f3e2a",
+      "reviewed_lines": 344,
+      "structured_record_reviewed": true,
+      "record_read_method": "Strict recursive full JSON parse; 1517 unique prose entries read unclipped; all source identities,20 criteria, counters and145 synthetic artifacts checked.",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-run-records-evidence.json"
     },
     {
       "path": "docs/development/full-maintenance-20261005/parent-development-document-evidence.json",
@@ -7382,11 +7388,17 @@
       "lines": 531,
       "module": "docs/development/full-maintenance-20261005",
       "kind": "run_record",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "New task-authored file; packet/source or schema consistency validation tracked separately."
+        "New task-authored file; packet/source or schema consistency validation tracked separately.",
+        "Historical status/limits preserved; classification accepted independently of current source and final-I execution."
       ],
-      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "e84ddc191582fd0f6aa3bc412af4c7554e9a1e29c8443ad6bdcf97cd99c929bc",
+      "reviewed_lines": 1454,
+      "structured_record_reviewed": true,
+      "record_read_method": "Strict recursive full JSON parse; 1517 unique prose entries read unclipped; all source identities,20 criteria, counters and145 synthetic artifacts checked.",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-run-records-evidence.json"
     },
     {
       "path": "docs/development/full-maintenance-20261005/parent-semantic-send-gate-evidence.json",
@@ -7440,11 +7452,17 @@
       "lines": 1576,
       "module": "docs/development",
       "kind": "run_record",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "New task-authored record; schema/consistency validation pending final integration."
+        "New task-authored record; schema/consistency validation pending final integration.",
+        "Historical status/limits preserved; classification accepted independently of current source and final-I execution."
       ],
-      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe"
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "b28067227e6db44217653e7b9b1fe9515f4420c273fd42a0160dbfe07c77a092",
+      "reviewed_lines": 1576,
+      "structured_record_reviewed": true,
+      "record_read_method": "Strict recursive full JSON parse; 1517 unique prose entries read unclipped; all source identities,20 criteria, counters and145 synthetic artifacts checked.",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-run-records-evidence.json"
     },
     {
       "path": "docs/development/maintenance-core-packet2-evidence.json",
@@ -7452,11 +7470,17 @@
       "bytes": 129113,
       "lines": 3435,
       "module": "docs",
-      "kind": "task-created",
-      "status": "PARTIAL",
+      "kind": "run_record",
+      "status": "REVIEWED",
       "evidence": [
-        "New task artifact; exact whole-candidate reconciliation and final review pending"
-      ]
+        "New task artifact; exact whole-candidate reconciliation and final review pending",
+        "Historical status/limits preserved; classification accepted independently of current source and final-I execution."
+      ],
+      "reviewed_sha256": "b22532f3158c9dfe544aa5675c136623ba810c790a256b01eae6e24ba55d67ec",
+      "reviewed_lines": 3435,
+      "structured_record_reviewed": true,
+      "record_read_method": "Strict recursive full JSON parse; 1517 unique prose entries read unclipped; all source identities,20 criteria, counters and145 synthetic artifacts checked.",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-run-records-evidence.json"
     },
     {
       "path": "docs/development/maintenance-core-packet3-evidence.json",
@@ -7516,11 +7540,17 @@
       "lines": 1448,
       "module": "docs",
       "kind": "run_record",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "origin": "new maintenance record",
       "evidence": [
-        "JSON parsed and patch inspected; final path/evidence reconciliation pending."
-      ]
+        "JSON parsed and patch inspected; final path/evidence reconciliation pending.",
+        "Historical status/limits preserved; classification accepted independently of current source and final-I execution."
+      ],
+      "reviewed_sha256": "27495aa7d8e2a2381d14f92290a85ccce653752af6b0b25163a3a927b082d56f",
+      "reviewed_lines": 1448,
+      "structured_record_reviewed": true,
+      "record_read_method": "Strict recursive full JSON parse; 1517 unique prose entries read unclipped; all source identities,20 criteria, counters and145 synthetic artifacts checked.",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-run-records-evidence.json"
     },
     {
       "path": "docs/development/maintenance-notify-packet2-evidence.json",
@@ -7528,11 +7558,17 @@
       "bytes": 119606,
       "lines": 2634,
       "module": "docs",
-      "kind": "task-created",
-      "status": "PARTIAL",
+      "kind": "run_record",
+      "status": "REVIEWED",
       "evidence": [
-        "New task artifact; exact whole-candidate reconciliation and final review pending"
-      ]
+        "New task artifact; exact whole-candidate reconciliation and final review pending",
+        "Historical status/limits preserved; classification accepted independently of current source and final-I execution."
+      ],
+      "reviewed_sha256": "73714b71c7cb52190fdb39594355afc9fd34f075ae034c23ace3adcdac4476ba",
+      "reviewed_lines": 2634,
+      "structured_record_reviewed": true,
+      "record_read_method": "Strict recursive full JSON parse; 1517 unique prose entries read unclipped; all source identities,20 criteria, counters and145 synthetic artifacts checked.",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-run-records-evidence.json"
     },
     {
       "path": "docs/development/maintenance-notify-packet3-evidence.json",
@@ -7583,11 +7619,17 @@
       "lines": 1440,
       "module": "docs",
       "kind": "run_record",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "origin": "new maintenance record",
       "evidence": [
-        "JSON parsed and patch inspected; final path/evidence reconciliation pending."
-      ]
+        "JSON parsed and patch inspected; final path/evidence reconciliation pending.",
+        "Historical status/limits preserved; classification accepted independently of current source and final-I execution."
+      ],
+      "reviewed_sha256": "acfe08be227f6a9ab8ce2efcebb303d81f8cd57a034838ea4c7b69400acb828b",
+      "reviewed_lines": 1440,
+      "structured_record_reviewed": true,
+      "record_read_method": "Strict recursive full JSON parse; 1517 unique prose entries read unclipped; all source identities,20 criteria, counters and145 synthetic artifacts checked.",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-run-records-evidence.json"
     },
     {
       "path": "docs/development/maintenance-semantic-packet2-evidence.json",
@@ -7596,11 +7638,17 @@
       "lines": 2879,
       "module": "docs/development",
       "kind": "run_record",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "New task-authored file; packet/source or schema consistency validation tracked separately."
+        "New task-authored file; packet/source or schema consistency validation tracked separately.",
+        "Historical status/limits preserved; classification accepted independently of current source and final-I execution."
       ],
-      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "c13aef9fdfcb63bfa758e5168e9278382e44b003efff8301c323287858fc3d19",
+      "reviewed_lines": 2879,
+      "structured_record_reviewed": true,
+      "record_read_method": "Strict recursive full JSON parse; 1517 unique prose entries read unclipped; all source identities,20 criteria, counters and145 synthetic artifacts checked.",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-run-records-evidence.json"
     },
     {
       "path": "docs/development/maintenance-semantic-packet3-evidence.json",
@@ -7608,11 +7656,17 @@
       "bytes": 168190,
       "lines": 3774,
       "module": "docs",
-      "kind": "task-created",
-      "status": "PARTIAL",
+      "kind": "run_record",
+      "status": "REVIEWED",
       "evidence": [
-        "Final candidate artifact reconciliation pending"
-      ]
+        "Final candidate artifact reconciliation pending",
+        "Historical status/limits preserved; classification accepted independently of current source and final-I execution."
+      ],
+      "reviewed_sha256": "24d178acee619d74bb321cb602fe3010b4b36d4bfc429cbca2317b7bac5657c7",
+      "reviewed_lines": 3774,
+      "structured_record_reviewed": true,
+      "record_read_method": "Strict recursive full JSON parse; 1517 unique prose entries read unclipped; all source identities,20 criteria, counters and145 synthetic artifacts checked.",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-run-records-evidence.json"
     },
     {
       "path": "docs/development/maintenance-semantic-packet4-evidence.json",
@@ -13061,7 +13115,7 @@
       "lines": 2986,
       "module": "mcs/notify",
       "kind": "source",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
       ],
@@ -13131,7 +13185,10 @@
         "notify_transport",
         "hermes_plugin"
       ],
-      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。"
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。",
+      "current_delta_sha256": "e41caa907dbf06ab263f422097b11f9d7a880a867ac57a53298b0639493ebd0d",
+      "current_delta_commit": "6eff3df",
+      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
     },
     {
       "path": "mcs/notify/notify_cmds.py",
@@ -13278,7 +13335,7 @@
       "lines": 797,
       "module": "mcs/notify",
       "kind": "source",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
       ],
@@ -13310,7 +13367,10 @@
         "notify_digest",
         "adapters/{slack,discord,lineworks}/cards.py"
       ],
-      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。"
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。",
+      "current_delta_sha256": "b6afa5e00db92d2a1fcceb27815718d6effdcc7ea1deca6b239fb92e5cb11948",
+      "current_delta_commit": "6eff3df",
+      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
     },
     {
       "path": "mcs/notify/notify_transport.py",
@@ -15249,7 +15309,7 @@
       "lines": 313,
       "module": "mcs/views",
       "kind": "source",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending",
         "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
@@ -15269,7 +15329,10 @@
       "callers": [
         "mcs_view.View/read/main",
         "hermes_plugin.__init__ / mcs/notify render consumers"
-      ]
+      ],
+      "current_delta_sha256": "8f3ffcf8ed22cab2725152050c87ef35b7a0fa47a7d50ca83bd67daf6f96de30",
+      "current_delta_commit": "6eff3df",
+      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
     },
     {
       "path": "mcs/views/metadata_report.py",
@@ -21146,7 +21209,7 @@
       "lines": 330,
       "module": "tests/notify",
       "kind": "source",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
       ],
@@ -21168,7 +21231,10 @@
         "scripts/run_tests.sh",
         "pytest（一時Ledger/journal、socket/実サービス遮断）"
       ],
-      "W_review": "P=WのSHA一致により全文確認を再利用。"
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "current_delta_sha256": "06152bbdfc38a2d00cb6ef1b4a1fa04b8c8cbc420099aee466def7f236ead4ef",
+      "current_delta_commit": "6eff3df",
+      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
     },
     {
       "path": "tests/notify/test_notification_reliability.py",
@@ -21203,7 +21269,7 @@
       "lines": 2727,
       "module": "tests/notify",
       "kind": "source",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
       ],
@@ -21265,7 +21331,10 @@
         "scripts/run_tests.sh",
         "pytest（一時Ledger/journal、socket/実サービス遮断）"
       ],
-      "W_review": "P=WのSHA一致により全文確認を再利用。"
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "current_delta_sha256": "83d59373977422159cdf814915b0d491c544dbaa9f4e08e99379406b8be85ce2",
+      "current_delta_commit": "6eff3df",
+      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
     },
     {
       "path": "tests/notify/test_notify_digest.py",
@@ -21722,7 +21791,7 @@
       "lines": 344,
       "module": "tests/notify",
       "kind": "source",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
       ],
@@ -21744,7 +21813,10 @@
         "scripts/run_tests.sh",
         "pytest（一時Ledger/journal、socket/実サービス遮断）"
       ],
-      "W_review": "P=WのSHA一致により全文確認を再利用。"
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "current_delta_sha256": "36ccfc459a9b355202c74b42063b0be18cdb2aa1ac55f16241f0b9306e52b25a",
+      "current_delta_commit": "6eff3df",
+      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
     },
     {
       "path": "tests/notify/test_summary_rendering_regressions.py",
@@ -26986,7 +27058,7 @@
       "lines": 225,
       "module": "tests/views",
       "kind": "source",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
@@ -27004,7 +27076,10 @@
       "responsibility": "Synthetic public consumer/fixture for response_observation; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
       "callers": [
         "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
-      ]
+      ],
+      "current_delta_sha256": "aad8fc281dc90e9e16b3933c48576ba0921c9d6a22c8feba6ace16273d68a6a2",
+      "current_delta_commit": "6eff3df",
+      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
     },
     {
       "path": "tests/views/test_response_observation_view.py",
@@ -27332,6 +27407,30 @@
       "evidence": [
         "全文receipt/140観点allassessment・同一refs/flow/findings/limits/全byte replayとcommit receiptを親受入。runtime/freshreviewとは別。"
       ]
+    },
+    {
+      "path": "docs/development/full-maintenance-20261005/parent-run-records-evidence.json",
+      "sha256": "93bdf35b06097297851c7c0ceb67fca08bc1d031d20d0e0044c220a0c0d1df71",
+      "bytes": 9130,
+      "lines": 246,
+      "module": "docs/development",
+      "kind": "run_record",
+      "status": "REVIEWED",
+      "structured_record_reviewed": true,
+      "reviewed_sha256": "93bdf35b06097297851c7c0ceb67fca08bc1d031d20d0e0044c220a0c0d1df71",
+      "evidence": [
+        "Parent authored and read full compact acceptance; nine current records and145 artifact hashes exact; no final-I claims."
+      ]
+    },
+    {
+      "path": "changes/20261005-stamp-actors-display.json",
+      "kind": "task-created",
+      "module": "changes",
+      "evidence": [],
+      "status": "PARTIAL",
+      "current_delta_sha256": "25af2ccfdd01aae6e7284dc9f93e8b9c6ac2223bdcc9af3db226e22db13055f3",
+      "current_delta_commit": "6eff3df",
+      "recheck_required": "Stamp source primary patch read accepted; formal worker criterion/report intake and parent UI/docs delta proof pending."
     }
   ],
   "protected_or_derived_groups": [
@@ -27463,5 +27562,11 @@
     },
     "source_changed_by_worker": false,
     "final_I_tests_or_fresh_review": false
+  },
+  "last_run_record_acceptance": {
+    "receipt_sha256": "ae978fc9cea57462cd5eca35afd9d122537fe0f526ac1e7756d39d8a0ea28e46",
+    "records": 9,
+    "artifacts": 145,
+    "proof": "docs/development/full-maintenance-20261005/parent-run-records-evidence.json"
   }
 }
