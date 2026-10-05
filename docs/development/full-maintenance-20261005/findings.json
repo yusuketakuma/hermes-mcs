@@ -267,6 +267,347 @@
       "contract": "Durable done bookkeeping remains authoritative; otherwise timeout is failure.",
       "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-01",
+      "status": "confirmed",
+      "resolution": "REQUESTED_CHANGE_IMPLEMENTED",
+      "priority": "P2",
+      "title": "10分取得契約にhealth producerの鮮度既定を合わせる",
+      "criteria": [
+        "C01",
+        "C02",
+        "C10",
+        "X01"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/health_watch.py"
+      ],
+      "evidence": "親指定のMCSサーバー負荷対策。default300だと正常10分producerでも900秒でstaleになり欠測許容が短くなる。600へ変更し明示300を維持。",
+      "regression": "test_deadline_derives_from_config_not_hardcode + default_ten_minute_cadence 5例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
+      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-02",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P1",
+      "title": "取得endpointと異なるraw患者IDの再ラベルを拒否",
+      "criteria": [
+        "C05",
+        "C07",
+        "X04"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/mcs_adapter.py"
+      ],
+      "evidence": "P _norm_messageはoptional raw project_idを無視しrequested pidへ置換。5取得経路×不正/別pid4種の後続pageをcompleteとして保存しかねない。共通入口でrejectし前完成pageを保持。",
+      "regression": "test_conflicting_message_project_does_not_relabel_a_completed_page:20例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
+      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-03",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P2",
+      "title": "巨大検査数値をschema失敗として記録し旧完成artifact保持",
+      "criteria": [
+        "C02",
+        "C07",
+        "C10",
+        "X07"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/project_metadata.py"
+      ],
+      "evidence": "math.isfinite(10**400)のOverflowErrorがMCSError境界を越えattempt artifactが書かれない。有限性conversion失敗をSchemaErrorへ変換。",
+      "regression": "test_out_of_range_number_records_failure_without_losing_complete_artifact:2例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
+      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-04",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P2",
+      "title": "最終受信chunkに終端があるWS headerの容量超過拒否",
+      "criteria": [
+        "C07",
+        "C09",
+        "C10"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/mcs_adapter.py"
+      ],
+      "evidence": "P _read_untilはmarker到着前だけcapを確認し、最後のchunkでmarker到着するとover capを返す。終端idxのcapを検証。正確capと後続frameは許容。",
+      "regression": "test_ws_header_terminator_cannot_bypass_header_limit:2例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
+      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-05",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P2",
+      "title": "過深な旧health JSONから正常producer公開を復旧",
+      "criteria": [
+        "C02",
+        "C08",
+        "C10"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/run_check.py"
+      ],
+      "evidence": "_prev_healthのRecursionErrorが_write_healthのtryへ伝播し正常runもhealth_write_failedとなる。壊れた旧状態は{}へ隔離しatomic正常記録へ。",
+      "regression": "test_deeply_nested_previous_health_does_not_block_fresh_publication:1例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
+      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-06",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P1",
+      "title": "MCS_ROOTとは別rootのcommand queueを消費する分離違反",
+      "criteria": [
+        "C01",
+        "C03",
+        "C05",
+        "X01"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/job_ops.py"
+      ],
+      "evidence": "CMD_DIRがHOME/.mcs固定、DB/lockはMCS_ROOT。2合成root subprocessでPは旧rootのprojectをselected Ledgerへ取り込みselected queueを無視。共通HOMEへ揃える。",
+      "regression": "test_default_command_drain_follows_mcs_root_and_preserves_other_root:1例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
+      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-07",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P2",
+      "title": "初期取込の非有限delayをロック・認証前に拒否",
+      "criteria": [
+        "C07",
+        "C10"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/init_data.py"
+      ],
+      "evidence": "nan/infはdelay<0を通り、取得が始まってからtime.sleepでValueError/OverflowError停止。math.isfiniteをCLI validationへ追加。",
+      "regression": "test_initial_import_nonfinite_delay_rejected_before_writer_lock:2例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
+      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-D01",
+      "status": "disproved",
+      "title": "mark_readのoldest_unreadキー省略はschema欠損か",
+      "evidence": "既存test_mark_read_confirms_when_oldest_unread_is_goneと_project_detail契約で省略は既読済み状態。is_archivedのboolean検証を維持。未確認を成功にする変更はしていない。",
+      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-D02",
+      "status": "disproved",
+      "title": "login候補URLの別port/originでcredential注入可能か",
+      "evidence": "auto_loginのstate→fill→clickそれぞれでlocation.originを固定https originと厳密比較。資格情報取得/注入前にbad_originが止まる。実Keychainへアクセスしていない。",
+      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-D03",
+      "status": "disproved",
+      "title": "download HTTPError response bodyを閉じ忘れるか",
+      "evidence": "合成allowed302/rejected302/404の3診断は修正前からpass。例外unwind/worker終了でcleanup。実益のないGC依存追加テストは除去、source変更なし。resource-before.logの3passは最終regressionとして数えない。",
+      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-D04",
+      "status": "disproved",
+      "title": "thread_window失敗時next_pageなしでcursorを誤認するか",
+      "evidence": "実fetch_thread_windowはerror時reached=False、pagesは完成pageのみ。job_opsはcompleted rows保存とnext page durable reservation後SessionExpired伝播。acquisition/job_drain異常系で確認。",
+      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-DEP01",
+      "status": "deferred",
+      "title": "親所有schedule/導入/upgrade説明の最終I整合",
+      "owner": "/root",
+      "evidence": "configured_cron_jobsをstandalone/runtimeが利用。parentがunread */10、deep10,40、health watcher */5と明示設定300→600必要操作を担当。子は10分health契約とroot isolationを実装したが親Iのscript/cron移行結果をここでは検証していない。",
+      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-DEP02",
+      "status": "deferred",
+      "title": "固定Iのfresh-context独立レビューと全域最終検証",
+      "owner": "/root",
+      "evidence": "子自身の修復/検証は独立レビューではない。親で全packet統合後、非実装reviewerがI/差分/台帳/consumer境界を確認する必要がある。",
+      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P2-F01",
+      "classification": "CONFIRMED_FIXED",
+      "priority": "P1",
+      "title": "最新の壊れたsignalから旧open表示/操作対象が復活",
+      "root_cause": "json_valid(content)を最新選択の前に掛け、型/状態/evidenceの共通validatorを使わなかった。最新key行を先に選び_signal_contentで検証する。",
+      "paths": [
+        "mcs/notify/notify_render.py"
+      ],
+      "regressions": [
+        "test_latest_invalid_signal_never_revives_old_display_or_actions"
+      ],
+      "synthetic_cases": 12,
+      "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-before.log",
+      "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-after.log",
+      "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
+      "packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P2-F02",
+      "classification": "CONFIRMED_FIXED",
+      "priority": "P1",
+      "title": "restore失attemptの人確定が兄弟未配達をacceptedにし、revokedを復活",
+      "root_cause": "rebindが生存renderを無視してcard/outboxを直更新した。共通_settle_attemptへ委譲しsealedcardpart/coverage/取消不変条件を保つ。",
+      "paths": [
+        "mcs/notify/notify_transport.py"
+      ],
+      "regressions": [
+        "test_rebind_delivered_completes_only_its_coverage_and_waits_for_siblings",
+        "test_rebind_never_revives_a_revoked_card"
+      ],
+      "synthetic_cases": 3,
+      "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-before.log",
+      "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-after.log",
+      "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
+      "packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P2-F03",
+      "classification": "CONFIRMED_FIXED",
+      "priority": "P1",
+      "title": "restore holdの別attempt/投稿ID/未送信証明でjournal事実を覆せた",
+      "root_cause": "hold rebind分岐だけがhold.attempt_idと_journal_contradictionを検査しなかった。通常resolveと同じ事実witnessを必須にする。",
+      "paths": [
+        "mcs/notify/notify_transport.py"
+      ],
+      "regressions": [
+        "test_rebind_checks_the_held_attempt_and_its_journal_witness"
+      ],
+      "synthetic_cases": 3,
+      "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/rebind-witness-before.log",
+      "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-all-after.log",
+      "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
+      "packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P2-F04",
+      "classification": "CONFIRMED_FIXED",
+      "priority": "P1",
+      "title": "unknown部分配送の後着確定を拒否し、新renderで重複送信する",
+      "root_cause": "unknownを確定terminalと扱い、in-flight待機はpending body/attachmentだけだった。unknown thread/body/attachmentは再計画待機、同sealed receipt/journalの後着事実は確定可能にする。",
+      "paths": [
+        "mcs/notify/notify_cards.py",
+        "mcs/notify/notify_transport.py",
+        "mcs/notify/notify_reconcile.py"
+      ],
+      "regressions": [
+        "test_unknown_part_accepts_a_late_factual_receipt",
+        "test_unknown_body_keeps_update_waiting_until_the_post_identity_is_known",
+        "test_unknown_thread_waits_for_its_identity_before_replanning",
+        "test_unknown_part_catches_up_from_a_journaled_factual_result"
+      ],
+      "synthetic_cases": 5,
+      "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/unknown-before.log",
+      "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/full-notify-final.log",
+      "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
+      "additional_before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-before.log",
+      "packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P2-F05",
+      "classification": "CONFIRMED_FIXED",
+      "priority": "P2",
+      "title": "再描画前の新返信が古いackで未確認一覧から隠れた",
+      "root_cause": "永続card.source_generationと最新manifestだけでackを判断し、別カードからのlive一覧が未保存source driftを観測しなかった。scope後のack候補に共通current generation判定を適用する。",
+      "paths": [
+        "mcs/notify/notify_views.py"
+      ],
+      "regressions": [
+        "test_unacked_observes_new_content_before_a_card_refresh"
+      ],
+      "synthetic_cases": 3,
+      "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-before.log",
+      "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-after.log",
+      "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
+      "packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P2-F06",
+      "classification": "CONFIRMED_FIXED",
+      "priority": "P1",
+      "title": "破損hold scopeのJSON深さ/型が人確定receipt経路を中断した",
+      "root_cause": "json.loadsのRecursionError未捕捉とdict/transport str未検査。実resolveで拒否receipt保存とhold保持に変換する。",
+      "paths": [
+        "mcs/notify/notify_transport.py"
+      ],
+      "regressions": [
+        "test_rebind_rejects_corrupt_scope_with_a_durable_receipt"
+      ],
+      "synthetic_cases": 6,
+      "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-before.log",
+      "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-after.log",
+      "commit": "872747183be090367d6890f1c22ca2d64bcdf5ae",
+      "packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-LIFECYCLE-003",
+      "status": "FIXED_LOCAL",
+      "cause": "Non-object recovery plist raises AttributeError inside ownership gate instead of refusing mutations.",
+      "before": "3 synthetic invalid plist cases failed before the source repair",
+      "after": "Five related setup/runtime families exited 0; 342 pass dots, no skip/failure",
+      "contract": "Unverifiable ownership remains a blocker; no files or service state modified.",
+      "paths": [
+        "mcs/ops/mcs_setup.py",
+        "tests/ops/test_runtime_compatibility.py"
+      ],
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "integration_status": "local integrated; final fixed-I checks and independent review pending"
     }
   ],
   "deferred": [],
@@ -307,6 +648,20 @@
       "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "integrated_behavior": "c97df9f",
       "tests": "408 lifecycle, 109 watchdog/consent, 170 updater/reaping; 197 unchanged cadence-family checks and 8 changed follow-up pass; final I pending"
+    },
+    {
+      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "P": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "worker_behavior": "0da054fee754edb25f272a6660c0518a85dda4de",
+      "source_hashes_match": true,
+      "tests": "Worker-local evidence retained; final fixed-I validation and independent review pending"
+    },
+    {
+      "packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "P": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "worker_behavior": "872747183be090367d6890f1c22ca2d64bcdf5ae",
+      "source_hashes_match": true,
+      "tests": "Worker-local evidence retained; final fixed-I validation and independent review pending"
     }
   ],
   "independent_review": {

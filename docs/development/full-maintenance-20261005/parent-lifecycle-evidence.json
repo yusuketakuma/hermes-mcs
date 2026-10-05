@@ -333,23 +333,15 @@
     {
       "path": "mcs/ops/mcs_setup.py",
       "status": "PARTIAL",
-      "full_content_read": false,
+      "full_content_read": true,
       "read_ranges": [
         [
           1,
-          1295
-        ],
-        [
-          2378,
-          2435
-        ],
-        [
-          2470,
-          2508
+          3468
         ]
       ],
-      "reviewed_sha256": "790cb697cf4b0073f093cf4c4ed484c371bed797d4df07867fd1a0661c0423d3",
-      "lines": 3466,
+      "reviewed_sha256": "ae1d9a64d4faf82459a90eddf4e34106f3db4688c19eff36d78a85fe5a468e98",
+      "lines": 3468,
       "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
     },
     {
@@ -421,6 +413,20 @@
       "reviewed_sha256": "047a53a9638dafb98d86d7d5735bd164a028e7cc277c2e662a7374a9aa9f3a35",
       "lines": 271,
       "review_note": "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+    },
+    {
+      "path": "tests/ops/test_runtime_compatibility.py",
+      "status": "PARTIAL",
+      "review_note": "Full content read; caller and criterion review in progress",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          556
+        ]
+      ],
+      "reviewed_sha256": "c554729bc75c432e737b810dccc3ad813c5d6a96bc5043ec4b82c17cb97a70bd",
+      "lines": 556
     }
   ],
   "confirmed_fixes": [
@@ -439,6 +445,14 @@
       "before": "2 failed",
       "after": "170 passed including updater family",
       "contract": "Durable done bookkeeping remains authoritative; otherwise timeout is failure."
+    },
+    {
+      "id": "PARENT-LIFECYCLE-003",
+      "status": "FIXED_LOCAL",
+      "cause": "Non-object recovery plist raises AttributeError inside ownership gate instead of refusing mutations.",
+      "before": "3 synthetic invalid plist cases failed before the source repair",
+      "after": "Five related setup/runtime families exited 0; 342 pass dots, no skip/failure",
+      "contract": "Unverifiable ownership remains a blocker; no files or service state modified."
     }
   ],
   "requested_change": {
@@ -510,6 +524,30 @@
       "path": "/tmp/mcs-maintenance-lifecycle-checks-20261005.log",
       "sha256": "eb06844331f7e86f95e0ce47128f418090eb9d3d3db6f064e12638a10e924139",
       "result": "408 passed in 485.61s; installer/upgrade/current v1.0.13 matrix/lifecycle fixtures; no skips"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-recovery-plist-before-20261005.log",
+      "sha256": "6af04a1f2cc2794cc99c592f27fb979aeb5308fbac2facf01e41afe7c0b45cd7",
+      "exit_code": 1,
+      "result": "3 failed",
+      "tail": [
+        "=========================== short test summary info ============================",
+        "FAILED tests/ops/test_runtime_compatibility.py::test_services_rejects_nonobject_recovery_plist_without_mutation[plist0]",
+        "FAILED tests/ops/test_runtime_compatibility.py::test_services_rejects_nonobject_recovery_plist_without_mutation[synthetic-invalid-plist]",
+        "FAILED tests/ops/test_runtime_compatibility.py::test_services_rejects_nonobject_recovery_plist_without_mutation[123]"
+      ]
+    },
+    {
+      "path": "/tmp/mcs-maintenance-recovery-plist-after-20261005.log",
+      "sha256": "74f41e055ce79a44753937a2b6da100b1319711557cec9a8ee2e45f3300ccf2c",
+      "exit_code": 0,
+      "result": "342 passed; pytest -q combined with runner quiet mode omits text summary",
+      "tail": [
+        "........................................................................ [ 42%]",
+        "........................................................................ [ 63%]",
+        "........................................................................ [ 84%]",
+        "......................................................                   [100%]"
+      ]
     }
   ],
   "criteria_status": "C01-C12/X01-X08 module review remains PARTIAL; prerequisite reads/test runs are not complete coverage.",

@@ -2126,6 +2126,8 @@ def _recovery_owned() -> bool:
         if Path(contents["pointer"].decode().strip()).resolve() != Path(REPO_ROOT).resolve():
             return False
         plist = plistlib.loads(contents["plist"])
+        if not isinstance(plist, dict):
+            return False
         argv = plist.get("ProgramArguments")
         return (plist.get("Label") == RECOVERY_LABEL and isinstance(argv, list)
                 and len(argv) == 3 and argv[1:] == [str(root / "mcs_recover.py"), "--if-stale"]

@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "PARTIAL": 89,
+      "PARTIAL": 88,
       "EXCLUDED": 2,
-      "UNSEEN": 665,
-      "REVIEWED": 86
+      "UNSEEN": 617,
+      "REVIEWED": 137
     },
-    "candidate_tracked": 840
+    "candidate_tracked": 842
   },
   "files": [
     {
@@ -5032,18 +5032,31 @@
       "lines": 389,
       "module": "mcs/ingest",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
       "read_ranges": [
         [
-          90,
-          135
+          1,
+          210
+        ],
+        [
+          211,
+          389
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "reviewed_sha256": "3580d54982ca68a320ab27e765a9eaa7dbd515d8edd194378575dca83661c54a",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "responsibility": "mentioned/bookmarkedの有界GET capture・local scope検証・独立artifact保存、既定publication off。",
+      "callers_or_consumers": [
+        "MCSAdapter.fetch_cross_list",
+        "cross_lists.main",
+        "mcs/views/cross_lists_view.py:get_cross_list"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "mcs/ingest/health_watch.py",
@@ -5052,9 +5065,34 @@
       "lines": 281,
       "module": "mcs/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "981b5ab0e68ccf49bcce05e2814b1e2702408520f369ae9f43d2bc44f1050e65",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          84
+        ],
+        [
+          85,
+          106
+        ],
+        [
+          107,
+          281
+        ]
+      ],
+      "responsibility": "実APIを呼ばずlocal health producerの鮮度・欠損・破損・dedupを判定。",
+      "callers_or_consumers": [
+        "run_check._health/_write_health",
+        "deployment/scripts/mcs_health.sh",
+        "mcs_setup health settings"
+      ],
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用"
     },
     {
       "path": "mcs/ingest/init_data.py",
@@ -5063,9 +5101,25 @@
       "lines": 238,
       "module": "mcs/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "17a0d32d0eb95202c0725877ad5e4dacf9fdeee06cffd21dd52004189e500dd4",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          238
+        ]
+      ],
+      "responsibility": "手動の履歴初期取込。共有writer lockとdeadline、再認証、durable cursor/floorを保持。",
+      "callers_or_consumers": [
+        "operator CLI mcs/ingest/init_data.py",
+        "tests/core/test_core_misc.py"
+      ],
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用"
     },
     {
       "path": "mcs/ingest/job_ops.py",
@@ -5074,18 +5128,39 @@
       "lines": 811,
       "module": "mcs/ingest",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
       "read_ranges": [
         [
-          360,
-          388
+          1,
+          230
+        ],
+        [
+          231,
+          445
+        ],
+        [
+          446,
+          650
+        ],
+        [
+          651,
+          811
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "reviewed_sha256": "d5b64a681b8b43a7f08decf4adddcf075465c94da1cfadcc3d515b98f2fea12f",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "responsibility": "commandの検証・commit後消費とreply/history/discovery/trickle/reconcileのdurable drain。",
+      "callers_or_consumers": [
+        "run_check._run_jobs/_commands_only/_consent_only",
+        "init_data.merge_full_replies",
+        "mcs_standalone/runtime.py child"
+      ],
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用"
     },
     {
       "path": "mcs/ingest/mcs_adapter.py",
@@ -5094,9 +5169,52 @@
       "lines": 1851,
       "module": "mcs/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "c3be0fa89a12ccc357273913c53d6c779ac391debfc4b7e179979ad694ca444d",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          275
+        ],
+        [
+          276,
+          550
+        ],
+        [
+          551,
+          825
+        ],
+        [
+          826,
+          1100
+        ],
+        [
+          1101,
+          1375
+        ],
+        [
+          1376,
+          1625
+        ],
+        [
+          1626,
+          1851
+        ]
+      ],
+      "responsibility": "固定MCS HTTP/CDP・session/cache・正規化・pagination・既読化・attachment境界。",
+      "callers_or_consumers": [
+        "run_check",
+        "init_data",
+        "project_metadata",
+        "cross_lists",
+        "scripts/development/probe_message_metadata.py"
+      ],
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用"
     },
     {
       "path": "mcs/ingest/mcs_worker.py",
@@ -5105,9 +5223,24 @@
       "lines": 191,
       "module": "mcs/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "c0d1946942450adc1d794128ca162f84a12761171c13de94d992d44588c28747",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          191
+        ]
+      ],
+      "responsibility": "HTTP/CDP/downloadを1操作childに閉じ、wall deadline・容量・stdin/stdout安全化を担う。",
+      "callers_or_consumers": [
+        "mcs_adapter._io"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "mcs/ingest/project_metadata.py",
@@ -5116,9 +5249,30 @@
       "lines": 390,
       "module": "mcs/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "257afe64943606ecac5f5706af8ca0564d003156e20133b2cc613cba9bad1cfa",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          220
+        ],
+        [
+          221,
+          390
+        ]
+      ],
+      "responsibility": "care_team/medication/observation/group consultationの有界構造化取得と失敗artifact保存。",
+      "callers_or_consumers": [
+        "MCSAdapter.fetch_project_members/fetch_observation_values/fetch_group_consultations",
+        "project_metadata.main",
+        "mcs/views/project_metadata_view.py"
+      ],
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用"
     },
     {
       "path": "mcs/ingest/run_check.py",
@@ -5127,26 +5281,60 @@
       "lines": 1928,
       "module": "mcs/ingest",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
       "read_ranges": [
         [
-          1540,
-          1600
+          1,
+          250
         ],
         [
-          1790,
-          1832
+          251,
+          500
         ],
         [
-          1860,
-          1875
+          501,
+          750
+        ],
+        [
+          751,
+          1000
+        ],
+        [
+          1001,
+          1250
+        ],
+        [
+          1251,
+          1369
+        ],
+        [
+          1370,
+          1535
+        ],
+        [
+          1536,
+          1759
+        ],
+        [
+          1760,
+          1928
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "reviewed_sha256": "915d6784befb59fcfffae019020dac59c92fa272571dfc325c36585b283ef00d",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "responsibility": "unread→self_probe→backfill、durable jobs、derive/delivery/semantic/shadow、health/snapshotの共通orchestration。",
+      "callers_or_consumers": [
+        "deployment/scripts/mcs_check.sh",
+        "deployment/scripts/mcs_deep.sh",
+        "deployment command workers",
+        "mcs_standalone/runtime.py"
+      ],
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用"
     },
     {
       "path": "mcs/notify/notify_cards.py",
@@ -5155,30 +5343,77 @@
       "lines": 2986,
       "module": "mcs/notify",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
       "read_ranges": [
         [
-          1740,
-          1840
+          1,
+          230
         ],
         [
-          1928,
-          1998
+          231,
+          465
         ],
         [
-          2190,
-          2220
+          466,
+          700
         ],
         [
-          2316,
-          2365
+          701,
+          920
+        ],
+        [
+          921,
+          1160
+        ],
+        [
+          1161,
+          1390
+        ],
+        [
+          1391,
+          1630
+        ],
+        [
+          1631,
+          1870
+        ],
+        [
+          1871,
+          2110
+        ],
+        [
+          2111,
+          2350
+        ],
+        [
+          2351,
+          2590
+        ],
+        [
+          2591,
+          2800
+        ],
+        [
+          2801,
+          2986
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "reviewed_sha256": "4da262ffadfdff40160dcf59847923ed7cd74d0b88d3bf609bb07486e692def0",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "responsibility": "カード・意図coverage・token/manifest・配送計画の永続化、操作認可、復旧・GC",
+      "callers_or_consumers": [
+        "notify_flush.flush",
+        "run_check._deliver",
+        "notify_cmds.dispatch",
+        "notify_transport",
+        "hermes_plugin"
+      ],
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。"
     },
     {
       "path": "mcs/notify/notify_cmds.py",
@@ -5187,9 +5422,33 @@
       "lines": 494,
       "module": "mcs/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "4ae2cd7e4a114106bcd4ac414fbfeb84f357406d26ae985fa35b6027315b2dc9",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          175
+        ],
+        [
+          176,
+          340
+        ],
+        [
+          341,
+          494
+        ]
+      ],
+      "responsibility": "cmd_int型/範囲検証、begin→receipt→interaction順の有限drain、人承認forward",
+      "callers_or_consumers": [
+        "mcs/ingest/run_check.py:_run_commands_only",
+        "mcs/ingest/run_check.py:_deliver"
+      ],
+      "W_review": "P=WのSHA一致により全文確認を再利用。"
     },
     {
       "path": "mcs/notify/notify_digest.py",
@@ -5266,9 +5525,33 @@
       "lines": 552,
       "module": "mcs/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "79b6f6be6901c76260a711d0a0d230b687bdada2c86353bc63ad93627890d5dd",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          205
+        ],
+        [
+          206,
+          405
+        ],
+        [
+          406,
+          552
+        ]
+      ],
+      "responsibility": "復元後のjournal/DB照合、配送結果再適用、証拠不明scopeの保留",
+      "callers_or_consumers": [
+        "mcs/ingest/run_check.py:_run_commands_only",
+        "notify_transport._journal_contradiction"
+      ],
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。"
     },
     {
       "path": "mcs/notify/notify_render.py",
@@ -5277,9 +5560,39 @@
       "lines": 797,
       "module": "mcs/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "f42d1837ccada87b926d397976f56fe21bb02888e9c06dfdf406f2b0fb22838e",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          400
+        ],
+        [
+          401,
+          610
+        ],
+        [
+          611,
+          797
+        ]
+      ],
+      "responsibility": "共通表示モデル・lossless本文・pagination/予算・source fingerprint・確認footer",
+      "callers_or_consumers": [
+        "notify_cards._build_spec",
+        "notify_views",
+        "notify_digest",
+        "adapters/{slack,discord,lineworks}/cards.py"
+      ],
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。"
     },
     {
       "path": "mcs/notify/notify_transport.py",
@@ -5288,9 +5601,42 @@
       "lines": 932,
       "module": "mcs/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "38428f3b4d0c76c7eb9b5ca088738c52b74f05b5de97adfc53a53fedc520580b",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          205
+        ],
+        [
+          206,
+          405
+        ],
+        [
+          406,
+          600
+        ],
+        [
+          601,
+          780
+        ],
+        [
+          781,
+          932
+        ]
+      ],
+      "responsibility": "排他送信grant、sealed receipt、部分配送、理由/証拠付き人による復旧確定",
+      "callers_or_consumers": [
+        "notify_cmds.dispatch",
+        "mcs/views/mcs_view.py:ops.card_resolve",
+        "notify_reconcile"
+      ],
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。"
     },
     {
       "path": "mcs/notify/notify_urgent.py",
@@ -5321,9 +5667,29 @@
       "lines": 371,
       "module": "mcs/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "d7231b1733636131875d47d4608e82b3099ed96ff9414a06e2dc940f3209dc2d",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          160
+        ],
+        [
+          161,
+          371
+        ]
+      ],
+      "responsibility": "clicker範囲の患者サマリー・自分のタスク・未確認一覧・患者内検索",
+      "callers_or_consumers": [
+        "notify_cards._act_view",
+        "hermes_plugin:private response renderers"
+      ],
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。"
     },
     {
       "path": "mcs/ops/brain_export.py",
@@ -5532,7 +5898,7 @@
       "kind": "source",
       "status": "PARTIAL",
       "evidence": [
-        "Full text or explicit ranges read; module-wide source-consumer/20-criteria review remains in progress. No whole-repository completion inferred."
+        "Parent full content read; module-wide criteria in progress"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -5540,15 +5906,7 @@
       "read_ranges": [
         [
           1,
-          865
-        ],
-        [
-          2378,
-          2435
-        ],
-        [
-          2470,
-          2508
+          3466
         ]
       ],
       "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json"
@@ -8151,9 +8509,25 @@
       "lines": 34,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "03d5831494c33b78a32a2f24d95c2efd4f1367f6d0aea7b3f095b2b9da02dde4",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          34
+        ]
+      ],
+      "responsibility": "完全合成Ledger/Message/UnreadPatient helper。",
+      "callers_or_consumers": [
+        "tests/ingest/",
+        "tests/core/test_core_misc.py"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "tests/ingest/test_acquisition_contracts.py",
@@ -8162,9 +8536,28 @@
       "lines": 453,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "510f94d404fe632c0b7775b43b4a602adfde24a26c8ca160e9ef5c38fc9fefb0",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          220
+        ],
+        [
+          221,
+          453
+        ]
+      ],
+      "responsibility": "実adapter/worker正規化へ完全合成wire replay、snapshot/partial/read条件・患者scope・初期CLI delay。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用"
     },
     {
       "path": "tests/ingest/test_adapter_wire.py",
@@ -8173,9 +8566,40 @@
       "lines": 1434,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "26c12487b689d48f78a2719b39083bac487be7401caab84367465201d92caf5b",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          275
+        ],
+        [
+          276,
+          550
+        ],
+        [
+          551,
+          825
+        ],
+        [
+          826,
+          1100
+        ],
+        [
+          1101,
+          1434
+        ]
+      ],
+      "responsibility": "HTTP/CDP/WS/private cache/login/URL/download/deadline/worker cleanupを合成wire/socket/processで検証。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用"
     },
     {
       "path": "tests/ingest/test_cross_lists.py",
@@ -8184,9 +8608,24 @@
       "lines": 339,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "962d20c5472c2825b4e5a095c80ac27ace295d025f09e91a6e53bde5f47b1edd",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          339
+        ]
+      ],
+      "responsibility": "mentioned/bookmarked契約・pagination/target/scope/保存の独立性とcached sessionを検証。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "tests/ingest/test_drug_map_pipeline.py",
@@ -8195,9 +8634,24 @@
       "lines": 94,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "13e720e558f7aa0e071f55b3365212aea470803d224f4da9f7437507edfdd57e",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          94
+        ]
+      ],
+      "responsibility": "合成医薬品辞書とrule extractionの収集consumerを検証。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "tests/ingest/test_fixture_synthetic.py",
@@ -8206,9 +8660,24 @@
       "lines": 92,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "870ab4a897e9dc0b83548a6f9731991af227a25e2993ac53b128d8d99dc94a5a",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          92
+        ]
+      ],
+      "responsibility": "対象wire fixturesのreserved ID band・SYNTHETIC/URL・no real-data制約を検証。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "tests/ingest/test_group_consultations.py",
@@ -8217,9 +8686,24 @@
       "lines": 228,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "47b64f165e5e766813dc4e0566919021f85b8cf08ff00a7ac9d1eabf6bdfc6d2",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          228
+        ]
+      ],
+      "responsibility": "group scope・API query・snapshot/partial・unknown patient associationを検証。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "tests/ingest/test_health_watch.py",
@@ -8228,9 +8712,28 @@
       "lines": 467,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "d4f017bdb1705cad86cb41111ac4538deec2409aa8c3c898f089ef0b994ca69e",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          250
+        ],
+        [
+          251,
+          467
+        ]
+      ],
+      "responsibility": "missing/corrupt/stale/fresh/finite/boundary/deep unread/dedup/CLI安全出力・10分契約。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用"
     },
     {
       "path": "tests/ingest/test_job_drain.py",
@@ -8239,9 +8742,44 @@
       "lines": 1576,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "6842a5576dc6adf4534137f04faf6f41ad5fee35694d6ff0731509d33bfa1ac0",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          560
+        ],
+        [
+          561,
+          840
+        ],
+        [
+          841,
+          1120
+        ],
+        [
+          1121,
+          1400
+        ],
+        [
+          1401,
+          1576
+        ]
+      ],
+      "responsibility": "durable command/reply/history/discovery/trickle/reconcile、floor/cursor/archived、receipt/consent/atomicity、MCS_ROOT分離。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用"
     },
     {
       "path": "tests/ingest/test_job_reasons_ingest.py",
@@ -8250,9 +8788,24 @@
       "lines": 85,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "d6b08c095e5182de1c39c0e2d399abd2cb47c8f364917899170bfdf2c41c2726",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          85
+        ]
+      ],
+      "responsibility": "取得jobの失敗reasonと再試行/可視化の契約。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "tests/ingest/test_message_metadata.py",
@@ -8261,9 +8814,32 @@
       "lines": 801,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "2be63c91caccb9c5effc5957421dd102c9e508d42c7e627d67bc3ab39f9d9ebc",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          560
+        ],
+        [
+          561,
+          801
+        ]
+      ],
+      "responsibility": "optional capture/shadow/publication、source/semantic isolation、bounded watch/age/target、privacy probe。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "tests/ingest/test_metadata_probe_observation.py",
@@ -8272,9 +8848,32 @@
       "lines": 629,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "47d4cc72d024f5879e6c51c5f38ba9d6e7fa41cebe9e7c6c145f3f585ac3fe23",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          560
+        ],
+        [
+          561,
+          629
+        ]
+      ],
+      "responsibility": "independent raw unread前後観測・snapshot/identity/pagination・安全出力・CLI defer。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "tests/ingest/test_metadata_probe_paging.py",
@@ -8283,9 +8882,28 @@
       "lines": 588,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "fdfcabb7ceaa1dfe45371979eb117740edeae686d401505fd3185623a5b156f8",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          588
+        ]
+      ],
+      "responsibility": "actor pagingの2独立snapshot・counts/set変化・aggregate-only出力・CLI read-state gate。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "tests/ingest/test_metadata_probe_usage.py",
@@ -8294,9 +8912,24 @@
       "lines": 341,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "4317e9024dd14cc90b6f4e5a142a0632f392884a77561cb75bd3fa36cf14d386",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          341
+        ]
+      ],
+      "responsibility": "medical karte identity dedupとgroup unit、complete/unknown/zeroの区別・CLI不確定status。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "tests/ingest/test_project_metadata.py",
@@ -8305,9 +8938,24 @@
       "lines": 298,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "a1bc35d7bd41b8d4ad7aa7b1e84a10da900f036bb8fbdd6d63dfe63308dc0e77",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          298
+        ]
+      ],
+      "responsibility": "bounded structured GET/schema/CLI/privacy/artifact失敗保持・巨大数値。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用"
     },
     {
       "path": "tests/ingest/test_reaction_actors.py",
@@ -8316,9 +8964,28 @@
       "lines": 477,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "345332fa7496fa249dbfecabd941c8d59573c624295c85fce7c8a10bf8920476",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          260
+        ],
+        [
+          261,
+          477
+        ]
+      ],
+      "responsibility": "reaction actor snapshot/migration/names/removed_at/freshness/retain/本体非干渉/4件cap。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "tests/ingest/test_run_check_stages.py",
@@ -8327,9 +8994,64 @@
       "lines": 2913,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "5ec818caf83f9dd8d327ef557610c7d067dddbc130accbe3cba7e9b9c19a28aa",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          560
+        ],
+        [
+          561,
+          840
+        ],
+        [
+          841,
+          1120
+        ],
+        [
+          1121,
+          1400
+        ],
+        [
+          1401,
+          1680
+        ],
+        [
+          1681,
+          1960
+        ],
+        [
+          1961,
+          2240
+        ],
+        [
+          2241,
+          2520
+        ],
+        [
+          2521,
+          2800
+        ],
+        [
+          2801,
+          2913
+        ]
+      ],
+      "responsibility": "orchestration順序、unread ack/cap/cursor/self_probe/memo/semantic/health/command/lock/errorと過深health復旧。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用"
     },
     {
       "path": "tests/ingest/test_run_watchdog.py",
@@ -8338,9 +9060,24 @@
       "lines": 94,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "ba09be62a9dfec332460658a791c350a383637fcb578afe12c36a4b4859966f9",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          94
+        ]
+      ],
+      "responsibility": "合成childのwhole-run期限超過を終了させ安全kindを返す。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "tests/ingest/test_semantic_ingest_revisions.py",
@@ -8349,9 +9086,24 @@
       "lines": 183,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "e306a9036680ec8416260ac859dfc8a05c85f4dc6ee896025e2f079d08015e02",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          183
+        ]
+      ],
+      "responsibility": "source generation・同一replay不活性・metadata preservation・失敗時tx rollback。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "tests/ingest/test_thread_count_retry.py",
@@ -8360,9 +9112,24 @@
       "lines": 49,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "708d993c47da2d6f466d450ad5e2cb5960f29293a223ee3e6391a8a708d3be82",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          49
+        ]
+      ],
+      "responsibility": "thread count更新とbounded retryのterminal/body状態。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "tests/ingest/test_thread_tombstone_gap.py",
@@ -8371,9 +9138,24 @@
       "lines": 31,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "reviewed_sha256": "c1bd116a7aaf3f7fcd0281361a38e07b4266f6d818614f69ff88ad27c3c0e287",
+      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          31
+        ]
+      ],
+      "responsibility": "tombstone threadのterminal扱いとcoverage gap。",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "W_review": "P/W SHA一致、全文レビューを再利用"
     },
     {
       "path": "tests/meta/test_c1_export_gates.py",
@@ -8598,9 +9380,25 @@
       "lines": 108,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "0fff0e0f11e9bb97d055e1c6ab7c401ca55623dcf460c21b43b717764361d29b",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          108
+        ]
+      ],
+      "responsibility": "カード配送後の追加添付と既配布添付の重複抑止",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P=WのSHA一致により全文確認を再利用。"
     },
     {
       "path": "tests/notify/test_card_buttons.py",
@@ -8609,9 +9407,33 @@
       "lines": 692,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "dad70f533ece9e41c7c0e10898ef4037766ef7e72eade2cdfbed706bbae4de06",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          475
+        ],
+        [
+          476,
+          692
+        ]
+      ],
+      "responsibility": "確認/担当/依頼/報告/タスク遷移、人承認・footer・buttons予算",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P=WのSHA一致により全文確認を再利用。"
     },
     {
       "path": "tests/notify/test_card_extras.py",
@@ -8620,9 +9442,25 @@
       "lines": 180,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "8917c08b54e630c33d4fa816c28134d2a554eba7887f225e9a1a2bee6864a5bc",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          180
+        ]
+      ],
+      "responsibility": "private一覧・患者検索・元資料更新とscope/count",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。"
     },
     {
       "path": "tests/notify/test_drain_int_sweep.py",
@@ -8631,9 +9469,25 @@
       "lines": 48,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "62bec5afebaadad005d964dc87bbeafcfb805c9d17b3672dcd136c324eb8d055",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          48
+        ]
+      ],
+      "responsibility": "操作後即時sweepとtransport-onlyの有限drain",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P=WのSHA一致により全文確認を再利用。"
     },
     {
       "path": "tests/notify/test_metadata_display.py",
@@ -8642,9 +9496,29 @@
       "lines": 330,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "07f6f3c1c90dc1e3a2e1bcd3cae318008018067c28455518d3a57b17daa325bd",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          175
+        ],
+        [
+          176,
+          330
+        ]
+      ],
+      "responsibility": "summary・stamp・専門職metadata順/省略/3チャネル表示",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P=WのSHA一致により全文確認を再利用。"
     },
     {
       "path": "tests/notify/test_notification_reliability.py",
@@ -8679,9 +9553,69 @@
       "lines": 2727,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "22ddb5ebb351f50cc68970a999db5b6968f5e0d84404f2a79736ceabdce959e6",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          480
+        ],
+        [
+          481,
+          715
+        ],
+        [
+          716,
+          955
+        ],
+        [
+          956,
+          1195
+        ],
+        [
+          1196,
+          1425
+        ],
+        [
+          1426,
+          1665
+        ],
+        [
+          1666,
+          1905
+        ],
+        [
+          1906,
+          2145
+        ],
+        [
+          2146,
+          2385
+        ],
+        [
+          2386,
+          2615
+        ],
+        [
+          2616,
+          2727
+        ]
+      ],
+      "responsibility": "カード状態・route/source/権限・冪等・fanout・復旧・旧schema・notice全経路",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P=WのSHA一致により全文確認を再利用。"
     },
     {
       "path": "tests/notify/test_notify_digest.py",
@@ -8772,9 +9706,25 @@
       "lines": 262,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "cc972eb83207f9142880f62ca0dc2efcf4de9b50d2e7e07541160a137825f7cf",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          262
+        ]
+      ],
+      "responsibility": "LINE WORKS native render契約、scope/version/append-only/overflow",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P=WのSHA一致により全文確認を再利用。"
     },
     {
       "path": "tests/notify/test_notify_lineworks_flush.py",
@@ -8805,9 +9755,37 @@
       "lines": 916,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "ba51be8e686019c6673440e1e4fc3969441869c57fa3ecf200af39eea13321b1",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          480
+        ],
+        [
+          481,
+          710
+        ],
+        [
+          711,
+          916
+        ]
+      ],
+      "responsibility": "sealed部分配送計画、長文・添付・予算・unknown・prior_remote_id・旧投稿互換",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。"
     },
     {
       "path": "tests/notify/test_notify_reconcile.py",
@@ -8816,9 +9794,33 @@
       "lines": 619,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "b3586726e5375d0bba602a572e65ad5af9cc5120a09e6661fcc6286f7aa825af",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          235
+        ],
+        [
+          236,
+          460
+        ],
+        [
+          461,
+          619
+        ]
+      ],
+      "responsibility": "合成journal/復元DBのhold/確定/矛盾/失試行・fanout・text保留",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。"
     },
     {
       "path": "tests/notify/test_notify_render.py",
@@ -8827,9 +9829,25 @@
       "lines": 165,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "8acd2a0948d5a07636817e85f499459568eb66ea37263c060b68a1d6c473129b",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          165
+        ]
+      ],
+      "responsibility": "他患者evidence排除、source drift、malformed latest tombstoneと3チャネル",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。"
     },
     {
       "path": "tests/notify/test_notify_review_regressions.py",
@@ -8838,9 +9856,25 @@
       "lines": 36,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "814db729a1b95804d3bdd1c89986b3aabe3437cb4f012827bf0714d14644d1a6",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          36
+        ]
+      ],
+      "responsibility": "抽出世代変化の表示/操作source更新",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P=WのSHA一致により全文確認を再利用。"
     },
     {
       "path": "tests/notify/test_notify_slack.py",
@@ -8849,9 +9883,29 @@
       "lines": 476,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "518d373e50623028efa51e4fd6d3664cb9828d9adcb5a565195bc44bf817b8c0",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          476
+        ]
+      ],
+      "responsibility": "Slack native card/ts/thread/receipt/versionと旧scope互換",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P=WのSHA一致により全文確認を再利用。"
     },
     {
       "path": "tests/notify/test_notify_standalone_flush.py",
@@ -8960,9 +10014,29 @@
       "lines": 447,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "58f145b1d221ed36346c92c4ab6ff58d8fc90f79c68aa3cc9dc2d5bcd306780a",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          230
+        ],
+        [
+          231,
+          447
+        ]
+      ],
+      "responsibility": "有限100/1000/10000規模の配送・操作・stage時間/件数上限",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P=WのSHA一致により全文確認を再利用。"
     },
     {
       "path": "tests/notify/test_signal_notify_off.py",
@@ -8971,9 +10045,25 @@
       "lines": 91,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "104ec312255e8dc6a12303f4f20a0b3b07a64e300d5410adbd4f75b81417973d",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          91
+        ]
+      ],
+      "responsibility": "アラートoff時のunsent抑止/済カード読取保持",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P=WのSHA一致により全文確認を再利用。"
     },
     {
       "path": "tests/notify/test_stamps_display.py",
@@ -8982,9 +10072,29 @@
       "lines": 344,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "b756e9eb2cea75b23a6102fb01f4720968932543b121f72a0e2125abded29a2f",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          180
+        ],
+        [
+          181,
+          344
+        ]
+      ],
+      "responsibility": "stampと確認の区別、ID主体、取得coverage、表示順・長文",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P=WのSHA一致により全文確認を再利用。"
     },
     {
       "path": "tests/notify/test_summary_rendering_regressions.py",
@@ -8993,9 +10103,29 @@
       "lines": 278,
       "module": "tests/notify",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-notify-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+      ],
+      "review_input": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "reviewed_sha256": "db0c3a31393618e4c3ad48bfea425ba05c3a7ef15aae6081c4fd1da4d29da045",
+      "review_packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          160
+        ],
+        [
+          161,
+          278
+        ]
+      ],
+      "responsibility": "実3rendererの長文/注記/緊急度/非表示ack/アーカイブ/観測時点",
+      "callers_or_consumers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ],
+      "W_review": "P=WのSHA一致により全文確認を再利用。"
     },
     {
       "path": "tests/ops/ext_fixtures.py",
@@ -10040,9 +11170,18 @@
       "lines": 537,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Parent full content read; module-wide criteria in progress"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "read_ranges": [
+        [
+          1,
+          537
+        ]
+      ],
+      "reviewed_sha256": "81f181a0fa24e96a8086e22758584d1f1e97797090fed025b29c00759e4f752a"
     },
     {
       "path": "tests/ops/test_supported_update_paths.py",
@@ -11808,6 +12947,30 @@
       "status": "UNSEEN",
       "evidence": [],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+    },
+    {
+      "path": "docs/development/maintenance-core-packet2-evidence.json",
+      "sha256": "b22532f3158c9dfe544aa5675c136623ba810c790a256b01eae6e24ba55d67ec",
+      "bytes": 129113,
+      "lines": 3435,
+      "module": "docs",
+      "kind": "task-created",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task artifact; exact whole-candidate reconciliation and final review pending"
+      ]
+    },
+    {
+      "path": "docs/development/maintenance-notify-packet2-evidence.json",
+      "sha256": "73714b71c7cb52190fdb39594355afc9fd34f075ae034c23ace3adcdac4476ba",
+      "bytes": 119606,
+      "lines": 2634,
+      "module": "docs",
+      "kind": "task-created",
+      "status": "PARTIAL",
+      "evidence": [
+        "New task artifact; exact whole-candidate reconciliation and final review pending"
+      ]
     }
   ],
   "protected_or_derived_groups": [
