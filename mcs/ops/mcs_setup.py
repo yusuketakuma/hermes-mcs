@@ -1913,7 +1913,7 @@ def _extract_queue_warnings(db):
     ).fetchone()[0]
     if backlog > 500:
         yield (f"extract_llm backlog={backlog} messages — "
-               "drainers (ai.mcs.extract-drainer*) serve oldest eligible first; "
+               "drainers (ai.mcs.extract-drainer*) serve newest eligible first; "
                "review eligible backlog and recent progress")
 
 

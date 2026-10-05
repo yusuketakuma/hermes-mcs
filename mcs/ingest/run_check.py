@@ -1176,8 +1176,8 @@ def stage_derive(ledger, result, deadline, cfg=None,
         budget = min(llm_budget_cap, max(0, remain))
         idle = {"done": 0, "failed": 0, "left": -1, "pids": []}
         # This tick's arrivals plus earlier notified arrivals a busy or
-        # one-call tick left behind — the oldest-first background lanes
-        # would otherwise reach them only after the whole backlog.
+        # one-call tick left behind — the realtime slot reaches them
+        # without waiting for a background lane to free up.
         realtime = set(result.get("realtime_ids", [])) | {
             r[0] for r in ledger.db.execute(
                 "SELECT message_id FROM messages WHERE notified_at >= ?",

@@ -2423,9 +2423,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # version error artifacts whose backoff expired (attempts < 5,
     # next_try <= now). Error rows of older schema versions neither
     # count toward attempts nor gate the retry — a v1 permanent failure
-    # gets a fresh v2 budget. oldest_first walks the tail of the queue:
-    # drainers take DESC (newest), so an ASC caller can progress the
-    # backlog without re-selecting rows a drainer just claimed.
+    # gets a fresh v2 budget. Every caller takes DESC (newest first) so
+    # a missed arrival is not stuck behind the whole backlog; claim
+    # leases keep concurrent callers off each other's rows. oldest_first
+    # (ASC) remains for callers that must walk the tail.
     order = "ASC" if oldest_first else "DESC"
     # T18: under v4 activation the v3 engine's new-inference admission
     # defaults to ZERO — only message ids carried by a live, non-expired
@@ -3135,10 +3136,10 @@ def _main() -> int:
                     if budget <= 0:
                         total["stopped"] = "stop_after"
                         break
-                # One oldest extraction per lane before semantic/QC;
+                # One newest extraction per lane before semantic/QC;
                 # existing claim leases exclude the other worker's item.
                 r = run_pending(led, limit=1 if args.semantic else 8,
-                                budget_s=min(budget, 900), oldest_first=True,
+                                budget_s=min(budget, 900), oldest_first=False,
                                 per_write_lock=True,
                                 workers=max(1, min(args.workers, 8)),
                                 shard=shard, batch_k=args.batch,
