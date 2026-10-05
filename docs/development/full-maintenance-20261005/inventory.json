@@ -26,11 +26,10 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "REVIEWED": 878,
-      "EXCLUDED": 25,
-      "PARTIAL": 7
+      "REVIEWED": 886,
+      "EXCLUDED": 25
     },
-    "candidate_tracked": 908
+    "candidate_tracked": 909
   },
   "files": [
     {
@@ -16995,7 +16994,7 @@
     {
       "path": "docs/development/full-maintenance-20261005/PLAN.md",
       "sha256": null,
-      "bytes": 3464,
+      "bytes": 6078,
       "lines": 40,
       "module": "docs",
       "kind": "task-run-record",
@@ -17005,7 +17004,7 @@
         "JSON parsed and patch inspected; final path/evidence reconciliation pending.",
         "Complete54line checkpoint read and ownership/snapshot/currentrequested-versus-actual-model assertions updated; constraints preserved."
       ],
-      "reviewed_sha256": "a5a981e3e2488b41ad97f0d01cdab55a9e19ec8951ebf1a8282ff33f21b815de",
+      "reviewed_sha256": "2f7ec7fd0437ac333d7fc7e569fb3639bd9f1420ff93432f53eade6e25f4c1c2",
       "reviewed_lines": 50,
       "structured_record_reviewed": true,
       "record_review_basis": "Previously accepted author/criterion/source receipt plus current complete parse and known parent-authored metadata deltas; historical status retained and final-I execution not inferred."
@@ -17013,7 +17012,7 @@
     {
       "path": "docs/development/full-maintenance-20261005/findings.json",
       "sha256": "4d8fa5d583f8844e7703ed0c7ff7b6eab8d29fc41720bd5a7fc7a5e9d94d4d4a",
-      "bytes": 194,
+      "bytes": 131504,
       "lines": 10,
       "module": "docs",
       "kind": "task-run-record",
@@ -17023,8 +17022,8 @@
         "JSON parsed and patch inspected; final path/evidence reconciliation pending.",
         "Parent-owned structured receipt/criteria/inventory record inspected as task output; full fixedI final checks/review remain pending."
       ],
-      "reviewed_sha256": "607d76ee4a85c948491cb1a27159a0a9ee5cd81b7a0f73be1e1d9391b7861cd9",
-      "reviewed_lines": 2320,
+      "reviewed_sha256": "27c35eeba6f97d547b140df12faf5cf457d0113820e07035e0f7c737c7919a90",
+      "reviewed_lines": 2366,
       "structured_nodes_seen": 3159,
       "strict_JSON_all_fields_parse": true,
       "structured_record_reviewed": true,
@@ -17059,8 +17058,8 @@
         "JSON parsed and patch inspected; final path/evidence reconciliation pending.",
         "Parent-owned structured receipt/criteria/inventory record inspected as task output; full fixedI final checks/review remain pending."
       ],
-      "record_snapshot_commit": "ea35c40c4afedd9fb3597805a4747319013bf1a5",
-      "record_snapshot_sha256": "74dbb0609ca965760a3fde7df085f30ac72c38e365c4d12340903156484b47de",
+      "record_snapshot_commit": "9da172078d95fcaa45108c8f34b92dc9a950ff41",
+      "record_snapshot_sha256": "c052b4f88eda29aeaf526201762758f31d4b3ad53d4874368b7954e1bea9e126",
       "self_hash_policy": "Own inventory current bytes are identified by final fixed-I commit and external full-file manifest; no self-hash fixed point claimed.",
       "structured_nodes_seen": 48609,
       "strict_JSON_all_fields_parse": true,
@@ -23191,94 +23190,58 @@
     {
       "path": "mcs/extract/drug_map.py",
       "sha256": "bb59d38da7e628ad0e1011e29fea950a136958247198c6c916227439e02c2a45",
-      "bytes": 17490,
+      "bytes": 17732,
       "lines": 404,
       "module": "mcs/extract",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending.",
+        "Parent accepted full primary delta and all20 criterion decisions, 7 exact-W source/test digests, 48 artifact hashes and real JUnit counts, P902-to-W904 complete byte/mode replay; whole final-I results remain separate."
       ],
-      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
-      "reviewed_sha256": "bb59d38da7e628ad0e1011e29fea950a136958247198c6c916227439e02c2a45",
-      "reviewed_lines": 404,
-      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
-      "responsibility": "明示指定の私有・所有者・0600・no-follow・容量/SHA検査済辞書だけを読む。schema1/2・exact alias/strengthを解決候補としてcurrent sourceへ結合しmed_refをtransaction内で置換。",
-      "callers": [
-        "mcs/extract/rollup.py",
-        "mcs/ingest/run_check.py",
-        "mcs/ops/brain_export.py",
-        "mcs/ops/import_drug_master.py",
-        "mcs/views/mcs_stats.py",
-        "tests/extract/test_drug_map.py",
-        "tests/extract/test_drug_map_evaluation.py",
-        "tests/extract/test_rollup_ref_lookup.py",
-        "tests/ingest/test_drug_map_pipeline.py",
-        "tests/ops/test_import_drug_master.py",
-        "tests/views/test_drug_candidates.py"
-      ],
+      "review_input": "7ecbba17a092e00bdee70ffec007159f8a96213d",
+      "reviewed_sha256": "c0daf81423adb11dffc6d2cf08ba1db663ee312ed4a0a437304b806e5c594c68",
+      "reviewed_lines": 411,
+      "review_packet": "docs/development/maintenance-drug-json-evidence.json",
+      "responsibility": "承認済み明示辞書の私有/SHA検証、薬剤候補の根拠束縛、派生保存、読取と候補文言。",
+      "callers": "load→run_check.stage_derive; derive→rollup rebuild pids; current_refs→rollup.build_rollup/mcs_stats._med_candidate_breakdown; candidate_note→brain_export._patient_md",
       "full_content_read": true,
       "read_ranges": [
         [
           1,
-          210
-        ],
-        [
-          211,
-          404
+          411
         ]
       ],
       "current_delta_sha256": "c0daf81423adb11dffc6d2cf08ba1db663ee312ed4a0a437304b806e5c594c68",
-      "current_delta_commit": "37da210",
-      "recheck_required": "Parent complete primary source/regression/fragment patch accepted; final formal drug JSON criterion/replay receipt intake pending."
+      "current_delta_commit": "37da210"
     },
     {
       "path": "mcs/extract/rollup.py",
       "sha256": "53aa618195fa714232c991827b052f8d950ab075a3e9a9789b522ef148b41c5a",
-      "bytes": 25703,
+      "bytes": 25916,
       "lines": 560,
       "module": "mcs/extract",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending.",
+        "Parent accepted full primary delta and all20 criterion decisions, 7 exact-W source/test digests, 48 artifact hashes and real JUnit counts, P902-to-W904 complete byte/mode replay; whole final-I results remain separate."
       ],
-      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
-      "reviewed_sha256": "f51ee79205e425d86fe38bb3e319094635ba048f047433d3a5bbcac59ac1b9ec",
+      "review_input": "7ecbba17a092e00bdee70ffec007159f8a96213d",
+      "reviewed_sha256": "9594f50c73242a9ea56ea47c6e2c9e7b33cae29fb0400d8b6613b8afbc08a698",
       "reviewed_lines": 563,
-      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
-      "responsibility": "hash/project/body-current抽出から患者表示用集計を構築。v4>canonical>legacy、fact_id根拠/薬剤未確認/症状否定/依頼返信段階/服薬期間/連携サマリーを保持。空current sourceを存在として扱うF03とpersisted version5を修復。",
-      "callers": [
-        "mcs/ingest/run_check.py",
-        "mcs/ops/mcs_repair.py",
-        "tests/extract/test_derive_deadline.py",
-        "tests/extract/test_drug_map.py",
-        "tests/extract/test_extract_llm.py",
-        "tests/extract/test_extract_packet4_regressions.py",
-        "tests/extract/test_extraction_review.py",
-        "tests/extract/test_rollup_canonical.py",
-        "tests/extract/test_rollup_period.py",
-        "tests/extract/test_rollup_ref_lookup.py",
-        "tests/ingest/test_drug_map_pipeline.py",
-        "tests/ops/test_mcs_repair.py",
-        "tests/semantic/test_canonical_projection.py",
-        "tests/semantic/test_review_20260930.py",
-        "tests/views/test_drug_candidates.py"
-      ],
+      "review_packet": "docs/development/maintenance-drug-json-evidence.json",
+      "responsibility": "current extractから患者集計を構築し、世代優先・未確認・返信段階・候補注記を表示用に保存する。",
+      "callers": "run_check.stage_derive→rebuild_many→rebuild→build_rollup; build_rollup→_llm_reply_kind/current_refs; brain_export uses resulting medications",
       "full_content_read": true,
       "read_ranges": [
         [
           1,
-          280
-        ],
-        [
-          281,
-          560
+          563
         ]
       ],
       "current_delta_sha256": "9594f50c73242a9ea56ea47c6e2c9e7b33cae29fb0400d8b6613b8afbc08a698",
-      "current_delta_commit": "37da210",
-      "recheck_required": "Parent complete primary source/regression/fragment patch accepted; final formal drug JSON criterion/replay receipt intake pending."
+      "current_delta_commit": "37da210"
     },
     {
       "path": "mcs/extract/v1/extract.py",
@@ -29210,47 +29173,33 @@
     {
       "path": "tests/extract/test_drug_map.py",
       "sha256": "79fbf122782fe40c378f461d44b522784eb4a974692ce861f9b41196b16aa20c",
-      "bytes": 18419,
+      "bytes": 23204,
       "lines": 425,
       "module": "tests/extract",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending.",
-        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending.",
+        "Parent accepted full primary delta and all20 criterion decisions, 7 exact-W source/test digests, 48 artifact hashes and real JUnit counts, P902-to-W904 complete byte/mode replay; whole final-I results remain separate."
       ],
-      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
-      "reviewed_sha256": "79fbf122782fe40c378f461d44b522784eb4a974692ce861f9b41196b16aa20c",
-      "reviewed_lines": 425,
-      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
-      "responsibility": "合成private dictionaryのschema/owner/symlink/SHA/bound、source identity/aliases/candidates/derivation/remove/rollback/期間解釈を検査。最低Pythonで同じFictionalEntry required/optionalキーを保持。",
-      "callers": [
-        {
-          "path": "scripts/run_tests.sh",
-          "entrypoint": "pytest explicit synthetic targets"
-        },
-        {
-          "path": "tests/views/test_drug_candidates.py",
-          "line": 13,
-          "owner": "parent; readonly"
-        }
-      ],
+      "review_input": "7ecbba17a092e00bdee70ffec007159f8a96213d",
+      "reviewed_sha256": "084dcbfdea2d8cb8dc20825887abbc5423eaec977ef8cc436f70f9dc69adb421",
+      "reviewed_lines": 529,
+      "review_packet": "docs/development/maintenance-drug-json-evidence.json",
+      "responsibility": "完全架空辞書とsource-bound注記の検証・同一性・私有ファイル・冪等性・破損境界回帰。",
+      "callers": "isolated runner; _dictionary/_seed shared with existing pipeline/view/ref_lookup tests",
       "full_content_read": true,
       "read_ranges": [
         [
           1,
-          210
-        ],
-        [
-          211,
-          417
+          529
         ]
       ],
       "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
       "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read.",
       "current_delta_sha256": "084dcbfdea2d8cb8dc20825887abbc5423eaec977ef8cc436f70f9dc69adb421",
-      "current_delta_commit": "37da210",
-      "recheck_required": "Parent complete primary source/regression/fragment patch accepted; final formal drug JSON criterion/replay receipt intake pending."
+      "current_delta_commit": "37da210"
     },
     {
       "path": "tests/extract/test_drug_map_evaluation.py",
@@ -29654,37 +29603,30 @@
     {
       "path": "tests/extract/test_rollup_canonical.py",
       "sha256": "2ace07d53f291a243619af82e50672140147d696668060b0ccd10d7c120ef8f1",
-      "bytes": 17921,
+      "bytes": 20297,
       "lines": 392,
       "module": "tests/extract",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending.",
+        "Parent accepted full primary delta and all20 criterion decisions, 7 exact-W source/test digests, 48 artifact hashes and real JUnit counts, P902-to-W904 complete byte/mode replay; whole final-I results remain separate."
       ],
-      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
-      "reviewed_sha256": "2ace07d53f291a243619af82e50672140147d696668060b0ccd10d7c120ef8f1",
-      "reviewed_lines": 392,
-      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
-      "responsibility": "canonical fact_id/evidence enumerable、v4優先、stale/foreign/deleted source除外、typed fields/med candidates/返信状態のview-only集計。",
-      "callers": [
-        "scripts/run_tests.sh / pytest",
-        "対象runtime/共有consumerをimportsで確認"
-      ],
+      "review_input": "7ecbba17a092e00bdee70ffec007159f8a96213d",
+      "reviewed_sha256": "7a0e9e284e04e57310623609a4ea18592774f85dd8d3285fc9941422956b5c15",
+      "reviewed_lines": 445,
+      "review_packet": "docs/development/maintenance-drug-json-evidence.json",
+      "responsibility": "完全合成current/canonical、未確認、世代・返信の根拠と深度境界の患者集計回帰。",
+      "callers": "isolated runner; real Ledger/build_rollup; original assertions unchanged",
       "full_content_read": true,
       "read_ranges": [
         [
           1,
-          196
-        ],
-        [
-          197,
-          392
+          445
         ]
       ],
       "current_delta_sha256": "7a0e9e284e04e57310623609a4ea18592774f85dd8d3285fc9941422956b5c15",
-      "current_delta_commit": "37da210",
-      "recheck_required": "Parent complete primary source/regression/fragment patch accepted; final formal drug JSON criterion/replay receipt intake pending."
+      "current_delta_commit": "37da210"
     },
     {
       "path": "tests/extract/test_rollup_period.py",
@@ -29723,24 +29665,23 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending.",
+        "Parent accepted full primary delta and all20 criterion decisions, 7 exact-W source/test digests, 48 artifact hashes and real JUnit counts, P902-to-W904 complete byte/mode replay; whole final-I results remain separate."
       ],
-      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "review_input": "7ecbba17a092e00bdee70ffec007159f8a96213d",
       "reviewed_sha256": "421b6bc980f6225ef94de1dff912327d4a01772bffa47ada347099cee21e2f57",
       "reviewed_lines": 24,
-      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
-      "responsibility": "辞書refの実current exact-message解決が二問/全投稿へ広がらないこと。",
-      "callers": [
-        "scripts/run_tests.sh / pytest",
-        "対象runtime/共有consumerをimportsで確認"
-      ],
+      "review_packet": "docs/development/maintenance-drug-json-evidence.json",
+      "responsibility": "実rollupがmed_refを持つmessageだけを照合する境界回帰。",
+      "callers": "isolated runner; byte-preserved existing _dictionary/_seed consumer",
       "full_content_read": true,
       "read_ranges": [
         [
           1,
           24
         ]
-      ]
+      ],
+      "current_delta_commit": "37da210"
     },
     {
       "path": "tests/extract/test_slot_routing.py",
@@ -30518,31 +30459,34 @@
     {
       "path": "tests/ingest/test_drug_map_pipeline.py",
       "sha256": "13e720e558f7aa0e071f55b3365212aea470803d224f4da9f7437507edfdd57e",
-      "bytes": 4263,
+      "bytes": 5368,
       "lines": 94,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
+        "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending",
+        "Parent accepted full primary delta and all20 criterion decisions, 7 exact-W source/test digests, 48 artifact hashes and real JUnit counts, P902-to-W904 complete byte/mode replay; whole final-I results remain separate."
       ],
-      "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
-      "reviewed_sha256": "13e720e558f7aa0e071f55b3365212aea470803d224f4da9f7437507edfdd57e",
-      "review_packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "review_input": "7ecbba17a092e00bdee70ffec007159f8a96213d",
+      "reviewed_sha256": "eb3d962343d5aa0422ab4182b30c0e4a96ebf5e002b47a15a158edabfdb9f960",
+      "review_packet": "docs/development/maintenance-drug-json-evidence.json",
       "read_ranges": [
         [
           1,
-          94
+          117
         ]
       ],
-      "responsibility": "合成医薬品辞書とrule extractionの収集consumerを検証。",
+      "responsibility": "辞書設定→tick診断→派生→rollupの実経路を合成Ledger/LLM budget zeroで確認。",
       "callers_or_consumers": [
         "scripts/run_tests.sh→pytest collection"
       ],
       "W_review": "P/W SHA一致、全文レビューを再利用",
       "current_delta_sha256": "eb3d962343d5aa0422ab4182b30c0e4a96ebf5e002b47a15a158edabfdb9f960",
       "current_delta_commit": "37da210",
-      "recheck_required": "Parent complete primary source/regression/fragment patch accepted; final formal drug JSON criterion/replay receipt intake pending."
+      "reviewed_lines": 117,
+      "callers": "run_check.stage_derive with only rule extraction/signals stubs; real dictionary validation/derive/rollup",
+      "full_content_read": true
     },
     {
       "path": "tests/ingest/test_fixture_synthetic.py",
@@ -37516,32 +37460,30 @@
     {
       "path": "tests/views/test_drug_candidates.py",
       "sha256": "56914862ba3efaccd098ae3c5dadb241443a12dcc6b280120cd8a7f26635cbbb",
-      "bytes": 3888,
+      "bytes": 5133,
       "lines": 94,
       "module": "tests/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending.",
+        "Parent accepted full primary delta and all20 criterion decisions, 7 exact-W source/test digests, 48 artifact hashes and real JUnit counts, P902-to-W904 complete byte/mode replay; whole final-I results remain separate."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "reviewed_sha256": "56914862ba3efaccd098ae3c5dadb241443a12dcc6b280120cd8a7f26635cbbb",
-      "reviewed_lines": 94,
+      "review_input": "7ecbba17a092e00bdee70ffec007159f8a96213d",
+      "reviewed_sha256": "9718e5c90e950ba1ec6b0cb400fd8a9534aedfb2f3434c25d4df10764a678138",
+      "reviewed_lines": 119,
       "full_content_read": true,
       "read_ranges": [
         [
           1,
-          94
+          119
         ]
       ],
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
-      "responsibility": "Synthetic public consumer/fixture for drug_candidates; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
-      "callers": [
-        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
-      ],
+      "review_packet": "docs/development/maintenance-drug-json-evidence.json",
+      "responsibility": "薬剤原名統計・未確認候補・Markdown/machine exportの実読取consumer回帰。",
+      "callers": "mcs_stats.run_stats→current_refs; rollup.build_rollup; brain_export._patient_md; export_schema.project_record",
       "current_delta_sha256": "9718e5c90e950ba1ec6b0cb400fd8a9534aedfb2f3434c25d4df10764a678138",
-      "current_delta_commit": "37da210",
-      "recheck_required": "Parent complete primary source/regression/fragment patch accepted; final formal drug JSON criterion/replay receipt intake pending."
+      "current_delta_commit": "37da210"
     },
     {
       "path": "tests/views/test_group_consultations_view.py",
@@ -38306,11 +38248,31 @@
       "path": "changes/20261005-drug-map-corrupt-json.json",
       "kind": "task-created",
       "module": "changes",
-      "evidence": [],
-      "status": "PARTIAL",
+      "evidence": [
+        "Parent read full Japanese impact/upgrade/details; exact fragment hash accepted, runtime regression record retained."
+      ],
+      "status": "REVIEWED",
       "current_delta_sha256": "e84125206092f9c6698805f647ac3e9eb5b77d8b9703e7bf1889c535ea5c2ee8",
       "current_delta_commit": "37da210",
-      "recheck_required": "Parent complete primary source/regression/fragment patch accepted; final formal drug JSON criterion/replay receipt intake pending."
+      "reviewed_sha256": "e84125206092f9c6698805f647ac3e9eb5b77d8b9703e7bf1889c535ea5c2ee8",
+      "bytes": 1744,
+      "reviewed_lines": 14,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-drug-json-evidence.json"
+    },
+    {
+      "path": "docs/development/maintenance-drug-json-evidence.json",
+      "kind": "run_record",
+      "module": "docs",
+      "status": "REVIEWED",
+      "reviewed_sha256": "40469da793ad589ae5201e06c632c0e2dea869a8820cc75c1cb789f1ffe56937",
+      "bytes": 63515,
+      "reviewed_lines": 1369,
+      "structured_record_reviewed": true,
+      "review_packet": "docs/development/maintenance-drug-json-evidence.json",
+      "evidence": [
+        "Root accepted complete criterion/finding/flow/constraint/source identity fields, all48 current artifact digests and XML actual counts; external final commit/replay receipt binds report hash without self-reference."
+      ]
     }
   ],
   "protected_or_derived_groups": [
@@ -38478,5 +38440,30 @@
     "count": 13,
     "input_commit": "ea35c40c4afedd9fb3597805a4747319013bf1a5",
     "self_identity": "External final fixed-I manifest/commit rather than recursive internal SHA"
+  },
+  "last_drug_json_import": {
+    "source_W": "2c8bdf3d4338cc355b3b4e7574b123b4b78a23ac",
+    "evidence_commit": "be9c905448927ae59203b31b746f24755806a173",
+    "20criteria_accepted": true,
+    "source_test_current_sha_matches": 7,
+    "artifact_sha_matches": 48,
+    "whole_worker_replay_paths": 904,
+    "before_new_cases": {
+      "310": {
+        "fail": 12,
+        "pass": 1
+      },
+      "313": {
+        "fail": 6,
+        "pass": 7
+      }
+    },
+    "worker_after_each_runtime": {
+      "pass": 122,
+      "skip": 0
+    },
+    "root_report_hash": "40469da793ad589ae5201e06c632c0e2dea869a8820cc75c1cb789f1ffe56937",
+    "external_receipt": "/tmp/mcs-maintenance-drug-json-20261005/final-commit-receipt.json",
+    "parent_whole_I_status": "NOT_YET_EXECUTED"
   }
 }

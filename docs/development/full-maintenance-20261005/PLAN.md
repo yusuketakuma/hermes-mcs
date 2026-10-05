@@ -10,7 +10,7 @@ B=main 4167697（既存未追跡8/recoverは調査後、明示された条件付
 | owner | 専用worktree/branch | 現packet | 次packet候補 |
 |---|---|---|---|
 | root | full-maintenance-20261005 / audit/full-maintenance-20261005 | 共有台帳・親統合・文書境界 | 固定Iの全体/SDK/隔離配布物検証 → fresh-context独立レビュー |
-| maintenance_core | maintenance-drug-json-20261005 / audit/maintenance-drug-json-20261005 | 薬剤辞書・保存結果の深いJSONによる停止の最小修復と回帰 | 修復成果の親統合 |
+| maintenance_core | maintenance-drug-json-20261005 / audit/maintenance-drug-json-20261005 | 薬剤辞書・保存結果の深いJSONによる停止の最小修復と回帰を受入済み | 担当完了 |
 | maintenance_notify | maintenance-notify-20261005 / audit/maintenance-notify-packet6-20261005 | 文書259件の正式受入済み | 固定Iの実SDK・配布物の隔離起動検証 |
 | maintenance_semantic | maintenance-stamps-20261005 / audit/maintenance-stamps-20261005 | スタンプ実装・20基準と両Python各385件を受入済み | 固定IのPython3.10全体検証 |
 
@@ -35,7 +35,7 @@ COMPLETEは全適用source対象REVIEWED、確定修復/有用保守解消、統
 
 ## 現状
 
-初期inventory: tracked 814 + original untracked 2。2026-10-05の親受入時点はtracked 907、台帳909件（削除2件を含む）、REVIEWED884・EXCLUDED25・UNSEEN/PARTIAL0。新しい薬剤JSON修復成果の受入と、固定Iの必須検証・独立レビューは未完。
+初期inventory: tracked 814 + original untracked 2。2026-10-05の親受入時点はtracked 909、台帳911件（削除2件を含む）、REVIEWED886・EXCLUDED25・UNSEEN/PARTIAL0。薬剤JSON修復と正式証拠の受入を完了し、固定Iの必須検証・独立レビューは未完。
 8/recoverは本文を外部出力せず確認し、見出しだけの残留作業出力と判断。2件33 bytesの削除と復元元は私有 receipt に記録。
 各source packet、文書259件、歴史20文書、旧run記録9件、スタンプ氏名表示を親の専用Iへ統合した。旧PASS/途中状態は原文に保持し、現在の全域受入へ転用しない。開始後にmainへ外部追加されたc26a009（テスト時Gateway実操作の拒否）は、元checkoutを変更せず専用Iへ取り込んだ。詳細はoriginal-state-preservation.json。
 

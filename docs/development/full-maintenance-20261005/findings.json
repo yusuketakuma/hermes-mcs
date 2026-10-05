@@ -2243,11 +2243,57 @@
     },
     {
       "id": "DRUGMAP-READONLY",
-      "status": "DEFERRED_TO_PARENT_OWNER",
+      "status": "CONFIRMED_FIXED",
       "evidence": "notify ownerからload/current_refs JSON RecursionError未捕捉候補を受領。fixed docPと現在Iは未照合、stamp所有外なので確定扱いせず親/coreへ移管。",
       "packet": "docs/development/maintenance-stamps-evidence.json",
-      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending.",
-      "current_disposition": "TRANSFERRED_TO_CORE_DRUG_JSON_OWNER"
+      "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending.",
+      "current_disposition": "RESOLVED_BY_DRUG_JSON_F01_TO_F04",
+      "resolution_packet": "docs/development/maintenance-drug-json-evidence.json",
+      "resolution_source_commit": "37da210"
+    },
+    {
+      "id": "DRUG-JSON-F01",
+      "status": "CONFIRMED_FIXED",
+      "boundary": "drug_map.load195",
+      "cause": "owner-private/pinned 20001byte深度10000 JSONでもRecursionErrorがValueError変換から漏れtickがgeneric exception。",
+      "fix": "except tupleへRecursionError追加→ValueError(drug_map_json)→invalid_dictionary/status invalid。",
+      "before": "dictionary load1 + pipeline tick1, both runtimes FAIL",
+      "validation": "実decoder error; empty synthetic Ledger dump不変; path無し。通常invalid設定の旧med_ref retirementは維持。",
+      "packet": "docs/development/maintenance-drug-json-evidence.json",
+      "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending."
+    },
+    {
+      "id": "DRUG-JSON-F02",
+      "status": "CONFIRMED_FIXED",
+      "boundary": "drug_map.current_refs283 content/meta",
+      "cause": "注記depth10000 RecursionErrorがstats/rollupへ伝播し候補集計を中断。",
+      "fix": "既存安全[] except tupleへRecursionError追加。",
+      "before": "read content/meta2 + stats/rollup/export content/meta2, both runtimes FAIL",
+      "validation": "valid resolved control→honest unavailable、action/name統計不変、source薬剤保持、候補値/ID非表示、全dump/total_changes不変。",
+      "packet": "docs/development/maintenance-drug-json-evidence.json",
+      "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending."
+    },
+    {
+      "id": "DRUG-JSON-F03",
+      "status": "CONFIRMED_FIXED",
+      "boundary": "P current_refs296/derive354",
+      "cause": "SQL-valid深度999はPython3.10 decode不能。SQL JSON制約はPython安全深度保証ではない。",
+      "fix": "refsはRecursionErrorで[]、deriveはsource=None→既存med_ref-only retirement/pids/idempotence。",
+      "before": "3.10追加2FAIL / 3.13 native2PASS control",
+      "validation": "read全DB不変、derive原文/source不変・古いrefsだけ除去、pids=[1]、再実行done0。stdlib sweepは3.10 depth995–999 SQL1/RecursionError、depth10000 SQL0。",
+      "packet": "docs/development/maintenance-drug-json-evidence.json",
+      "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending."
+    },
+    {
+      "id": "DRUG-JSON-F04",
+      "status": "CONFIRMED_FIXED",
+      "boundary": "rollup facts149/158 catch163; raw reply225→_llm_reply_kind62 catch63",
+      "cause": "同SQL-valid source停止。fact catchだけ補ってもraw legacy reply再decodeで停止する同根。",
+      "fix": "2つの既存except tupleへRecursionError追加。既存empty facts/None replyを利用。",
+      "before": "3.10 v1/llm/canonical3 + shadowed reply1 FAIL / 3.13 native4PASS",
+      "validation": "全dump/total_changes不変、valid vitals/done保持、破損根拠からvitals/done無し。最初のscope外probeは親追加所有後に解消。",
+      "packet": "docs/development/maintenance-drug-json-evidence.json",
+      "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending."
     }
   ],
   "deferred": [],
@@ -2316,5 +2362,5 @@
     "status": "not_started",
     "reason": "Requires fixed I after all packets"
   },
-  "coverage_current": "All existing applicable sources have accepted current-SHA receipts; final drug JSON delta intake still in progress."
+  "coverage_current": "All current applicable paths reviewed; no UNSEEN/PARTIAL source or owned metadata. Final fixed-I whole tests/SDK/archive/fresh independent review remain required."
 }
