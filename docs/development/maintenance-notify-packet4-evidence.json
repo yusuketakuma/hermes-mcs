@@ -1,0 +1,3142 @@
+{
+  "schema_version": 1,
+  "task": "全域監査 v7 maintenance notify packet4",
+  "language": "ja",
+  "target_version": "1.0.13",
+  "date": "2026-10-05",
+  "agent": "/root/maintenance_notify",
+  "branch": "audit/maintenance-notify-packet4-20261005",
+  "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005",
+  "points": {
+    "B": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+    "P": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+    "W": "3e9dbf1c46cd7db1b739f333ee8f758a7c276c2f",
+    "source_commits": [
+      "42051eb1df1561fa06be314cfe4c2519c7ed3bec",
+      "3e9dbf1c46cd7db1b739f333ee8f758a7c276c2f"
+    ],
+    "parent_I_last_observed": "ec014475 (parent reported; worker verification対象外)",
+    "evidence_commit": "このreportだけの後続commit。git logで取得（自己SHA循環を避けsourceWを固定）。"
+  },
+  "scope": {
+    "existing_text_files": 19,
+    "existing_full_read_lines": 4560,
+    "writer_existing_files": 18,
+    "readonly_core_file": "integration/test_standalone_sdk.py",
+    "reviewed_existing": 19,
+    "partial_existing": 0,
+    "unread_existing": 0,
+    "new_direct_test": 1,
+    "new_Japanese_changes": 2,
+    "W_tracked_inventory_count": 22,
+    "W_inventory_lines": 4738,
+    "excluded": "platform/common/notify/views/standalone sourceと他integration guard/conftest/version/生成DEVELOPMENT/親台帳はreadonly。全repo完了は未宣言。"
+  },
+  "instructions": {
+    "spec": "/Users/yusuke/.codex/attachments/9bb89786-a65f-4f06-8123-c608a4bb4464/pasted-text-1.txt 全66行既読",
+    "AGENTS": "/Users/yusuke/.mcs/AGENTS.md / current user instructions",
+    "skill": "/Users/yusuke/.agents/skills/agent-defaults/SKILL.md 全文適用",
+    "model": "親が指定した GPT-6.1-sol ultra 継続",
+    "restrictions": "再帰spawn/agmsg/push/PR/merge/deploy/main編集/実service/PHI/PII/secret/実DB/Keychain/LLM/Jev禁止。完全合成temp fixturesだけ。"
+  },
+  "criteria_catalog": {
+    "C01": "設計・責務・依存・重複・文書",
+    "C02": "状態・欠落・日付・境界",
+    "C03": "transaction・lock・冪等・削除",
+    "C04": "migration・旧schema",
+    "C05": "認証認可・tenant・injection・暗号",
+    "C06": "PHI・ログ・保管",
+    "C07": "API・CLI・入力容量・pagination",
+    "C08": "UI・stale・二重操作・復旧・accessibility",
+    "C09": "計算量・メモリ・予算・起動",
+    "C10": "retry・queue・timeout・cancel・例外・観測",
+    "C11": "偽陽性テスト・mock・flaky・skip",
+    "C12": "runtime・依存・CI・script",
+    "X01": "包装・起動停止・旧新共存・rollback",
+    "X02": "供給網・公式URL・CI・license",
+    "X03": "restore・backup・削除復活・鍵",
+    "X04": "外部署名・identity・宛先・部分配送・retry・順序",
+    "X05": "native/OS・offline・容量",
+    "X06": "AI/MCP・prompt injection・tool・人承認・memory",
+    "X07": "医療/財務・日時・根拠・人承認",
+    "X08": "publicWeb・link・form・index・公開境界"
+  },
+  "judgment_semantics": "REVIEWEDは対象fileを全読し実caller/consumer/適用性を確認した局所監査状態。global免責proofやparent統合Iの成功ではない。非適用も具体責務で記録し、確認済み/改善不要/owner残課題を区別。",
+  "files": [
+    {
+      "path": "adapters/README.md",
+      "P_lines": 30,
+      "P_sha256": "b0086cebedc74b027b817153f73043d4a0261989c0d4fe05524300da75ac6431",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          30
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 30,
+      "W_sha256": "b0086cebedc74b027b817153f73043d4a0261989c0d4fe05524300da75ac6431",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          30
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "canonical adapters/common/platformと旧互換入口の配置/責務/運用説明。",
+      "callers": [
+        "利用者/運用者/開発者",
+        "canonical adapters/ / hermes_plugin/ / integration SDKconsumer"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "全文をsource/callerへ照合: canonical adapters/common/platformと旧互換入口の配置/責務/運用説明。"
+        },
+        "C02": {
+          "判定": "文書照合・runtime非適用",
+          "根拠": "runtime状態を実装しない。READMEはpreview/confirm/queuedとapplied、standalone ownershipをsourceと照合。"
+        },
+        "C03": {
+          "判定": "適用・確認済み",
+          "根拠": "journal/lock/receipt説明をsourceに照合。HermesREADMEのprestarted not_sent条件へjournal完全性・自分claim存在・unknown保持を補記。"
+        },
+        "C04": {
+          "判定": "文書照合・runtime非適用",
+          "根拠": "DBmigration実装なし。旧hermes_plugin/mcs_* alias/legacy standalone runtime互換をcanonicalsourceへ照合。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "秘密の設定例を含まず、explicituser/chat/project/roleの境界・privateクリック・source由来scopeをsource照合。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "記述/例は完全合成、実投稿匿名化なし。患者snapshotは公開copy、元DB/credentialは置かないという運用説明。"
+        },
+        "C07": {
+          "判定": "文書照合・runtime非適用",
+          "根拠": "nativeJSON/CLI/compatpathの例をexistingparser/manifest/loaderへ照合。実構成を変更しない。"
+        },
+        "C08": {
+          "判定": "適用・確認済み",
+          "根拠": "stale/doubleclick/unknown/receipt説明をsourceへ照合。Slack添付reuse段落はPの旧contractに一致；core新sealed-prior契約の統合時doc追随を親へ返却。"
+        },
+        "C09": {
+          "判定": "文書照合・runtime非適用",
+          "根拠": "文書だけでruntime負荷なし。大モジュールの行数分割や新SDKdependencyは提案しない。"
+        },
+        "C10": {
+          "判定": "適用・確認済み",
+          "根拠": "startup journal taint/missingclaim時unknown保持を現在sourceに同期。再送前receipt確認とoperator人承認説明を保持。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "文書自体にテストを増やさず対応sourceの実fixture/SDK testsで契約を照合。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "記載path/entryとactual git ls-files照合、wholeplugin checkout/discoveryはpinned SDKで確認。生成DEVELOPMENTは親owner。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "whole checkout/symlink/localinstaller・gateway/LW/standalone再起動条件を説明。今回実機適用しない。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "公式SDK/既存Hermes、設定済みsource pin以外のprovider追加なし。本文内URLは秘密値を持たない。"
+        },
+        "X03": {
+          "判定": "適用・確認済み",
+          "根拠": "restore taint/oldruntime/recovery人確認説明を現在commonworker/notifyresolverへ照合。実backup改変/秘密を読まない。"
+        },
+        "X04": {
+          "判定": "適用・確認済み",
+          "根拠": "claim→grant→started→result→receiptの説明、unknown部分配送/identityをsourceに照合。Slackcore修復後のattachment/hash/partial-history説明は親doc次packetへ。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "nativeSlack/Discordと独立LWの責務境界を説明、実UIスクリーンショットの追加なし。"
+        },
+        "X06": {
+          "判定": "適用・確認済み",
+          "根拠": "modeltool/shell/自動承認を追加しない、native provenanceとhuman-confirmed+reason+receipt説明を保持。"
+        },
+        "X07": {
+          "判定": "文書照合・runtime非適用",
+          "根拠": "診療判断/無対応の断定を文書に入れない。候補と人承認結果の区別を維持。"
+        },
+        "X08": {
+          "判定": "文書照合・runtime非適用",
+          "根拠": "publicCallbackはLINE WORKS guide owner、plugin独自webendpoint無し。links/formはnativeSDK側のsource契約。"
+        }
+      }
+    },
+    {
+      "path": "adapters/__init__.py",
+      "P_lines": 1,
+      "P_sha256": "8b68bbbbdca7acbd688af3e53dfaf34fcbd29b0aa60600d124329db750e69227",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_sha256": "8b68bbbbdca7acbd688af3e53dfaf34fcbd29b0aa60600d124329db750e69227",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "adapter packageの説明docstringのみ。",
+      "callers": [
+        "利用者/運用者/開発者",
+        "canonical adapters/ / hermes_plugin/ / integration SDKconsumer"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "C02": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "C03": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "C04": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "C05": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "C06": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "C07": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "C08": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "C09": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "C10": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "C11": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "C12": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "X01": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "X02": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "X03": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "X04": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "X05": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "X06": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "X07": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        },
+        "X08": {
+          "判定": "非適用・docstringのみ",
+          "根拠": "非適用: adapter packageの説明docstringのみ。 import実行副作用・auth・保存・I/O・UI・設定・依存追加は無い。package入口の1行を全文確認。"
+        }
+      }
+    },
+    {
+      "path": "hermes_plugin/README.md",
+      "P_lines": 380,
+      "P_sha256": "cc419cdd2d82560cb200a555b26226bb847ebc9aa239154c5701bc6b88eddf53",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          190
+        ],
+        [
+          191,
+          380
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 382,
+      "W_sha256": "f08a4cb24ecb09c72ba5768bb23d7a3fb078c4e4a82ae3d81368854a31cc4c17",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          382
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "native commands/settings・人承認/receipt・Hermes/standalone包装・Discord/Slack常駐配送/復旧説明。",
+      "callers": [
+        "利用者/運用者/開発者",
+        "canonical adapters/ / hermes_plugin/ / integration SDKconsumer"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "全文をsource/callerへ照合: native commands/settings・人承認/receipt・Hermes/standalone包装・Discord/Slack常駐配送/復旧説明。"
+        },
+        "C02": {
+          "判定": "文書照合・runtime非適用",
+          "根拠": "runtime状態を実装しない。READMEはpreview/confirm/queuedとapplied、standalone ownershipをsourceと照合。"
+        },
+        "C03": {
+          "判定": "適用・確認済み",
+          "根拠": "journal/lock/receipt説明をsourceに照合。HermesREADMEのprestarted not_sent条件へjournal完全性・自分claim存在・unknown保持を補記。"
+        },
+        "C04": {
+          "判定": "文書照合・runtime非適用",
+          "根拠": "DBmigration実装なし。旧hermes_plugin/mcs_* alias/legacy standalone runtime互換をcanonicalsourceへ照合。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "秘密の設定例を含まず、explicituser/chat/project/roleの境界・privateクリック・source由来scopeをsource照合。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "記述/例は完全合成、実投稿匿名化なし。患者snapshotは公開copy、元DB/credentialは置かないという運用説明。"
+        },
+        "C07": {
+          "判定": "文書照合・runtime非適用",
+          "根拠": "nativeJSON/CLI/compatpathの例をexistingparser/manifest/loaderへ照合。実構成を変更しない。"
+        },
+        "C08": {
+          "判定": "照合済み・次I契約差分を親へ返却",
+          "根拠": "stale/doubleclick/unknown/receipt説明をsourceへ照合。Slack添付reuse段落はPの旧contractに一致；core新sealed-prior契約の統合時doc追随を親へ返却。"
+        },
+        "C09": {
+          "判定": "文書照合・runtime非適用",
+          "根拠": "文書だけでruntime負荷なし。大モジュールの行数分割や新SDKdependencyは提案しない。"
+        },
+        "C10": {
+          "判定": "適用・確認済み",
+          "根拠": "startup journal taint/missingclaim時unknown保持を現在sourceに同期。再送前receipt確認とoperator人承認説明を保持。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "文書自体にテストを増やさず対応sourceの実fixture/SDK testsで契約を照合。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "記載path/entryとactual git ls-files照合、wholeplugin checkout/discoveryはpinned SDKで確認。生成DEVELOPMENTは親owner。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "whole checkout/symlink/localinstaller・gateway/LW/standalone再起動条件を説明。今回実機適用しない。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "公式SDK/既存Hermes、設定済みsource pin以外のprovider追加なし。本文内URLは秘密値を持たない。"
+        },
+        "X03": {
+          "判定": "適用・確認済み",
+          "根拠": "restore taint/oldruntime/recovery人確認説明を現在commonworker/notifyresolverへ照合。実backup改変/秘密を読まない。"
+        },
+        "X04": {
+          "判定": "照合済み・次I契約差分を親へ返却",
+          "根拠": "claim→grant→started→result→receiptの説明、unknown部分配送/identityをsourceに照合。Slackcore修復後のattachment/hash/partial-history説明は親doc次packetへ。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "nativeSlack/Discordと独立LWの責務境界を説明、実UIスクリーンショットの追加なし。"
+        },
+        "X06": {
+          "判定": "適用・確認済み",
+          "根拠": "modeltool/shell/自動承認を追加しない、native provenanceとhuman-confirmed+reason+receipt説明を保持。"
+        },
+        "X07": {
+          "判定": "文書照合・runtime非適用",
+          "根拠": "診療判断/無対応の断定を文書に入れない。候補と人承認結果の区別を維持。"
+        },
+        "X08": {
+          "判定": "文書照合・runtime非適用",
+          "根拠": "publicCallbackはLINE WORKS guide owner、plugin独自webendpoint無し。links/formはnativeSDK側のsource契約。"
+        }
+      }
+    },
+    {
+      "path": "hermes_plugin/__init__.py",
+      "P_lines": 1078,
+      "P_sha256": "520af78445d02b3f8736b2aad1ab81cd17b94d6b412180e0ed0c79fce2e41594",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          420
+        ],
+        [
+          421,
+          630
+        ],
+        [
+          631,
+          850
+        ],
+        [
+          851,
+          1078
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1086,
+      "W_sha256": "070420efb3a446e83c2a52212697f644319126dc594447853830712da0243e30",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          1086
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "native Discord JSON commandとSlack/LW共通dispatcher。preview/confirm/receiptの認可・snapshot reference・queue入口。",
+      "callers": [
+        "Hermes PluginManager→register→_make_handler",
+        "adapters/common/commands.answer→_dispatch",
+        "mcs_requests/mcs_view readonlyconsumer"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "単一native JSON入口とshared dispatcher。parse/validate/enqueueはmcs_requests、viewはreadonly snapshot、workerをcard_workersへ委譲。新依存なし。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "_validate_contextのboolean exact type、_projectのpositive exact int、source/full/hash/revision、loop/adoption fingerprint再確認。最新signal破損は旧openへfallbackせずsignal_changed。"
+        },
+        "C03": {
+          "判定": "適用・consumer残課題あり",
+          "根拠": "previewは無書込。confirmだけ既存inboxへenqueueしqueued receipt。mcs_requestsのatomic publish/fsync・UUID/hash receipt-first BEGIN IMMEDIATEをreadonly照合。runnerの最新signal欠陥は担当外としてcoreへ返却。"
+        },
+        "C04": {
+          "判定": "適用・確認済み",
+          "根拠": "View readonlyで旧schema不足はoperation_failedへ安全拒否。schema追加/migrationなし。controlのprojectless lifecycleとtransport versionを既存validatorへ渡す。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "_validate_context native provenance＋毎call settings user/chat/project許可。origin/actor/hash一致を確認しstored render/hold由来scopeを確認。入力SQLはbind、未知fieldを拒否。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "_make_handlerはpath/SQL/input例外をoperation_failedへ固定、_dispatchはbare denial codeだけ開示。op summaryはnames=False＋static/auto allowed scope。完全合成fixtureのみ。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "_parse→MAX_COMMAND_BYTES16384、duplicate keys/NaN/depth拒否。READ_KINDS/CONTROL_FIELDS allowlist、reason2000、days365/pages40。JSON summaryのdialectは認証済みtransportで選ぶ。"
+        },
+        "C08": {
+          "判定": "適用・確認済み",
+          "根拠": "原文・revision・loop policy・comparison・latest signalをconfirm時再確認。3チャネルのJSON summaryは実parts_textで見出し/脚注を確認。preview_hashとreceipt_hashを分離。"
+        },
+        "C09": {
+          "判定": "適用・確認済み",
+          "根拠": "設定は1call単位、Viewはfinally close。projectless readsはsnapshot全patientsが許可範囲内か先に確認。job retry追加枠の上限はvalidatorで再確認。"
+        },
+        "C10": {
+          "判定": "適用・確認済み",
+          "根拠": "enqueue失敗はenqueue_failed、publishing後fsync失敗はunknown receipt。handled exceptionに秘密を含めない。何も送らずqueue保持・再処理はconsumerが所有。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "新30回帰は固定P17fail/13controls→固定W30pass。既存source→snapshot→preview→confirm→drain→receipt、stale、revoked actor、duplicate operationテストとfamily51pass。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "isolatedHOME runner＋pinned Ruff。公式Hermes/standalone SDK consumer各lane no skip。Hermes pin全archive15281fileとdistribution版を照合。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "registerはstandalone所有時に何も登録しない。file-location plugin load/compat aliasesを維持。gateway更新後の再起動条件をfragmentに記載し実起動はしない。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "独自SDK依存を加えずHermes既存adapter。外部HTTP/signatureは各transport owner。固定SDK metadata/immutable Hermes archiveをconsumerテストで照合。"
+        },
+        "X03": {
+          "判定": "適用・確認済み",
+          "根拠": "ops.restore_approveはprojectlessでもuser/chat/reason/hash必須。ops.card_resolveはrender/restore holdからscopeを導出。壊れたhold JSONはgeneric拒否・enqueue無し（安全性をsource経路で確認）。"
+        },
+        "X04": {
+          "判定": "適用・確認済み",
+          "根拠": "Discord provenance入口とSlack/LW認証済みcommon.commandsを照合。E1 queuedは配送proofでない。native durable consumerのremote ID＋part journalは合成SDKで確認、live配送は対象外。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "OS credential/Keychainは使わずtempHOME/tmpDB。CLI/plugin textはnative command。native wire容量分割はreadonlyadapterの1900chunk等とSDK consumerで照合。"
+        },
+        "X06": {
+          "判定": "適用・確認済み",
+          "根拠": "model/tool/shell登録なし。人からのnative確認だけhuman_confirmed/reason/actorへ固定。元投稿の指示で確認contextを作らずforwarded/recovered/unmarked eventをSDK integrationが拒否。"
+        },
+        "X07": {
+          "判定": "適用・確認済み",
+          "根拠": "医療判断の自動採用なし。source hash・policy・根拠・比較hashを人承認で確認。signal最新破損時の旧open再利用を防止。記録不存在を対応不存在へ変換しない。"
+        },
+        "X08": {
+          "判定": "native境界を確認・publicWeb非適用",
+          "根拠": "公開web入口なし。native JSON/formとprivate callerの範囲を維持。Viewの実装は親ownerで全監査、HTML/外部link生成はreadonly表示owner。"
+        }
+      }
+    },
+    {
+      "path": "hermes_plugin/card_workers.py",
+      "P_lines": 154,
+      "P_sha256": "016b3d89a180571c40e09d64e731dc871a7450f1453a682f331353c5d0f46fc5",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          154
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 154,
+      "W_sha256": "016b3d89a180571c40e09d64e731dc871a7450f1453a682f331353c5d0f46fc5",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          154
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "Hermes native Discord/Slack factory settingsとstandalone ownership検知。",
+      "callers": [
+        "hermes_plugin.register",
+        "canonical adapters/discord/tasks.Supervisor",
+        "canonical adapters/slack/tasks.Supervisor"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "platform worker生成だけ。settings/provenanceはplugin、送信・journal・lockはcanonical adapters/common/各platform。再分割/新依存なし。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "interactive is TrueとIDs/listを確認、Discord app IDはconnected bot fallback、@everyone roleを除外。Slack opt-in/flags/transport/standaloneを明示検証。"
+        },
+        "C03": {
+          "判定": "適用・確認済み",
+          "根拠": "_standalone_ownedで登録を抑制。実send authority/scope lockはSupervisor/common.workerに委譲し初期factory自体はqueue/DBを更新しない。"
+        },
+        "C04": {
+          "判定": "非適用・境界確認",
+          "根拠": "既存settings/int ID互換、legacy flags missing/壊れたprobeはcommands登録を妨げずworker側read_flagsがfail closed。schema migrationなし。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "Discord users/chats/projectsとoptional roleを分離。Slack team/app/channel/user/project設定非空、flags opt-in double gate。外部auth/secretsを独自取得しない。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "loggerはevent codeとworkerからの限定fieldsのみ。factoryはsecret/tokenを設定から取得しない。temp data_rootで検証。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "config_ids exact types、profile/IDs/stringのboundaries、snapshot/inbox optionalの既存制約を保持。command parsingは別入口。"
+        },
+        "C08": {
+          "判定": "適用・確認済み",
+          "根拠": "gateway fresh native appの再結線、disabled app再結線ではworker再活性化しないcontractをHermes integrationで確認。"
+        },
+        "C09": {
+          "判定": "適用・確認済み",
+          "根拠": "明示opt-in時だけSupervisor.start、nonenabledはNone。startupDB/LLM/ネットワーク処理をfactoryに追加しない。"
+        },
+        "C10": {
+          "判定": "適用・確認済み",
+          "根拠": "standalone probe例外はFalse、senderのflags/lock/native bindが最終gate。stop/cancel/restartはcanonical Supervisor ownerに委譲。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "application ID fallback/int IDs/standalone standdown/file-location subprocess tests、Hermes Slack factory native integrationで確認。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "isolated file-location import＋公式pinnedHermes discovery＋SDK serialization no skip。標準libのみ。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "plugin registerとboth factoryでstandalone ownershipを確認。新旧gateway appの切替でold supervisor停止/lock継承はreadonlytasks契約。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "独自OAuth/RESTなし、Hermes接続を再利用。manifest settingsをactual PluginManagerで読み取る。"
+        },
+        "X03": {
+          "判定": "適用・確認済み",
+          "根拠": "restore_pending/scope lock/journal integrityはreadonlycanonicalworker。factoryからrestore markerを解除しない。"
+        },
+        "X04": {
+          "判定": "適用・確認済み",
+          "根拠": "connected native bot/Bolt instanceをsenderへ渡す。trusted context/署名/unknown partial deliveryは各platform owner、pinned consumersでbindを確認。"
+        },
+        "X05": {
+          "判定": "非適用・境界確認",
+          "根拠": "offline syntheticbot/bolt利用。LINE WORKS factoryはここに無い（独立CLI owner）。"
+        },
+        "X06": {
+          "判定": "非適用・境界確認",
+          "根拠": "LLM/Jev/tool登録・model命令実行なし。_event_loggerが自由なmodel入力を扱わない。"
+        },
+        "X07": {
+          "判定": "非適用・境界確認",
+          "根拠": "医学的判断なし、allowed project/user scopeを送信consumerへ渡すだけ。"
+        },
+        "X08": {
+          "判定": "非適用・境界確認",
+          "根拠": "公開Callback/HTTP/フォームを作らない。native platform登録のみ。"
+        }
+      }
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/__init__.py",
+      "P_lines": 12,
+      "P_sha256": "f0eab407de8f38ce6120e7803f8e230b5692a879ffe30834d532a47badd76a25",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          12
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 12,
+      "W_sha256": "f0eab407de8f38ce6120e7803f8e230b5692a879ffe30834d532a47badd76a25",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          12
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "canonical adapter moduleを再exportする旧import互換入口。",
+      "callers": [
+        "hermes_plugin.card_workers",
+        "integration/test_hermes_slack.py",
+        "既存mcs_delivery/mcs_discord/mcs_slack callers"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "canonical moduleをsys.modulesとglobalsへ再exportする互換入口。二重実装/二重stateを作らない。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "repo rootをPath(__file__).resolve().parents[2]で導出。既存module名を同じmodule instanceへalias。"
+        },
+        "C03": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "起動/send/queue/transactionを実装しない。common/transportのcanonical stateとlockを共有。"
+        },
+        "C04": {
+          "判定": "適用・確認済み",
+          "根拠": "旧hermes_plugin.mcs_* importを保持する互換機能。DB migration/schema変更なし。"
+        },
+        "C05": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "authを実装せずcanonical consumerへ委譲。外部パスやユーザー入力からimport名を作らない。"
+        },
+        "C06": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "本文/secret/患者DB/ログを扱わない。固定import列挙だけ。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "API alias名固定、旧callerのspec/delivery/tasks importをSDK integrationで実行。"
+        },
+        "C08": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "UI/ボタンを生成せず旧importから新implementationを利用。古いruntimeの状態を復活させない。"
+        },
+        "C09": {
+          "判定": "適用・確認済み",
+          "根拠": "有限個のimport、canonical single module instance。新task/process/cacheなし。"
+        },
+        "C10": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "例外を独自retry/receiptに置換しない。canonical exceptionの意味を維持。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "packet3 adapter layout/export import control＋今回Hermes実discovery/partdeliveryで互換importを実行。currentPのshim source hashは変更なし。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "plugin file-location load/stdlib import bootstrapとpinned consumerを確認。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "plugin全checkout配置、旧pathはaliasとして保持。新runtimeと同じowner実装。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "新依存/外部download無し。canonical SDK consumerの固定版を確認。"
+        },
+        "X03": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "backup/restore/鍵操作を実装しない。common recoveryを別module copyへ分岐させない。"
+        },
+        "X04": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "配送/認可を別implementせずcanonical moduleへalias。transport protocol validationを変更しない。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "Path/sys/importlibだけのoffline包装境界、孤立sourceexportとconsumer importを確認。"
+        },
+        "X06": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "AI/tool/MCP/memory操作なし。"
+        },
+        "X07": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "診療/金融/日時判断なし。"
+        },
+        "X08": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "web/URL/form/public endpointなし。"
+        }
+      }
+    },
+    {
+      "path": "hermes_plugin/mcs_discord/__init__.py",
+      "P_lines": 12,
+      "P_sha256": "4ff9611d251c4b922b0151a62110b83300e5a5f6f1add80f2e9b668861328c2e",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          12
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 12,
+      "W_sha256": "4ff9611d251c4b922b0151a62110b83300e5a5f6f1add80f2e9b668861328c2e",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          12
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "canonical adapter moduleを再exportする旧import互換入口。",
+      "callers": [
+        "hermes_plugin.card_workers",
+        "integration/test_hermes_slack.py",
+        "既存mcs_delivery/mcs_discord/mcs_slack callers"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "canonical moduleをsys.modulesとglobalsへ再exportする互換入口。二重実装/二重stateを作らない。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "repo rootをPath(__file__).resolve().parents[2]で導出。既存module名を同じmodule instanceへalias。"
+        },
+        "C03": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "起動/send/queue/transactionを実装しない。common/transportのcanonical stateとlockを共有。"
+        },
+        "C04": {
+          "判定": "適用・確認済み",
+          "根拠": "旧hermes_plugin.mcs_* importを保持する互換機能。DB migration/schema変更なし。"
+        },
+        "C05": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "authを実装せずcanonical consumerへ委譲。外部パスやユーザー入力からimport名を作らない。"
+        },
+        "C06": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "本文/secret/患者DB/ログを扱わない。固定import列挙だけ。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "API alias名固定、旧callerのspec/delivery/tasks importをSDK integrationで実行。"
+        },
+        "C08": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "UI/ボタンを生成せず旧importから新implementationを利用。古いruntimeの状態を復活させない。"
+        },
+        "C09": {
+          "判定": "適用・確認済み",
+          "根拠": "有限個のimport、canonical single module instance。新task/process/cacheなし。"
+        },
+        "C10": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "例外を独自retry/receiptに置換しない。canonical exceptionの意味を維持。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "packet3 adapter layout/export import control＋今回Hermes実discovery/partdeliveryで互換importを実行。currentPのshim source hashは変更なし。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "plugin file-location load/stdlib import bootstrapとpinned consumerを確認。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "plugin全checkout配置、旧pathはaliasとして保持。新runtimeと同じowner実装。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "新依存/外部download無し。canonical SDK consumerの固定版を確認。"
+        },
+        "X03": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "backup/restore/鍵操作を実装しない。common recoveryを別module copyへ分岐させない。"
+        },
+        "X04": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "配送/認可を別implementせずcanonical moduleへalias。transport protocol validationを変更しない。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "Path/sys/importlibだけのoffline包装境界、孤立sourceexportとconsumer importを確認。"
+        },
+        "X06": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "AI/tool/MCP/memory操作なし。"
+        },
+        "X07": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "診療/金融/日時判断なし。"
+        },
+        "X08": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "web/URL/form/public endpointなし。"
+        }
+      }
+    },
+    {
+      "path": "hermes_plugin/mcs_slack/__init__.py",
+      "P_lines": 12,
+      "P_sha256": "25d006bbb378c48768d38dcfd5be3c3c7d9ee18d45e316f5e72f5b2800717435",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          12
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 12,
+      "W_sha256": "25d006bbb378c48768d38dcfd5be3c3c7d9ee18d45e316f5e72f5b2800717435",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          12
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "canonical adapter moduleを再exportする旧import互換入口。",
+      "callers": [
+        "hermes_plugin.card_workers",
+        "integration/test_hermes_slack.py",
+        "既存mcs_delivery/mcs_discord/mcs_slack callers"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "canonical moduleをsys.modulesとglobalsへ再exportする互換入口。二重実装/二重stateを作らない。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "repo rootをPath(__file__).resolve().parents[2]で導出。既存module名を同じmodule instanceへalias。"
+        },
+        "C03": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "起動/send/queue/transactionを実装しない。common/transportのcanonical stateとlockを共有。"
+        },
+        "C04": {
+          "判定": "適用・確認済み",
+          "根拠": "旧hermes_plugin.mcs_* importを保持する互換機能。DB migration/schema変更なし。"
+        },
+        "C05": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "authを実装せずcanonical consumerへ委譲。外部パスやユーザー入力からimport名を作らない。"
+        },
+        "C06": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "本文/secret/患者DB/ログを扱わない。固定import列挙だけ。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "API alias名固定、旧callerのspec/delivery/tasks importをSDK integrationで実行。"
+        },
+        "C08": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "UI/ボタンを生成せず旧importから新implementationを利用。古いruntimeの状態を復活させない。"
+        },
+        "C09": {
+          "判定": "適用・確認済み",
+          "根拠": "有限個のimport、canonical single module instance。新task/process/cacheなし。"
+        },
+        "C10": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "例外を独自retry/receiptに置換しない。canonical exceptionの意味を維持。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "packet3 adapter layout/export import control＋今回Hermes実discovery/partdeliveryで互換importを実行。currentPのshim source hashは変更なし。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "plugin file-location load/stdlib import bootstrapとpinned consumerを確認。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "plugin全checkout配置、旧pathはaliasとして保持。新runtimeと同じowner実装。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "新依存/外部download無し。canonical SDK consumerの固定版を確認。"
+        },
+        "X03": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "backup/restore/鍵操作を実装しない。common recoveryを別module copyへ分岐させない。"
+        },
+        "X04": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "配送/認可を別implementせずcanonical moduleへalias。transport protocol validationを変更しない。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "Path/sys/importlibだけのoffline包装境界、孤立sourceexportとconsumer importを確認。"
+        },
+        "X06": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "AI/tool/MCP/memory操作なし。"
+        },
+        "X07": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "診療/金融/日時判断なし。"
+        },
+        "X08": {
+          "判定": "非適用・canonicalへ委譲",
+          "根拠": "web/URL/form/public endpointなし。"
+        }
+      }
+    },
+    {
+      "path": "hermes_plugin/plugin.yaml",
+      "P_lines": 103,
+      "P_sha256": "f8c00049a470e4b55138c62a4b7b05290958169006360572e553682bee092968",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          103
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 103,
+      "W_sha256": "f8c00049a470e4b55138c62a4b7b05290958169006360572e553682bee092968",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          103
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "Hermes plugin discovery/settings descriptor。",
+      "callers": [
+        "Hermes PluginManager.discover_and_load",
+        "hermes_plugin.register/_settings/card_workers"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "plugin descriptorのみ、native mcs commandとDiscord/Slack factory settings。required5設定・explicit opt-inを記述、source registerと実loaderで照合。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "project auto/roles/profile/interactive/app/channel/guild/team optionalsの説明とsource settings照合。defaultは静的opt-in無し。"
+        },
+        "C03": {
+          "判定": "非適用・runtimeへ委譲",
+          "根拠": "保存/queue/transaction実装なし。設定値は毎call/factoryでscope gate、actualwriterはsource owner。"
+        },
+        "C04": {
+          "判定": "非適用・runtimeへ委譲",
+          "根拠": "plugin name mcs-discord-commands/compat packageを保持、manifest version0.1.0とMCS release versionは異なるcontract。DB schema無し。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "allowed_role_idsはcardsのみ、/mcs/systemapprovalはexplicit allowed_user_ids。Slack別allowed users/team/app/channelを明示。token/password設定を加えない。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "公開manifestには秘密・患者例なし。snapshot/inboxは設定名と説明だけ。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "YAMLはactualPluginManagerのdescriptor解析を通る。設定型のruntimeチェックはcard_workers/_settingsへ委譲。"
+        },
+        "C08": {
+          "判定": "非適用・runtimeへ委譲",
+          "根拠": "opt-in・fresh app/gateway restart条件がsettingsとREADMEで一致。UI本文や色/サイズはcanonicalrenderer。"
+        },
+        "C09": {
+          "判定": "適用・確認済み",
+          "根拠": "静的103行descriptor、provider/モデル/bootstrap heavy task登録無し。"
+        },
+        "C10": {
+          "判定": "非適用・runtimeへ委譲",
+          "根拠": "snapshot error/queue retryはruntime owner。descriptorからretryやgateを弱めない。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "actualHermesdiscover/load integrationでrequired settingsのpluginを読み、nativeSlack inert→optinを確認。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "pinnedHermes source/distributionによるplugin YAML解析、Ruff対象外のdatafileとして全文確認。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "whole plugincheckoutを配置するmanifest、standalone standdownはregister sourceで確認。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "新外部依存/registry URLなし。Hermes immutable source pinでcompatibility確認。"
+        },
+        "X03": {
+          "判定": "非適用・runtimeへ委譲",
+          "根拠": "backup/鍵/restore命令の設定追加なし。既存snapshot公開境界を説明。"
+        },
+        "X04": {
+          "判定": "適用・確認済み",
+          "根拠": "nativeDiscord/Slack2platformsだけを宣言。LWはHermesadapter無しで別CLI、署名はこのdescriptorに無し。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "platform factoryが取得済みnative SDKを再利用、独自SDK接続を設定しない。"
+        },
+        "X06": {
+          "判定": "適用・確認済み",
+          "根拠": "modeltool/shell/MCP権限登録なし。人確認のnative command contextに限定。"
+        },
+        "X07": {
+          "判定": "非適用・runtimeへ委譲",
+          "根拠": "医学的推論/自動採用設定なし。人承認gateをsourceへ委譲。"
+        },
+        "X08": {
+          "判定": "非適用・runtimeへ委譲",
+          "根拠": "public Web endpoint/link/form/index設定無し。"
+        }
+      }
+    },
+    {
+      "path": "hermes_plugin/projects.py",
+      "P_lines": 83,
+      "P_sha256": "1f7428a6fb418f4ea72a781872cb8340502ca13034ed042057700c524f1ee82c",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          83
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 83,
+      "W_sha256": "1f7428a6fb418f4ea72a781872cb8340502ca13034ed042057700c524f1ee82c",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          83
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "公開snapshotのproject scopeとbounded cache、summary/viewへの許可scope伝播。",
+      "callers": [
+        "hermes_plugin._authorize/_notification_receipt/_dispatch_op",
+        "adapters/{discord,slack,lineworks}/actions.py"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "project scopeだけを集約。snapshot cache、static/auto scope、view_inputsをplugin/全transportから共有。stdlibのみ。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "auto snapshot inode/dev/mtime_ns/sizeとTTL120でpublish replacementを検知。missing/sqlite errorはNone、静的空scopeはsummary []でunrestrictedにしない。"
+        },
+        "C03": {
+          "判定": "適用・確認済み",
+          "根拠": "参照専用sqlite mode=ro、transaction更新/削除なし。cacheはpath+file generationに束縛。test_auto_project_scope_tracks_snapshot_replacementで1→2変更を確認。"
+        },
+        "C04": {
+          "判定": "非適用・境界確認",
+          "根拠": "patients(project_id)既存schemaのみ読む。旧schemaのsqlite.ErrorをNoneで拒否しmigrationしない。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "project_allowedはconfigured IDsまたはauto readonly患者scope。native _authorizeはpositive exact int必須。snapshot pathはquoteされたreadonlyURI、query固定。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "患者本文・名前をcache/ログへ入れずproject IDsだけ。テストDBは新規完全合成。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "static_scopeはpositive intだけ、上限1000。view_inputsはname120とproject list。user-facingparserではない。"
+        },
+        "C08": {
+          "判定": "適用・確認済み",
+          "根拠": "snapshot置換でcache更新、mytasks/digest/unackedのscope伝播。元UI token/receiptのstaleはreadonlyconsumerが検証。"
+        },
+        "C09": {
+          "判定": "適用・確認済み",
+          "根拠": "TTL cacheをmetadata generationでinvalidatesし短いSELECTのみ。計算量はpatients数、static scope1000。新背景taskなし。"
+        },
+        "C10": {
+          "判定": "適用・確認済み",
+          "根拠": "sqlite/OSErrorで不明scopeを拒否。auto失敗時はproject_allowed False、無制限fallback無し。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "置換をos.replaceした合成回帰、plugin familyと3チャネルallowed=[1]/names=Falseを確認。legacy fixtures/production DB無し。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "flat-import互換とplugin file-location loader、pinned SDK consumerを確認。追加依存なし。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "plugin/shim/standaloneが同じscope helperをimport。動的snapshot publishと固定設定の区別を保持。"
+        },
+        "X02": {
+          "判定": "非適用・境界確認",
+          "根拠": "外部通信/SDK/vendor URLなし。stdlib sqlite/time/Pathのローカル参照だけ。"
+        },
+        "X03": {
+          "判定": "適用・確認済み",
+          "根拠": "backup/鍵を読まない。古いsnapshotへ置換された場合もgeneration変化で再計算しUI復旧authorityは付与しない。"
+        },
+        "X04": {
+          "判定": "適用・確認済み",
+          "根拠": "tenant/project scopeをSDK/action callerへ渡すのみ。外部署名/部分配送を独自実装しない。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "読み取り専用SQLite URI/OS stat/monotonic TTLを合成tempDBで確認、offline。"
+        },
+        "X06": {
+          "判定": "非適用・境界確認",
+          "根拠": "AI/tool/MCP/memory操作無し。project scopeはmodel出力から生成せず設定/公開snapshotだけ。"
+        },
+        "X07": {
+          "判定": "非適用・境界確認",
+          "根拠": "臨床処理なし。許可projectだけをsummary/view操作へ伝播し診療有無を判断しない。"
+        },
+        "X08": {
+          "判定": "非適用・境界確認",
+          "根拠": "publicWeb/form/link生成なし。name/project inputはreadonlyview引数でprivate callerに保持。"
+        }
+      }
+    },
+    {
+      "path": "integration/test_hermes_config.py",
+      "P_lines": 39,
+      "P_sha256": "bb83a8b8c6c24dc06c5691a3aedafad6f83c121bb05fbeb3ba51d9d1c3889c99",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          39
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 39,
+      "W_sha256": "bb83a8b8c6c24dc06c5691a3aedafad6f83c121bb05fbeb3ba51d9d1c3889c99",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          39
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "合成検証: 固定Hermesの実public CLI config set --stdin、選択HOME別の合成credential隔離・値非argv",
+      "callers": [
+        "scripts/run_tests.sh",
+        "scripts/check_pinned_sdks.shの指定consumer"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "完全合成consumer回帰。対象責務: 固定Hermesの実public CLI config set --stdin、選択HOME別の合成credential隔離・値非argv。本番実装をtest内へ複製しない。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "状態/境界を固定Hermesの実public CLI config set --stdin、選択HOME別の合成credential隔離・値非argvのactual公開/helper経路で確認。期待値だけを書き換えない。"
+        },
+        "C03": {
+          "判定": "適用・確認済み",
+          "根拠": "必要なqueue/receipt/lockはtempDB・tmpPath・local journalを使用。assertで本当のqueuefile/DB mutation又はat-most-once callを確認。実DB変更なし。"
+        },
+        "C04": {
+          "判定": "非適用・consumer既存schema",
+          "根拠": "migration実装を持たない。既存schema fixture又はcanonicalconsumerを使う。追加skip/schema弱化なし。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "入口scope/actor/provenanceの当該consumer境界を確認: 固定Hermesの実public CLI config set --stdin、選択HOME別の合成credential隔離・値非argv。transport秘密/実tenant無し。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "fictional/syntheticだけ、資格情報fixtureも新規合成。isolatedHOME runner+conftestでsocket/実MCS/LLM/Jev/Keychainを遮断。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "実caller/SDK API形状を照合: 固定Hermesの実public CLI config set --stdin、選択HOME別の合成credential隔離・値非argv。pinned laneはcollection guardで必須fileとdistributionを確認。"
+        },
+        "C08": {
+          "判定": "適用・確認済み",
+          "根拠": "表示/確認/再起動関連は固定Hermesの実public CLI config set --stdin、選択HOME別の合成credential隔離・値非argvを対象。実画面やlive deliveryは未実施として区別。"
+        },
+        "C09": {
+          "判定": "機能範囲確認・性能判定非適用",
+          "根拠": "ローカル有界fixture、wait_for/subprocess timeoutは既存値維持。性能閾値/skipを変更しない。"
+        },
+        "C10": {
+          "判定": "適用・確認済み",
+          "根拠": "該当failure/queue/restartの契約を固定Hermesの実public CLI config set --stdin、選択HOME別の合成credential隔離・値非argvで確認。SDKのwireだけスタブで安全なunknown/definite rejectを区別。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "ファイル全文を読んだうえでfamily/laneを実行。新30件はP17fail13controls→W30pass。該当scope: 固定Hermesの実public CLI config set --stdin、選択HOME別の合成credential隔離・値非argv。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "プロジェクトrunner使用。SDK testsは明示pinned guard lane no skip。依存をcoreへ追加せず既存isolated interpreter。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "包装/import/start-stopの該当consumer: 固定Hermesの実public CLI config set --stdin、選択HOME別の合成credential隔離・値非argv。gateway/実adapterは起動しない。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "pinnedlane distribution metadata＋Hermes pin archive全bytes検証、public official SDK以外は使わない。テストから依存取得無し。"
+        },
+        "X03": {
+          "判定": "非適用・実backup/鍵禁止",
+          "根拠": "実backup/鍵/restoreは読まない。合成tmp fixturesのauthorityを実サービスに与えない。"
+        },
+        "X04": {
+          "判定": "適用・確認済み",
+          "根拠": "署名/remote identity/partialdeliveryの該当外部consumer: 固定Hermesの実public CLI config set --stdin、選択HOME別の合成credential隔離・値非argv。すべてwireスタブ、live E2と区別。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "公式SDKのnative serialization又はisolatedfile-loadをofflineで確認。OS private credential APIは実行しない。"
+        },
+        "X06": {
+          "判定": "適用・確認済み",
+          "根拠": "model/LLM/Jevを一切起動しない。syntheticfacts/summaryを明示生成し、人操作のhash/actor gateへ通す。"
+        },
+        "X07": {
+          "判定": "境界確認・臨床品質判定非適用",
+          "根拠": "医学判断の品質評価ではない。完全合成根拠を保存/参照し、操作承認と保存receiptを確認。"
+        },
+        "X08": {
+          "判定": "native境界確認・publicWeb非適用",
+          "根拠": "publicWebを起動しない。nativeform/CLI/private responseはSDK/localconsumerで確認。evil.invalid等は新規架空URLでwire不使用を確認。"
+        }
+      }
+    },
+    {
+      "path": "integration/test_hermes_discord.py",
+      "P_lines": 269,
+      "P_sha256": "d845dd1e19a9113c94ab20577e180a437fb1a42be57cacf933a30f74e1767138",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          170
+        ],
+        [
+          171,
+          269
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 269,
+      "W_sha256": "d845dd1e19a9113c94ab20577e180a437fb1a42be57cacf933a30f74e1767138",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          170
+        ],
+        [
+          171,
+          269
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "合成検証: 固定Hermes実discovery/nativeMessageEvent/provenance/admission/dispatch→snapshot→humanqueue→drain→receipt・duplicate/stale/policy/adoption",
+      "callers": [
+        "scripts/run_tests.sh",
+        "scripts/check_pinned_sdks.shの指定consumer"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "完全合成consumer回帰。対象責務: 固定Hermes実discovery/nativeMessageEvent/provenance/admission/dispatch→snapshot→humanqueue→drain→receipt・duplicate/stale/policy/adoption。本番実装をtest内へ複製しない。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "状態/境界を固定Hermes実discovery/nativeMessageEvent/provenance/admission/dispatch→snapshot→humanqueue→drain→receipt・duplicate/stale/policy/adoptionのactual公開/helper経路で確認。期待値だけを書き換えない。"
+        },
+        "C03": {
+          "判定": "適用・確認済み",
+          "根拠": "必要なqueue/receipt/lockはtempDB・tmpPath・local journalを使用。assertで本当のqueuefile/DB mutation又はat-most-once callを確認。実DB変更なし。"
+        },
+        "C04": {
+          "判定": "非適用・consumer既存schema",
+          "根拠": "migration実装を持たない。既存schema fixture又はcanonicalconsumerを使う。追加skip/schema弱化なし。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "入口scope/actor/provenanceの当該consumer境界を確認: 固定Hermes実discovery/nativeMessageEvent/provenance/admission/dispatch→snapshot→humanqueue→drain→receipt・duplicate/stale/policy/adoption。transport秘密/実tenant無し。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "fictional/syntheticだけ、資格情報fixtureも新規合成。isolatedHOME runner+conftestでsocket/実MCS/LLM/Jev/Keychainを遮断。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "実caller/SDK API形状を照合: 固定Hermes実discovery/nativeMessageEvent/provenance/admission/dispatch→snapshot→humanqueue→drain→receipt・duplicate/stale/policy/adoption。pinned laneはcollection guardで必須fileとdistributionを確認。"
+        },
+        "C08": {
+          "判定": "適用・確認済み",
+          "根拠": "表示/確認/再起動関連は固定Hermes実discovery/nativeMessageEvent/provenance/admission/dispatch→snapshot→humanqueue→drain→receipt・duplicate/stale/policy/adoptionを対象。実画面やlive deliveryは未実施として区別。"
+        },
+        "C09": {
+          "判定": "機能範囲確認・性能判定非適用",
+          "根拠": "ローカル有界fixture、wait_for/subprocess timeoutは既存値維持。性能閾値/skipを変更しない。"
+        },
+        "C10": {
+          "判定": "適用・確認済み",
+          "根拠": "該当failure/queue/restartの契約を固定Hermes実discovery/nativeMessageEvent/provenance/admission/dispatch→snapshot→humanqueue→drain→receipt・duplicate/stale/policy/adoptionで確認。SDKのwireだけスタブで安全なunknown/definite rejectを区別。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "ファイル全文を読んだうえでfamily/laneを実行。新30件はP17fail13controls→W30pass。該当scope: 固定Hermes実discovery/nativeMessageEvent/provenance/admission/dispatch→snapshot→humanqueue→drain→receipt・duplicate/stale/policy/adoption。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "プロジェクトrunner使用。SDK testsは明示pinned guard lane no skip。依存をcoreへ追加せず既存isolated interpreter。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "包装/import/start-stopの該当consumer: 固定Hermes実discovery/nativeMessageEvent/provenance/admission/dispatch→snapshot→humanqueue→drain→receipt・duplicate/stale/policy/adoption。gateway/実adapterは起動しない。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "pinnedlane distribution metadata＋Hermes pin archive全bytes検証、public official SDK以外は使わない。テストから依存取得無し。"
+        },
+        "X03": {
+          "判定": "非適用・実backup/鍵禁止",
+          "根拠": "実backup/鍵/restoreは読まない。合成tmp fixturesのauthorityを実サービスに与えない。"
+        },
+        "X04": {
+          "判定": "適用・確認済み",
+          "根拠": "署名/remote identity/partialdeliveryの該当外部consumer: 固定Hermes実discovery/nativeMessageEvent/provenance/admission/dispatch→snapshot→humanqueue→drain→receipt・duplicate/stale/policy/adoption。すべてwireスタブ、live E2と区別。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "公式SDKのnative serialization又はisolatedfile-loadをofflineで確認。OS private credential APIは実行しない。"
+        },
+        "X06": {
+          "判定": "適用・確認済み",
+          "根拠": "model/LLM/Jevを一切起動しない。syntheticfacts/summaryを明示生成し、人操作のhash/actor gateへ通す。"
+        },
+        "X07": {
+          "判定": "境界確認・臨床品質判定非適用",
+          "根拠": "医学判断の品質評価ではない。完全合成根拠を保存/参照し、操作承認と保存receiptを確認。"
+        },
+        "X08": {
+          "判定": "native境界確認・publicWeb非適用",
+          "根拠": "publicWebを起動しない。nativeform/CLI/private responseはSDK/localconsumerで確認。evil.invalid等は新規架空URLでwire不使用を確認。"
+        }
+      }
+    },
+    {
+      "path": "integration/test_hermes_slack.py",
+      "P_lines": 426,
+      "P_sha256": "e9f8f9cb701eb18c894f37688cada995aea16dcf587486aea20e85f9ce9f2e47",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          426
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 426,
+      "W_sha256": "e9f8f9cb701eb18c894f37688cada995aea16dcf587486aea20e85f9ce9f2e47",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          426
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "合成検証: 固定Hermes実PluginManager→disabled fresh app/optin/card action・secondary SDK bind/client retry不変・realSDK thread+3stepupload+partreceipt",
+      "callers": [
+        "scripts/run_tests.sh",
+        "scripts/check_pinned_sdks.shの指定consumer"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "完全合成consumer回帰。対象責務: 固定Hermes実PluginManager→disabled fresh app/optin/card action・secondary SDK bind/client retry不変・realSDK thread+3stepupload+partreceipt。本番実装をtest内へ複製しない。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "状態/境界を固定Hermes実PluginManager→disabled fresh app/optin/card action・secondary SDK bind/client retry不変・realSDK thread+3stepupload+partreceiptのactual公開/helper経路で確認。期待値だけを書き換えない。"
+        },
+        "C03": {
+          "判定": "適用・確認済み",
+          "根拠": "必要なqueue/receipt/lockはtempDB・tmpPath・local journalを使用。assertで本当のqueuefile/DB mutation又はat-most-once callを確認。実DB変更なし。"
+        },
+        "C04": {
+          "判定": "非適用・consumer既存schema",
+          "根拠": "migration実装を持たない。既存schema fixture又はcanonicalconsumerを使う。追加skip/schema弱化なし。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "入口scope/actor/provenanceの当該consumer境界を確認: 固定Hermes実PluginManager→disabled fresh app/optin/card action・secondary SDK bind/client retry不変・realSDK thread+3stepupload+partreceipt。transport秘密/実tenant無し。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "fictional/syntheticだけ、資格情報fixtureも新規合成。isolatedHOME runner+conftestでsocket/実MCS/LLM/Jev/Keychainを遮断。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "実caller/SDK API形状を照合: 固定Hermes実PluginManager→disabled fresh app/optin/card action・secondary SDK bind/client retry不変・realSDK thread+3stepupload+partreceipt。pinned laneはcollection guardで必須fileとdistributionを確認。"
+        },
+        "C08": {
+          "判定": "適用・確認済み",
+          "根拠": "表示/確認/再起動関連は固定Hermes実PluginManager→disabled fresh app/optin/card action・secondary SDK bind/client retry不変・realSDK thread+3stepupload+partreceiptを対象。実画面やlive deliveryは未実施として区別。"
+        },
+        "C09": {
+          "判定": "機能範囲確認・性能判定非適用",
+          "根拠": "ローカル有界fixture、wait_for/subprocess timeoutは既存値維持。性能閾値/skipを変更しない。"
+        },
+        "C10": {
+          "判定": "適用・確認済み",
+          "根拠": "該当failure/queue/restartの契約を固定Hermes実PluginManager→disabled fresh app/optin/card action・secondary SDK bind/client retry不変・realSDK thread+3stepupload+partreceiptで確認。SDKのwireだけスタブで安全なunknown/definite rejectを区別。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "ファイル全文を読んだうえでfamily/laneを実行。新30件はP17fail13controls→W30pass。該当scope: 固定Hermes実PluginManager→disabled fresh app/optin/card action・secondary SDK bind/client retry不変・realSDK thread+3stepupload+partreceipt。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "プロジェクトrunner使用。SDK testsは明示pinned guard lane no skip。依存をcoreへ追加せず既存isolated interpreter。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "包装/import/start-stopの該当consumer: 固定Hermes実PluginManager→disabled fresh app/optin/card action・secondary SDK bind/client retry不変・realSDK thread+3stepupload+partreceipt。gateway/実adapterは起動しない。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "pinnedlane distribution metadata＋Hermes pin archive全bytes検証、public official SDK以外は使わない。テストから依存取得無し。"
+        },
+        "X03": {
+          "判定": "非適用・実backup/鍵禁止",
+          "根拠": "実backup/鍵/restoreは読まない。合成tmp fixturesのauthorityを実サービスに与えない。"
+        },
+        "X04": {
+          "判定": "適用・確認済み",
+          "根拠": "署名/remote identity/partialdeliveryの該当外部consumer: 固定Hermes実PluginManager→disabled fresh app/optin/card action・secondary SDK bind/client retry不変・realSDK thread+3stepupload+partreceipt。すべてwireスタブ、live E2と区別。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "公式SDKのnative serialization又はisolatedfile-loadをofflineで確認。OS private credential APIは実行しない。"
+        },
+        "X06": {
+          "判定": "適用・確認済み",
+          "根拠": "model/LLM/Jevを一切起動しない。syntheticfacts/summaryを明示生成し、人操作のhash/actor gateへ通す。"
+        },
+        "X07": {
+          "判定": "境界確認・臨床品質判定非適用",
+          "根拠": "医学判断の品質評価ではない。完全合成根拠を保存/参照し、操作承認と保存receiptを確認。"
+        },
+        "X08": {
+          "判定": "native境界確認・publicWeb非適用",
+          "根拠": "publicWebを起動しない。nativeform/CLI/private responseはSDK/localconsumerで確認。evil.invalid等は新規架空URLでwire不使用を確認。"
+        }
+      }
+    },
+    {
+      "path": "integration/test_standalone_discord.py",
+      "P_lines": 189,
+      "P_sha256": "cbbe6c438b7267a776ded1044ca57a5ff27d995f8535548ef0dfd4e3e784e538",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          189
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 189,
+      "W_sha256": "cbbe6c438b7267a776ded1044ca57a5ff27d995f8535548ef0dfd4e3e784e538",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          189
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "合成検証: 固定discord.py realHTTPserialization・200/403/500の単発送信・files/text分割・nativebutton/slash・restart後IDlistener",
+      "callers": [
+        "scripts/run_tests.sh",
+        "scripts/check_pinned_sdks.shの指定consumer"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "完全合成consumer回帰。対象責務: 固定discord.py realHTTPserialization・200/403/500の単発送信・files/text分割・nativebutton/slash・restart後IDlistener。本番実装をtest内へ複製しない。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "状態/境界を固定discord.py realHTTPserialization・200/403/500の単発送信・files/text分割・nativebutton/slash・restart後IDlistenerのactual公開/helper経路で確認。期待値だけを書き換えない。"
+        },
+        "C03": {
+          "判定": "適用・確認済み",
+          "根拠": "必要なqueue/receipt/lockはtempDB・tmpPath・local journalを使用。assertで本当のqueuefile/DB mutation又はat-most-once callを確認。実DB変更なし。"
+        },
+        "C04": {
+          "判定": "非適用・consumer既存schema",
+          "根拠": "migration実装を持たない。既存schema fixture又はcanonicalconsumerを使う。追加skip/schema弱化なし。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "入口scope/actor/provenanceの当該consumer境界を確認: 固定discord.py realHTTPserialization・200/403/500の単発送信・files/text分割・nativebutton/slash・restart後IDlistener。transport秘密/実tenant無し。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "fictional/syntheticだけ、資格情報fixtureも新規合成。isolatedHOME runner+conftestでsocket/実MCS/LLM/Jev/Keychainを遮断。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "実caller/SDK API形状を照合: 固定discord.py realHTTPserialization・200/403/500の単発送信・files/text分割・nativebutton/slash・restart後IDlistener。pinned laneはcollection guardで必須fileとdistributionを確認。"
+        },
+        "C08": {
+          "判定": "適用・確認済み",
+          "根拠": "表示/確認/再起動関連は固定discord.py realHTTPserialization・200/403/500の単発送信・files/text分割・nativebutton/slash・restart後IDlistenerを対象。実画面やlive deliveryは未実施として区別。"
+        },
+        "C09": {
+          "判定": "機能範囲確認・性能判定非適用",
+          "根拠": "ローカル有界fixture、wait_for/subprocess timeoutは既存値維持。性能閾値/skipを変更しない。"
+        },
+        "C10": {
+          "判定": "適用・確認済み",
+          "根拠": "該当failure/queue/restartの契約を固定discord.py realHTTPserialization・200/403/500の単発送信・files/text分割・nativebutton/slash・restart後IDlistenerで確認。SDKのwireだけスタブで安全なunknown/definite rejectを区別。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "ファイル全文を読んだうえでfamily/laneを実行。新30件はP17fail13controls→W30pass。該当scope: 固定discord.py realHTTPserialization・200/403/500の単発送信・files/text分割・nativebutton/slash・restart後IDlistener。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "プロジェクトrunner使用。SDK testsは明示pinned guard lane no skip。依存をcoreへ追加せず既存isolated interpreter。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "包装/import/start-stopの該当consumer: 固定discord.py realHTTPserialization・200/403/500の単発送信・files/text分割・nativebutton/slash・restart後IDlistener。gateway/実adapterは起動しない。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "pinnedlane distribution metadata＋Hermes pin archive全bytes検証、public official SDK以外は使わない。テストから依存取得無し。"
+        },
+        "X03": {
+          "判定": "非適用・実backup/鍵禁止",
+          "根拠": "実backup/鍵/restoreは読まない。合成tmp fixturesのauthorityを実サービスに与えない。"
+        },
+        "X04": {
+          "判定": "適用・確認済み",
+          "根拠": "署名/remote identity/partialdeliveryの該当外部consumer: 固定discord.py realHTTPserialization・200/403/500の単発送信・files/text分割・nativebutton/slash・restart後IDlistener。すべてwireスタブ、live E2と区別。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "公式SDKのnative serialization又はisolatedfile-loadをofflineで確認。OS private credential APIは実行しない。"
+        },
+        "X06": {
+          "判定": "適用・確認済み",
+          "根拠": "model/LLM/Jevを一切起動しない。syntheticfacts/summaryを明示生成し、人操作のhash/actor gateへ通す。"
+        },
+        "X07": {
+          "判定": "境界確認・臨床品質判定非適用",
+          "根拠": "医学判断の品質評価ではない。完全合成根拠を保存/参照し、操作承認と保存receiptを確認。"
+        },
+        "X08": {
+          "判定": "native境界確認・publicWeb非適用",
+          "根拠": "publicWebを起動しない。nativeform/CLI/private responseはSDK/localconsumerで確認。evil.invalid等は新規架空URLでwire不使用を確認。"
+        }
+      }
+    },
+    {
+      "path": "integration/test_standalone_sdk.py",
+      "P_lines": 343,
+      "P_sha256": "16934192f557400653d4e8ddde7091b77be135313186a4500d6bea2485ed69f2",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          175
+        ],
+        [
+          176,
+          343
+        ]
+      ],
+      "ownership": "READONLY_CORE_LOCAL_STUB",
+      "W_lines": 343,
+      "W_sha256": "16934192f557400653d4e8ddde7091b77be135313186a4500d6bea2485ed69f2",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          175
+        ],
+        [
+          176,
+          343
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "合成検証: 固定realSDK互換runtime login/send・mentions/attachment拒否・未知loss・forum/commands・stop/scope lock・Slackescaping/uploadfail/catchall；stub補足はcoreのreadonly所有",
+      "callers": [
+        "scripts/run_tests.sh",
+        "scripts/check_pinned_sdks.shの指定consumer"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "完全合成consumer回帰。対象責務: 固定realSDK互換runtime login/send・mentions/attachment拒否・未知loss・forum/commands・stop/scope lock・Slackescaping/uploadfail/catchall；stub補足はcoreのreadonly所有。本番実装をtest内へ複製しない。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "状態/境界を固定realSDK互換runtime login/send・mentions/attachment拒否・未知loss・forum/commands・stop/scope lock・Slackescaping/uploadfail/catchall；stub補足はcoreのreadonly所有のactual公開/helper経路で確認。期待値だけを書き換えない。"
+        },
+        "C03": {
+          "判定": "適用・確認済み",
+          "根拠": "必要なqueue/receipt/lockはtempDB・tmpPath・local journalを使用。assertで本当のqueuefile/DB mutation又はat-most-once callを確認。実DB変更なし。"
+        },
+        "C04": {
+          "判定": "非適用・consumer既存schema",
+          "根拠": "migration実装を持たない。既存schema fixture又はcanonicalconsumerを使う。追加skip/schema弱化なし。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "入口scope/actor/provenanceの当該consumer境界を確認: 固定realSDK互換runtime login/send・mentions/attachment拒否・未知loss・forum/commands・stop/scope lock・Slackescaping/uploadfail/catchall；stub補足はcoreのreadonly所有。transport秘密/実tenant無し。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "fictional/syntheticだけ、資格情報fixtureも新規合成。isolatedHOME runner+conftestでsocket/実MCS/LLM/Jev/Keychainを遮断。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "実caller/SDK API形状を照合: 固定realSDK互換runtime login/send・mentions/attachment拒否・未知loss・forum/commands・stop/scope lock・Slackescaping/uploadfail/catchall；stub補足はcoreのreadonly所有。pinned laneはcollection guardで必須fileとdistributionを確認。"
+        },
+        "C08": {
+          "判定": "適用・確認済み",
+          "根拠": "表示/確認/再起動関連は固定realSDK互換runtime login/send・mentions/attachment拒否・未知loss・forum/commands・stop/scope lock・Slackescaping/uploadfail/catchall；stub補足はcoreのreadonly所有を対象。実画面やlive deliveryは未実施として区別。"
+        },
+        "C09": {
+          "判定": "機能範囲確認・性能判定非適用",
+          "根拠": "ローカル有界fixture、wait_for/subprocess timeoutは既存値維持。性能閾値/skipを変更しない。"
+        },
+        "C10": {
+          "判定": "適用・確認済み",
+          "根拠": "該当failure/queue/restartの契約を固定realSDK互換runtime login/send・mentions/attachment拒否・未知loss・forum/commands・stop/scope lock・Slackescaping/uploadfail/catchall；stub補足はcoreのreadonly所有で確認。SDKのwireだけスタブで安全なunknown/definite rejectを区別。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "ファイル全文を読んだうえでfamily/laneを実行。新30件はP17fail13controls→W30pass。該当scope: 固定realSDK互換runtime login/send・mentions/attachment拒否・未知loss・forum/commands・stop/scope lock・Slackescaping/uploadfail/catchall；stub補足はcoreのreadonly所有。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "プロジェクトrunner使用。SDK testsは明示pinned guard lane no skip。依存をcoreへ追加せず既存isolated interpreter。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "包装/import/start-stopの該当consumer: 固定realSDK互換runtime login/send・mentions/attachment拒否・未知loss・forum/commands・stop/scope lock・Slackescaping/uploadfail/catchall；stub補足はcoreのreadonly所有。gateway/実adapterは起動しない。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "pinnedlane distribution metadata＋Hermes pin archive全bytes検証、public official SDK以外は使わない。テストから依存取得無し。"
+        },
+        "X03": {
+          "判定": "非適用・実backup/鍵禁止",
+          "根拠": "実backup/鍵/restoreは読まない。合成tmp fixturesのauthorityを実サービスに与えない。"
+        },
+        "X04": {
+          "判定": "適用・確認済み",
+          "根拠": "署名/remote identity/partialdeliveryの該当外部consumer: 固定realSDK互換runtime login/send・mentions/attachment拒否・未知loss・forum/commands・stop/scope lock・Slackescaping/uploadfail/catchall；stub補足はcoreのreadonly所有。すべてwireスタブ、live E2と区別。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "公式SDKのnative serialization又はisolatedfile-loadをofflineで確認。OS private credential APIは実行しない。"
+        },
+        "X06": {
+          "判定": "適用・確認済み",
+          "根拠": "model/LLM/Jevを一切起動しない。syntheticfacts/summaryを明示生成し、人操作のhash/actor gateへ通す。"
+        },
+        "X07": {
+          "判定": "境界確認・臨床品質判定非適用",
+          "根拠": "医学判断の品質評価ではない。完全合成根拠を保存/参照し、操作承認と保存receiptを確認。"
+        },
+        "X08": {
+          "判定": "native境界確認・publicWeb非適用",
+          "根拠": "publicWebを起動しない。nativeform/CLI/private responseはSDK/localconsumerで確認。evil.invalid等は新規架空URLでwire不使用を確認。"
+        }
+      }
+    },
+    {
+      "path": "integration/test_standalone_slack_sdk.py",
+      "P_lines": 381,
+      "P_sha256": "f7e11ac8fd05ca95195b1b2b5f1a62eae64d15a6e835b9cb3fc17aebc29a8e49",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          190
+        ],
+        [
+          191,
+          381
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 381,
+      "W_sha256": "f7e11ac8fd05ca95195b1b2b5f1a62eae64d15a6e835b9cb3fc17aebc29a8e49",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          190
+        ],
+        [
+          191,
+          381
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "合成検証: 固定SlackSDK/Bolt/socketmode fullmodal/humanconfirm・scope/actor/doubleclick・session/URL/noProxy/redirect・scope lock beforeconnect・ambientOAuth/logredaction",
+      "callers": [
+        "scripts/run_tests.sh",
+        "scripts/check_pinned_sdks.shの指定consumer"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "完全合成consumer回帰。対象責務: 固定SlackSDK/Bolt/socketmode fullmodal/humanconfirm・scope/actor/doubleclick・session/URL/noProxy/redirect・scope lock beforeconnect・ambientOAuth/logredaction。本番実装をtest内へ複製しない。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "状態/境界を固定SlackSDK/Bolt/socketmode fullmodal/humanconfirm・scope/actor/doubleclick・session/URL/noProxy/redirect・scope lock beforeconnect・ambientOAuth/logredactionのactual公開/helper経路で確認。期待値だけを書き換えない。"
+        },
+        "C03": {
+          "判定": "適用・確認済み",
+          "根拠": "必要なqueue/receipt/lockはtempDB・tmpPath・local journalを使用。assertで本当のqueuefile/DB mutation又はat-most-once callを確認。実DB変更なし。"
+        },
+        "C04": {
+          "判定": "非適用・consumer既存schema",
+          "根拠": "migration実装を持たない。既存schema fixture又はcanonicalconsumerを使う。追加skip/schema弱化なし。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "入口scope/actor/provenanceの当該consumer境界を確認: 固定SlackSDK/Bolt/socketmode fullmodal/humanconfirm・scope/actor/doubleclick・session/URL/noProxy/redirect・scope lock beforeconnect・ambientOAuth/logredaction。transport秘密/実tenant無し。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "fictional/syntheticだけ、資格情報fixtureも新規合成。isolatedHOME runner+conftestでsocket/実MCS/LLM/Jev/Keychainを遮断。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "実caller/SDK API形状を照合: 固定SlackSDK/Bolt/socketmode fullmodal/humanconfirm・scope/actor/doubleclick・session/URL/noProxy/redirect・scope lock beforeconnect・ambientOAuth/logredaction。pinned laneはcollection guardで必須fileとdistributionを確認。"
+        },
+        "C08": {
+          "判定": "適用・確認済み",
+          "根拠": "表示/確認/再起動関連は固定SlackSDK/Bolt/socketmode fullmodal/humanconfirm・scope/actor/doubleclick・session/URL/noProxy/redirect・scope lock beforeconnect・ambientOAuth/logredactionを対象。実画面やlive deliveryは未実施として区別。"
+        },
+        "C09": {
+          "判定": "機能範囲確認・性能判定非適用",
+          "根拠": "ローカル有界fixture、wait_for/subprocess timeoutは既存値維持。性能閾値/skipを変更しない。"
+        },
+        "C10": {
+          "判定": "適用・確認済み",
+          "根拠": "該当failure/queue/restartの契約を固定SlackSDK/Bolt/socketmode fullmodal/humanconfirm・scope/actor/doubleclick・session/URL/noProxy/redirect・scope lock beforeconnect・ambientOAuth/logredactionで確認。SDKのwireだけスタブで安全なunknown/definite rejectを区別。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "ファイル全文を読んだうえでfamily/laneを実行。新30件はP17fail13controls→W30pass。該当scope: 固定SlackSDK/Bolt/socketmode fullmodal/humanconfirm・scope/actor/doubleclick・session/URL/noProxy/redirect・scope lock beforeconnect・ambientOAuth/logredaction。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "プロジェクトrunner使用。SDK testsは明示pinned guard lane no skip。依存をcoreへ追加せず既存isolated interpreter。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "包装/import/start-stopの該当consumer: 固定SlackSDK/Bolt/socketmode fullmodal/humanconfirm・scope/actor/doubleclick・session/URL/noProxy/redirect・scope lock beforeconnect・ambientOAuth/logredaction。gateway/実adapterは起動しない。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "pinnedlane distribution metadata＋Hermes pin archive全bytes検証、public official SDK以外は使わない。テストから依存取得無し。"
+        },
+        "X03": {
+          "判定": "非適用・実backup/鍵禁止",
+          "根拠": "実backup/鍵/restoreは読まない。合成tmp fixturesのauthorityを実サービスに与えない。"
+        },
+        "X04": {
+          "判定": "適用・確認済み",
+          "根拠": "署名/remote identity/partialdeliveryの該当外部consumer: 固定SlackSDK/Bolt/socketmode fullmodal/humanconfirm・scope/actor/doubleclick・session/URL/noProxy/redirect・scope lock beforeconnect・ambientOAuth/logredaction。すべてwireスタブ、live E2と区別。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "公式SDKのnative serialization又はisolatedfile-loadをofflineで確認。OS private credential APIは実行しない。"
+        },
+        "X06": {
+          "判定": "適用・確認済み",
+          "根拠": "model/LLM/Jevを一切起動しない。syntheticfacts/summaryを明示生成し、人操作のhash/actor gateへ通す。"
+        },
+        "X07": {
+          "判定": "境界確認・臨床品質判定非適用",
+          "根拠": "医学判断の品質評価ではない。完全合成根拠を保存/参照し、操作承認と保存receiptを確認。"
+        },
+        "X08": {
+          "判定": "native境界確認・publicWeb非適用",
+          "根拠": "publicWebを起動しない。nativeform/CLI/private responseはSDK/localconsumerで確認。evil.invalid等は新規架空URLでwire不使用を確認。"
+        }
+      }
+    },
+    {
+      "path": "tests/plugin/test_hermes_plugin_mcs.py",
+      "P_lines": 796,
+      "P_sha256": "585301021f5cfe387d864e8814370ba748359c9455c3c3d946fb82a5babb7e89",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          400
+        ],
+        [
+          401,
+          600
+        ],
+        [
+          601,
+          796
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 796,
+      "W_sha256": "585301021f5cfe387d864e8814370ba748359c9455c3c3d946fb82a5babb7e89",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          400
+        ],
+        [
+          401,
+          600
+        ],
+        [
+          601,
+          796
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "合成検証: native provenance/allowlists・snapshot置換・request preview/confirm/receipt・source stale/revocation・loop/policy・adoption/comparison・scan/retry/pause/resume・intID/file-location imports",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/plugin family"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "完全合成consumer回帰。対象責務: native provenance/allowlists・snapshot置換・request preview/confirm/receipt・source stale/revocation・loop/policy・adoption/comparison・scan/retry/pause/resume・intID/file-location imports。本番実装をtest内へ複製しない。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "状態/境界をnative provenance/allowlists・snapshot置換・request preview/confirm/receipt・source stale/revocation・loop/policy・adoption/comparison・scan/retry/pause/resume・intID/file-location importsのactual公開/helper経路で確認。期待値だけを書き換えない。"
+        },
+        "C03": {
+          "判定": "適用・確認済み",
+          "根拠": "必要なqueue/receipt/lockはtempDB・tmpPath・local journalを使用。assertで本当のqueuefile/DB mutation又はat-most-once callを確認。実DB変更なし。"
+        },
+        "C04": {
+          "判定": "非適用・consumer既存schema",
+          "根拠": "migration実装を持たない。既存schema fixture又はcanonicalconsumerを使う。追加skip/schema弱化なし。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "入口scope/actor/provenanceの当該consumer境界を確認: native provenance/allowlists・snapshot置換・request preview/confirm/receipt・source stale/revocation・loop/policy・adoption/comparison・scan/retry/pause/resume・intID/file-location imports。transport秘密/実tenant無し。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "fictional/syntheticだけ、資格情報fixtureも新規合成。isolatedHOME runner+conftestでsocket/実MCS/LLM/Jev/Keychainを遮断。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "実caller/SDK API形状を照合: native provenance/allowlists・snapshot置換・request preview/confirm/receipt・source stale/revocation・loop/policy・adoption/comparison・scan/retry/pause/resume・intID/file-location imports。pinned laneはcollection guardで必須fileとdistributionを確認。"
+        },
+        "C08": {
+          "判定": "適用・確認済み",
+          "根拠": "表示/確認/再起動関連はnative provenance/allowlists・snapshot置換・request preview/confirm/receipt・source stale/revocation・loop/policy・adoption/comparison・scan/retry/pause/resume・intID/file-location importsを対象。実画面やlive deliveryは未実施として区別。"
+        },
+        "C09": {
+          "判定": "機能範囲確認・性能判定非適用",
+          "根拠": "ローカル有界fixture、wait_for/subprocess timeoutは既存値維持。性能閾値/skipを変更しない。"
+        },
+        "C10": {
+          "判定": "適用・確認済み",
+          "根拠": "該当failure/queue/restartの契約をnative provenance/allowlists・snapshot置換・request preview/confirm/receipt・source stale/revocation・loop/policy・adoption/comparison・scan/retry/pause/resume・intID/file-location importsで確認。SDKのwireだけスタブで安全なunknown/definite rejectを区別。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "ファイル全文を読んだうえでfamily/laneを実行。新30件はP17fail13controls→W30pass。該当scope: native provenance/allowlists・snapshot置換・request preview/confirm/receipt・source stale/revocation・loop/policy・adoption/comparison・scan/retry/pause/resume・intID/file-location imports。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "プロジェクトrunner使用。SDK testsは明示pinned guard lane no skip。依存をcoreへ追加せず既存isolated interpreter。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "包装/import/start-stopの該当consumer: native provenance/allowlists・snapshot置換・request preview/confirm/receipt・source stale/revocation・loop/policy・adoption/comparison・scan/retry/pause/resume・intID/file-location imports。gateway/実adapterは起動しない。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "pinnedlane distribution metadata＋Hermes pin archive全bytes検証、public official SDK以外は使わない。テストから依存取得無し。"
+        },
+        "X03": {
+          "判定": "非適用・実backup/鍵禁止",
+          "根拠": "実backup/鍵/restoreは読まない。合成tmp fixturesのauthorityを実サービスに与えない。"
+        },
+        "X04": {
+          "判定": "適用・確認済み",
+          "根拠": "署名/remote identity/partialdeliveryの該当外部consumer: native provenance/allowlists・snapshot置換・request preview/confirm/receipt・source stale/revocation・loop/policy・adoption/comparison・scan/retry/pause/resume・intID/file-location imports。すべてwireスタブ、live E2と区別。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "公式SDKのnative serialization又はisolatedfile-loadをofflineで確認。OS private credential APIは実行しない。"
+        },
+        "X06": {
+          "判定": "適用・確認済み",
+          "根拠": "model/LLM/Jevを一切起動しない。syntheticfacts/summaryを明示生成し、人操作のhash/actor gateへ通す。"
+        },
+        "X07": {
+          "判定": "境界確認・臨床品質判定非適用",
+          "根拠": "医学判断の品質評価ではない。完全合成根拠を保存/参照し、操作承認と保存receiptを確認。"
+        },
+        "X08": {
+          "判定": "native境界確認・publicWeb非適用",
+          "根拠": "publicWebを起動しない。nativeform/CLI/private responseはSDK/localconsumerで確認。evil.invalid等は新規架空URLでwire不使用を確認。"
+        }
+      }
+    },
+    {
+      "path": "tests/plugin/test_hermes_plugin_standalone.py",
+      "P_lines": 91,
+      "P_sha256": "ed46b7505df5d700ae7059f2e57f605bb720ccef8100c026ce5c896aa680fa15",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          91
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 91,
+      "W_sha256": "ed46b7505df5d700ae7059f2e57f605bb720ccef8100c026ce5c896aa680fa15",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          91
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "合成検証: isolated file-location loader・standalone registration抑止・broken flagprobeとfactory standdown",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/plugin family"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "完全合成consumer回帰。対象責務: isolated file-location loader・standalone registration抑止・broken flagprobeとfactory standdown。本番実装をtest内へ複製しない。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "状態/境界をisolated file-location loader・standalone registration抑止・broken flagprobeとfactory standdownのactual公開/helper経路で確認。期待値だけを書き換えない。"
+        },
+        "C03": {
+          "判定": "適用・確認済み",
+          "根拠": "必要なqueue/receipt/lockはtempDB・tmpPath・local journalを使用。assertで本当のqueuefile/DB mutation又はat-most-once callを確認。実DB変更なし。"
+        },
+        "C04": {
+          "判定": "非適用・consumer既存schema",
+          "根拠": "migration実装を持たない。既存schema fixture又はcanonicalconsumerを使う。追加skip/schema弱化なし。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "入口scope/actor/provenanceの当該consumer境界を確認: isolated file-location loader・standalone registration抑止・broken flagprobeとfactory standdown。transport秘密/実tenant無し。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "fictional/syntheticだけ、資格情報fixtureも新規合成。isolatedHOME runner+conftestでsocket/実MCS/LLM/Jev/Keychainを遮断。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "実caller/SDK API形状を照合: isolated file-location loader・standalone registration抑止・broken flagprobeとfactory standdown。pinned laneはcollection guardで必須fileとdistributionを確認。"
+        },
+        "C08": {
+          "判定": "適用・確認済み",
+          "根拠": "表示/確認/再起動関連はisolated file-location loader・standalone registration抑止・broken flagprobeとfactory standdownを対象。実画面やlive deliveryは未実施として区別。"
+        },
+        "C09": {
+          "判定": "機能範囲確認・性能判定非適用",
+          "根拠": "ローカル有界fixture、wait_for/subprocess timeoutは既存値維持。性能閾値/skipを変更しない。"
+        },
+        "C10": {
+          "判定": "適用・確認済み",
+          "根拠": "該当failure/queue/restartの契約をisolated file-location loader・standalone registration抑止・broken flagprobeとfactory standdownで確認。SDKのwireだけスタブで安全なunknown/definite rejectを区別。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "ファイル全文を読んだうえでfamily/laneを実行。新30件はP17fail13controls→W30pass。該当scope: isolated file-location loader・standalone registration抑止・broken flagprobeとfactory standdown。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "プロジェクトrunner使用。SDK testsは明示pinned guard lane no skip。依存をcoreへ追加せず既存isolated interpreter。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "包装/import/start-stopの該当consumer: isolated file-location loader・standalone registration抑止・broken flagprobeとfactory standdown。gateway/実adapterは起動しない。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "pinnedlane distribution metadata＋Hermes pin archive全bytes検証、public official SDK以外は使わない。テストから依存取得無し。"
+        },
+        "X03": {
+          "判定": "非適用・実backup/鍵禁止",
+          "根拠": "実backup/鍵/restoreは読まない。合成tmp fixturesのauthorityを実サービスに与えない。"
+        },
+        "X04": {
+          "判定": "適用・確認済み",
+          "根拠": "署名/remote identity/partialdeliveryの該当外部consumer: isolated file-location loader・standalone registration抑止・broken flagprobeとfactory standdown。すべてwireスタブ、live E2と区別。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "公式SDKのnative serialization又はisolatedfile-loadをofflineで確認。OS private credential APIは実行しない。"
+        },
+        "X06": {
+          "判定": "適用・確認済み",
+          "根拠": "model/LLM/Jevを一切起動しない。syntheticfacts/summaryを明示生成し、人操作のhash/actor gateへ通す。"
+        },
+        "X07": {
+          "判定": "境界確認・臨床品質判定非適用",
+          "根拠": "医学判断の品質評価ではない。完全合成根拠を保存/参照し、操作承認と保存receiptを確認。"
+        },
+        "X08": {
+          "判定": "native境界確認・publicWeb非適用",
+          "根拠": "publicWebを起動しない。nativeform/CLI/private responseはSDK/localconsumerで確認。evil.invalid等は新規架空URLでwire不使用を確認。"
+        }
+      }
+    },
+    {
+      "path": "tests/plugin/test_update_ops.py",
+      "P_lines": 161,
+      "P_sha256": "69d6efc199233ac2df304e102dec492b844c49ef83c1d9d140701416b7318f90",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          161
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 161,
+      "W_sha256": "69d6efc199233ac2df304e102dec492b844c49ef83c1d9d140701416b7318f90",
+      "P_full_read": true,
+      "W_read_ranges": [
+        [
+          1,
+          161
+        ]
+      ],
+      "W_full_read_basis": "P全文＋今回差分全読",
+      "responsibility": "合成検証: projectless update preview/confirm・actor/chat/reason・hash改竄・unknownfield拒否・本当のinboxfile",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/plugin family"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "完全合成consumer回帰。対象責務: projectless update preview/confirm・actor/chat/reason・hash改竄・unknownfield拒否・本当のinboxfile。本番実装をtest内へ複製しない。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "状態/境界をprojectless update preview/confirm・actor/chat/reason・hash改竄・unknownfield拒否・本当のinboxfileのactual公開/helper経路で確認。期待値だけを書き換えない。"
+        },
+        "C03": {
+          "判定": "適用・確認済み",
+          "根拠": "必要なqueue/receipt/lockはtempDB・tmpPath・local journalを使用。assertで本当のqueuefile/DB mutation又はat-most-once callを確認。実DB変更なし。"
+        },
+        "C04": {
+          "判定": "非適用・consumer既存schema",
+          "根拠": "migration実装を持たない。既存schema fixture又はcanonicalconsumerを使う。追加skip/schema弱化なし。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "入口scope/actor/provenanceの当該consumer境界を確認: projectless update preview/confirm・actor/chat/reason・hash改竄・unknownfield拒否・本当のinboxfile。transport秘密/実tenant無し。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "fictional/syntheticだけ、資格情報fixtureも新規合成。isolatedHOME runner+conftestでsocket/実MCS/LLM/Jev/Keychainを遮断。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "実caller/SDK API形状を照合: projectless update preview/confirm・actor/chat/reason・hash改竄・unknownfield拒否・本当のinboxfile。pinned laneはcollection guardで必須fileとdistributionを確認。"
+        },
+        "C08": {
+          "判定": "適用・確認済み",
+          "根拠": "表示/確認/再起動関連はprojectless update preview/confirm・actor/chat/reason・hash改竄・unknownfield拒否・本当のinboxfileを対象。実画面やlive deliveryは未実施として区別。"
+        },
+        "C09": {
+          "判定": "機能範囲確認・性能判定非適用",
+          "根拠": "ローカル有界fixture、wait_for/subprocess timeoutは既存値維持。性能閾値/skipを変更しない。"
+        },
+        "C10": {
+          "判定": "適用・確認済み",
+          "根拠": "該当failure/queue/restartの契約をprojectless update preview/confirm・actor/chat/reason・hash改竄・unknownfield拒否・本当のinboxfileで確認。SDKのwireだけスタブで安全なunknown/definite rejectを区別。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "ファイル全文を読んだうえでfamily/laneを実行。新30件はP17fail13controls→W30pass。該当scope: projectless update preview/confirm・actor/chat/reason・hash改竄・unknownfield拒否・本当のinboxfile。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "プロジェクトrunner使用。SDK testsは明示pinned guard lane no skip。依存をcoreへ追加せず既存isolated interpreter。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "包装/import/start-stopの該当consumer: projectless update preview/confirm・actor/chat/reason・hash改竄・unknownfield拒否・本当のinboxfile。gateway/実adapterは起動しない。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "pinnedlane distribution metadata＋Hermes pin archive全bytes検証、public official SDK以外は使わない。テストから依存取得無し。"
+        },
+        "X03": {
+          "判定": "非適用・実backup/鍵禁止",
+          "根拠": "実backup/鍵/restoreは読まない。合成tmp fixturesのauthorityを実サービスに与えない。"
+        },
+        "X04": {
+          "判定": "適用・確認済み",
+          "根拠": "署名/remote identity/partialdeliveryの該当外部consumer: projectless update preview/confirm・actor/chat/reason・hash改竄・unknownfield拒否・本当のinboxfile。すべてwireスタブ、live E2と区別。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "公式SDKのnative serialization又はisolatedfile-loadをofflineで確認。OS private credential APIは実行しない。"
+        },
+        "X06": {
+          "判定": "適用・確認済み",
+          "根拠": "model/LLM/Jevを一切起動しない。syntheticfacts/summaryを明示生成し、人操作のhash/actor gateへ通す。"
+        },
+        "X07": {
+          "判定": "境界確認・臨床品質判定非適用",
+          "根拠": "医学判断の品質評価ではない。完全合成根拠を保存/参照し、操作承認と保存receiptを確認。"
+        },
+        "X08": {
+          "判定": "native境界確認・publicWeb非適用",
+          "根拠": "publicWebを起動しない。nativeform/CLI/private responseはSDK/localconsumerで確認。evil.invalid等は新規架空URLでwire不使用を確認。"
+        }
+      }
+    },
+    {
+      "path": "tests/plugin/test_hermes_plugin_signal_staleness.py",
+      "P_lines": 0,
+      "P_sha256": null,
+      "read_ranges": [],
+      "ownership": "WRITER_NEW",
+      "W_lines": 149,
+      "W_sha256": "5c9d5272a9cb087c25f27add438a844fedd241a2950eeedd553090e17c687bff",
+      "state": "REVIEWED",
+      "P_full_read": false,
+      "W_read_ranges": [
+        [
+          1,
+          149
+        ]
+      ],
+      "W_full_read_basis": "作成した全内容を再読",
+      "responsibility": "合成検証: 3チャネルlatest signal preview/confirm・壊れた/deep/nonobject/closed transition・正常pinnedqueue・実parts_textのnativeJSON見出し/脚注",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/plugin family"
+      ],
+      "criteria": {
+        "C01": {
+          "判定": "適用・確認済み",
+          "根拠": "完全合成consumer回帰。対象責務: 3チャネルlatest signal preview/confirm・壊れた/deep/nonobject/closed transition・正常pinnedqueue・実parts_textのnativeJSON見出し/脚注。本番実装をtest内へ複製しない。"
+        },
+        "C02": {
+          "判定": "適用・確認済み",
+          "根拠": "状態/境界を3チャネルlatest signal preview/confirm・壊れた/deep/nonobject/closed transition・正常pinnedqueue・実parts_textのnativeJSON見出し/脚注のactual公開/helper経路で確認。期待値だけを書き換えない。"
+        },
+        "C03": {
+          "判定": "適用・確認済み",
+          "根拠": "必要なqueue/receipt/lockはtempDB・tmpPath・local journalを使用。assertで本当のqueuefile/DB mutation又はat-most-once callを確認。実DB変更なし。"
+        },
+        "C04": {
+          "判定": "非適用・consumer既存schema",
+          "根拠": "migration実装を持たない。既存schema fixture又はcanonicalconsumerを使う。追加skip/schema弱化なし。"
+        },
+        "C05": {
+          "判定": "適用・確認済み",
+          "根拠": "入口scope/actor/provenanceの当該consumer境界を確認: 3チャネルlatest signal preview/confirm・壊れた/deep/nonobject/closed transition・正常pinnedqueue・実parts_textのnativeJSON見出し/脚注。transport秘密/実tenant無し。"
+        },
+        "C06": {
+          "判定": "適用・確認済み",
+          "根拠": "fictional/syntheticだけ、資格情報fixtureも新規合成。isolatedHOME runner+conftestでsocket/実MCS/LLM/Jev/Keychainを遮断。"
+        },
+        "C07": {
+          "判定": "適用・確認済み",
+          "根拠": "実caller/SDK API形状を照合: 3チャネルlatest signal preview/confirm・壊れた/deep/nonobject/closed transition・正常pinnedqueue・実parts_textのnativeJSON見出し/脚注。pinned laneはcollection guardで必須fileとdistributionを確認。"
+        },
+        "C08": {
+          "判定": "適用・確認済み",
+          "根拠": "表示/確認/再起動関連は3チャネルlatest signal preview/confirm・壊れた/deep/nonobject/closed transition・正常pinnedqueue・実parts_textのnativeJSON見出し/脚注を対象。実画面やlive deliveryは未実施として区別。"
+        },
+        "C09": {
+          "判定": "機能範囲確認・性能判定非適用",
+          "根拠": "ローカル有界fixture、wait_for/subprocess timeoutは既存値維持。性能閾値/skipを変更しない。"
+        },
+        "C10": {
+          "判定": "適用・確認済み",
+          "根拠": "該当failure/queue/restartの契約を3チャネルlatest signal preview/confirm・壊れた/deep/nonobject/closed transition・正常pinnedqueue・実parts_textのnativeJSON見出し/脚注で確認。SDKのwireだけスタブで安全なunknown/definite rejectを区別。"
+        },
+        "C11": {
+          "判定": "適用・確認済み",
+          "根拠": "ファイル全文を読んだうえでfamily/laneを実行。新30件はP17fail13controls→W30pass。該当scope: 3チャネルlatest signal preview/confirm・壊れた/deep/nonobject/closed transition・正常pinnedqueue・実parts_textのnativeJSON見出し/脚注。"
+        },
+        "C12": {
+          "判定": "適用・確認済み",
+          "根拠": "プロジェクトrunner使用。SDK testsは明示pinned guard lane no skip。依存をcoreへ追加せず既存isolated interpreter。"
+        },
+        "X01": {
+          "判定": "適用・確認済み",
+          "根拠": "包装/import/start-stopの該当consumer: 3チャネルlatest signal preview/confirm・壊れた/deep/nonobject/closed transition・正常pinnedqueue・実parts_textのnativeJSON見出し/脚注。gateway/実adapterは起動しない。"
+        },
+        "X02": {
+          "判定": "適用・確認済み",
+          "根拠": "pinnedlane distribution metadata＋Hermes pin archive全bytes検証、public official SDK以外は使わない。テストから依存取得無し。"
+        },
+        "X03": {
+          "判定": "非適用・実backup/鍵禁止",
+          "根拠": "実backup/鍵/restoreは読まない。合成tmp fixturesのauthorityを実サービスに与えない。"
+        },
+        "X04": {
+          "判定": "適用・確認済み",
+          "根拠": "署名/remote identity/partialdeliveryの該当外部consumer: 3チャネルlatest signal preview/confirm・壊れた/deep/nonobject/closed transition・正常pinnedqueue・実parts_textのnativeJSON見出し/脚注。すべてwireスタブ、live E2と区別。"
+        },
+        "X05": {
+          "判定": "適用・確認済み",
+          "根拠": "公式SDKのnative serialization又はisolatedfile-loadをofflineで確認。OS private credential APIは実行しない。"
+        },
+        "X06": {
+          "判定": "適用・確認済み",
+          "根拠": "model/LLM/Jevを一切起動しない。syntheticfacts/summaryを明示生成し、人操作のhash/actor gateへ通す。"
+        },
+        "X07": {
+          "判定": "境界確認・臨床品質判定非適用",
+          "根拠": "医学判断の品質評価ではない。完全合成根拠を保存/参照し、操作承認と保存receiptを確認。"
+        },
+        "X08": {
+          "判定": "native境界確認・publicWeb非適用",
+          "根拠": "publicWebを起動しない。nativeform/CLI/private responseはSDK/localconsumerで確認。evil.invalid等は新規架空URLでwire不使用を確認。"
+        }
+      }
+    },
+    {
+      "path": "changes/maintenance-plugin-signal-latest-20261005.json",
+      "P_lines": 0,
+      "P_sha256": null,
+      "read_ranges": [],
+      "ownership": "WRITER_NEW",
+      "W_lines": 11,
+      "W_sha256": "9dbe4a5957e129e2d0ed20c75fefffe203798a0e50bbc8aaf47b77616e53b580",
+      "state": "REVIEWED",
+      "P_full_read": false,
+      "W_read_ranges": [
+        [
+          1,
+          11
+        ]
+      ],
+      "W_full_read_basis": "作成した全内容を再読",
+      "responsibility": "日本語1.0.13 release fragment。検証済みsource変更と再起動条件。",
+      "callers": [
+        "scripts/development/release_notes.pyのchanges consumer"
+      ],
+      "criteria_applicability": "runtime moduleではないため対応sourceの20criteriaへ参照",
+      "source_refs": [
+        "hermes_plugin/__init__.py",
+        "tests/plugin/test_hermes_plugin_signal_staleness.py"
+      ]
+    },
+    {
+      "path": "changes/maintenance-plugin-summary-dialect-20261005.json",
+      "P_lines": 0,
+      "P_sha256": null,
+      "read_ranges": [],
+      "ownership": "WRITER_NEW",
+      "W_lines": 8,
+      "W_sha256": "a35e5e25cde1511acfd3ec021d094dffa5ebe1cdd2e06d4c6a3d935aa62f4281",
+      "state": "REVIEWED",
+      "P_full_read": false,
+      "W_read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "W_full_read_basis": "作成した全内容を再読",
+      "responsibility": "日本語1.0.13 release fragment。検証済みsource変更と再起動条件。",
+      "callers": [
+        "scripts/development/release_notes.pyのchanges consumer"
+      ],
+      "criteria_applicability": "runtime moduleではないため対応sourceの20criteriaへ参照",
+      "source_refs": [
+        "hermes_plugin/__init__.py",
+        "tests/plugin/test_hermes_plugin_signal_staleness.py"
+      ]
+    }
+  ],
+  "readonly_boundaries": [
+    {
+      "path": "adapters/common/commands.py",
+      "ownership": "READONLY",
+      "sha256": "4a1c1011caabba83c9b8b2ccdc51e3f0903c603e1ba2f7928e85b619d659915b",
+      "lines": 38,
+      "read_ranges": [
+        [
+          1,
+          38
+        ]
+      ],
+      "state": "BOUNDARY_READ_ONLY",
+      "basis": "native Slack/LINE WORKS private command scope/flags/provenance→plugin dispatcher。全文。",
+      "not_counted_as_full_repo_review": true
+    },
+    {
+      "path": "adapters/common/summary.py",
+      "ownership": "READONLY",
+      "sha256": "922efc6f390011fd588b6e2bbda8538a9080d5a6dcf2cf23903a14961b75da5c",
+      "lines": 88,
+      "read_ranges": [
+        [
+          1,
+          88
+        ]
+      ],
+      "state": "BOUNDARY_READ_ONLY",
+      "basis": "summary scope/readonlysqlite/stale/names/dialect。全文（packet3全読も同SHA）。",
+      "not_counted_as_full_repo_review": true
+    },
+    {
+      "path": "scripts/check_pinned_sdks.sh",
+      "ownership": "READONLY",
+      "sha256": "d40727c9b2ecc00b0acafa8b8584814e776a0d8b92e8011201bbf0adfb04dcf8",
+      "lines": 32,
+      "read_ranges": [
+        [
+          1,
+          32
+        ]
+      ],
+      "state": "BOUNDARY_READ_ONLY",
+      "basis": "standalone/Hermes exact lane runner。全文。",
+      "not_counted_as_full_repo_review": true
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "ownership": "READONLY",
+      "sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "lines": 46,
+      "read_ranges": [
+        [
+          1,
+          46
+        ]
+      ],
+      "state": "BOUNDARY_READ_ONLY",
+      "basis": "env-i/tempHOME runner。全文。",
+      "not_counted_as_full_repo_review": true
+    },
+    {
+      "path": "integration/conftest.py",
+      "ownership": "READONLY",
+      "sha256": "5c51bd43d7ef4e731e8ce78def5df7201e42964ee02c68ca361deabc925b920c",
+      "lines": 14,
+      "read_ranges": [
+        [
+          1,
+          14
+        ]
+      ],
+      "state": "BOUNDARY_READ_ONLY",
+      "basis": "integration collection前guard。全文。",
+      "not_counted_as_full_repo_review": true
+    },
+    {
+      "path": "integration/sdk_safety.py",
+      "ownership": "READONLY",
+      "sha256": "cabdf08366d2af2e1632539e812fc940d2d378f1d86e0c67c8e0217de043428e",
+      "lines": 31,
+      "read_ranges": [
+        [
+          1,
+          31
+        ]
+      ],
+      "state": "BOUNDARY_READ_ONLY",
+      "basis": "必須lane/requiredcollection。全文。",
+      "not_counted_as_full_repo_review": true
+    },
+    {
+      "path": "integration/test_pinned_sdk_versions.py",
+      "ownership": "READONLY",
+      "sha256": "c83cb2c3927fef4c56d16f147cf0b160e040687f6c0cd6d423ed4f85b180f224",
+      "lines": 99,
+      "read_ranges": [
+        [
+          1,
+          99
+        ]
+      ],
+      "state": "BOUNDARY_READ_ONLY",
+      "basis": "distribution/archive all bytes検証。全文。",
+      "not_counted_as_full_repo_review": true
+    },
+    {
+      "path": "mcs/ops/mcs_requests.py",
+      "ownership": "READONLY",
+      "sha256": "49170be641eb7d838981d37e1d08161468ff98d730cd228645ca6f5b20b47b21",
+      "lines": 461,
+      "read_ranges": [
+        [
+          1,
+          243
+        ],
+        [
+          280,
+          417
+        ]
+      ],
+      "state": "BOUNDARY_READ_ONLY",
+      "basis": "parse/validate/receipt-first tx＋source/version/loop再確認＋enqueue/fsyncをpartialreadonly。",
+      "not_counted_as_full_repo_review": true
+    },
+    {
+      "path": "mcs/ops/mcs_operations.py",
+      "ownership": "READONLY",
+      "sha256": "c564dc2db5f0bc0e5b396ef6fad425aca67d0556b93591945d035f99eaa4f149",
+      "lines": 911,
+      "read_ranges": [
+        [
+          516,
+          573
+        ]
+      ],
+      "state": "BOUNDARY_READ_ONLY",
+      "basis": "signal apply consumerの最新破損fallback、担当外根拠。partialreadonly。",
+      "not_counted_as_full_repo_review": true
+    },
+    {
+      "path": "mcs/ops/mcs_signals.py",
+      "ownership": "READONLY",
+      "sha256": "62a2f961c98d14d49b8ca6746b3b2d9d5c482bea085fe6f8c99d3f29c7b3b4d4",
+      "lines": 1691,
+      "read_ranges": [
+        [
+          985,
+          1045
+        ]
+      ],
+      "state": "BOUNDARY_READ_ONLY",
+      "basis": "latest破損tombstone契約、partialreadonly。",
+      "not_counted_as_full_repo_review": true
+    },
+    {
+      "path": "mcs/notify/notify_cards.py",
+      "ownership": "READONLY",
+      "sha256": "4da262ffadfdff40160dcf59847923ed7cd74d0b88d3bf609bb07486e692def0",
+      "lines": 2987,
+      "read_ranges": [
+        [
+          335,
+          374
+        ]
+      ],
+      "state": "BOUNDARY_READ_ONLY",
+      "basis": "stored scope/version/transport、partialreadonly（packet2 fullreview済みでP patch同期）。",
+      "not_counted_as_full_repo_review": true
+    },
+    {
+      "path": "adapters/lineworks/actions.py",
+      "ownership": "READONLY",
+      "sha256": "fb679d7d0aeb79d26caabdd978033c943c285373e59cf0faf0ecc41f0a21e639",
+      "lines": 337,
+      "read_ranges": [
+        [
+          47,
+          90
+        ],
+        [
+          130,
+          200
+        ]
+      ],
+      "state": "BOUNDARY_READ_ONLY",
+      "basis": "native JSON sharedcaller/privateDM/1900 allchunks/plain専用summary。partialreadonly（packet3全読）。",
+      "not_counted_as_full_repo_review": true
+    },
+    {
+      "path": "adapters/slack/actions.py",
+      "ownership": "READONLY",
+      "sha256": "d15893388e8577df4dd09a0b0ed3b5beaaeda20ca676dd11e13ec80e5eaf419c",
+      "lines": 675,
+      "read_ranges": [
+        [
+          135,
+          220
+        ],
+        [
+          275,
+          307
+        ],
+        [
+          450,
+          510
+        ]
+      ],
+      "state": "BOUNDARY_READ_ONLY",
+      "basis": "native JSON/ephemeral/scope/current dedicatedsummary、partialreadonly、core次Iのescapeに干渉しない。",
+      "not_counted_as_full_repo_review": true
+    },
+    {
+      "path": "mcs/notify/notify_render.py",
+      "ownership": "READONLY",
+      "sha256": "f42d1837ccada87b926d397976f56fe21bb02888e9c06dfdf406f2b0fb22838e",
+      "lines": 795,
+      "read_ranges": [
+        [
+          100,
+          131
+        ]
+      ],
+      "state": "BOUNDARY_READ_ONLY",
+      "basis": "real transport dialect renderer、partialreadonly（packet2 fullreview済み）。",
+      "not_counted_as_full_repo_review": true
+    }
+  ],
+  "flow": [
+    {
+      "entry": "Hermes native Discord context/admission→registered /mcs; Slack Bolt/LINEWORKS verified DM→common.commands",
+      "authorization": "native provenance + current user/chat/project; common route/team/app/epoch flags; previeworigin/actor/hash",
+      "processing": "readonly snapshot reference and stale source/revision/policy/comparison/latest signal check",
+      "storage": "human confirmed command → existing inbox atomic link/fsync; queued/unknown receipt",
+      "consumer": "job_ops drain→mcs_requests validate/BEGIN IMMEDIATE→command_receipts+request mutation; operatornotification_receipt scope; deliveryworkers transportgrant/started/result/partjournal",
+      "evidence": "native consumer path actual pinnedSDK serialized with only wire/session stub; new tests actual 3transportcommands/renderer; runner stale signal fix belongs core"
+    }
+  ],
+  "delivery_proof": {
+    "E1": "queued receipt/command file/journal locally durable ≠ server delivery。pluginconfirm receipt onlyqueued/unknown。",
+    "E2": "SDK syntheticHTTP responseのremote messageID、perpart deliveredjournal、allnativeAPIshapeとscopeを確認。未知/partial受信は再送しないowner契約。",
+    "limits": "実provider保存/live画面/実操作/再起動を確認していない。P/W synthetic E2をliveE2やIの全面成功と扱わない。"
+  },
+  "findings": [
+    {
+      "id": "N4-F01",
+      "status": "CONFIRMED_FIXED",
+      "title": "最新の破損signal transitionを除外して旧openを人承認できる",
+      "source": "hermes_plugin/__init__.py:_control_reference",
+      "before": "json_valid(content) WHERE filterにより最新malformed/deepが消え、旧openでpreview/confirm成功。最新arrayはpreview operation_failed。",
+      "fix": "最新key rowを先に選び、parse ValueError/TypeError/RecursionError、nonobject/nonopen、expectedartifact差分をsignal_changedで拒否。project scope先行保持。",
+      "synthetic": "3transport × 2phase × malformed/deep/nonobject/closed =24cases＋cleanconfirmation3。P15fail12pass→W27pass。inbox空/oldartifact未書込を確認。",
+      "consumer_deferred": "mcs_operations runnerの同じfilterはcore次packet ownerへ送信。P/W global実行のrunner欠陥修復はclaimしない。"
+    },
+    {
+      "id": "N4-F02",
+      "status": "CONFIRMED_FIXED",
+      "title": "native JSON summaryがDiscord形式固定でSlack/LWに不適切表示",
+      "source": "hermes_plugin/__init__.py:_dispatch_op summary",
+      "before": "common.commands→plugin経路だけdialect=discord固定。Slackに##/LWに##と-#、専用summary入口は各dialectで正常。",
+      "fix": "trusted identity.transportからslack/plainを選びDiscorddefaultを維持。allowed scope/names=False不変。",
+      "synthetic": "native parser/dispatcher→stubbed synthetic summary parts→actual notify_render.parts_text。P/W1 2fail1Discordcontrolpass→W3pass。"
+    },
+    {
+      "id": "N4-M01",
+      "status": "CONFIRMED_MAINTENANCE",
+      "title": "READMEのprestarted判定条件がjournal完全性条件を欠く",
+      "source": "hermes_plugin/README.md:229-235",
+      "fix": "scope lock＋journal完全性＋自claim存在を満たした時だけnot_sent、それ以外unknown保持をpacket3sourceへ同期。",
+      "basis": "固定Pはcommon worker8db修復を含む。文書だけなので追加mirrortest無し、既存syntheticjournal proofを再利用。"
+    },
+    {
+      "id": "N4-D01",
+      "status": "DISPROVED_DEFECT",
+      "title": "壊れたhold scope JSONが承認scopeを解除する候補",
+      "source": "hermes_plugin/__init__.py:_card_resolution/_make_handler",
+      "basis": "hold JSON例外やnonobject AttributeErrorはnativehandlerとcommon.commands outer Exceptionでoperation_failed、validate/enqueueより前で安全拒否。sourceでfailclosedを確認、詳細code改善は必須ではない。"
+    },
+    {
+      "id": "N4-D02",
+      "status": "DISPROVED_DEFECT",
+      "title": "壊れたstandalone probeがHermes新worker送信を許可する候補",
+      "source": "hermes_plugin/card_workers.py + readonlySupervisor/commonworker",
+      "basis": "probe failureはcommand registrationを残すがactualworker flags read/interactive optin/scope lockが別gate。既存standalone standdown/importconsumerとpinned start-stopで確認。"
+    },
+    {
+      "id": "N4-R01",
+      "status": "DEFERRED_OWNER_CONFIRMED",
+      "title": "mcs_operations signal applyの最新破損fallback",
+      "source": "mcs/ops/mcs_operations.py:_apply_signal_dismiss_tx:522",
+      "owner": "/root/maintenance_core next ops packet",
+      "basis": "same json_valid(content)filter、mcs_signals最新tombstoneと不一致。fullsynthetic fixture契約を直接共有済み。担当外source/testは編集無し。"
+    },
+    {
+      "id": "N4-R02",
+      "status": "DEFERRED_INTEGRATION_DOC",
+      "title": "Slack新attachment reuse/incomplete history契約へのREADME追随",
+      "source": "hermes_plugin/README.md:363-367",
+      "owner": "parent finaldoc packet",
+      "basis": "READMEは固定Pの旧name/size/sha256条件と一致。core同時packetでsealed prior remoteID＋bot/app author＋immutable hosted/size/name/hash矛盾無し、has_more/cursor incompletehistoryunknownを修復中。Pでfuturecontractを記述せず統合後親が同期。"
+    },
+    {
+      "id": "N4-R03",
+      "status": "DEFERRED_CORE_LOCAL_STUB",
+      "title": "test_standalone_sdk localResponse iter_chunked/Session trust_env追随",
+      "source": "integration/test_standalone_sdk.py",
+      "owner": "/root/maintenance_core",
+      "basis": "ファイル全343行はreadonlyで確認済み。固定P/Wのofficial lane25pass。core後続runtime_compatのboundedresponse/sessionguardに必要なstub補足はcore所有で未持込。Iのpassを意味しない。"
+    }
+  ],
+  "verification": [
+    {
+      "id": "P-final-before",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/plugin/test_hermes_plugin_signal_staleness.py -o addopts= -vv --junitxml=/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/P-before-final.xml > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/P-before-final.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/P-before-final",
+      "source_point": "da3426afbffb45ecdd77d599cac29b41d1ef56b2 + final test only",
+      "exit": 1,
+      "count": {
+        "tests": 30,
+        "passed": 13,
+        "failed": 17,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/P-before-final.log",
+      "junit_xml_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/P-before-final.xml",
+      "environment": {
+        "runner": "env -i",
+        "HOME": "mktemp isolated HOME",
+        "MCS_TEST_SANDBOX": "1",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "network": "tests/conftest process guards installed before collection; SDK wire/session stubs only",
+        "secrets": "none; only invented credentials/temp paths"
+      }
+    },
+    {
+      "id": "W-final-family",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/plugin/ -o addopts= -q --junitxml=/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/plugin-family-final-display.xml > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/plugin-family-final-display.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005",
+      "source_point": "3e9dbf1c46cd7db1b739f333ee8f758a7c276c2f",
+      "exit": 0,
+      "count": {
+        "tests": 51,
+        "passed": 51,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/plugin-family-final-display.log",
+      "junit_xml_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/plugin-family-final-display.xml",
+      "environment": {
+        "runner": "env -i",
+        "HOME": "mktemp isolated HOME",
+        "MCS_TEST_SANDBOX": "1",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "network": "tests/conftest process guards installed before collection; SDK wire/session stubs only",
+        "secrets": "none; only invented credentials/temp paths"
+      }
+    },
+    {
+      "id": "W-isolated-replay-family",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/plugin/ -o addopts= -q --junitxml=/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-replay-family.xml > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-replay-family.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/P-replay",
+      "source_point": "3e9dbf1c46cd7db1b739f333ee8f758a7c276c2f (P + complete binary patch)",
+      "exit": 0,
+      "count": {
+        "tests": 51,
+        "passed": 51,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-replay-family.log",
+      "junit_xml_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-replay-family.xml",
+      "environment": {
+        "runner": "env -i",
+        "HOME": "mktemp isolated HOME",
+        "MCS_TEST_SANDBOX": "1",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "network": "tests/conftest process guards installed before collection; SDK wire/session stubs only",
+        "secrets": "none; only invented credentials/temp paths"
+      }
+    },
+    {
+      "id": "W-final-standalone-sdk",
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-pinned-sdk-Hy9hxx/venv/bin/python scripts/run_tests.sh -p integration.sdk_safety --sdk-lane standalone integration/test_pinned_sdk_versions.py integration/test_standalone_sdk.py integration/test_standalone_discord.py integration/test_standalone_slack_sdk.py -o addopts= -q -s -r fEs --junitxml=/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-standalone-sdk.xml > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-standalone-sdk.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005",
+      "source_point": "3e9dbf1c46cd7db1b739f333ee8f758a7c276c2f",
+      "exit": 0,
+      "count": {
+        "tests": 25,
+        "passed": 25,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-standalone-sdk.log",
+      "junit_xml_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-standalone-sdk.xml",
+      "environment": {
+        "runner": "env -i",
+        "HOME": "mktemp isolated HOME",
+        "MCS_TEST_SANDBOX": "1",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "network": "tests/conftest process guards installed before collection; SDK wire/session stubs only",
+        "secrets": "none; only invented credentials/temp paths"
+      }
+    },
+    {
+      "id": "W-final-Hermes-sdk",
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-pinned-sdk-Hy9hxx/hermes-venv/bin/python scripts/run_tests.sh -p integration.sdk_safety --sdk-lane hermes --hermes-project /tmp/mcs-pinned-sdk-Hy9hxx/hermes-source/pyproject.toml --hermes-reference-root /Users/yusuke/.hermes/hermes-agent integration/test_pinned_sdk_versions.py integration/test_hermes_discord.py integration/test_hermes_slack.py integration/test_hermes_config.py tests/adapters/discord/test_discord_sdk_real.py -o addopts= -q -s -r fEs --junitxml=/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-hermes-sdk.xml > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-hermes-sdk.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005",
+      "source_point": "3e9dbf1c46cd7db1b739f333ee8f758a7c276c2f",
+      "exit": 0,
+      "count": {
+        "tests": 16,
+        "passed": 16,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-hermes-sdk.log",
+      "junit_xml_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-hermes-sdk.xml",
+      "environment": {
+        "runner": "env -i",
+        "HOME": "mktemp isolated HOME",
+        "MCS_TEST_SANDBOX": "1",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "network": "tests/conftest process guards installed before collection; SDK wire/session stubs only",
+        "secrets": "none; only invented credentials/temp paths"
+      }
+    },
+    {
+      "id": "W1-summary-before",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/plugin/test_hermes_plugin_signal_staleness.py -k native_json_summary -o addopts= -vv --junitxml=/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/before-summary.xml > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/before-summary.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005",
+      "source_point": "42051eb1df1561fa06be314cfe4c2519c7ed3bec + 3 summary regression tests",
+      "exit": 1,
+      "count": {
+        "tests": 3,
+        "passed": 1,
+        "failed": 2,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/before-summary.log",
+      "junit_xml_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/before-summary.xml",
+      "environment": {
+        "runner": "env -i",
+        "HOME": "mktemp isolated HOME",
+        "MCS_TEST_SANDBOX": "1",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "network": "tests/conftest process guards installed before collection; SDK wire/session stubs only",
+        "secrets": "none; only invented credentials/temp paths"
+      }
+    },
+    {
+      "id": "pinned-Ruff-final",
+      "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check hermes_plugin tests/plugin adapters/__init__.py integration/test_hermes_config.py integration/test_hermes_discord.py integration/test_hermes_slack.py integration/test_standalone_discord.py integration/test_standalone_slack_sdk.py",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005",
+      "source_point": "3e9dbf1c46cd7db1b739f333ee8f758a7c276c2f",
+      "exit": 0,
+      "count": null,
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/ruff-final-display.log",
+      "environment": {
+        "ruff": "0.16.10",
+        "dependencies": "existing public cache; core dependencies unchanged"
+      }
+    },
+    {
+      "id": "diff-check",
+      "command": "git diff --check",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005",
+      "source_point": "W1 preparation and W2 preparation",
+      "exit": 0,
+      "count": null,
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/diff-check.log",
+      "environment": {
+        "no_reset_restore_stash": true
+      }
+    }
+  ],
+  "intermediate_validation": [
+    {
+      "log": "before-signal.log",
+      "state": "SUPERSEDED_BY_FINAL_P",
+      "result": "初期Discordのみ5fail4pass。final3チャネルfixtureでP17fail13passを確定。"
+    },
+    {
+      "log": "before-signal-final.log",
+      "state": "SUPERSEDED_BY_FINAL_P",
+      "result": "初期9case verbose proof。"
+    },
+    {
+      "log": "P-before-threechannels.log",
+      "state": "SIGNAL_FINAL_BEFORE",
+      "result": "最終signal27case P15fail12pass、summary追加前。"
+    },
+    {
+      "log": "plugin-family.log",
+      "state": "SUPERSEDED_BY_FINAL_W",
+      "result": "初期30pass。"
+    },
+    {
+      "log": "plugin-family-final.log",
+      "state": "SUPERSEDED_BY_FINAL_W",
+      "result": "48pass・summary追加前。"
+    },
+    {
+      "log": "plugin-family-threechannels.log",
+      "state": "INVALID_TARGET_PATH",
+      "exit": 4,
+      "result": "2テストfilenameを未実照合で指定してno tests ran。実在inventoryへ修正しfamily51pass。成功として再利用しない。"
+    },
+    {
+      "logs": [
+        "standalone-sdk.log",
+        "hermes-sdk.log"
+      ],
+      "state": "EARLIER_SOURCE_W1",
+      "result": "25/16pass。最終Wの別ログで再確認し置換。"
+    }
+  ],
+  "patch_reproduction": {
+    "P": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+    "W": "3e9dbf1c46cd7db1b739f333ee8f758a7c276c2f",
+    "patch_bytes": 13314,
+    "patch_sha256": "c4d48e296b0c4e84a7b0a2157ae96fc3a5fe1ebb24e24478892334e709d2ef78",
+    "check_exit": 0,
+    "apply_exit": 0,
+    "all_exported_file_count": 858,
+    "all_exported_bytes_and_modes_match": true,
+    "full_patch_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/P-W.patch",
+    "full_reproduction_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/patch-reproduction.json",
+    "isolated_P": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/P-replay",
+    "isolated_W": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-export",
+    "changed_paths": [
+      "changes/maintenance-plugin-signal-latest-20261005.json",
+      "changes/maintenance-plugin-summary-dialect-20261005.json",
+      "hermes_plugin/README.md",
+      "hermes_plugin/__init__.py",
+      "tests/plugin/test_hermes_plugin_signal_staleness.py"
+    ]
+  },
+  "artifacts": [
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/P-W.patch",
+      "bytes": 13314,
+      "sha256": "c4d48e296b0c4e84a7b0a2157ae96fc3a5fe1ebb24e24478892334e709d2ef78"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/P-before-final.log",
+      "bytes": 103157,
+      "sha256": "4dd37f0353c334780c47c0a3d6c2cd7eb3f81729dff8afd649b209b7c4399576"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/P-before-final.xml",
+      "bytes": 102513,
+      "sha256": "9b3889f40cd6efbf5d3d2e9bc6a269a0c7b6325ef32f16666cabbef81364b9d3"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/P-before-threechannels.log",
+      "bytes": 97174,
+      "sha256": "0ac312d2f8779c4a5ccbdd9052f610cf54964794aa2c002aafbea3a0a9d191b3"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/P-before-threechannels.xml",
+      "bytes": 96894,
+      "sha256": "610929742a1c1baa3cff83cefcef50ce90ee10dde777a8a94bc0ee873cc325f5"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-hermes-sdk.log",
+      "bytes": 375,
+      "sha256": "3fb73b02e5fb19fd81e6084e46d26ab280cbf7b49506b0108405fd4b79046e41"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-hermes-sdk.xml",
+      "bytes": 1796,
+      "sha256": "46e0f657d598746992b15a1938d37d1e2351574dfb94673365b4772ab6fe26ef"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-replay-family.log",
+      "bytes": 99,
+      "sha256": "236bed3344e3cd4fabef493b0261999d3179cfa9d1151355fedd0234e2aceae4"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-replay-family.xml",
+      "bytes": 8171,
+      "sha256": "07f85c43b06f785c6e9190ec2b5394cb0a03319a17dc6183bd5af60422e521cf"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-standalone-sdk.log",
+      "bytes": 412,
+      "sha256": "27d0a60b79c04f19058efd5df584d22a0e4b06904d4a475bf000a2bd97bd2782"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/W-standalone-sdk.xml",
+      "bytes": 3642,
+      "sha256": "15c0ddcc181b736d50229097c5f05114e7aa4c883be40985ee2322defd770119"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/before-signal-final.log",
+      "bytes": 31836,
+      "sha256": "1067ce4d8026f3f352d93f66a8e049af7e6527ad09904579ed811af27322cde3"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/before-signal-final.xml",
+      "bytes": 31475,
+      "sha256": "90fed18e74a97c0625dc68075277fee6f7fd3d8f7128a70bdcc8f176920a3ebc"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/before-signal.log",
+      "bytes": 25552,
+      "sha256": "963ad386e9f52714ed6743c1b891e58a0bf5cf3e600a234fb21e575fc253cdfe"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/before-signal.xml",
+      "bytes": 22074,
+      "sha256": "e565bd9b5c7edbbe5a968450d7cb74a9a888956b049e9297645b3ea87edca926"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/before-summary.log",
+      "bytes": 6717,
+      "sha256": "9717a1712433c7e5ddca8a1f03d26146b6485b59bbbe3228ed858b859b25d64d"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/before-summary.xml",
+      "bytes": 5870,
+      "sha256": "dbcf1066e8ab505d624fb9f2ee075b9a86f30980fad08d69869e0c478bb3be2c"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/diff-check.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/hermes-sdk.log",
+      "bytes": 375,
+      "sha256": "0ed5c3c89610db7a0ec573528c1c3e848e32aed5f208b0b9d98f388dd87adadd"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/hermes-sdk.xml",
+      "bytes": 1796,
+      "sha256": "fc83bf11007997610562716deac39c5643158b4caf6d017ea18d75099bb4a276"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/inventory-final.json",
+      "bytes": 12283,
+      "sha256": "193abe754d1cd9904acb9be20638a5dd078b4bcd5ecb0d9260133bd16db92c95"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/patch-reproduction.json",
+      "bytes": 133410,
+      "sha256": "f88ca2e53f02c7e38618b5bdb2341cda8697bb40ee61afe5b3f7486499a853d2"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/plugin-family-final-display.log",
+      "bytes": 99,
+      "sha256": "16af1f2c35c320d483b2f42b06f3b99c7aa7ba2c0d7710bedc37edca2be5665a"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/plugin-family-final-display.xml",
+      "bytes": 8171,
+      "sha256": "cd43b20fc39be4fc0cff98ec161a0c073f6824bcb8405ebda22c02e78f6437fc"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/plugin-family-final.log",
+      "bytes": 99,
+      "sha256": "f21d609e308a04fb7ee33bc008565549f0e85c13af84aae3ea1f6f85ca3823a2"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/plugin-family-final.xml",
+      "bytes": 7572,
+      "sha256": "0ff1f6a2a3c41ed0a0cd9b0cbaa0687e211bac39e11de6099cd851ede00065f1"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/plugin-family-threechannels.log",
+      "bytes": 102,
+      "sha256": "42c97d440e74f0a2bb7f8829beb3d70480112772d795fe216f417c2c80ba3baf"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/plugin-family-threechannels.xml",
+      "bytes": 241,
+      "sha256": "12bb44d3da9967b4df4b5340393b3fb4c7d51de09ba200f4e3c2db49c287121f"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/plugin-family.log",
+      "bytes": 99,
+      "sha256": "abbe32fcf9fe4f2a082c362383062e0d3952e50401ccbedf30b8d72d2303e1b4"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/plugin-family.xml",
+      "bytes": 4409,
+      "sha256": "07a268c1544db7ac2cf42f2f60cf63b883a84c702469ff97c7190f85850abfc9"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/read-inventory.json",
+      "bytes": 6106,
+      "sha256": "a5c2ee067582f1a92b3bba07cc924ef0684c4969bbd6790cd6ea1b86e53b10a2"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/ruff-final-display.log",
+      "bytes": 19,
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/ruff-final.log",
+      "bytes": 19,
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/ruff.log",
+      "bytes": 19,
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/standalone-sdk.log",
+      "bytes": 412,
+      "sha256": "2a085e61c83ca0f168a2ebebabc1a48b7da55825d06b478caa654e9fffd5089a"
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet4-20261005/standalone-sdk.xml",
+      "bytes": 3642,
+      "sha256": "48a945b19a722ec249bf3365a88d0b52a7135eaf0c74ce6dbf5ab53e564a3fc8"
+    }
+  ],
+  "self_review": {
+    "full_P_W_diff_read": true,
+    "source_paths_only_5": true,
+    "parallel_changes_preserved": true,
+    "source_worktree_clean_after_2_commits": true,
+    "external_artifacts_not_committed": true,
+    "readme_generation": "親所有、docstring first sentence変更なし。",
+    "independent_review": "親のsource/evidence技術受入と最終I検証が別ゲート。今回selfreviewを独立review扱いしない。"
+  },
+  "acceptance": {
+    "worker_packet": "source+全読+localsyntheticfamily+pinnedconsumers+Ruff+P→W858file byte/mode再現が揃った",
+    "parent_I": "未検証。core/parent統合sourceとguard/stub/doc残課題をIで検証する。",
+    "remaining": "担当外runner signal修復、core新SDK stub/Slackdocs追随、親fresh独立review/全repo台帳/最終I/check/release/docs packet、実機applyは未承認。"
+  }
+}
