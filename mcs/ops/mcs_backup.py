@@ -114,6 +114,15 @@ class BackupError(MaintenanceError):
     """A stable reason token, never OpenSSL stderr, key material or DB rows."""
 
 
+def _finite_number(value) -> bool:
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 class KeychainStore(Protocol):
     def __call__(self, account: str, pw: str, *, service: str) -> bool: ...
 
@@ -291,9 +300,7 @@ def status(state_dir: str, policy: BackupPolicy
                   "last_drill_at", "last_restore_at", "source_last_successful_run"):
         value = state.get(field)
         if value is not None and (
-                not isinstance(value, (int, float)) or isinstance(value, bool)
-                or not math.isfinite(value)
-                or value < 0):
+                not _finite_number(value) or value < 0):
             raise BackupError("backup_record_invalid")
         out[field] = value
     source_at = out["source_last_successful_run"]
@@ -416,7 +423,7 @@ def _key(provider: Callable[[], bytes | None]) -> bytes:
 
 def _fresh(timestamp: float | None, policy: BackupPolicy) -> None:
     now = time.time()
-    if (timestamp is None or type(timestamp) not in (int, float) or not math.isfinite(timestamp)
+    if (not _finite_number(timestamp)
             or not 0 <= now - timestamp <= policy.max_rpo_seconds):
         raise BackupError("backup_rpo_exceeded_or_unknown")
 
@@ -564,8 +571,7 @@ def _inventory(path: Path, *, max_steps: int | None = None,
         ):
             columns = {r[1] for r in db.execute(f'PRAGMA table_info("{table}")')}
             value = db.execute(query).fetchone()[0] if required <= columns else None
-            if value is not None and (
-                    type(value) not in (int, float) or not math.isfinite(value)):
+            if value is not None and not _finite_number(value):
                 raise BackupError("backup_invalid_metric")
             metrics[name] = value
         jobs: dict[str, dict[str, int]] | None = None
@@ -808,6 +814,7 @@ def verify(bundle: str, expected_sha256: str, policy: BackupPolicy,
         if target is not None:
             # Exclusive mkdir reserves ownership; never swap an existing DB.
             target.mkdir(mode=0o700)
+            published = False
             try:
                 notify_cards.mark_restored(
                     str(target), by="mcs_backup_drill", phase="awaiting_consent",
@@ -815,9 +822,17 @@ def verify(bundle: str, expected_sha256: str, policy: BackupPolicy,
                 atomic_write(str(target / "drill.json"),
                              lambda f: json.dump(report, f, sort_keys=True),
                              mode=0o600)
-                publish_tmp(str(plain), str(target / "ledger.db"), mode=0o600)
+                with plain.open("rb") as stream:
+                    os.fsync(stream.fileno())
+                os.link(plain, target / "ledger.db")
+                published = True
+                plain.unlink()
+                _fsync_directory(target)
             except (OSError, BackupError):
-                shutil.rmtree(target)
+                # A concurrent ledger is not ours to replace or remove. Keep
+                # its consent hold, as on the corresponding restore path.
+                if published or not os.path.lexists(target / "ledger.db"):
+                    shutil.rmtree(target)
                 raise
         return report
 
@@ -981,8 +996,7 @@ def plan(policy_path: str | Path, *, snapshot: str | None = None,
     facts = report["facts"]
     try:
         if (type(max_steps) is not int or not 100 <= max_steps <= 1_000_000_000
-                or type(max_seconds) not in (int, float)
-                or not math.isfinite(max_seconds) or max_seconds <= 0):
+                or not _finite_number(max_seconds) or max_seconds <= 0):
             raise BackupError("backup_inspection_budget_invalid")
         facts.update(sqlite_max_steps=max_steps, sqlite_max_seconds=max_seconds,
                      sqlite_progress_granularity=100,

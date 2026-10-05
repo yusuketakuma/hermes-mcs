@@ -238,13 +238,15 @@ def plan(snapshot: str | Path, *, nonce: str | None = None,
         from extract import RULE_VERSION
         count("stale_v1_messages",
               {"artifacts": "kind message_id meta", "messages": "message_id content_hash"},
-              """SELECT COUNT(DISTINCT a.message_id) FROM artifacts a
-              JOIN messages m ON m.message_id=a.message_id WHERE a.kind='extract_v1'
-              AND CASE WHEN json_valid(a.meta) THEN
+              """SELECT CASE WHEN SUM(NOT json_valid(a.meta)
+                OR m.content_hash IS NULL)>0 THEN NULL ELSE
+              COUNT(DISTINCT CASE WHEN json_valid(a.meta) THEN CASE WHEN
                 json_extract(a.meta,'$.hash') IS NULL
                 OR json_extract(a.meta,'$.hash')!=m.content_hash
                 OR COALESCE(json_extract(a.meta,'$.rule_version'),0)!=?
-              ELSE 0 END""", (RULE_VERSION,))
+                THEN a.message_id END END) END FROM artifacts a
+              JOIN messages m ON m.message_id=a.message_id WHERE a.kind='extract_v1'""",
+              (RULE_VERSION,))
         # Same dirty criterion as rollup, evaluated at published snapshot time.
         counts["dirty_rollups"] = None
         if binding and supported({"patients": "project_id",

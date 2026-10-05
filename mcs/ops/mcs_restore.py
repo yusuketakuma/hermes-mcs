@@ -279,6 +279,9 @@ def resume(destination: str, *, receipt_sha256: str, confirm_human: bool,
             # never leave a permanent BLOCKED marker behind.
             if _read(fd, RESUMED)[0] != activation:
                 raise RestoreConsentError("restore_already_resumed")
+            if _binding(path, fd, receipt["binding"]["source_sha256"],
+                        static=False) != receipt["binding"]:
+                raise RestoreConsentError("restore_receipt_stale")
             return {"writers_resumed": True, "delivery_policy": "hold_all",
                     "command_id": receipt["command_id"]}
         binding = _binding(path, fd, receipt["binding"]["source_sha256"])

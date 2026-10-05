@@ -318,7 +318,7 @@ def test_drill_failure_leaves_no_partial_destination(world, monkeypatch):
         assert notify_cards.restore_pending(str(target))
         raise OSError("synthetic publication failure")
 
-    monkeypatch.setattr(backup, "publish_tmp", fail)
+    monkeypatch.setattr(backup.os, "link", fail)
     with pytest.raises(OSError):
         backup.verify(receipt["bundle"], receipt["sha256"], world[3], lambda: KEY,
                       drill_destination=str(target))

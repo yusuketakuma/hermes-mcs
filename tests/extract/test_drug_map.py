@@ -6,7 +6,7 @@ from difflib import SequenceMatcher
 import hashlib
 import json
 from operator import setitem
-from typing import NotRequired, TypedDict
+from typing import TypedDict
 
 import pytest
 
@@ -15,14 +15,17 @@ import rollup
 from extract_testkit import _hash, _ledger, _message
 
 
-class FictionalEntry(TypedDict):
+class _FictionalEntryRequired(TypedDict):
     id: str
     kind: str
     display: str
     aliases: list[str]
     codes: dict[str, str]
     forms: list[str]
-    source_codes: NotRequired[list[dict[str, str | None]]]
+
+
+class FictionalEntry(_FictionalEntryRequired, total=False):
+    source_codes: list[dict[str, str | None]]
 
 
 class FictionalDocument(TypedDict):
@@ -48,6 +51,11 @@ DOCUMENT: FictionalDocument = {
          "aliases": ["架空群薬"], "codes": {}, "forms": []},
     ],
 }
+
+
+def test_fictional_entry_keeps_required_and_optional_keys():
+    assert FictionalEntry.__required_keys__ == {"id", "kind", "display", "aliases", "codes", "forms"}
+    assert FictionalEntry.__optional_keys__ == {"source_codes"}
 
 
 def _dictionary(tmp_path, document=None):

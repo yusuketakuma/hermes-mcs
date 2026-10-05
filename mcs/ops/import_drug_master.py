@@ -313,7 +313,7 @@ def main(argv=None) -> int:
         print(json.dumps({**result.report,
                          "written": args.output is not None and not args.dry_run}, ensure_ascii=False))
         return 0
-    except (MasterError, ValueError, OSError, TypeError) as error:
+    except (MasterError, ValueError, OSError, TypeError, RecursionError) as error:
         code = error.code if isinstance(error, MasterError) else (
             "output_exists" if isinstance(error, FileExistsError) else "input_or_dictionary_invalid")
         print(json.dumps({"status": "refused", "reason": code, "written": False}))

@@ -241,7 +241,8 @@ def test_failed_reapproval_preserves_previous_baseline(tmp_path, failure):
                 with pytest.raises(sqlite3.DatabaseError):
                     requests.apply_command(db, req)
         finally:
-            db.db.set_authorizer(None)
+            # Keep the fault cleanup portable to the minimum Python 3.10.
+            db.db.set_authorizer(lambda *_: sqlite3.SQLITE_OK)
         assert approved.read_bytes() == previous
         assert pending.read_bytes() == proposed
         assert len(db.artifacts("refstat_approval_v1")) == 1

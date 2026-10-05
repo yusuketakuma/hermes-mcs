@@ -22,6 +22,28 @@ def assets():
     return support.load_queue(EVALUATION)
 
 
+@pytest.mark.parametrize("schema,required,optional", [
+    ("SourceCase", {"case_id", "focus", "messages", "human_review_status", "promotion_eligible"},
+     {"source_time"}),
+    ("Proposal", {"case_id", "request_kind", "evidence"},
+     {"reply_kind", "false_done_risk", "request_to", "request_from", "due_text", "condition"}),
+    ("Quote", {"message_index", "quote"}, set()),
+])
+def test_review_schema_required_and_optional_keys_are_preserved(schema, required, optional):
+    contract = getattr(support, schema)
+    assert contract.__required_keys__ == required
+    assert contract.__optional_keys__ == optional
+
+
+@pytest.mark.parametrize("stamp", ["2026-10-04T01:00:00Z", "2026-10-04T01:00:00+00:00",
+                                  "2026-10-04T10:00:00+09:00"])
+def test_explicit_source_timezones_remain_accepted(assets, stamp):
+    sources, proposals = copy.deepcopy(assets[:2])
+    sources[0]["source_time"] = stamp
+    report = support.validate(sources, proposals)
+    assert report["pending"] == 220 and report["promotion_eligible"] is False
+
+
 def test_fixed_heldout_assets_are_distinct_pending_and_have_coverage(assets):
     # Given / When
     sources, proposals, report = assets
@@ -136,6 +158,22 @@ def test_non_object_manifest_is_rejected_without_queue_export(tmp_path, capsys):
     # Then
     assert code == 1 and captured.out == ""
     assert json.loads(captured.err) == {"state": "invalid", "reason": "queue_manifest_invalid"}
+
+
+@pytest.mark.parametrize("damage", ["deep", "missing"])
+def test_invalid_queue_inputs_emit_a_code_without_private_paths(tmp_path, capsys, damage):
+    directory = tmp_path / "SYNTHETIC_PRIVATE_DIRECTORY"
+    directory.mkdir()
+    if damage == "deep":
+        depth = sys.getrecursionlimit() + 100
+        (directory / "request_following_review_manifest.json").write_text(
+            "[" * depth + "0" + "]" * depth)
+    assert support.main(["export", "--directory", str(directory)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == "" and "SYNTHETIC_PRIVATE_DIRECTORY" not in captured.err
+    report = json.loads(captured.err)
+    assert report["state"] == "invalid" and report["reason"] in {
+        "queue_input_invalid", "queue_manifest_invalid"}
 
 
 @pytest.mark.parametrize("command", ["validate", "export", "export-proposals"])
