@@ -57,8 +57,8 @@
 <text x="626" y="386" font-size="17" fill="#087f5b" font-weight="bold">構造化（抽出候補）</text>
 <text x="626" y="417" font-size="16" fill="#202124">依頼: 次回訪問時に残薬確認</text>
 <text x="626" y="451" font-size="15" fill="#087f5b">スタンプ 👀2 🙆1 · 観測 10-01 10:00</text>
-<text x="626" y="484" font-size="15" fill="#202124">押した人: 👀 田中 花子、佐藤 一郎</text>
-<text x="626" y="512" font-size="15" fill="#202124">🙆 鈴木 太郎（自分）</text>
+<text x="626" y="484" font-size="15" fill="#202124">押した人: 👀 田中 花子、佐藤 一郎 / 🙆 鈴木 太郎</text>
+<text x="626" y="508.0" font-size="15" fill="#202124">（自分） · 観測 10-01 10:00</text>
 <text x="626" y="550" font-size="17" fill="#202124">本文: 次回訪問時に残薬を確認してください。</text>
 <text x="626" y="615" font-size="14" fill="#66716f">押下者取得を有効にした場合の表示例</text>
 <rect x="588" y="660" width="30" height="30" rx="8" fill="#087f5b"/>
