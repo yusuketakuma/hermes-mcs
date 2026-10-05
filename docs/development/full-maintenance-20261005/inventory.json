@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "PARTIAL": 59,
+      "PARTIAL": 69,
       "EXCLUDED": 2,
-      "UNSEEN": 551,
+      "UNSEEN": 543,
       "REVIEWED": 238
     },
-    "candidate_tracked": 848
+    "candidate_tracked": 857
   },
   "files": [
     {
@@ -2427,6 +2427,18 @@
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
     },
     {
+      "path": "changes/maintenance-structured-empty-source-20261005.json",
+      "sha256": "0b14352f0ff063f49cac34c4b18c9d55e83bd22c0ad6603ce15990b43d5e7ec7",
+      "bytes": 1019,
+      "lines": 8,
+      "module": "changes",
+      "kind": "source",
+      "status": "PARTIAL",
+      "evidence": [
+        "Authored task record; final fixed-I classification/reconciliation pending."
+      ]
+    },
+    {
       "path": "changes/maintenance-ten-minute-schedule-20261005.json",
       "sha256": "666acb5c86bc0e7d176e8f70d4cbc67f9925d8fe195a18e21f309b2e80e0c9a3",
       "bytes": 1172,
@@ -3654,6 +3666,18 @@
         "New task-authored file; packet/source or schema consistency validation tracked separately."
       ],
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+    },
+    {
+      "path": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "sha256": "44851871925bff3e985663361bbd14345532779e11de9de9d1996663fae8eb95",
+      "bytes": 7318,
+      "lines": 196,
+      "module": "docs",
+      "kind": "source",
+      "status": "PARTIAL",
+      "evidence": [
+        "Authored task record; final fixed-I classification/reconciliation pending."
+      ]
     },
     {
       "path": "docs/development/maintenance-core-evidence.json",
@@ -7253,9 +7277,19 @@
       "lines": 103,
       "module": "mcs/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          103
+        ]
+      ],
+      "reviewed_sha256": "1d565f67a33b13f9078b55227934f462dc6e99619a46a86848627528be8c3859"
     },
     {
       "path": "mcs/views/mcs_stats.py",
@@ -7286,9 +7320,19 @@
       "lines": 313,
       "module": "mcs/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          313
+        ]
+      ],
+      "reviewed_sha256": "b1f0ffe7349af80381c7ff4cfa15a0afbcbb646799d193bbdf42e97075257ddc"
     },
     {
       "path": "mcs/views/metadata_report.py",
@@ -7297,9 +7341,19 @@
       "lines": 160,
       "module": "mcs/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          160
+        ]
+      ],
+      "reviewed_sha256": "23807c61a7047c6b78e7c10518cf94da49712098d836e5255f24acf4f29f97f2"
     },
     {
       "path": "mcs/views/project_metadata_view.py",
@@ -7308,9 +7362,19 @@
       "lines": 309,
       "module": "mcs/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          309
+        ]
+      ],
+      "reviewed_sha256": "192067dca2822d9b1b135668d0f57fc5a14872ff61a1d509153d9489af63f466"
     },
     {
       "path": "mcs/views/read_model.py",
@@ -7319,9 +7383,19 @@
       "lines": 361,
       "module": "mcs/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          361
+        ]
+      ],
+      "reviewed_sha256": "588e4bb58510ee920508223cac4c66e06eb760190135bf404f37548ffe14ad91"
     },
     {
       "path": "mcs/views/response_observation_view.py",
@@ -7343,20 +7417,18 @@
       "kind": "source",
       "status": "PARTIAL",
       "evidence": [
-        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
         [
-          42,
-          120
-        ],
-        [
-          165,
-          179
+          1,
+          441
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "full_content_read": true,
+      "reviewed_sha256": "5e082192ef31d4cd6fac63e8e7449fd3138f0b2defc0427dfba45713b772e224"
     },
     {
       "path": "mcs/views/summary_review.py",
@@ -14151,9 +14223,19 @@
       "lines": 43,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          43
+        ]
+      ],
+      "reviewed_sha256": "aeba521435f7b30d2bbe45444329ec9fdcdb937dbae0d334faf24b5c2d3c7e3b"
     },
     {
       "path": "tests/views/test_structured_view.py",
@@ -14162,9 +14244,19 @@
       "lines": 416,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          437
+        ]
+      ],
+      "reviewed_sha256": "300e5fe9b6da03338bd82f3d77a6cf50d72a1c1c5d5135bc5b5dd9bc7f84270e"
     },
     {
       "path": "tests/views/test_summary_review.py",
@@ -14195,9 +14287,19 @@
       "lines": 97,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          97
+        ]
+      ],
+      "reviewed_sha256": "5435276d90281e002653bceb56d36d8185e61fa3fa64c6a5c4044b8861e62478"
     }
   ],
   "protected_or_derived_groups": [

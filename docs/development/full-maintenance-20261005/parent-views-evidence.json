@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "packet": "parent-views-progress",
+  "status": "PARTIAL",
+  "B": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+  "P": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+  "scope": "mcs/views all10 source and tests/views all24 existing text; parent writer",
+  "read_inventory": [
+    {
+      "path": "mcs/views/structured_view.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 441,
+      "read_ranges": [
+        [
+          1,
+          441
+        ]
+      ],
+      "reviewed_sha256": "5e082192ef31d4cd6fac63e8e7449fd3138f0b2defc0427dfba45713b772e224",
+      "review_note": "全文読取済み。views全34filesのcaller/20観点照合は進行中で、全文読取だけを完了と扱わない。"
+    },
+    {
+      "path": "mcs/views/message_metadata.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 313,
+      "read_ranges": [
+        [
+          1,
+          313
+        ]
+      ],
+      "reviewed_sha256": "b1f0ffe7349af80381c7ff4cfa15a0afbcbb646799d193bbdf42e97075257ddc",
+      "review_note": "全文読取済み。views全34filesのcaller/20観点照合は進行中で、全文読取だけを完了と扱わない。"
+    },
+    {
+      "path": "mcs/views/metadata_report.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 160,
+      "read_ranges": [
+        [
+          1,
+          160
+        ]
+      ],
+      "reviewed_sha256": "23807c61a7047c6b78e7c10518cf94da49712098d836e5255f24acf4f29f97f2",
+      "review_note": "全文読取済み。views全34filesのcaller/20観点照合は進行中で、全文読取だけを完了と扱わない。"
+    },
+    {
+      "path": "mcs/views/cross_lists_view.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 103,
+      "read_ranges": [
+        [
+          1,
+          103
+        ]
+      ],
+      "reviewed_sha256": "1d565f67a33b13f9078b55227934f462dc6e99619a46a86848627528be8c3859",
+      "review_note": "全文読取済み。views全34filesのcaller/20観点照合は進行中で、全文読取だけを完了と扱わない。"
+    },
+    {
+      "path": "mcs/views/project_metadata_view.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 309,
+      "read_ranges": [
+        [
+          1,
+          309
+        ]
+      ],
+      "reviewed_sha256": "192067dca2822d9b1b135668d0f57fc5a14872ff61a1d509153d9489af63f466",
+      "review_note": "全文読取済み。views全34filesのcaller/20観点照合は進行中で、全文読取だけを完了と扱わない。"
+    },
+    {
+      "path": "mcs/views/read_model.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 361,
+      "read_ranges": [
+        [
+          1,
+          361
+        ]
+      ],
+      "reviewed_sha256": "588e4bb58510ee920508223cac4c66e06eb760190135bf404f37548ffe14ad91",
+      "review_note": "全文読取済み。views全34filesのcaller/20観点照合は進行中で、全文読取だけを完了と扱わない。"
+    },
+    {
+      "path": "tests/views/test_structured_view.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 437,
+      "read_ranges": [
+        [
+          1,
+          437
+        ]
+      ],
+      "reviewed_sha256": "300e5fe9b6da03338bd82f3d77a6cf50d72a1c1c5d5135bc5b5dd9bc7f84270e",
+      "review_note": "全文読取済み。views全34filesのcaller/20観点照合は進行中で、全文読取だけを完了と扱わない。"
+    },
+    {
+      "path": "tests/views/test_structured_review_regressions.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 43,
+      "read_ranges": [
+        [
+          1,
+          43
+        ]
+      ],
+      "reviewed_sha256": "aeba521435f7b30d2bbe45444329ec9fdcdb937dbae0d334faf24b5c2d3c7e3b",
+      "review_note": "全文読取済み。views全34filesのcaller/20観点照合は進行中で、全文読取だけを完了と扱わない。"
+    },
+    {
+      "path": "tests/views/views_testkit.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 97,
+      "read_ranges": [
+        [
+          1,
+          97
+        ]
+      ],
+      "reviewed_sha256": "5435276d90281e002653bceb56d36d8185e61fa3fa64c6a5c4044b8861e62478",
+      "review_note": "全文読取済み。views全34filesのcaller/20観点照合は進行中で、全文読取だけを完了と扱わない。"
+    }
+  ],
+  "confirmed_fixes": [
+    {
+      "id": "PARENT-VIEWS-001",
+      "state": "CONFIRMED_FIXED",
+      "path": "mcs/views/structured_view.py",
+      "cause": "Empty selected current fact dictionaries are mistaken for absent facts and revive rule events/vitals",
+      "before": "3 failed/4 controls passed/95 deselected for extract_llm/canonical_projection/semantic_facts_v4 versus absent/stale facts",
+      "after": "214 passed in 7.08s across structured views and notification consumers",
+      "contract": "Empty current facts suppress excluded events/vitals; media reference and absent/stale rule fallback retained; symptoms/medication-candidate/request fallback unchanged",
+      "integration_status": "local repaired source; final whole-I checks and independent review pending"
+    }
+  ],
+  "verification": [
+    {
+      "path": "/tmp/mcs-maintenance-structured-empty-before-20261005.log",
+      "sha256": "b89fcd46156eda0cfaa45e1625b3542acde9d1a222e45f49329d22b45e6ec0ba",
+      "result": "3 failed, 4 passed, 95 deselected in 0.27s"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-structured-empty-after-20261005.log",
+      "sha256": "70aeb7d2873685f16e516d2d3a05f7e8f2fa67bbc160a09368a0d1172ba8f0e3",
+      "result": "214 passed in 7.08s"
+    }
+  ],
+  "criteria_status": "C01-C12/X01-X08 module review remains in progress; 9 full-content reads are prerequisites, not whole-module completion.",
+  "remaining_files": [
+    "mcs/views/mcs_stats.py",
+    "mcs/views/mcs_view.py",
+    "mcs/views/response_observation_view.py",
+    "mcs/views/summary_review.py",
+    "tests/views/test_cross_lists_view.py",
+    "tests/views/test_drug_candidates.py",
+    "tests/views/test_group_consultations_view.py",
+    "tests/views/test_interaction_latency.py",
+    "tests/views/test_mcs_stats.py",
+    "tests/views/test_mcs_stats_signal_feedback.py",
+    "tests/views/test_metadata_report.py",
+    "tests/views/test_notification_receipt_scope.py",
+    "tests/views/test_physician_viewed.py",
+    "tests/views/test_project_metadata_comparison.py",
+    "tests/views/test_project_metadata_view.py",
+    "tests/views/test_qc_view.py",
+    "tests/views/test_read_model.py",
+    "tests/views/test_response_observation.py",
+    "tests/views/test_response_observation_view.py",
+    "tests/views/test_semantic_view.py",
+    "tests/views/test_staff_directory.py",
+    "tests/views/test_status_fetch_reason.py",
+    "tests/views/test_status_view.py",
+    "tests/views/test_summary_review.py",
+    "tests/views/test_summary_review_cli.py"
+  ],
+  "checks": {
+    "ruff": "ruff 0.16.10 changed2 Python paths passed",
+    "diff": "git diff --check passed"
+  },
+  "limitations": [
+    "No real snapshots, patient data, services, credentials, live SDK transport or model/API accessed.",
+    "All remaining files, final fixed I SDK/distribution and fresh independent review are pending."
+  ]
+}

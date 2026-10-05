@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "空の最新抽出から古い区分・バイタルを再表示しない",
+  "summary": "最新の有効な抽出結果が空の場合、古いルール抽出の区分やバイタルを通知へ戻しません。添付の区分と、抽出結果が未作成・旧本文のままである場合のルール表示は維持します。Slack・Discord・LINE WORKSが使う共通の構造化表示へ反映します。",
+  "upgrade": "更新後に新しく描画する通知が対象です。HermesのSlack・Discordはgateway、独立接続とLINE WORKSは該当アダプターの再起動で読み込まれます。保存済みの原文・抽出・通知投稿を変更する操作は行っていません。",
+  "details": ["有効な抽出が存在しないNoneと、存在する空の辞書を区別する。", "症状・薬剤候補・依頼の既存のルール補完条件は維持する。"],
+  "refs": ["mcs/views/structured_view.py", "tests/views/test_structured_view.py"]
+}

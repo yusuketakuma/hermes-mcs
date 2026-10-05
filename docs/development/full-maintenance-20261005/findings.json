@@ -692,6 +692,17 @@
       "path": "mcs/ops/mcs_setup.py",
       "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "integration_status": "local repair; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-VIEWS-001",
+      "state": "CONFIRMED_FIXED",
+      "path": "mcs/views/structured_view.py",
+      "cause": "Empty selected current fact dictionaries are mistaken for absent facts and revive rule events/vitals",
+      "before": "3 failed/4 controls passed/95 deselected for extract_llm/canonical_projection/semantic_facts_v4 versus absent/stale facts",
+      "after": "214 passed in 7.08s across structured views and notification consumers",
+      "contract": "Empty current facts suppress excluded events/vitals; media reference and absent/stale rule fallback retained; symptoms/medication-candidate/request fallback unchanged",
+      "integration_status": "local repaired source; final whole-I checks and independent review pending",
+      "packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
     }
   ],
   "deferred": [],
