@@ -9,13 +9,14 @@ PNGはREADME表示用、SVGは編集用のソース。配置・書体・絵文�
 
 | 画面 | 根拠 |
 |---|---|
-| `01-delivery` | `adapters/lineworks/cards.py`（ボタンテンプレート）、`adapters/lineworks/delivery.py`（同じトークルームへカード・番号付き原文・添付を連続投稿）、`mcs/notify/notify_cards.py`（条件付き操作ラベル） |
+| `01-delivery` | `adapters/lineworks/cards.py`（ボタンテンプレート）、`adapters/lineworks/delivery.py`（同じトークルームへカード・番号付き原文・添付を連続投稿）、`mcs/notify/notify_cards.py`（条件付き操作ラベル）、`mcs/notify/notify_render.py`・`mcs/views/message_metadata.py`（スタンプ件数と、取得を有効にした場合の各投稿の押下者氏名） |
 | `02-task-confirm` | `adapters/lineworks/actions.py`（本人の1:1トークへの項目別入力・確認・確定）、`adapters/common/text.py`（入力ラベル・確認本文・結果の文言） |
 
 ボタンの種類とCallbackは[公式ボタンテンプレート仕様](https://developers.worksmobile.com/jp/docs/bot-send-button)とも照合。
 架空の元投稿と抽出参照があるカードを例にしている。ボタンは状態・設定で変わり、
 本文の長さや操作数によって追加投稿に分割される。
 添付は保存・通知のみで、画像内容の解析は示していない。
+スタンプの観測日時は押下時刻ではなく、「完了」のスタンプも正式なタスク完了ではない。
 
 1:1図はスタッフ一覧を使わず担当者を手入力する例。入力プロンプトと本文は
 説明用に一部省略し、理由の入力後の確認画面を右側に示す。
