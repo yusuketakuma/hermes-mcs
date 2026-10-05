@@ -64,3 +64,12 @@ def test_member_with_unknown_profession_keeps_the_count_unknown(store):
     store.save_reaction_actors(900, [], True, now=120)
     assert _status(store)["reason"] == "care_team_profession_unknown"
     assert _status(store)["state"] == "unknown"
+
+
+def test_cancelled_viewed_is_not_observed(store):
+    capture(store, rows=[_member(5)], now=100)
+    store.save_reaction_actors(900, [
+        {"actor_id": 5, "reaction_type": "viewed", "profession": "医師"}], True, now=110)
+    store.save_reaction_actors(900, [], True, now=120)   # cancelled 見ました
+    out = _status(store)
+    assert (out["viewed_observed"], out["not_observed"]) == (0, 1)

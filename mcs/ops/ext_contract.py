@@ -117,6 +117,9 @@ def _validate_authorization(raw, now: float, *, c1: bool = False) -> dict:
     for key in ("auth_id", "purpose", "actor", "destination", "reason"):
         if not isinstance(raw.get(key), str) or not raw[key].strip():
             raise ContractError(f"auth_invalid:{key}")
+    # Same cap as the withdraw/1 directive, so every exported envelope stays withdrawable.
+    if len(raw["auth_id"]) > 256:
+        raise ContractError("auth_invalid:auth_id")
     if "revoked" in raw and type(raw["revoked"]) is not bool:
         raise ContractError("auth_invalid:revoked")
     if raw.get("revoked"):
@@ -536,11 +539,12 @@ class HandoffSink(LocalSink):
         Cleanup (discard) never creates a directive; this explicit call does,
         and also stops handing over a still-staged envelope copy."""
         from c1_envelopes import C1ContractError, encode_withdrawal
+        # Stop handing over the copy first, even if the directive cannot be encoded.
+        self.delete(envelope_id)
         try:
-            raw = encode_withdrawal(_check_id(envelope_id), auth_id, reason).decode("utf-8")
+            raw = encode_withdrawal(envelope_id, auth_id, reason).decode("utf-8")
         except C1ContractError as e:
             raise ContractError(e.code) from e
-        self.delete(envelope_id)
         folder = self.root / "withdrawals"
         folder.mkdir(mode=0o700, exist_ok=True)
         atomic_write(str(folder / f"{envelope_id}.json"), lambda fh: fh.write(raw),
@@ -813,10 +817,14 @@ class GovernedExporter:
         if prior is None:
             self._audit("reconcile", "no_journal", envelope_id=envelope_id)
             return {"status": "no_journal", "envelope_id": envelope_id}
+        if prior["status"] == "refused":
+            # Never sent, so the journal has no sink binding to check.
+            self._audit("reconcile", "refused", envelope_id=envelope_id)
+            return {"status": "refused", "envelope_id": envelope_id}
         if prior.get("sink_root") != str(sink.root.resolve()):
             raise ContractError("sink_binding_mismatch")
-        if prior["status"] in ("acked", "withdrawn", "refused", "rejected"):
-            if isinstance(sink, HandoffSink) and prior["status"] != "refused":
+        if prior["status"] in ("acked", "withdrawn", "rejected"):
+            if isinstance(sink, HandoffSink):
                 sink.discard(envelope_id)
             self._audit("reconcile", prior["status"], envelope_id=envelope_id)
             return {"status": prior["status"], "envelope_id": envelope_id}
@@ -964,9 +972,8 @@ def _journal_paths(state, max_entries=None):
     Withdraw and reconcile stay uncapped: the journal is never pruned, so a
     cap would block deletion propagation once enough parts were handed off.
     """
-    root = Path(state).absolute()
-    directory = root / "journal"
-    if root.resolve() != root or directory.is_symlink():
+    directory = Path(state) / "journal"
+    if directory.is_symlink():
         raise ContractError("journal_directory_invalid")
     with os.scandir(directory) as entries:
         for count, entry in enumerate(entries, 1):
@@ -1155,6 +1162,13 @@ def _receive(args) -> dict:
                 # Receipts or /1 copies in the same outbox are not inputs to this receiver.
                 transport["skipped"] += 1
                 continue
+            if contract is None:
+                try:
+                    parse_receipt(raw)  # legacy receipts imported into the outbox carry no contract
+                    transport["skipped"] += 1
+                    continue
+                except ContractError:
+                    pass
             withdraw = contract == WITHDRAW_CONTRACT
             try:
                 if withdraw:
@@ -1187,6 +1201,15 @@ def _receive(args) -> dict:
     return {"transport": dict(transport), "receipts": len(receipts),
             "expired": expiry["expired"],
             "receiver": receiver.diagnostics(), "binding": "synthetic_reference_receiver"}
+
+
+def _read_records(path):
+    """Load export.jsonl lines, refusing any line that is not a JSON object."""
+    records = [json.loads(line) for line in
+               Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not all(isinstance(r, dict) for r in records):
+        raise ContractError("records_invalid")
+    return records
 
 
 def main(argv=None) -> int:
@@ -1351,9 +1374,7 @@ def main(argv=None) -> int:
                         finally:
                             view.close()
                     else:
-                        records = [json.loads(line) for line in
-                                   Path(args.records).read_text(
-                                       encoding="utf-8").splitlines() if line.strip()]
+                        records = _read_records(args.records)
                     selection = select_records(
                         records, auth["fields"], only_with_facts=args.only_with_facts,
                         since_days=args.since_days)
@@ -1367,11 +1388,9 @@ def main(argv=None) -> int:
                 except (C1ContractError, SnapshotError) as e:
                     raise ContractError(e.code) from e
             else:
-                records = [json.loads(line) for line in
-                           Path(args.records).read_text(
-                               encoding="utf-8").splitlines() if line.strip()]
-                gen_at = next((r.get("snapshot", {}).get("generated_at")
-                               for r in records if r.get("type") == "meta"), None)
+                records = _read_records(args.records)
+                snap = next((r.get("snapshot") for r in records if r.get("type") == "meta"), None)
+                gen_at = snap.get("generated_at") if isinstance(snap, dict) else None
                 env = build_envelope(records, auth, gen_at)
                 envelopes = [env]
             if args.dry_run:

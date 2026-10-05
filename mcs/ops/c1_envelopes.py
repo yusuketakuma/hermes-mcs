@@ -22,6 +22,7 @@ from c1_contract import (
 
 CONTRACT = "mcs-ext-export/2"
 MAX_WIRE_BYTES = 1_048_576
+AUTH_ID_MAX = 256  # same limit as withdraw/1, so every sealed auth_id stays withdrawable
 Record: TypeAlias = dict[str, JSONValue]
 _SHARED = ("meta", "coverage", "signals_truncated", "patient_coverage")
 _CONTEXT = (
@@ -191,6 +192,8 @@ def build_envelopes(records: object, *, profile: JSONValue,
     for value in (auth_id, destination, purpose):
         if not isinstance(value, str) or not value.strip():
             raise C1ContractError("envelope_metadata_invalid")
+    if len(auth_id) > AUTH_ID_MAX:
+        raise C1ContractError("envelope_metadata_invalid")
     canonical_json(context)
     single = _seal(context, shared + [r for group in groups for r in group])
     if len(_wire(single)) <= max_bytes:
@@ -261,6 +264,8 @@ def validate_envelope(envelope: JSONValue) -> None:
         value = envelope[key]
         if not isinstance(value, str) or not value.strip():
             raise C1ContractError("envelope_metadata_invalid")
+    if len(envelope["auth_id"]) > AUTH_ID_MAX:
+        raise C1ContractError("envelope_metadata_invalid")
     retention = envelope["retention_days"]
     if type(retention) is not int or not 1 <= retention <= 30:
         raise C1ContractError("envelope_retention_invalid")
@@ -346,7 +351,7 @@ def parse_withdrawal(raw: bytes) -> Record:
     if not _hex(directive["envelope_id"], 24):
         raise C1ContractError("envelope_id_invalid")
     auth_id = directive["auth_id"]
-    if not isinstance(auth_id, str) or not auth_id.strip() or len(auth_id) > 256:
+    if not isinstance(auth_id, str) or not auth_id.strip() or len(auth_id) > AUTH_ID_MAX:
         raise C1ContractError("withdraw_auth_invalid")
     if directive["reason"] not in WITHDRAW_REASONS:
         raise C1ContractError("withdraw_reason_invalid")

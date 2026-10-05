@@ -320,6 +320,12 @@ def _validate_notify(ntf: dict) -> list[str]:
                         and all(isinstance(v, str) and re.fullmatch(
                             r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}", v) for v in users)):
                     errors.append("notify.lineworks.allowed_user_ids: non-empty identifier list required")
+                names = d.get("user_names", {})
+                if not (isinstance(names, dict) and all(
+                        isinstance(k, str) and re.fullmatch(r"[A-Za-z0-9._@-]{1,128}", k)
+                        and isinstance(v, str) and 0 < len(v.strip()) <= 40
+                        for k, v in names.items())):
+                    errors.append("notify.lineworks.user_names: {userId: 表示名(40字以内)} required")
                 automatic = d.get("project_ids_auto", False)
                 if type(automatic) is not bool:
                     errors.append("notify.lineworks.project_ids_auto: must be a boolean")
@@ -429,8 +435,13 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
         # keep it as a warning so a discord->slack switch leaves a
         # visible note instead of a silently ignored config
         act = cfg["notify"].get("interactive")
+        # standalone sends to notify_target/notify_system_target through
+        # their own scope block (_validate_standalone_scope requires it)
+        used = {t.split(":", 1)[0] for t in (
+            cfg.get("notify_target"), cfg.get("notify_system_target"))
+            if isinstance(t, str)} if cfg.get("runtime_mode") == "standalone" else set()
         for other in ("discord", "slack", "lineworks"):
-            if other != act and isinstance(cfg["notify"].get(other),
+            if other != act and other not in used and isinstance(cfg["notify"].get(other),
                                            dict):
                 warnings.append(
                     f"notify.{other}: scope configured but interactive "
@@ -822,6 +833,16 @@ def _keychain_store(account: str, pw: str, *, service: str = KEYCHAIN_SERVICE) -
     if (not service.strip()
             or any(c in value for value in (account, pw, service) for c in "\r\n\x00")):
         return False
+    # Update the item the adapter's service-only read resolves to, under
+    # its own account: a first interactive init stores under "mcs" before
+    # mcs_login_id is known, and a write under another account would add
+    # a shadowed second item instead of replacing the password.
+    existing = _run(["security", "find-generic-password", "-s", service])
+    if existing.returncode == 0:
+        m = re.search(r'^\s*"acct"<blob>="(.*)"\s*$', existing.stdout or "",
+                      re.MULTILINE)
+        if m:
+            account = m.group(1)
     previous = _run(
         ["security", "find-generic-password", "-s", service,
          "-a", account, "-w"])
@@ -1064,6 +1085,15 @@ def _get_key(cfg: dict, dotted: str):
     return cur
 
 
+def _has_key(cfg: dict, dotted: str) -> bool:
+    cur = cfg
+    for part in dotted.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return False
+        cur = cur[part]
+    return True
+
+
 def _set_key(cfg: dict, dotted: str, val):
     parts = dotted.split(".")
     if val is _UNSET:
@@ -1132,10 +1162,16 @@ def _parse_answer(kind: str, raw: str):
     return True, raw
 
 
-def _ask(key: str, kind: str, default, desc: str, cur):
-    """One wizard item. Returns the value to store, or _UNSET."""
+def _ask(key: str, kind: str, default, desc: str, cur, present=False):
+    """One wizard item. Returns the value to store, or _UNSET.
+    `present`: the key exists in cfg (so cur=None is an explicit null)."""
     eff = cur if cur is not None else default
+    # explicit null on a required item is a valid stored value (e.g.
+    # semantic.project_ids: null = all projects) — Enter keeps it
+    keep_null = present and cur is None and kind.startswith("req")
     marks = []
+    if keep_null:
+        marks.append("現在: null（全対象）")
     if cur is not None:
         marks.append(f"現在: {_fmt(cur)}")
     elif eff is not None:
@@ -1151,6 +1187,8 @@ def _ask(key: str, kind: str, default, desc: str, cur):
     while True:
         raw = input(prompt).strip()
         if not raw:
+            if keep_null:
+                return None
             if kind.startswith("req") and eff is None:
                 print("    必須項目です — 値を入力してください")
                 continue
@@ -1175,7 +1213,8 @@ def _wizard(cfg: dict):
             if when is not None and not when(cfg):
                 continue
             _set_key(cfg, key,
-                     _ask(key, kind, default, desc, _get_key(cfg, key)))
+                     _ask(key, kind, default, desc, _get_key(cfg, key),
+                          _has_key(cfg, key)))
 
 
 PLUGIN_SETTINGS = "plugins.entries.mcs-discord-commands.settings"
@@ -1481,7 +1520,10 @@ def cmd_init(args) -> int:
     if not args.yes and not _guard_config(False):
         return 1
     cfg = load_config()
-    mode_before = mcs_runtime.mode(cfg)
+    try:
+        mode_before = mcs_runtime.mode(cfg)
+    except ValueError:
+        mode_before = None  # an explicit --runtime-mode may repair it
     if getattr(args, "runtime_mode", None):
         cfg["runtime_mode"] = args.runtime_mode
     if getattr(args, "recovery_python", None) is not None:
@@ -1525,6 +1567,11 @@ def cmd_init(args) -> int:
         return 1
 
     # before any secret reaches Keychain/.env
+    try:
+        mcs_runtime.mode(cfg)
+    except ValueError:
+        print("init: runtime_mode must be 'hermes' or 'standalone' — nothing written")
+        return 1
     why = _init_recovery_problem(cfg)
     if why:
         print("init: recovery_python " + why + " — nothing written")
@@ -3191,6 +3238,9 @@ def _retire_previous_runtime(prev, desired_mode, note, dry):
         if _agent_loaded(label):
             note(f"previous agent {label}: stop unverifiable — no new service started")
             return 1
+        # bootout does not persist: launchd reloads a left plist at next login
+        with suppress(FileNotFoundError):
+            os.unlink(os.path.join(AGENTS_DIR, label + ".plist"))
     if scripts:
         exe = _hermes_exe(load_config())
         entries = _cron_list(exe)
@@ -3228,7 +3278,11 @@ def _sync_standalone_service(manifest, note, dry):
         if sys.platform.startswith("linux") and changed:
             if _run(["systemctl", "--user", "daemon-reload"]).returncode:
                 return 1
-        if running:
+        # launchd keeps the definition loaded at bootstrap: a rewritten plist
+        # (moved checkout, new interpreter) takes effect only via bootout+bootstrap.
+        # A loaded label with no plist on disk keeps the non-killing start path.
+        reload = sys.platform == "darwin" and running and changed and current is not None
+        if running and not reload:
             # Synchronization also reloads changed Python sources whose service argv is unchanged.
             try:
                 request_restart(HOME)
@@ -3249,12 +3303,11 @@ def _sync_standalone_service(manifest, note, dry):
                 else:
                     note("standalone restart request failed; service was preserved")
                     return 1
-        elif not running:
-            if sys.platform == "darwin":
-                if not _agent_reconcile(STANDALONE_LABEL, path, note, False):
-                    return 1
-            elif _run(["systemctl", "--user", "enable", "--now", STANDALONE_UNIT]).returncode:
+        elif sys.platform == "darwin":
+            if not _agent_reconcile(STANDALONE_LABEL, path, note, False):
                 return 1
+        elif _run(["systemctl", "--user", "enable", "--now", STANDALONE_UNIT]).returncode:
+            return 1
         if not _standalone_loaded():
             note("standalone service did not become active")
             return 1

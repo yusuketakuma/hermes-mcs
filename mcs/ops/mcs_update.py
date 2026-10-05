@@ -1337,8 +1337,9 @@ def _hold_rollback_for_consent(state, e, tag, command_id,
     consent hold without ever restoring)."""
     rid = e.report["report_id"]
     entry = state["applying"]
-    state["applying"] = _rollback_applying(
-        entry, entry.get("sha"), command_id or entry.get("command_id"))
+    if not entry.get("rollback"):
+        state["applying"] = _rollback_applying(
+            entry, entry.get("sha"), command_id or entry.get("command_id"))
     reason += " (rollback held: consent pending " + rid[:16] + "…)"
     if command_id:
         state.setdefault("executed", {})[command_id] = {
@@ -1449,8 +1450,19 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             # the tree is already on the new code — a plain abort would
             # leave the system running NEW code while claiming nothing
             # happened; fall back to the surgical rollback path
+            entry = state["applying"]
+            if entry.get("schema_bump") and entry.get("backup_path"):
+                # journal rollback-shaped BEFORE the reset, like
+                # rollback(): a failed/interrupted DB restore must
+                # classify as head == target on the next recover pass
+                # and retry _restore_db — an apply-shaped record would
+                # read head == prev and 'finish' on the newer schema
+                state["applying"] = _rollback_applying(
+                    entry, entry.get("sha"),
+                    command_id or entry.get("command_id"))
+                journal(state, "rollback")
             try:
-                _rollback_tree(state["applying"])
+                _rollback_tree(entry)
                 reason += " (rolled back)"
             except RestoreConsentPending as e:
                 # the post-merge child may already have restarted the

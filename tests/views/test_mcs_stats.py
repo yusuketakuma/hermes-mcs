@@ -131,8 +131,8 @@ def test_med_change_followup_suppressed_by_request(db):
     _msg(db, 1, chash="h1", ts=SNAP_TS - 30 * 86400)
     _extract(db, 1, "h1", [{"name": "薬A", "action": "stop"}])
     db.execute("INSERT INTO requests(request_id,project_id,status,"
-               "due_date,updated_at,source_message_id) "
-               "VALUES (1,1,'open',NULL,0,1)")
+               "due_date,updated_at,source_message_id,created_at) "
+               "VALUES (1,1,'open',NULL,0,1,0)")
     st = run(db, stat="med_change_followup")["med_change_followup"]
     assert st["no_followup_record"]["total"] == 0
 

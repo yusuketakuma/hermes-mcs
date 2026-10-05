@@ -94,7 +94,8 @@ def _payload(root: str) -> dict:
 def send(root: str, target: str) -> int:
     cfg = config.load(root)
     transport, _ = config.channel(cfg, target)
-    config.tokens(root, transport)
+    # The Slack connector loads both tokens even to send (load_credentials).
+    config.tokens(root, transport, socket=transport == "slack")
     payload = _payload(root)
     # SDK problems surface here, before any network use: safe to retry.
     # After this point an ImportError is as unknown as any other failure.
@@ -103,6 +104,8 @@ def send(root: str, target: str) -> int:
         raise NotSent(problem)
     try:
         result = asyncio.run(_runtime(transport).send(root, target, payload))
+    except config.ConfigError:
+        raise   # setup codes keep their exit status (75 when incomplete)
     except ValueError:
         raise Refused("configuration_invalid") from None
     if result.get("result") == "delivered":
@@ -192,7 +195,8 @@ def check(root: str) -> int:
             used.add(config.channel(cfg, target)[0])
     for transport in sorted(used):
         serving = config.interactive(cfg) == transport
-        config.tokens(root, transport, socket=serving)
+        # send loads both Slack tokens too (load_credentials), not only run.
+        config.tokens(root, transport, socket=serving or transport == "slack")
         if serving:
             # The connector builds its settings with connector_settings,
             # which is stricter than config.load: validate the same rules

@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 import mcs_backup  # noqa: E402
 from mcs_requests import (  # noqa: E402
-    _text, canonical, parse_command, payload_hash, valid_hash, valid_uuid,
+    MAX_COMMAND_BYTES, _text, canonical, parse_command, payload_hash, valid_hash, valid_uuid,
 )
 
 PURPOSE = "ops.backup_restore_resume"
@@ -236,6 +236,10 @@ def approve(destination: str, *, source_sha256: str, plan_sha256: str,
             "binding": binding, "plan_sha256": plan_sha256,
             "outcome": "applied",
         }
+        # _read() refuses anything parse_command() would; never publish an
+        # unreadable receipt that would also block any later approval.
+        if len(canonical(receipt)) > MAX_COMMAND_BYTES:
+            raise RestoreConsentError("restore_receipt_too_large")
         _publish(fd, APPROVAL, receipt)
         if _binding(path, fd, source_sha256) != binding:
             raise RestoreConsentError("restore_changed_during_approval")

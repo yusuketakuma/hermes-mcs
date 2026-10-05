@@ -324,3 +324,17 @@ def test_cron_timeout_wrapper_forwards_sigterm(tmp_path):
     time.sleep(0.5)
     child = int(marker.read_text())
     assert subprocess.run(["kill", "-0", str(child)], capture_output=True).returncode != 0
+
+
+def test_retire_previous_hermes_removes_plists_so_login_does_not_reload(monkeypatch, tmp_path):
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir()
+    for label in ("ai.mcs.extract-drainer", "local.mcs-cmd"):
+        (agents / (label + ".plist")).write_text("x")
+    monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
+    monkeypatch.setattr(mcs_setup, "_run", lambda *a, **k: None)
+    monkeypatch.setattr(mcs_setup, "_agent_loaded", lambda label: False)
+    prev = {"runtime_mode": "hermes",
+            "agents": [{"label": "ai.mcs.extract-drainer"}, {"label": "local.mcs-cmd"}]}
+    assert mcs_setup._retire_previous_runtime(prev, "standalone", lambda m: None, False) == 0
+    assert list(agents.iterdir()) == []

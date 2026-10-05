@@ -28,7 +28,7 @@ CREATE TABLE artifacts (artifact_id INTEGER PRIMARY KEY, kind TEXT,
                         content TEXT, model TEXT, meta TEXT, created_at REAL);
 CREATE TABLE requests (request_id INTEGER PRIMARY KEY, project_id INTEGER,
                        status TEXT, due_date TEXT, updated_at REAL,
-                       source_message_id INTEGER);
+                       created_at REAL, source_message_id INTEGER);
 """
 
 

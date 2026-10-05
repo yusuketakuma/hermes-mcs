@@ -154,23 +154,19 @@ def cmd_capture(args) -> int:
         return 1
     view = _load_view(args.snapshot)
     try:
-        result = view.stats(vars(args))
-        # pin the resolved as_of into the stored query: unpinned it
-        # means "this snapshot's generated_at", which silently re-bases
-        # every windowed stat on each republish — pinning freezes the
-        # window so verify diffs reflect data/code, not the clock
-        query = dict(result.get("query") or {})
-        if query.get("as_of") is None:
+        # pin the resolved as_of BEFORE computing: unpinned it means
+        # "this snapshot's generated_at", which silently re-bases every
+        # windowed stat on each republish. generated_at is a float but
+        # verify replays the ISO pin via _parse_when (whole seconds), so
+        # compute at int(generated_at) too or lower window bounds differ
+        if getattr(args, "as_of", None) is None:
             from datetime import datetime
             import mcs_stats
-            gen = (result.get("snapshot") or {}).get("generated_at")
+            gen = view.meta.get("generated_at")
             if gen is not None:
-                # ISO string — _parse_when requires text with an
-                # explicit offset; int() truncation is safe because
-                # posted_at_ts is integer-second
-                query["as_of"] = datetime.fromtimestamp(
-                    gen, mcs_stats.JST).isoformat()
-        result = {**result, "query": query}
+                args.as_of = datetime.fromtimestamp(
+                    int(gen), mcs_stats.JST).isoformat()
+        result = view.stats(vars(args))
     finally:
         view.close()
     ref = {"schema": "refstat_v1", "name": args.name,

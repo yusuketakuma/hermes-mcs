@@ -25,9 +25,10 @@ import read_model
 from export_schema import project_record
 from mcs_queries import item_unverified
 from drug_map import candidate_note
+import mcs_util
 from mcs_util import loads_dict
 
-HOME = Path(os.path.expanduser("~/.mcs"))
+HOME = Path(mcs_util.HOME)
 SNAPSHOT = HOME / "data" / "snapshots" / "ledger-snapshot.db"
 OUT_DIR = HOME / "data" / "exports"
 # dated export copies are derived snapshots of the published read —

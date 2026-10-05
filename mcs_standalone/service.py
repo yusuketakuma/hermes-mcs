@@ -78,9 +78,11 @@ def render(root, platform=None):
         def quote(value):
             if any(c in value for c in "\n\r\x00"):
                 raise ValueError("standalone_service_path_invalid")
-            return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
+            return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$") + '"'
+        quote(repository)  # reject newline/NUL in the repository path too
+        # Path directives keep literal spaces/$; only %-specifiers need escaping.
         body = ("[Unit]\nDescription=Independent MCS runtime\nAfter=network-online.target\n\n"
-                "[Service]\nType=simple\nWorkingDirectory=" + quote(repository)
+                "[Service]\nType=simple\nWorkingDirectory=" + repository.replace("%", "%%") + "/."
                 + "\nExecStart=" + " ".join(quote(v) for v in argv)
                 + "\nRestart=always\nRestartSec=30\nTimeoutStopSec=3660\n"
                   "KillMode=control-group\n\n[Install]\nWantedBy=default.target\n")

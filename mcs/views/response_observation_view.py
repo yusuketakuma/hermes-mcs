@@ -63,12 +63,16 @@ def _field_unknown(metadata, field, row, as_of, max_age_s):
     body_at = _timestamp(row["updated_seen"])
     if not valid_hash(row["content_hash"]) or body_at is None:
         return "source_binding_unknown"
-    if at is None or checked is None or not body_at <= at <= checked <= as_of:
+    # observed_at is the value's first-seen time and survives unchanged
+    # re-captures, so the body is bound by checked_at (same upsert as
+    # updated_seen); freshness below still uses the first-seen time.
+    if (at is None or checked is None or not at <= checked
+            or not body_at <= checked <= as_of):
         return "source_binding_unknown"
     if row["revision_hash"] is not None:
         revision_at = _timestamp(row["revision_at"])
         if (row["revision_hash"] != row["content_hash"] or revision_at is None
-                or at <= revision_at):
+                or checked <= revision_at):
             return "source_binding_unknown"
     if as_of - at > max_age_s or as_of - checked > max_age_s:
         return "observation_stale"

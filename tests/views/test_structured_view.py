@@ -65,11 +65,12 @@ def test_unverified_only_requests_never_render_as_confirmed(db):
 
 
 def test_confirmed_requests_render_unchanged(db):
+    # owner rule 2026-10-05: the 要約 lists every request, no count cap
     joined = _render(db, {"requests": [
         {"to": "医師", "action": "a", "unverified": False},
         {"to": "医師", "action": "b"}, {"to": "医師", "action": "c"},
         {"to": "医師", "action": "d"}]})
-    assert _request_rows(joined) == ["依頼: 医師へa / 医師へb / 医師へc"]
+    assert _request_rows(joined) == ["依頼: 医師へa / 医師へb / 医師へc / 医師へd"]
 
 
 def test_request_kind_prefix_due_text_and_condition(db):
@@ -90,17 +91,12 @@ def test_request_kind_prefix_due_text_and_condition(db):
         "確認依頼:家族へデイ利用希望の確認 / "
         "看護師へ医師へ連絡(条件:血圧が160を超えるようなら翌朝までに必ず)",
         "依頼候補（未確認）: 予定:医師へ再診"]
-    # a long condition (stored cap 60) stays whole; the action gives way
-    # first and a cut is marked with …
+    # owner rule 2026-10-05: action and condition are never cut
     cond = "あ" * 60
     joined = _render(db, {"requests": [
         {"to": "医師", "action": "い" * 30, "condition": cond}]})
     assert _request_rows(joined) == [
-        f"依頼: 医師へ{'い' * 9}…(条件:{cond})"]
-    joined = _render(db, {"requests": [
-        {"to": "医師", "action": "い" * 31, "condition": "う" * 20}]})
-    assert _request_rows(joined) == [
-        f"依頼: 医師へ{'い' * 29}…(条件:{'う' * 20})"]
+        f"依頼: 医師へ{'い' * 30}(条件:{cond})"]
     # foreign/legacy artifacts: an unhashable kind and a non-string due
     # neither abort the card nor hide a renderable due_text
     joined = _render(db, {"requests": [
@@ -119,7 +115,7 @@ def test_malformed_unverified_flag_fails_closed(db):
         {"action": "c4", "unverified": "yes"},
         {"from": "家族", "unverified": True}, "not-a-dict"]})
     assert _request_rows(joined) == [
-        "依頼候補（未確認）: 文字列 / 数値 / null"]
+        "依頼候補（未確認）: 文字列 / 数値 / null / c4"]
 
 
 def test_llm_event_exclusions_are_not_overridden(db):
@@ -232,7 +228,7 @@ def test_canonical_facts_do_not_duplicate_legacy_slots(db):
     ({"polarity": "unknown", "epistemic": "unknown"}, "極性:unknown、確度:unknown"),
     ({"event_time": "2026-09-01"}, "時点:2026-09-01"),
 ])
-def test_projected_findings_keep_qualifiers_before_truncated_text(db, kind, attrs, marker):
+def test_projected_findings_keep_qualifiers_before_full_text(db, kind, attrs, marker):
     """Evidence-verified findings preserve subject, negation, certainty and time."""
     from semantic_facts import validate_facts_doc
     from semantic_projection import project_v2_doc_legacy
@@ -260,7 +256,8 @@ def test_projected_findings_keep_qualifiers_before_truncated_text(db, kind, attr
                     meta={"hash": "synthetic-hash", "engine_version": 4})
     text = "\n".join(structured_view.structured_lines(db.db, 1))
     assert marker in text and text.index(marker) < text.index(statement[:60])
-    assert statement not in text and "末尾に限定条件" not in text
+    # owner rule 2026-10-05: the statement and its evidence are never cut
+    assert statement in text and "末尾に限定条件" in text
     assert text in notify_render._structured_block(db.db, 1)["text"]
 
 
@@ -314,7 +311,7 @@ def test_canonical_finding_with_missing_id_does_not_break_render(db):
 def test_legacy_artifact_without_project_uses_message_scope(db):
     db.artifact_add("extract_llm", json.dumps({"summary": "旧形式の合成結果"}),
                     message_id=1, meta={"hash": "synthetic-hash"})
-    assert structured_view.structured_lines(db.db, 1) == ["要約: 旧形式の合成結果"]
+    assert structured_view.structured_lines(db.db, 1) == ["旧形式の合成結果"]
 
 
 @pytest.mark.parametrize("field", ["summary", "points", "events", "labs",
@@ -335,7 +332,7 @@ def test_unreadable_selected_fields_never_restore_rule_mentions(db, value):
         "symptoms": ["合成除外症状"],
         "medications": [{"name": "合成除外薬"}],
         "requests": [{"kind": "confirm", "ctx": "合成除外依頼"}]})
-    assert joined == "要約: 合成要約"
+    assert joined == "合成要約"
 
 
 def test_unhashable_labels_and_event_items_do_not_hide_valid_facts(db):

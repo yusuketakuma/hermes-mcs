@@ -305,9 +305,11 @@ def physician_viewed_status(db, project_id: int, message_id: int, *,
         return out
     physicians = {row["id"] for row in rows if isinstance(row, dict)
                   and "医師" in (row.get("professions") or [])}
+    columns = {r[1] for r in db.execute("PRAGMA table_info(message_reaction_actors)")}
+    current = " AND removed_at IS NULL" if "removed_at" in columns else ""
     viewed = {actor for actor, prof in db.execute(
         "SELECT actor_id,profession FROM message_reaction_actors "
-        "WHERE message_id=? AND reaction_type='viewed'", (message_id,))
+        "WHERE message_id=? AND reaction_type='viewed'" + current, (message_id,))
         if isinstance(prof, str) and "医師" in prof.split(", ")}
     seen = len(physicians & viewed)
     out.update(state="known", physicians=len(physicians), viewed_observed=seen,

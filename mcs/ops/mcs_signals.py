@@ -307,15 +307,22 @@ def _med_excludes(sig_cfg):
             if isinstance(x, str) and x.strip()}
 
 
+def _member_sql(col):
+    """instr() test for one ? value being an element of a ", "-joined
+    multi-value column (profession/organization)."""
+    return f"instr(', '||COALESCE({col},'')||', ', ', '||?||', ')"
+
+
 def _self_author_pred(organizations, alias="m"):
     """SQL fragment + params excluding mentions authored by configured
     own organizations — self-authored records aren't review candidates
     FOR us. Empty config -> no exclusion."""
     if not organizations:
         return "", []
-    ph = ",".join("?" * len(organizations))
-    return (f" AND COALESCE({alias}.organization,'') NOT IN ({ph})",
-            list(organizations))
+    # organization holds stations joined with ", " (mcs_adapter);
+    # match each listed station, not the whole joined string.
+    return ("".join(f" AND {_member_sql(f'{alias}.organization')}=0"
+                    for _ in organizations), list(organizations))
 
 
 def _self_post_exists(db, pid, ts, professions, organizations):
@@ -323,14 +330,11 @@ def _self_post_exists(db, pid, ts, professions, organizations):
     or a configured own-org) exists in the room after ts — visible
     engagement on the record. No identity configured -> never counts."""
     pred, params = [], []
-    if professions:
-        pred.append("profession IN ("
-                    + ",".join("?" * len(professions)) + ")")
-        params += list(professions)
-    if organizations:
-        pred.append("organization IN ("
-                    + ",".join("?" * len(organizations)) + ")")
-        params += list(organizations)
+    for col, vals in (("profession", professions),
+                      ("organization", organizations)):
+        for v in vals or ():
+            pred.append(f"{_member_sql(col)}>0")
+            params.append(v)
     if not pred:
         return False
     return db.execute(
@@ -461,7 +465,7 @@ def _med_followup(db, now, th, sig_cfg):
     for (pid, med), mids in episodes.items():
         yield _key("med_change_no_followup", pid, med), {
             "type": "med_change_no_followup", "project_id": pid,
-            "evidence": {"med": med, "message_ids": mids[:10],
+            "evidence": {"med": med, "message_ids": mids[-10:],
                          "mention_count": len(mids)},
             "context": {"window_days": th["followup_days"]},
             "note": _med_followup_note([med], th["followup_days"])}
@@ -820,6 +824,7 @@ def _adherence_concern(db, now, th, sig_cfg):
                            'patient')='patient'
               AND COALESCE(json_extract({JSON_OBJECT_SQL},'$.status'),
                            'current')!='past'
+              AND {ITEM_CONFIRMED_SQL}
               AND (json_extract({JSON_OBJECT_SQL},'$.negated') IS 1
                    OR NOT ({MED_NOT_CAPABILITY_SQL}))
             ORDER BY m.project_id, m.message_id""",
@@ -1403,7 +1408,7 @@ def _urgency_high(db, sig):
     ev = sig.get("evidence") or {}
     mids = ev.get("message_ids")
     mid = ((mids[-1] if isinstance(mids, list) and mids else None)
-           or ev.get("discharge_message_id"))
+           or ev.get("message_id") or ev.get("discharge_message_id"))
     if type(mid) is not int:
         return False
     return message_urgency(db, mid) is not None

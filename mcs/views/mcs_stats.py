@@ -546,6 +546,7 @@ def st_rx_expiry(db, scope):
     per_room = {}
     items = []
     seen = set()
+    posted_ok = {}
     for pid, mid, content in med_period_artifacts(db):
         for p, end_d in iter_period_ends(content):
             if not (today <= end_d <= horizon):
@@ -556,6 +557,15 @@ def st_rx_expiry(db, scope):
             seen.add(key)
             if scope["project_id"] is not None \
                     and pid != scope["project_id"]:
+                continue
+            if mid not in posted_ok:
+                # as_of freeze: a period posted after as_of did not
+                # exist yet; undated rows keep their treatment (_where)
+                posted_ok[mid] = db.execute(
+                    "SELECT 1 FROM messages WHERE message_id=? AND "
+                    "(posted_at_ts IS NULL OR posted_at_ts <= ?)",
+                    (mid, scope["as_of"])).fetchone() is not None
+            if not posted_ok[mid]:
                 continue
             per_room[pid] = per_room.get(pid, 0) + 1
             items.append({"project_id": pid, "message_id": mid,
@@ -593,8 +603,8 @@ def st_med_change_followup(db, scope):
             continue
         total += 1
         tracked = db.execute(
-            "SELECT 1 FROM requests WHERE source_message_id=? LIMIT 1",
-            (mid,)).fetchone()
+            "SELECT 1 FROM requests WHERE source_message_id=? "
+            "AND created_at<=? LIMIT 1", (mid, scope["as_of"])).fetchone()
         follow = db.execute(
             "SELECT COUNT(*) FROM messages WHERE project_id=? "
             "AND posted_at_ts > ? AND posted_at_ts <= ?",
@@ -619,6 +629,12 @@ def st_transition_reconciliation(db, scope):
     the same room. Co-occurrence count only — reconciliation need is
     a human decision."""
     w, p = _where(scope, "d.posted_at_ts")
+    # the ±14d window must not reach past the frozen window end either:
+    # a med change posted after until/as_of did not exist yet
+    if scope["until"] is not None:
+        w, p = w + " AND m.posted_at_ts < ?", [*p, scope["until"]]
+    elif scope.get("as_of") is not None:
+        w, p = w + " AND m.posted_at_ts <= ?", [*p, scope["as_of"]]
     grouped = transition_cooccurrences(
         db, win_s=14 * DAY_S, extra_where=w, params=p)
     items = [{"project_id": pid, "discharge_message_id": dmid,
@@ -640,8 +656,12 @@ def st_open_loop_aging(db, scope):
     those surface as due_unparseable, not silently as no_due."""
     rows = db.execute(
         "SELECT request_id, project_id, status, due_date FROM requests "
-        "WHERE status IN ('open','in_progress')" +
+        "WHERE status IN ('open','in_progress') "
+        # as_of freeze: requests registered later did not exist yet;
+        # status itself is the snapshot's, not the status at as_of
+        "AND (created_at IS NULL OR created_at <= ?)" +
         (" AND project_id = ?" if scope["project_id"] is not None else ""),
+        [scope["as_of"]] +
         ([scope["project_id"]] if scope["project_id"] is not None else [])
     ).fetchall()
     buckets = {"not_yet_due": 0, "0-7d": 0, "8-30d": 0, "31-90d": 0,
