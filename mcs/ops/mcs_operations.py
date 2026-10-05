@@ -521,7 +521,6 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
     row = db.execute(
         """SELECT artifact_id, project_id, content FROM artifacts
            WHERE kind='signal_v1' AND json_valid(meta)
-             AND json_valid(content)
              AND json_extract(meta,'$.key')=?
            ORDER BY artifact_id DESC LIMIT 1""",
         (req["signal_key"],)).fetchone()
@@ -537,9 +536,14 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
         return "signal_changed", {"signal_key": req["signal_key"],
                                   "current_artifact_id":
                                       row["artifact_id"]}
-    content = json.loads(row["content"])
+    try:
+        content = json.loads(row["content"])
+    except (ValueError, TypeError, RecursionError):
+        # Select the latest transition before validating it. An unreadable
+        # latest row must never revive an older open signal.
+        return "signal_corrupt", {"signal_key": req["signal_key"]}
     if not isinstance(content, dict):
-        # json_valid passed but the payload is a scalar/array — a corrupt
+        # The payload is a scalar/array — a corrupt
         # row must reject cleanly, not crash the whole command drain
         return "signal_corrupt", {"signal_key": req["signal_key"]}
     if content.get("state") != "open":
