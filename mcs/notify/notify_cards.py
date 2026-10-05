@@ -46,8 +46,9 @@ from mcs_queries import HOLD_PROGRESS_SET, current_extract_pred, current_v4_id
 from mcs_requests import canonical, payload_hash, positive, valid_hash
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
-    _latest_signals, _mmdd, _patient_name, _signal_evidence, _source_fp,
-    display_text, fit_parts, parts_text, plain_notice)
+    _hhmm, _latest_signals, _mmdd, _patient_name, _signal_evidence, _source_fp,
+    display_text, fit_parts, lineworks_card_split, lineworks_member_names,
+    parts_text, patient_heading, plain_notice)
 from notify_views import (
     my_tasks_view, patient_search_view, patient_summary_text, unacked_view)
 
@@ -257,21 +258,24 @@ CREATE TABLE IF NOT EXISTS notification_task_reminders(
 # labels are state-dependent (_action_rows); "defer" is retired — never
 # minted, kept so tokens on already-posted cards still resolve.
 _ACTIONS = {
-    "ack":     ("☐ 確認", "secondary", "write"),
-    "assign":  ("👤 担当する", "secondary", "write"),
-    "defer":   ("⏸ 保留", "secondary", "write"),
-    "body":    ("📄 本文表示", "secondary", "view"),
-    "tasks":   ("☑ タスク完了", "secondary", "view"),
-    "request": ("📝 タスク作成", "secondary", "write"),
-    "summary": ("🧾 患者サマリー", "secondary", "view"),
-    "report":  ("⚠ 抽出の誤りを報告", "secondary", "write"),
-    "dismiss": ("🚫 却下", "danger", "write"),
-    "prev":    ("◀ 前へ", "secondary", "view"),
-    "next":    ("次へ ▶", "secondary", "view"),
-    "mytasks": ("📋 自分のタスク", "secondary", "view"),
-    "unacked": ("🗂 未確認一覧", "secondary", "view"),
-    "search":  ("🔎 この患者を検索", "secondary", "view"),
-    "digest":  ("📊 サマリー", "secondary", "view"),
+    "ack":     ("確認する", "secondary", "write"),
+    "assign":  ("担当する", "secondary", "write"),
+    "defer":   ("保留", "secondary", "write"),
+    "body":    ("本文表示", "secondary", "view"),
+    "tasks":   ("タスク一覧", "secondary", "view"),
+    "request": ("タスク作成", "secondary", "write"),
+    "summary": ("患者の記録まとめ", "secondary", "view"),
+    "report":  ("誤りを報告", "secondary", "write"),
+    "dismiss": ("却下", "danger", "write"),
+    "prev":    ("◀ 前", "secondary", "view"),
+    "next":    ("次 ▶", "secondary", "view"),
+    "mytasks": ("自分のタスク", "secondary", "view"),
+    "unacked": ("未確認一覧", "secondary", "view"),
+    "search":  ("この患者を検索", "secondary", "view"),
+    "digest":  ("全体の新着集計", "secondary", "view"),
+    # LINE WORKS only: the adapter answers it locally with a 1:1 menu
+    # of the card's other buttons — it never reaches the runner
+    "more":    ("その他の操作", "secondary", "view"),
     # minted only inside a tasks view — never a card button; the plugin
     # supplies its own labels from the view's transitions
     "task_status": ("", "secondary", "write"),
@@ -603,8 +607,20 @@ def _card_for(db, target, scope, now) -> int:
         transport = scope["transport"]
         version = TRANSPORT_VERSIONS[transport]
         key = f"v{version}|{transport}|{payload_hash(scope)}|{key.removeprefix('v1|')}"
-    row = db.execute("SELECT card_id FROM notification_cards "
-                     "WHERE card_key=?", (key,)).fetchone()
+    row = db.execute("SELECT card_id,project_id,delivery_state "
+                     "FROM notification_cards WHERE card_key=?",
+                     (key,)).fetchone()
+    if row is not None and row["delivery_state"] == "revoked" and not (
+            positive(row["project_id"]) and db.execute(
+                "SELECT 1 FROM patients WHERE project_id=? "
+                "AND is_archived=1", (row["project_id"],)).fetchone()):
+        # a revocation stands only until a new intent arrives for a
+        # reactivated unit: retire the revoked card's key and mint a
+        # fresh card, which is never revoked and renders a new post
+        db.execute("UPDATE notification_cards SET card_key=card_key"
+                   "||'|revoked:'||card_id WHERE card_id=?",
+                   (row["card_id"],))
+        row = None
     if row is not None:
         return row["card_id"]
     cur = db.execute(
@@ -654,6 +670,8 @@ def _action_rows(db, card, content, now, context=None,
     """Button rows for a render; every button carries a fresh token.
     Buttons whose modal flow cannot pin a source (no context) are not
     emitted — a button that can never succeed is worse than none."""
+    if card["delivery_state"] == "revoked":
+        return []                          # ⛔ 取り下げ済み: nothing to press
     kind = card["kind"]
     keys = _anchor_keys(card)
     context = context or {}
@@ -661,14 +679,11 @@ def _action_rows(db, card, content, now, context=None,
     need = {"source_gen": card["source_generation"],
             "manifest_id": content["manifest_id"],
             "ui_rev": card["ui_revision"]}
-    # toggles show state: the label/style is what a glance must tell —
-    # the display model already read it for the footer
+    # labels name the action and never change; the footer states who
+    # confirmed / owns the card — style is only a secondary cue
     acked = content["toggles"]["acked"]
     assigned = content["toggles"]["assigned"]
-    if kind == "digest":
-        ack_label = "✅ このページ確認済み" if acked else "☐ このページを確認"
-    else:
-        ack_label = "✅ 確認済み" if acked else _ACTIONS["ack"][0]
+    ack_label = "このページを確認する" if kind == "digest" else None
 
     def btn(action, params=None, label=None, style=None):
         tok = _mint_token(db, card["card_id"], action, params, need, now)
@@ -682,24 +697,29 @@ def _action_rows(db, card, content, now, context=None,
             rows.append(list(row))
             row.clear()
 
-    # row 1 — state toggles (+ 📄 where no thread carries the body)
+    # row 1 — primary: 確認する · 担当する · タスク作成 · MCSで開く
     btn("ack", {"shown_kind": content["shown_kind"]}, label=ack_label,
         style="success" if acked else None)
-    btn("assign", label="👤 担当中" if assigned else None,
-        style="primary" if assigned else None)
-    if not in_thread_body:
-        # cards with a companion thread show the body inside it on
-        # delivery — the 📄 button only remains where no thread can
-        # carry it (card_thread off, failed/deleted thread)
-        btn("body")
-    flush()
-    # row 2 — actions
+    btn("assign", style="primary" if assigned else None)
     pid = card["project_id"]
     if positive(pid) and positive(context.get("source_message_id")) \
             and context.get("source_hash"):
         # a digest spans projects — a card-level request cannot pin a
         # single source, so the button is only emitted where it can work
         btn("request", {"project_id": pid})
+    if positive(pid):
+        # a plain link: no token, no runner round-trip
+        row.append({"id": "link", "ui": "link", "label": "MCSで開く",
+                    "url": project_url(pid)})
+    if card["transport"] == "lineworks":
+        btn("more")
+    flush()
+    # row 2 — secondary (a select / the LINE WORKS 1:1 menu)
+    if not in_thread_body:
+        # cards with a companion thread show the body inside it on
+        # delivery — 本文表示 only remains where no thread can carry it
+        # (card_thread off, failed/deleted thread)
+        btn("body")
     if content["toggles"]["has_tasks"]:
         # only while the thread has open tasks — the list view is the
         # thread-anchored _thread_tasks (signal/digest cards span
@@ -713,11 +733,7 @@ def _action_rows(db, card, content, now, context=None,
             and keys[0] in (context.get("signals") or {}):
         btn("dismiss", {"signal_key": keys[0]})
     flush()
-    # row 3 — MCS link + paging
-    if positive(pid):
-        # a plain link: no token, no runner round-trip
-        row.append({"id": "link", "ui": "link", "label": "🔗 MCSで開く",
-                    "url": project_url(pid)})
+    # row 3 — paging
     if content["pages"] > 1:
         # only mint buttons that can actually move — a dead nav button
         # always comes back bad_page
@@ -747,7 +763,8 @@ def _sha_text(text: str) -> str:
 
 def _split_body_chunks(text: str, limit: int = THREAD_PART_LIMIT) -> list:
     """Lossless chunks <= limit for the durable thread plan —
-    ``"".join(chunks) == text`` always holds: lines keep their trailing
+    ``"".join(chunks) == text`` holds (save a blank run too long to
+    carry, see _no_blank_chunks): lines keep their trailing
     newline and overlong lines hard-wrap, so planned parts reassemble
     byte-exact into the sealed body (the plugin sends these verbatim)."""
     chunks, cur = [], ""
@@ -773,7 +790,54 @@ def _split_body_chunks(text: str, limit: int = THREAD_PART_LIMIT) -> list:
         cur += seg
     if cur:
         chunks.append(cur)
-    return chunks
+    return _no_blank_chunks(chunks, limit)
+
+
+def _no_blank_chunks(chunks: list, limit: int) -> list:
+    """A whitespace-only chunk would be an empty post (Discord rejects
+    it): its whitespace joins a neighbouring visible character instead —
+    lossless and within ``limit``, except a blank run too long for its
+    neighbours (about 2x ``limit``), whose excess whitespace drops."""
+    out: list = []
+    queue, carry = list(chunks), ""
+    while queue:
+        c, carry = carry + queue.pop(0), ""
+        room = limit - len(out[-1]) if out else 0
+        if not c.strip():
+            # whitespace fills the previous chunk; the rest leads with that
+            # chunk's last visible character (if it has another), else
+            # rides ahead on the next visible chunk
+            if out:
+                out[-1] += c[:room]
+                c = c[room:]
+                k = len(out[-1].rstrip()) - 1
+                if c and out[-1][:k].strip():
+                    out[-1], c = out[-1][:k], out[-1][k:] + c
+                    queue.insert(0, c)
+                    continue
+            carry = c
+            continue
+        if len(c) <= limit:
+            out.append(c)
+            continue
+        lead = len(c) - len(c.lstrip())
+        if out:
+            out[-1] += c[:min(room, lead)]
+            c, lead = c[min(room, lead):], lead - min(room, lead)
+        if len(c) <= limit:
+            out.append(c)
+            continue
+        if lead >= limit:
+            # ponytail: a blank run too long for its neighbours (about
+            # 2x limit) cannot be lossless without an empty post — drop
+            # the excess whitespace only
+            c = c[lead - limit + 1:]
+        out.append(c[:limit])
+        queue.insert(0, c[limit:])
+    if not out:
+        return list(chunks)                # nothing visible at all
+    # trailing carry: whitespace that did not fit is dropped likewise
+    return out
 
 
 def _plan_attachments(db, shown) -> list:
@@ -846,9 +910,11 @@ def _thread_plan_ids(db, card, shown) -> list:
     # this card's thread/project never enter the plan
     return [r["message_id"] for r in db.execute(
         "SELECT message_id FROM messages WHERE (message_id=? OR "
-        "parent_id=?) AND project_id=? ORDER BY posted_at_ts",
+        "parent_id=?) AND project_id=? "
+        "ORDER BY message_id<>?, posted_at_ts, message_id",
         (card["root_message_id"], card["root_message_id"],
-         card["project_id"])) if r["message_id"] in wanted]
+         card["project_id"], card["root_message_id"]))
+        if r["message_id"] in wanted]
 
 
 def _prior_remote_ids(db, card) -> dict:
@@ -929,7 +995,9 @@ def _body_groups(db, card, planned, prior) -> list:
     page subset nor re-posted — and a reply the earlier rule appended to
     the post before it keeps riding that post instead of re-notifying."""
     if card["kind"] != "thread":
-        return [("legacy", list(planned))]
+        # one post per signal, keyed by the signal — a page move adds
+        # the other page's posts instead of rewriting this page's ones
+        return [(_signal_post_key(k), [k]) for k in planned]
     announced = _announced_ids(db, card) if prior else set()
     frozen = (_delivered_members(db, card, legacy=True)
               if any(k.startswith("legacy#") for k in prior) else set())
@@ -962,6 +1030,51 @@ def _body_groups(db, card, planned, prior) -> list:
     return groups
 
 
+def _signal_post_key(key) -> str:
+    return "s:" + hashlib.sha256(str(key).encode("utf-8")).hexdigest()[:16]
+
+
+def _prior_body_sha(db, card) -> dict:
+    """post key -> payload sha256 of the newest delivered body chunk."""
+    out: dict = {}
+    for r in db.execute(
+            """SELECT p.name, p.payload_sha256
+               FROM notification_render_parts p
+               JOIN notification_renders r ON r.delivery_id=p.delivery_id
+               WHERE r.card_id=? AND p.kind='body_part' AND p.name IS NOT NULL
+                 AND p.state='delivered' AND p.remote_id IS NOT NULL
+               ORDER BY r.render_rev, p.idx""", (card["card_id"],)):
+        out[r["name"]] = r["payload_sha256"]
+    return out
+
+
+def _attachment_captions(db, card, attachments) -> dict:
+    """attachment_id -> 📎 name — 患者 時刻 送信者 (取得失敗 if unavailable)."""
+    if not attachments:
+        return {}
+    ids = [a["attachment_id"] for a in attachments]
+    ph = ",".join("?" * len(ids))
+    rows = db.execute(
+        f"""SELECT a.attachment_id, m.posted_at, m.sender_name, m.project_id
+            FROM attachments a JOIN messages m ON m.message_id=a.message_id
+            WHERE a.attachment_id IN ({ph})""", ids).fetchall()
+    where = {r["attachment_id"]: r for r in rows}
+    out = {}
+    for a in attachments:
+        r = where.get(a["attachment_id"])
+        if a.get("unavailable"):
+            tail = "取得失敗"
+        elif r is not None:
+            tail = (f"{patient_heading(db, r['project_id'])} "
+                    f"{_mmdd(r['posted_at'])} {_hhmm(r['posted_at'])} "
+                    f"{(r['sender_name'] or '').strip() or '?'}")
+        else:
+            tail = ""
+        text = f"📎 {a['name']}" + (f" — {tail}" if tail else "")
+        out[a["attachment_id"]] = text[:300]
+    return out
+
+
 def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
     """Seal the ordered delivery plan into the spec: the card is always
     part 0; a thread-bound render adds the thread, every body chunk and
@@ -988,11 +1101,15 @@ def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
     update = spec["op"] == "update"
     posts = _prior_body_posts(db, card) if update else {}
     keyed = []                             # (post key, chunk)
-    if card["transport"] == "lineworks":
+    lineworks = card["transport"] == "lineworks"
+    if lineworks:
         keyed.extend(_lineworks_overflow(parts))
     for key, mids in _body_groups(db, card, planned, posts):
         man = {"shown": json.dumps(mids, ensure_ascii=False)}
-        body = _card_body_text(db, card, man, max_chars=None)[1]
+        # LINE WORKS cannot edit a post: no stamp line, so only a change
+        # of the original text or its extraction re-posts it
+        body = _card_body_text(db, card, man, max_chars=None,
+                               stamps=not lineworks)[1]
         # lossless — no chunk dropped
         keyed += [(f"{key}#{k}", c)
                   for k, c in enumerate(_split_body_chunks(body), 1)]
@@ -1006,20 +1123,31 @@ def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
         keyed.append(("truncated#1", _TRUNCATED_PART))
     parts["thread_body_parts"] = [c for _k, c in keyed]
     prior = _prior_remote_ids(db, card) if update else {}
+    same = _prior_body_sha(db, card) if update and lineworks else {}
     for i, (key, chunk) in enumerate(keyed):
         entry = {"part_id": f"body:{i + 1:04d}",
                  "kind": "body_part", "index": idx, "name": key,
                  "sha256": _sha_text(chunk),
                  "bytes": len(chunk.encode("utf-8"))}
-        if key in posts:
+        if key in posts and (not lineworks
+                             or same.get(key) == entry["sha256"]):
+            # Slack/Discord rewrite the post in place; LINE WORKS only
+            # skips a byte-identical post (it cannot edit, so any other
+            # change is posted anew)
             entry["prior_remote_id"] = posts[key]
         manifest.append(entry)
         idx += 1
+    captions = _attachment_captions(db, card, attachments)
     for a in attachments:
         entry = {"part_id": f"attach:{a['attachment_id']:04d}",
                  "kind": "attachment_part", "index": idx, **a}
+        if captions.get(a["attachment_id"]):
+            entry["caption"] = captions[a["attachment_id"]]
         rid, sha = prior.get(entry["part_id"], (None, None))
-        if rid and a.get("sha256") and sha == a["sha256"]:
+        if rid and a.get("unavailable") and entry.get("caption"):
+            # its 取得失敗 line is already in the thread — never repeat it
+            entry["prior_remote_id"] = rid
+        elif rid and a.get("sha256") and sha == a["sha256"]:
             # the same bytes are already in the thread — reuse, never
             # upload a second copy on every update render
             entry["prior_remote_id"] = rid
@@ -1030,22 +1158,22 @@ def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
 
 def _lineworks_overflow(parts) -> list:
     """[(name, chunk)] — LINE WORKS button-template text is bounded at
-    1000 characters. The exact remainder and the buttons past ten ride
-    as durable body parts, never truncated (lineworks/cards.validate)."""
-    overflow = display_text(parts)[LINEWORKS_DISPLAY:]
-    keyed = [(f"display#{i}", chunk)
-             for i, chunk in enumerate(_split_body_chunks(overflow), 1)]
-    button_count = sum(len(row) for row in parts.get("action_rows") or [])
-    keyed.extend((f"actions#{i}", "MCS 追加操作")
-                 for i in range(1, (button_count + 9) // 10))
-    return keyed
+    1000 characters. The card text breaks at a line ending with ↓ 続き;
+    the remainder rides as durable body parts, never truncated
+    (lineworks/cards.validate). Buttons beyond the card's primary ones
+    live behind その他の操作 in the 1:1 talk, not in extra room posts."""
+    rest = lineworks_card_split(display_text(parts))[1]
+    return [(f"display#{i}", chunk)
+            for i, chunk in enumerate(_split_body_chunks(rest), 1)]
 
 
 def _seed_parts(db, spec, now) -> None:
     """Persist the sealed plan rows in the same transaction as the
     render insert — restart-stable identities from the first write."""
     for p in spec["parts"]["manifest"]:
-        unavailable = p.get("unavailable") is True
+        # a captioned unavailable file is still delivered — as its
+        # visible 📎 … — 取得失敗 line
+        unavailable = p.get("unavailable") is True and not p.get("caption")
         db.execute(
             """INSERT INTO notification_render_parts(
                  delivery_id,part_id,kind,idx,payload_sha256,bytes,name,
@@ -1264,25 +1392,37 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
     # answer only the clicker can see.
     thread_on = (notify_cfg(cfg).get("card_thread") is True
                  or card["transport"] == "lineworks")
-    in_thread_body = (thread_on
-                      and card["thread_state"] not in ("failed", "deleted"))
+    # LINE WORKS has no real thread (a logical grouping only), so a
+    # failed thread part never stops its body/overflow parts
+    in_thread_body = thread_on and (
+        card["transport"] == "lineworks"
+        or card["thread_state"] not in ("failed", "deleted"))
+    containers, footer = content["containers"], content["footer"]
+    if card["transport"] == "lineworks":
+        # no silent mentions on LINE WORKS: configured names go in now
+        names = (notify_cfg(cfg).get("lineworks") or {}).get("user_names")
+        footer = [dict(f, text=lineworks_member_names(f["text"], names))
+                  if f.get("type") == "text" else f for f in footer]
+        if op == "update":
+            # a LINE WORKS update is a new post; older cards stay as-is
+            containers = _mark_reposted(containers)
     spec["parts"] = {
-        "containers": content["containers"],
+        "containers": containers,
         "action_rows": _action_rows(db, card, content, now, context,
                                     in_thread_body=in_thread_body),
-        "footer": content["footer"]
+        "footer": footer
                   + [{"type": "meta", "correlation": correlation}],
         "manifest_id": content["manifest_id"],
         "page": content["page"], "pages": content["pages"],
         "context": context,
     }
-    if any("<@" in (f.get("text") or "") for f in content["footer"]):
+    if any("<@" in (f.get("text") or "") for f in footer):
         # the footer names members as <@id> mentions — a worker must
         # render them without pinging; one that predates this key
         # rejects the spec (held) instead of sending live mentions
         spec["parts"]["mentions"] = "silent"
     if thread_on:
-        spec["parts"]["thread_name"] = (_digest_thread_name()
+        spec["parts"]["thread_name"] = (_digest_thread_name(now)
                                         if card["kind"] == "digest"
                                         else _thread_name(db, card))
     # the body travels inside the spec as individually journaled
@@ -1290,6 +1430,19 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
     # thread carries the untruncated shown-set text (T7)
     _build_part_manifest(db, card, spec, content, in_thread_body)
     return spec
+
+
+def _mark_reposted(containers) -> list:
+    """③ gains 🔄 更新版 — on the change line if there is one, else as
+    its own line right under the heading/context lines."""
+    out = [dict(c) for c in containers]
+    for c in out:
+        if c.get("type") == "text" and c["text"].startswith("🆕"):
+            c["text"] += " · 🔄 更新版"
+            return out
+    at = next((i for i, c in enumerate(out) if c.get("rule")), len(out))
+    out.insert(at, {"type": "text", "text": "🔄 更新版"})
+    return out
 
 
 def _persist_render(db, card, spec, op, rev, now):
@@ -1381,8 +1534,11 @@ def _thread_name(db, card) -> str:
     return title if len(title) <= 100 else title[:99] + "…"
 
 
-def _digest_thread_name() -> str:
-    return f"💬 アラート — {time.strftime('%m-%d')}"
+def _digest_thread_name(now) -> str:
+    # the digest is keyed by its JST day, never the host's local zone
+    from datetime import datetime
+    from mcs_queries import JST
+    return f"💬 アラート — {datetime.fromtimestamp(now, JST):%m-%d}"
 
 
 def _source_hash(db, mid, project_id) -> str | None:
@@ -1755,7 +1911,10 @@ def _notice_route_moved(render, cfg) -> bool:
             or render["transport"] != active_transport(cfg)
             or any(render[k] != scope.get(k) for k in
                    ("application_id", "channel_id", "team_id", "guild_id")
-                   if k in scope))
+                   if k in scope)
+            # begin checks the full scope (profile included) for these
+            or (render["transport"] in ("slack", "lineworks")
+                and not _scope_match(render, scope)))
 
 
 def _dispatch_notice(ledger, ev, cfg, now) -> dict:
@@ -1930,7 +2089,10 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
         if batch is not None:
             if interactive_enabled(cfg) and batch["transport"] != active_transport(cfg):
                 return {"error": "transport_mismatch"}
-            if batch["transport"] in ("slack", "lineworks") \
+            # off: active_transport() falls back to discord, so the
+            # stored scope can't match — fall through to reseat instead
+            if interactive_enabled(cfg) \
+                    and batch["transport"] in ("slack", "lineworks") \
                     and batch["scope_json"] != canonical(scope).decode():
                 return {"error": "scope_mismatch"}
             # sealed already — a flush re-entry only repairs + completes
@@ -1979,6 +2141,14 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                     (event_id, cid,
                      json.dumps(target["coverage"],
                                 ensure_ascii=False)))
+                # still archived: a revoked card can never deliver this
+                # coverage — suppress it so the intent can complete
+                db.execute(
+                    "UPDATE notification_intent_cards SET state='suppressed' "
+                    "WHERE event_id=? AND card_id=? AND state='pending' "
+                    "AND EXISTS(SELECT 1 FROM notification_cards c WHERE "
+                    "c.card_id=? AND c.delivery_state='revoked')",
+                    (event_id, cid, cid))
                 card_ids.append(cid)
                 covered.update(target["coverage"])
             if card_ids:
@@ -2229,8 +2399,10 @@ def _act_view(db, base, card, action, inputs, now, cfg=None) -> dict:
         view = my_tasks_view(db, inputs.get("name"), now,
                              inputs.get("projects"))
     elif action == "unacked":
-        view = unacked_view(db, card["transport"], now,
-                            inputs.get("projects"))
+        view = unacked_view(
+            db, card["transport"], now, inputs.get("projects"),
+            member_names=(notify_cfg(cfg).get("lineworks") or {}).get(
+                "user_names"))
     else:
         view = patient_search_view(db, card["project_id"], inputs["query"])
     return {**base, "outcome": "applied", "action": "list", "list": view}

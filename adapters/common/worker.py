@@ -543,9 +543,12 @@ class DeliveryWorker:
         spec = claim["spec"]
         for part in manifest:
             kind = part.get("kind")
-            if kind == "card" or part.get("unavailable"):
+            if kind == "card" or (part.get("unavailable")
+                                  and not part.get("caption")):
                 continue              # card mirrors the primary attempt;
-                                      # unavailable was disclosed at issue
+                                      # an uncaptioned unavailable file was
+                                      # settled at issue; a captioned one
+                                      # posts its 📎 … — 取得失敗 line
             aid = envelopes.part_attempt_id(spec["delivery_id"],
                                             part["part_id"])
             rows = records.get(aid, [])

@@ -19,7 +19,7 @@ from mcs_queries import JST, incomplete_reply_roots
 from notify_render import (
     _current_generation, _hhmm, _inline, _mmdd, _patient_name, _source_fp,
     actor_label, card_reaction_lines,
-    card_reactions, today_jst)
+    card_reactions, lineworks_member_names, today_jst)
 
 SUMMARY_CAVEAT = ("※ 取得済み投稿から自動作成した暫定集約です。未取得・未抽出・"
                   "訂正前の記録があり得るため、確定した処方一覧や依頼台帳の"
@@ -32,7 +32,7 @@ def patient_summary_text(db, project_id) -> tuple:
     tasks from the requests ledger. Missing material is said plainly —
     the text never implies completeness."""
     name = _patient_name(db, project_id) or f"project {project_id}"
-    title = f"🧾 {name} — 患者サマリー（暫定集約）"
+    title = f"{name} — 患者の記録まとめ（暫定集約）"
     lines = [SUMMARY_CAVEAT, _coverage_line(db, project_id)]
     row = db.execute(
         "SELECT content FROM artifacts WHERE kind='patient_rollup' "
@@ -217,7 +217,7 @@ def my_tasks_view(db, name, now=None, projects=None) -> dict:
     notes = ["※ 担当者欄が表示名（またはスタッフ一覧の「氏名（事業所）」）と"
              "一致するタスクだけを表示します。手入力の別表記・略称のタスクは"
              "含まれません。", _NOT_DONE_NOTE]
-    out = {"title": f"📋 自分のタスク（担当: {_inline(name, 40) or '不明'}）",
+    out = {"title": f"自分のタスク（担当: {_inline(name, 40) or '不明'}）",
            "head": [], "items": [], "more": 0, "notes": notes,
            "empty": "該当するタスクはありません。"}
     if not _norm_name(name):
@@ -268,11 +268,14 @@ def _discord_link(card) -> str | None:
 UNACKED_WINDOW_S = 7 * 86400
 
 
-def unacked_view(db, transport, now=None, projects=None) -> dict:
+def unacked_view(db, transport, now=None, projects=None,
+                 member_names=None) -> dict:
     """🗂 delivered thread/signal cards updated within the window whose
     current content carries no live acknowledgement, grouped by patient
     (oldest card's patient first), oldest first; assigned-but-unconfirmed
-    cards are marked. Digest cards span projects and are left out."""
+    cards are marked. Digest cards span projects and are left out.
+    On LINE WORKS the owner mention becomes the ``member_names`` name or
+    メンバー (``lineworks_member_names``), never the raw user id."""
     now = time.time() if now is None else now
     rows = db.execute(
         """SELECT c.*, t.owner, EXISTS (
@@ -317,7 +320,10 @@ def unacked_view(db, transport, now=None, projects=None) -> dict:
             kind = "🧵 投稿" if c["kind"] == "thread" else "🔔 アラート"
             line = f"・{kind} {at:%m-%d %H:%M}〜 未確認"
             if c["owner"]:
-                line += f"（担当中: {actor_label(c['owner'])}）"
+                owner = actor_label(c['owner'])
+                if transport == "lineworks":
+                    owner = lineworks_member_names(owner, member_names)
+                line += f"（担当中: {owner}）"
             for reaction in card_reaction_lines(reactions):
                 line += "\n  " + reaction
             line += f"\n  MCS: {project_url(pid)}"

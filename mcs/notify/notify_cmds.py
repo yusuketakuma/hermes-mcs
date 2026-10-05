@@ -344,6 +344,14 @@ def dispatch(ledger, req, cfg, root, now=None):
     if op == "part_receipt":
         return notify_transport.apply_part_receipt(ledger, req, cfg, now)
     if req.get("cmd") in HUMAN_CMDS:
+        # a confirm can outlive its preview: the kill switch, a pending
+        # restore or a transport switch since then must still refuse it
+        if (not notify_cards.interactive_enabled(cfg)
+                or notify_cards.restore_pending(root) is not None
+                or ("transport" in req
+                    and req["transport"] != notify_cards.active_transport(cfg))):
+            return {"outcome": "rejected", "error": "interactive_off",
+                    "command_id": req.get("command_id")}
         error = _human_cmd_check(req)
         if error:
             return {"outcome": "rejected", "error": error,

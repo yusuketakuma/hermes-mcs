@@ -683,9 +683,8 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
     now = time.time() if now is None else now
     if cfg is None:
         try:
-            from mcs_util import load_config
-            cfg = load_config(os.path.join(os.path.expanduser("~/.mcs"),
-                                           "config.json"))
+            import mcs_util
+            cfg = mcs_util.load_config(mcs_util.CONF_PATH)
         except Exception:
             cfg = {}
     digest = payload_hash(req)

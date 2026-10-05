@@ -148,10 +148,10 @@ def _canonical_finding_lines(llm: dict) -> list[str]:
                  (("subject", "対象"), *_LINE_ATTRS, ("event_time", "時点"))
                  if isinstance(f.get(key), str) and f[key].strip()]
         qualifier = f"（{'、'.join(attrs)}）" if attrs else ""
-        line = f"{label}｜{qualifier}{statement.strip()[:60]}"
+        line = f"{label}｜{qualifier}{statement.strip()}"
         quote = f.get("evidence_quote")
         if isinstance(quote, str) and quote.strip():
-            line += f"（根拠:{quote.strip()[:40]}）"
+            line += f"（根拠:{quote.strip()}）"
         out.append(line)
     return out
 
@@ -184,11 +184,11 @@ def _head_lines(llm: dict | None, v1: dict, urgency: str | None = None) -> list[
         lines.append(URGENCY_LABEL[urgency])
     summary = llm.get("summary")
     if isinstance(summary, str) and summary.strip():
-        lines.append(f"要約: {summary.strip()[:80]}")
+        lines.append(summary.strip())
     pts = [p.strip() for p in _items(llm, "points")
            if isinstance(p, str) and p.strip()]
     if pts:
-        lines.append("要点: " + " / ".join(p[:40] for p in pts[:3]))
+        lines.append("要点: " + " / ".join(pts))
     # LLM omissions can encode negation, subject or temporal exclusions.
     rule_events = _items(v1, "events")
     if selected:
@@ -197,7 +197,7 @@ def _head_lines(llm: dict | None, v1: dict, urgency: str | None = None) -> list[
     evs = list(dict.fromkeys(event for event in events
                              if _label(EVT_LABEL, event)))
     if evs:
-        lines.append("区分: " + "・".join(EVT_LABEL[e] for e in evs[:5]))
+        lines.append("区分: " + "・".join(EVT_LABEL[e] for e in evs))
     return lines
 
 
@@ -303,10 +303,10 @@ def _symptom_line(llm: dict, v1: dict):
             syms.append(s)
     if not syms and not neg:
         return None
-    line = "症状: " + "、".join(syms[:6])
+    line = "症状: " + "、".join(syms)
     if neg:
         line += ("　" if syms else "") + "、".join(
-            f"{n}なし" for n in neg[:4])
+            f"{n}なし" for n in neg)
     return line
 
 
@@ -344,26 +344,21 @@ def _med_lines(llm: dict, v1: dict) -> list[str]:
             for m in _items(v1, "medications")
             if isinstance(m, dict) and m.get("name"))
         unverified_meds.extend(
-            f"{RX_LABEL[a['action']]}:{a['ctx'][:18]}"
+            f"{RX_LABEL[a['action']]}:{a['ctx']}"
             for a in _items(v1, "rx_actions")
             if isinstance(a, dict) and _label(RX_LABEL, a.get("action"))
             and isinstance(a.get("ctx"), str) and a["ctx"])
     lines = []
     if meds:
-        lines.append("薬剤: " + "、".join(meds[:6]))
+        lines.append("薬剤: " + "、".join(meds))
     if unverified_meds:
-        lines.append("薬剤候補（未確認）: " + "、".join(unverified_meds[:6]))
+        lines.append("薬剤候補（未確認）: " + "、".join(unverified_meds))
     return lines
 
 
 # per-item prefix inside the 依頼: line — a plan of the poster or a
 # question is not an order to somebody (#20 order 3)
 _REQ_KIND_PREFIX = {"self_plan": "予定:", "question": "確認依頼:"}
-
-
-def _clip(text: str, cap: int) -> str:
-    """Cut text to cap chars, marking an actual cut with a trailing …."""
-    return text if len(text) <= cap else text[:cap - 1] + "…"
 
 
 def _request_lines(llm: dict, v1: dict) -> list[str]:
@@ -384,15 +379,12 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
             due = due if isinstance(due, str) and due else r.get("due_text")
             suffix = f"(期限:{due})" if isinstance(due, str) and due \
                 else ""
-            # the condition is shown in full up to its stored 60-char cap;
-            # action + condition share the 50-char item budget and the
-            # action gives way first (floor 10 so it never vanishes)
+            # owner rule 2026-10-05: the 要約 shows every word — no caps
             cond = r.get("condition")
-            cond = _clip(cond, 60) if isinstance(cond, str) else ""
+            cond = cond if isinstance(cond, str) else ""
             if cond:
                 suffix += f"(条件:{cond})"
-            action = _clip(str(r.get("action") or ""),
-                           min(30, max(10, 50 - len(cond))))
+            action = str(r.get("action") or "")
             # negated/speculative/ungrounded requests must not read as
             # confirmed; any flag other than a literal False fails closed
             (cands if item_unverified(r) else reqs).append(
@@ -400,13 +392,13 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
     # rule fallback only when the selected facts carry no request at all
     if _empty_field(llm, "requests"):
         reqs.extend(f"{_label(REQ_LABEL, r.get('kind')) or '依頼'}:"
-                    f"{r['ctx'][:24]}"
+                    f"{r['ctx']}"
                     for r in _items(v1, "requests")
                     if isinstance(r, dict) and isinstance(r.get("ctx"), str)
                     and r["ctx"])
-    lines = ["依頼: " + " / ".join(reqs[:3])] if reqs else []
+    lines = ["依頼: " + " / ".join(reqs)] if reqs else []
     if cands:
-        lines.append("依頼候補（未確認）: " + " / ".join(cands[:3]))
+        lines.append("依頼候補（未確認）: " + " / ".join(cands))
     return lines
 
 

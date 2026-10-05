@@ -293,8 +293,8 @@ def list_messages(result: dict, allowed, markdown: bool = True, *,
     projects outside this deployment's scope (``allowed(pid)`` false)
     are dropped before counting; the rest is capped with 「他N件」 (the
     runner's own overflow ``more`` is counted in, unfiltered). The title
-    is bold in Discord markdown, or in Slack mrkdwn (``*``) when
-    ``markdown`` is false."""
+    is bold in Discord markdown, in Slack mrkdwn (``*``) when
+    ``markdown`` is false, and unmarked when ``plain``."""
     view = result.get("list") or {}
     items = [i for i in view.get("items") or []
              if isinstance(i, dict) and allowed(i.get("project_id"))]
@@ -328,6 +328,9 @@ def view_answer(result: dict | None, allowed,
     if not result or result.get("outcome") != "applied" \
             or result.get("modal"):
         return None
+    # markdown=False callers send plain text (Slack plain_text / LINE
+    # WORKS): no "**" or "*" markup may reach them
+    plain = plain or not markdown
     action = result.get("action")
     if action == "digest" and isinstance(result.get("text"), str):
         # rendered by the runner from the shared display model in this

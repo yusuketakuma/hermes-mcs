@@ -739,10 +739,11 @@ def _send(argv: list[str], content: str,
     detail = (r.stderr or r.stdout or "").strip()[:400]
     if r.returncode == 2:
         raise _SendUsage(detail or "hermes send usage error")
-    if r.returncode == 75 and argv[1:2] and argv[1].endswith("/mcs_standalone/__main__.py"):
-        # EX_TEMPFAIL from the standalone sender: the platform provably
+    if r.returncode == 75 and argv[1:2] and argv[1].endswith(
+            ("/mcs_standalone/__main__.py", "/lineworks_adapter/__main__.py")):
+        # EX_TEMPFAIL from a direct sender: the platform provably
         # accepted nothing (failed before the post, or a definitive reject).
-        raise _SendFailed(detail or "standalone send not accepted")
+        raise _SendFailed(detail or "send not accepted")
     if r.returncode != 0:
         # A failed child can have delivered text or some attachments
         # before losing its response. Its exit status is not a negative ACK.

@@ -41,13 +41,15 @@ def _render(parts, transport, monkeypatch) -> str:
         _, blocks = slack_cards.render(spec)
         assert len(blocks) <= 50
         return "\n".join(
-            b["text"]["text"] if "text" in b else b["elements"][0]["text"] for b in blocks)
+            b["text"]["text"] if "text" in b else b["elements"][0]["text"]
+            for b in blocks if b["type"] != "divider")
     if transport == "discord":
         monkeypatch.setitem(sys.modules, "discord", _fake_discord())
         view = discord_cards.build_view(spec)
         texts = [child.content for child in view.items[0].children if hasattr(child, "content")]
         assert sum(map(len, texts)) <= 4000
-        return "\n".join(texts)
+        # Discord shows markup characters as same-length fullwidth look-alikes
+        return "\n".join(texts).replace("＿", "_")
     face = lineworks_cards.render(spec)
     face_text = face["text"]
     assert isinstance(face_text, str) and len(face_text) <= 1000
@@ -159,7 +161,7 @@ def test_late_urgency_updates_delivered_card_without_new_intent(led, kind):
     # Then: an update of the existing card exposes the source; it is not a new alert.
     after = _latest_render(led)
     assert after["op"] == "update" and after["render_rev"] == before["render_rev"] + 1
-    assert "緊急度: 高（AI抽出）" in notify_render.display_text(
+    assert "［緊急度高・AI判定］" in notify_render.display_text(
         json.loads(after["spec_json"])["parts"])
     assert led.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0] == count
 
@@ -186,11 +188,12 @@ def test_signal_card_and_message_notice_follow_same_current_urgency_source(
         led, _intent(led, payload={"message_ids": [100]}))
     # Then: stale/routine artifacts don't produce a high badge; sources remain distinct.
     if expected is None:
-        assert "緊急度: 高" not in face and "緊急語を含む" not in face
+        assert "緊急度高" not in face and "緊急語あり" not in face
         assert "緊急度: 高" not in text and "緊急語を含む" not in text
     else:
-        label = "AI抽出" if expected == "llm" else "機械照合"
-        assert label in face and label in text
+        # the card tag and the text notice each keep the source distinct
+        assert notify_render.URGENCY_TAG[expected] in face
+        assert ("AI抽出" if expected == "llm" else "機械照合") in text
 
 
 @pytest.mark.parametrize("field", ["content", "meta"])
@@ -274,5 +277,6 @@ def test_long_signal_explanation_cannot_hide_current_urgency_badge(led, source):
     spec = _spec(led)
     # Then: source-labeled urgency stays visible even after physical truncation.
     face = notify_render.display_text(spec["parts"])
-    assert ("AI抽出" if source == "extract_llm" else "機械照合") in face
+    assert notify_render.URGENCY_TAG[
+        "llm" if source == "extract_llm" else "rule"] in face
     assert notify_render._text_cost(spec["parts"]) <= notify_render.CARD_TEXT_BUDGET

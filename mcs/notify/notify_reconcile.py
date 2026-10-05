@@ -472,13 +472,19 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     unlinked = sum(
         1 for h in held if h["detail"].startswith(("attempt_lost",))
         and not h.get("spec_linked"))
+    # Only intents that existed at the restore point are unverifiable. Later
+    # events just wait in flush's restore gate and resume when it clears.
+    restored_at = (marker or {}).get("restored_at")
+    if type(restored_at) not in (int, float):
+        restored_at = None     # unknown restore point: hold every intent
     mass_held = 0
     if unlinked:
         mass_held = db.execute(
             "UPDATE notify_outbox SET state='failed',next_try=NULL,"
             f"{HOLD_PROGRESS_SET},updated_at=? "
-            "WHERE state='pending' AND route='interactive'",
-            ("restore_unlinked", now)).rowcount
+            "WHERE state='pending' AND route='interactive' "
+            "AND (? IS NULL OR created_at IS NULL OR created_at <= ?)",
+            ("restore_unlinked", now, restored_at, restored_at)).rowcount
         db.commit()
     # Text sends have no independent transport journal. A restored pending
     # receipt cannot prove that its content was never posted. Keep these
@@ -487,11 +493,6 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     text_held = []
     new_text_holds = 0
     import notify_flush
-    # Only intents that existed at the restore point are unverifiable. Later
-    # events just wait in flush's restore gate and resume when it clears.
-    restored_at = (marker or {}).get("restored_at")
-    if type(restored_at) not in (int, float):
-        restored_at = None     # unknown restore point: hold every intent
     for ev in db.execute(
             "SELECT * FROM notify_outbox WHERE COALESCE(route,'text')='text' "
             "AND state IN ('pending','failed')").fetchall():

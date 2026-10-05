@@ -470,13 +470,13 @@ def test_card_page_indicator_shows_position(led, tmp_path):
     card["ui_state"] = json.dumps({"page": 0})
     c = notify_render._card_content(led.db, card)
     assert c["pages"] > 1
-    ftxt = "\n".join(b.get("text") or "" for b in c["footer"])
-    assert "ページ" in ftxt and "全14件" in ftxt
-    # last page shows the final range
+    # the context line under the heading: post count, then the page
+    ctx = c["containers"][1]["text"]
+    assert ctx.startswith("14投稿") and f"1/{c['pages']}ページ" in ctx
+    # last page shows its position
     card["ui_state"] = json.dumps({"page": c["pages"] - 1})
     c = notify_render._card_content(led.db, card)
-    ftxt = "\n".join(b.get("text") or "" for b in c["footer"])
-    assert f"{c['pages']}/{c['pages']} ページ" in ftxt
+    assert f"{c['pages']}/{c['pages']}ページ" in c["containers"][1]["text"]
     # single-page card carries no page line at all
     _patient(led, 2)
     _msg(led, 200, 2)
@@ -488,7 +488,7 @@ def test_card_page_indicator_shows_position(led, tmp_path):
     c2 = notify_render._card_content(led.db, card2)
     assert c2["pages"] == 1
     assert "ページ" not in "\n".join(
-        b.get("text") or "" for b in c2["footer"])
+        b.get("text") or "" for b in c2["containers"] + c2["footer"])
 
 
 def test_fit_item_field_shrinks_as_last_resort(led):
@@ -558,7 +558,8 @@ def test_card_stale_and_bad_extraction_not_shown(led, tmp_path):
     card["ui_state"] = json.dumps({"page": 0})
     c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
-    assert "📋 要約" not in joined and "疼痛" not in joined
+    # no current extraction: each post says so instead of a stale block
+    assert joined.count("📋 要約 処理待ち") == 2 and "疼痛" not in joined
     # the card still renders the message headers (bodies stay off-card)
     assert "職員" in joined and "本文" not in joined
 
@@ -580,7 +581,8 @@ def test_card_deleted_message_hides_structured_data(led, tmp_path):
     c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     assert "（削除済み）" in joined
-    assert "📋 要約" not in joined and "疼痛" not in joined
+    # only the live reply carries a 📋 line; the deleted post none
+    assert joined.count("📋 要約") == 1 and "疼痛" not in joined
 
 
 def test_card_sender_tag_shows_time_profession_org(led, tmp_path):
@@ -613,8 +615,9 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
     assert "09-24 08:" in text
     # header -> (summary) -> stamps -> posted body, in that order
     rule = notify_render.SECTION_RULE
-    assert f"08:40 職員（薬剤師・薬局Y）\nスタンプ 未取得\n押した人: 未取得\n{rule}\n本文" in text
-    assert f"08:41 職員\nスタンプ 未取得\n押した人: 未取得\n{rule}\n本文" in text
+    assert (f"↳ 患者A 様 · 09-24 08:40 職員（薬剤師・薬局Y）\n📋 要約 処理待ち\n"
+            f"{rule}\nスタンプ 未取得\n{rule}\n本文") in text
+    assert f"08:41 職員\n📋 要約 処理待ち\n{rule}\nスタンプ 未取得\n{rule}\n本文" in text
 
 
 def test_signal_quote_shows_sender_metadata(led, tmp_path):
@@ -657,7 +660,7 @@ def test_card_signal_structured_evidence(led, tmp_path):
     assert "📋 要約" not in joined and "退院後フォローの記録" not in joined
     _, body = notify_render._card_body_text(
         led.db, card, {"shown": json.dumps(c["shown"])})
-    assert "📋 要約" in body and "要約: 状態安定" in body
+    assert "📋 要約\n・状態安定\n・要点: 経過観察" in body
     assert "退院後フォローの記録" in body        # raw body still there
 
 
@@ -679,8 +682,8 @@ def test_digest_face_groups_signals_per_patient(led):
     c = notify_render._card_content(led.db, card)
     texts = [b.get("text") or "" for b in c["containers"]
              if b["type"] == "text"]
-    assert texts.count("患者A") == 1 and texts.count("患者B") == 1
-    a_block = texts[texts.index("患者A") + 1]
+    assert texts.count("患者A 様") == 1 and texts.count("患者B 様") == 1
+    a_block = texts[texts.index("患者A 様") + 1]
     assert "note sig-a1" in a_block and "note sig-a2" in a_block
     assert c["shown"] == ["sig-a1", "sig-a2", "sig-b1"]
 
@@ -2550,7 +2553,7 @@ def test_tasks_button_only_on_thread_cards(led, tmp_path):
          / (render["delivery_id"] + ".json")).read_text())
     button = next(b for row in spec1["parts"]["action_rows"] for b in row
                   if b["id"] == "tasks")
-    assert button["label"] == "☑ タスク完了"
+    assert button["label"] == "タスク一覧"
     _patient(led, 2)
     _msg(led, 200, 2)
     _signal_row(led, "sig-nt", pid=2, mids=[200])

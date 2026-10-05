@@ -73,9 +73,23 @@ def _fake_discord():
                      url=None):
             self.custom_id = custom_id
 
+    class SelectOption:
+        def __init__(self, label=None, value=None, **_):
+            self.label, self.value = label, value
+
+    class Select:
+        def __init__(self, custom_id=None, options=(), **_):
+            self.custom_id, self.options = custom_id, list(options)
+
+    class Separator:
+        def __init__(self, visible=True, spacing=None):
+            self.visible, self.spacing = visible, spacing
+
     mod.ui = SimpleNamespace(LayoutView=LayoutView, TextDisplay=TextDisplay,
                              ActionRow=ActionRow, Container=Container,
-                             Button=Button)
+                             Button=Button, Select=Select, Separator=Separator)
+    mod.SelectOption = SelectOption
+    mod.SeparatorSpacing = SimpleNamespace(small=1, large=2)
     mod.ButtonStyle = SimpleNamespace(primary=1, secondary=2,
                                       success=3, danger=4, link=5)
     mod.AllowedMentions = SimpleNamespace(none=lambda: "no-pings")

@@ -85,7 +85,7 @@ def test_footer_is_read_only_and_unknown_labels_cannot_mention(led):
     def strip(t):
         return [ln for ln in t.split("\n") if not ln.startswith("スタンプ ")]
     assert strip(after_body) == strip(before_body)
-    assert "スタンプ ✅1 ❔1（自分 ✅❔） · 観測 " in after_body
+    assert "スタンプ ✅1 ❔1 · 自分 ✅❔ · " in after_body
     assert led.db.execute("SELECT count(*) FROM notification_acknowledgements").fetchone()[0] == 0
 
 
@@ -234,7 +234,8 @@ def test_stamps_and_busy_footer_fit_card_budget(
             spec_mod._footer_cost(content["footer"])[1]
         footer = "\n".join(item["text"] for item in content["footer"])
         assert "スタンプ 👀" in footer and "自分 " in footer and "再取得失敗" in footer
-        assert f"{page + 1}/{first['pages']} ページ" in footer
+        # the page marker sits on the context line under the heading
+        assert f"{page + 1}/{first['pages']}ページ" in content["containers"][1]["text"]
         _, body = notify_render._card_body_text(
             led.db, card, {"shown": json.dumps(content["shown"])}, max_chars=None)
         assert "合" * structured_length in body

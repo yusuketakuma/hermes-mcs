@@ -49,14 +49,14 @@ def _footer(spec):
 def test_ack_toggles_label_footer_and_withdraws(led):
     spec1 = _delivered_card(led)
     ack = _button(spec1, "ack")
-    assert (ack["label"], ack["style"]) == ("☐ 確認", "secondary")
+    assert (ack["label"], ack["style"]) == ("確認する", "secondary")
     assert "✅" not in _footer(spec1)
 
     r = _click(led, spec1, "ack", now=NOW + 1)
     assert r["outcome"] == "applied" and r["delivery_id"]
     spec2 = _spec(led)
     ack = _button(spec2, "ack")
-    assert (ack["label"], ack["style"]) == ("✅ 確認済み", "success")
+    assert (ack["label"], ack["style"]) == ("確認する", "success")
     assert "✅ 確認: <@1001>" in _footer(spec2)
     # footer names are mentions — the worker must send them silently
     assert spec2["parts"]["mentions"] == "silent"
@@ -79,7 +79,7 @@ def test_ack_toggles_label_footer_and_withdraws(led):
     assert out["withdrawn"] is True
     spec4 = _spec(led)
     assert "✅ 確認: <@U0SYN1>" in _footer(spec4)
-    assert _button(spec4, "ack")["label"] == "✅ 確認済み"
+    assert _button(spec4, "ack")["style"] == "success"
     rows = led.db.execute(
         "SELECT actor, withdrawn_at FROM notification_acknowledgements "
         "ORDER BY ack_id").fetchall()
@@ -90,7 +90,7 @@ def test_ack_toggles_label_footer_and_withdraws(led):
     _deliver(led)
     _click(led, spec4, "ack", actor=SLACK_ACTOR, now=NOW + 5)
     spec5 = _spec(led)
-    assert _button(spec5, "ack")["label"] == "☐ 確認"
+    assert _button(spec5, "ack")["style"] == "secondary"
     assert "✅" not in _footer(spec5)
 
 
@@ -98,11 +98,11 @@ def test_new_content_starts_unconfirmed(led):
     spec1 = _delivered_card(led)
     _click(led, spec1, "ack", now=NOW + 1)
     _deliver(led)
-    assert _button(_spec(led), "ack")["label"] == "✅ 確認済み"
+    assert _button(_spec(led), "ack")["style"] == "success"
     _msg(led, 102, 1, parent=100, body="新しい返信")
     notify_cards.sweep(led, CFG, now=NOW + 2)
     spec = _spec(led)
-    assert _button(spec, "ack")["label"] == "☐ 確認"
+    assert _button(spec, "ack")["style"] == "secondary"
     assert "✅" not in _footer(spec)
 
 
@@ -115,11 +115,11 @@ def test_digest_ack_label_follows_toggle(led):
     _deliver(led)
     spec = _spec(led)
     assert spec["kind"] == "digest"
-    assert _button(spec, "ack")["label"] == "☐ このページを確認"
+    assert _button(spec, "ack")["label"] == "このページを確認する"
     # a digest spans projects: no MCS link, no single-patient summary
     assert not {"link", "summary", "request"} & set(_ids(spec))
     _click(led, spec, "ack", now=NOW + 1)
-    assert _button(_spec(led), "ack")["label"] == "✅ このページ確認済み"
+    assert _button(_spec(led), "ack")["style"] == "success"
 
 
 # ---------- 👤 担当 --------------------------------------------------------
@@ -127,12 +127,12 @@ def test_digest_ack_label_follows_toggle(led):
 def test_assign_toggle_takeover_and_release(led):
     spec1 = _delivered_card(led)
     b = _button(spec1, "assign")
-    assert (b["label"], b["style"]) == ("👤 担当する", "secondary")
+    assert (b["label"], b["style"]) == ("担当する", "secondary")
 
     _click(led, spec1, "assign", now=NOW + 1)
     spec2 = _spec(led)
     b = _button(spec2, "assign")
-    assert (b["label"], b["style"]) == ("👤 担当中", "primary")
+    assert (b["label"], b["style"]) == ("担当する", "primary")
     assert "👤 担当: <@1001>" in _footer(spec2)
     # double tap on the old face: still assigned, nothing new rendered
     assert _click(led, spec1, "assign", now=NOW + 2)["absorbed"] is True
@@ -149,13 +149,13 @@ def test_assign_toggle_takeover_and_release(led):
     assert r["owner"] == B
     spec3 = _spec(led)
     assert "👤 担当: <@2002>" in _footer(spec3)
-    assert _button(spec3, "assign")["label"] == "👤 担当中"
+    assert _button(spec3, "assign")["style"] == "primary"
 
     _deliver(led)
     r = _click(led, spec3, "assign", actor=B, now=NOW + 4)   # release
     assert r["released"] is True and r["owner"] is None
     spec4 = _spec(led)
-    assert _button(spec4, "assign")["label"] == "👤 担当する"
+    assert _button(spec4, "assign")["style"] == "secondary"
     assert "👤" not in _footer(spec4)
     tri = led.db.execute("SELECT * FROM notification_triage").fetchone()
     assert tri["state"] == "open" and tri["owner"] is None
@@ -209,12 +209,12 @@ def test_withdrawn_at_migration_is_additive_and_idempotent(tmp_path):
 def test_button_rows_layout_and_link(led):
     spec = _delivered_card(led)
     rows = [[b["id"] for b in row] for row in spec["parts"]["action_rows"]]
-    # card_thread on: 📄 lives in the thread; no task yet -> no ☑;
-    # no extract_llm result -> no ⚠
-    assert rows == [["ack", "assign"], ["request", "summary"], ["link"],
+    # primary row first; card_thread on: 本文 lives in the thread; no
+    # task yet -> no タスク一覧; no extract_llm result -> no 誤りを報告
+    assert rows == [["ack", "assign", "request", "link"], ["summary"],
                     ["digest", "mytasks", "unacked", "search"]]
     link = _button(spec, "link")
-    assert link == {"id": "link", "ui": "link", "label": "🔗 MCSで開く",
+    assert link == {"id": "link", "ui": "link", "label": "MCSで開く",
                     "url": "https://www.medical-care.net/projects/medical/1"}
     assert "defer" not in _ids(spec)
     assert all(len(row) <= 5 for row in rows) and len(rows) <= 5
@@ -233,16 +233,12 @@ def test_footer_lists_open_tasks_and_tasks_button(led):
     _add_request(led, title="完了済み", status="done")
     notify_cards.sweep(led, CFG, now=NOW + 1)
     spec = _spec(led)
-    tasks_item = next(f["text"] for f in spec["parts"]["footer"]
-                      if f.get("text", "").count("📝") >= 2)
-    lines = tasks_item.splitlines()
-    assert lines[0] == ("⚠ 期限切れ 📝 期限切れの確認 — 担当 山田（みどり薬局）"
-                        " — 期限 2020-01-01")
-    # typed text can never form a mention
-    assert lines[1] == f"📝 ＜@999＞ 返信の件 — 期限 {today}"
-    assert lines[2] == "📝 三件目" and lines[3] == "📝 他1件"
-    assert "完了済み" not in tasks_item
-    assert _button(spec, "tasks")["label"] == "☑ タスク完了"
+    footer = _footer(spec)
+    # the face counts open tasks; titles live in タスク一覧
+    assert "📝 タスク 4件（期限切れ 1）" in footer
+    assert "完了済み" not in footer and "@999" not in footer
+    assert today
+    assert _button(spec, "tasks")["label"] == "タスク一覧"
     assert "mentions" not in spec["parts"]       # no member names shown
 
     led.db.execute("UPDATE requests SET status='done'")
@@ -284,7 +280,7 @@ def test_request_create_rerenders_anchored_card(led, tmp_path):
     render = _latest_render(led)
     assert render["render_rev"] == before + 1
     footer = _footer(json.loads(render["spec_json"]))
-    assert "📝 服薬状況を確認 — 担当 山田 — 期限 2026-10-01" in footer
+    assert "📝 タスク 1件" in footer
 
 
 def test_applied_command_survives_a_failed_rerender(led, tmp_path,
@@ -320,7 +316,7 @@ def test_request_click_returns_prefill_and_roster_never_persisted(
     _dispatch(led, _intent(led))
     _deliver(led)
     spec = _spec(led)
-    assert _button(spec, "request")["label"] == "📝 タスク作成"
+    assert _button(spec, "request")["label"] == "タスク作成"
     r = _click(led, spec, "request")
     assert r["modal"] is True
     assert r["form"] == {"hint": "残薬を 確認して 報告",
@@ -328,7 +324,7 @@ def test_request_click_returns_prefill_and_roster_never_persisted(
                                    "佐藤 一郎（みどり薬局）"]}
     stored = led.db.execute(
         "SELECT receipt_json FROM command_receipts WHERE command_id "
-        "LIKE ?", (spec["parts"]["action_rows"][1][0]["token"] + ":%",)
+        "LIKE ?", (_button(spec, "request")["token"] + ":%",)
     ).fetchone()["receipt_json"]
     assert "form" not in json.loads(stored) and "残薬" not in stored
 
@@ -470,7 +466,7 @@ def test_report_pins_extraction_repends_once_and_marks_card(led, tmp_path):
     assert spec["parts"]["context"]["extract_ref"] == {
         "message_id": 101, "artifact_id": aid,
         "content_hash": f"{101:064x}"}
-    assert _button(spec, "report")["label"] == "⚠ 抽出の誤りを報告"
+    assert _button(spec, "report")["label"] == "誤りを報告"
     assert _click(led, spec, "report")["modal"] is True
     assert 101 not in _pending_ids(led)
 
@@ -622,8 +618,10 @@ def test_worst_case_footer_stays_under_the_text_budget(led, tmp_path,
     notify_cards.sweep(led, CFG, now=NOW + 1)
     spec = _spec(led)
     footer = _footer(spec)
-    assert "他2名" in footer and "📝 他2件" in footer \
-        and "誤り報告" in footer and "ページ" in footer
+    containers = "\n".join(c.get("text", "")
+                           for c in spec["parts"]["containers"])
+    assert "他2名" in footer and "📝 タスク 5件（期限切れ 5）" in footer \
+        and "誤り報告" in footer and "ページ" in containers
     spec_mod.validate(spec)
     _, est = spec_mod._containers_cost(spec["parts"]["containers"])
     est += spec_mod._footer_cost(spec["parts"]["footer"])[1]

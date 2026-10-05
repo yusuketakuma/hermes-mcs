@@ -12,7 +12,7 @@ import mcs_signals
 import notify_cards
 import notify_render
 import structured_view
-from mcs_queries import FACT_KINDS_SQL, JST, current_fact_pred
+from mcs_queries import FACT_KINDS_SQL, JST, current_fact_pred, json_or_null
 from mcs_requests import positive, valid_hash
 
 
@@ -184,9 +184,7 @@ def _engagement(db, row, cfg, now):
     if mcs_signals._request_registered(db, mid):
         return "request_registered"
     self_id = mcs_signals.self_sender_id(db)
-    own_orgs = cfg.get("own_orgs") or []
-    if not isinstance(own_orgs, list) or any(not isinstance(x, str) or not x for x in own_orgs):
-        return "identity_unknown"
+    own_orgs = mcs_signals._self_sets(cfg.get("signals"), db)[0]
     if self_id is None and not own_orgs:
         return "identity_unknown"
     for post in db.execute(
@@ -296,7 +294,7 @@ def maybe_enqueue(ledger, cfg, *, now=None) -> _EnqueueResult:
             SELECT DISTINCT m.message_id FROM messages m
             JOIN artifacts a ON a.message_id=m.message_id
             WHERE a.kind IN ({FACT_KINDS_SQL}) {current_fact_pred("a", "m")}
-              AND json_extract(a.content,'$.urgency')='high' ORDER BY m.message_id""").fetchall()
+              AND json_extract({json_or_null('a.content')},'$.urgency')='high' ORDER BY m.message_id""").fetchall()
         restoring = mids and notify_cards.restore_pending(
             notify_cards.data_root(ledger)) is not None
         history = None if restoring else _history(ledger.db, opts["mode"] == "shadow")

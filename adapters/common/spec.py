@@ -71,7 +71,14 @@ PARTS_KEYS = frozenset({
     "mentions"})
 PART_ENTRY_KEYS = frozenset({
     "part_id", "kind", "index", "sha256", "bytes", "name",
-    "attachment_id", "path", "unavailable", "prior_remote_id"})
+    "attachment_id", "path", "unavailable", "prior_remote_id", "caption"})
+MAX_CAPTION = 300
+
+# Buttons a card keeps as buttons on every transport; every other
+# action goes into the transport's secondary surface (Slack/Discord
+# select, LINE WORKS 1:1 menu behind ``more``). The ``link`` button
+# (ui=link) is always primary too.
+PRIMARY_ACTIONS = ("ack", "assign", "request")
 
 STYLES = {"primary": 1, "secondary": 2, "success": 3, "danger": 4}
 _CONTAINER_TYPES = ("heading", "text", "field", "quote", "meta")
@@ -312,6 +319,10 @@ def _validate_manifest(manifest) -> None:
             # only a body chunk (rewritten in place) or an unchanged
             # attachment (reused) names its earlier post, by transport id
             _err("bad_prior_remote_id")
+        if "caption" in p and (kind != "attachment_part"
+                               or not _text(p["caption"], MAX_CAPTION)):
+            # an attachment's visible line: 📎 name — patient/post
+            _err("bad_part_caption")
         if kind == "card" and i != 0:
             _err("bad_card_part")
         if kind == "thread":

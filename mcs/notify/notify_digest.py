@@ -145,7 +145,7 @@ def _self_reaction_count(db, since, until, keep=None) -> tuple:
         "WHERE x.source='capture' AND json_valid(x.content) "
         "AND json_extract(x.content,'$.reactions.observed_at')>=? "
         "AND json_extract(x.content,'$.reactions.observed_at')<? "
-        "AND COALESCE(p.is_archived,0)=0 AND m.body_state!='deleted'",
+        "AND COALESCE(p.is_archived,0)=0 AND COALESCE(m.body_state,'')!='deleted'",
         (since, until))
     posts, counts = 0, {}
     for row in rows:
@@ -352,7 +352,8 @@ def build(db, cfg, since: float, until: float, flt=None, *,
            ORDER BY m.first_seen, m.message_id""", (since, until))
         # history imports land with first_seen now but an old post time
         if ok(r["project_id"])
-        and (floor is None or (r["posted_at_ts"] or 0) >= floor)]
+        # an unknown post time cannot be proven old (Ledger._filter_notify_age)
+        and (floor is None or not r["posted_at_ts"] or r["posted_at_ts"] >= floor)]
     urgent = [(r["project_id"], r["message_id"], u) for r in rows
               if (u := structured_view.message_urgency(db, r["message_id"]))]
 

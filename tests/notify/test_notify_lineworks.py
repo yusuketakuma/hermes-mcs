@@ -13,7 +13,7 @@ import notify_reconcile as reconcile
 import notify_transport as transport
 from hermes_plugin.mcs_delivery import envelopes, registry
 from hermes_plugin.mcs_delivery.spec import validate as validate_v1
-from notify_render import display_text
+from notify_render import display_text, lineworks_card_split
 from notify_testkit import (
     CFG, NOW, _card, _dispatch, _intent, _latest_render, _seed_thread,
     _token_for, led as led,
@@ -103,8 +103,11 @@ def test_lineworks_visible_text_overflow_is_lossless_durable_content(led, monkey
         [p for p in spec["parts"]["manifest"] if p["kind"] == "body_part"],
         spec["parts"]["thread_body_parts"], strict=True)
         if p["name"].startswith("display#")]
-    assert len(text) > 1000 and display
-    assert text[:1000] + "".join(c for _, c in display) == text
+    head, rest = lineworks_card_split(text)
+    # the card breaks at a line end with ↓ 続き; the rest rides as parts
+    assert len(text) > 1000 and display and len(head) <= 1000
+    assert head.endswith("\n↓ 続き") and "".join(c for _, c in display) == rest
+    assert text.startswith(head.removesuffix("\n↓ 続き"))
     validate_v1({**spec, "schema": cards.RENDER_SCHEMA})
 
 

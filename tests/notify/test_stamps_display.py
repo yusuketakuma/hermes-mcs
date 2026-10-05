@@ -86,7 +86,7 @@ def test_card_footer_uses_sender_id_not_same_name(led):
     body = notify_render._card_body_text(
         led.db, _card(led), {"shown": "[100, 101]"}, max_chars=None)[1]
     own, other = body.split("\n\n")
-    assert "スタンプ 👀1（自分 👀）" in own and "スタンプ 👀2（自分 👀）" in other
+    assert "スタンプ 👀1 · 自分 👀 · " in own and "スタンプ 👀2 · 自分 👀 · " in other
 
 
 def test_unreacted_own_posts_section_only_when_published(led):
@@ -301,14 +301,13 @@ def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
     body = notify_render._card_body_text(
         led.db, _card(led), {"shown": "[100, 101]"}, max_chars=None)[1]
     for post, mid, stamps in zip(body.split("\n\n"), (100, 101),
-                                 ("スタンプ 🙆2 👍1（自分 🙆） · 観測 ",
+                                 ("スタンプ 🙆2 👍1 · 自分 🙆 · ",
                                   "スタンプ 未取得")):
         lines = post.split("\n")
         assert lines[1:4] == ["📋 要約", f"・要約{mid}", notify_render.SECTION_RULE]
-        assert lines[4].startswith(stamps)
-        assert lines[5] == "押した人: 未取得"
-        assert lines[6] == notify_render.SECTION_RULE
-        assert lines[7] == led.db.execute(
+        assert lines[4].startswith(stamps)        # one merged stamp line
+        assert lines[5] == notify_render.SECTION_RULE
+        assert lines[6] == led.db.execute(
             "SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone()[0]
 
 
@@ -334,20 +333,19 @@ def test_thread_post_names_who_pressed(led, monkeypatch):
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
     body = lambda: notify_render._card_body_text(  # noqa: E731
         led.db, _card(led), {"shown": "[100]"}, max_chars=None)[1]
-    assert "押した人: 未取得" in body()                 # never walked yet
+    def stamp():
+        return next(ln for ln in body().split("\n") if ln.startswith("スタンプ "))
+    # never walked yet: counts only, one line
+    assert stamp() == "スタンプ 👀2 · 自分 🙆 · 09-21 23:12時点"
     led.save_reaction_actors(100, [
         {"actor_id": OTHER, "reaction_type": "viewed", "name": "合成 一郎", "profession": "医師"},
         {"actor_id": 9, "reaction_type": "viewed", "name": "合成 花子"},
         {"actor_id": SELF, "reaction_type": "accepted", "name": "合成 自分"}], True, now=NOW - 50)
     monkeypatch.setattr(ledger.time, "time", lambda: NOW + 86400)
-    lines = body().split("\n")
-    i = next(n for n, ln in enumerate(lines) if ln.startswith("スタンプ "))
-    assert lines[i + 1] == ("押した人（古い情報）: 👀 合成 一郎（医師）・合成 花子 / 🙆 合成 自分（自分）"
-                            " · 観測 09-21 23:12")       # pinned clock: 24h past
+    assert stamp() == ("スタンプ 👀2 合成 一郎・合成 花子 · 自分 🙆 · 押した人 古い情報"
+                       " · 09-21 23:12時点")       # pinned clock: 24h past
     monkeypatch.setattr(ledger.time, "time", lambda: NOW)
-    lines = body().split("\n")
-    assert lines[i + 1] == ("押した人: 👀 合成 一郎（医師）・合成 花子 / "
-                            "🙆 合成 自分（自分） · 観測 09-21 23:12")
+    assert stamp() == "スタンプ 👀2 合成 一郎・合成 花子 · 自分 🙆 · 09-21 23:12時点"
     footer = "\n".join(x["text"] for x in notify_render._card_content(led.db, _card(led))["footer"])
     assert "合成 一郎" not in footer
 
@@ -471,10 +469,18 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
     assert set(posts) == {100, 101}
     for mid in (100, 101):
         post = "".join(posts[mid])
-        assert f"合成本人{mid}（自分）" in post and f"合成他者{mid}＜＠UFAKE＞" in post
-        assert f"合成本人{201 - mid}" not in post
-        assert "押した人: 👀" in post and " · 観測 09-21 23:13" in post
         assert "<@" not in post and "@everyone" not in post
+        if platform == "lineworks":
+            # LINE WORKS cannot edit a post: no stamp line at all, so a
+            # stamp change never re-posts the body
+            assert "スタンプ" not in post and "合成他者" not in post
+            continue
+        assert f"合成本人{201 - mid}" not in post
+        if mid == 100:
+            # one's own post counts and names others only
+            assert "スタンプ 👀1 合成他者100＜＠UFAKE＞ · 自分 👀 · " in post
+        else:
+            assert "スタンプ 👀2 合成本人101・合成他者101＜＠UFAKE＞ · 自分 👀 · " in post
     for _, kwargs in calls:
         if platform == "slack":
             assert kwargs["link_names"] is False and kwargs["unfurl_links"] is False
@@ -543,8 +549,7 @@ def test_stamp_actor_late_names_and_fetch_state_refresh_existing_parts(led, monk
     with led.db:
         assert notify_cards._issue_render(led.db, 1, CFG, NOW, specs) is not None
     body = "".join(specs[0]["parts"]["thread_body_parts"])
-    assert "押した人（再取得失敗）: 👀 合成後着" in body
-    assert " · 観測 09-21 23:13" in body
+    assert "スタンプ 👀2 合成後着 · 押した人 取得失敗 · " in body
 
 
 def test_stamp_actor_late_name_updates_an_existing_post_outside_the_card_page(led, monkeypatch):

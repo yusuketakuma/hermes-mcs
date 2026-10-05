@@ -18,8 +18,8 @@ from ledger import reaction_actor_summary
 from mcs_queries import EXTRACT_FEEDBACK_KIND, JST, feedback_current
 from mcs_requests import payload_hash, positive
 from message_metadata import (get_message_metadata, is_self_sender,
-                              self_stamps, stamp_counts, stamp_line,
-                              actor_line)
+                              mentions_self, self_stamps, stamp_counts,
+                              thread_stamp_line, actor_line)
 import structured_view
 
 PAGE_DIGEST = 5           # digest candidates per page (count cap)
@@ -40,12 +40,34 @@ def display_text(parts: dict) -> str:
         kind = item["type"]
         if kind == "meta":
             continue
+        if item.get("rule") and lines:
+            lines.append(SECTION_RULE)
         value = (f"{item['name']}: {item['value']}"
                  if kind == "field" else item["text"])
         lines.append(f"引用: {value}" if kind == "quote" else value)
-    lines.extend(item["text"] for item in parts.get("footer") or []
-                 if item["type"] == "text")
+    footer = [item["text"] for item in parts.get("footer") or []
+              if item["type"] == "text"]
+    if footer and lines:
+        lines.append(SECTION_RULE)
+    lines.extend(footer)
     return re.sub(r"<@[^>\n]+>", "メンバー", "\n".join(lines))
+
+
+LINEWORKS_CARD_LIMIT = 1000   # button_template contentText ceiling
+LINEWORKS_MORE = "\n↓ 続き"
+
+
+def lineworks_card_split(text: str) -> tuple[str, str]:
+    """(card text, remainder) for LINE WORKS' 1000-character card: cut
+    at the last line break that leaves room for the ``↓ 続き`` marker,
+    hard-cutting only a single overlong line."""
+    if len(text) <= LINEWORKS_CARD_LIMIT:
+        return text, ""
+    room = LINEWORKS_CARD_LIMIT - len(LINEWORKS_MORE)
+    cut = text.rfind("\n", 0, room + 1)
+    if cut <= 0:
+        return text[:room] + LINEWORKS_MORE, text[room:]
+    return text[:cut] + LINEWORKS_MORE, text[cut + 1:]
 
 
 # the shared display model's text budget (adapters/common/spec.py
@@ -94,11 +116,13 @@ def fit_parts(parts: dict, limit: int = PARTS_TEXT_BUDGET) -> dict:
         c = max(lists, key=lambda c: len(bullets(c)))
         lines = c["text"].split("\n")
         folded = 0
-        if _FOLD_RE.match(lines[-1]):
-            folded = int(_FOLD_RE.match(lines[-1]).group(1))
-            lines.pop()
-        del lines[bullets({"text": "\n".join(lines)})[-1]]
-        c["text"] = "\n".join(lines + [f"・…他{folded + 1}件"])
+        marks = [i for i, ln in enumerate(lines) if _FOLD_RE.match(ln)]
+        if marks:  # may sit before a trailing note line
+            folded = int(_FOLD_RE.match(lines[marks[-1]]).group(1))
+            del lines[marks[-1]]
+        last = bullets({"text": "\n".join(lines)})[-1]
+        lines[last] = f"・…他{folded + 1}件"
+        c["text"] = "\n".join(lines)
     return out
 
 
@@ -113,6 +137,8 @@ def parts_text(parts: dict, dialect: str = "plain") -> str:
         kind = item["type"]
         if kind == "meta":
             continue
+        if item.get("rule") and lines:
+            lines.append(SECTION_RULE)
         if kind == "heading":
             lines.append(head.format(item["text"]))
         elif kind == "field":
@@ -120,10 +146,11 @@ def parts_text(parts: dict, dialect: str = "plain") -> str:
         else:
             lines.append(f"引用: {item['text']}" if kind == "quote"
                          else item["text"])
-    for item in parts.get("footer") or []:
-        if item["type"] == "text":
-            lines.extend(f"-# {ln}" if dialect == "discord" else ln
-                         for ln in item["text"].splitlines())
+    footer = [ln for item in parts.get("footer") or []
+              if item["type"] == "text" for ln in item["text"].splitlines()]
+    if footer and lines:
+        lines.append(SECTION_RULE)
+    lines.extend(f"-# {ln}" if dialect == "discord" else ln for ln in footer)
     return re.sub(r"<@[^>\n]+>", "メンバー", "\n".join(lines))
 
 
@@ -198,12 +225,12 @@ def _blocks_len(blocks) -> int:
 
 def _cap_card_text(text, cap=PAGE_TEXT_BUDGET) -> str:
     """Full text on the card, bounded only by the physical per-page
-    ceiling — an explicit marker points at 📄本文表示/原本 for the tail
+    ceiling — an explicit marker points at 本文表示/原本 for the tail
     that cannot physically fit."""
     cap = max(cap, 80)
     if len(text) <= cap:
         return text
-    return text[:cap - 1] + "…\n（省略 — 📄本文表示または原本を参照）"
+    return text[:cap - 1] + "…\n（省略 — 本文表示または原本を参照）"
 
 
 def _fit_item(blocks, budget=PAGE_TEXT_BUDGET) -> list:
@@ -256,11 +283,56 @@ def _footer_len(footer) -> int:
                for line in item["text"].splitlines())
 
 
-def _page_caption(kind, indices, page, pages, total) -> dict:
-    pos = (f"{indices[0] + 1}〜{indices[-1] + 1}件目 / 全{total}件"
-           if kind == "message_ids" else
-           f"アラート {indices[0] + 1}〜{indices[-1] + 1} / {total}名")
-    return {"type": "text", "text": f"{page + 1}/{pages} ページ（{pos}）"}
+_PAGE_RESERVE = 20        # " · 99/99ページ" plus a possible new line
+
+
+def _add_page_marker(containers, page, pages) -> None:
+    """Page position on the card's context line (② under the heading)."""
+    mark = f"{page + 1}/{pages}ページ"
+    if len(containers) > 1 and containers[1]["type"] == "text" \
+            and not containers[1].get("rule") \
+            and not containers[1]["text"].startswith("🆕"):
+        containers[1] = {**containers[1],
+                         "text": containers[1]["text"] + " · " + mark}
+    else:
+        containers.insert(1, {"type": "text", "text": mark})
+
+
+def _card_created(card):
+    try:
+        return card["created_at"]
+    except (KeyError, IndexError):
+        return None
+
+
+def _signal_tier(sig) -> str | None:
+    import mcs_signals
+    return mcs_signals.SIGNAL_TIERS.get(sig.get("type"))
+
+
+def _thread_context(db, card, msgs) -> str:
+    """② 投稿数 · 未取得の返信 · 添付件数 · 自分宛て — only facts that
+    are present; '' when there is nothing to say beyond the posts."""
+    live = [m for m in msgs if m["body_state"] != "deleted"]
+    parts = [f"{len(msgs)}投稿"] if msgs else []
+    replies = (msgs[0].get("reply_count") or 0) if msgs else 0
+    missing = replies - (len(msgs) - 1)
+    if missing > 0:
+        parts.append(f"返信未取得 {missing}件")
+    ids = [m["message_id"] for m in live]
+    if ids:
+        ph = ",".join("?" * len(ids))
+        files = db.execute(f"SELECT COUNT(*) FROM attachments "
+                           f"WHERE message_id IN ({ph})", ids).fetchone()[0]
+        if files:
+            parts.append(f"📎 {files}")
+        import mcs_signals
+        me = mcs_signals.self_sender_id(db)
+        if me is not None and any(
+                mentions_self(get_message_metadata(db, mid), me)
+                for mid in ids):
+            parts.append("@自分宛て")
+    return " · ".join(parts)
 
 
 def _structured_block(db, mid) -> dict | None:
@@ -276,6 +348,82 @@ def _structured_block(db, mid) -> dict | None:
         return None
     return {"type": "text",
             "text": "📋 要約\n" + "\n".join("・" + ln for ln in lines)}
+
+
+def _summary_block(db, mid) -> dict:
+    """📋 要約 of one post, or its visible empty state — a post with no
+    usable extraction says whether it is still queued or exhausted its
+    retries instead of silently showing nothing."""
+    block = _structured_block(db, mid)
+    if block:
+        return block
+    return {"type": "text", "text": "📋 要約 " + (
+        "作成失敗" if _extraction_failed(db, mid) else "処理待ち")}
+
+
+def _extraction_failed(db, mid) -> bool:
+    """The LLM extraction of the post's current body ran out of retries."""
+    return db.execute(
+        """SELECT 1 FROM artifacts a JOIN messages m
+             ON m.message_id=a.message_id
+           WHERE a.message_id=? AND a.kind='extract_llm'
+             AND json_valid(a.meta)
+             AND json_extract(a.meta,'$.error')=1
+             AND COALESCE(json_extract(a.meta,'$.attempts'),0)>=5
+             AND json_extract(a.meta,'$.hash') IS m.content_hash
+           LIMIT 1""", (mid,)).fetchone() is not None
+
+
+SIGNAL_TYPE_LABEL = {
+    "pharmacist_request_unanswered": "依頼への返信未記録",
+    "discharge_notice": "退院連絡",
+    "transition_reconciliation": "移行時の薬確認",
+    "med_change_no_followup": "服薬変更後の記録なし",
+    "rx_request_visibility": "処方依頼",
+    "adherence_concern": "服薬状況",
+    "symptom_after_med_change": "服薬変更後の症状",
+    "request_overdue": "期限超過",
+    "request_aging": "長期未完了",
+    "comm_concentration": "投稿集中",
+    "rx_period_expiry": "処方期限間近",
+    "rx_period_lapsed": "処方期限切れ",
+}
+SIGNAL_STATE_LABEL = {"open": "未対応", "resolved": "解消",
+                      "dismissed": "却下"}
+URGENCY_TAG = {"llm": "［緊急度高・AI判定］", "rule": "［緊急語あり］"}
+
+
+def signal_label(sig: dict) -> str:
+    """【種別】 of a signal in Japanese — never the internal type id."""
+    return "【" + SIGNAL_TYPE_LABEL.get(sig.get("type"), "アラート") + "】"
+
+
+def signal_state(sig: dict) -> str:
+    return SIGNAL_STATE_LABEL.get(sig.get("state") or "open", "状態不明")
+
+
+def _honorific(name: str) -> str:
+    return name if name.endswith(("様", "さん")) else f"{name} 様"
+
+
+def patient_heading(db, pid) -> str:
+    """患者名 様（施設）— plus ``#末尾4桁`` only when another stored
+    patient shares the name, so a same-name room is never mistaken."""
+    if not positive(pid):
+        return ""
+    r = db.execute("SELECT patient_name, station_name FROM patients "
+                   "WHERE project_id=?", (pid,)).fetchone()
+    name = ((r["patient_name"] or "").strip() if r else "")
+    if not name:
+        return f"project {pid}"
+    out = _honorific(name)
+    station = (r["station_name"] or "").strip()
+    if station:
+        out += f"（{station}）"
+    if db.execute("SELECT 1 FROM patients WHERE patient_name=? AND "
+                  "project_id!=? LIMIT 1", (r["patient_name"], pid)).fetchone():
+        out += f" #{str(pid)[-4:]}"
+    return out
 
 
 def _source_fp(db, card) -> str:
@@ -374,24 +522,21 @@ def _signal_evidence(db, sig) -> tuple[int | None, sqlite3.Row | None]:
 
 def _signal_compact(db, pid, contents: list) -> list:
     """Card-face item for one patient's candidate signals — the
-    patient name plus each signal's note (the key point). The
-    evidence quote and 📋要約 stay on the companion thread
-    (or behind the 📄本文 action when no thread carries them)."""
-    name = _patient_name(db, pid) or f"project {pid}"
+    patient line plus each signal's 【種別】note（状態）. The evidence
+    quote and 📋要約 stay on the companion thread (or behind the 本文表示
+    action when no thread carries them)."""
     lines = []
     for s in contents:
-        line = "・" + (s.get("note") or s["type"])
-        state = s.get("state")
-        if state and state != "open":
-            line += f"（{state}）"
+        line = signal_label(s)
         mid, message = _signal_evidence(db, s)
         urgency = (structured_view.message_urgency(db, mid)
                    if message is not None and mid is not None and s.get("project_id") == pid
                    else None)
         if urgency:
-            line = "・" + structured_view.URGENCY_LABEL[urgency] + " — " + line[1:]
-        lines.append(line)
-    return _fit_item([{"type": "text", "text": name},
+            line += URGENCY_TAG[urgency]
+        lines.append(f"・{line}{s.get('note') or ''}（{signal_state(s)}）")
+    return _fit_item([{"type": "text", "rule": True,
+                       "text": patient_heading(db, pid)},
                       {"type": "text", "text": "\n".join(lines)}])
 
 
@@ -400,47 +545,41 @@ def _signal_compact(db, pid, contents: list) -> list:
 SECTION_RULE = "─" * 12
 
 
-def _message_post(db, mid, m, sender, head="") -> str:
+def _message_post(db, mid, m, sender, head="", stamps=True) -> str:
     """One MCS post as a thread message, always in the owner's order
     (2026-10-03): header, 📋 summary, MCS stamps, then the posted body,
-    with SECTION_RULE between summary, stamps and body."""
+    with SECTION_RULE between summary, stamps and body. ``stamps=False``
+    leaves the stamp line out (LINE WORKS posts cannot be edited, so a
+    stamp change must not force a re-post)."""
+    title = f"{head}{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} {sender}"
     if m["body_state"] == "deleted":
-        return f"{head}{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} {sender}（削除済み）"
-    out = [f"{head}{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} {sender}"]
-    sblk = _structured_block(db, mid)
-    if sblk:
-        out += [sblk["text"], SECTION_RULE]
-    meta = get_message_metadata(db, mid)
-    sid = m["sender_id"] if "sender_id" in m.keys() else None
-    meta["own_post"] = is_self_sender(db, sid)
-    out.append(stamp_line(meta))
-    who = actor_line(reaction_actor_summary(db, mid))
-    if who:
-        out.append(who)
+        return f"{title}（削除済み）"
+    out = [title, _summary_block(db, mid)["text"]]
+    if stamps:
+        meta = get_message_metadata(db, mid)
+        sid = m["sender_id"] if "sender_id" in m.keys() else None
+        meta["own_post"] = is_self_sender(db, sid)
+        out += [SECTION_RULE,
+                thread_stamp_line(meta, reaction_actor_summary(db, mid))]
     out += [SECTION_RULE, m["body_text"] or ""]
     return "\n".join(out)
 
 
-def _signal_body(db, sig: dict) -> str:
+def _signal_body(db, sig: dict, stamps=True) -> str:
     """Full-text view of one signal — the thread post and 'body'
-    action surface: notice text, patient, the untruncated evidence
-    quote and the 📋要約 block."""
-    import mcs_signals
-    lines = [mcs_signals.signal_notice_text(sig)]
-    name = _patient_name(db, sig.get("project_id"))
-    if name:
-        lines.append(f"患者: {name}")
+    action surface: 【種別】note / state, then the evidence post."""
+    lines = [f"{signal_label(sig)}{sig.get('note') or ''} / 状態: {signal_state(sig)}"]
     mid, m = _signal_evidence(db, sig)
     if m and m["body_text"]:
-        lines.append(_message_post(db, mid, m, _sender_tag(m, db),
-                                   head="最新言及 "))
-    state = sig.get("state")
-    if state and state != "open":
-        lines.append(f"状態: {state}")
+        lines.append(_message_post(
+            db, mid, m, _sender_tag(m, db),
+            head=f"↳ {patient_heading(db, sig.get('project_id'))} · ",
+            stamps=stamps))
     return "\n".join(lines)
 
 
-def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS) -> tuple:
+def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
+                    stamps=True) -> tuple:
     """Full text of the shown set frozen into the click's manifest —
     'body' answers what the button rendered, never the card's *current*
     page, so a concurrent nav cannot swap the view under the click.
@@ -454,6 +593,7 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS) -> tuple:
         shown = []
     if card["kind"] == "thread":
         lines = []
+        head = f"↳ {patient_heading(db, card['project_id'])} · "
         for mid in shown:
             if not positive(mid):
                 continue
@@ -464,16 +604,15 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS) -> tuple:
                 (mid, card["project_id"])).fetchone()
             if m is None:
                 continue
-            lines.append(_message_post(db, mid, m, _sender_tag(m, db)))
-        name = _patient_name(db, card["project_id"]) \
-            or "project " + str(card["project_id"])
-        title = f"💬 {name} — 本文"
+            lines.append(_message_post(db, mid, m, _sender_tag(m, db),
+                                       head=head, stamps=stamps))
+        title = f"💬 {patient_heading(db, card['project_id'])} — 本文"
         text = "\n\n".join(lines)
     else:
         shown = [k for k in shown if isinstance(k, str)]
         sigs = _latest_signals(db, shown, card["project_id"])
         text = "\n\n— — —\n\n".join(
-            _signal_body(db, sigs[k]["content"]) for k in shown
+            _signal_body(db, sigs[k]["content"], stamps) for k in shown
             if k in sigs)
         title = ("アラート — 本文" if card["kind"] == "digest"
                  else "シグナル — 本文")
@@ -491,29 +630,37 @@ def _card_content(db, card) -> dict:
     if kind == "thread":
         msgs = [dict(m) for m in db.execute(
             """SELECT message_id,sender_id,sender_name,profession,organization,
-                      posted_at,body_text,body_state,
+                      posted_at,body_text,body_state,first_seen,
                       reply_count FROM messages
                WHERE (message_id=? OR parent_id=?) AND project_id=?
-               ORDER BY posted_at_ts""",
+               ORDER BY message_id<>?, posted_at_ts, message_id""",
             (card["root_message_id"], card["root_message_id"],
-             card["project_id"]))]
-        name = _patient_name(db, card["project_id"])
+             card["project_id"], card["root_message_id"]))]
         first = msgs[0] if msgs else {}
+        urgency = {structured_view.message_urgency(db, m["message_id"])
+                   for m in msgs if m["body_state"] != "deleted"}
+        tag = next((URGENCY_TAG[u] for u in ("llm", "rule") if u in urgency), "")
         containers = [{"type": "heading", "text":
-                       f"💬 {name or 'project ' + str(card['project_id'])}"
-                       f" — {_mmdd(first.get('posted_at'))}"}]
-        # no body text on the card face — a per-message header line is
-        # all that renders; 📄本文表示 answers with the full shown set
+                       f"💬 {patient_heading(db, card['project_id'])}"
+                       f" · 起点 {_mmdd(first.get('posted_at'))}"
+                       + (f" {tag}" if tag else "")}]
+        context = _thread_context(db, card, msgs)
+        if context:
+            containers.append({"type": "text", "text": context})
+        new = sum(1 for m in msgs[1:] if (m.get("first_seen") or 0)
+                  > (_card_created(card) or float("inf")))
+        if new:
+            containers.append({"type": "text", "text": f"🆕 返信+{new}"})
+        # per post: sender line + its full 📋 要約 (or its empty state)
         rendered = []
         for m in msgs:
             line = (f"{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} "
                     f"{_sender_tag(m, db)}"
-                    + (" （削除済み）" if m["body_state"] == "deleted"
+                    + ("（削除済み）" if m["body_state"] == "deleted"
                        else ""))
-            blocks = [{"type": "text", "text": line}]
-            sblk = _structured_block(db, m["message_id"])
-            if sblk:
-                blocks.append(sblk)
+            blocks = [{"type": "text", "rule": True, "text": line}]
+            if m["body_state"] != "deleted":
+                blocks.append(_summary_block(db, m["message_id"]))
             rendered.append(_fit_item(blocks))
         item_shown = [[m["message_id"]] for m in msgs]
         max_count = PAGE_THREAD
@@ -524,7 +671,7 @@ def _card_content(db, card) -> dict:
         ordered = [k for k in keys if k in sigs]
         # one face item per patient — the card stays at key points;
         # the evidence quote and 📋要約 ride the companion thread
-        # (or the 📄本文 action when no thread carries them)
+        # (or the 本文表示 action when no thread carries them)
         groups, gidx = [], {}
         for k in ordered:
             pid = sigs[k]["content"].get("project_id")
@@ -535,10 +682,13 @@ def _card_content(db, card) -> dict:
         rendered = [_signal_compact(
             db, pid, [sigs[k]["content"] for k in ks])
             for pid, ks in groups]
+        urgent = any(_signal_tier(sigs[k]["content"]) == "immediate"
+                     for k in ordered)
         containers = [{"type": "heading", "text":
                        (f"💬 アラート（{len(groups)}名 / "
                          f"{len(ordered)}件）"
-                        if kind == "digest" else "アラート")}]
+                        if kind == "digest" else "💬 アラート")
+                       + (" ［要確認］" if urgent else "")}]
         item_shown = [ks for _, ks in groups]
         max_count = PAGE_DIGEST if kind == "digest" else PAGE_THREAD
         shown_kind = "signal_keys"
@@ -554,11 +704,10 @@ def _card_content(db, card) -> dict:
         for p, indices in enumerate(pages_idx):
             shown = [key for i in indices for key in item_shown[i]]
             footer, toggles = _footer(db, card, shown, generation)
-            if len(pages_idx) > 1:
-                footer.append(_page_caption(
-                    shown_kind, indices, p, len(pages_idx), len(rendered)))
             page_states.append((shown, footer, toggles))
+        # the page marker joins the context line after paging; reserve it
         budget = min(budget, CARD_TEXT_BUDGET - _blocks_len(containers)
+                     - _PAGE_RESERVE
                      - max(_footer_len(state[1]) for state in page_states))
         if all(sum(_blocks_len(rendered[i]) for i in indices) <= budget
                for indices in pages_idx):
@@ -570,6 +719,8 @@ def _card_content(db, card) -> dict:
     pages = len(pages_idx)
     page = _page(ui, pages, default=pages - 1 if kind == "thread" else 0)
     shown, footer, toggles = page_states[page]
+    if pages > 1:
+        _add_page_marker(containers, page, pages)
     for i in pages_idx[page]:
         containers.extend(rendered[i])
     # Names belong to each post's body, never the aggregate card footer.
@@ -597,6 +748,20 @@ def _current_generation(card, source_fp) -> int:
 
 
 _DISCORD_UID = re.compile(r"[0-9]{1,20}")
+_LINEWORKS_UID = re.compile(r"[A-Za-z0-9._@-]{1,128}")
+_MENTION = re.compile(r"<@([^>\n]+)>")
+
+
+def lineworks_member_names(text: str, names) -> str:
+    """LINE WORKS has no silent mention: ``<@user>`` becomes the member
+    name configured in ``notify.lineworks.user_names`` or メンバー."""
+    names = names if isinstance(names, dict) else {}
+
+    def name(m):
+        value = names.get(m.group(1))
+        return value.strip()[:40] if isinstance(value, str) and value.strip() \
+            else "メンバー"
+    return _MENTION.sub(name, text)
 _SLACK_UID = re.compile(r"[UW][A-Z0-9]{1,30}")
 UNKNOWN_ACTOR = "不明なユーザー"
 
@@ -614,6 +779,12 @@ def actor_label(actor) -> str:
     if kind == "slack":
         uid = rest.rpartition(":")[2]          # slack:<team>:<user>
         if ":" in rest and _SLACK_UID.fullmatch(uid):
+            return f"<@{uid}>"
+    if kind == "lineworks":
+        uid = rest.partition(":")[2]           # lineworks:<team>:<user>
+        if _LINEWORKS_UID.fullmatch(uid):
+            # the runner swaps it for the configured member name before
+            # a LINE WORKS card is sealed (lineworks_member_names)
             return f"<@{uid}>"
     return UNKNOWN_ACTOR
 
@@ -664,7 +835,7 @@ def card_reactions(db, card, shown=None) -> list:
             params.extend(shown)
         mids = [r[0] for r in db.execute(
             "SELECT message_id FROM messages WHERE project_id=? "
-            "AND (message_id=? OR parent_id=?) AND body_state!='deleted' "
+            "AND (message_id=? OR parent_id=?) AND body_state IS NOT 'deleted' "
             + selected + " ORDER BY posted_at_ts,message_id", params)]
     else:
         keys = shown if shown is not None else _anchor_keys(card)
@@ -757,48 +928,46 @@ def _footer(db, card, shown, generation) -> tuple:
     button faces show (acked / assigned / has_tasks), handed to
     notify_cards._action_rows so a render queries it once. Not part of
     the content fingerprint: the footer text already carries it."""
-    out = []
+    lines, who = [], []
     tri = db.execute(
         "SELECT owner,state,defer_until,last_actor FROM notification_triage"
         " WHERE card_id=?", (card["card_id"],)).fetchone()
     if tri and tri["state"] == "assigned" and tri["owner"]:
-        out.append({"type": "text",
-                    "text": f"👤 担当: {actor_label(tri['owner'])}"})
+        who.append(f"👤 担当: {actor_label(tri['owner'])}")
     elif tri and tri["state"] == "deferred" and tri["defer_until"]:
         # legacy state — 保留 is no longer offered; the sweep reopens it
-        until = time.strftime("%m-%d %H:%M",
-                              time.localtime(tri["defer_until"]))
-        out.append({"type": "text", "text": f"⏸ 保留中（〜{until}）"})
+        from datetime import datetime
+        until = datetime.fromtimestamp(
+            tri["defer_until"], JST).strftime("%m-%d %H:%M")
+        who.append(f"⏸ 保留中（〜{until}）")
     ackers = current_ackers(db, card["card_id"], generation, shown)
     if ackers:
         names = "・".join(actor_label(a) for a in ackers[:FOOTER_ACKERS])
         if len(ackers) > FOOTER_ACKERS:
             names += f" 他{len(ackers) - FOOTER_ACKERS}名"
-        out.append({"type": "text", "text": "✅ 確認: " + names})
-    reactions = card_reaction_lines(card_reactions(db, card, shown))
-    if reactions:
-        out.append({"type": "text", "text": "\n".join(reactions)})
+        who.append("✅ 確認: " + names)
+    if who:
+        lines.append(" · ".join(who))
+    work = []
     tasks = open_tasks(db, card)
     if tasks:
-        # one footer item — every line costs a component slot otherwise
         today = today_jst()
-        lines = []
-        for t in tasks[:FOOTER_TASKS]:
-            line = "📝 " + _inline(t["title"], 30)
-            if t["assignee"]:
-                line += " — 担当 " + _inline(t["assignee"], 40)
-            if t["due_date"]:
-                line += " — 期限 " + _inline(t["due_date"], 10)
-                if t["due_date"] < today:
-                    line = "⚠ 期限切れ " + line
-            lines.append(line)
-        if len(tasks) > FOOTER_TASKS:
-            lines.append(f"📝 他{len(tasks) - FOOTER_TASKS}件")
-        out.append({"type": "text", "text": "\n".join(lines)})
+        late = sum(1 for t in tasks if t["due_date"] and t["due_date"] < today)
+        work.append(f"📝 タスク {len(tasks)}件"
+                    + (f"（期限切れ {late}）" if late else ""))
+    work.extend(card_reaction_lines(card_reactions(db, card, shown)))
+    if work:
+        lines.append(" · ".join(work))
     if feedback_pending(db, card):
-        out.append({"type": "text", "text": "⚠ 誤り報告あり（再抽出待ち）"})
+        lines.append("⚠ 誤り報告あり・再抽出待ち")
+    if card["kind"] == "thread" and db.execute(
+            "SELECT 1 FROM patients WHERE project_id=? "
+            "AND fetch_state='incomplete'", (card["project_id"],)).fetchone():
+        lines.append("⚠ 履歴取得未完了")
     if card["delivery_state"] == "revoked":
-        out.append({"type": "text", "text": "（取り下げ済み）"})
+        lines.append("⛔ 取り下げ済み")
+    # one footer item: every item costs a component slot on Discord
+    out = [{"type": "text", "text": "\n".join(lines)}] if lines else []
     return out, {"acked": bool(ackers), "has_tasks": bool(tasks),
                  "assigned": bool(tri and tri["state"] == "assigned"
                                   and tri["owner"])}

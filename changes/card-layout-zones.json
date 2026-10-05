@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "通知カードの画面配置を整理",
+  "summary": "カードを「患者と投稿の概要」「投稿ごとの要約」「担当・確認・タスクの状態」「操作」の順に並べ、区切りを入れました。見出しに施設名と起点日、同名の患者がいる場合は識別番号の末尾、緊急度（AI判定／緊急語）を表示します。見出しの下には投稿数・未取得の返信・添付件数・自分宛てのメンション・ページ位置、カード作成後に増えた返信数を出します。担当・確認・タスク件数（期限切れ件数）・スタンプは1つの状態欄にまとめ、履歴取得の失敗と取り下げも状態欄に示します。",
+  "upgrade": "Slack・DiscordはHermes gatewayの再起動（独立モードは常駐プロセスの再起動）、LINE WORKSは独立アダプターの再起動が必要です。再起動前の古いworkerは新しい形式のカードを保留し、再起動後に配信します。配信済みのカードは次に内容が更新されたときに新しい配置になります。",
+  "details": [
+    "表示モデルの容器に任意キー rule を追加し、Slackはdivider、DiscordはSeparator、文字表示は罫線で区切る。",
+    "ページ表示を状態欄から見出し下の行へ移動。状態欄は1項目にまとめてDiscordの部品数を節約。",
+    "取り下げ済みカードには操作ボタンを出さない。"
+  ],
+  "refs": ["mcs/notify/notify_render.py", "mcs/notify/notify_cards.py", "adapters/slack/cards.py", "adapters/discord/cards.py", "adapters/lineworks/cards.py"]
+}

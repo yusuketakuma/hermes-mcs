@@ -574,10 +574,10 @@ def test_unavailable_attachment_disclosed_not_omitted(led):
            if p["kind"] == "attachment_part"]
     assert len(att) == 1
     assert att[0].get("unavailable") is True
+    # disclosed in the thread as its own visible line — never dropped
+    assert att[0]["caption"] == "📎 gone.txt — 取得失敗"
     row = _part(led, render["delivery_id"], att[0]["part_id"])
-    assert row["state"] == "not_sent"
-    assert row["error_code"] == "attachment_unavailable"
-    # disclosed as incomplete for this generation — never silently dropped
+    assert row["state"] == "pending" and row["error_code"] is None
     _begin_and_deliver_card(led, render)
     _part_receipt(led, render, "thread", remote_id="t-1", n=64)
     for p in _parts(led, render["delivery_id"]):
@@ -585,7 +585,17 @@ def test_unavailable_attachment_disclosed_not_omitted(led):
             _part_receipt(led, render, p["part_id"], remote_id="b", n=65)
     assert led.db.execute(
         "SELECT parts_state FROM notification_renders WHERE delivery_id=?",
-        (render["delivery_id"],)).fetchone()["parts_state"] == "incomplete"
+        (render["delivery_id"],)).fetchone()["parts_state"] != "complete"
+    _part_receipt(led, render, att[0]["part_id"], remote_id="cap", n=66)
+    assert led.db.execute(
+        "SELECT parts_state FROM notification_renders WHERE delivery_id=?",
+        (render["delivery_id"],)).fetchone()["parts_state"] == "complete"
+    # an update render reuses the delivered line instead of repeating it
+    _msg(led, 300, parent=100, body="新しい記録")
+    _dispatch(led, _intent(led, payload={"message_ids": [300]}))
+    again = [p for p in _spec(_latest_render(led))["parts"]["manifest"]
+             if p["kind"] == "attachment_part"]
+    assert again[0]["prior_remote_id"] == "cap"
 
 
 def test_pending_download_not_in_manifest(led):
