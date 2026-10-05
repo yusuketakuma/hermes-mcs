@@ -361,11 +361,11 @@
     {
       "path": "tests/ops/test_mcs_setup.py",
       "status": "PARTIAL",
-      "full_content_read": false,
+      "full_content_read": true,
       "read_ranges": [
         [
-          720,
-          1195
+          1,
+          2233
         ]
       ],
       "reviewed_sha256": "da912141c4cfed9c4da1d3bd2ed85bc8205190d598f0d8658c33ca9555e90cee",
@@ -403,11 +403,11 @@
     {
       "path": "mcs_standalone/__main__.py",
       "status": "PARTIAL",
-      "full_content_read": false,
+      "full_content_read": true,
       "read_ranges": [
         [
           1,
-          190
+          271
         ]
       ],
       "reviewed_sha256": "047a53a9638dafb98d86d7d5735bd164a028e7cc277c2e662a7374a9aa9f3a35",
@@ -427,6 +427,118 @@
       ],
       "reviewed_sha256": "c554729bc75c432e737b810dccc3ad813c5d6a96bc5043ec4b82c17cb97a70bd",
       "lines": 556
+    },
+    {
+      "path": "tests/ops/test_mcs_update.py",
+      "status": "PARTIAL",
+      "review_note": "Full text read; module criteria/caller verification in progress",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          2313
+        ]
+      ],
+      "reviewed_sha256": "e1cbb7bc1692a3eff2a4e5bc9280b7259cb04750f728af7d751c736514db0257",
+      "lines": 2313
+    },
+    {
+      "path": "tests/ops/test_mcs_setup_standalone.py",
+      "status": "PARTIAL",
+      "review_note": "Full text read; module criteria/caller verification in progress",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          326
+        ]
+      ],
+      "reviewed_sha256": "88f9a33d50e1f78b298ead57c40ecabd1c05967bf6a6cb2b8aeb068336e523f2",
+      "lines": 326
+    },
+    {
+      "path": "tests/ops/test_mcs_setup_lineworks.py",
+      "status": "PARTIAL",
+      "review_note": "Full text read; module criteria/caller verification in progress",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          148
+        ]
+      ],
+      "reviewed_sha256": "16e24f4fbdf9ecdf22aacf82cb8a4af1f201ae553a71c56b55635b74d1d954af",
+      "lines": 148
+    },
+    {
+      "path": "tests/ops/test_mcs_setup_urgency.py",
+      "status": "PARTIAL",
+      "review_note": "Full text read; module criteria/caller verification in progress",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          24
+        ]
+      ],
+      "reviewed_sha256": "9acf10f45b9aeda9e17738ff13d7b42559e8199c4af196212a5dfc73bca58b6b",
+      "lines": 24
+    },
+    {
+      "path": "tests/ops/test_mcs_setup_doctor.py",
+      "status": "PARTIAL",
+      "review_note": "Full text read; module criteria/caller verification in progress",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          116
+        ]
+      ],
+      "reviewed_sha256": "53b6a99456ae7bcc4139a31ed84fc0980e1afd03ca5976041f409f736d0b4d2b",
+      "lines": 116
+    },
+    {
+      "path": "tests/ops/test_lifecycle_standalone.py",
+      "status": "PARTIAL",
+      "review_note": "Full text read; module criteria/caller verification in progress",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          109
+        ]
+      ],
+      "reviewed_sha256": "2c68ad8f82e8dde4452c8c3b631826450578843a1a36bf30c043b0119e004d0c",
+      "lines": 109
+    },
+    {
+      "path": "mcs_standalone/service.py",
+      "status": "PARTIAL",
+      "review_note": "Full text read; module criteria/caller verification in progress",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          88
+        ]
+      ],
+      "reviewed_sha256": "7e309d128e12ac77d2774caa3c7baa2b6f2794172ecc2549a42db43d9692a35a",
+      "lines": 88
+    },
+    {
+      "path": "deployment/launchagents/org.mcs.recovery.plist",
+      "status": "PARTIAL",
+      "review_note": "Full text read; module criteria/caller verification in progress",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          18
+        ]
+      ],
+      "reviewed_sha256": "c873f8e40dcf869f3447f00ad63b58524b43c5e383b571d30bac87e000145aa7",
+      "lines": 18
     }
   ],
   "confirmed_fixes": [

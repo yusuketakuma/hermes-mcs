@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "PARTIAL": 88,
+      "PARTIAL": 89,
       "EXCLUDED": 2,
-      "UNSEEN": 617,
-      "REVIEWED": 137
+      "UNSEEN": 580,
+      "REVIEWED": 176
     },
-    "candidate_tracked": 842
+    "candidate_tracked": 845
   },
   "files": [
     {
@@ -6001,9 +6001,28 @@
       "lines": 329,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "17359c2920443794e8b8ab709e9d6a6675f0a6799cccb86b683c5cea8915f8bf",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          329
+        ]
+      ],
+      "responsibility": "根拠・revisionに結合した薬剤/症状の次元評価とJev結果cache。確認済みfact自体の書換えや承認はしない。",
+      "callers_or_consumers": [
+        "mcs/semantic/semantic_drain.py",
+        "tests/semantic/test_semantic_assessment.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_audit.py",
@@ -6061,9 +6080,27 @@
       "lines": 394,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "d8bb8b320266ed0f4c8371e8450eb8b41137feca60218d33b26d1e8ff55b1a02",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          190
+        ],
+        [
+          191,
+          394
+        ]
+      ],
+      "responsibility": "固定合成corpusの抽出/要約/監査指標、検知probeと読み取り専用の校正分布。corpus/runの安全な入力境界。",
+      "callers_or_consumers": [
+        "tests/semantic/test_semantic_bench.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_blind.py",
@@ -6072,9 +6109,28 @@
       "lines": 426,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "07c85a44880fd8d6f480f72aadda9bccad3ecdcdb01347fd1adf0c5c7483ba5d",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          215
+        ],
+        [
+          216,
+          426
+        ]
+      ],
+      "responsibility": "固定bundleでの3方式盲検票・独立coordinator key・改変検出・明示snapshotの読み取り・human labelsの厳密結合。",
+      "callers_or_consumers": [
+        "tests/semantic/test_semantic_blind.py",
+        "tests/semantic/test_semantic_lifecycle.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_drain.py",
@@ -6172,9 +6228,54 @@
       "lines": 1172,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "6e97b38b5c3ac89e84c66b05a4ba7192e6fabbc30c18e01199c71d6ee42f05ae",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          220
+        ],
+        [
+          221,
+          450
+        ],
+        [
+          451,
+          675
+        ],
+        [
+          676,
+          905
+        ],
+        [
+          906,
+          1172
+        ]
+      ],
+      "responsibility": "offline評価入力/criteria検証、全分母と欠測を保持する集計、人ラベル/held-out/lifecycle gate、合成e2e driver。",
+      "callers_or_consumers": [
+        "evaluation/canonical_request_eval.py",
+        "mcs/ops/mcs_setup.py",
+        "mcs/semantic/semantic_blind.py",
+        "mcs/semantic/semantic_lifecycle.py",
+        "mcs/semantic/semantic_observe.py",
+        "mcs/views/mcs_stats.py",
+        "scripts/development/semantic_shadow_e2e.py",
+        "tests/semantic/semantic_testkit.py",
+        "tests/semantic/test_fact_source.py",
+        "tests/semantic/test_jev_value.py",
+        "tests/semantic/test_semantic_blind.py",
+        "tests/semantic/test_semantic_evaluation.py",
+        "tests/semantic/test_semantic_fact_contract.py",
+        "tests/semantic/test_semantic_lifecycle.py",
+        "tests/semantic/test_semantic_observe.py",
+        "tests/semantic/test_semantic_runtime.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_extraction.py",
@@ -6325,20 +6426,59 @@
       "lines": 645,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet."
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
       "reviewed_sha256": "6068b22ef515bfecec9e079f7c9261469c7077fe4cac7ac938a0e62dde684d42",
       "read_ranges": [
         [
           1,
-          108
+          220
+        ],
+        [
+          221,
+          440
+        ],
+        [
+          441,
+          645
         ]
       ],
       "packet": "docs/development/maintenance-semantic-evidence.json",
-      "owner": "semantic"
+      "owner": "semantic",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "responsibility": "固定model/endpointのJev wire契約、厳密な応答/usage検証、予算/deadline/retryと注入可能なtransport境界。",
+      "callers_or_consumers": [
+        "mcs/ops/mcs_setup.py",
+        "mcs/semantic/semantic.py",
+        "mcs/semantic/semantic_assessment.py",
+        "mcs/semantic/semantic_audit.py",
+        "mcs/semantic/semantic_bench.py",
+        "mcs/semantic/semantic_drain.py",
+        "mcs/semantic/semantic_extraction.py",
+        "mcs/semantic/semantic_llm.py",
+        "mcs/semantic/semantic_loops.py",
+        "mcs/semantic/semantic_policy.py",
+        "mcs/semantic/semantic_qc.py",
+        "mcs/semantic/semantic_store.py",
+        "scripts/development/semantic_shadow_e2e.py",
+        "tests/conftest.py",
+        "tests/extract/test_extract_qc.py",
+        "tests/semantic/semantic_testkit.py",
+        "tests/semantic/test_canonical_drain.py",
+        "tests/semantic/test_mcs_semantic.py",
+        "tests/semantic/test_semantic_assessment.py",
+        "tests/semantic/test_semantic_circuit_drain.py",
+        "tests/semantic/test_semantic_jev_contract.py",
+        "tests/semantic/test_semantic_manual_retry.py",
+        "tests/semantic/test_semantic_runtime.py",
+        "tests/semantic/test_semantic_scope_edges.py",
+        "tests/semantic/test_semantic_smoke.py",
+        "tests/semantic/test_semantic_transport.py",
+        "tests/semantic/test_three_slot_lanes.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_lifecycle.py",
@@ -6347,9 +6487,24 @@
       "lines": 263,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "ee3b393e05e8254b9a1aa1a8a0767de978708d0f0c31182bc216ab919dc3791d",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          263
+        ]
+      ],
+      "responsibility": "read-only snapshotから verified/rendered/delivered fact集合を独立観測し、page全件と配送receiptの証拠を検証。",
+      "callers_or_consumers": [
+        "mcs/semantic/semantic_blind.py",
+        "tests/semantic/test_semantic_lifecycle.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_llm.py",
@@ -6380,9 +6535,30 @@
       "lines": 252,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "047ec3084aebfe2979446c25b73dcde887c35598e520e9a971c255729caa337f",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          252
+        ]
+      ],
+      "responsibility": "根拠revisionに結合した助言候補とrelationを作成・再利用。人承認なしの業務依頼作成/完了操作はしない。",
+      "callers_or_consumers": [
+        "integration/test_hermes_discord.py",
+        "mcs/semantic/semantic.py",
+        "mcs/semantic/semantic_drain.py",
+        "tests/ops/test_mcs_request_loops.py",
+        "tests/semantic/test_canonical_request_following.py",
+        "tests/semantic/test_semantic_acceptance_edges.py",
+        "tests/semantic/test_semantic_loop_generations.py",
+        "tests/semantic/test_semantic_loop_view.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_metrics.py",
@@ -6391,9 +6567,24 @@
       "lines": 117,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "8ec5e844dc8b38ad3625967381fd1c0e4769bc749e69d47f00eb9af18fe63780",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          117
+        ]
+      ],
+      "responsibility": "現行世代の品質・artifact・backlog件数集計。患者本文を観測出力に含めない。",
+      "callers_or_consumers": [
+        "mcs/semantic/semantic.py",
+        "mcs/semantic/semantic_observe.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_observe.py",
@@ -6402,9 +6593,28 @@
       "lines": 318,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "b6e190e6867ee23abca04dcfd49d806c5a1a4537d85171da830db4aab2112f60",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          190
+        ],
+        [
+          191,
+          318
+        ]
+      ],
+      "responsibility": "read-only ledger/configで状態・設定異常・予算/巡回telemetry欠測を集計する診断CLI。",
+      "callers_or_consumers": [
+        "tests/semantic/test_semantic_fairness.py",
+        "tests/semantic/test_semantic_observe.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_policy.py",
@@ -6495,9 +6705,29 @@
       "lines": 345,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "89bbb34dbdc3e86afe809230bd6c7e17cef87516840847088897aa85a179390e",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          345
+        ]
+      ],
+      "responsibility": "抽出source世代に結合したQC注記、有限質問/予算、job/artifact更新の原子性。根拠本文と臨床事実は変更しない。",
+      "callers_or_consumers": [
+        "mcs/semantic/semantic_drain.py",
+        "mcs/views/mcs_view.py",
+        "tests/views/test_qc_view.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_quantities.py",
@@ -6506,9 +6736,29 @@
       "lines": 380,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "6e783f5450f93cb0250ba00b04fd1c86f622e12307f9418af4de9cfaee846492",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          380
+        ]
+      ],
+      "responsibility": "原文とfactの数値・符号・単位・頻度をDecimalで比較し、曖昧/欠落/矛盾を保留するdeterministic guard。",
+      "callers_or_consumers": [
+        "mcs/extract/clinical_values.py",
+        "mcs/semantic/semantic_audit.py",
+        "tests/semantic/test_semantic_quantities.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_relations.py",
@@ -6517,9 +6767,27 @@
       "lines": 215,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "224e48fed98d49769ace102c1409457ec0627f96d1700355dc7265b75348f116",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          215
+        ]
+      ],
+      "responsibility": "事実を削除せず、明示時系列・主体・entity・臨床属性を保持する候補関係とpromotion用fingerprint。",
+      "callers_or_consumers": [
+        "mcs/semantic/semantic_evaluation.py",
+        "mcs/semantic/semantic_extraction.py",
+        "mcs/semantic/semantic_projection.py",
+        "tests/semantic/test_jev_value.py",
+        "tests/semantic/test_semantic_relations.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_render.py",
@@ -6528,9 +6796,34 @@
       "lines": 411,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "c3193faba38e0b46b8570c2309a72c470873d933b9b4804ca8fa52242f506551",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          220
+        ],
+        [
+          221,
+          411
+        ]
+      ],
+      "responsibility": "監査済み必須fact全件/page/evidence IDを決定的に表示し、coverage/audit/source URLをコードで生成。",
+      "callers_or_consumers": [
+        "mcs/semantic/semantic.py",
+        "mcs/semantic/semantic_drain.py",
+        "mcs/semantic/semantic_evaluation.py",
+        "mcs/semantic/semantic_lifecycle.py",
+        "mcs/views/structured_view.py",
+        "tests/semantic/test_jev_value.py",
+        "tests/semantic/test_semantic_lifecycle.py",
+        "tests/semantic/test_semantic_mandatory_render.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_runtime.py",
@@ -6561,26 +6854,31 @@
       "lines": 386,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
       "read_ranges": [
         [
-          25,
-          52
+          1,
+          200
         ],
         [
-          111,
-          201
-        ],
-        [
-          204,
-          258
+          201,
+          386
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "reviewed_sha256": "750e42b91d55269c6d1679153c6195a31481d8b376e0fb86ea6452f37d52d00c",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "responsibility": "source/target/policy/publication世代の送信gate、raw通知補助表示、凍結本文の根拠反復chunkとbody帰属。",
+      "callers_or_consumers": [
+        "mcs/notify/notify_flush.py",
+        "mcs/semantic/semantic_lifecycle.py",
+        "tests/notify/test_notify_digest.py",
+        "tests/semantic/test_semantic_send_gate.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_store.py",
@@ -6628,9 +6926,44 @@
       "lines": 666,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "5d040cea543512230e5fe2522ca7c8b75a8b463bcce66f402d957085726f2082",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          230
+        ],
+        [
+          231,
+          460
+        ],
+        [
+          461,
+          666
+        ]
+      ],
+      "responsibility": "PASS専用read model・stage receipt・世代分離・request candidate・有限cohortと破壊的retirementの保留境界。",
+      "callers_or_consumers": [
+        "integration/test_mcs_recovery_narrative.py",
+        "mcs/extract/v4/extract_llm.py",
+        "mcs/semantic/semantic.py",
+        "mcs/semantic/semantic_drain.py",
+        "mcs/semantic/semantic_lifecycle.py",
+        "mcs/semantic/semantic_store.py",
+        "tests/extract/test_extract_llm.py",
+        "tests/semantic/semantic_testkit.py",
+        "tests/semantic/test_canonical_projection.py",
+        "tests/semantic/test_canonical_request_following.py",
+        "tests/semantic/test_malformed_meta_queries.py",
+        "tests/semantic/test_request_following_generation.py",
+        "tests/semantic/test_semantic_lifecycle.py",
+        "tests/semantic/test_semantic_v4.py"
+      ]
     },
     {
       "path": "mcs/semantic/semantic_workflow.py",
@@ -6639,9 +6972,23 @@
       "lines": 276,
       "module": "mcs/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "a58028359221c6f49405aaebe88edaf4f28d0493523a907e039d8e27d0250c80",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          276
+        ]
+      ],
+      "responsibility": "完全合成workflow比較の入力/identity/費用検証とoffline集計。臨床効果・実測・昇格の代用にしない。",
+      "callers_or_consumers": [
+        "tests/semantic/test_semantic_workflow.py"
+      ]
     },
     {
       "path": "mcs/views/cross_lists_view.py",
@@ -11386,9 +11733,24 @@
       "lines": 161,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "ea65c64d2771e9814b89689f5dfbae5b7a136ddfde6d272b8e191fe47869bda1",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          161
+        ]
+      ],
+      "responsibility": "固定220件の合成held-out資産・pending人手評価・identity/引用/manifest改変の拒否と実offline CLI。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_canonical_projection.py",
@@ -11445,9 +11807,24 @@
       "lines": 169,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "6df64ce292efb104000a380d3bf9d73e2628dd0270454b754b8e52c5463228aa",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          169
+        ]
+      ],
+      "responsibility": "旧新projection品質の独立計数、人ラベル/telemetry欠測と合成200件の非昇格、合成capacity境界。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_canonical_request_following.py",
@@ -11456,9 +11833,24 @@
       "lines": 284,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "16898ab7c30d366482df9cd835a95b73857ca1bff162e46bd0391e91ac64905a",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          284
+        ]
+      ],
+      "responsibility": "旧schema互換、根拠結合metadata、実normalizer/cache/staging、業務side effect非発生。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_fact_source.py",
@@ -11499,9 +11891,28 @@
       "lines": 307,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "86b3142481f8cd78b1900e10a9f7ec00fc265742c61e6ad87a2b62045a8c493c",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          307
+        ]
+      ],
+      "responsibility": "注入Jevの追加検知、期待fact分母、shadow e2e全段階、未評価/後続失敗/repair後relationの検出。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_malformed_meta_queries.py",
@@ -11594,9 +12005,28 @@
       "lines": 337,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "8fd00b02902683b127582d26d64cbe4f5dcd1464990b8e2ba6ab7a6f518c9825",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          337
+        ]
+      ],
+      "responsibility": "旧新prompt/cache世代の交差拒否、再試行/repair/receipt、source変化、読取り専用比較CLI。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_review_20260930.py",
@@ -11659,9 +12089,24 @@
       "lines": 185,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "3a86414788f4a8aaa26ad7687abf6abfcf10dc5575477cffc8f1f44f32480487",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          185
+        ]
+      ],
+      "responsibility": "完全合成の次元評価、source/quote/revision/cache結合と不正応答を保留。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_atomization.py",
@@ -11734,9 +12179,24 @@
       "lines": 81,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "29a692740116bdd15212a7d5904697ecc6aaf27e5122b547cd0585e45e40e64b",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          81
+        ]
+      ],
+      "responsibility": "合成corpus/実pipeline callbackと未結合入力のdispatch前拒否、private原子保存・校正/検知の集計。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_blind.py",
@@ -11745,9 +12205,28 @@
       "lines": 248,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "f7fa903d0d20f83e3e52f16c5a307ac38025fbf6931eeeaa123b6f97451ef634",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          150
+        ],
+        [
+          151,
+          248
+        ]
+      ],
+      "responsibility": "盲検票/key権限、bundle/artifact改変、人評価のexact candidate結合、synthetic provenance非昇格。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_budget_retry.py",
@@ -11854,9 +12333,24 @@
       "lines": 24,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "1740678377247046eee361cb955441f22a6476a6027e7f4b33ade83a5801066a",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          24
+        ]
+      ],
+      "responsibility": "readonly運用semantic CLI契約と非機密出力。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_degraded_coverage.py",
@@ -11897,9 +12391,28 @@
       "lines": 295,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "41afe480cd0fc7c20ae197d68980fbf356d8195a9fbf595ce2bb3a9dab95938b",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          220
+        ],
+        [
+          221,
+          295
+        ]
+      ],
+      "responsibility": "source/policy/mode切替、部分receipt/fingerprint、凍結内容の改変保留、shadow/offのbyte互換。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_detail_deadline.py",
@@ -11930,9 +12443,32 @@
       "lines": 506,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "43bccbb14c02c3f742d64bd3615cfe7e0978012ae5e99652cb940cb061be218c",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          190
+        ],
+        [
+          191,
+          350
+        ],
+        [
+          351,
+          506
+        ]
+      ],
+      "responsibility": "評価分母/held-out/critical overclaim/loop/lifecycle/receipt、欠測・無効数値・集計overflowとaggregate限定出力。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_extraction.py",
@@ -12181,9 +12717,24 @@
       "lines": 159,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "b8f59cd82dee6a5d968088f6bae8fae2f48d08b250c0339d3b1a068189b4fc30",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          159
+        ]
+      ],
+      "responsibility": "固定endpoint/model、正式choice/noul wire、確率・usage検証とstale hook前の返却usage計上。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_lifecycle.py",
@@ -12192,9 +12743,28 @@
       "lines": 391,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "e2d4b0ea1c77804a1cc00ebbd9c21cc52c565e82cf8f999b17fe62a22219c4ae",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          215
+        ],
+        [
+          216,
+          391
+        ]
+      ],
+      "responsibility": "temp ledger上の実render/chunkとverified→rendered→delivered、部分receipt・page欠損・改変世代とreadonly snapshot。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_llm_retry.py",
@@ -12225,9 +12795,24 @@
       "lines": 77,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "f495961bd719a047c2adfa3df6858b5dea5d5ef6b0fab0645f97691ce50fd2cb",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          77
+        ]
+      ],
+      "responsibility": "候補のsource編集/新着世代が旧応答や承認境界を混同しない。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_loop_view.py",
@@ -12236,9 +12821,24 @@
       "lines": 126,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "506e6eb556dd2b9d75dcdb2cefa64ec1e963481abf1d28a00e217395e2444233",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          126
+        ]
+      ],
+      "responsibility": "loop助言表示の最新世代・未知/未完了の区別。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_mandatory_render.py",
@@ -12301,9 +12901,24 @@
       "lines": 25,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "262553cf5b48ba83904007d4b78c5bb974f0702e6263c38a0357964695446b8f",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          25
+        ]
+      ],
+      "responsibility": "semantic通知のcoverage/audit/source表示契約。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_observe.py",
@@ -12312,9 +12927,24 @@
       "lines": 237,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "6cdce29a0f8039f2d1878d7f3dbf5074877bb9691e4a8fef755d0c83a1f2ba50",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          237
+        ]
+      ],
+      "responsibility": "readonly診断の欠測・config異常・容量/telemetry集計と患者本文非出力。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_pause.py",
@@ -12377,9 +13007,24 @@
       "lines": 119,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "51f6ca10a34f97c5f3e476dc9523fe385f3a189b63ae357e76f06dc07d55f2f6",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          119
+        ]
+      ],
+      "responsibility": "数値/単位/符号/頻度の根拠結合、複数fact曖昧性と数値欠落の保留。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_relations.py",
@@ -12388,9 +13033,24 @@
       "lines": 204,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "da06a457be402bb53666ac76f11433ce2291186946c8121bd09cb4113233e8b4",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          204
+        ]
+      ],
+      "responsibility": "重複/主体/属性/関係fingerprint、offset/同時刻/無効日/精度不一致の時系列非推測。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_repair.py",
@@ -12517,9 +13177,24 @@
       "lines": 174,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "a070c20e2c37ea27bffe667acb614733fe6d0253385f42ed903d0e12f382cbf8",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          174
+        ]
+      ],
+      "responsibility": "source/target/current PASS/凍結policy、41必須factのraw表示、本文内footer保全と通常byte-pinned chunk契約。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_smoke.py",
@@ -12636,9 +13311,32 @@
       "lines": 581,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "c98d3033f69b330678ba14a6724bcd0ffe52c700e4c8fdf8885c7d3fc19922bd",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          160
+        ],
+        [
+          161,
+          365
+        ],
+        [
+          366,
+          581
+        ]
+      ],
+      "responsibility": "stage receiptとPASS公開、旧writer fence、有限cohort予約/再開/txrollback、cleanup未承認の原本保持。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_view_generation.py",
@@ -12647,9 +13345,24 @@
       "lines": 39,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "dc60ae96c97c03086895b92abd033773d895251e0f0d7e706bd57a68250eb1d7",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          39
+        ]
+      ],
+      "responsibility": "表示上の旧新世代・訂正後sourceの分離。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_semantic_workflow.py",
@@ -12658,9 +13371,24 @@
       "lines": 167,
       "module": "tests/semantic",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+      ],
+      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "reviewed_sha256": "cfc043b5bef2f245aa342fd2f85434574e671e79897600e7f8db6e52514d2e10",
+      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "read_ranges": [
+        [
+          1,
+          167
+        ]
+      ],
+      "responsibility": "合成workflow評価の入力/identity/計数・費用境界と実効品質/実測への誤昇格拒否。",
+      "callers_or_consumers": [
+        "pytest collection",
+        "tests/conftest.py"
+      ]
     },
     {
       "path": "tests/semantic/test_three_slot_lanes.py",
@@ -12970,6 +13698,42 @@
       "status": "PARTIAL",
       "evidence": [
         "New task artifact; exact whole-candidate reconciliation and final review pending"
+      ]
+    },
+    {
+      "path": "changes/20261005-semantic-evidence-corpus.json",
+      "sha256": "fdb5c9e633f5766e34f41a7f955c79536cbbe3ab94118c1abf5ef670e280546b",
+      "bytes": 1590,
+      "lines": 12,
+      "module": "changes",
+      "kind": "task-created",
+      "status": "PARTIAL",
+      "evidence": [
+        "Final candidate artifact reconciliation pending"
+      ]
+    },
+    {
+      "path": "changes/maintenance-recovery-plist-20261005.json",
+      "sha256": "0ac83974ba88889d82d0a95dc39c1b18770027d199e25e2c9068c95ff090f1eb",
+      "bytes": 942,
+      "lines": 8,
+      "module": "changes",
+      "kind": "task-created",
+      "status": "PARTIAL",
+      "evidence": [
+        "Final candidate artifact reconciliation pending"
+      ]
+    },
+    {
+      "path": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "sha256": "24d178acee619d74bb321cb602fe3010b4b36d4bfc429cbca2317b7bac5657c7",
+      "bytes": 168190,
+      "lines": 3774,
+      "module": "docs",
+      "kind": "task-created",
+      "status": "PARTIAL",
+      "evidence": [
+        "Final candidate artifact reconciliation pending"
       ]
     }
   ],

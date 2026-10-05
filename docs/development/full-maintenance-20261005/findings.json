@@ -608,6 +608,68 @@
       ],
       "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "integration_status": "local integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P3-P3-F01",
+      "state": "CONFIRMED_FIXED",
+      "path": "mcs/semantic/semantic_send_gate.py",
+      "function": "semantic_summary_block",
+      "before": "claimsのみを表示し、空ならreturn。監査済みmandatory_factsが補助表示から全欠落。",
+      "after": "current PASS/enforce/policy/source gateを通った全mandatory_factsをclaimsとは独立に表示。source/evidenceの生成文字列を変更しない。",
+      "regressions": [
+        "test_raw_notice_keeps_all_verified_mandatory_facts[claims0]",
+        "test_raw_notice_keeps_all_verified_mandatory_facts[claims1]"
+      ],
+      "before_failed": 2,
+      "packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P3-P3-F02",
+      "state": "CONFIRMED_FIXED",
+      "path": "mcs/semantic/semantic_send_gate.py",
+      "function": "semantic_chunk_parts",
+      "before": "最初のfooter marker/後続HTTPSを本文由来でも採用。後続の必須factと本来のsource linkが脱落、誤ったリンクを反復。",
+      "after": "末尾2行の生成footerのみ構造扱いし本文内markerを保持。予期しないfooter後尾は拒否。通常byte-pinned出力/receipt契約は維持。",
+      "regressions": [
+        "test_chunker_preserves_embedded_footer_text_and_uses_terminal_source_link",
+        "test_chunker_rejects_unexpected_text_after_source_footer"
+      ],
+      "before_failed": 2,
+      "packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P3-P3-F03",
+      "state": "CONFIRMED_FIXED",
+      "path": "mcs/semantic/semantic_relations.py",
+      "function": "_iso/_ordered_before",
+      "before": "ISO prefixだけ検査して文字列比較し、offsetの実際の前後/等価instant/invaliddate/精度を取り違えてsupersession候補を作成。",
+      "after": "stdlib date/datetimeが有効時刻を解析。UTC instantで順序比較、naive/awareとdate/datetimeが混在または同時刻なら順序を推測しない。candidate-only人承認境界維持。",
+      "regressions": [
+        "test_temporal_relations_require_valid_comparable_instants (7 × event_time/valid_time)"
+      ],
+      "before_failed": 14,
+      "packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P3-P3-F04",
+      "state": "CONFIRMED_FIXED",
+      "path": "mcs/semantic/semantic_bench.py",
+      "function": "cmd_corpus/cmd_run",
+      "before": "既定real ledgerを開き本文bundleをportable corpusへ固定。run --jevは凍結real corpusを外部へ送れる。AGENTS完全合成bench規約に反する既定入口。",
+      "after": "既存evaluation/extract_cases.jsonだけからsynthetic corpusを固定、runは全case data exact equalityをdispatch/credential前に検証。source標識だけでは不十分、旧/無効/未結合入力はexit2。原本読取/匿名化経路を追加しない。",
+      "regressions": [
+        "test_corpus_cli_freezes_only_checked_in_synthetic_sources",
+        "test_run_refuses_unbound_corpus_before_model_or_credentials (2 × Jev off/on)",
+        "test_run_accepts_frozen_synthetic_corpus_with_injected_pipeline",
+        "invalid count/malformed JSON/missing synthetic asset"
+      ],
+      "before_failed": 6,
+      "operational_change": "旧corpus再利用不可、同CLIで合成資産から再作成。asset欠落時fail closed。日本語upgrade記録あり。",
+      "packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
     }
   ],
   "deferred": [],
@@ -662,6 +724,14 @@
       "worker_behavior": "872747183be090367d6890f1c22ca2d64bcdf5ae",
       "source_hashes_match": true,
       "tests": "Worker-local evidence retained; final fixed-I validation and independent review pending"
+    },
+    {
+      "packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "P": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "worker_behavior": "e58119363a940acb1e119d4ae117bf0301167176",
+      "integrated_behavior": "4d97c28",
+      "source_hashes_match": true,
+      "tests": "857 semantic passed/0skip, 39 Ruff paths pass; final I pending"
     }
   ],
   "independent_review": {
