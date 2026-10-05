@@ -681,6 +681,17 @@
       "path": "deployment/scripts/llamacpp_restart_if_idle.sh",
       "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "integration_status": "local repair; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-LIFECYCLE-004",
+      "cause": "Jev value CLI labels arbitrary case content synthetic, dispatches before provenance validation and accepts nonfinite deadlines; deep JSON aborts",
+      "before": "13 initial cases: 11 failed/2 control passed; missing asset: 1 failed/3 asset controls passed; 12 unique failing regressions",
+      "after": "240 passed in 2.12s",
+      "contract": "three checked-in fully synthetic assets exact dictionary equality, copied unique subsets accepted; finite positive deadline before credentials/dispatch; human labels remain zero",
+      "state": "CONFIRMED_FIXED",
+      "path": "mcs/ops/mcs_setup.py",
+      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "integration_status": "local repair; final fixed-I checks and independent review pending"
     }
   ],
   "deferred": [],

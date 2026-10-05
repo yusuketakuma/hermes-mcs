@@ -360,12 +360,12 @@
       "read_ranges": [
         [
           1,
-          3468
+          3488
         ]
       ],
-      "reviewed_sha256": "ae1d9a64d4faf82459a90eddf4e34106f3db4688c19eff36d78a85fe5a468e98",
-      "lines": 3468,
-      "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
+      "reviewed_sha256": "6c8602a8b1abfcdc79da35b5cf9eb7605a1438304a42438ef762cb7b0e369b9f",
+      "lines": 3488,
+      "review_note": "親が基礎ソース全文読取後の全差分と回帰を確認。Jev価値評価のsynthetic case内容照合・有限期限・深い破損JSONをclient/config/credential前で拒否。",
       "review_module": "lifecycle"
     },
     {
@@ -907,6 +907,36 @@
       "reviewed_sha256": "a3cd62d2ef9b25b05980f05734cfe1e46bdb2b448d151eb5e0be1440abbfd03e",
       "review_note": "全文と実呼出元・契約・合成テストを照合。下記の領域別C01-C12/X01-X08評価に対応。実機適用と最終I検証は別途未実施。",
       "review_module": "deployment"
+    },
+    {
+      "path": "tests/ops/test_jev_value_input_boundary.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 90,
+      "read_ranges": [
+        [
+          1,
+          90
+        ]
+      ],
+      "reviewed_sha256": "79fc3ab4f172f1d069064a9802aeba82601bd9d33cf4e81b7274ef874c2fac00",
+      "review_module": "lifecycle",
+      "review_note": "親が基礎ソース全文読取後の全差分と回帰を確認。Jev価値評価のsynthetic case内容照合・有限期限・深い破損JSONをclient/config/credential前で拒否。"
+    },
+    {
+      "path": "changes/maintenance-jev-value-input-20261005.json",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "lines": 8,
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "reviewed_sha256": "a4c72f1c31e635a230dc0179bb48499d5d95064083f122025c2616e570d3e926",
+      "review_module": "lifecycle",
+      "review_note": "親が基礎ソース全文読取後の全差分と回帰を確認。Jev価値評価のsynthetic case内容照合・有限期限・深い破損JSONをclient/config/credential前で拒否。"
     }
   ],
   "confirmed_fixes": [
@@ -941,6 +971,14 @@
       "before": "1 failed, 5 deselected; stub captured curl argv without --noproxy",
       "after": "69 passed including deployment and standalone families",
       "contract": "fixed localhost URL, no redirect following and existing 5s request / 15min restart window retained"
+    },
+    {
+      "id": "PARENT-LIFECYCLE-004",
+      "status": "FIXED_LOCAL",
+      "cause": "Jev value CLI labels arbitrary case content synthetic, dispatches before provenance validation and accepts nonfinite deadlines; deep JSON aborts",
+      "before": "13 initial cases: 11 failed/2 control passed; missing asset: 1 failed/3 asset controls passed; 12 unique failing regressions",
+      "after": "240 passed in 2.12s",
+      "contract": "three checked-in fully synthetic assets exact dictionary equality, copied unique subsets accepted; finite positive deadline before credentials/dispatch; human labels remain zero"
     }
   ],
   "requested_change": {
@@ -1048,6 +1086,21 @@
       "sha256": "53967b53f385a3088e5090bde85cbdd455e6fa9cd5dad79acb889d25a5dff0a4",
       "exit_code": 0,
       "result": "69 passed in 7.32s"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-jev-value-before-20261005.log",
+      "sha256": "58b10159565d362f692de23232f96f0131f84133bacf756fd2447dad4af8aa33",
+      "result": "11 failed, 2 passed in 0.31s"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-jev-value-extra-before-20261005.log",
+      "sha256": "3c4b46250610ae4efa8631fd271d70c7ef44af7f6bcfa1177048c8306a18d9eb",
+      "result": "1 failed, 3 passed, 12 deselected in 0.21s"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-jev-value-after-20261005.log",
+      "sha256": "b541e8912b499150ae0ec487a853a4b172e2c57364dce307ead03c0b5cc38921",
+      "result": "240 passed in 2.12s"
     }
   ],
   "criteria_status": "各領域の20観点をソース・呼出元・合成検証と照合済み。全リポジトリと最終配布物・固定SDK・独立レビューの完了を意味しない。",
@@ -1176,6 +1229,21 @@
         "criterion": "X08",
         "status": "REVIEWED",
         "evidence": "release/公開は承認範囲外で実行しない。運用文書リンクと1.0.13選択手順を照合し、静的ローカル変更だけを実施。"
+      },
+      {
+        "supplement": "Jev value input boundary",
+        "criteria": [
+          "C05",
+          "C06",
+          "C07",
+          "C09",
+          "C10",
+          "C11",
+          "X06",
+          "X07"
+        ],
+        "status": "REVIEWED",
+        "evidence": "Known asset exact content binding is enforced before client/credential/model access; input label alone is not provenance. New 16 synthetic tests include 12 unique before failures and 4 preserved controls."
       }
     ],
     "standalone": [

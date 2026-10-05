@@ -29,9 +29,9 @@
       "PARTIAL": 59,
       "EXCLUDED": 2,
       "UNSEEN": 551,
-      "REVIEWED": 236
+      "REVIEWED": 238
     },
-    "candidate_tracked": 846
+    "candidate_tracked": 848
   },
   "files": [
     {
@@ -678,7 +678,7 @@
       "kind": "text_asset",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
@@ -2308,6 +2308,27 @@
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
     },
     {
+      "path": "changes/maintenance-jev-value-input-20261005.json",
+      "sha256": "a4c72f1c31e635a230dc0179bb48499d5d95064083f122025c2616e570d3e926",
+      "bytes": 1213,
+      "lines": 8,
+      "module": "lifecycle",
+      "kind": "source",
+      "status": "REVIEWED",
+      "reviewed_sha256": "a4c72f1c31e635a230dc0179bb48499d5d95064083f122025c2616e570d3e926",
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "lifecycle",
+      "evidence": [
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
+      ]
+    },
+    {
       "path": "changes/maintenance-local-slot-proxy-20261005.json",
       "sha256": "907c08fea75af00f99c92ab3f1bd8183b655142e9b732af4cd16e9149f9e989d",
       "bytes": 861,
@@ -2316,7 +2337,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "reviewed_sha256": "907c08fea75af00f99c92ab3f1bd8183b655142e9b732af4cd16e9149f9e989d",
       "read_ranges": [
@@ -2560,7 +2581,7 @@
       "kind": "text_asset",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "b61208603e1cbf91069c33768a6266078b086fc3516253edbee39565737567f4",
@@ -2582,7 +2603,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "12a1766e1013278f2ddfb043f108cf0ddfbfe97b414133a5728378467bad9148",
@@ -2604,7 +2625,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "f54ee5c114cbe042a252eb12696151877d39a1ede3d1efe32b97950de3928bdb",
@@ -2626,7 +2647,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "e575304cb83db130469b166f5a31cd3edb13391389500d8cea7136fbe775069f",
@@ -2648,7 +2669,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "7fd509490b3725a10288e19906955be01f6c573d3414cab3bef46b9e0871e667",
@@ -2670,7 +2691,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "32f3f1229fc83eafddd711a4c259b4754879240045c311b97ff2f129b5e0babc",
@@ -2692,7 +2713,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "a3cd62d2ef9b25b05980f05734cfe1e46bdb2b448d151eb5e0be1440abbfd03e",
@@ -2714,7 +2735,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "c873f8e40dcf869f3447f00ad63b58524b43c5e383b571d30bac87e000145aa7",
@@ -2736,7 +2757,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -2771,7 +2792,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "b0e46aa76c0875e3ae2001d45a4f09fe43231ea78ab684b0975158d516c146f3",
@@ -2793,7 +2814,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -2817,7 +2838,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "7233672d24c8970a2ee19e7e5cc47bf2c9d7b2409fa7e7483cda4f42f1ab23bb",
@@ -2839,7 +2860,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -2863,7 +2884,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "d0fd2bd402fdd606516ebbdffcd74a33a7891cac663760aa59abafb7ec9fd297",
@@ -2885,7 +2906,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "41a14807d6d049be700b8e124a9d9f8d805f23b9a10608ebfff36dda02dc1214",
@@ -2907,7 +2928,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -3806,7 +3827,7 @@
       "kind": "text_asset",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -4323,7 +4344,7 @@
       "kind": "text_asset",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -4644,7 +4665,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -6028,7 +6049,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -6129,15 +6150,15 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
-      "reviewed_sha256": "ae1d9a64d4faf82459a90eddf4e34106f3db4688c19eff36d78a85fe5a468e98",
+      "reviewed_sha256": "6c8602a8b1abfcdc79da35b5cf9eb7605a1438304a42438ef762cb7b0e369b9f",
       "read_ranges": [
         [
           1,
-          3468
+          3488
         ]
       ],
       "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
@@ -6181,7 +6202,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -7357,7 +7378,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "8f3f40b4b6cde6a7687dcc4ca1bc80659d7f1b8b2fa7c16ebada1ab604217556",
@@ -7379,7 +7400,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
@@ -7403,7 +7424,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -7427,7 +7448,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "a1565406c01e079c1940205a87bb405fc2e8ddf7766c6eb3f1bb7d267f7de70b",
@@ -7449,7 +7470,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "3415d702cca37f3ebedcb0ba9d1b2ed0667a1ad96723a49f84b070cd7d9ded34",
@@ -7471,7 +7492,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
@@ -7495,7 +7516,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "7e309d128e12ac77d2774caa3c7baa2b6f2794172ecc2549a42db43d9692a35a",
@@ -7517,7 +7538,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "40c6d34e50942ed1246247acd3947de1e8c2c51cdaa291f5a4c5cc706a977a84",
@@ -7951,7 +7972,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -7975,7 +7996,7 @@
       "kind": "text_asset",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -7999,7 +8020,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -8273,7 +8294,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "23d5a0ef38aec6c9a7837e20900f2a86a84453547cb3c4806df84ea04e32aa70",
@@ -8295,7 +8316,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "411daf3226354989b54ac03d07620b944b7dfab690830aef9b582e768c19c7c3",
@@ -8317,7 +8338,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "848b2f0ff3ed19c5b22791e875f27684f3de5e0d8ff2afeae1e3e035a192cae6",
@@ -8339,7 +8360,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "728a3d26b09451e94440b61a6df15387e04b36c2611787947869949b0d6b5d28",
@@ -9094,7 +9115,7 @@
       "kind": "text_asset",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -9184,7 +9205,7 @@
       "kind": "text_asset",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -9893,7 +9914,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "ffe0f86c54ef70839f0f76f2dc16b02ee15bcb94b137f698549d4f89ea066896",
@@ -9915,7 +9936,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -9939,7 +9960,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -9982,7 +10003,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "a7a4d6c30da2e595d9cfaed3fcbcee47e09618e06900e8cc6b7b37578476f4b1",
@@ -10015,7 +10036,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -11411,7 +11432,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -11636,6 +11657,27 @@
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
     },
     {
+      "path": "tests/ops/test_jev_value_input_boundary.py",
+      "sha256": "79fc3ab4f172f1d069064a9802aeba82601bd9d33cf4e81b7274ef874c2fac00",
+      "bytes": 4252,
+      "lines": 90,
+      "module": "lifecycle",
+      "kind": "source",
+      "status": "REVIEWED",
+      "reviewed_sha256": "79fc3ab4f172f1d069064a9802aeba82601bd9d33cf4e81b7274ef874c2fac00",
+      "read_ranges": [
+        [
+          1,
+          90
+        ]
+      ],
+      "full_content_read": true,
+      "review_module": "lifecycle",
+      "evidence": [
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
+      ]
+    },
+    {
       "path": "tests/ops/test_lifecycle_standalone.py",
       "sha256": "2c68ad8f82e8dde4452c8c3b631826450578843a1a36bf30c043b0119e004d0c",
       "bytes": 5550,
@@ -11644,7 +11686,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "2c68ad8f82e8dde4452c8c3b631826450578843a1a36bf30c043b0119e004d0c",
@@ -11765,7 +11807,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -11789,7 +11831,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "53b6a99456ae7bcc4139a31ed84fc0980e1afd03ca5976041f409f736d0b4d2b",
@@ -11811,7 +11853,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "16e24f4fbdf9ecdf22aacf82cb8a4af1f201ae553a71c56b55635b74d1d954af",
@@ -11833,7 +11875,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "88f9a33d50e1f78b298ead57c40ecabd1c05967bf6a6cb2b8aeb068336e523f2",
@@ -11855,7 +11897,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "9acf10f45b9aeda9e17738ff13d7b42559e8199c4af196212a5dfc73bca58b6b",
@@ -11899,7 +11941,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "e1cbb7bc1692a3eff2a4e5bc9280b7259cb04750f728af7d751c736514db0257",
@@ -11921,7 +11963,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -11956,7 +11998,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
       "reviewed_sha256": "73876d0fcbad4afcd993b7a1ebae35ba4735fb18f91218c0764f1f11eae48f08",
@@ -11978,7 +12020,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
@@ -12000,7 +12042,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "owner": "root",
@@ -12024,7 +12066,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
       "reviewed_sha256": "7af37d19c2a47b89db86dc719f6d9d17924cb0bc22a3d41e7da0da02882b2d2f",
@@ -12046,7 +12088,7 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent full-content source/caller review with C01-C12/X01-X08 module evidence: parent-lifecycle-evidence.json; local synthetic verification, final whole-I still pending."
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
       ],
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
       "reviewed_sha256": "616663001bcdb906bb8ffbd766b73786ac1c9e952e550efd7f7918f0d92b106c",
