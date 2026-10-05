@@ -1503,6 +1503,79 @@
       "change": "Catch RecursionError only alongside JSONDecodeError/TypeError in three JSON loads scopes; newest corrupt summary stays ineligible, no fallback to older generation, no data rewrite.",
       "packet": "docs/development/full-maintenance-20261005/parent-semantic-send-gate-evidence.json",
       "integration_status": "integrated; final fixedI checks/independent review pending"
+    },
+    {
+      "id": "CORE6-DOC-MODE",
+      "state": "confirmed",
+      "severity": "low",
+      "path": "README.md",
+      "lines": [
+        226,
+        228
+      ],
+      "criterion": [
+        "C01",
+        "C12",
+        "X01"
+      ],
+      "cause": "mode選択の説明直後でHermes同期をSlack/Discord一般に記載し、standaloneにも必要と読める。",
+      "proof": "固定Pの_sync_gateway実関数をASTから隔離して5合成modecase実行。standalone Slack/DiscordとHermes LWはgateway非呼出、Hermes Slack/Discordだけ既存gateway確認。",
+      "repair_owner": "parent",
+      "proposal": "HermesモードのSlack/DiscordではHermesとの同期も行います。",
+      "local_patch": null,
+      "parent_followup": "親から同一文言のREADME1文修正実装済みと受領。親I commit/最終検証は別receipt。P/W正文は変更せず固定。",
+      "status": "FIXED",
+      "packet": "docs/development/maintenance-core-packet6-evidence.json",
+      "integration_status": "parent fix fb488c8 or notify refs fix15c8c04 integrated; final I checks pending"
+    },
+    {
+      "id": "CORE6-REFS-GATE",
+      "state": "confirmed",
+      "severity": "medium",
+      "path": "changes/maintenance-notify-packet3-lineworks-silent-20261005.json",
+      "criterion": [
+        "C07",
+        "C11",
+        "C12",
+        "X02",
+        "X08"
+      ],
+      "cause": "https公式根拠refをfragmentのrefs構文が拒否するためP release_notes.py check exit1。",
+      "proof": "verification.release_check / invalid-fragments.json、拒否1file exact。",
+      "repair_owner": "maintenance_notify packet6",
+      "local_patch": null,
+      "parent_followup": "既知のrefs URL移動fix所有へ共有、重複編集なし。P失敗を親I成功へ読み替えない。",
+      "status": "FIXED",
+      "packet": "docs/development/maintenance-core-packet6-evidence.json",
+      "integration_status": "parent fix fb488c8 or notify refs fix15c8c04 integrated; final I checks pending"
+    },
+    {
+      "id": "CORE6-HISTORY-CADENCE",
+      "state": "disproved",
+      "reason": "旧5分/夜20分/15分は日付付き版履歴で、現在guide10分・CRON_JOBS */10/deep10,40/healthdefault600と時点分離。旧値を現設定として一括置換不要。",
+      "status": "DISPROVED",
+      "packet": "docs/development/maintenance-core-packet6-evidence.json"
+    },
+    {
+      "id": "CORE6-RELEASE-GEN8",
+      "state": "disproved",
+      "reason": "1.0.13のrule6→7記録と現RULE_VERSION8の差は後続未compilefragmentで記録済。releaseprep/build/versionbumpは今回未承認。現在READMEmain説明とrelease記録を区別。",
+      "status": "DISPROVED",
+      "packet": "docs/development/maintenance-core-packet6-evidence.json"
+    },
+    {
+      "id": "CORE6-UMASK-PROMISE",
+      "state": "disproved",
+      "reason": "CHANGELOG/READMEはresidenttemplate Umask077と定期generatedplist未対応を明示。_cron_plist/standalone serviceにUmaskなしというPと矛盾しない。",
+      "status": "DISPROVED",
+      "packet": "docs/development/maintenance-core-packet6-evidence.json"
+    },
+    {
+      "id": "CORE6-SYNTHETIC-IS-LIVE",
+      "state": "disproved",
+      "reason": "currentguide/security/changelog/briefすべて合成/SDK型/実API/人ラベル/部署受入を分離。本文中のhistoricalPASSを全域v7受入に計上しない。",
+      "status": "DISPROVED",
+      "packet": "docs/development/maintenance-core-packet6-evidence.json"
     }
   ],
   "deferred": [],

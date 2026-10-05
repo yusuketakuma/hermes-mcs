@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "REVIEWED": 572,
+      "REVIEWED": 579,
       "EXCLUDED": 25,
-      "PARTIAL": 34,
-      "UNSEEN": 269
+      "UNSEEN": 268,
+      "PARTIAL": 29
     },
-    "candidate_tracked": 897
+    "candidate_tracked": 899
   },
   "files": [
     {
@@ -306,14 +306,15 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "5022b4fbc28963d7a3ba6106ae67f39cf6839be9c64c838169804268149b84a9",
-      "bytes": 14296,
+      "sha256": "891bc4420cbc7af01b0318a7a2d4f33c73e0626399ec39cdb5ff4d580fbbc171",
+      "bytes": 14336,
       "lines": 174,
       "module": "AGENTS.md",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "担当packetの安全/契約contextとして全文read。全repoの独立レビュー済み判定ではない。"
+        "担当packetの安全/契約contextとして全文read。全repoの独立レビュー済み判定ではない。",
+        "Core6全4395行・7module×20criterionを親が確認。READMEはP全文と親mode限定1文deltaのみ、その他5文書は現I SHA一致。"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
@@ -322,7 +323,78 @@
           174
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "reviewed_sha256": "891bc4420cbc7af01b0318a7a2d4f33c73e0626399ec39cdb5ff4d580fbbc171",
+      "reviewed_lines": 174,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet6-evidence.json",
+      "responsibility": "エージェントの入口/依存・安全・所有・合成検証・生成/リリース正本規約。",
+      "callers": [
+        "repoを扱う全エージェント",
+        "CI・生成・release作業者"
+      ],
+      "criteria": {
+        "C01": [
+          "criteria.C01.agent_instructions"
+        ],
+        "C02": [
+          "criteria.C02.agent_instructions"
+        ],
+        "C03": [
+          "criteria.C03.agent_instructions"
+        ],
+        "C04": [
+          "criteria.C04.agent_instructions"
+        ],
+        "C05": [
+          "criteria.C05.agent_instructions"
+        ],
+        "C06": [
+          "criteria.C06.agent_instructions"
+        ],
+        "C07": [
+          "criteria.C07.agent_instructions"
+        ],
+        "C08": [
+          "criteria.C08.agent_instructions"
+        ],
+        "C09": [
+          "criteria.C09.agent_instructions"
+        ],
+        "C10": [
+          "criteria.C10.agent_instructions"
+        ],
+        "C11": [
+          "criteria.C11.agent_instructions"
+        ],
+        "C12": [
+          "criteria.C12.agent_instructions"
+        ],
+        "X01": [
+          "criteria.X01.agent_instructions"
+        ],
+        "X02": [
+          "criteria.X02.agent_instructions"
+        ],
+        "X03": [
+          "criteria.X03.agent_instructions"
+        ],
+        "X04": [
+          "criteria.X04.agent_instructions"
+        ],
+        "X05": [
+          "criteria.X05.agent_instructions"
+        ],
+        "X06": [
+          "criteria.X06.agent_instructions"
+        ],
+        "X07": [
+          "criteria.X07.agent_instructions"
+        ],
+        "X08": [
+          "criteria.X08.agent_instructions"
+        ]
+      }
     },
     {
       "path": "CHANGELOG.md",
@@ -331,9 +403,185 @@
       "lines": 3492,
       "module": "CHANGELOG.md",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core6全4395行・7module×20criterionを親が確認。READMEはP全文と親mode限定1文deltaのみ、その他5文書は現I SHA一致。"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "93e35fd818850878c052accfbd49160b3a1561072f324ed818d84ad3b1fa57d1",
+      "reviewed_lines": 3492,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          130
+        ],
+        [
+          131,
+          300
+        ],
+        [
+          301,
+          440
+        ],
+        [
+          441,
+          610
+        ],
+        [
+          611,
+          780
+        ],
+        [
+          781,
+          950
+        ],
+        [
+          951,
+          1111
+        ],
+        [
+          1112,
+          1280
+        ],
+        [
+          1281,
+          1460
+        ],
+        [
+          1461,
+          1640
+        ],
+        [
+          1641,
+          1825
+        ],
+        [
+          1826,
+          2010
+        ],
+        [
+          2011,
+          2190
+        ],
+        [
+          2191,
+          2380
+        ],
+        [
+          2381,
+          2570
+        ],
+        [
+          2571,
+          2760
+        ],
+        [
+          2761,
+          2950
+        ],
+        [
+          2951,
+          3140
+        ],
+        [
+          3141,
+          3330
+        ],
+        [
+          3331,
+          3492
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet6-evidence.json",
+      "responsibility": "14版の日付付き変更と更新時注意の正本、README生成とGitHubRelease export/syncのconsumer入力。",
+      "callers": [
+        "scripts/development/release_notes.py:section/check_changelog/main(export/build)",
+        "scripts/development/readme_release.py:render_block/check",
+        "scripts/development/sync_release_notes.py:synchronize"
+      ],
+      "criteria": {
+        "C01": [
+          "criteria.C01.release_current",
+          "criteria.C01.release_history"
+        ],
+        "C02": [
+          "criteria.C02.release_current",
+          "criteria.C02.release_history"
+        ],
+        "C03": [
+          "criteria.C03.release_current",
+          "criteria.C03.release_history"
+        ],
+        "C04": [
+          "criteria.C04.release_current",
+          "criteria.C04.release_history"
+        ],
+        "C05": [
+          "criteria.C05.release_current",
+          "criteria.C05.release_history"
+        ],
+        "C06": [
+          "criteria.C06.release_current",
+          "criteria.C06.release_history"
+        ],
+        "C07": [
+          "criteria.C07.release_current",
+          "criteria.C07.release_history"
+        ],
+        "C08": [
+          "criteria.C08.release_current",
+          "criteria.C08.release_history"
+        ],
+        "C09": [
+          "criteria.C09.release_current",
+          "criteria.C09.release_history"
+        ],
+        "C10": [
+          "criteria.C10.release_current",
+          "criteria.C10.release_history"
+        ],
+        "C11": [
+          "criteria.C11.release_current",
+          "criteria.C11.release_history"
+        ],
+        "C12": [
+          "criteria.C12.release_current",
+          "criteria.C12.release_history"
+        ],
+        "X01": [
+          "criteria.X01.release_current",
+          "criteria.X01.release_history"
+        ],
+        "X02": [
+          "criteria.X02.release_current",
+          "criteria.X02.release_history"
+        ],
+        "X03": [
+          "criteria.X03.release_current",
+          "criteria.X03.release_history"
+        ],
+        "X04": [
+          "criteria.X04.release_current",
+          "criteria.X04.release_history"
+        ],
+        "X05": [
+          "criteria.X05.release_current",
+          "criteria.X05.release_history"
+        ],
+        "X06": [
+          "criteria.X06.release_current",
+          "criteria.X06.release_history"
+        ],
+        "X07": [
+          "criteria.X07.release_current",
+          "criteria.X07.release_history"
+        ],
+        "X08": [
+          "criteria.X08.release_current",
+          "criteria.X08.release_history"
+        ]
+      }
     },
     {
       "path": "LICENSE",
@@ -342,9 +590,10 @@
       "lines": 12,
       "module": "LICENSE",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent complete bounded read; README truncated middle reread351–440. Contract/docs/20criteria cross-check pending; no complete review inferred from reading alone."
+        "Parent complete bounded read; README truncated middle reread351–440. Contract/docs/20criteria cross-check pending; no complete review inferred from reading alone.",
+        "Core6全4395行・7module×20criterionを親が確認。READMEはP全文と親mode限定1文deltaのみ、その他5文書は現I SHA一致。"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "full_content_read": true,
@@ -354,7 +603,77 @@
           12
         ]
       ],
-      "read_sha256": "2ceb424e7bb8031d488e006071d9f7d17e3022ae854608da161eea902ad0ad1a"
+      "read_sha256": "2ceb424e7bb8031d488e006071d9f7d17e3022ae854608da161eea902ad0ad1a",
+      "reviewed_sha256": "2ceb424e7bb8031d488e006071d9f7d17e3022ae854608da161eea902ad0ad1a",
+      "reviewed_lines": 12,
+      "review_packet": "docs/development/maintenance-core-packet6-evidence.json",
+      "responsibility": "proprietary著作権・許可/利用責任の宣言。",
+      "callers": [
+        "README.md:535",
+        "配布物受領者"
+      ],
+      "criteria": {
+        "C01": [
+          "criteria.C01.license"
+        ],
+        "C02": [
+          "criteria.C02.license"
+        ],
+        "C03": [
+          "criteria.C03.license"
+        ],
+        "C04": [
+          "criteria.C04.license"
+        ],
+        "C05": [
+          "criteria.C05.license"
+        ],
+        "C06": [
+          "criteria.C06.license"
+        ],
+        "C07": [
+          "criteria.C07.license"
+        ],
+        "C08": [
+          "criteria.C08.license"
+        ],
+        "C09": [
+          "criteria.C09.license"
+        ],
+        "C10": [
+          "criteria.C10.license"
+        ],
+        "C11": [
+          "criteria.C11.license"
+        ],
+        "C12": [
+          "criteria.C12.license"
+        ],
+        "X01": [
+          "criteria.X01.license"
+        ],
+        "X02": [
+          "criteria.X02.license"
+        ],
+        "X03": [
+          "criteria.X03.license"
+        ],
+        "X04": [
+          "criteria.X04.license"
+        ],
+        "X05": [
+          "criteria.X05.license"
+        ],
+        "X06": [
+          "criteria.X06.license"
+        ],
+        "X07": [
+          "criteria.X07.license"
+        ],
+        "X08": [
+          "criteria.X08.license"
+        ]
+      }
     },
     {
       "path": "Makefile",
@@ -410,24 +729,108 @@
     },
     {
       "path": "README.md",
-      "sha256": "f8fdf9554103bf347494617de64a89df8bab966af932d41517c0adaf40090c17",
-      "bytes": 57870,
-      "lines": 533,
+      "sha256": "ba4b06a566fcb8c644cbf9d18a3dc4743454d88d9fe22b390ad008828be2b6c7",
+      "bytes": 57999,
+      "lines": 535,
       "module": "README.md",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent complete bounded read; README truncated middle reread351–440. Contract/docs/20criteria cross-check pending; no complete review inferred from reading alone."
+        "Parent complete bounded read; README truncated middle reread351–440. Contract/docs/20criteria cross-check pending; no complete review inferred from reading alone.",
+        "Core6全4395行・7module×20criterionを親が確認。READMEはP全文と親mode限定1文deltaのみ、その他5文書は現I SHA一致。"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "full_content_read": true,
       "read_ranges": [
         [
-          1,
+          101,
+          280
+        ],
+        [
+          281,
+          440
+        ],
+        [
+          441,
           535
+        ],
+        [
+          1,
+          100
         ]
       ],
-      "read_sha256": "15953da31f91eedf229e30c2f5634f489d808208e7c12bef8ac81565271a822b"
+      "read_sha256": "15953da31f91eedf229e30c2f5634f489d808208e7c12bef8ac81565271a822b",
+      "reviewed_sha256": "ba4b06a566fcb8c644cbf9d18a3dc4743454d88d9fe22b390ad008828be2b6c7",
+      "reviewed_lines": 535,
+      "review_packet": "docs/development/maintenance-core-packet6-evidence.json",
+      "responsibility": "現在mainの利用入口・3channel表示・mode/導入・安全・生成release要約。",
+      "callers": [
+        "利用者/installer導線",
+        "scripts/development/readme_release.py:check/render",
+        "scripts/development/release_notes.py:build"
+      ],
+      "criteria": {
+        "C01": [
+          "criteria.C01.current_guide"
+        ],
+        "C02": [
+          "criteria.C02.current_guide"
+        ],
+        "C03": [
+          "criteria.C03.current_guide"
+        ],
+        "C04": [
+          "criteria.C04.current_guide"
+        ],
+        "C05": [
+          "criteria.C05.current_guide"
+        ],
+        "C06": [
+          "criteria.C06.current_guide"
+        ],
+        "C07": [
+          "criteria.C07.current_guide"
+        ],
+        "C08": [
+          "criteria.C08.current_guide"
+        ],
+        "C09": [
+          "criteria.C09.current_guide"
+        ],
+        "C10": [
+          "criteria.C10.current_guide"
+        ],
+        "C11": [
+          "criteria.C11.current_guide"
+        ],
+        "C12": [
+          "criteria.C12.current_guide"
+        ],
+        "X01": [
+          "criteria.X01.current_guide"
+        ],
+        "X02": [
+          "criteria.X02.current_guide"
+        ],
+        "X03": [
+          "criteria.X03.current_guide"
+        ],
+        "X04": [
+          "criteria.X04.current_guide"
+        ],
+        "X05": [
+          "criteria.X05.current_guide"
+        ],
+        "X06": [
+          "criteria.X06.current_guide"
+        ],
+        "X07": [
+          "criteria.X07.current_guide"
+        ],
+        "X08": [
+          "criteria.X08.current_guide"
+        ]
+      }
     },
     {
       "path": "SECURITY.md",
@@ -436,9 +839,10 @@
       "lines": 133,
       "module": "SECURITY.md",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent complete bounded read; README truncated middle reread351–440. Contract/docs/20criteria cross-check pending; no complete review inferred from reading alone."
+        "Parent complete bounded read; README truncated middle reread351–440. Contract/docs/20criteria cross-check pending; no complete review inferred from reading alone.",
+        "Core6全4395行・7module×20criterionを親が確認。READMEはP全文と親mode限定1文deltaのみ、その他5文書は現I SHA一致。"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "full_content_read": true,
@@ -448,7 +852,77 @@
           133
         ]
       ],
-      "read_sha256": "41b0a8ea82e451f15a3d3e9bcf1ad217a0d01be0a1a73d60ff5f155bdbf956ce"
+      "read_sha256": "41b0a8ea82e451f15a3d3e9bcf1ad217a0d01be0a1a73d60ff5f155bdbf956ce",
+      "reviewed_sha256": "41b0a8ea82e451f15a3d3e9bcf1ad217a0d01be0a1a73d60ff5f155bdbf956ce",
+      "reviewed_lines": 133,
+      "review_packet": "docs/development/maintenance-core-packet6-evidence.json",
+      "responsibility": "PHI/secret・通信/認可・LLM/export・backup/restore・運用信頼境界。",
+      "callers": [
+        "READMEデータ/安全導線",
+        "利用者/エージェント/運用owner"
+      ],
+      "criteria": {
+        "C01": [
+          "criteria.C01.safety_policy"
+        ],
+        "C02": [
+          "criteria.C02.safety_policy"
+        ],
+        "C03": [
+          "criteria.C03.safety_policy"
+        ],
+        "C04": [
+          "criteria.C04.safety_policy"
+        ],
+        "C05": [
+          "criteria.C05.safety_policy"
+        ],
+        "C06": [
+          "criteria.C06.safety_policy"
+        ],
+        "C07": [
+          "criteria.C07.safety_policy"
+        ],
+        "C08": [
+          "criteria.C08.safety_policy"
+        ],
+        "C09": [
+          "criteria.C09.safety_policy"
+        ],
+        "C10": [
+          "criteria.C10.safety_policy"
+        ],
+        "C11": [
+          "criteria.C11.safety_policy"
+        ],
+        "C12": [
+          "criteria.C12.safety_policy"
+        ],
+        "X01": [
+          "criteria.X01.safety_policy"
+        ],
+        "X02": [
+          "criteria.X02.safety_policy"
+        ],
+        "X03": [
+          "criteria.X03.safety_policy"
+        ],
+        "X04": [
+          "criteria.X04.safety_policy"
+        ],
+        "X05": [
+          "criteria.X05.safety_policy"
+        ],
+        "X06": [
+          "criteria.X06.safety_policy"
+        ],
+        "X07": [
+          "criteria.X07.safety_policy"
+        ],
+        "X08": [
+          "criteria.X08.safety_policy"
+        ]
+      }
     },
     {
       "path": "adapters/README.md",
@@ -3225,16 +3699,17 @@
     },
     {
       "path": "changes/maintenance-notify-packet3-lineworks-silent-20261005.json",
-      "sha256": null,
+      "sha256": "6c949ee862047473cf02fedf1a529811e00aa60acf992a0d2c16ff254186e1ba",
       "bytes": 1147,
       "lines": 8,
       "module": "changes",
       "kind": "release-fragment",
       "status": "REVIEWED",
       "evidence": [
-        "日本語runtime変更・upgradeと修復sourceを親照合済み。"
+        "日本語runtime変更・upgradeと修復sourceを親照合済み。",
+        "既存受入後のrefs URL移動/UTCreadmetadata253→228訂正のexactdeltaを親が全文確認。元runtime証拠は保持。"
       ],
-      "reviewed_sha256": "e40278900656f54f28c45a1e704ba917fdd037a65517cdf18f5ed0b128d22575",
+      "reviewed_sha256": "6c949ee862047473cf02fedf1a529811e00aa60acf992a0d2c16ff254186e1ba",
       "reviewed_lines": 8,
       "read_ranges": [
         [
@@ -4901,7 +5376,7 @@
     },
     {
       "path": "docs/development/full-maintenance-20261005/parent-semantic-utc-evidence.json",
-      "sha256": null,
+      "sha256": "1bde1885a4372a45438ff824b0d929192b1f9869edb49746f60616ddbf632f1b",
       "bytes": 1896,
       "lines": 28,
       "module": "docs",
@@ -4913,10 +5388,11 @@
           28
         ]
       ],
-      "reviewed_sha256": "9e6b81e65321866180fa02bf11fbd3d030c4614032b3ca419ed63eca2af08171",
+      "reviewed_sha256": "1bde1885a4372a45438ff824b0d929192b1f9869edb49746f60616ddbf632f1b",
       "evidence": [
         "親作成・全文確認。対象source/callerと検証ログを照合済み。",
-        "Parent-owned structured receipt/criteria/inventory record inspected as task output; full fixedI final checks/review remain pending."
+        "Parent-owned structured receipt/criteria/inventory record inspected as task output; full fixedI final checks/review remain pending.",
+        "既存受入後のrefs URL移動/UTCreadmetadata253→228訂正のexactdeltaを親が全文確認。元runtime証拠は保持。"
       ]
     },
     {
@@ -4996,6 +5472,17 @@
       "lines": 4582,
       "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
       "structured_record_reviewed": true
+    },
+    {
+      "path": "docs/development/maintenance-core-packet6-evidence.json",
+      "module": "run-record",
+      "kind": "run_record",
+      "status": "REVIEWED",
+      "sha256": "3b8f36321ea22b9af262f3e3838b2ee98f7b0c4fa93566bf995fa86a48812ca0",
+      "structured_record_reviewed": true,
+      "evidence": [
+        "独立実装担当のroot読取り専用packet証拠として全140criterion/flows/findings/実local検証とhistorical限界を親が受入。fresh independent reviewerとは別。"
+      ]
     },
     {
       "path": "docs/development/maintenance-notify-evidence.json",
@@ -10820,9 +11307,10 @@
       "lines": 49,
       "module": "openwiki",
       "kind": "canonical-wiki-brief",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Whole user-authored49line brief read; no generated classification. Maintained code/docs/PHI/source/current-versus-history contracts align; parent documentation criteria pending."
+        "Whole user-authored49line brief read; no generated classification. Maintained code/docs/PHI/source/current-versus-history contracts align; parent documentation criteria pending.",
+        "Core6全4395行・7module×20criterionを親が確認。READMEはP全文と親mode限定1文deltaのみ、その他5文書は現I SHA一致。"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "full_content_read": true,
@@ -10832,7 +11320,76 @@
           49
         ]
       ],
-      "read_sha256": "4d3b26ee66727baf0d69b688fcfecb70d00a1aaacf8f64bcc03f56baac71504b"
+      "read_sha256": "4d3b26ee66727baf0d69b688fcfecb70d00a1aaacf8f64bcc03f56baac71504b",
+      "reviewed_sha256": "4d3b26ee66727baf0d69b688fcfecb70d00a1aaacf8f64bcc03f56baac71504b",
+      "reviewed_lines": 49,
+      "review_packet": "docs/development/maintenance-core-packet6-evidence.json",
+      "responsibility": "ユーザー作成49行のWiki生成brief。現在sourceと歴史/未受入/PHI禁止を指示。",
+      "callers": [
+        "OpenWiki更新workflow/生成利用者（今回は起動しない）"
+      ],
+      "criteria": {
+        "C01": [
+          "criteria.C01.wiki_brief"
+        ],
+        "C02": [
+          "criteria.C02.wiki_brief"
+        ],
+        "C03": [
+          "criteria.C03.wiki_brief"
+        ],
+        "C04": [
+          "criteria.C04.wiki_brief"
+        ],
+        "C05": [
+          "criteria.C05.wiki_brief"
+        ],
+        "C06": [
+          "criteria.C06.wiki_brief"
+        ],
+        "C07": [
+          "criteria.C07.wiki_brief"
+        ],
+        "C08": [
+          "criteria.C08.wiki_brief"
+        ],
+        "C09": [
+          "criteria.C09.wiki_brief"
+        ],
+        "C10": [
+          "criteria.C10.wiki_brief"
+        ],
+        "C11": [
+          "criteria.C11.wiki_brief"
+        ],
+        "C12": [
+          "criteria.C12.wiki_brief"
+        ],
+        "X01": [
+          "criteria.X01.wiki_brief"
+        ],
+        "X02": [
+          "criteria.X02.wiki_brief"
+        ],
+        "X03": [
+          "criteria.X03.wiki_brief"
+        ],
+        "X04": [
+          "criteria.X04.wiki_brief"
+        ],
+        "X05": [
+          "criteria.X05.wiki_brief"
+        ],
+        "X06": [
+          "criteria.X06.wiki_brief"
+        ],
+        "X07": [
+          "criteria.X07.wiki_brief"
+        ],
+        "X08": [
+          "criteria.X08.wiki_brief"
+        ]
+      }
     },
     {
       "path": "openwiki/architecture/extraction-and-semantic.md",
@@ -21291,5 +21848,12 @@
     "matched_reviewed_files": 45,
     "source_W": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
     "parent_criteria_read": "C01..C06 reused prior uninterrupted reads; C07..X08 full read this goal continuation"
+  },
+  "last_core6_import": {
+    "report": "docs/development/maintenance-core-packet6-evidence.json",
+    "record_sha256": "3b8f36321ea22b9af262f3e3838b2ee98f7b0c4fa93566bf995fa86a48812ca0",
+    "reviewed_files": 6,
+    "parent_delta": "README standalone/Hermesmode1文fb488c8",
+    "criteria_full_read": "C01..X08 all140, clipped C09..C12 reread in full"
   }
 }
