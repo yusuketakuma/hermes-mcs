@@ -4,6 +4,8 @@ import json
 import time
 import uuid
 
+import pytest
+
 from ledger import Ledger
 import job_ops
 import mcs_operations
@@ -296,6 +298,53 @@ def test_signal_dismiss_rejects_corrupt_evidence_with_receipt(tmp_path):
         assert receipt["outcome"] == "rejected"
         assert receipt["error"] == "signal_corrupt"
         assert len(db.artifacts("signal_v1", project_id=1)) == 1
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("raw", ["{broken", "[" * 1500 + "0" + "]" * 1500,
+                                 "[]", "null"], ids=["malformed", "deep", "array", "null"])
+@pytest.mark.parametrize("pin", ["old", "latest", "absent"])
+def test_signal_dismiss_never_falls_back_past_corrupt_latest(tmp_path, raw, pin):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        key = "synthetic-operation-signal"
+        old = db.artifact_add(
+            "signal_v1", json.dumps({"state": "open", "evidence": {}}),
+            project_id=1, meta={"key": key})
+        latest = db.artifact_add("signal_v1", raw, project_id=1, meta={"key": key})
+        fields = {"signal_key": key, "reason": "synthetic human review"}
+        if pin != "absent":
+            fields["expected_signal_artifact_id"] = old if pin == "old" else latest
+        command = _command("ops.signal_dismiss", **fields)
+        receipt = mcs_requests.apply_command(db, command)
+        assert receipt["outcome"] == "rejected"
+        assert receipt["error"] == ("signal_changed" if pin == "old" else "signal_corrupt")
+        assert mcs_requests.apply_command(db, command) == receipt
+        assert len(db.artifacts("signal_v1", project_id=1)) == 2
+        stored = db.db.execute(
+            "SELECT receipt_json FROM command_receipts WHERE command_id=?",
+            (command["command_id"],)).fetchone()
+        assert json.loads(stored[0]) == receipt
+    finally:
+        db.close()
+
+
+def test_signal_dismiss_corrupt_foreign_latest_checks_scope_before_pin(tmp_path):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        key = "synthetic-operation-signal"
+        old = db.artifact_add(
+            "signal_v1", json.dumps({"state": "open", "evidence": {}}),
+            project_id=1, meta={"key": key})
+        db.artifact_add("signal_v1", "{broken", project_id=2, meta={"key": key})
+        receipt = mcs_requests.apply_command(db, _command(
+            "ops.signal_dismiss", signal_key=key, reason="synthetic human review",
+            expected_signal_artifact_id=old))
+        assert receipt["outcome"] == "rejected"
+        assert receipt["error"] == "project_mismatch"
+        assert "current_artifact_id" not in receipt
+        assert len(db.artifacts("signal_v1")) == 2
     finally:
         db.close()
 
