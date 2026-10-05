@@ -132,7 +132,8 @@
       "topic": "all caller auth/transport/schema and fresh independent fixed-I review",
       "reason": "shared modules are another owner and were read only at relevant boundaries; this packet does not claim their full audit or final integration acceptance.",
       "packet": "docs/development/maintenance-notify-evidence.json",
-      "integration_status": "integrated; final fixed-I checks and independent review pending"
+      "integration_status": "integrated; final fixed-I checks and independent review pending",
+      "current_disposition": "ALL_SHARED_SOURCES_REVIEWED; final-I checks/fresh review pending"
     },
     {
       "id": "CORE-001",
@@ -463,7 +464,9 @@
       "owner": "/root",
       "evidence": "configured_cron_jobsをstandalone/runtimeが利用。parentがunread */10、deep10,40、health watcher */5と明示設定300→600必要操作を担当。子は10分health契約とroot isolationを実装したが親Iのscript/cron移行結果をここでは検証していない。",
       "packet": "docs/development/maintenance-core-packet2-evidence.json",
-      "integration_status": "integrated; final fixed-I checks and independent review pending"
+      "integration_status": "integrated; final fixed-I checks and independent review pending",
+      "current_disposition": "SOURCE_AND_GUIDES_REVIEWED; final-I test pending",
+      "current_evidence": "parent-lifecycle-evidence.json + maintenance-notify-packet6-evidence.json; current cron/host/health/source cadence10 min=MCS server load measure."
     },
     {
       "id": "CORE-P2-ING-DEP02",
@@ -2012,6 +2015,239 @@
       "counterexample": "固定Pで28実Markdown相対target全てtrackedに存在。code記法の旧path/oldGitobjectsはhistoryとして別分類。",
       "receipt": "/tmp/mcs-maintenance-core-docs7-20261005/static-receipt.json",
       "packet": "docs/development/maintenance-core-docs7-evidence.json"
+    },
+    {
+      "id": "N6-01",
+      "state": "CONFIRMED_FIXED",
+      "path": "changes/maintenance-notify-packet3-lineworks-silent-20261005.json",
+      "criteria": [
+        "C01",
+        "C04",
+        "C12",
+        "X02"
+      ],
+      "before": "正式release_notes.validate全180→179valid/1reject、refs external URL",
+      "repair": "sourcepathrefsだけにし公式URLはdetailsへ保持。runtime/C1/notify契約変更なし。",
+      "evidence": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet6-20261005/fragment-schema-P.json",
+      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-02",
+      "state": "CONFIRMED_FIXED",
+      "path": "docs/specs/external-export-contract.md",
+      "criteria": [
+        "C01",
+        "C05",
+        "C06",
+        "C07",
+        "X04",
+        "X07"
+      ],
+      "before": "PHI節が/1限定を明記せずbody一律禁止と記述し、同文書explicitC1 paragraphと実consumerのrootbody_text例外に矛盾。",
+      "repair": "default/1禁止と明示C1pairedmessage_bodyのrootbody_textだけ許可を分け、PHIになり得ること/人許可・byte/hash・残るfield禁止・retention/withdrawを明記。",
+      "basis": "packet5 617syntheticfamily+sameSHA全文contract; packet6 sections65–155/210–272 actualread。runtime変更なし。",
+      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-03",
+      "state": "CONFIRMED_FIXED",
+      "path": "hermes_plugin/README.md",
+      "criteria": [
+        "C01",
+        "C03",
+        "C04",
+        "C05",
+        "C08",
+        "C10",
+        "X04",
+        "X06"
+      ],
+      "before": "旧『SHAが返らなければ再upload』説明がsealedprior immutablehosted contractを否定。partialpagination/latesthumanauthority/currentgeneration条件が明示されない。",
+      "repair": "現delivery._file_remote_match/_replies、samehash prior seal、人承認receiptcurrentauthority/legacytoken、semanticgeneration gateを補記。runtime追加/既存allowlist緩和なし。",
+      "basis": "同SHA priorpacket4全読再利用＋今回README382行再読、ownedruntimeはreadonly関数ranges、coreから受領の既存合成test IDsに照合。",
+      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-04",
+      "paths": [
+        "docs/guides/USER_GUIDE.md",
+        "docs/guides/LINEWORKS.md"
+      ],
+      "issue": "ガイドの配送再開保証と任意辞書の未実装断定、LINE WORKS silent本文説明が現行ガードと不一致",
+      "fix": "確認済み未送信partのみ再開、不明結果を保留し自動再送しない説明へ。任意辞書の現行候補条件とネイティブメンション抑止を明記",
+      "evidence": [
+        "mcs/notify/notify_cards.py:_parts_in_flight",
+        "mcs/views/mcs_stats.py:med_reference_breakdown",
+        "adapters/lineworks/client.py:_silent_content"
+      ],
+      "state": "CONFIRMED_FIXED",
+      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-05",
+      "paths": [
+        "docs/guides/SETUP_AGENT.md"
+      ],
+      "issue": "導入形態A/Bの選択表に定義のないS分岐が残る",
+      "fix": "重複S分岐を削除しA→Phase3/B→Phase6の実在する選択肢だけ保持",
+      "evidence": [
+        "docs/guides/SETUP_AGENT.md:Phase2",
+        "docs/guides/SETUP_AGENT.md:Phase6"
+      ],
+      "state": "CONFIRMED_FIXED",
+      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-06",
+      "paths": [
+        "docs/guides/USER_GUIDE.md"
+      ],
+      "issue": "自動signal resolvedを確認済みと説明し人の確認/対応と混同し得る",
+      "fix": "評価した検出条件の解消と説明し、人承認・カード確認と別であることを明記",
+      "evidence": [
+        "mcs/ops/mcs_signals.py:1180-1248",
+        "docs/guides/USER_GUIDE.md:350",
+        "docs/guides/USER_GUIDE.md:423"
+      ],
+      "state": "CONFIRMED_FIXED",
+      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-07",
+      "paths": [
+        "docs/specs/lifecycle-spec.md"
+      ],
+      "issue": "現行doctorがcheckを実行するとの旧説明、offsite明示scheduleのローカル実装と実機適用を混同",
+      "fix": "doctorのread-only/明示probe/未確認状態と、明示schedule接続の合成検証・実機未適用を区別",
+      "evidence": [
+        "mcs/ops/mcs_setup.py:cmd_doctor",
+        "mcs/ops/mcs_setup.py:_cron_jobs",
+        "docs/guides/BACKUP.md:9"
+      ],
+      "state": "CONFIRMED_FIXED",
+      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-08",
+      "paths": [
+        "docs/ROADMAP.md"
+      ],
+      "issue": "F-2/F-3初期レビューを現行未修正と読める照合表が残る",
+      "fix": "初期記録は保持し日付とローカル修正状態を追記、実API/本番/C0未受入を区別",
+      "evidence": [
+        "mcs/extract/v1/extract.py:RULE_VERSION",
+        "mcs/ops/ext_contract.py:_valid_ack",
+        "changes/maintenance-core-packet5-rule-repair.json",
+        "changes/archive/1.0.13/20261004-receipt-contract.json"
+      ],
+      "state": "CONFIRMED_FIXED",
+      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-09",
+      "paths": [
+        "docs/specs/semantic-evaluation.md"
+      ],
+      "issue": "partial配送fingerprintが再照合されないとの旧説明とカード全体へ意味内容なしの過剰断定",
+      "fix": "現行width/明示send cfgでtargetとchunksのfingerprintを再計算し不一致を未証明とする、card receiptをこのlifecycle chainで使わない範囲へ限定",
+      "evidence": [
+        "mcs/semantic/semantic_lifecycle.py:124-185",
+        "tests/semantic/test_semantic_blind.py:test_cli_credits_a_matching_partial_receipt_from_supplied_config",
+        "tests/semantic/test_semantic_blind.py:test_cli_partial_receipt_with_changed_chunk_width_is_unprovable",
+        "owner:/root/maintenance_semantic"
+      ],
+      "state": "CONFIRMED_FIXED",
+      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-10",
+      "paths": [
+        "docs/roadmap/signals-stats.md"
+      ],
+      "summary": "#19の現状節が記録上の解消原因・再open統計・小標本抑制等を未実装とし、冒頭追記と固定Pの実装に矛盾していた。現状のみ同期し古い設計と未達の人手/privacyゲートを保持。",
+      "evidence": [
+        "mcs/views/mcs_stats.py:775-1047 full boundary read",
+        "mcs/ops/mcs_signals.py:1180-1248 prior boundary read"
+      ],
+      "runtime_modified": false,
+      "state": "CONFIRMED_FIXED",
+      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-11",
+      "state": "CONFIRMED_TRANSFERRED_PARENT_DELTA",
+      "path": "docs/dev-records/phase-j-record.md",
+      "criteria": [
+        "C01",
+        "X08"
+      ],
+      "issue": "現在操作手順と明示したprefaceのdocs/DEVELOPMENT.mdがfixedPでは不存在。history本文の古いpathとは別。",
+      "resolution": "core docs7にて合成静的counterexampleを確認。親が別Iでpreface1行をdocs/development/DEVELOPMENT.mdへ修復と報告。sourceW d0dac97では原本を変えず、親I receiptは親owner。",
+      "receipt": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-docs7-20261005/docs/development/maintenance-core-docs7-evidence.json",
+      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending.",
+      "current_disposition": "RESOLVED_PARENT_DELTA"
+    },
+    {
+      "id": "STAMP-01",
+      "status": "CONFIRMED_FIXED",
+      "cause": "card/post helperのprefixがMCSでユーザー指定のスタンプ表示でない。",
+      "fix": "shared card_reaction_lines/stamp_lineのprefixとempty/unfetched表示を統一。",
+      "regression": "3platform rendered footer+body actual worker methods / snapshot evidence controls。",
+      "packet": "docs/development/maintenance-stamps-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "STAMP-02",
+      "status": "CONFIRMED_FIXED",
+      "cause": "actor_lineが未取得でNone、自分は氏名を消して自分だけ、stale/failedが日付のみ、長氏名/制御文字は無上限。",
+      "fix": "kind別氏名、実名+自分、未取得/失敗/古い情報とcomplete_at観測時点、12/40/20文字上限とsilent inline化。",
+      "regression": "6状態+kind/self/unknown+longnames/MAXactors+partial保持。",
+      "packet": "docs/development/maintenance-stamps-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "STAMP-03",
+      "status": "CONFIRMED_FIXED",
+      "cause": "actor-only changeがcontent_fpに入らずqueued/delivered bodyが更新されない。named prior postがpage外になると新body planに入らない。",
+      "fix": "表示actor hashをpresentation_fpへ追加、既配送named memberをbody planへ再投入しprior_remote_idを維持。",
+      "regression": "実dispatch/grant/validated transport/part receipts、queued/delivered/unknowncontrol、page外post、source identity/human ack。",
+      "packet": "docs/development/maintenance-stamps-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "DEFAULT-01",
+      "status": "DISPROVED_CHANGE_NEEDED",
+      "evidence": "名前到達は既存metadata_shadow=True AND metadata_actors=True。どちらも既定off。表示依頼に取得既定変更は含めず親が有効化条件を文書化。",
+      "packet": "docs/development/maintenance-stamps-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending.",
+      "current_disposition": "DISPROVED"
+    },
+    {
+      "id": "LEGACY-01",
+      "status": "MAINTAINED_COMPATIBILITY_LIMIT",
+      "evidence": "旧unnamed legacy bodyは既存frozen経路。named partsのupdateを証明し、旧postのリライトや重複再送を勝手に開始しない。本文表示操作はcurrent viewを読む。",
+      "packet": "docs/development/maintenance-stamps-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending.",
+      "current_disposition": "MAINTAINED_COMPATIBILITY_BOUNDARY"
+    },
+    {
+      "id": "DRUGMAP-READONLY",
+      "status": "DEFERRED_TO_PARENT_OWNER",
+      "evidence": "notify ownerからload/current_refs JSON RecursionError未捕捉候補を受領。fixed docPと現在Iは未照合、stamp所有外なので確定扱いせず親/coreへ移管。",
+      "packet": "docs/development/maintenance-stamps-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending.",
+      "current_disposition": "TRANSFERRED_TO_CORE_DRUG_JSON_OWNER"
     }
   ],
   "deferred": [],
@@ -2079,5 +2315,6 @@
   "independent_review": {
     "status": "not_started",
     "reason": "Requires fixed I after all packets"
-  }
+  },
+  "coverage_current": "All existing applicable sources have accepted current-SHA receipts; final drug JSON delta intake still in progress."
 }

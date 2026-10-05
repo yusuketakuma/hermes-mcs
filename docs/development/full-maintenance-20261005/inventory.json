@@ -17003,7 +17003,11 @@
       "evidence": [
         "JSON parsed and patch inspected; final path/evidence reconciliation pending.",
         "Complete54line checkpoint read and ownership/snapshot/currentrequested-versus-actual-model assertions updated; constraints preserved."
-      ]
+      ],
+      "reviewed_sha256": "a5a981e3e2488b41ad97f0d01cdab55a9e19ec8951ebf1a8282ff33f21b815de",
+      "reviewed_lines": 50,
+      "structured_record_reviewed": true,
+      "record_review_basis": "Previously accepted author/criterion/source receipt plus current complete parse and known parent-authored metadata deltas; historical status retained and final-I execution not inferred."
     },
     {
       "path": "docs/development/full-maintenance-20261005/findings.json",
@@ -17017,7 +17021,13 @@
       "evidence": [
         "JSON parsed and patch inspected; final path/evidence reconciliation pending.",
         "Parent-owned structured receipt/criteria/inventory record inspected as task output; full fixedI final checks/review remain pending."
-      ]
+      ],
+      "reviewed_sha256": "607d76ee4a85c948491cb1a27159a0a9ee5cd81b7a0f73be1e1d9391b7861cd9",
+      "reviewed_lines": 2320,
+      "structured_nodes_seen": 3159,
+      "strict_JSON_all_fields_parse": true,
+      "structured_record_reviewed": true,
+      "record_review_basis": "Previously accepted author/criterion/source receipt plus current complete parse and known parent-authored metadata deltas; historical status retained and final-I execution not inferred."
     },
     {
       "path": "docs/development/full-maintenance-20261005/generated-classification.json",
@@ -17027,7 +17037,13 @@
       "status": "REVIEWED",
       "evidence": [
         "Parent-created structured provenance/SHA classification receipt; no self-referential SHA claim."
-      ]
+      ],
+      "reviewed_sha256": "65531859e6ed01f19eb4c1fb275a373bb2b5abb19f61ea9c11e4b34aea1e6e1e",
+      "reviewed_lines": 138,
+      "structured_nodes_seen": 168,
+      "strict_JSON_all_fields_parse": true,
+      "structured_record_reviewed": true,
+      "record_review_basis": "Previously accepted author/criterion/source receipt plus current complete parse and known parent-authored metadata deltas; historical status retained and final-I execution not inferred."
     },
     {
       "path": "docs/development/full-maintenance-20261005/inventory.json",
@@ -17041,7 +17057,14 @@
       "evidence": [
         "JSON parsed and patch inspected; final path/evidence reconciliation pending.",
         "Parent-owned structured receipt/criteria/inventory record inspected as task output; full fixedI final checks/review remain pending."
-      ]
+      ],
+      "record_snapshot_commit": "ea35c40c4afedd9fb3597805a4747319013bf1a5",
+      "record_snapshot_sha256": "74dbb0609ca965760a3fde7df085f30ac72c38e365c4d12340903156484b47de",
+      "self_hash_policy": "Own inventory current bytes are identified by final fixed-I commit and external full-file manifest; no self-hash fixed point claimed.",
+      "structured_nodes_seen": 48609,
+      "strict_JSON_all_fields_parse": true,
+      "structured_record_reviewed": true,
+      "record_review_basis": "Previously accepted author/criterion/source receipt plus current complete parse and known parent-authored metadata deltas; historical status retained and final-I execution not inferred."
     },
     {
       "path": "docs/development/full-maintenance-20261005/original-state-preservation.json",
@@ -17051,7 +17074,13 @@
       "status": "REVIEWED",
       "evidence": [
         "Parent structured original-state preservation record; no self-referentialSHA claim."
-      ]
+      ],
+      "reviewed_sha256": "c7e37f166bd11461c67500613c58df0f1df21f254977ec6933b59b075b8dae12",
+      "reviewed_lines": 60,
+      "structured_nodes_seen": 77,
+      "strict_JSON_all_fields_parse": true,
+      "structured_record_reviewed": true,
+      "record_review_basis": "Previously accepted author/criterion/source receipt plus current complete parse and known parent-authored metadata deltas; historical status retained and final-I execution not inferred."
     },
     {
       "path": "docs/development/full-maintenance-20261005/parent-bootstrap-evidence.json",
@@ -17061,7 +17090,13 @@
       "status": "REVIEWED",
       "evidence": [
         "Parent-authored all20criterion bootstrap decision receipt; source SHA verified, no self-referentialSHA."
-      ]
+      ],
+      "reviewed_sha256": "06077d2e408d0acc4c34d4732dcc71c5163563130f917240c3b133784d1226df",
+      "reviewed_lines": 101,
+      "structured_nodes_seen": 126,
+      "strict_JSON_all_fields_parse": true,
+      "structured_record_reviewed": true,
+      "record_review_basis": "Previously accepted author/criterion/source receipt plus current complete parse and known parent-authored metadata deltas; historical status retained and final-I execution not inferred."
     },
     {
       "path": "docs/development/full-maintenance-20261005/parent-ci-evidence.json",
@@ -17092,7 +17127,12 @@
       "structured_record_reviewed": true,
       "evidence": [
         "親作成/全20観点/全文read証拠/実在local linkとsourceを確認。"
-      ]
+      ],
+      "reviewed_sha256": "77222f1f3e9d5571a8d7eaa81fd8749a534f57323953e65d46eedc390eef84c4",
+      "reviewed_lines": 137,
+      "structured_nodes_seen": 154,
+      "strict_JSON_all_fields_parse": true,
+      "record_review_basis": "Previously accepted author/criterion/source receipt plus current complete parse and known parent-authored metadata deltas; historical status retained and final-I execution not inferred."
     },
     {
       "path": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
@@ -17122,7 +17162,12 @@
       "sha256": "d3e1c47d39fecc48e4cf3b6f90be25e143fad8de8cec7c810a865ea6ffd0bea7",
       "evidence": [
         "Authored/checked source identity, actual before/after exit logs and hashes; implementation proof distinct from pending final I."
-      ]
+      ],
+      "reviewed_sha256": "d3e1c47d39fecc48e4cf3b6f90be25e143fad8de8cec7c810a865ea6ffd0bea7",
+      "reviewed_lines": 107,
+      "structured_nodes_seen": 133,
+      "strict_JSON_all_fields_parse": true,
+      "record_review_basis": "Previously accepted author/criterion/source receipt plus current complete parse and known parent-authored metadata deltas; historical status retained and final-I execution not inferred."
     },
     {
       "path": "docs/development/full-maintenance-20261005/parent-semantic-utc-evidence.json",
@@ -17156,7 +17201,13 @@
       "evidence": [
         "Authored task record; final fixed-I classification/reconciliation pending.",
         "Parent-owned structured receipt/criteria/inventory record inspected as task output; full fixedI final checks/review remain pending."
-      ]
+      ],
+      "reviewed_sha256": "fb183034fec4b2efb9f53cdefbfddda3c76ff0b2289acb9d6630d522712ca101",
+      "reviewed_lines": 1695,
+      "structured_nodes_seen": 1896,
+      "strict_JSON_all_fields_parse": true,
+      "structured_record_reviewed": true,
+      "record_review_basis": "Previously accepted author/criterion/source receipt plus current complete parse and known parent-authored metadata deltas; historical status retained and final-I execution not inferred."
     },
     {
       "path": "docs/development/maintenance-core-evidence.json",
@@ -17244,7 +17295,12 @@
       "structured_record_reviewed": true,
       "evidence": [
         "独立実装担当のroot読取り専用packet証拠として全140criterion/flows/findings/実local検証とhistorical限界を親が受入。fresh independent reviewerとは別。"
-      ]
+      ],
+      "reviewed_sha256": "3b8f36321ea22b9af262f3e3838b2ee98f7b0c4fa93566bf995fa86a48812ca0",
+      "reviewed_lines": 3371,
+      "structured_nodes_seen": 3365,
+      "strict_JSON_all_fields_parse": true,
+      "record_review_basis": "Previously accepted author/criterion/source receipt plus current complete parse and known parent-authored metadata deltas; historical status retained and final-I execution not inferred."
     },
     {
       "path": "docs/development/maintenance-notify-evidence.json",
@@ -38123,7 +38179,12 @@
       "structured_record_reviewed": true,
       "evidence": [
         "53項目/120観点/flow/再生/ログmanifest/限界を親受入。fresh最終独立reviewではない。"
-      ]
+      ],
+      "reviewed_sha256": "324245517db1308b0c0d868544049f96a613b00b07280de15fb8366405c6081d",
+      "reviewed_lines": 4225,
+      "structured_nodes_seen": 5361,
+      "strict_JSON_all_fields_parse": true,
+      "record_review_basis": "Previously accepted author/criterion/source receipt plus current complete parse and known parent-authored metadata deltas; historical status retained and final-I execution not inferred."
     },
     {
       "path": "docs/development/full-maintenance-20261005/parent-static-svg-evidence.json",
@@ -38134,7 +38195,12 @@
       "structured_record_reviewed": true,
       "evidence": [
         "親の静的SVG3件実preview・source/outputhashとtool限界。"
-      ]
+      ],
+      "reviewed_sha256": "23599a69706945573719fd0dff97348a7fc64de574b2ced55a98161b615d5728",
+      "reviewed_lines": 43,
+      "structured_nodes_seen": 62,
+      "strict_JSON_all_fields_parse": true,
+      "record_review_basis": "Previously accepted author/criterion/source receipt plus current complete parse and known parent-authored metadata deltas; historical status retained and final-I execution not inferred."
     },
     {
       "path": "docs/development/maintenance-core-docs7-evidence.json",
@@ -38145,7 +38211,12 @@
       "structured_record_reviewed": true,
       "evidence": [
         "全文receipt/140観点allassessment・同一refs/flow/findings/limits/全byte replayとcommit receiptを親受入。runtime/freshreviewとは別。"
-      ]
+      ],
+      "reviewed_sha256": "7d46676877f4094dfce6126e85c193512f33bc2ad89b1d609eea69d70961cddd",
+      "reviewed_lines": 4106,
+      "structured_nodes_seen": 4864,
+      "strict_JSON_all_fields_parse": true,
+      "record_review_basis": "Previously accepted author/criterion/source receipt plus current complete parse and known parent-authored metadata deltas; historical status retained and final-I execution not inferred."
     },
     {
       "path": "docs/development/full-maintenance-20261005/parent-run-records-evidence.json",
@@ -38373,5 +38444,10 @@
     "own_criteria": 180,
     "core_criteria_reused": 140,
     "final_I_execution": "PENDING"
+  },
+  "parent_run_record_identity_refresh": {
+    "count": 13,
+    "input_commit": "ea35c40c4afedd9fb3597805a4747319013bf1a5",
+    "self_identity": "External final fixed-I manifest/commit rather than recursive internal SHA"
   }
 }

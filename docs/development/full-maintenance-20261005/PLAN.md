@@ -10,9 +10,9 @@ B=main 4167697（既存未追跡8/recoverは調査後、明示された条件付
 | owner | 専用worktree/branch | 現packet | 次packet候補 |
 |---|---|---|---|
 | root | full-maintenance-20261005 / audit/full-maintenance-20261005 | 共有台帳・親統合・文書境界 | 固定Iの全体/SDK/隔離配布物検証 → fresh-context独立レビュー |
-| maintenance_core | maintenance-core-docs7-20261005 / audit/maintenance-core-docs7-20261005 | root文書・CHANGELOG・歴史20文書を受入済み、旧run記録9件の読取り専用照合 | 固定Iの必須検証（親が入力を固定して別指示） |
-| maintenance_notify | maintenance-notify-20261005 / audit/maintenance-notify-packet6-20261005 | guides/specs/roadmap/履歴記録/changes文書259件の正式受入記録 | 固定Iの必須検証（親が入力を固定して別指示） |
-| maintenance_semantic | maintenance-stamps-20261005 / audit/maintenance-stamps-20261005 | 各投稿の押下者氏名・取得状態、件数ラベル、後着表示更新の合成回帰 | stamp成果の親統合・文書整合 |
+| maintenance_core | maintenance-drug-json-20261005 / audit/maintenance-drug-json-20261005 | 薬剤辞書・保存結果の深いJSONによる停止の最小修復と回帰 | 修復成果の親統合 |
+| maintenance_notify | maintenance-notify-20261005 / audit/maintenance-notify-packet6-20261005 | 文書259件の正式受入済み | 固定Iの実SDK・配布物の隔離起動検証 |
+| maintenance_semantic | maintenance-stamps-20261005 / audit/maintenance-stamps-20261005 | スタンプ実装・20基準と両Python各385件を受入済み | 固定IのPython3.10全体検証 |
 
 ユーザー指定はGPT-6.1-sol ultra。実効モデル名は子のAPI応答から確認できないため、要求設定と実測を混同しない。再帰spawnなし、1 worktree/1 writer。共有ledger/schemaはcore owner。
 親は必要境界をreadonlyで照合し、検証済みcommit/patchを順次直列統合。
@@ -35,9 +35,9 @@ COMPLETEは全適用source対象REVIEWED、確定修復/有用保守解消、統
 
 ## 現状
 
-初期inventory: tracked 814 + original untracked 2。全確認は未完。
+初期inventory: tracked 814 + original untracked 2。2026-10-05の親受入時点はtracked 907、台帳909件（削除2件を含む）、REVIEWED884・EXCLUDED25・UNSEEN/PARTIAL0。新しい薬剤JSON修復成果の受入と、固定Iの必須検証・独立レビューは未完。
 8/recoverは本文を外部出力せず確認し、見出しだけの残留作業出力と判断。2件33 bytesの削除と復元元は私有 receipt に記録。
-親の統合と子3packetの確認・再現・最小修正を継続中。開始後にmainへ外部追加されたc26a009（テスト時Gateway実操作の拒否）は、元checkoutを変更せず専用Iへ取り込んだ。詳細はoriginal-state-preservation.json。
+各source packet、文書259件、歴史20文書、旧run記録9件、スタンプ氏名表示を親の専用Iへ統合した。旧PASS/途中状態は原文に保持し、現在の全域受入へ転用しない。開始後にmainへ外部追加されたc26a009（テスト時Gateway実操作の拒否）は、元checkoutを変更せず専用Iへ取り込んだ。詳細はoriginal-state-preservation.json。
 
 ## 追加された受入条件
 
