@@ -221,6 +221,13 @@ def admitted_chat(client_route: str, prompt: str, *,
         return {"text": None, "finish_reason": None, "usage": None,
                 "status": None, "admission": sent.get("reason"),
                 "permit_id": pid}
+    if deadline is not None and time.monotonic() >= deadline:
+        # an expired deadline is rejected before any byte is sent —
+        # retire the permit instead of holding a slot as ``unknown``
+        broker.terminal(pid, "not_sent", proof="deadline")
+        return {"text": None, "finish_reason": None, "usage": None,
+                "status": None, "admission": "deadline",
+                "permit_id": pid}
     extra = dict(kw.pop("extra_payload", None) or {})
     extra["admission_token"] = sent["token"]
     extra.setdefault("id_slot", request_slot())
@@ -237,6 +244,9 @@ def admitted_chat(client_route: str, prompt: str, *,
         if err_out.get("kind") == "unreachable":
             # connection refused — provably never reached the backend
             broker.terminal(pid, "not_sent", proof="unreachable")
+        elif err_out.get("kind") == "protocol":
+            # HTTP 200 with an unusable body — the backend finished
+            broker.terminal(pid, "done", proof="malformed_200")
         else:
             # transport failure — the backend may still be decoding;
             # unknown, never assumed free
@@ -275,6 +285,10 @@ def admitted_probe_format(client_route: str, endpoint: str, model: str,
     if not sent.get("sent"):
         broker.terminal(pid, "not_sent", proof=sent.get("reason"))
         return "plain"
+    deadline = kw.get("deadline")
+    if deadline is not None and time.monotonic() >= deadline:
+        broker.terminal(pid, "not_sent", proof="deadline")
+        return "plain"
     err_out = kw.pop("error_out", None)
     if err_out is None:
         err_out = {}
@@ -291,6 +305,8 @@ def admitted_probe_format(client_route: str, endpoint: str, model: str,
         if p is not None and p["state"] == "sent":
             if err_out.get("kind") == "unreachable":
                 broker.terminal(pid, "not_sent", proof="unreachable")
+            elif err_out.get("kind") == "protocol":
+                broker.terminal(pid, "done", proof="probe_malformed_200")
             elif err_out.get("kind"):
                 broker.mark_unknown(pid, "probe_transport")
             else:
@@ -374,7 +390,8 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
     (status, headers, raw)`` seam — tests inject a fake loopback here
     and ``semantic.llm_chat`` passes ``bounded_request`` to keep
     worker isolation.  ``error_out``, when given, receives
-    ``{"kind": "unreachable"|"transport"}`` on the exception path —
+    ``{"kind": "unreachable"|"transport"}`` on the exception path, or
+    ``{"kind": "protocol"}`` when an HTTP 200 body is unusable —
     "unreachable" means the server refused the connection outright
     (never started / down), which callers may treat as free-of-cost
     unlike a timeout that consumed real server work.
@@ -409,27 +426,31 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
             error_out["kind"] = (
                 "unreachable"
                 if isinstance(reason, ConnectionRefusedError)
+                or isinstance(error, bounded_http.NotSentTimeout)
                 else "transport")
         return None
     if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
         return {"text": None, "finish_reason": None, "usage": None,
                 "status": status}
+    # An HTTP 200 proves the backend finished the request even when the
+    # body is unusable — report "protocol" so admission retires the
+    # permit instead of holding it as an unknown transport failure.
     try:
         out = json.loads(raw.decode("utf-8"))
     except (ValueError, RecursionError):
-        return None
+        return _malformed(error_out)
     if not isinstance(out, dict) \
             or not isinstance(out.get("choices"), list) \
             or not out["choices"] \
             or not isinstance(out["choices"][0], dict):
-        return None
+        return _malformed(error_out)
     choice = out["choices"][0]
     message = choice.get("message")
     if not isinstance(message, dict):
-        return None
+        return _malformed(error_out)
     text = message.get("content")
     if text is not None and not isinstance(text, str):
-        return None
+        return _malformed(error_out)
     finish = choice.get("finish_reason")
     if finish is not None and not isinstance(finish, str):
         finish = str(finish)
@@ -437,6 +458,12 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
             "usage": _usage_dict(out.get("usage")),
             "timings": _timings_dict(out.get("timings")),
             "status": status}
+
+
+def _malformed(error_out: dict | None) -> None:
+    if error_out is not None:
+        error_out["kind"] = "protocol"
+    return None
 
 
 def acceptance_error(response: dict | None) -> str | None:

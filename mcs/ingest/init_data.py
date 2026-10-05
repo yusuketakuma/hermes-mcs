@@ -116,18 +116,21 @@ def main() -> int:
         if floor and floor <= since:
             result["skipped_floored"] += 1
             continue
-        # Resume the stored cursor for ANY cutoff: pages are newest-first
-        # so a deeper --since just continues the descent and a shallower
-        # one reaches its cutoff on the next fetched page. Restarting at
-        # page 1 on target drift made `--days` re-runs (whose `since`
-        # moves every invocation) re-walk already-saved pages forever
-        # (P-3). The floor write is monotonic, so a resumed walk can
-        # never regress coverage. Finished floors still skip above.
+        # Resume the stored cursor for the same or a shallower cutoff:
+        # pages are newest-first so a shallower one reaches its cutoff on
+        # the next fetched page. Restarting at page 1 on that drift made
+        # `--days` re-runs (whose `since` moves later every invocation)
+        # re-walk already-saved pages forever (P-3). A DEEPER cutoff must
+        # restart: fetch_history drops messages older than the old target
+        # and the cursor may sit past them (even at the timeline end), so
+        # resuming would skip [since, target) and still set the floor.
+        # save_messages dedups the re-fetched pages.
         cursor = ledger.history_cursor(p.project_id)
-        if not cursor:
+        target = ledger.history_target(p.project_id)
+        if not cursor or (target and since < target):
             ledger.reset_history_cursor(p.project_id, since)
             cursor = 1
-        elif ledger.history_target(p.project_id) != since:
+        elif target != since:
             ledger.set_history_target(p.project_id, since)
         pages_left = args.pages
         total_new = 0
@@ -199,6 +202,12 @@ def main() -> int:
                 state = adapter.auto_login(profile_dir=CHROME_PROFILE,
                                            chrome_bin=CHROME_BIN)
                 if state == "ok":
+                    # the expired chunk is re-fetched: un-mark the walk
+                    # as done and refund its pages when the cursor did
+                    # not advance, or the loop exits with replies unfetched
+                    reached = False
+                    if not merged.checkpoint_safe:
+                        pages_left += pages_used
                     continue
                 stats["errors"].append(
                     f"history {p.project_id}: auto_login={state}")

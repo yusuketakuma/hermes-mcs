@@ -1102,7 +1102,7 @@ class MCSAdapter:
         that never validated."""
         try:
             self._ensure_chrome(profile_dir, chrome_bin)
-        except (BootstrapError, OSError):
+        except (MCSError, OSError):  # incl. deadline_exceeded
             return "failed"
         # cheapest recovery first — before touching the login form at
         # all, a live session (fresh token + valid API check) ends it
@@ -1177,7 +1177,11 @@ class MCSAdapter:
                 continue
             if tok:
                 self._token = tok
-                if self.check_session():
+                try:
+                    ok = self.check_session()
+                except MCSError:
+                    return "failed"
+                if ok:
                     self._write_cache(tok)
                     return "ok"
                 # token present but not yet valid, or MFA page — keep waiting
@@ -1758,7 +1762,7 @@ class MCSAdapter:
     def download(self, url: str, dest: str) -> dict:
         _assert_allowed_url(url)
         if not self._token:
-            raise MCSError("no_token")
+            self.bootstrap_token()
         try:
             fd, tmp = tempfile.mkstemp(prefix=".download-", suffix=".part",
                                        dir=os.path.dirname(dest) or ".")

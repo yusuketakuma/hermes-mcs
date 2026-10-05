@@ -22,6 +22,9 @@ LOGFILE = os.path.join(HOME, "data", "run.log")
 BACKUP_KEEP = 7
 LOG_MAX = 5 * 1024 * 1024
 ATTACHMENT_KEEP_S = 14 * 86400
+# an apply publishes its preupdate backup, then waits up to 20min for the
+# run lock before recording backup_path in state; prune must not race it
+PREUPDATE_GRACE_S = 86400
 
 
 class MaintenanceError(RuntimeError):
@@ -81,16 +84,20 @@ def daily_backup(db_path: str):
         os.unlink(tmp)
     src = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro",
                           uri=True)
-    dst = sqlite3.connect(tmp)
     try:
-        src.backup(dst)
-        dst.execute("PRAGMA journal_mode=DELETE")
-    finally:
-        dst.close()
-        src.close()
-    if not valid_mcs_db(tmp):
-        os.unlink(tmp)
-        raise MaintenanceError("backup_verify_failed")
+        dst = sqlite3.connect(tmp)
+        try:
+            src.backup(dst)
+            dst.execute("PRAGMA journal_mode=DELETE")
+        finally:
+            dst.close()
+            src.close()
+        if not valid_mcs_db(tmp):
+            raise MaintenanceError("backup_verify_failed")
+    except BaseException:
+        with suppress(OSError):   # never strand a partial PHI copy
+            os.unlink(tmp)
+        raise
     # chmod -> fsync -> os.replace -> dir fsync: a power loss never
     # leaves a torn rollback point at dest
     publish_tmp(tmp, dest, mode=0o600)
@@ -119,16 +126,20 @@ def preupdate_backup(db_path: str) -> str:
     dest = tmp[:-4]
     src = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro",
                           uri=True)
-    dst = sqlite3.connect(tmp)
     try:
-        src.backup(dst)
-        dst.execute("PRAGMA journal_mode=DELETE")
-    finally:
-        dst.close()
-        src.close()
-    if not valid_mcs_db(tmp):
-        os.unlink(tmp)
-        raise MaintenanceError("backup_verify_failed")
+        dst = sqlite3.connect(tmp)
+        try:
+            src.backup(dst)
+            dst.execute("PRAGMA journal_mode=DELETE")
+        finally:
+            dst.close()
+            src.close()
+        if not valid_mcs_db(tmp):
+            raise MaintenanceError("backup_verify_failed")
+    except BaseException:
+        with suppress(OSError):   # never strand a partial PHI copy
+            os.unlink(tmp)
+        raise
     publish_tmp(tmp, dest, mode=0o600)
     return dest
 
@@ -164,6 +175,11 @@ def prune_preupdate_backups(state_path: str | None = None) -> int:
     for path in glob.glob(os.path.join(BACKUP_DIR, "preupdate-*.db")):
         if os.path.abspath(path) in referenced:
             continue
+        with suppress(OSError):
+            # fresh and not yet recorded: an apply may still be waiting
+            # for the run lock before it writes backup_path to state
+            if time.time() - os.path.getmtime(path) < PREUPDATE_GRACE_S:
+                continue
         with suppress(OSError):
             os.unlink(path)
             removed += 1

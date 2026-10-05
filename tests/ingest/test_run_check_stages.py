@@ -1032,7 +1032,7 @@ def test_self_probe_fetches_and_notifies_own_post(tmp_path):
             return {"message_id": 101, "is_self_only": True}
 
         def fetch_history(self, pid, since, max_pages=10, start_page=1):
-            assert since == wm
+            assert since == wm - run_check.BACKFILL_OVERLAP_S
             self.history_calls += 1
             return mcs_adapter.MessageBatch([own], pages=1, reached=True)
 

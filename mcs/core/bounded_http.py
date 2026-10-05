@@ -144,6 +144,10 @@ def _worker_environment() -> dict:
             if key in allowed}
 
 
+class NotSentTimeout(TimeoutError):
+    """Deadline expired before the request body reached the worker."""
+
+
 def bounded_http_request(endpoint: str, method: str, body,
                          timeout: float, api_key: str | None = None,
                          deadline: float | None = None,
@@ -178,7 +182,7 @@ def bounded_http_request(endpoint: str, method: str, body,
         operation_deadline = min(operation_deadline, float(deadline))
     remaining = operation_deadline - time.monotonic()
     if remaining <= 0:
-        raise TimeoutError("http worker deadline exceeded")
+        raise NotSentTimeout("http worker deadline exceeded")
     envelope = {
         "endpoint": endpoint,
         "method": method,
@@ -196,7 +200,7 @@ def bounded_http_request(endpoint: str, method: str, body,
     try:
         remaining = operation_deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError("http worker deadline exceeded")
+            raise NotSentTimeout("http worker deadline exceeded")
         stdout, _stderr = process.communicate(input=payload, timeout=remaining)
     except subprocess.TimeoutExpired as error:
         try:

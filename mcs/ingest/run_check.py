@@ -960,7 +960,11 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
         if ledger.probe_marker(pid) == mid:
             continue                     # unfetchable id — already tried
         try:
-            batch = adapter.fetch_history(pid, wm, max_pages=SELF_PROBE_PAGES)
+            # overlap the watermark: fetch_history drops items with ts <=
+            # since, and a same-second post would be skipped then marked
+            batch = adapter.fetch_history(
+                pid, max(1, wm - BACKFILL_OVERLAP_S),
+                max_pages=SELF_PROBE_PAGES)
         except SessionExpired:
             raise
         except MCSError as e:
@@ -995,6 +999,11 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
 
 # ---------- stage: attachments ----------
 
+def _download_session_ok(adapter) -> bool:
+    probe = getattr(adapter, "_probe_session_ok", None)
+    return bool(probe()) if callable(probe) else True
+
+
 def stage_attachments(adapter, ledger, result, deadline, semantic=False):
     # attachments referenced by queued notify events jump the queue —
     # otherwise a deep backlog leaves new-message files undownloaded
@@ -1026,6 +1035,12 @@ def stage_attachments(adapter, ledger, result, deadline, semantic=False):
                 result["errors"].append(
                     f"attach {a['attachment_id']}: fs")
                 continue
+            # downloads carry the session bearer but surface an expired
+            # session as a plain 401/403 — re-login instead of burning
+            # the row into a permanent 'failed' (same rule as _request)
+            if e.kind == "http_error" and getattr(e, "status", None) in (
+                    401, 403) and not _download_session_ok(adapter):
+                raise SessionExpired("attachments", status=e.status) from e
             # keep the HTTP status in the recorded kind — the failure
             # class (permanent 4xx vs transient) and triage need it (F11)
             kind = (f"http_{e.status}" if e.kind == "http_error"
@@ -1541,7 +1556,9 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
                       stage_thread_read, adapter, ledger, result, deadline)
 
     if args.download_files:
-        stage_attachments(adapter, ledger, result, deadline, semantic=sem_on)
+        _with_relogin(adapter, ledger, result, "attachments",
+                      stage_attachments, adapter, ledger, result, deadline,
+                      semantic=sem_on)
 
     # -- idle-capacity deep history (trickle) ----------------------
     deep_history = cfg.get("deep_history", True)

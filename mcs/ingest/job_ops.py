@@ -501,7 +501,9 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
         if batch.pages and merged.checkpoint_safe:
             pl["page"] = sp + batch.pages
             pl["stalls"] = 0
-        elif not batch.error:
+        elif not batch.error and not merged.deadline:
+            # a deadline-cut merge is unfinished, not a blocker — it resumes
+            # next tick via the plain checkpoint below.
             # same window re-walked with checkpoint unsafe — track stalls
             # so a permanently unverifiable blocker surfaces instead of
             # re-fetching identical pages forever
@@ -553,7 +555,7 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
             # replies still pending — keep job alive to re-check floor,
             # backing off as stalls accumulate
             ledger.job_defer(job["job_id"],
-                             min(3600, 600 * pl.get("stalls", 1)),
+                             min(3600, 600 * max(1, pl.get("stalls", 0))),
                              payload=pl, reason_code="waiting_replies")
         else:
             # progress checkpoint: resume from this page next tick without
@@ -617,6 +619,9 @@ def run_reconcile_jobs(adapter, ledger, result, deadline,
             passes = pl.get("passes", 0)
             if type(passes) is not int or passes < 0:
                 raise ValueError
+            stalls = pl.get("stalls", 0)
+            if type(stalls) is not int or stalls < 0:
+                raise ValueError
         except ValueError:
             ledger.job_fail(job["job_id"], reason_code="invalid_payload")
             result["errors"].append("reconcile: invalid_payload")
@@ -641,9 +646,23 @@ def run_reconcile_jobs(adapter, ledger, result, deadline,
                                        semantic=semantic)
         if merged.error:
             raise merged.error
-        if batch.pages and merged.checkpoint_safe:
+        stalled = False
+        if not batch.error and not merged.checkpoint_safe \
+                and not merged.deadline:
+            # an uncertifiable window (e.g. 'snippet' parent) must not pin
+            # the rotation forever: reconcile certifies no floor, so after
+            # HISTORY_STALL_LIMIT re-walks skip past it visibly
+            pl["stalls"] = stalls + 1
+            if pl["stalls"] >= HISTORY_STALL_LIMIT:
+                stalled = True
+                result["errors"].append(f"reconcile {pid}: window_stalled")
+        if batch.pages and (merged.checkpoint_safe or stalled):
             pl["page"] = page + batch.pages
-        if batch.reached and not batch.error and merged.checkpoint_safe:
+            pl["stalls"] = 0
+        elif stalled:
+            pl["stalls"] = 0
+        if batch.reached and not batch.error and (merged.checkpoint_safe
+                                                  or stalled):
             # full pass complete — restart the rotation after a pause
             pl["page"] = 1
             pl["passes"] = passes + 1
@@ -661,7 +680,8 @@ def run_reconcile_jobs(adapter, ledger, result, deadline,
             result["errors"].append(f"reconcile {pid}: {batch.error.kind}")
         else:
             ledger.job_defer(job["job_id"],
-                             0 if merged.checkpoint_safe else 300, payload=pl)
+                             0 if merged.checkpoint_safe or stalled else 300,
+                             payload=pl)
         result.setdefault("reconcile", []).append(
             {"pid": pid, "new": len(new_ids), "page": pl["page"]})
         done_n += 1

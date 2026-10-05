@@ -165,9 +165,9 @@ def test_interrupted_backup_retains_last_verified_generation(tmp_path, monkeypat
     assert previous.read_bytes() == previous_bytes
     assert maintenance.valid_mcs_db(str(previous))
     assert not (backup_dir / "ledger-20260921.db").exists()
-    assert (backup_dir / "ledger-20260921.db.tmp").exists()
+    assert not (backup_dir / "ledger-20260921.db.tmp").exists()
 
-    # A subsequent run removes the abandoned candidate and can publish the
+    # The failed run removed its own candidate; a subsequent run can publish the
     # next generation once the source path is healthy again.
     monkeypatch.setattr(maintenance.sqlite3, "connect", real_connect)
     maintenance.daily_backup(str(source))
