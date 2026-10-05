@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "input_I": "22ebd08240976051edb9bfeb7f7afc6c42fa6280",
+  "synthetic_only": true,
+  "tool": "/usr/bin/qlmanage -t -s1600",
+  "first_attempt": "magickはfont未解決で3件exit1。QuickLook元寸法previewは右端切断。root intrinsic sizeだけ等比縮小、viewBoxと内容同一の一時コピーで再render。",
+  "previews": [
+    {
+      "source": "docs/assets/runtime-topology.svg",
+      "render_input": "/tmp/mcs-maintenance-static-svg-20261005/runtime-topology.fit.svg",
+      "change": "intrinsic size only, viewBox/content unchanged; fit QuickLook768 viewport",
+      "exit_status": 0,
+      "source_sha256": "b583fcb7befbf840125251f1d0f10d528e6b6d2dfa7da4e2172a47a8620d266e",
+      "preview_sha256": "881535731f79b1352869998591ae05f316f45c750c600ff8cf6d2d0bd9be1c76",
+      "visual_inspected": true,
+      "result": "全体と変更文言を実表示で確認。10分/deep10,40・結果不明保留/人確認を判読、右端切断なし。"
+    },
+    {
+      "source": "docs/screenshots/slack-thread.svg",
+      "render_input": "/tmp/mcs-maintenance-static-svg-20261005/slack-thread.fit.svg",
+      "change": "intrinsic size only, viewBox/content unchanged; fit QuickLook768 viewport",
+      "exit_status": 0,
+      "source_sha256": "bc58cd25dfd4115c84b1f1f677e2c8a2a90b20f23e13c0c6c7dc1c425c6fc649",
+      "preview_sha256": "3126699ebf4433f3e74cac29a905b53e58393673d2e5979c7159f754beb675c0",
+      "visual_inspected": true,
+      "result": "全体と変更文言を実表示で確認。10分/deep10,40・結果不明保留/人確認を判読、右端切断なし。"
+    },
+    {
+      "source": "docs/screenshots/discord-thread.svg",
+      "render_input": "/tmp/mcs-maintenance-static-svg-20261005/discord-thread.fit.svg",
+      "change": "intrinsic size only, viewBox/content unchanged; fit QuickLook768 viewport",
+      "exit_status": 0,
+      "source_sha256": "89867d2ea162024cd9e501c63173fab530035a985fdd1a89141d5531a2f19c40",
+      "preview_sha256": "72d5ee2f39f4caaff1b6e81dc0a7a51484700d1f7b0aa0157f7019de2116c9ee",
+      "visual_inspected": true,
+      "result": "全体と変更文言を実表示で確認。10分/deep10,40・結果不明保留/人確認を判読、右端切断なし。"
+    }
+  ],
+  "limits": [
+    "静的説明SVGのlocal preview。Slack/Discord実サービスやnative UI/実データ送信成功の証明ではない。",
+    "一時previewはrepo未収録。正本SVGはこの視覚確認で無編集。"
+  ]
+}

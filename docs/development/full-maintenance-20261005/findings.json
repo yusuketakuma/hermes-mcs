@@ -1576,6 +1576,336 @@
       "reason": "currentguide/security/changelog/briefすべて合成/SDK型/実API/人ラベル/部署受入を分離。本文中のhistoricalPASSを全域v7受入に計上しない。",
       "status": "DISPROVED",
       "packet": "docs/development/maintenance-core-packet6-evidence.json"
+    },
+    {
+      "id": "SEM-P6-F01",
+      "status": "FIXED",
+      "title": "release以外の生成marker破損が成功扱い/手書き本文を置換する",
+      "paths": [
+        "scripts/development/update_readme.py"
+      ],
+      "root_cause_and_fix": "全5markerの個数/順序をrender前検査、全doc validation終了前writeなし。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_generated_marker_damage_keeps_manual_text",
+          "test_marker_failure_in_second_doc_does_not_write_first"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-F02",
+      "status": "FIXED",
+      "title": "READMEとDEVELOPMENTが両方ないのに検査/生成が0終了",
+      "paths": [
+        "scripts/development/update_readme.py"
+      ],
+      "root_cause_and_fix": "両targetゼロを1終了にする。片方のみ/disabled blocks互換を保持。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_missing_all_generated_docs_is_not_success",
+          "test_single_enabled_doc_and_absent_sections_remain_supported"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-F03",
+      "status": "FIXED",
+      "title": "PNG scanline filter5以上を正常画像として受入れる",
+      "paths": [
+        "scripts/development/generate_slack_gallery.py"
+      ],
+      "root_cause_and_fix": "bounded decode後の全行filterを0..4と検査。RGB/RGBA正常5filter保持。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_png_check_rejects_invalid_scanline_filters",
+          "test_png_check_keeps_all_standard_filters"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-F04",
+      "status": "FIXED",
+      "title": "不正Release identity/状態型が書込計画へ進み判定不能",
+      "paths": [
+        "scripts/development/sync_release_notes.py"
+      ],
+      "root_cause_and_fix": "全一覧/直前GET/PATCH応答/再GETのstable record型を検査。既存identity/concurrency/draft/tag/idempotence境界維持。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_release_response_contract_rejected_before_any_write"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-F05",
+      "status": "FIXED",
+      "title": "最低対応3.10の深いJSONでRecursionErrorがCLI診断を抜ける",
+      "paths": [
+        "scripts/development/release_notes.py",
+        "scripts/development/readme_release.py",
+        "scripts/development/sync_release_notes.py"
+      ],
+      "root_cause_and_fix": "ValueError/OSError等の既存top-level診断へRecursionErrorを追加。source/入力payloadやTracebackを出さない。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_deep_json_cli_has_controlled_offline_diagnostic"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-F06",
+      "status": "FIXED",
+      "title": "shadow budgetのNaN/inf/非正値がモデルへ伝播",
+      "paths": [
+        "scripts/development/semantic_shadow_e2e.py"
+      ],
+      "root_cause_and_fix": "モデル利用前にfiniteかつpositiveを検査、0.25/300の有効値と任意合成fixtureを保持。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_shadow_cli_rejects_nonfinite_or_nonpositive_budget_before_model",
+          "test_shadow_cli_preserves_valid_operator_fixture_and_budget"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-F07",
+      "status": "FIXED",
+      "title": "不正case/message memberがshadow runnerへ進む",
+      "paths": [
+        "scripts/development/semantic_shadow_e2e.py"
+      ],
+      "root_cause_and_fix": "case objectsとtruthy messages list/member objectsを入口検査、deep JSON診断。falsy/empty messages fallbackとvalid body/threadを保持。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_shadow_cli_malformed_cases_stop_before_model",
+          "test_shadow_cli_preserves_valid_operator_fixture_and_budget"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-M01",
+      "status": "IMPLEMENTED",
+      "title": "runtime diagramの5分/deep7,37を現在の10分/deep10,40へ同期",
+      "paths": [
+        "docs/assets/runtime-topology.svg"
+      ],
+      "evidence": "mcs/ops/mcs_setup.py:2390-2422 CRON_JOBS全文範囲、P→W SVG差分。static正本、PNG pairなし。",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-M02",
+      "status": "IMPLEMENTED",
+      "title": "Slack/Discord説明の絶対重複保証を結果不明保留/人確認へ修正",
+      "paths": [
+        "docs/screenshots/slack-thread.svg",
+        "docs/screenshots/discord-thread.svg"
+      ],
+      "evidence": "合成static canonical sourceと通知receipt/unknown契約。PNG pairなし、native/browser renderは未実行。",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-D01",
+      "status": "DISPROVED",
+      "title": "release buildの任意IO途中失敗を汎用transactionへ置換すべきか",
+      "evidence": [
+        "docs/development/README_MAINTENANCE.md:35-38",
+        "docs/development/RELEASE_NOTES.md:65-70",
+        "scripts/development/release_notes.py build",
+        "tests/release/test_release_notes.py"
+      ],
+      "decision": "既存手順はgit diffでCHANGELOG/README/残fragment/archiveを照合して手動復旧と明示。validateで中断する異常入力を既存testで確認し、無関係なtransaction追加をしない。任意IO完全atomic性・途中IO実fault injectionは未検証。",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-D02",
+      "status": "DISPROVED",
+      "title": "shadow任意--casesをpacket3 bench同様fixedasset限定にするべきか",
+      "evidence": [
+        "scripts/development/semantic_shadow_e2e.py:2-16,28-79",
+        "mcs/semantic/semantic_evaluation.py:1075-1172",
+        "mcs/semantic/semantic_bench.py:148-173"
+      ],
+      "decision": "本driverはoperatorが--casesを指定する完全合成CLI契約で、実DBを既定で凍結するpacket3入口と異なる。任意合成fixture/保存形を保持。実データ/匿名化は本auditでは禁止。",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-D03",
+      "status": "DISPROVED",
+      "title": "readme_release -Iでsibling importが消える",
+      "evidence": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-readme_release.py.log",
+      "decision": "通常Python CLIはscript dirをsys.pathに含む。-Iはそれを除去する通常CLI外条件、parent判断受入済み。正式CLIをenv-i/PYTHONPATHなし/-S/repo外cwdでboth runtime起動、追加runpy bindingsでarchive内source束縛を確認。不要bootstrapなし。",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-H01",
+      "status": "RESOLVED_PARENT_DELTA",
+      "title": "固定Pのnotify fragment refsにURLがありrelease_notes checkが拒否",
+      "path": "changes/maintenance-notify-packet3-lineworks-silent-20261005.json",
+      "sha256_P": "e40278900656f54f28c45a1e704ba917fdd037a65517cdf18f5ed0b128d22575",
+      "child_result": "P/Wのcheck exit1を保持しvalidatorを弱めない。今回fragment含むその他はindividual validator成功。",
+      "parent_report": "notify3e1824c→親15c8c04で修復済み、親Iでrelease_notes/readme checks正常と連絡。child固定P/Wで再検証した結果ではない。",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-H02",
+      "status": "RESOLVED_PARENT_DELTA",
+      "title": "新test fileでDEVELOPMENT生成countが254→255",
+      "child_result": "親正本は未編集。isolated archiveで再生成するとcount1行だけ、README unchanged、その後both-runtime bootstrap success。",
+      "patch": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-generated.diff",
+      "parent_report": "親I追加他owner testを含め256filesへ再生成しb3140f4へ記録と連絡。",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-H03",
+      "status": "SAFETY_LIMITATION",
+      "title": "実MCS/原本DB/token-cache/LLM/Jev/Keychain/外部API/実送信/配備/native renderer",
+      "decision": "明示禁止、全fixtureは完全合成。SDK/実認証/transport/browserアプリ/productionの検証をlocal passから推測しない。最終I全体統合とfresh独立レビューはparent owner。",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-H04",
+      "status": "FIXED",
+      "title": "semantic_send_gate deep corrupt JSON predicate疑義",
+      "decision": "packet6完了時にparentが所有者を分けて合成確認へ投入。packet6所有外で未編集・未確認、全域未完了を維持。",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending",
+      "parent_resolution": "fb488c8/84b23db; parent-semantic-send-gate-evidence.json deepJSON6before-fail/both-runtime56after-pass"
+    },
+    {
+      "id": "SEM-P6-H05",
+      "status": "REVIEWED",
+      "title": "CHANGELOG全3492行を現在fragmentから再生成できるか",
+      "decision": "buildは既存header/historyを保持し新sectionを挿入。RELEASE_NOTES95-103にv1.0.0〜1.0.8を2026-10-01人手再編集し旧原本をarchive保存と記載。checkはformat/source同期を検査し過去本文の事実を再検証しない。rootCHANGELOGはparent readonly、全文reviewを本packetに算入しない。",
+      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending",
+      "parent_resolution": "core6全3492行manualhistory全文/140観点受入7c90b16/a525f96"
     }
   ],
   "deferred": [],

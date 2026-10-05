@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "REVIEWED": 579,
+      "REVIEWED": 634,
       "EXCLUDED": 25,
-      "UNSEEN": 268,
-      "PARTIAL": 29
+      "PARTIAL": 28,
+      "UNSEEN": 216
     },
-    "candidate_tracked": 899
+    "candidate_tracked": 901
   },
   "files": [
     {
@@ -1755,8 +1755,150 @@
       "lines": 21,
       "module": "changes",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": []
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "1c9d9038c9dfaa4e922d7b0be2baa23c9d2fc9359bcb168e41b63dd39813d39e",
+      "reviewed_lines": 21,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "今回の合成回帰または日本語利用者向け変更記録",
+      "callers": [
+        "scripts/run_tests.sh",
+        "general CI pytest (test)",
+        "scripts/development/release_notes.py check (fragment)"
+      ],
+      "flow": "fragment/版/参照/Release identity検査→生成/export/明示sync計画→ローカル文書/stub receipt→README/公開候補。公開操作未実行。 / source/doc→全marker/shape/参照検査→生成block→検査後ローカル書込→README/DEVELOPMENT/review。 / 完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。 / 完全合成cases→object/messages/finite positive budget検査→stub pipeline→report→評価。実LLM/Jev/DB無し。",
+      "read_ranges": [
+        [
+          1,
+          21
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.release.all_20_criteria.C01",
+          "modules.readme.all_20_criteria.C01",
+          "modules.gallery.all_20_criteria.C01",
+          "modules.shadow.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.release.all_20_criteria.C02",
+          "modules.readme.all_20_criteria.C02",
+          "modules.gallery.all_20_criteria.C02",
+          "modules.shadow.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.release.all_20_criteria.C03",
+          "modules.readme.all_20_criteria.C03",
+          "modules.gallery.all_20_criteria.C03",
+          "modules.shadow.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.release.all_20_criteria.C04",
+          "modules.readme.all_20_criteria.C04",
+          "modules.gallery.all_20_criteria.C04",
+          "modules.shadow.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.release.all_20_criteria.C05",
+          "modules.readme.all_20_criteria.C05",
+          "modules.gallery.all_20_criteria.C05",
+          "modules.shadow.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.release.all_20_criteria.C06",
+          "modules.readme.all_20_criteria.C06",
+          "modules.gallery.all_20_criteria.C06",
+          "modules.shadow.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.release.all_20_criteria.C07",
+          "modules.readme.all_20_criteria.C07",
+          "modules.gallery.all_20_criteria.C07",
+          "modules.shadow.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.release.all_20_criteria.C08",
+          "modules.readme.all_20_criteria.C08",
+          "modules.gallery.all_20_criteria.C08",
+          "modules.shadow.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.release.all_20_criteria.C09",
+          "modules.readme.all_20_criteria.C09",
+          "modules.gallery.all_20_criteria.C09",
+          "modules.shadow.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.release.all_20_criteria.C10",
+          "modules.readme.all_20_criteria.C10",
+          "modules.gallery.all_20_criteria.C10",
+          "modules.shadow.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.release.all_20_criteria.C11",
+          "modules.readme.all_20_criteria.C11",
+          "modules.gallery.all_20_criteria.C11",
+          "modules.shadow.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.release.all_20_criteria.C12",
+          "modules.readme.all_20_criteria.C12",
+          "modules.gallery.all_20_criteria.C12",
+          "modules.shadow.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.release.all_20_criteria.X01",
+          "modules.readme.all_20_criteria.X01",
+          "modules.gallery.all_20_criteria.X01",
+          "modules.shadow.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.release.all_20_criteria.X02",
+          "modules.readme.all_20_criteria.X02",
+          "modules.gallery.all_20_criteria.X02",
+          "modules.shadow.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.release.all_20_criteria.X03",
+          "modules.readme.all_20_criteria.X03",
+          "modules.gallery.all_20_criteria.X03",
+          "modules.shadow.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.release.all_20_criteria.X04",
+          "modules.readme.all_20_criteria.X04",
+          "modules.gallery.all_20_criteria.X04",
+          "modules.shadow.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.release.all_20_criteria.X05",
+          "modules.readme.all_20_criteria.X05",
+          "modules.gallery.all_20_criteria.X05",
+          "modules.shadow.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.release.all_20_criteria.X06",
+          "modules.readme.all_20_criteria.X06",
+          "modules.gallery.all_20_criteria.X06",
+          "modules.shadow.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.release.all_20_criteria.X07",
+          "modules.readme.all_20_criteria.X07",
+          "modules.gallery.all_20_criteria.X07",
+          "modules.shadow.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.release.all_20_criteria.X08",
+          "modules.readme.all_20_criteria.X08",
+          "modules.gallery.all_20_criteria.X08",
+          "modules.shadow.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "changes/20261005-extraction-snapshot-evidence.json",
@@ -4630,9 +4772,91 @@
       "lines": 31,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "efa874a310f20b459423dc6ce5710d1e6092c5babfcc404045ac5216ed4f286d",
+      "reviewed_lines": 31,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "flow": "現在source/安全契約→完全合成SVG/manual docs→local表示/リンク→利用者説明。",
+      "read_ranges": [
+        [
+          1,
+          31
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.static_docs.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.static_docs.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.static_docs.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.static_docs.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.static_docs.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.static_docs.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.static_docs.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.static_docs.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.static_docs.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.static_docs.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.static_docs.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.static_docs.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.static_docs.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.static_docs.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.static_docs.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.static_docs.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.static_docs.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.static_docs.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.static_docs.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.static_docs.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/assets/flow-journey.svg",
@@ -4641,9 +4865,91 @@
       "lines": 36,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "5fd5290fd75682abe041f3dfa8e9eb98c85067cd29e20707a40cb6397e5148b1",
+      "reviewed_lines": 36,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "flow": "現在source/安全契約→完全合成SVG/manual docs→local表示/リンク→利用者説明。",
+      "read_ranges": [
+        [
+          1,
+          36
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.static_docs.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.static_docs.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.static_docs.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.static_docs.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.static_docs.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.static_docs.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.static_docs.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.static_docs.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.static_docs.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.static_docs.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.static_docs.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.static_docs.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.static_docs.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.static_docs.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.static_docs.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.static_docs.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.static_docs.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.static_docs.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.static_docs.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.static_docs.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/assets/flow-network.svg",
@@ -4652,9 +4958,91 @@
       "lines": 38,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "083ff5eb31c26caeecbbdc096cb9b16bb8d0e40dec8df8b295ec363f90567c59",
+      "reviewed_lines": 38,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "flow": "現在source/安全契約→完全合成SVG/manual docs→local表示/リンク→利用者説明。",
+      "read_ranges": [
+        [
+          1,
+          38
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.static_docs.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.static_docs.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.static_docs.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.static_docs.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.static_docs.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.static_docs.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.static_docs.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.static_docs.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.static_docs.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.static_docs.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.static_docs.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.static_docs.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.static_docs.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.static_docs.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.static_docs.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.static_docs.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.static_docs.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.static_docs.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.static_docs.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.static_docs.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/assets/flow-overview.svg",
@@ -4663,9 +5051,91 @@
       "lines": 35,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "aeff8973e7e57bda3863c09211f37d22af2eadf99a8bd087d57852248d6dc1f7",
+      "reviewed_lines": 35,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "flow": "現在source/安全契約→完全合成SVG/manual docs→local表示/リンク→利用者説明。",
+      "read_ranges": [
+        [
+          1,
+          35
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.static_docs.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.static_docs.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.static_docs.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.static_docs.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.static_docs.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.static_docs.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.static_docs.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.static_docs.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.static_docs.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.static_docs.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.static_docs.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.static_docs.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.static_docs.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.static_docs.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.static_docs.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.static_docs.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.static_docs.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.static_docs.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.static_docs.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.static_docs.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/assets/flow-pipeline.svg",
@@ -4674,9 +5144,91 @@
       "lines": 47,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "794651d32c5732ae343da37de2c518d06030a0b9caa73464618e546295ca0878",
+      "reviewed_lines": 47,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "flow": "現在source/安全契約→完全合成SVG/manual docs→local表示/リンク→利用者説明。",
+      "read_ranges": [
+        [
+          1,
+          47
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.static_docs.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.static_docs.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.static_docs.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.static_docs.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.static_docs.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.static_docs.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.static_docs.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.static_docs.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.static_docs.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.static_docs.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.static_docs.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.static_docs.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.static_docs.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.static_docs.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.static_docs.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.static_docs.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.static_docs.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.static_docs.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.static_docs.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.static_docs.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/assets/flow-signals.svg",
@@ -4685,9 +5237,91 @@
       "lines": 42,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "2fbf6910392281d0d22ec70306a2da9c27a547f96265e2cffd20d05402acba1f",
+      "reviewed_lines": 42,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "flow": "現在source/安全契約→完全合成SVG/manual docs→local表示/リンク→利用者説明。",
+      "read_ranges": [
+        [
+          1,
+          42
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.static_docs.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.static_docs.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.static_docs.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.static_docs.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.static_docs.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.static_docs.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.static_docs.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.static_docs.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.static_docs.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.static_docs.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.static_docs.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.static_docs.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.static_docs.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.static_docs.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.static_docs.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.static_docs.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.static_docs.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.static_docs.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.static_docs.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.static_docs.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/assets/flow-timeline.svg",
@@ -4696,9 +5330,91 @@
       "lines": 27,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "aa6564ecfd5a97dd7c575b113ea570a1a033251256ea31e769d56544cb3b312f",
+      "reviewed_lines": 27,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "flow": "現在source/安全契約→完全合成SVG/manual docs→local表示/リンク→利用者説明。",
+      "read_ranges": [
+        [
+          1,
+          27
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.static_docs.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.static_docs.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.static_docs.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.static_docs.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.static_docs.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.static_docs.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.static_docs.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.static_docs.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.static_docs.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.static_docs.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.static_docs.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.static_docs.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.static_docs.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.static_docs.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.static_docs.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.static_docs.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.static_docs.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.static_docs.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.static_docs.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.static_docs.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/assets/runtime-topology.svg",
@@ -4707,9 +5423,91 @@
       "lines": 117,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "b583fcb7befbf840125251f1d0f10d528e6b6d2dfa7da4e2172a47a8620d266e",
+      "reviewed_lines": 117,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "flow": "現在source/安全契約→完全合成SVG/manual docs→local表示/リンク→利用者説明。",
+      "read_ranges": [
+        [
+          1,
+          117
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.static_docs.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.static_docs.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.static_docs.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.static_docs.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.static_docs.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.static_docs.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.static_docs.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.static_docs.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.static_docs.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.static_docs.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.static_docs.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.static_docs.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.static_docs.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.static_docs.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.static_docs.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.static_docs.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.static_docs.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.static_docs.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.static_docs.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.static_docs.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/dev-records/HANDOFF_CLAUDE_1.0.13_20261004.md",
@@ -5227,9 +6025,92 @@
       "lines": 82,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "dcfb3af671339b3e26af29aba42cbcd283abc495ac3c331fc2cccf7409d5b256",
+      "reviewed_lines": 82,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "source由来のREADME/DEVELOPMENT生成blockとrelease要約/review根拠の検査・ローカル再生成",
+      "callers": [
+        "Makefile:23-26",
+        ".github/workflows/ci.yml:32,46",
+        "docs/development/README_MAINTENANCE.md:30-38",
+        "tests/meta/test_ci_scripts.py:49-107,298-316",
+        "tests/release/test_readme_release.py"
+      ],
+      "flow": "source/doc→全marker/shape/参照検査→生成block→検査後ローカル書込→README/DEVELOPMENT/review。",
+      "read_ranges": [
+        [
+          1,
+          82
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.readme.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.readme.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.readme.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.readme.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.readme.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.readme.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.readme.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.readme.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.readme.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.readme.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.readme.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.readme.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.readme.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.readme.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.readme.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.readme.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.readme.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.readme.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.readme.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.readme.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/development/RELEASE_1.0.13.md",
@@ -5238,9 +6119,91 @@
       "lines": 146,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "6604b6984d96ff58f13647ca478f7d653c6536b79364522e733a136fbd6bcf82",
+      "reviewed_lines": 146,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "flow": "現在source/安全契約→完全合成SVG/manual docs→local表示/リンク→利用者説明。",
+      "read_ranges": [
+        [
+          1,
+          146
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.static_docs.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.static_docs.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.static_docs.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.static_docs.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.static_docs.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.static_docs.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.static_docs.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.static_docs.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.static_docs.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.static_docs.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.static_docs.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.static_docs.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.static_docs.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.static_docs.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.static_docs.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.static_docs.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.static_docs.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.static_docs.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.static_docs.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.static_docs.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/development/RELEASE_NOTES.md",
@@ -5249,9 +6212,92 @@
       "lines": 114,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "3f41412df7b4308348313c7c42d16e94802e23bcb0083d5dbc84e70dd225af56",
+      "reviewed_lines": 114,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "日本語変更fragmentから版sectionを検査・生成・exportし、既存GitHub Release本文/タイトルだけを明示同期",
+      "callers": [
+        "docs/development/RELEASE_NOTES.md:51-60",
+        ".github/workflows/release-notes.yml:45-124",
+        "tests/release/test_release_notes.py",
+        "tests/release/test_sync_release_notes.py",
+        "scripts/development/readme_release.py"
+      ],
+      "flow": "fragment/版/参照/Release identity検査→生成/export/明示sync計画→ローカル文書/stub receipt→README/公開候補。公開操作未実行。",
+      "read_ranges": [
+        [
+          1,
+          114
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.release.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.release.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.release.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.release.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.release.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.release.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.release.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.release.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.release.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.release.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.release.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.release.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.release.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.release.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.release.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.release.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.release.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.release.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.release.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.release.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/development/full-maintenance-20261005/PLAN.md",
@@ -5623,9 +6669,92 @@
       "lines": 100,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "b68cca16cf73b155b2edd3d0a0d31e699586e4815345e941262df9844a97f9d6",
+      "reviewed_lines": 100,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "source由来のREADME/DEVELOPMENT生成blockとrelease要約/review根拠の検査・ローカル再生成",
+      "callers": [
+        "Makefile:23-26",
+        ".github/workflows/ci.yml:32,46",
+        "docs/development/README_MAINTENANCE.md:30-38",
+        "tests/meta/test_ci_scripts.py:49-107,298-316",
+        "tests/release/test_readme_release.py"
+      ],
+      "flow": "source/doc→全marker/shape/参照検査→生成block→検査後ローカル書込→README/DEVELOPMENT/review。",
+      "read_ranges": [
+        [
+          1,
+          100
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.readme.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.readme.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.readme.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.readme.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.readme.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.readme.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.readme.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.readme.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.readme.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.readme.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.readme.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.readme.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.readme.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.readme.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.readme.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.readme.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.readme.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.readme.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.readme.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.readme.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/guides/BACKUP.md",
@@ -5896,9 +7025,91 @@
       "lines": 86,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "3a866efc72ff3e6289982b76b54809c170af2b38a3c5e69efeeff6233299112f",
+      "reviewed_lines": 86,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "flow": "現在source/安全契約→完全合成SVG/manual docs→local表示/リンク→利用者説明。",
+      "read_ranges": [
+        [
+          1,
+          86
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.static_docs.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.static_docs.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.static_docs.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.static_docs.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.static_docs.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.static_docs.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.static_docs.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.static_docs.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.static_docs.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.static_docs.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.static_docs.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.static_docs.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.static_docs.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.static_docs.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.static_docs.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.static_docs.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.static_docs.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.static_docs.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.static_docs.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.static_docs.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/discord-thread.svg",
@@ -5907,9 +7118,91 @@
       "lines": 84,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "89867d2ea162024cd9e501c63173fab530035a985fdd1a89141d5531a2f19c40",
+      "reviewed_lines": 84,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "flow": "現在source/安全契約→完全合成SVG/manual docs→local表示/リンク→利用者説明。",
+      "read_ranges": [
+        [
+          1,
+          84
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.static_docs.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.static_docs.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.static_docs.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.static_docs.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.static_docs.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.static_docs.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.static_docs.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.static_docs.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.static_docs.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.static_docs.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.static_docs.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.static_docs.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.static_docs.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.static_docs.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.static_docs.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.static_docs.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.static_docs.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.static_docs.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.static_docs.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.static_docs.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/lineworks-gallery/01-delivery.png",
@@ -5918,9 +7211,95 @@
       "lines": null,
       "module": "docs",
       "kind": "binary",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "d290c1b3822e6671acba3bb97d782873488a4ec94c1f3ef822d289ac991ffc29",
+      "reviewed_lines": null,
+      "full_content_read": false,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      },
+      "generated_from": [
+        "scripts/development/generate_lineworks_gallery.py",
+        "docs/screenshots/lineworks-gallery/01-delivery.svg",
+        "docs/screenshots/lineworks-gallery/assets.json",
+        "docs/screenshots/lineworks-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "classification_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。"
     },
     {
       "path": "docs/screenshots/lineworks-gallery/01-delivery.svg",
@@ -5929,9 +7308,92 @@
       "lines": 70,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "1e1243ff6bddbf0d6fb58b1b5392c64f5851df96a0a8c0721c7555a4f5b4b8d6",
+      "reviewed_lines": 70,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [
+        [
+          1,
+          70
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/lineworks-gallery/02-task-confirm.png",
@@ -5940,9 +7402,95 @@
       "lines": null,
       "module": "docs",
       "kind": "binary",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "e63bf43804611adf3363ff59597bd955d91359ce7c60651706d9dd58c51c293d",
+      "reviewed_lines": null,
+      "full_content_read": false,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      },
+      "generated_from": [
+        "scripts/development/generate_lineworks_gallery.py",
+        "docs/screenshots/lineworks-gallery/02-task-confirm.svg",
+        "docs/screenshots/lineworks-gallery/assets.json",
+        "docs/screenshots/lineworks-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "classification_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。"
     },
     {
       "path": "docs/screenshots/lineworks-gallery/02-task-confirm.svg",
@@ -5951,9 +7499,92 @@
       "lines": 60,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "ac28e593323c7a5c8b353cdfc0583025e6cc481cc159f84708bd55f79a38f127",
+      "reviewed_lines": 60,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [
+        [
+          1,
+          60
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/lineworks-gallery/README.md",
@@ -5962,9 +7593,92 @@
       "lines": 38,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "7e04de4357258ebe14084b723fc1e0420326497bf4df8e2be92becd265920224",
+      "reviewed_lines": 38,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [
+        [
+          1,
+          38
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/lineworks-gallery/assets.json",
@@ -5973,9 +7687,92 @@
       "lines": 10,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "08d9f139b7346e3ef2b5e7d410e05a118b72e59dd0a49685c1e08a7fcaeac96d",
+      "reviewed_lines": 10,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [
+        [
+          1,
+          10
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/signals-cli.svg",
@@ -5984,9 +7781,91 @@
       "lines": 19,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "1847467b96615b637a9ee9e297dea5284e9bb676fdcaf2ae543381fabdb96b1d",
+      "reviewed_lines": 19,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "flow": "現在source/安全契約→完全合成SVG/manual docs→local表示/リンク→利用者説明。",
+      "read_ranges": [
+        [
+          1,
+          19
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.static_docs.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.static_docs.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.static_docs.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.static_docs.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.static_docs.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.static_docs.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.static_docs.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.static_docs.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.static_docs.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.static_docs.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.static_docs.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.static_docs.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.static_docs.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.static_docs.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.static_docs.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.static_docs.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.static_docs.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.static_docs.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.static_docs.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.static_docs.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/slack-card.svg",
@@ -5995,9 +7874,91 @@
       "lines": 101,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "3dbd082f74547619dc92d03be1c82ae1d3e38507fe8b8662b24564e4f66f8132",
+      "reviewed_lines": 101,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "flow": "現在source/安全契約→完全合成SVG/manual docs→local表示/リンク→利用者説明。",
+      "read_ranges": [
+        [
+          1,
+          101
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.static_docs.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.static_docs.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.static_docs.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.static_docs.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.static_docs.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.static_docs.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.static_docs.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.static_docs.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.static_docs.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.static_docs.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.static_docs.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.static_docs.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.static_docs.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.static_docs.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.static_docs.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.static_docs.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.static_docs.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.static_docs.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.static_docs.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.static_docs.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/slack-gallery/01-overview.png",
@@ -6006,9 +7967,95 @@
       "lines": null,
       "module": "docs",
       "kind": "binary",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "43acd8b463ae71e7df344ae1702b69d99d2347afd72e27f428528952d28fdbd5",
+      "reviewed_lines": null,
+      "full_content_read": false,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      },
+      "generated_from": [
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/01-overview.svg",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/slack-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "classification_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。"
     },
     {
       "path": "docs/screenshots/slack-gallery/01-overview.svg",
@@ -6017,9 +8064,92 @@
       "lines": 53,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "53dc21ccca3976dce6b3373b3647587b11b6339c7995c678512c2d9863d1dfe3",
+      "reviewed_lines": 53,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [
+        [
+          1,
+          53
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/slack-gallery/02-notification.png",
@@ -6028,9 +8158,95 @@
       "lines": null,
       "module": "docs",
       "kind": "binary",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "c61b4e8854947d8a96bdd1d95e3f65604938d5a7f56dcefbdf4e266defbd6680",
+      "reviewed_lines": null,
+      "full_content_read": false,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      },
+      "generated_from": [
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/02-notification.svg",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/slack-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "classification_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。"
     },
     {
       "path": "docs/screenshots/slack-gallery/02-notification.svg",
@@ -6039,9 +8255,92 @@
       "lines": 45,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "a84a13417a607b1ee1d59e875d837dcfe8f283fc005f2e622387f9c1d6bafe0d",
+      "reviewed_lines": 45,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [
+        [
+          1,
+          45
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/slack-gallery/03-actions.png",
@@ -6050,9 +8349,95 @@
       "lines": null,
       "module": "docs",
       "kind": "binary",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "557fee9a41ebb3663db7edd3f75c863cb5c2a5e0f1b7e21b0f37ee5dc12af8fb",
+      "reviewed_lines": null,
+      "full_content_read": false,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      },
+      "generated_from": [
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/03-actions.svg",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/slack-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "classification_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。"
     },
     {
       "path": "docs/screenshots/slack-gallery/03-actions.svg",
@@ -6061,9 +8446,92 @@
       "lines": 49,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "6dca61a9bcf6ad6203b43b45083f1dd6fbd7867aa274d420934f5e82193e9378",
+      "reviewed_lines": 49,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [
+        [
+          1,
+          49
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/slack-gallery/04-task-form.png",
@@ -6072,9 +8540,95 @@
       "lines": null,
       "module": "docs",
       "kind": "binary",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "32b56acf90251a20dc522ede033436fdbd71d78c08d390cf8697c0683f0b77ec",
+      "reviewed_lines": null,
+      "full_content_read": false,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      },
+      "generated_from": [
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/04-task-form.svg",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/slack-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "classification_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。"
     },
     {
       "path": "docs/screenshots/slack-gallery/04-task-form.svg",
@@ -6083,9 +8637,92 @@
       "lines": 45,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "0cf9d0d6876f4b3ab1e696a2be50e3db75bb9903f3286ee44479646ae6299bdc",
+      "reviewed_lines": 45,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [
+        [
+          1,
+          45
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/slack-gallery/05-task-preview.png",
@@ -6094,9 +8731,95 @@
       "lines": null,
       "module": "docs",
       "kind": "binary",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "06707ada2dbe594b1f198e6f285f4e1a68c411d959f47ec5284dc96594258d0a",
+      "reviewed_lines": null,
+      "full_content_read": false,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      },
+      "generated_from": [
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/05-task-preview.svg",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/slack-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "classification_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。"
     },
     {
       "path": "docs/screenshots/slack-gallery/05-task-preview.svg",
@@ -6105,9 +8828,92 @@
       "lines": 39,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "37f36fd185fb7d9fb3bcc54cf6144b3d228b8c549c7772811f0caf92412561f7",
+      "reviewed_lines": 39,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [
+        [
+          1,
+          39
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/slack-gallery/06-task-list.png",
@@ -6116,9 +8922,95 @@
       "lines": null,
       "module": "docs",
       "kind": "binary",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "96bb3c03c0609f0f239b7ee4b6e803790c101cda8ac002007e7f0be9a0574f51",
+      "reviewed_lines": null,
+      "full_content_read": false,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      },
+      "generated_from": [
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/06-task-list.svg",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/slack-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "classification_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。"
     },
     {
       "path": "docs/screenshots/slack-gallery/06-task-list.svg",
@@ -6127,9 +9019,92 @@
       "lines": 44,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "6a72e7ca999ff11116326c3e9ecd3e8d9d9e248c83aecc2c0380ba465994a4f3",
+      "reviewed_lines": 44,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [
+        [
+          1,
+          44
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/slack-gallery/07-patient-summary.png",
@@ -6138,9 +9113,95 @@
       "lines": null,
       "module": "docs",
       "kind": "binary",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "6aab67a6dd20a413390f66dbb9c99428463160ab1cc33b4ad2589cc039d639cc",
+      "reviewed_lines": null,
+      "full_content_read": false,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      },
+      "generated_from": [
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/07-patient-summary.svg",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/slack-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "classification_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。"
     },
     {
       "path": "docs/screenshots/slack-gallery/07-patient-summary.svg",
@@ -6149,9 +9210,92 @@
       "lines": 41,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "6f141fc75074ad0e7038cad9370aa9e620310bc3c34290111de600c7eae5d6e2",
+      "reviewed_lines": 41,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [
+        [
+          1,
+          41
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/slack-gallery/README.md",
@@ -6160,9 +9304,92 @@
       "lines": 44,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "056e36341de45f8b34e6dc728bac76fee58728202d1c49b0723d176542b6b50b",
+      "reviewed_lines": 44,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [
+        [
+          1,
+          44
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/slack-gallery/assets.json",
@@ -6171,9 +9398,92 @@
       "lines": 30,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "dbbbdf2df5ad799dcc316bca69c3d89e37c9cdff032e398428276afad1bfa362",
+      "reviewed_lines": 30,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [
+        [
+          1,
+          30
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/slack-thread.svg",
@@ -6182,9 +9492,91 @@
       "lines": 131,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "bc58cd25dfd4115c84b1f1f677e2c8a2a90b20f23e13c0c6c7dc1c425c6fc649",
+      "reviewed_lines": 131,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "flow": "現在source/安全契約→完全合成SVG/manual docs→local表示/リンク→利用者説明。",
+      "read_ranges": [
+        [
+          1,
+          131
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.static_docs.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.static_docs.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.static_docs.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.static_docs.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.static_docs.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.static_docs.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.static_docs.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.static_docs.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.static_docs.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.static_docs.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.static_docs.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.static_docs.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.static_docs.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.static_docs.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.static_docs.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.static_docs.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.static_docs.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.static_docs.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.static_docs.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.static_docs.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/screenshots/view-status.svg",
@@ -6193,9 +9585,91 @@
       "lines": 22,
       "module": "docs",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "20421da20261a83a5ab16737e46154853654a5373816231954f2ed20c0bb039f",
+      "reviewed_lines": 22,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "flow": "現在source/安全契約→完全合成SVG/manual docs→local表示/リンク→利用者説明。",
+      "read_ranges": [
+        [
+          1,
+          22
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.static_docs.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.static_docs.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.static_docs.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.static_docs.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.static_docs.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.static_docs.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.static_docs.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.static_docs.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.static_docs.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.static_docs.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.static_docs.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.static_docs.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.static_docs.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.static_docs.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.static_docs.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.static_docs.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.static_docs.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.static_docs.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.static_docs.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.static_docs.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "docs/specs/external-export-contract.md",
@@ -11685,9 +15159,92 @@
       "lines": 180,
       "module": "scripts",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "5d9c64a3ad63e024fb0ad4c889326842a9f90e27c3833bf57f76c08b4aef9ea1",
+      "reviewed_lines": 180,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [
+        [
+          1,
+          180
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "scripts/development/generate_slack_gallery.py",
@@ -11696,9 +15253,96 @@
       "lines": 366,
       "module": "scripts",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "7dd0af58daafc8c562719a7c8735e69a0925ebae8e381524d617ddb4015f1928",
+      "reviewed_lines": 369,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "flow": "完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。",
+      "read_ranges": [
+        [
+          1,
+          185
+        ],
+        [
+          186,
+          366
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.gallery.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.gallery.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.gallery.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.gallery.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.gallery.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.gallery.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.gallery.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.gallery.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.gallery.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.gallery.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.gallery.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.gallery.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.gallery.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.gallery.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.gallery.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.gallery.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.gallery.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.gallery.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.gallery.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.gallery.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "scripts/development/probe_message_metadata.py",
@@ -11707,9 +15351,95 @@
       "lines": 483,
       "module": "scripts",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "d548cf16d8336ec148405d8908fe06d88809a3bb6feaab7373e0ebade777e880",
+      "reviewed_lines": 483,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "明示承認されたread-only targetのmetadata/未読保持/actorページ観測だけを診断する既存operator CLI（本audit実接続禁止）",
+      "callers": [
+        "tests/ingest/test_message_metadata.py:653,700,744,774 (SEARCH_ONLY)",
+        "tests/ingest/test_metadata_probe_observation.py:30 (SEARCH_ONLY)",
+        "tests/ingest/test_metadata_probe_usage.py:19 (SEARCH_ONLY)",
+        "tests/ingest/test_metadata_probe_paging.py:27 (SEARCH_ONLY)"
+      ],
+      "flow": "明示target→read-only/期限/容量/URL/認可→metadata probe→診断。今回stubだけ、実MCS/秘密値取得無し。",
+      "read_ranges": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          483
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.probe.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.probe.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.probe.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.probe.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.probe.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.probe.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.probe.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.probe.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.probe.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.probe.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.probe.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.probe.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.probe.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.probe.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.probe.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.probe.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.probe.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.probe.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.probe.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.probe.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "scripts/development/readme_release.py",
@@ -11718,9 +15448,92 @@
       "lines": 158,
       "module": "scripts",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "5d83b3ca32ff48ca968d855ee16f1b1926db96798c007636fd8ac123d0c130ab",
+      "reviewed_lines": 158,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "source由来のREADME/DEVELOPMENT生成blockとrelease要約/review根拠の検査・ローカル再生成",
+      "callers": [
+        "Makefile:23-26",
+        ".github/workflows/ci.yml:32,46",
+        "docs/development/README_MAINTENANCE.md:30-38",
+        "tests/meta/test_ci_scripts.py:49-107,298-316",
+        "tests/release/test_readme_release.py"
+      ],
+      "flow": "source/doc→全marker/shape/参照検査→生成block→検査後ローカル書込→README/DEVELOPMENT/review。",
+      "read_ranges": [
+        [
+          1,
+          158
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.readme.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.readme.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.readme.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.readme.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.readme.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.readme.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.readme.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.readme.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.readme.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.readme.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.readme.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.readme.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.readme.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.readme.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.readme.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.readme.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.readme.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.readme.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.readme.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.readme.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "scripts/development/release_notes.py",
@@ -11729,9 +15542,92 @@
       "lines": 245,
       "module": "scripts",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "181f9551a24a1ff8f46d3cbcc9d40443651e93eee4b9934f38f7ad0987bc6be4",
+      "reviewed_lines": 245,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "日本語変更fragmentから版sectionを検査・生成・exportし、既存GitHub Release本文/タイトルだけを明示同期",
+      "callers": [
+        "docs/development/RELEASE_NOTES.md:51-60",
+        ".github/workflows/release-notes.yml:45-124",
+        "tests/release/test_release_notes.py",
+        "tests/release/test_sync_release_notes.py",
+        "scripts/development/readme_release.py"
+      ],
+      "flow": "fragment/版/参照/Release identity検査→生成/export/明示sync計画→ローカル文書/stub receipt→README/公開候補。公開操作未実行。",
+      "read_ranges": [
+        [
+          1,
+          245
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.release.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.release.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.release.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.release.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.release.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.release.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.release.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.release.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.release.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.release.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.release.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.release.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.release.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.release.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.release.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.release.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.release.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.release.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.release.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.release.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "scripts/development/semantic_shadow_e2e.py",
@@ -11740,9 +15636,91 @@
       "lines": 74,
       "module": "scripts",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "f5833aa4cc4fe294114534d97ac38b3719085a009a2d5d001e6ccfe1a9846bd8",
+      "reviewed_lines": 80,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "任意の完全合成operator casesからcanonical shadow pipelineを明示起動しINCOMPLETEを含む評価reportを保存（本auditはstubだけ）",
+      "callers": [
+        "scripts/development/semantic_shadow_e2e.py:11-13 usage",
+        "mcs/semantic/semantic_evaluation.py:1075-1172 run_shadow_e2e",
+        "tests/meta/test_ci_scripts.py:35-45",
+        "tests/meta/test_maintenance_development_regressions.py:178-235"
+      ],
+      "flow": "完全合成cases→object/messages/finite positive budget検査→stub pipeline→report→評価。実LLM/Jev/DB無し。",
+      "read_ranges": [
+        [
+          1,
+          74
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.shadow.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.shadow.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.shadow.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.shadow.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.shadow.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.shadow.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.shadow.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.shadow.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.shadow.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.shadow.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.shadow.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.shadow.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.shadow.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.shadow.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.shadow.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.shadow.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.shadow.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.shadow.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.shadow.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.shadow.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "scripts/development/sync_release_notes.py",
@@ -11751,9 +15729,92 @@
       "lines": 107,
       "module": "scripts",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "fea761590871e47f7b79685006c466f02afeff4d58222b43fff549e6cb1661fa",
+      "reviewed_lines": 122,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "日本語変更fragmentから版sectionを検査・生成・exportし、既存GitHub Release本文/タイトルだけを明示同期",
+      "callers": [
+        "docs/development/RELEASE_NOTES.md:51-60",
+        ".github/workflows/release-notes.yml:45-124",
+        "tests/release/test_release_notes.py",
+        "tests/release/test_sync_release_notes.py",
+        "scripts/development/readme_release.py"
+      ],
+      "flow": "fragment/版/参照/Release identity検査→生成/export/明示sync計画→ローカル文書/stub receipt→README/公開候補。公開操作未実行。",
+      "read_ranges": [
+        [
+          1,
+          107
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.release.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.release.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.release.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.release.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.release.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.release.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.release.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.release.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.release.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.release.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.release.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.release.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.release.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.release.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.release.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.release.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.release.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.release.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.release.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.release.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "scripts/development/update_readme.py",
@@ -11762,17 +15823,93 @@
       "lines": 208,
       "module": "scripts",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json."
+        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json.",
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
       "read_ranges": [
         [
           1,
           208
         ]
-      ]
+      ],
+      "reviewed_sha256": "d8fc9726eed1c85d91efce00f4c3c44bb9131dc42cafb89a9abbecb547abd4cc",
+      "reviewed_lines": 212,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "source由来のREADME/DEVELOPMENT生成blockとrelease要約/review根拠の検査・ローカル再生成",
+      "callers": [
+        "Makefile:23-26",
+        ".github/workflows/ci.yml:32,46",
+        "docs/development/README_MAINTENANCE.md:30-38",
+        "tests/meta/test_ci_scripts.py:49-107,298-316",
+        "tests/release/test_readme_release.py"
+      ],
+      "flow": "source/doc→全marker/shape/参照検査→生成block→検査後ローカル書込→README/DEVELOPMENT/review。",
+      "criteria": {
+        "C01": [
+          "modules.readme.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.readme.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.readme.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.readme.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.readme.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.readme.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.readme.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.readme.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.readme.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.readme.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.readme.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.readme.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.readme.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.readme.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.readme.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.readme.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.readme.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.readme.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.readme.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.readme.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "scripts/keychain_to_env.py",
@@ -15490,8 +19627,150 @@
       "lines": 230,
       "module": "tests/meta",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": []
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "2067ad3a9bc4d01cdd9f064c460af9f80e66a7abafd2b4644246aac1cd2ba8ae",
+      "reviewed_lines": 235,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "今回の合成回帰または日本語利用者向け変更記録",
+      "callers": [
+        "scripts/run_tests.sh",
+        "general CI pytest (test)",
+        "scripts/development/release_notes.py check (fragment)"
+      ],
+      "flow": "fragment/版/参照/Release identity検査→生成/export/明示sync計画→ローカル文書/stub receipt→README/公開候補。公開操作未実行。 / source/doc→全marker/shape/参照検査→生成block→検査後ローカル書込→README/DEVELOPMENT/review。 / 完全合成canonical generator→SVG/PNG/manifest→bounded PNG構造/filter/hash検査→静的画面説明。 / 完全合成cases→object/messages/finite positive budget検査→stub pipeline→report→評価。実LLM/Jev/DB無し。",
+      "read_ranges": [
+        [
+          1,
+          235
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.release.all_20_criteria.C01",
+          "modules.readme.all_20_criteria.C01",
+          "modules.gallery.all_20_criteria.C01",
+          "modules.shadow.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.release.all_20_criteria.C02",
+          "modules.readme.all_20_criteria.C02",
+          "modules.gallery.all_20_criteria.C02",
+          "modules.shadow.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.release.all_20_criteria.C03",
+          "modules.readme.all_20_criteria.C03",
+          "modules.gallery.all_20_criteria.C03",
+          "modules.shadow.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.release.all_20_criteria.C04",
+          "modules.readme.all_20_criteria.C04",
+          "modules.gallery.all_20_criteria.C04",
+          "modules.shadow.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.release.all_20_criteria.C05",
+          "modules.readme.all_20_criteria.C05",
+          "modules.gallery.all_20_criteria.C05",
+          "modules.shadow.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.release.all_20_criteria.C06",
+          "modules.readme.all_20_criteria.C06",
+          "modules.gallery.all_20_criteria.C06",
+          "modules.shadow.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.release.all_20_criteria.C07",
+          "modules.readme.all_20_criteria.C07",
+          "modules.gallery.all_20_criteria.C07",
+          "modules.shadow.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.release.all_20_criteria.C08",
+          "modules.readme.all_20_criteria.C08",
+          "modules.gallery.all_20_criteria.C08",
+          "modules.shadow.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.release.all_20_criteria.C09",
+          "modules.readme.all_20_criteria.C09",
+          "modules.gallery.all_20_criteria.C09",
+          "modules.shadow.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.release.all_20_criteria.C10",
+          "modules.readme.all_20_criteria.C10",
+          "modules.gallery.all_20_criteria.C10",
+          "modules.shadow.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.release.all_20_criteria.C11",
+          "modules.readme.all_20_criteria.C11",
+          "modules.gallery.all_20_criteria.C11",
+          "modules.shadow.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.release.all_20_criteria.C12",
+          "modules.readme.all_20_criteria.C12",
+          "modules.gallery.all_20_criteria.C12",
+          "modules.shadow.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.release.all_20_criteria.X01",
+          "modules.readme.all_20_criteria.X01",
+          "modules.gallery.all_20_criteria.X01",
+          "modules.shadow.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.release.all_20_criteria.X02",
+          "modules.readme.all_20_criteria.X02",
+          "modules.gallery.all_20_criteria.X02",
+          "modules.shadow.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.release.all_20_criteria.X03",
+          "modules.readme.all_20_criteria.X03",
+          "modules.gallery.all_20_criteria.X03",
+          "modules.shadow.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.release.all_20_criteria.X04",
+          "modules.readme.all_20_criteria.X04",
+          "modules.gallery.all_20_criteria.X04",
+          "modules.shadow.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.release.all_20_criteria.X05",
+          "modules.readme.all_20_criteria.X05",
+          "modules.gallery.all_20_criteria.X05",
+          "modules.shadow.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.release.all_20_criteria.X06",
+          "modules.readme.all_20_criteria.X06",
+          "modules.gallery.all_20_criteria.X06",
+          "modules.shadow.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.release.all_20_criteria.X07",
+          "modules.readme.all_20_criteria.X07",
+          "modules.gallery.all_20_criteria.X07",
+          "modules.shadow.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.release.all_20_criteria.X08",
+          "modules.readme.all_20_criteria.X08",
+          "modules.gallery.all_20_criteria.X08",
+          "modules.shadow.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "tests/meta/test_mcs_recover.py",
@@ -19268,9 +23547,92 @@
       "lines": 123,
       "module": "tests/release",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "103d0c40c9bc53007e12d3dc2f36c0e48e127383b9260de5d9b31218440ff3ea",
+      "reviewed_lines": 123,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "source由来のREADME/DEVELOPMENT生成blockとrelease要約/review根拠の検査・ローカル再生成",
+      "callers": [
+        "Makefile:23-26",
+        ".github/workflows/ci.yml:32,46",
+        "docs/development/README_MAINTENANCE.md:30-38",
+        "tests/meta/test_ci_scripts.py:49-107,298-316",
+        "tests/release/test_readme_release.py"
+      ],
+      "flow": "source/doc→全marker/shape/参照検査→生成block→検査後ローカル書込→README/DEVELOPMENT/review。",
+      "read_ranges": [
+        [
+          1,
+          123
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.readme.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.readme.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.readme.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.readme.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.readme.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.readme.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.readme.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.readme.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.readme.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.readme.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.readme.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.readme.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.readme.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.readme.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.readme.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.readme.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.readme.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.readme.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.readme.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.readme.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "tests/release/test_release_notes.py",
@@ -19279,9 +23641,92 @@
       "lines": 147,
       "module": "tests/release",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "fd2b7f93666c8f658726d4a9acef001e3682302f880d8ccac6b57a0c28d55152",
+      "reviewed_lines": 147,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "日本語変更fragmentから版sectionを検査・生成・exportし、既存GitHub Release本文/タイトルだけを明示同期",
+      "callers": [
+        "docs/development/RELEASE_NOTES.md:51-60",
+        ".github/workflows/release-notes.yml:45-124",
+        "tests/release/test_release_notes.py",
+        "tests/release/test_sync_release_notes.py",
+        "scripts/development/readme_release.py"
+      ],
+      "flow": "fragment/版/参照/Release identity検査→生成/export/明示sync計画→ローカル文書/stub receipt→README/公開候補。公開操作未実行。",
+      "read_ranges": [
+        [
+          1,
+          147
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.release.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.release.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.release.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.release.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.release.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.release.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.release.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.release.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.release.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.release.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.release.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.release.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.release.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.release.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.release.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.release.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.release.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.release.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.release.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.release.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "tests/release/test_sync_release_notes.py",
@@ -19290,9 +23735,92 @@
       "lines": 124,
       "module": "tests/release",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
+      ],
+      "review_input": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "reviewed_sha256": "29e97b5318f1b606109afe0840b838e06cf2ee9f9d0ce7b59adb024806e96857",
+      "reviewed_lines": 124,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "responsibility": "日本語変更fragmentから版sectionを検査・生成・exportし、既存GitHub Release本文/タイトルだけを明示同期",
+      "callers": [
+        "docs/development/RELEASE_NOTES.md:51-60",
+        ".github/workflows/release-notes.yml:45-124",
+        "tests/release/test_release_notes.py",
+        "tests/release/test_sync_release_notes.py",
+        "scripts/development/readme_release.py"
+      ],
+      "flow": "fragment/版/参照/Release identity検査→生成/export/明示sync計画→ローカル文書/stub receipt→README/公開候補。公開操作未実行。",
+      "read_ranges": [
+        [
+          1,
+          124
+        ]
+      ],
+      "criteria": {
+        "C01": [
+          "modules.release.all_20_criteria.C01"
+        ],
+        "C02": [
+          "modules.release.all_20_criteria.C02"
+        ],
+        "C03": [
+          "modules.release.all_20_criteria.C03"
+        ],
+        "C04": [
+          "modules.release.all_20_criteria.C04"
+        ],
+        "C05": [
+          "modules.release.all_20_criteria.C05"
+        ],
+        "C06": [
+          "modules.release.all_20_criteria.C06"
+        ],
+        "C07": [
+          "modules.release.all_20_criteria.C07"
+        ],
+        "C08": [
+          "modules.release.all_20_criteria.C08"
+        ],
+        "C09": [
+          "modules.release.all_20_criteria.C09"
+        ],
+        "C10": [
+          "modules.release.all_20_criteria.C10"
+        ],
+        "C11": [
+          "modules.release.all_20_criteria.C11"
+        ],
+        "C12": [
+          "modules.release.all_20_criteria.C12"
+        ],
+        "X01": [
+          "modules.release.all_20_criteria.X01"
+        ],
+        "X02": [
+          "modules.release.all_20_criteria.X02"
+        ],
+        "X03": [
+          "modules.release.all_20_criteria.X03"
+        ],
+        "X04": [
+          "modules.release.all_20_criteria.X04"
+        ],
+        "X05": [
+          "modules.release.all_20_criteria.X05"
+        ],
+        "X06": [
+          "modules.release.all_20_criteria.X06"
+        ],
+        "X07": [
+          "modules.release.all_20_criteria.X07"
+        ],
+        "X08": [
+          "modules.release.all_20_criteria.X08"
+        ]
+      }
     },
     {
       "path": "tests/semantic/semantic_testkit.py",
@@ -21756,6 +26284,28 @@
       "callers": [
         "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
       ]
+    },
+    {
+      "path": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "module": "run-record",
+      "kind": "run_record",
+      "status": "REVIEWED",
+      "sha256": "324245517db1308b0c0d868544049f96a613b00b07280de15fb8366405c6081d",
+      "structured_record_reviewed": true,
+      "evidence": [
+        "53項目/120観点/flow/再生/ログmanifest/限界を親受入。fresh最終独立reviewではない。"
+      ]
+    },
+    {
+      "path": "docs/development/full-maintenance-20261005/parent-static-svg-evidence.json",
+      "module": "run-record",
+      "kind": "run_record",
+      "status": "REVIEWED",
+      "sha256": "23599a69706945573719fd0dff97348a7fc64de574b2ced55a98161b615d5728",
+      "structured_record_reviewed": true,
+      "evidence": [
+        "親の静的SVG3件実preview・source/outputhashとtool限界。"
+      ]
     }
   ],
   "protected_or_derived_groups": [
@@ -21855,5 +26405,22 @@
     "reviewed_files": 6,
     "parent_delta": "README standalone/Hermesmode1文fb488c8",
     "criteria_full_read": "C01..X08 all140, clipped C09..C12 reread in full"
+  },
+  "last_semantic6_import": {
+    "report": "docs/development/maintenance-semantic-packet6-evidence.json",
+    "record_sha256": "324245517db1308b0c0d868544049f96a613b00b07280de15fb8366405c6081d",
+    "reviewed_files": 53,
+    "all_criteria_full_read": 120,
+    "current_source_sha_equal": 53,
+    "behavior_I_commits": [
+      "931f292",
+      "49e49b2"
+    ],
+    "parent_resolved_dependencies": [
+      "15c8c04",
+      "b3140f4",
+      "fb488c8",
+      "a525f96"
+    ]
   }
 }
