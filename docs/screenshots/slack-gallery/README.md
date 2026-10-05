@@ -34,8 +34,10 @@ python3 scripts/development/readme_release.py --check
 ```
 
 通常の`--png`による再生成にはInkscapeと日本語フォントが必要。
-今回はmacOS標準Quick Lookで一時的に正方形へ拡張したSVGを描画し、
-既存ImageMagickで上端から元の比率へ切り出した。公開SVGのサイズは変更していない。
+既存PNGのうち概要・操作メニューの2画像は、Quick Lookでの描画と切り出しにより上部・右側が欠けていた。
+2026-10-05の修正では隔離したLinux環境の既存librsvg/Cairoと日本語フォントを使い、
+正本SVG全体を幅1650px・縦横比維持で描画し直した。公開SVGのサイズは変更していない。
+切り出し結果を寸法やハッシュだけで合格とせず、見出し・右端・注意書きをPNGで確認する。
 `scripts/development/generate_slack_gallery.py`の説明用の例とレイアウトを修正し、SVGとPNGを一緒に更新する。
 7画面の文字切れ・重なり・説明・本人向け表示・人承認条件を確認する。
 PNGは生成時に一時ファイルのCRC・全チャンク・画像データを検査してから置き換える。
