@@ -12,6 +12,50 @@ import mcs_signals
 from ops_testkit import DAY, NOW, _extract_v1, _msg
 
 
+@pytest.mark.parametrize("raw", ["{broken", "[" * 1500 + "0" + "]" * 1500,
+                                 "[]", "null"], ids=["malformed", "deep", "array", "null"])
+def test_corrupt_latest_policy_never_revives_prior_approval(led, raw):
+    assert _policy(led, {"req_age_days": 7})["outcome"] == "applied"
+    _req(led.db, "open", created=NOW - 20 * DAY)
+    led.artifact_add(mcs_signals.POLICY_KIND, raw)
+    before = led.db.total_changes
+    current = mcs_signals.current_open(led.db)
+    assert current["policy"] is None
+    assert current["thresholds"]["req_age_days"] == mcs_signals.REQ_AGE_DAYS
+    assert led.db.total_changes == before
+    assert _ev(led)["open"] == 0
+    assert led.db.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("raw", ["{broken", "[" * 1500 + "0" + "]" * 1500,
+                                 "[]", "null"], ids=["malformed", "deep", "array", "null"])
+def test_corrupt_latest_profile_never_revives_prior_identity(led, raw):
+    mcs_signals.record_self_profile(led.db, {
+        "sender_id": 42, "organizations": ["synthetic-org"], "professions": ["看護師"]})
+    led.artifact_add(mcs_signals.SELF_PROFILE_KIND, raw)
+    before = led.db.total_changes
+    assert mcs_signals._latest_self_profile(led.db) == {}
+    assert mcs_signals.self_sender_id(led.db) is None
+    assert not mcs_signals.is_self_message(led.db, 42)
+    assert mcs_signals._self_sets({}, led.db) == ([], ["薬剤師"], [])
+    explicit = {"self_organizations": ["synthetic-explicit"], "self_professions": []}
+    assert mcs_signals._self_sets(explicit, led.db) == (["synthetic-explicit"], [], [])
+    assert led.db.total_changes == before
+
+
+@pytest.mark.parametrize("raw", ["{broken", "[" * 1500 + "0" + "]" * 1500,
+                                 "[]", "null"], ids=["malformed", "deep", "array", "null"])
+def test_corrupt_latest_roster_never_revives_prior_membership(led, raw):
+    mcs_signals.record_station_staff(led.db, [{"staff_id": 42, "is_self": True}])
+    led.artifact_add(mcs_signals.STATION_STAFF_KIND, raw)
+    before = led.db.total_changes
+    assert mcs_signals.latest_station_staff(led.db) == []
+    assert mcs_signals.own_sender_ids(led.db) == frozenset()
+    assert mcs_signals.is_own_station_message(led.db, 42) is None
+    assert mcs_signals.self_sender_id(led.db) is None
+    assert led.db.total_changes == before
+
+
 @pytest.fixture
 def led(tmp_path):
     lg = ledger_mod.Ledger(str(tmp_path / "ledger.db"))

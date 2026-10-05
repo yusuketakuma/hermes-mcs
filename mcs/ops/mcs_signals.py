@@ -89,12 +89,15 @@ def _approved_policy(db):
     A bare artifact insert cannot move thresholds — same identity
     boundary as the command envelope."""
     row = db.execute(
-        "SELECT artifact_id, content FROM artifacts WHERE kind=? AND "
-        "json_valid(content) ORDER BY artifact_id DESC LIMIT 1",
+        "SELECT artifact_id, content FROM artifacts WHERE kind=? "
+        "ORDER BY artifact_id DESC LIMIT 1",
         (POLICY_KIND,)).fetchone()
     if row is None:
         return None
-    content = json.loads(row["content"])
+    try:
+        content = json.loads(row["content"])
+    except (ValueError, TypeError, RecursionError):
+        return None  # Never revive a prior approval past an unreadable latest row.
     if not (isinstance(content, dict)
             and isinstance(content.get("command_id"), str)
             and content["command_id"]
@@ -142,11 +145,11 @@ def _latest_self_profile(db):
     for self identity. Returns {} when absent or unparsable."""
     row = db.execute(
         "SELECT content FROM artifacts WHERE kind=? "
-        "AND json_valid(content) ORDER BY artifact_id DESC LIMIT 1",
+        "ORDER BY artifact_id DESC LIMIT 1",
         (SELF_PROFILE_KIND,)).fetchone()
     try:
         d = json.loads(row["content"]) if row else {}
-    except (json.JSONDecodeError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return {}
     return d if isinstance(d, dict) else {}
 
@@ -186,11 +189,11 @@ def latest_station_staff(db) -> list:
     absent or unparsable."""
     row = db.execute(
         "SELECT content FROM artifacts WHERE kind=? "
-        "AND json_valid(content) ORDER BY artifact_id DESC LIMIT 1",
+        "ORDER BY artifact_id DESC LIMIT 1",
         (STATION_STAFF_KIND,)).fetchone()
     try:
         d = json.loads(row["content"]) if row else {}
-    except (json.JSONDecodeError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return []
     staff = d.get("staff") if isinstance(d, dict) else None
     return [s for s in staff if isinstance(s, dict)] \
