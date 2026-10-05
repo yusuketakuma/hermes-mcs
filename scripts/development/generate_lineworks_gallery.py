@@ -12,7 +12,8 @@ import sys
 import tempfile
 import zlib
 
-from generate_slack_gallery import FONT, INK, MUTED, Screen, verify_png
+from generate_slack_gallery import (BODY, FONT, HEADING, INK, MUTED, POSTS, RULE,
+                                    SENDER, Screen, verify_png)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -55,6 +56,15 @@ class TalkScreen(Screen):
         self.rect(x, y, 422, height, "#dbf3e3" if user else "#fff", 9, "#d5e1e5")
         self.paragraph(x + 15, y + 28, value, width=390, size=17)
 
+    def block(self, x, y, lines, size=15):
+        """A bot text post sized to its (value, color, bold) lines; returns its bottom."""
+        mark, end = len(self.parts), y + 30
+        for value, color, bold in lines:
+            end = self.paragraph(x + 16, end, value, 390, size, color, bold)
+        self.rect(x, y, 422, end - y - 10, "#fff", 9, "#d5e1e5")
+        self.parts.insert(mark, self.parts.pop())
+        return end - 10
+
     def template(self, x, y, labels):
         for label in labels:
             self.rect(x, y, 422, 33, "#fff", 0, "#d5e1e5")
@@ -66,52 +76,41 @@ class TalkScreen(Screen):
 def delivery():
     s = TalkScreen(1, "同じトークルームで、要約・原文・添付を確認。",
                    "カードに続いて原文と添付を連続投稿。入力・確認は本人との1:1トークへ。")
-    s.panel(24, "① 共有トークルーム", "操作例 / MCS Botからの新着通知")
+    s.panel(24, "① 共有トークルーム", "MCS Botからの新着通知カード")
     s.panel(568, "②・③ 同じトークルームの続き", "スレッドではなく、通常のトークとして届きます")
     s.bot(44, 245)
-    s.rect(66, 286, 422, 273, "#fff", 9, "#d5e1e5")
-    s.text(82, 318, "💬 山田さん — 10-01", 20, INK, True)
-    s.paragraph(82, 350, "10-01 09:40 佐藤さん（訪問看護）", 390, 15, MUTED)
-    s.text(82, 406, "📋 要約", 18, GREEN, True)
-    s.paragraph(82, 439, "依頼: 次回訪問時に残薬を確認\n期限表現: 次回訪問時", 390, 18)
-    s.text(82, 534, "スタンプ 👀2 🙆1 · 自分 1投稿", 15, GREEN)
-    s.template(66, 559, ["☐ 確認", "👤 担当する", "📝 タスク作成", "🧾 患者サマリー",
-                        "⚠ 抽出の誤りを報告", "🔗 MCSで開く", "📋 自分のタスク",
-                        "🗂 未確認一覧", "🔎 この患者を検索"])
-    s.paragraph(44, 886, "ボタンはカードの状態・設定で変わります。\n確認済みの表示はタスク完了を意味しません。", 468, 16, MUTED)
+    sender, bullets = POSTS[0]
+    summary = [("📋 要約", GREEN, True), *(("・" + b, INK, False) for b in bullets)]
+    y = s.block(66, 286, [(HEADING, INK, True), ("1投稿 · 📎 1 · @自分宛て", MUTED, False),
+                          (RULE, MUTED, False), (sender, INK, True), *summary,
+                          (RULE, MUTED, False), ("👤 担当: 田中 · ✅ 確認: 田中", INK, False),
+                          ("📝 タスク 1件 · スタンプ 👀2 🙆1 · 自分 1投稿", INK, False)])
+    s.template(66, y, ["確認する", "担当する", "タスク作成", "MCSで開く", "その他の操作"])
     s.bot(588, 245)
-    s.rect(610, 286, 422, 350, "#fff", 9, "#d5e1e5")
-    s.text(626, 320, "MCS 1234abcd（1/1）", 19, GREEN, True)
-    s.text(626, 356, "10-01 09:40 佐藤さん（訪問看護）", 15, MUTED)
-    s.text(626, 386, "要約（抽出候補）", 17, GREEN, True)
-    s.text(626, 417, "依頼: 次回訪問時に残薬確認", 16)
-    s.text(626, 451, "スタンプ 👀2 🙆1 · 観測 10-01 10:00", 15, GREEN)
-    s.paragraph(626, 484, "押した人: 👀 田中 花子、佐藤 一郎 / 🙆 鈴木 太郎（自分） · 観測 10-01 10:00", 390, 15)
-    s.paragraph(626, 550, "本文: 次回訪問時に残薬を確認してください。", 390, 17)
-    s.text(626, 615, "押下者取得を有効にした場合の表示例", 14, MUTED)
-    s.bot(588, 660)
-    s.rect(610, 702, 422, 145, "#fff", 9, "#d5e1e5")
-    s.rect(626, 718, 390, 68, "#f0f5f1", 8)
-    s.text(646, 745, "添付ファイル", 18, INK, True)
-    s.text(646, 775, "服薬カレンダー.jpg", 16, MUTED)
-    s.text(626, 822, "保存・通知のみ。添付の内容解析は行いません。", 15, MUTED)
-    s.paragraph(588, 872, "説明用に本文を短縮しています。\n長い本文や追加の操作は、別の投稿に分割します。", 468, 16, MUTED)
+    y = s.block(610, 286, [(f"↳ 山田 花子 様 · 10-01 09:40 {SENDER}", INK, True), *summary,
+                           (RULE, MUTED, False), (BODY, INK, False)])
+    s.bot(588, y + 10)
+    s.rect(610, y + 51, 422, 100, "#fff", 9, "#d5e1e5")
+    s.rect(626, y + 67, 390, 68, "#f0f5f1", 8)
+    s.text(646, y + 94, "添付ファイル", 18, INK, True)
+    s.text(646, y + 124, "服薬カレンダー.jpg", 16, MUTED)
     return s.finish()
 
 
 def task_confirm():
-    s = TalkScreen(2, "タスクは、本人との1:1トークで入力・確定。",
-                   "共有カードの「タスク作成」から開始。項目ごとに返信し、最後に内容を確認します。")
-    s.panel(24, "① Botとの1:1トークで入力", "許可ユーザー本人だけのトーク / 入力の抜粋")
-    s.panel(568, "② Botとの1:1トークで確認", "「確定する」を選ぶまで登録されません")
-    s.bot(44, 245)
-    s.bubble(66, 286, "タスク内容\n中止する場合は「取消」。", height=83)
-    s.bubble(88, 388, "次回訪問時に残薬を確認", user=True)
-    s.bubble(66, 473, "担当者（任意）\n省略する場合は「なし」。", height=83)
-    s.bubble(88, 575, "田中さん", user=True)
-    s.bubble(66, 660, "期限 YYYY-MM-DD（任意）\n省略する場合は「なし」。", height=83)
-    s.bubble(88, 762, "2026-10-02", user=True)
-    s.paragraph(44, 874, "続いて理由を入力します。\n例: 次回訪問で確認するため", 468, 16, MUTED)
+    s = TalkScreen(2, "その他の操作とタスクは、本人との1:1トークで。",
+                   "共有カードのボタンから開始。メニュー選択・項目入力・確認は本人だけに届きます。")
+    s.panel(24, "① Botとの1:1トーク", "許可ユーザー本人だけのトーク / 抜粋")
+    s.panel(568, "② タスクの確認と確定", "「確定する」を選ぶまで登録されません")
+    s.text(44, 252, "「その他の操作」を押したとき", 16, GREEN, True)
+    s.bot(44, 266)
+    s.template(66, s.block(66, 304, [(HEADING, INK, True)]), ["患者の記録まとめ", "誤りを報告", "自分のタスク", "未確認一覧",
+                         "この患者を検索", "全体の新着集計"])
+    s.text(44, 600, "「タスク作成」を押したとき", 16, GREEN, True)
+    s.bot(44, 614)
+    s.bubble(66, 652, "タスク内容\n中止する場合は「取消」。", height=83)
+    s.bubble(88, 750, "次回訪問時に残薬を確認", user=True)
+    s.paragraph(44, 850, "続いて担当者・期限・理由を同様に入力します。", 468, 16, MUTED)
     s.bot(588, 245)
     s.rect(610, 286, 422, 279, "#fff", 9, "#d5e1e5")
     s.text(626, 321, "確認 — タスク作成", 21, INK, True)

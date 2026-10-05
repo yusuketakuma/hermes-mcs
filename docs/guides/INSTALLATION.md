@@ -362,7 +362,7 @@ Discord を使う場合は、対象チャンネルで新着投稿があるとカ
   restart` が必須** — gateway は plugin を起動時に読み込む長寿命
   プロセス。再起動しないと新形式 spec を旧 worker が処理し、カード
   だけ届いてスレッド本文・添付が欠落する（2026-09 実機事案）。
-  リンクボタン（`🔗 MCSで開く`）や人名表示（`parts.mentions`）を含む
+  リンクボタン（`MCSで開く`）や人名表示（`parts.mentions`）を含む
   カードは、旧 worker では配送されず保留される（再起動後に配送）
 - **カードを操作できる人を増やす（Discord）** — 薬局スタッフ全員に
   ロールを付け、そのロール ID を `allowed_role_ids` に入れる:
@@ -762,7 +762,7 @@ SLACK_HOME_CHANNEL=C01234567890        # 任意: cron/通知の既定ch
 
 ### 任意: `/mcs-summary`（本人専用の要約サマリー）
 
-カードの「📊 サマリー」に加え、Slackのslash commandからも呼び出せます（v1.0.11〜）。
+カードの「全体の新着集計」に加え、Slackのslash commandからも呼び出せます（v1.0.11〜）。
 使う場合だけ、Slackアプリ設定で次を追加して**アプリを再インストール**します。
 
 - **Slash Commands** → Create New Command: Command `/mcs-summary`、

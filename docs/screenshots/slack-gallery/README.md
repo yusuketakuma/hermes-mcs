@@ -1,7 +1,7 @@
 # Slackの画面例ギャラリー
 
 READMEの推奨通知先はSlack。先頭の全体像と、確認・担当、操作メニュー、
-タスク入力、タスク確定、タスク一覧、患者サマリーの7画面を用意する。
+タスク入力、タスク確定、タスク一覧、患者の記録まとめの7画面を用意する。
 架空の名前・投稿・数値を使った説明図で、実画面のキャプチャではない。
 実データ・実投稿の匿名化例は使用しない。
 
@@ -13,16 +13,15 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 
 | 画面 | 根拠 |
 |---|---|
-| `01-overview` | `docs/guides/USER_GUIDE.md`、`adapters/slack/delivery.py`（カード・本文・添付の配送） |
-| `02-notification` | `adapters/slack/cards.py`、`mcs/notify/notify_cards.py`（確認・担当・無音の表示名）、`mcs/notify/notify_render.py`、`mcs/views/message_metadata.py`（「スタンプ」の絵文字集計と本人反応の投稿数。押下者取得を有効にした場合はスレッドの各投稿に氏名を表示。取得状態・観測日時は押下時刻やタスク完了とは別の情報） |
-| `03-actions` | 同カード実装（確認・担当以外を選択メニューへ。表示項目は状態・設定に依存） |
+| `01-overview` | `docs/guides/USER_GUIDE.md`、`adapters/slack/delivery.py`（カード・本文・添付の配送）、`mcs/notify/notify_render.py`の`_message_post`（スレッド投稿は`↳`見出し・📋 要約・スタンプ行・本文を区切り線で並べる）、`mcs/notify/notify_cards.py`（添付の`📎`行） |
+| `02-notification` | `mcs/notify/notify_render.py`の`_card_content`・`_thread_context`・`_footer`（概要・投稿ごとの要約・状態の区画）、`adapters/slack/cards.py`（区画間の区切り線、`確認する`・`担当する`・`タスク作成`のボタンと「操作を選ぶ…」、`MCSで開く`のテキストリンク）、`mcs/notify/notify_cards.py`の`_ACTIONS`、`mcs/views/message_metadata.py`（スタンプ件数と自分の投稿数） |
+| `03-actions` | 同カード実装（ボタン以外の操作を選択メニューへ。表示項目は状態・設定に依存） |
 | `04-task-form` | `adapters/common/text.py`の`modal_fields`、`adapters/slack/actions.py`の`_open_modal` |
 | `05-task-preview` | 同`preview_text`と`_preview`（本人向け、確定する／取消） |
-| `06-task-list` | 同`task_list_text`と`_task_blocks`（本人向けの一覧・タスクごとの状態操作） |
-| `07-patient-summary` | `mcs/notify/notify_views.py`の`patient_summary_text`（暫定集約・取得範囲・原本確認） |
+| `06-task-list` | `adapters/slack/actions.py`の`_task_blocks`・`_task_text`（本人向けの一覧。各タスクの直後にその状態操作） |
+| `07-patient-summary` | `mcs/notify/notify_views.py`の`patient_summary_text`（患者の記録まとめ。暫定集約・取得範囲・原本確認） |
 
 表示例では絵文字や一部の長い行を読みやすく簡略化する。
-タスク一覧の`**タスク**`は、現在のplain_text出力に含まれる文字列に合わせている。
 ダッシュボードや患者管理画面は描かない。Slackの`/mcs`コマンドは本文と導入ガイドで説明し、このカード操作の画面例には含めない。
 
 ## 更新

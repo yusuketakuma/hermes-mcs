@@ -1,86 +1,67 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="880" height="664" viewBox="0 0 880 664" font-family="'Hiragino Sans', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="720" viewBox="0 0 880 720" font-family="'Hiragino Sans', sans-serif">
   <title>架空データを使った Discord 通知カード表示例</title>
-  <desc>実患者・実投稿を参照せずに新規作成した、通知カードと操作後状態の図。</desc>
-  <rect width="880" height="664" fill="#313338"/>
-
-  <!-- channel header -->
-  <rect width="880" height="44" fill="#1e1f22"/>
+  <desc>実患者・実投稿を参照せずに新規作成した、Discord 通知カード（区切り線で分かれた概要・要約・状態・操作）の図。</desc>
+  <rect width="880" height="720" fill="#313338"/>
+  <rect x="0" y="0" width="880" height="44" rx="0" fill="#1e1f22"/>
   <text x="20" y="28" font-size="14" fill="#dbdee1"># mcs-demo</text>
   <text x="856" y="28" font-size="11" fill="#b5bac1" text-anchor="end">架空の表示例</text>
-
-  <!-- bot 1 -->
   <circle cx="46" cy="76" r="20" fill="#5865f2"/>
   <text x="46" y="82" font-size="15" fill="#fff" text-anchor="middle">M</text>
   <text x="76" y="67" font-size="14" fill="#fff" font-weight="bold">MCSボット</text>
-  <rect x="150" y="55" width="38" height="16" rx="3" fill="#3f4248"/>
-  <text x="169" y="67" font-size="9" fill="#dbdee1" text-anchor="middle">APP</text>
-  <text x="204" y="67" font-size="11" fill="#b5bac1">今日 10:02</text>
-
-  <!-- card 1 -->
-  <rect x="76" y="90" width="690" height="370" rx="8" fill="#2b2d31" stroke="#1e1f22"/>
-  <text x="92" y="118" font-size="15" fill="#fff" font-weight="bold">山田さん— 09-28 の記録</text>
-  <text x="92" y="146" font-size="12" fill="#dbdee1">09:40 訪問看護 佐藤さん（あおぞら訪問看護）</text>
-  <circle cx="745" cy="141" r="9" fill="#5865f2"/>
-  <text x="745" y="145" font-size="10" fill="#fff" text-anchor="middle">1</text>
-  <text x="92" y="168" font-size="11" fill="#a6a9ad">📋 要約</text>
-  <text x="102" y="188" font-size="12" fill="#b5bac1">・要約: 夕方バイタル測定の報告</text>
-  <text x="102" y="206" font-size="12" fill="#b5bac1">・区分: バイタル報告</text>
-  <line x1="92" y1="220" x2="750" y2="220" stroke="#3a3c42" stroke-width="1"/>
-  <text x="92" y="240" font-size="12" fill="#dbdee1">09:50 ケアマネ 鈴木さん（ひなた居宅介護支援）</text>
-  <text x="92" y="262" font-size="11" fill="#a6a9ad">📋 要約</text>
-  <circle cx="745" cy="258" r="9" fill="#5865f2"/>
-  <text x="745" y="262" font-size="10" fill="#fff" text-anchor="middle">2</text>
-  <text x="102" y="282" font-size="12" fill="#b5bac1">・要約: かかりつけ医より服薬変更の連絡を共有</text>
-  <text x="102" y="300" font-size="12" fill="#b5bac1">・要点: フェロキシピン中止 → カルベジロール 2.5mg 開始</text>
-  <text x="102" y="318" font-size="12" fill="#b5bac1">・区分: 服薬変更</text>
-  <text x="102" y="336" font-size="12" fill="#b5bac1">・バイタル: BP 142/88・脈 76・SpO2 96%</text>
-  <text x="102" y="354" font-size="12" fill="#b5bac1">・症状: 起立時のめまい（転倒・外傷なし）</text>
-  <text x="102" y="372" font-size="12" fill="#b5bac1">・依頼: 次回訪問時に残薬を確認してください</text>
-
-  <!-- buttons row 1 -->
-  <rect x="92" y="386" width="92" height="30" rx="5" fill="#248046"/>
-  <text x="138" y="406" font-size="12" fill="#fff" text-anchor="middle">✅ 確認済み</text>
-  <rect x="192" y="386" width="92" height="30" rx="5" fill="#5865f2"/>
-  <text x="238" y="406" font-size="12" fill="#fff" text-anchor="middle">👤 担当中</text>
-  <rect x="292" y="386" width="92" height="30" rx="5" fill="#4e5058"/>
-  <text x="338" y="406" font-size="12" fill="#dbdee1" text-anchor="middle">🔗 MCSで開く</text>
-  <circle cx="745" cy="401" r="9" fill="#5865f2"/>
-  <text x="745" y="405" font-size="10" fill="#fff" text-anchor="middle">3</text>
-
-  <!-- buttons row 2 -->
-  <rect x="92" y="422" width="120" height="30" rx="5" fill="#4e5058"/>
-  <text x="152" y="442" font-size="12" fill="#dbdee1" text-anchor="middle">📝 タスク作成</text>
-  <rect x="220" y="422" width="120" height="30" rx="5" fill="#4e5058"/>
-  <text x="280" y="442" font-size="12" fill="#dbdee1" text-anchor="middle">🧾 患者サマリー</text>
-  <text x="356" y="441" font-size="10" fill="#6e7681">💬 本文・添付 2件 → コンパニオンスレッドへ配送済み</text>
-  <circle cx="745" cy="436" r="9" fill="#5865f2"/>
-  <text x="745" y="440" font-size="10" fill="#fff" text-anchor="middle">4</text>
-
-  <!-- bot 2: confirmed state -->
-  <circle cx="46" cy="492" r="16" fill="#5865f2"/>
-  <text x="46" y="498" font-size="12" fill="#fff" text-anchor="middle">M</text>
-  <text x="70" y="485" font-size="13" fill="#fff" font-weight="bold">MCSボット</text>
-  <rect x="134" y="474" width="34" height="14" rx="3" fill="#3f4248"/>
-  <text x="151" y="484" font-size="8" fill="#dbdee1" text-anchor="middle">APP</text>
-  <text x="182" y="485" font-size="10" fill="#b5bac1">今日 10:05</text>
-  <rect x="76" y="498" width="690" height="76" rx="8" fill="#2b2d31" stroke="#1e1f22"/>
-  <text x="92" y="522" font-size="13" fill="#fff" font-weight="bold">山田さん— 09-27 の記録</text>
-  <text x="92" y="546" font-size="12" fill="#a3d2a5">✅ 確認: 田中さん · 👤 担当: 田中さん</text>
-  <text x="92" y="566" font-size="10" fill="#8b949e">ボタン操作の結果がカードへ反映されます（receipt として台帳に記録）</text>
-
-  <!-- legend -->
-  <line x1="0" y1="592" x2="880" y2="592" stroke="#1e1f22" stroke-width="1"/>
-  <circle cx="24" cy="610" r="8" fill="#5865f2"/>
-  <text x="24" y="614" font-size="9" fill="#fff" text-anchor="middle">1</text>
-  <text x="40" y="614" font-size="11" fill="#b5bac1">送信者行 — 記入時刻・職種・氏名・組織</text>
-  <circle cx="24" cy="632" r="8" fill="#5865f2"/>
-  <text x="24" y="636" font-size="9" fill="#fff" text-anchor="middle">2</text>
-  <text x="40" y="636" font-size="11" fill="#b5bac1">📋要約 — ローカルLLMの抽出結果（要約・区分・バイタル・症状・依頼。候補扱い）</text>
-  <circle cx="500" cy="610" r="8" fill="#5865f2"/>
-  <text x="500" y="614" font-size="9" fill="#fff" text-anchor="middle">3</text>
-  <text x="516" y="614" font-size="11" fill="#b5bac1">操作ボタン — 確認・担当・タスク作成・患者サマリー・MCSで開く</text>
-  <circle cx="500" cy="632" r="8" fill="#5865f2"/>
-  <text x="500" y="636" font-size="9" fill="#fff" text-anchor="middle">4</text>
-  <text x="516" y="636" font-size="11" fill="#b5bac1">配送状態 — 本文・添付はコンパニオンスレッドへ</text>
-  <text x="20" y="658" font-size="9" fill="#8b949e">名前・投稿・数値は架空です。実データ・実投稿の匿名化例は使用していません。</text>
+  <rect x="170" y="55" width="38" height="16" rx="3" fill="#3f4248"/>
+  <text x="189" y="67" font-size="9" fill="#dbdee1" text-anchor="middle">APP</text>
+  <text x="222" y="67" font-size="11" fill="#b5bac1">今日 10:02</text>
+  <rect x="76" y="90" width="690" height="439" rx="8" fill="#2b2d31" stroke="#1e1f22"/>
+  <text x="92" y="118" font-size="14" fill="#ffffff" font-weight="bold">💬 山田 花子 様（あおぞら）· 起点 10-01 ［緊急度高・AI判定］</text>
+  <text x="92" y="139" font-size="11" fill="#b5bac1">2投稿 · 📎 1 · @自分宛て</text>
+  <text x="92" y="156" font-size="11" fill="#b5bac1">🆕 返信+1</text>
+  <line x1="92" y1="168" x2="750" y2="168" stroke="#4e5058" stroke-width="1"/>
+  <text x="92" y="189" font-size="12" fill="#dbdee1" font-weight="bold">10-01 09:40 佐藤さん（訪問看護・あおぞら）</text>
+  <text x="92" y="208" font-size="11" fill="#7fc8a9" font-weight="bold">📋 要約</text>
+  <text x="92" y="226" font-size="11" fill="#dbdee1">・次回訪問時に残薬を確認してほしいとの連絡</text>
+  <text x="92" y="244" font-size="11" fill="#dbdee1">・要点: 残薬の確認 / 服薬カレンダーを共有</text>
+  <text x="92" y="262" font-size="11" fill="#dbdee1">・区分: 依頼・添付</text>
+  <text x="92" y="280" font-size="11" fill="#dbdee1">・依頼: 確認依頼:次回訪問時に残薬を確認(期限:次回訪問時)</text>
+  <line x1="92" y1="292" x2="750" y2="292" stroke="#4e5058" stroke-width="1"/>
+  <text x="92" y="313" font-size="12" fill="#dbdee1" font-weight="bold">10-01 10:05 鈴木さん（ケアマネ・ひなた）</text>
+  <text x="92" y="332" font-size="11" fill="#7fc8a9" font-weight="bold">📋 要約</text>
+  <text x="92" y="350" font-size="11" fill="#dbdee1">・確認結果を担当者会議で共有してほしいとの連絡</text>
+  <text x="92" y="368" font-size="11" fill="#dbdee1">・区分: 連絡</text>
+  <line x1="92" y1="380" x2="750" y2="380" stroke="#4e5058" stroke-width="1"/>
+  <text x="92" y="401" font-size="11" fill="#b5bac1">👤 担当: 田中 · ✅ 確認: 田中</text>
+  <text x="92" y="419" font-size="11" fill="#b5bac1">📝 タスク 1件 · スタンプ 👀5 🙆2 · 自分 2投稿</text>
+  <line x1="92" y1="431" x2="750" y2="431" stroke="#4e5058" stroke-width="1"/>
+  <rect x="92" y="443" width="84" height="30" rx="5" fill="#248046"/>
+  <text x="134.0" y="462.0" font-size="12" fill="#fff" text-anchor="middle">確認する</text>
+  <rect x="184" y="443" width="84" height="30" rx="5" fill="#4e5058"/>
+  <text x="226.0" y="462.0" font-size="12" fill="#fff" text-anchor="middle">担当する</text>
+  <rect x="276" y="443" width="96" height="30" rx="5" fill="#4e5058"/>
+  <text x="324.0" y="462.0" font-size="12" fill="#fff" text-anchor="middle">タスク作成</text>
+  <rect x="380" y="443" width="104" height="30" rx="5" fill="#4e5058"/>
+  <text x="432.0" y="462.0" font-size="12" fill="#fff" text-anchor="middle">MCSで開く ↗</text>
+  <rect x="92" y="481" width="360" height="32" rx="5" fill="#1e1f22" stroke="#4e5058"/>
+  <text x="106" y="502" font-size="12" fill="#b5bac1">他の操作…</text>
+  <text x="436" y="502" font-size="11" fill="#b5bac1" text-anchor="middle">▾</text>
+  <circle cx="745" cy="114" r="9" fill="#5865f2"/>
+  <text x="745" y="118" font-size="10" fill="#fff" text-anchor="middle">1</text>
+  <circle cx="745" cy="185" r="9" fill="#5865f2"/>
+  <text x="745" y="189" font-size="10" fill="#fff" text-anchor="middle">2</text>
+  <circle cx="745" cy="397" r="9" fill="#5865f2"/>
+  <text x="745" y="401" font-size="10" fill="#fff" text-anchor="middle">3</text>
+  <circle cx="745" cy="458" r="9" fill="#5865f2"/>
+  <text x="745" y="462" font-size="10" fill="#fff" text-anchor="middle">4</text>
+  <line x1="0" y1="549" x2="880" y2="549" stroke="#1e1f22" stroke-width="1"/>
+  <circle cx="24" cy="571" r="8" fill="#5865f2"/>
+  <text x="24" y="575" font-size="9" fill="#fff" text-anchor="middle">1</text>
+  <text x="40" y="575" font-size="11" fill="#b5bac1">概要 — 患者名・施設・起点日・緊急度、投稿数・添付・自分宛て・新しい返信</text>
+  <circle cx="24" cy="591" r="8" fill="#5865f2"/>
+  <text x="24" y="595" font-size="9" fill="#fff" text-anchor="middle">2</text>
+  <text x="40" y="595" font-size="11" fill="#b5bac1">投稿ごとの要約 — 送信者行と 📋 要約（Separator で投稿ごとに分かれる）</text>
+  <circle cx="24" cy="611" r="8" fill="#5865f2"/>
+  <text x="24" y="615" font-size="9" fill="#fff" text-anchor="middle">3</text>
+  <text x="40" y="615" font-size="11" fill="#b5bac1">状態 — 担当・確認・タスク件数・スタンプ</text>
+  <circle cx="24" cy="631" r="8" fill="#5865f2"/>
+  <text x="24" y="635" font-size="9" fill="#fff" text-anchor="middle">4</text>
+  <text x="40" y="635" font-size="11" fill="#b5bac1">操作 — 確認する・担当する・タスク作成・MCSで開く と「他の操作…」</text>
+  <text x="20" y="657" font-size="9" fill="#8b949e">名前・投稿・数値は架空です。実データ・実投稿の匿名化例は使用していません。</text>
 </svg>

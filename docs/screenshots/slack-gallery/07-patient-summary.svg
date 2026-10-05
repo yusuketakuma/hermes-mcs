@@ -1,13 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="1080" viewBox="0 0 1100 1080" font-family="Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="880" viewBox="0 0 1100 880" font-family="Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif">
 <title>訪問前に、患者の記録をたどる。 — 架空のSlack表示例</title>
 <desc>架空の名前・投稿・数値を使った説明図。実データ・実投稿の匿名化例は使用していません。実画面のキャプチャではありません。</desc>
-<rect x="0" y="0" width="1100" height="1080" rx="0" fill="#f6f4ef"/>
+<rect x="0" y="0" width="1100" height="880" rx="0" fill="#f6f4ef"/>
 <text x="28" y="34" font-size="14" fill="#087f5b" font-weight="bold">HERMES-MCS  /  SLACK  /  07</text>
 <text x="28" y="76" font-size="32" fill="#202124" font-weight="bold">訪問前に、患者の記録をたどる。</text>
 <text x="28" y="107" font-size="18" fill="#66716f">取得済み投稿の暫定集約。未取得の記録を「無い」と扱いません。</text>
-<rect x="24" y="134" width="1052" height="865" rx="12" fill="#fff" stroke="#dce2dd"/>
-<rect x="24" y="134" width="142" height="865" rx="12" fill="#351638"/>
-<rect x="148" y="134" width="18" height="865" rx="0" fill="#351638"/>
+<rect x="24" y="134" width="1052" height="665" rx="12" fill="#fff" stroke="#dce2dd"/>
+<rect x="24" y="134" width="142" height="665" rx="12" fill="#351638"/>
+<rect x="148" y="134" width="18" height="665" rx="0" fill="#351638"/>
 <text x="44" y="176" font-size="22" fill="#fff" font-weight="bold">MCSデモ</text>
 <text x="44" y="218" font-size="14" fill="#cbbfcf">チャンネル</text>
 <rect x="34" y="232" width="122" height="36" rx="6" fill="#64406a"/>
@@ -16,8 +16,8 @@
 <path d="M166 194 L1076 194" stroke="#e1e5e2" fill="none"/>
 <text x="192" y="172" font-size="22" fill="#202124" font-weight="bold"># mcs-demo</text>
 <text x="1050" y="172" font-size="15" fill="#66716f" text-anchor="end">架空の表示例</text>
-<text x="28" y="1035" font-size="16" fill="#66716f">説明用の画面イメージ。実際の配置はSlackのバージョン・設定で異なります。</text>
-<text x="28" y="1060" font-size="15" fill="#087f5b">実データ不使用 / 画像内の操作はできません</text>
+<text x="28" y="835" font-size="16" fill="#66716f">説明用の画面イメージ。実際の配置はSlackのバージョン・設定で異なります。</text>
+<text x="28" y="860" font-size="15" fill="#087f5b">実データ不使用 / 画像内の操作はできません</text>
 <rect x="192" y="228" width="36" height="36" rx="8" fill="#087f5b"/>
 <text x="201" y="254" font-size="22" fill="#fff" font-weight="bold">M</text>
 <text x="240" y="244" font-size="19" fill="#202124" font-weight="bold">MCS</text>
@@ -25,17 +25,16 @@
 <text x="298" y="243" font-size="11" fill="#66716f">APP</text>
 <text x="343" y="244" font-size="14" fill="#66716f">10:02</text>
 <text x="240" y="270" font-size="15" fill="#66716f">操作した本人にだけ表示</text>
-<text x="240" y="304" font-size="23" fill="#202124" font-weight="bold">山田さん — 患者サマリー（暫定集約）</text>
+<text x="240" y="304" font-size="23" fill="#202124" font-weight="bold">山田 花子 — 患者の記録まとめ（暫定集約）</text>
 <text x="240" y="342" font-size="18" fill="#66716f">※ 取得済み投稿から自動作成した暫定集約です。未取得・未抽出・訂正前の記録があり得る</text>
 <text x="240" y="370.8" font-size="18" fill="#66716f">ため、確定した処方一覧や依頼台帳の代わりにはなりません。原本で確認してください。</text>
-<text x="240" y="411.6" font-size="18" fill="#66716f">履歴取得: 未完了（指定日より前は未取得）（取れていない記録は「無い」ではありません</text>
-<text x="240" y="440.40000000000003" font-size="18" fill="#66716f">。欠落なしの保証ではありません）</text>
+<text x="240" y="411.6" font-size="18" fill="#66716f">履歴取得: 未完了（指定日より前は未取得）（取れていない記録は「無い」ではありません。</text>
+<text x="240" y="440.40000000000003" font-size="18" fill="#66716f">欠落なしの保証ではありません）</text>
 <text x="240" y="488.20000000000005" font-size="19" fill="#202124">■ 薬（投稿から抽出。確定した処方ではありません）</text>
 <text x="240" y="528.6" font-size="19" fill="#202124">・薬剤A（最終言及 2026-10-01）</text>
 <text x="240" y="569.0" font-size="19" fill="#202124">■ 抽出されたバイタルなし</text>
 <text x="240" y="609.4" font-size="19" fill="#202124">■ 次回予定（抽出表現）: 10月3日の訪問</text>
 <text x="240" y="649.8" font-size="19" fill="#202124">連携サマリー（MCS）: 未取得</text>
 <text x="240" y="690.1999999999999" font-size="19" fill="#202124">■ 未完了タスク</text>
-<text x="240" y="730.5999999999999" font-size="19" fill="#202124">・#101 次回訪問で残薬を確認 — 担当 田中さん</text>
-<text x="240" y="770.9999999999999" font-size="19" fill="#202124">  期限 2026-10-03</text>
+<text x="240" y="730.5999999999999" font-size="19" fill="#202124">・#101 次回訪問で残薬を確認 — 担当 田中さん — 期限 2026-10-03</text>
 </svg>

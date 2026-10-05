@@ -5,6 +5,7 @@ import argparse
 import hashlib
 from html import escape
 import json
+import re
 from pathlib import Path
 import struct
 import subprocess
@@ -20,6 +21,23 @@ INK = "#202124"
 MUTED = "#66716f"
 GREEN = "#087f5b"
 FONT = "Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif"
+# Fully fictional example shared by every screen (no real or anonymised posts).
+HEADING = "💬 山田 花子 様（あおぞら）· 起点 10-01"
+SENDER = "佐藤さん（訪問看護・あおぞら）"
+POSTS = (
+    (f"10-01 09:40 {SENDER}",
+     ("次回訪問時に残薬を確認してほしいとの連絡",
+      "要点: 残薬の確認 / 服薬カレンダーを共有",
+      "区分: 依頼・添付",
+      "依頼: 確認依頼:次回訪問時に残薬を確認(期限:次回訪問時)")),
+    ("10-01 10:05 鈴木さん（ケアマネ・ひなた）",
+     ("確認結果を担当者会議で共有してほしいとの連絡",
+      "区分: 連絡")),
+)
+STATE = ("👤 担当: 田中 · ✅ 確認: 田中",
+         "📝 タスク 1件 · スタンプ 👀5 🙆2 · 自分 2投稿")
+RULE = "─" * 12
+BODY = "次回訪問時に残薬を確認してください。服薬カレンダーの写真を共有します。"
 
 
 class Screen:
@@ -64,19 +82,22 @@ class Screen:
                           + (' text-anchor="end"' if end else "")
                           + f'>{escape(value)}</text>')
 
-    def paragraph(self, x, y, value, width=770, size=19, color=INK):
+    def paragraph(self, x, y, value, width=770, size=19, color=INK, bold=False):
         used, line = 0, ""
         for c in value:
-            advance = size * (1 if unicodedata.east_asian_width(c) in "WF" else .62)
-            if c == "\n" or used + advance > width:
-                self.text(x, y, line, size, color)
+            advance = size * (1 if unicodedata.east_asian_width(c) in "WFA" else .62)
+            if c == "\n" or used + advance > width and c not in "。、）」":
+                # keep dates, times and words whole: carry a trailing ASCII run
+                word = re.search(r"[0-9A-Za-z.:()-]+$", line) if c.isascii() and c.strip() else None
+                carry = line[word.start():] if word and word.start() else ""
+                self.text(x, y, line[:len(line) - len(carry)], size, color, bold)
                 y += size * 1.6
-                used, line = 0, ""
+                line, used = carry, size * .62 * len(carry)
             if c != "\n":
                 line += c
                 used += advance
         if line:
-            self.text(x, y, line, size, color)
+            self.text(x, y, line, size, color, bold)
             y += size * 1.6
         return y
 
@@ -96,90 +117,94 @@ class Screen:
                   None if primary else "#a9b5ae")
         self.text(x + 14, y + 27, label, 18, "#fff" if primary else INK, primary)
 
-    def actions(self, x, y, confirmed=False):
-        self.button(x, y, "確認済み" if confirmed else "☐ 確認", 116, confirmed)
-        self.button(x + 126, y, "担当中" if confirmed else "担当する", 116)
-        self.button(x + 252, y, "操作を選ぶ… ▾", 173)
+    def rule(self, x, y, width):
+        self.line(x, y - 12, x + width, y - 12, "#d5dcd7")
+        return y + 16
 
-    def card(self, x, y, width=770, compact=False):
-        self.text(x, y, "山田さん — 10-01", 23, INK, True)
-        y += 35
-        self.text(x, y, "10-01 09:40 訪問看護 佐藤さん", 17, MUTED)
-        y += 32
-        self.text(x, y, "要約（抽出候補）", 17, GREEN, True)
-        y += 30
-        y = self.paragraph(x, y, "要約: 次回訪問時に残薬を確認してほしいとの連絡", width, 19)
-        self.text(x, y + 5, "区分: 依頼", 19)
-        y += 38
-        if not compact:
-            y = self.paragraph(x, y, "依頼: 残薬確認 / 期限表現: 次回訪問時", width, 19)
-            y += 12
-        return y
+    def actions(self, x, y, confirmed=False, wrap=False):
+        """確認する・担当する・タスク作成 + one select; MCSで開く is a text link below."""
+        self.button(x, y, "確認する", 110, confirmed)
+        self.button(x + 120, y, "担当する", 110)
+        self.button(x + 240, y, "タスク作成", 128)
+        sx, sy = (x, y + 52) if wrap else (x + 378, y)
+        self.button(sx, sy, "操作を選ぶ… ▾", 173)
+        self.text(x, sy + 76, "MCSで開く", 18, "#1264a3")
+        return sy + 100
+
+    def card(self, x, y, width=770, full=False):
+        """Card zones top to bottom: overview, per-post 📋 要約, state."""
+        y = self.paragraph(x, y, HEADING, width, 21, INK, True)
+        y = self.paragraph(x, y - 4, "2投稿 · 📎 1 · @自分宛て" if full
+                           else "1投稿 · 📎 1 · @自分宛て", width, 17, MUTED)
+        if full:
+            y = self.paragraph(x, y - 4, "🆕 返信+1", width, 17, GREEN)
+        for sender, bullets in POSTS[:2 if full else 1]:
+            y = self.rule(x, y, width)
+            y = self.paragraph(x, y, sender, width, 17, INK, True)
+            y = self.paragraph(x, y - 2, "📋 要約", width, 17, GREEN, True)
+            for bullet in bullets:
+                y = self.paragraph(x, y - 2, "・" + bullet, width, 18)
+        y = self.rule(x, y, width)
+        for line in STATE if full else ("📝 タスク 1件 · スタンプ 👀2 🙆1",):
+            y = self.paragraph(x, y - 2, line, width, 17, MUTED)
+        return self.rule(x, y, width)
+
+    def thread_post(self, x, y, width, size=17, sender=SENDER, stamps=True):
+        """One post in the companion thread: header, 📋 要約, stamps, body."""
+        y = self.paragraph(x, y, f"↳ 山田 花子 様 · 10-01 09:40 {sender}", width, size, INK, True)
+        y = self.paragraph(x, y - 2, "📋 要約", width, size, GREEN, True)
+        for bullet in POSTS[0][1]:
+            y = self.paragraph(x, y - 2, "・" + bullet, width, size)
+        if stamps:
+            y = self.paragraph(x, y, RULE, width, size, MUTED)
+            y = self.paragraph(x, y - 2, "スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 10:00時点",
+                               width, size, GREEN)
+        y = self.paragraph(x, y, RULE, width, size, MUTED)
+        return self.paragraph(x, y - 2, BODY, width, size)
 
     def finish(self):
         return "\n".join(self.parts + ["</svg>"]) + "\n"
 
 
 def overview():
-    s = Screen(1, "連絡の要点と原文を、同じSlackで。", "カードで確認・担当を共有。本文と添付はスレッドへ。", 810)
-    s.line(662, 194, 662, 729)
+    s = Screen(1, "連絡の要点と原文を、同じSlackで。", "カードで確認・担当を共有。本文と添付はスレッドへ。", 1000)
+    s.line(662, 194, 662, 919)
     x, y = s.app(188, 227)
-    y = s.card(x, y, 397, compact=True)
     # Slack wraps controls in a narrow pane; the menu remains one select.
-    s.button(x, y + 16, "☐ 確認", 110)
-    s.button(x + 122, y + 16, "担当する", 116)
-    s.button(x, y + 68, "操作を選ぶ… ▾", 173)
-    s.text(x, y + 146, "MCSで開く", 18, "#1264a3")
-    s.text(x, y + 182, "本文・添付はスレッドに投稿済み", 16, MUTED)
+    s.actions(x, s.card(x, y, 397), wrap=True)
     s.text(689, 227, "スレッド", 23, INK, True)
-    s.text(689, 257, "山田さん — 10-01", 16, MUTED)
+    s.text(689, 257, "# mcs-demo", 16, MUTED)
     s.line(682, 275, 1059, 275)
-    s.text(689, 313, "MCS / 原文の配送", 18, INK, True)
-    y = s.paragraph(689, 350, "訪問看護 佐藤さん\n次回訪問時に残薬を確認してください。\n服薬カレンダーの写真を共有します。", 354, 18)
-    s.rect(689, y + 9, 352, 105, "#f3f6f4", 8, "#dce2dd")
-    s.text(707, y + 43, "添付: 服薬カレンダー.jpg", 16)
-    s.text(707, y + 76, "説明用の添付表示 / 内容解析なし", 15, MUTED)
-    s.text(689, y + 156, "原文を読んで、人が確認・判断します。", 16, GREEN)
+    s.text(689, 313, "MCS", 18, INK, True)
+    y = s.thread_post(689, 348, 354, 16)
+    s.text(689, y + 24, "MCS", 18, INK, True)
+    y = s.paragraph(689, y + 58, "📎 服薬カレンダー.jpg — 山田 花子 様 10-01 09:40 佐藤さん", 354, 16)
+    s.rect(689, y - 8, 200, 120, "#f3f6f4", 8, "#dce2dd")
+    s.text(789, y + 58, "画像", 16, MUTED)
     return s.finish()
 
 
 def notification():
-    s = Screen(2, "通知カードから、確認と担当を共有。", "カードは件数、スレッドは投稿ごとのスタンプと押した人。", 1070)
+    s = Screen(2, "通知カードから、確認と担当を共有。", "上から概要・投稿ごとの要約・状態・操作の順。区切り線で分かれます。", 950)
     x, y = s.app()
-    y = s.card(x, y)
-    s.line(x, y + 8, 1028, y + 8)
-    s.text(x, y + 45, "確認: 田中さん / 担当: 田中さん", 18, MUTED)
-    s.text(x, y + 77, "スタンプ 👀5 🙆2 · 自分 2投稿", 18, GREEN)
-    s.actions(x, y + 105, confirmed=True)
-    s.text(x, y + 171, "MCSで開く", 19, "#1264a3")
-    s.text(x, y + 204, "本文・添付はスレッドに投稿済み", 17, MUTED)
-    s.text(x, y + 236, "スタンプの観測は、担当引受・タスク完了の記録ではありません。", 16, MUTED)
-    s.text(x, y + 274, "スレッドの投稿ごとの表示（押下者取得を有効にした場合）", 16, GREEN, True)
-    s.rect(x, y + 290, 788, 178, "#f3f6f4", 8, "#dce2dd")
-    s.text(x + 18, y + 321, "10-01 09:40 佐藤さん（訪問看護）", 17, MUTED)
-    s.text(x + 18, y + 353, "スタンプ 👀2 🙆1 · 観測 10-01 10:00", 18, GREEN)
-    s.paragraph(x + 18, y + 385, "押した人: 👀 田中 花子、佐藤 一郎 / 🙆 鈴木 太郎（自分） · 観測 10-01 10:00", 752, 17)
-    s.line(x + 18, y + 420, x + 770, y + 420, "#c4ccc6")
-    s.text(x + 18, y + 450, "次回訪問時に残薬を確認してください。", 18)
-    s.text(x, y + 489, "観測は取得した時点。スタンプを押した時刻ではありません。", 15, MUTED)
+    s.actions(x, s.card(x, y, full=True), confirmed=True)
     return s.finish()
 
 
 def menu():
-    s = Screen(3, "次の操作を、ひとつのメニューから。", "タスク作成・患者サマリー・検索など、必要な操作だけを選びます。", 940)
+    s = Screen(3, "次の操作を、ひとつのメニューから。", "記録まとめ・誤りの報告・検索など、ボタン以外の操作を選びます。", 1040)
     x, y = s.app()
-    s.card(x, y, compact=True)
-    s.actions(x, 465)
-    s.rect(x + 252, 513, 348, 310, "#fff", 8, "#aebbb2")
-    labels = ("タスク作成", "タスク完了", "患者サマリー", "抽出の誤りを報告",
-              "自分のタスク", "未確認一覧", "この患者を検索")
+    y = s.card(x, y)
+    s.actions(x, y)
+    labels = ("患者の記録まとめ", "誤りを報告", "タスク一覧", "自分のタスク",
+              "未確認一覧", "この患者を検索", "全体の新着集計")
+    mx, my = x + 378, y + 48
+    s.rect(mx, my, 300, 18 + 42 * len(labels), "#fff", 8, "#aebbb2")
     for i, label in enumerate(labels):
-        yy = 526 + i * 42
+        yy = my + 12 + i * 42
         if i == 0:
-            s.rect(x + 259, yy - 2, 334, 38, "#e5f3ec", 4)
-        s.text(x + 278, yy + 24, label, 19, GREEN if i == 0 else INK, i == 0)
-    s.text(x, 552, "表示項目はカードの", 18, MUTED)
-    s.text(x, 582, "状態・設定で変わります。", 18, MUTED)
+            s.rect(mx + 7, yy - 2, 286, 38, "#e5f3ec", 4)
+        s.text(mx + 24, yy + 24, label, 19, GREEN if i == 0 else INK, i == 0)
     return s.finish()
 
 
@@ -224,27 +249,24 @@ def task_preview():
 
 
 def task_list():
-    s = Screen(6, "未完了タスクを、次の状態へ。", "このスレッドの一覧を本人に表示。対応中・完了を人が記録します。", 820)
+    s = Screen(6, "未完了タスクを、次の状態へ。", "このスレッドの一覧を本人に表示。対応中・完了を人が記録します。", 720)
     x, y = s.app(private=True)
-    s.text(x, y, "**タスク**（このスレッド）", 23, INK, True)
-    s.rect(x, y + 27, 13, 13, "#fff", 2, "#a9b5ae")
-    s.text(x + 25, y + 43, "#101 次回訪問で残薬を確認", 21)
-    s.text(x + 25, y + 78, "担当: 田中さん / 期限: 2026-10-03", 19, MUTED)
-    s.rect(x, y + 121, 13, 13, "#fff", 2, "#a9b5ae")
-    s.text(x + 25, y + 137, "#102 添付された記録を確認", 21)
-    s.text(x + 25, y + 172, "担当: 田中さん / 期限: 2026-10-04", 19, MUTED)
-    s.button(x, y + 212, "対応中 #101", 166)
-    s.button(x + 184, y + 212, "完了 #101", 153, True)
-    s.button(x, y + 266, "対応中 #102", 166)
-    s.button(x + 184, y + 266, "完了 #102", 153, True)
-    s.text(x, y + 355, "カードの確認済み表示は、タスク完了ではありません。", 18, GREEN)
+    s.text(x, y, "📋 タスク（このスレッド）", 23, INK, True)
+    y += 44
+    for number, title, due in ((101, "次回訪問で残薬を確認", "2026-10-03"),
+                               (102, "添付された記録を確認", "2026-10-04")):
+        s.text(x, y, f"⬜ #{number} {title}", 21)
+        s.text(x, y + 34, f"担当: 田中さん ・ 期限: {due}", 19, MUTED)
+        s.button(x, y + 54, f"対応中 #{number}", 166)
+        s.button(x + 184, y + 54, f"完了 #{number}", 153, True)
+        y += 140
     return s.finish()
 
 
 def patient_summary():
-    s = Screen(7, "訪問前に、患者の記録をたどる。", "取得済み投稿の暫定集約。未取得の記録を「無い」と扱いません。", 1080)
+    s = Screen(7, "訪問前に、患者の記録をたどる。", "取得済み投稿の暫定集約。未取得の記録を「無い」と扱いません。", 880)
     x, y = s.app(private=True)
-    s.text(x, y, "山田さん — 患者サマリー（暫定集約）", 23, INK, True)
+    s.text(x, y, "山田 花子 — 患者の記録まとめ（暫定集約）", 23, INK, True)
     y += 38
     y = s.paragraph(x, y, "※ 取得済み投稿から自動作成した暫定集約です。未取得・未抽出・訂正前の記録があり得るため、確定した処方一覧や依頼台帳の代わりにはなりません。原本で確認してください。", 758, 18, MUTED)
     y += 12
@@ -257,8 +279,7 @@ def patient_summary():
         "■ 次回予定（抽出表現）: 10月3日の訪問",
         "連携サマリー（MCS）: 未取得",
         "■ 未完了タスク",
-        "・#101 次回訪問で残薬を確認 — 担当 田中さん",
-        "  期限 2026-10-03",
+        "・#101 次回訪問で残薬を確認 — 担当 田中さん — 期限 2026-10-03",
     ]
     for row in rows:
         y = s.paragraph(x, y, row, 758, 19)
