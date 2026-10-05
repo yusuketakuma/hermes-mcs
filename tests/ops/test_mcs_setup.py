@@ -2231,3 +2231,20 @@ def test_init_returns_failure_when_gateway_sync_fails(monkeypatch, tmp_path, cfg
     monkeypatch.setattr(mcs_setup, "cmd_check", lambda args: 0)
     monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init", "--yes"])
     assert mcs_setup.main() == 1
+
+
+@pytest.mark.parametrize("verb", ["install", "uninstall", "restart", "start", "stop"])
+def test_gateway_lifecycle_refused_in_test_sandbox(monkeypatch, tmp_path, verb):
+    """Under MCS_TEST_SANDBOX a gateway lifecycle call never runs a real hermes executable: it
+    writes the LaunchAgent under the real account home whatever HOME/HERMES_HOME a test set."""
+    monkeypatch.setenv("MCS_TEST_SANDBOX", "1")
+    marker = tmp_path / "spawned"
+    exe = tmp_path / "hermes"
+    exe.write_text(f"#!/bin/sh\ntouch {marker}\n")
+    exe.chmod(0o755)
+    r = mcs_setup._hermes_cli(str(exe), "", "gateway", verb)
+    assert r is not None and r.returncode == 126 and "MCS_TEST_SANDBOX" in r.stderr
+    assert not marker.exists()
+    # read-only verbs still run
+    assert mcs_setup._hermes_cli(str(exe), "", "gateway", "status").returncode == 0
+    assert marker.exists()
