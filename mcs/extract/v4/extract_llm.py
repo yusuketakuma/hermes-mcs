@@ -1601,9 +1601,13 @@ def _karte_block(ledger, project_id: int, posted_at: str | None) -> str:
     comment = ks.get("comment")
     if not isinstance(comment, str) or not comment.strip():
         return ""
+    values = (ks.get("updated_at"), posted_at)
+    if any(not isinstance(value, str) for value in values):
+        return ""
     try:
-        upd = datetime.fromisoformat(ks.get("updated_at"))
-        post = datetime.fromisoformat(posted_at)
+        # Python 3.10 accepts an explicit UTC offset, but not a Z suffix.
+        upd, post = (datetime.fromisoformat(value[:-1] + "+00:00"
+                     if value.endswith("Z") else value) for value in values)
     except (TypeError, ValueError):
         return ""
     # Keep fractional seconds and compare explicit instants across offsets.
