@@ -83,6 +83,31 @@ def test_stats_do_not_read_dictionary_and_ignore_stale_source_refs(store, tmp_pa
     assert not rollup.build_rollup(store, 1)["medications"][0].get("ref")
 
 
+@pytest.mark.parametrize("field", ["content", "meta"])
+def test_deep_annotation_keeps_stats_and_rollup_available_without_writes(
+        store, tmp_path, field):
+    _seed(store)
+    drug_map.derive(store, _dictionary(tmp_path))
+    valid = _stats(store)
+    assert valid["by_ingredient_candidate"]["by_resolution"]["resolved"]["numerator"] == 1
+    deep = "[" * 10000 + "0" + "]" * 10000
+    store.db.execute(f"UPDATE artifacts SET {field}=? WHERE kind=?", (deep, drug_map.KIND))
+    store.db.commit()
+    before = tuple(store.db.iterdump())
+    changes = store.db.total_changes
+    stats = _stats(store)
+    assert stats["action_totals"] == valid["action_totals"]
+    assert stats["by_name_month"] == valid["by_name_month"]
+    assert stats["by_ingredient_candidate"]["status"] == "unavailable"
+    assert stats["by_ingredient_candidate"]["by_resolution"]["unavailable"]["numerator"] == 1
+    roll = rollup.build_rollup(store, 1)
+    assert len(roll["medications"]) == 1 and not roll["medications"][0].get("ref")
+    text = brain_export._patient_md(1, "fictional", {}, roll)
+    assert "架空成分甲" not in text and "fictional-v1@" not in text
+    assert tuple(store.db.iterdump()) == before
+    assert store.db.total_changes == changes
+
+
 def test_class_alias_cannot_be_counted_as_resolved_ingredient(store, tmp_path):
     document = deepcopy(DOCUMENT)
     document["entries"][2]["aliases"].append("キラナ")

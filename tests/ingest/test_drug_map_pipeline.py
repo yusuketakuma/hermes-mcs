@@ -71,6 +71,29 @@ def test_invalid_dictionary_setting_retires_candidates_and_returns_safe_reason(t
         db.close()
 
 
+def test_deep_dictionary_returns_safe_tick_diagnostic_without_db_writes(tmp_path, monkeypatch):
+    raw = b"[" * 10000 + b"0" + b"]" * 10000
+    path = tmp_path / "synthetic-deep-dictionary.json"
+    path.write_bytes(raw)
+    path.chmod(0o600)
+    config = {"drug_map": {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}}
+    assert mcs_setup._drug_map_config(config["drug_map"]) is None
+    monkeypatch.setattr(run_check.time, "monotonic", lambda: 1)
+    monkeypatch.setattr(extract, "run_pending", lambda *args, **kwargs: {"done": 0, "pids": []})
+    monkeypatch.setattr(mcs_signals, "evaluate", lambda *args, **kwargs: {})
+    db = _ledger(tmp_path)
+    try:
+        before = tuple(db.db.iterdump())
+        result = {"errors": []}
+        run_check.stage_derive(db, result, 100, config, llm_budget_cap=0)
+        assert result["errors"] == ["drug_map: invalid_dictionary"]
+        assert result["drug_map"] == {"status": "invalid", "done": 0, "pids": []}
+        assert str(path) not in json.dumps(result)
+        assert tuple(db.db.iterdump()) == before
+    finally:
+        db.close()
+
+
 def test_dictionary_config_requires_absolute_path_and_pin():
     assert mcs_setup._drug_map_config({"path": "/fictional", "sha256": "a" * 64}) is None
     for value in (None, {}, {"path": "relative", "sha256": "a" * 64},

@@ -60,7 +60,7 @@ def _llm_reply_kind(blob):
     try:
         lm = blob if isinstance(blob, dict) \
             else json.loads(blob) if blob else None
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError, RecursionError):
         return None
     if not isinstance(lm, dict) or lm.get("_error"):
         return None
@@ -160,7 +160,7 @@ def build_rollup(ledger, project_id: int) -> dict:
                                and not lm.get("_error"))
             if lm_blob is not None and lm_blob is llm_blob:
                 llm = lm    # one decode per unshadowed extract_llm row
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError, RecursionError):
             v1 = lm = {}
         if not isinstance(v1, dict):
             v1 = {}

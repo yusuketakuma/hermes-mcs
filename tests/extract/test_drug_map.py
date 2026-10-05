@@ -142,6 +142,18 @@ def test_load_missing_pin_private_path_and_symlink(tmp_path):
         drug_map.load(link, expected_sha256=dictionary.sha256)
 
 
+def test_deep_dictionary_json_uses_safe_validation_error(tmp_path):
+    raw = b"[" * 10000 + b"0" + b"]" * 10000
+    assert len(raw) == 20001 and len(raw) < drug_map.MAX_BYTES
+    with pytest.raises(RecursionError):
+        json.loads(raw)
+    path = tmp_path / "synthetic-deep-dictionary.json"
+    path.write_bytes(raw)
+    path.chmod(0o600)
+    with pytest.raises(ValueError, match="^drug_map_json$"):
+        drug_map.load(path, expected_sha256=hashlib.sha256(raw).hexdigest())
+
+
 @pytest.mark.parametrize("field", ["schema", "provenance", "date", "id",
                                   "kind", "aliases", "forms", "codes"])
 def test_invalid_dictionary_boundary(tmp_path, field):
@@ -204,6 +216,98 @@ def test_derive_is_pinned_idempotent_and_body_free(store, tmp_path):
     assert drug_map.derive(store, dictionary)["done"] == 0
     assert store.artifacts(drug_map.KIND)[0]["artifact_id"] == row["artifact_id"]
     assert drug_map.current_refs(store.db, 1)[0]["cands"][0]["code"] == "fiction-i1"
+
+
+@pytest.mark.parametrize("field", ["content", "meta"])
+def test_deep_annotation_json_is_unavailable_without_writes(store, tmp_path, field):
+    _seed(store)
+    drug_map.derive(store, _dictionary(tmp_path))
+    assert drug_map.current_refs(store.db, 1)[0]["cands"][0]["code"] == "fiction-i1"
+    deep = "[" * 10000 + "0" + "]" * 10000
+    with pytest.raises(RecursionError):
+        json.loads(deep)
+    # The column is selected from this fixed parameter table, never an input.
+    store.db.execute(f"UPDATE artifacts SET {field}=? WHERE kind=?",
+                     (deep, drug_map.KIND))
+    store.db.commit()
+    before = tuple(store.db.iterdump())
+    changes = store.db.total_changes
+    assert drug_map.current_refs(store.db, 1) == []
+    assert tuple(store.db.iterdump()) == before
+    assert store.db.total_changes == changes
+
+
+def test_deep_source_json_is_excluded_before_python_medication_decode(store, tmp_path):
+    source_id = _seed(store)
+    drug_map.derive(store, _dictionary(tmp_path))
+    deep = '{"meds":[],"synthetic_unused":' + "[" * 10000 + "0" + "]" * 10000 + "}"
+    store.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (deep, source_id))
+    store.db.commit()
+    assert store.db.execute("SELECT json_valid(?)", (deep,)).fetchone()[0] == 0
+    before = tuple(store.db.iterdump())
+    assert drug_map.current_refs(store.db, 1) == []
+    assert tuple(store.db.iterdump()) == before
+
+
+def test_sql_valid_source_at_python_depth_limit_keeps_read_only_refs_safe(store, tmp_path):
+    source_id = _seed(store)
+    drug_map.derive(store, _dictionary(tmp_path))
+    original = store.db.execute("SELECT content FROM artifacts WHERE artifact_id=?",
+                                (source_id,)).fetchone()[0]
+    deep = original[:-1] + ',"synthetic_unused":' + "[" * 999 + "0" + "]" * 999 + "}"
+    assert store.db.execute("SELECT json_valid(?)", (deep,)).fetchone()[0] == 1
+    try:
+        json.loads(deep)
+    except RecursionError:
+        readable = False
+    else:
+        readable = True
+    meta = json.loads(store.artifacts(drug_map.KIND)[0]["meta"])
+    meta["source_sha256"] = hashlib.sha256(deep.encode()).hexdigest()
+    store.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (deep, source_id))
+    store.db.execute("UPDATE artifacts SET meta=? WHERE kind=?",
+                     (json.dumps(meta), drug_map.KIND))
+    store.db.commit()
+    before = tuple(store.db.iterdump())
+    changes = store.db.total_changes
+    refs = drug_map.current_refs(store.db, 1)
+    if readable:
+        assert refs[0]["cands"][0]["code"] == "fiction-i1"
+    else:
+        assert refs == []
+    assert tuple(store.db.iterdump()) == before
+    assert store.db.total_changes == changes
+
+
+def test_sql_valid_source_at_python_depth_limit_retires_only_unreadable_refs(store, tmp_path):
+    source_id = _seed(store)
+    dictionary = _dictionary(tmp_path)
+    drug_map.derive(store, dictionary)
+    original = store.db.execute("SELECT content FROM artifacts WHERE artifact_id=?",
+                                (source_id,)).fetchone()[0]
+    deep = original[:-1] + ',"synthetic_unused":' + "[" * 999 + "0" + "]" * 999 + "}"
+    assert store.db.execute("SELECT json_valid(?)", (deep,)).fetchone()[0] == 1
+    try:
+        json.loads(deep)
+    except RecursionError:
+        readable = False
+    else:
+        readable = True
+    store.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (deep, source_id))
+    store.db.commit()
+    source_before = tuple(store.db.execute("SELECT * FROM artifacts WHERE kind<>?",
+                                           (drug_map.KIND,)))
+    messages_before = tuple(store.db.execute("SELECT * FROM messages"))
+    assert drug_map.derive(store, dictionary) == {"status": "ok", "done": 1, "pids": [1]}
+    refs = drug_map.current_refs(store.db, 1)
+    if readable:
+        assert refs[0]["cands"][0]["code"] == "fiction-i1"
+    else:
+        assert refs == [] and store.artifacts(drug_map.KIND) == []
+    assert drug_map.derive(store, dictionary) == {"status": "ok", "done": 0, "pids": []}
+    assert tuple(store.db.execute("SELECT * FROM artifacts WHERE kind<>?",
+                                  (drug_map.KIND,))) == source_before
+    assert tuple(store.db.execute("SELECT * FROM messages")) == messages_before
 
 
 def test_unapproved_and_missing_dictionary_remove_production_refs(store, tmp_path):
