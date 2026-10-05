@@ -26,10 +26,11 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "REVIEWED": 884,
-      "EXCLUDED": 25
+      "REVIEWED": 878,
+      "EXCLUDED": 25,
+      "PARTIAL": 7
     },
-    "candidate_tracked": 907
+    "candidate_tracked": 908
   },
   "files": [
     {
@@ -23194,7 +23195,7 @@
       "lines": 404,
       "module": "mcs/extract",
       "kind": "source",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
       ],
@@ -23226,7 +23227,10 @@
           211,
           404
         ]
-      ]
+      ],
+      "current_delta_sha256": "c0daf81423adb11dffc6d2cf08ba1db663ee312ed4a0a437304b806e5c594c68",
+      "current_delta_commit": "37da210",
+      "recheck_required": "Parent complete primary source/regression/fragment patch accepted; final formal drug JSON criterion/replay receipt intake pending."
     },
     {
       "path": "mcs/extract/rollup.py",
@@ -23235,7 +23239,7 @@
       "lines": 560,
       "module": "mcs/extract",
       "kind": "source",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
       ],
@@ -23271,7 +23275,10 @@
           281,
           560
         ]
-      ]
+      ],
+      "current_delta_sha256": "9594f50c73242a9ea56ea47c6e2c9e7b33cae29fb0400d8b6613b8afbc08a698",
+      "current_delta_commit": "37da210",
+      "recheck_required": "Parent complete primary source/regression/fragment patch accepted; final formal drug JSON criterion/replay receipt intake pending."
     },
     {
       "path": "mcs/extract/v1/extract.py",
@@ -29207,7 +29214,7 @@
       "lines": 425,
       "module": "tests/extract",
       "kind": "source",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending.",
         "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
@@ -29240,7 +29247,10 @@
         ]
       ],
       "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
-      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read.",
+      "current_delta_sha256": "084dcbfdea2d8cb8dc20825887abbc5423eaec977ef8cc436f70f9dc69adb421",
+      "current_delta_commit": "37da210",
+      "recheck_required": "Parent complete primary source/regression/fragment patch accepted; final formal drug JSON criterion/replay receipt intake pending."
     },
     {
       "path": "tests/extract/test_drug_map_evaluation.py",
@@ -29648,7 +29658,7 @@
       "lines": 392,
       "module": "tests/extract",
       "kind": "source",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
       ],
@@ -29671,7 +29681,10 @@
           197,
           392
         ]
-      ]
+      ],
+      "current_delta_sha256": "7a0e9e284e04e57310623609a4ea18592774f85dd8d3285fc9941422956b5c15",
+      "current_delta_commit": "37da210",
+      "recheck_required": "Parent complete primary source/regression/fragment patch accepted; final formal drug JSON criterion/replay receipt intake pending."
     },
     {
       "path": "tests/extract/test_rollup_period.py",
@@ -30509,7 +30522,7 @@
       "lines": 94,
       "module": "tests/ingest",
       "kind": "source",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "docs/development/maintenance-core-packet2-evidence.json: full P read, complete W differences, all criteria and local verification; final fixed-I validation pending"
       ],
@@ -30526,7 +30539,10 @@
       "callers_or_consumers": [
         "scripts/run_tests.sh→pytest collection"
       ],
-      "W_review": "P/W SHA一致、全文レビューを再利用"
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "current_delta_sha256": "eb3d962343d5aa0422ab4182b30c0e4a96ebf5e002b47a15a158edabfdb9f960",
+      "current_delta_commit": "37da210",
+      "recheck_required": "Parent complete primary source/regression/fragment patch accepted; final formal drug JSON criterion/replay receipt intake pending."
     },
     {
       "path": "tests/ingest/test_fixture_synthetic.py",
@@ -37504,7 +37520,7 @@
       "lines": 94,
       "module": "tests/views",
       "kind": "source",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
@@ -37522,7 +37538,10 @@
       "responsibility": "Synthetic public consumer/fixture for drug_candidates; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
       "callers": [
         "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
-      ]
+      ],
+      "current_delta_sha256": "9718e5c90e950ba1ec6b0cb400fd8a9534aedfb2f3434c25d4df10764a678138",
+      "current_delta_commit": "37da210",
+      "recheck_required": "Parent complete primary source/regression/fragment patch accepted; final formal drug JSON criterion/replay receipt intake pending."
     },
     {
       "path": "tests/views/test_group_consultations_view.py",
@@ -38282,6 +38301,16 @@
       "evidence": [
         "Parent accepted all9x20 criteria,20 core source exact reuse,all259 entry/current SHA (256W+3parent delta), findings/flows/limits/static checks and全893bytes/mode replay."
       ]
+    },
+    {
+      "path": "changes/20261005-drug-map-corrupt-json.json",
+      "kind": "task-created",
+      "module": "changes",
+      "evidence": [],
+      "status": "PARTIAL",
+      "current_delta_sha256": "e84125206092f9c6698805f647ac3e9eb5b77d8b9703e7bf1889c535ea5c2ee8",
+      "current_delta_commit": "37da210",
+      "recheck_required": "Parent complete primary source/regression/fragment patch accepted; final formal drug JSON criterion/replay receipt intake pending."
     }
   ],
   "protected_or_derived_groups": [
