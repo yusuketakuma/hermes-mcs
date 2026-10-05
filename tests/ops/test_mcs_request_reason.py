@@ -1,6 +1,7 @@
 """Reason fields on human-confirmed request commands."""
 
 import uuid
+import json
 
 import pytest
 
@@ -52,3 +53,25 @@ def test_invalid_reason_is_rejected_without_creating_request(tmp_path, reason):
     assert receipt["reason"] is None
     assert db.db.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 0
     db.close()
+
+
+@pytest.mark.parametrize("kind", ["extract_v1", "extract_llm"])
+@pytest.mark.parametrize("field", ["content", "meta"])
+def test_deep_latest_extraction_hides_suggestions_without_history_fallback(tmp_path, kind, field):
+    db = _source(tmp_path)
+    try:
+        source = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+        content = {"requests": [{"kind": "confirm", "ctx": "synthetic-v1",
+                                  "to": "synthetic-recipient", "action": "synthetic-llm"}]}
+        meta = {"hash": source["content_hash"]}
+        db.artifact_add(kind, json.dumps(content), project_id=1, message_id=1, meta=meta)
+        assert any(item["extraction_kind"] == kind for item in requests.candidates(db.db, source))
+        latest = db.artifact_add(kind, json.dumps(content), project_id=1, message_id=1, meta=meta)
+        raw = "[" * 1500 + "0" + "]" * 1500
+        db.db.execute(f"UPDATE artifacts SET {field}=? WHERE artifact_id=?", (raw, latest))
+        before = db.db.total_changes
+        result = requests.candidates(db.db, source)
+        assert all(item["extraction_kind"] != kind for item in result)
+        assert db.db.total_changes == before
+    finally:
+        db.close()
