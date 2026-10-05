@@ -5,6 +5,7 @@ the SDKs' own. Skips when the SDKs are not installed."""
 import asyncio
 import json
 import re
+from types import SimpleNamespace
 
 import pytest
 
@@ -27,6 +28,12 @@ class Response:
         self._body = json.dumps(body)
         self.headers = CIMultiDict({"Content-Type": "application/json"})
         self.content_type = "application/json"
+        self.content = SimpleNamespace(iter_chunked=self.iter_chunked)
+
+    async def iter_chunked(self, size):
+        body = self._body.encode()
+        for start in range(0, len(body), size):
+            yield body[start:start + size]
 
     async def text(self, encoding=None):
         return self._body
@@ -43,6 +50,8 @@ class Response:
 
 class Session:
     """Answers by (method, url regex); records every request."""
+
+    trust_env = False
 
     def __init__(self, routes, log):
         self.routes, self.log, self.closed = routes, log, False
