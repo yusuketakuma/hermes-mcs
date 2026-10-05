@@ -192,7 +192,7 @@ def load(path: str | Path, *, expected_sha256: str) -> DrugMap | None:
         raise ValueError("drug_map_sha256")
     try:
         document = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ValueError("drug_map_json") from exc
     if not isinstance(document, dict) or document.get("schema") not in (SCHEMA, SOURCE_SCHEMA):
         raise ValueError("drug_map_schema")
@@ -280,7 +280,7 @@ def current_refs(db: sqlite3.Connection, mid: int) -> list[Annotation]:
         return []
     try:
         content, meta = json.loads(row[0]), json.loads(row[1])
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError, RecursionError):
         return []
     if (not isinstance(content, dict) or not isinstance(meta, dict)
             or any(meta.get(k) != v for k, v in binding.items())
@@ -293,8 +293,11 @@ def current_refs(db: sqlite3.Connection, mid: int) -> list[Annotation]:
             or not _text(meta["source"].get("approved_by"))
             or not isinstance(content.get("refs"), list)):
         return []
-    meds = json.loads(source[2]).get(
-        "medications" if source[1] == "extract_v1" else "meds", [])
+    try:
+        meds = json.loads(source[2]).get(
+            "medications" if source[1] == "extract_v1" else "meds", [])
+    except RecursionError:
+        return []
     if not isinstance(meds, list):
         return []
     refs = []
@@ -351,8 +354,12 @@ def derive(ledger, dictionary: DrugMap | None, *,
         source = _source(ledger.db, mid) if usable else None
         content = meta = None
         if source is not None and dictionary is not None:
-            meds = json.loads(source[2]).get(
-                "medications" if source[1] == "extract_v1" else "meds", [])
+            try:
+                meds = json.loads(source[2]).get(
+                    "medications" if source[1] == "extract_v1" else "meds", [])
+            except RecursionError:
+                source = None
+        if source is not None and dictionary is not None:
             content = {"refs": [dictionary.resolve(med["name"], i)
                        for i, med in enumerate(meds if isinstance(meds, list) else [])
                        if isinstance(med, dict) and _text(med.get("name"))]}
