@@ -125,7 +125,8 @@ def test_stale_loop_rejected_and_link_failure_rolls_back(tmp_path):
         else sqlite3.SQLITE_OK)
     with pytest.raises(sqlite3.DatabaseError):
         requests.apply_command(db, rollback_req)
-    db.db.set_authorizer(None)
+    # Python 3.10 requires a callable; None disables the authorizer from 3.11.
+    db.db.set_authorizer(lambda *_: sqlite3.SQLITE_OK)
     assert db.db.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 0
     assert db.db.execute("SELECT COUNT(*) FROM command_receipts").fetchone()[0] == 1
     db.close()

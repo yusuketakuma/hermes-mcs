@@ -30,7 +30,7 @@ def validate_loop_ref(value) -> str | None:
 def _decode(value, code: str):
     try:
         result = json.loads(value or "{}")
-    except (json.JSONDecodeError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         raise ValueError(code) from None
     if not isinstance(result, dict):
         raise ValueError(code)

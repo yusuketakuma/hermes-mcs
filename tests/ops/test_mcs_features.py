@@ -234,7 +234,8 @@ def test_request_atomicity_replay_revisions_source_edits(tmp_path):
                          else sqlite3.SQLITE_OK)
     with pytest.raises(sqlite3.DatabaseError):
         requests.apply_command(db, create)
-    db.db.set_authorizer(None)
+    # Python 3.10 requires a callable to restore unrestricted fixture access.
+    db.db.set_authorizer(lambda *_: sqlite3.SQLITE_OK)
     assert db.db.execute("SELECT count(*) FROM requests").fetchone()[0] == 0
     receipt = requests.apply_command(db, create)
     assert receipt["outcome"] == "applied"
@@ -342,7 +343,7 @@ def test_inbox_rejections_faults_and_commit_before_unlink(tmp_path, monkeypatch,
                          else sqlite3.SQLITE_OK)
     with pytest.raises(sqlite3.DatabaseError):
         job_ops.drain_commands(db, {"errors": []}, str(inbox))
-    db.db.set_authorizer(None)
+    db.db.set_authorizer(lambda *_: sqlite3.SQLITE_OK)
     assert db.db.execute("SELECT count(*) FROM requests").fetchone()[0] == 0
     assert len(list(inbox.glob("*.json"))) == 3
     # Distinct payload is quarantined by the host receipt, not file replacement.

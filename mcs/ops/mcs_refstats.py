@@ -122,7 +122,7 @@ def _receipt_applied(db, approval: dict, artifact_id: int) -> bool:
                 and receipt["refstat_artifact_id"] == artifact_id
                 and receipt.get("name") == approval.get("name")
                 and receipt.get("file_hash") == approval.get("file_hash"))
-    except (json.JSONDecodeError, TypeError, AttributeError):
+    except (ValueError, TypeError, AttributeError, RecursionError):
         return False
 
 
@@ -135,7 +135,7 @@ def _approvals_in_db(db, name: str):
             "ORDER BY artifact_id DESC", (APPROVAL_KIND,)):
         try:
             c = json.loads(r["content"] or "{}")
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             continue
         if isinstance(c, dict) and c.get("name") == name \
                 and _receipt_applied(db, c, r["artifact_id"]):
