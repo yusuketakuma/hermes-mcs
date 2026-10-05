@@ -3,7 +3,7 @@
   "status": "REVIEWED_LOCAL_SUPPLEMENT; GLOBAL_PARTIAL",
   "P": "bb533f588026b3640310f4b89c6973a892fe52fa",
   "source": "mcs/semantic/semantic_relations.py",
-  "source_full_read_lines": 253,
+  "source_full_read_lines": 228,
   "source_current_sha256": "fb3b731cea7d94691395004410d42c44aaee19f44895d611b9bbb716f54f6f62",
   "tests": "tests/semantic/test_semantic_relations.py",
   "test_current_lines": 251,
@@ -24,5 +24,6 @@
   "limits": [
     "Final fixedI SDK/archive/fullchecks/review pending.",
     "No model/real DB/service access."
-  ]
+  ],
+  "record_correction": "Corrected line-count metadata from253 to228 after checking complete source; original read ranges1–150/151–260 covered all228 lines."
 }

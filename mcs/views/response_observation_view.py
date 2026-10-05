@@ -95,9 +95,12 @@ def get_response_observation_list(
     if max_age_s is None:
         result.update(state="unknown", reason="freshness_policy_unknown")
         return result
-    if (not isinstance(max_age_s, (int, float)) or isinstance(max_age_s, bool)
-            or not math.isfinite(max_age_s)
-            or max_age_s < 0):
+    try:
+        valid_age = (isinstance(max_age_s, (int, float)) and not isinstance(max_age_s, bool)
+                     and math.isfinite(max_age_s) and max_age_s >= 0)
+    except OverflowError:
+        valid_age = False
+    if not valid_age:
         raise ValueError("bad_max_age_s")
     max_age_s = float(max_age_s)
     binding = payload_hash([meta["generation_id"], SCHEMA, scope, max_age_s])

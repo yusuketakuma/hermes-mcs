@@ -60,7 +60,7 @@ def _parse_when(text: str) -> int:
         if "T" not in text and " " not in text:
             d = datetime.strptime(text, "%Y-%m-%d")
             return int(d.replace(tzinfo=JST).timestamp())
-        dt = datetime.fromisoformat(text)
+        dt = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
         if dt.tzinfo is None:
             raise ValueError("bad_time_arg")
         return int(dt.timestamp())
@@ -364,16 +364,17 @@ def _med_messages(db, scope, extra_sql="", extra_params=()):
             FROM artifacts a JOIN messages m ON m.message_id=a.message_id
             WHERE a.kind IN ({FACT_KINDS_SQL})
               {current_fact_pred()}
-              AND json_array_length({json_or_null('a.content')},'$.meds')>0
               {extra_sql}{w}
             ORDER BY a.artifact_id DESC""",
-        [*extra_params, *p]).fetchall()
+        [*extra_params, *p])
     seen = set()
     for pid, mid, ts, content in rows:
         if mid in seen:
             continue
         seen.add(mid)
-        yield pid, mid, ts, json.loads(content).get("meds") or []
+        meds = json.loads(content).get("meds") or []
+        if meds:
+            yield pid, mid, ts, meds
 
 
 def _med_rows(db, scope, msgs=None):
@@ -1266,7 +1267,7 @@ def run_stats(db, snapshot_ts: int, args: dict) -> dict:
                     privacy_policy=args.get("interaction_privacy_policy"))
             else:
                 stats[name] = REGISTRY[name]["fn"](db, scope)
-        except (json.JSONDecodeError, TypeError, KeyError,
+        except (json.JSONDecodeError, RecursionError, TypeError, KeyError,
                 AttributeError, OverflowError, sqlite3.Error) as e:
             stats[name] = _result("unavailable", scope, {},
                                   reason=f"data_error:{type(e).__name__}")

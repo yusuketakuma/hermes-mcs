@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "PARTIAL": 80,
+      "PARTIAL": 59,
       "EXCLUDED": 2,
-      "UNSEEN": 510,
-      "REVIEWED": 277
+      "UNSEEN": 405,
+      "REVIEWED": 412
     },
-    "candidate_tracked": 867
+    "candidate_tracked": 874
   },
   "files": [
     {
@@ -233,9 +233,26 @@
       "lines": 30,
       "module": "adapters",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "b0086cebedc74b027b817153f73043d4a0261989c0d4fe05524300da75ac6431",
+      "reviewed_lines": 30,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "canonical adapters/common/platformと旧互換入口の配置/責務/運用説明。",
+      "callers": [
+        "利用者/運用者/開発者",
+        "canonical adapters/ / hermes_plugin/ / integration SDKconsumer"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          30
+        ]
+      ]
     },
     {
       "path": "adapters/__init__.py",
@@ -244,9 +261,26 @@
       "lines": 1,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "8b68bbbbdca7acbd688af3e53dfaf34fcbd29b0aa60600d124329db750e69227",
+      "reviewed_lines": 1,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "adapter packageの説明docstringのみ。",
+      "callers": [
+        "利用者/運用者/開発者",
+        "canonical adapters/ / hermes_plugin/ / integration SDKconsumer"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ]
     },
     {
       "path": "adapters/common/__init__.py",
@@ -477,9 +511,21 @@
       "lines": 13,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "b7060721cd27ed534ef3edf580f29829bb649331542a97fbbfd3bf6118da218c",
+      "reviewed_lines": 13,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "Hermes登録入口から既存native Discord Supervisorを構成する。",
+      "callers": [
+        "hermes_plugin/mcs_discord/__init__.py",
+        "hermes_plugin/card_workers.py:register_discord"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "adapters/discord/actions.py",
@@ -488,9 +534,21 @@
       "lines": 765,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "a1f6fe925ffa5e87d1e8ec77ab8b78b32f30dad9a047ad56790be84035aac527",
+      "reviewed_lines": 765,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "native interactionのscope・actor・tokenを検証し、stale refresh、modal、本人確認と個別回答を扱う。",
+      "callers": [
+        "adapters/discord/tasks.py:Supervisor",
+        "adapters/discord/standalone.py:run"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "adapters/discord/cards.py",
@@ -499,9 +557,22 @@
       "lines": 207,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "bccbc08e862a31b5c46fe1db6e0b06347f82bbe3ed5020f5ee71f222c2650dac",
+      "reviewed_lines": 207,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "Components V2のUIを写像し、no_pings、sealed upload、SDK single_postを提供する。",
+      "callers": [
+        "adapters/discord/delivery.py",
+        "adapters/discord/actions.py",
+        "adapters/discord/runtime_compat.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "adapters/discord/delivery.py",
@@ -510,9 +581,20 @@
       "lines": 268,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "678d279ef9097bf55871e5abe5ca1b237f991023ffb9b57a6fc7e423fd583bf0",
+      "reviewed_lines": 269,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "common durable workerのDiscord card/thread/body/file境界、bot著者とremote IDの照合を所有する。",
+      "callers": [
+        "adapters/discord/tasks.py:Supervisor"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "adapters/discord/runtime_compat.py",
@@ -521,9 +603,21 @@
       "lines": 161,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "ba8ca159e89c3ceb85d558bd253aefeda3d627a47fab244c9b1bd650f671054c",
+      "reviewed_lines": 166,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "旧独立APIの引数・戻り値を維持し、現在のSDK接続制約とsingle_postを共有する。",
+      "callers": [
+        "mcs_standalone/discord_runtime.py",
+        "integration/test_standalone_sdk.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "adapters/discord/standalone.py",
@@ -532,9 +626,22 @@
       "lines": 458,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "d51ee1d292ab6dff21b4d3dc425afc2b7038e2f07cda7c9b72c50c13fe21fb46",
+      "reviewed_lines": 458,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "固定SDKの独立接続、identity/channel、設定revocation、native入力とtask停止を所有する。",
+      "callers": [
+        "mcs_standalone/__main__.py",
+        "mcs_standalone sender dispatch",
+        "adapters/discord/runtime_compat.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "adapters/discord/tasks.py",
@@ -543,9 +650,22 @@
       "lines": 135,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "9d8097b152441f26d17469351bcf15f09f3358b82e2bcc076f088f08d712da56",
+      "reviewed_lines": 135,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "scope lockを取得してworker/actionsを起動し、再構築・停止時のlock所有を維持する。",
+      "callers": [
+        "hermes_plugin/card_workers.py:register_discord",
+        "adapters/discord/standalone.py:run",
+        "adapters/discord/runtime_compat.py:run"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "adapters/lineworks/__init__.py",
@@ -752,9 +872,21 @@
       "lines": 2,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "179cbcb2e57b187d300652bbdf60dce120170eb2ee9d986a7db25a1a8bbe551b",
+      "reviewed_lines": 2,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "副作用を持たないSlack canonical package入口。",
+      "callers": [
+        "hermes_plugin/mcs_slack/__init__.py",
+        "adapters.slack consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "adapters/slack/actions.py",
@@ -763,9 +895,20 @@
       "lines": 675,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "ecd490dd85d591c2b9189fe33a3a70453a8fcb3072fa6eef1db544ab060d417b",
+      "reviewed_lines": 694,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "workspace/app/channel/userをpinしたSlack action、modal、confirm、個別回答とUTF-8 wire境界を所有する。",
+      "callers": [
+        "adapters/slack/tasks.py:Supervisor"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "adapters/slack/cards.py",
@@ -774,9 +917,21 @@
       "lines": 143,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "080400362ed3876a8e202bf5ba789bed91858f1dbb41954386bdff8e3027b807",
+      "reviewed_lines": 153,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "validated neutral specをSlack Block Kitへ写像し、plain text/mentionとnative link容量を制約する。",
+      "callers": [
+        "adapters/slack/delivery.py:SlackCardAdapter.perform",
+        "adapters/slack/actions.py:_parts_blocks"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "adapters/slack/delivery.py",
@@ -785,9 +940,20 @@
       "lines": 495,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "3129b7fc6753f4b83bbc2965daced330daf68b77c9d9661b621f379027245b8b",
+      "reviewed_lines": 512,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "既存workspace client、single-attempt snapshot、thread本文/添付とdurable part receiptのSlack境界を所有する。",
+      "callers": [
+        "adapters/slack/tasks.py:Supervisor"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "adapters/slack/paths.py",
@@ -796,9 +962,22 @@
       "lines": 17,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "bffc8204582e5bc00f71c5d37a686287d479c6d936fd6b1cb54e61ab6e1e4486",
+      "reviewed_lines": 17,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "共通private path処理を再利用し、Slack state/receipt/renderを他transportから分離する。",
+      "callers": [
+        "adapters/slack/tasks.py",
+        "adapters/slack/delivery.py",
+        "adapters/slack/actions.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "adapters/slack/runtime_compat.py",
@@ -807,9 +986,21 @@
       "lines": 113,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "cfdb6b6c57ffcf5dc1587f83b06e3104581f082ff9a10503ff6ea296d19c749d",
+      "reviewed_lines": 124,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "旧独立APIの署名を保持し、Web APIとSocket Modeの現行接続制約・終了処理を再利用する。",
+      "callers": [
+        "mcs_standalone/slack_runtime.py",
+        "integration/test_standalone_sdk.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "adapters/slack/standalone.py",
@@ -818,9 +1009,22 @@
       "lines": 381,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "2d25aef0679b535cd8afeb5cf7588cd813f55b97f639f9c2c8422790fb79b1e5",
+      "reviewed_lines": 381,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "独立Slack client/socket、公式URL、response容量、設定revocationとprocess-owned taskを所有する。",
+      "callers": [
+        "mcs_standalone/__main__.py",
+        "mcs_standalone sender dispatch",
+        "adapters/slack/runtime_compat.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "adapters/slack/tasks.py",
@@ -829,9 +1033,50 @@
       "lines": 106,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "05f8eee2d706f9c17a1a2480f8d905d9abb3f1e1615e6f50e289e614600b5b9a",
+      "reviewed_lines": 106,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "workspace scope lock、既存client bindと後継appへのlistener handoffを監督する。",
+      "callers": [
+        "hermes_plugin/card_workers.py:register_slack",
+        "adapters/slack/standalone.py:run",
+        "adapters/slack/runtime_compat.py:run"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
+    },
+    {
+      "path": "changes/20261005-extraction-snapshot-evidence.json",
+      "sha256": null,
+      "bytes": 2502,
+      "lines": 15,
+      "module": "changes",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
+      "evidence": [
+        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。",
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "reviewed_sha256": "100bec4bba096c0bf3d988dd85b995d2d3efe0f1c5863011d4a7e83288de430c",
+      "reviewed_lines": 15,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "日本語の利用者影響/CLI予算/bench入力制限/worker更新/rollup再構築の変更記録。生成CHANGELOG/DEVELOPMENTはparent owner。",
+      "callers": [
+        "pytest / release change compiler"
+      ],
+      "full_content_read": true,
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "read_ranges": [
+        [
+          1,
+          15
+        ]
+      ]
     },
     {
       "path": "changes/20261005-semantic-deadline-output-contract.json",
@@ -2458,6 +2703,42 @@
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
     },
     {
+      "path": "changes/maintenance-core-packet3-legacy-boundaries.json",
+      "sha256": null,
+      "bytes": 1373,
+      "lines": 16,
+      "module": "changes",
+      "kind": "new-source-or-test",
+      "status": "UNSEEN",
+      "evidence": [
+        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。"
+      ]
+    },
+    {
+      "path": "changes/maintenance-core-packet3-native-boundaries.json",
+      "sha256": null,
+      "bytes": 1649,
+      "lines": 18,
+      "module": "changes",
+      "kind": "new-source-or-test",
+      "status": "UNSEEN",
+      "evidence": [
+        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。"
+      ]
+    },
+    {
+      "path": "changes/maintenance-core-packet4-signal-latest.json",
+      "sha256": null,
+      "bytes": 875,
+      "lines": 11,
+      "module": "changes",
+      "kind": "source",
+      "status": "UNSEEN",
+      "evidence": [
+        "New tracked path added; no complete review inferred."
+      ]
+    },
+    {
       "path": "changes/maintenance-core-preflight-20261005.json",
       "sha256": "4a825b2b91b2d2a0468f364fc586f8715761d40622c56ccc103b702188b03501",
       "bytes": 1908,
@@ -2591,6 +2872,69 @@
       ]
     },
     {
+      "path": "changes/maintenance-notify-packet3-lineworks-silent-20261005.json",
+      "sha256": null,
+      "bytes": 1147,
+      "lines": 8,
+      "module": "changes",
+      "kind": "release-fragment",
+      "status": "REVIEWED",
+      "evidence": [
+        "日本語runtime変更・upgradeと修復sourceを親照合済み。"
+      ],
+      "reviewed_sha256": "e40278900656f54f28c45a1e704ba917fdd037a65517cdf18f5ed0b128d22575",
+      "reviewed_lines": 8,
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
+      "path": "changes/maintenance-notify-packet3-private-display-20261005.json",
+      "sha256": null,
+      "bytes": 1152,
+      "lines": 8,
+      "module": "changes",
+      "kind": "release-fragment",
+      "status": "REVIEWED",
+      "evidence": [
+        "日本語runtime変更・upgradeと修復sourceを親照合済み。"
+      ],
+      "reviewed_sha256": "fc2ad3c8184ec7a1dec9013328417cb1de63aab068c8384e3f2a53de113849ad",
+      "reviewed_lines": 8,
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
+      "path": "changes/maintenance-notify-packet3-recovery-20261005.json",
+      "sha256": null,
+      "bytes": 1786,
+      "lines": 12,
+      "module": "changes",
+      "kind": "release-fragment",
+      "status": "REVIEWED",
+      "evidence": [
+        "日本語runtime変更・upgradeと修復sourceを親照合済み。"
+      ],
+      "reviewed_sha256": "78ff8f50b55e96fa600d2864e072e18e9ca61b1bf34526d7fb5892755be5befb",
+      "reviewed_lines": 12,
+      "read_ranges": [
+        [
+          1,
+          12
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
       "path": "changes/maintenance-notify-standalone-attachment-pins.json",
       "sha256": "d6cf05782af334c05e080385eec3bd982c7b34689402bcf92d5df8f11f18b700",
       "bytes": 1059,
@@ -2601,6 +2945,56 @@
       "origin": "new maintenance record",
       "evidence": [
         "JSON parsed and patch inspected; final path/evidence reconciliation pending."
+      ]
+    },
+    {
+      "path": "changes/maintenance-plugin-signal-latest-20261005.json",
+      "sha256": null,
+      "module": "changes",
+      "kind": "source",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "status": "REVIEWED",
+      "reviewed_sha256": "9dbe4a5957e129e2d0ed20c75fefffe203798a0e50bbc8aaf47b77616e53b580",
+      "reviewed_lines": 11,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "日本語1.0.13 release fragment。検証済みsource変更と再起動条件。",
+      "callers": [
+        "scripts/development/release_notes.pyのchanges consumer"
+      ],
+      "full_content_read": true,
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "read_ranges": [
+        [
+          1,
+          11
+        ]
+      ]
+    },
+    {
+      "path": "changes/maintenance-plugin-summary-dialect-20261005.json",
+      "sha256": null,
+      "module": "changes",
+      "kind": "source",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "status": "REVIEWED",
+      "reviewed_sha256": "a35e5e25cde1511acfd3ec021d094dffa5ebe1cdd2e06d4c6a3d935aa62f4281",
+      "reviewed_lines": 8,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "日本語1.0.13 release fragment。検証済みsource変更と再起動条件。",
+      "callers": [
+        "scripts/development/release_notes.pyのchanges consumer"
+      ],
+      "full_content_read": true,
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
       ]
     },
     {
@@ -2627,6 +3021,25 @@
         "New task-authored file; packet/source or schema consistency validation tracked separately."
       ],
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+    },
+    {
+      "path": "changes/maintenance-semantic-utc-python310-20261005.json",
+      "sha256": null,
+      "bytes": 833,
+      "lines": 12,
+      "module": "changes",
+      "kind": "release-fragment",
+      "status": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          12
+        ]
+      ],
+      "reviewed_sha256": "8cc251a18ec2110b818dc6b7eee25a5e94c5d5ee883c018fc6ff7c3fcc225ab4",
+      "evidence": [
+        "親作成・全文確認。対象source/callerと検証ログを照合済み。"
+      ]
     },
     {
       "path": "changes/maintenance-structured-empty-source-20261005.json",
@@ -2665,6 +3078,36 @@
         "New task-authored file; packet/source or schema consistency validation tracked separately."
       ],
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+    },
+    {
+      "path": "changes/maintenance-view-current-state-20261005.json",
+      "sha256": null,
+      "module": "changes",
+      "kind": "release-fragment",
+      "status": "REVIEWED",
+      "reviewed_sha256": "1ce915775ea2acb47d7aa96718b31055ecfa6aabf6b91d6f9b48d81d97cf2a1a",
+      "evidence": [
+        "Full Japanese user effect/upgrade/source refs inspected; source criteria in parent views packet."
+      ]
+    },
+    {
+      "path": "changes/maintenance-views-invalid-numbers-20261005.json",
+      "sha256": null,
+      "bytes": 1019,
+      "lines": 14,
+      "module": "changes",
+      "kind": "release-fragment",
+      "status": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          14
+        ]
+      ],
+      "reviewed_sha256": "df956fa9164155a23348a4b866f52324959463fd7072fd7701953e920e33baea",
+      "evidence": [
+        "親作成・全文確認。対象source/callerと検証ログを照合済み。"
+      ]
     },
     {
       "path": "ci/gates-coverage.json",
@@ -3870,6 +4313,25 @@
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
     },
     {
+      "path": "docs/development/full-maintenance-20261005/parent-semantic-utc-evidence.json",
+      "sha256": null,
+      "bytes": 1896,
+      "lines": 28,
+      "module": "docs",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          28
+        ]
+      ],
+      "reviewed_sha256": "9e6b81e65321866180fa02bf11fbd3d030c4614032b3ca419ed63eca2af08171",
+      "evidence": [
+        "親作成・全文確認。対象source/callerと検証ログを照合済み。"
+      ]
+    },
+    {
       "path": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
       "sha256": "44851871925bff3e985663361bbd14345532779e11de9de9d1996663fae8eb95",
       "bytes": 7318,
@@ -3907,6 +4369,20 @@
       ]
     },
     {
+      "path": "docs/development/maintenance-core-packet3-evidence.json",
+      "sha256": null,
+      "bytes": 172393,
+      "lines": 4143,
+      "module": "docs/development",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
+      "reviewed_sha256": "2e10db192af9b7f55d95876593e65f7a5c7228a6a6bbd7ba70635c909f8129c6",
+      "evidence": [
+        "Structured whole record inspection, inventory/criterion validation, source patch review and I digest matching; run record classified separately from source text."
+      ],
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json"
+    },
+    {
       "path": "docs/development/maintenance-notify-evidence.json",
       "sha256": "27495aa7d8e2a2381d14f92290a85ccce653752af6b0b25163a3a927b082d56f",
       "bytes": 53972,
@@ -3930,6 +4406,35 @@
       "evidence": [
         "New task artifact; exact whole-candidate reconciliation and final review pending"
       ]
+    },
+    {
+      "path": "docs/development/maintenance-notify-packet3-evidence.json",
+      "sha256": null,
+      "bytes": 323455,
+      "lines": 8109,
+      "module": "docs",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
+      "evidence": [
+        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。",
+        "JSON全構造・32file digest/640観点・9findings/6反証/4制約・artifact/logSHA検査済み。run記録として分類。"
+      ],
+      "reviewed_sha256": "babad73b627ca7b93958597a33b0fbccd95415f25bd1cd1d49b4682e8fc605f1",
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
+      "path": "docs/development/maintenance-notify-packet4-evidence.json",
+      "sha256": null,
+      "bytes": 158882,
+      "lines": 3142,
+      "module": "docs/development",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
+      "reviewed_sha256": "9f348947c767a1022a962a69a70caa0c08c6469393f3b70887c6acb2d4b74920",
+      "evidence": [
+        "Structured whole record inspection, inventory/criterion validation, source patch review and I digest matching; run record classified separately from source text."
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json"
     },
     {
       "path": "docs/development/maintenance-semantic-evidence.json",
@@ -3968,6 +4473,20 @@
       "evidence": [
         "Final candidate artifact reconciliation pending"
       ]
+    },
+    {
+      "path": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "sha256": null,
+      "bytes": 509025,
+      "lines": 8189,
+      "module": "docs/development",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
+      "reviewed_sha256": "efc0f30529b27fc1069058b6e6ff709aa7e52e394688f3d3b3b758bc5f7e8864",
+      "evidence": [
+        "Structured whole record inspection, inventory/criterion validation, source patch review and I digest matching; run record classified separately from source text."
+      ],
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json"
     },
     {
       "path": "docs/development/readme-review.json",
@@ -4625,9 +5144,27 @@
       "lines": 20,
       "module": "evaluation",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "4c50ff886cbd66cf64234a52a4acb4d39e891d381b8d6405a51953e2a4bfded8",
+      "reviewed_lines": 20,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "評価資産を完全合成/匿名化不可と定義し、CLI/注釈/criteriaの導線を確認。P3 exact SHAで全文再利用。",
+      "callers": [
+        "evaluation/canonical_request_eval.py",
+        "mcs/semantic/semantic_evaluation.py",
+        "tests/semantic/test_canonical_request_evaluation.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          20
+        ]
+      ]
     },
     {
       "path": "evaluation/annotation-guide.md",
@@ -4636,9 +5173,27 @@
       "lines": 22,
       "module": "evaluation",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "48b276818cac98fdf047248e67afa92bba2a67e888adc6b101a165ef588d675a",
+      "reviewed_lines": 22,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "source-first人手labelの根拠/fact_id/主体/時点/mandatory/実receiptとsyntheticの区別。candidate/旧qualitativeから人承認へ自動昇格しない。",
+      "callers": [
+        "evaluation/canonical_request_eval.py",
+        "mcs/semantic/semantic_evaluation.py",
+        "tests/semantic/test_canonical_request_evaluation.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          22
+        ]
+      ]
     },
     {
       "path": "evaluation/canonical_request_cases.json",
@@ -4647,9 +5202,27 @@
       "lines": 103,
       "module": "evaluation",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "be1fd87a392db1259b9b637ec02b73758d7c8688389be41041bc15467625e32f",
+      "reviewed_lines": 103,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "完全架空の依頼/質問/自己予定/返信/false-done/unknownを含む12caseと合成capacity days。model出力や人手署名でない。",
+      "callers": [
+        "evaluation/canonical_request_eval.py",
+        "mcs/semantic/semantic_evaluation.py",
+        "tests/semantic/test_canonical_request_evaluation.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          103
+        ]
+      ]
     },
     {
       "path": "evaluation/canonical_request_eval.py",
@@ -4658,9 +5231,35 @@
       "lines": 415,
       "module": "evaluation",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "320c2a8ec14c77c60a9c3c9c222b2461cb4143aac3bd4cc9899561969698b4f4",
+      "reviewed_lines": 415,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "offline canonical fact validate/project/one-to-one request scoring/G6 synthetic-denominator/capacity。--shadow-dbは明示readonly入口で今回未実行、モデル呼出0とproduction_ready falseを保持。",
+      "callers": [
+        "evaluation/canonical_request_eval.py",
+        "mcs/semantic/semantic_evaluation.py",
+        "tests/semantic/test_canonical_request_evaluation.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          415
+        ],
+        [
+          211,
+          415
+        ]
+      ]
     },
     {
       "path": "evaluation/extract_cases.json",
@@ -4669,9 +5268,30 @@
       "lines": 359,
       "module": "evaluation",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "b63e9d47f52a01c2c44d167feafad867bd2479f53f6cf8c47b684c1a67956eb1",
+      "reviewed_lines": 359,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "全synthetic named corpus。否定/本人以外/薬剤/依頼/疑問/完了と受領/条件/期限/context-onlyを覆う。P3全読をexact SHA再利用。",
+      "callers": [
+        "mcs/extract/v4/extract_bench.py",
+        "tests/extract/test_extract_bench.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          190
+        ],
+        [
+          191,
+          359
+        ]
+      ]
     },
     {
       "path": "evaluation/extract_cases_labs.json",
@@ -4680,9 +5300,30 @@
       "lines": 508,
       "module": "evaluation",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "291e7ee7949ff68910afa60be77fe12cd9dea0a803a6c0c7275e11fe35e03ce0",
+      "reviewed_lines": 508,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "24完全合成case。値/単位/width/analyte/mismatch/family/planned/reference/date/qualitativeを覆い、未知≠無しとconfirmed candidate分離。",
+      "callers": [
+        "mcs/extract/v4/extract_bench.py",
+        "tests/extract/test_extract_bench.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          255
+        ],
+        [
+          256,
+          508
+        ]
+      ]
     },
     {
       "path": "evaluation/g6-criteria-v1.json",
@@ -4691,9 +5332,27 @@
       "lines": 36,
       "module": "evaluation",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "ea7959300fe52110761ccf83eba4f4d9ed0c053e59ee46070ce0c4fea825177b",
+      "reviewed_lines": 36,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "G6人手label>=200、重大な誤完了/根拠欠落/drop/collisionは0、delivery・mandatory/evidence closure等をactual denominatorで評価。fixture passはpromotionでない。",
+      "callers": [
+        "evaluation/canonical_request_eval.py",
+        "mcs/semantic/semantic_evaluation.py",
+        "tests/semantic/test_canonical_request_evaluation.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          36
+        ]
+      ]
     },
     {
       "path": "evaluation/rehearsal-comparison.jsonl",
@@ -4702,9 +5361,27 @@
       "lines": 1,
       "module": "evaluation",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "32387930f2b164c1c887d244e53573b48bd61ba1b0bb7726db844d71d197d6eb",
+      "reviewed_lines": 1,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "1完全合成の比較run記録。品質/latency/costの仮定値であり実モデル実測や配備receiptに読替えない。",
+      "callers": [
+        "evaluation/canonical_request_eval.py",
+        "mcs/semantic/semantic_evaluation.py",
+        "tests/semantic/test_canonical_request_evaluation.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ]
     },
     {
       "path": "evaluation/request_following_heldout_proposals_a.json",
@@ -4713,9 +5390,38 @@
       "lines": 112,
       "module": "evaluation",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "f9987b7a41ca56d49cd6fe23e326b9fa416ec6d83b73552c5a29a2a566dcaa65",
+      "reviewed_lines": 112,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "架空001–110のsynthetic proposals全文。依頼/質問/自己予定/返信/受領/false-done、引用index/職種/条件/期限をraw sourceと別資産で保持。",
+      "callers": [
+        "evaluation/request_following_review.py",
+        "tests/semantic/test_request_following_generation.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          28
+        ],
+        [
+          29,
+          56
+        ],
+        [
+          57,
+          84
+        ],
+        [
+          85,
+          112
+        ]
+      ]
     },
     {
       "path": "evaluation/request_following_heldout_proposals_b.json",
@@ -4724,9 +5430,38 @@
       "lines": 112,
       "module": "evaluation",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "d6e1bb8c97e361cb31da7e1d90b963a5ca8f7b7bf5c2da37d3e823f88237207e",
+      "reviewed_lines": 112,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "架空111–220のsynthetic proposals全文。部分完了/条件/依存/曖昧時刻/宛先/依頼者 unknown、context quoteの関係を保持。",
+      "callers": [
+        "evaluation/request_following_review.py",
+        "tests/semantic/test_request_following_generation.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          28
+        ],
+        [
+          29,
+          56
+        ],
+        [
+          57,
+          84
+        ],
+        [
+          85,
+          112
+        ]
+      ]
     },
     {
       "path": "evaluation/request_following_heldout_sources_a.json",
@@ -4735,9 +5470,38 @@
       "lines": 112,
       "module": "evaluation",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "63a1c27e27f85e15b0e3a699ca266e24ef6d22923dad33a2aa238df26e636358",
+      "reviewed_lines": 112,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "110架空office会話を全読。全case pending、promotion_eligible=false。実患者/利用者の匿名化や真の人手labelを含めない。",
+      "callers": [
+        "evaluation/request_following_review.py",
+        "tests/semantic/test_request_following_generation.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          28
+        ],
+        [
+          29,
+          56
+        ],
+        [
+          57,
+          84
+        ],
+        [
+          85,
+          112
+        ]
+      ]
     },
     {
       "path": "evaluation/request_following_heldout_sources_b.json",
@@ -4746,9 +5510,38 @@
       "lines": 112,
       "module": "evaluation",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "570b669a6e4332171261595745c9ddd6ca096028363eeff5ae28205977feae2d",
+      "reviewed_lines": 112,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "110架空office会話を全読。2026-10 relative timeの不確実性、受領≠実施、当事者不明を埋めない。全pending/no promotion。",
+      "callers": [
+        "evaluation/request_following_review.py",
+        "tests/semantic/test_request_following_generation.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          28
+        ],
+        [
+          29,
+          56
+        ],
+        [
+          57,
+          84
+        ],
+        [
+          85,
+          112
+        ]
+      ]
     },
     {
       "path": "evaluation/request_following_review.py",
@@ -4757,9 +5550,26 @@
       "lines": 251,
       "module": "evaluation",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "966dfe8aaeab5e5a50f4d6cd0272d22e972b1898bdd7c908702d573409456691",
+      "reviewed_lines": 251,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "offline manifest名/path/SHA・220unique source/target・11focus>=15・known fields/false_done>=20・完全exact quote/indexを検査しsource-only worksheetとproposalsを分離export。人手署名/receipt/labelを作らない。",
+      "callers": [
+        "evaluation/request_following_review.py",
+        "tests/semantic/test_request_following_generation.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          251
+        ]
+      ]
     },
     {
       "path": "evaluation/request_following_review_manifest.json",
@@ -4768,9 +5578,26 @@
       "lines": 18,
       "module": "evaluation",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "fd86d74642844b9dff3e4a4335a58ab0d126ee8f0e7bc26bb60cd07108520f75",
+      "reviewed_lines": 18,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "完全合成source/proposal4fileの固定SHA、test split/min200/pending/falseを全確認。入力自己申告だけで真正性を立証しない。",
+      "callers": [
+        "evaluation/request_following_review.py",
+        "tests/semantic/test_request_following_generation.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          18
+        ]
+      ]
     },
     {
       "path": "evaluation/request_following_review_protocol.md",
@@ -4779,9 +5606,26 @@
       "lines": 65,
       "module": "evaluation",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "ff8017c4160fcd4fb1179b41f056595160c1fef1f427f4683f158e066c178612",
+      "reviewed_lines": 65,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "220架空case/source-first/randomized worksheetとunknown labelsの人レビュー手順。合成proposalと別入力、G6昇格不可・モデル/署名/実データを捏造しない。",
+      "callers": [
+        "evaluation/request_following_review.py",
+        "tests/semantic/test_request_following_generation.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          65
+        ]
+      ]
     },
     {
       "path": "evaluation/semantic_completeness_cases.json",
@@ -4790,9 +5634,31 @@
       "lines": 504,
       "module": "evaluation",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "6c9321d6d2bdfbce87d4bba3fcff9ffa9c0f6c767b2cf0eeba0ed9ed8bd4e488",
+      "reviewed_lines": 504,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "12完全合成のmulti-message dense facts/evidence/quantity/date/subject/negation/uncertainty/adherence/ADR/current-past-restartケース。category unknownとnoneを分離しsource原子化の欠落検知。",
+      "callers": [
+        "evaluation/canonical_request_eval.py",
+        "mcs/semantic/semantic_evaluation.py",
+        "tests/semantic/test_canonical_request_evaluation.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          252
+        ],
+        [
+          253,
+          504
+        ]
+      ]
     },
     {
       "path": "hermes_plugin/README.md",
@@ -4801,9 +5667,26 @@
       "lines": 380,
       "module": "hermes_plugin",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "f08a4cb24ecb09c72ba5768bb23d7a3fb078c4e4a82ae3d81368854a31cc4c17",
+      "reviewed_lines": 382,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "native commands/settings・人承認/receipt・Hermes/standalone包装・Discord/Slack常駐配送/復旧説明。",
+      "callers": [
+        "利用者/運用者/開発者",
+        "canonical adapters/ / hermes_plugin/ / integration SDKconsumer"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          382
+        ]
+      ]
     },
     {
       "path": "hermes_plugin/__init__.py",
@@ -4812,9 +5695,27 @@
       "lines": 1078,
       "module": "hermes_plugin",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "070420efb3a446e83c2a52212697f644319126dc594447853830712da0243e30",
+      "reviewed_lines": 1086,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "native Discord JSON commandとSlack/LW共通dispatcher。preview/confirm/receiptの認可・snapshot reference・queue入口。",
+      "callers": [
+        "Hermes PluginManager→register→_make_handler",
+        "adapters/common/commands.answer→_dispatch",
+        "mcs_requests/mcs_view readonlyconsumer"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1086
+        ]
+      ]
     },
     {
       "path": "hermes_plugin/card_workers.py",
@@ -4823,9 +5724,27 @@
       "lines": 154,
       "module": "hermes_plugin",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "016b3d89a180571c40e09d64e731dc871a7450f1453a682f331353c5d0f46fc5",
+      "reviewed_lines": 154,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "Hermes native Discord/Slack factory settingsとstandalone ownership検知。",
+      "callers": [
+        "hermes_plugin.register",
+        "canonical adapters/discord/tasks.Supervisor",
+        "canonical adapters/slack/tasks.Supervisor"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          154
+        ]
+      ]
     },
     {
       "path": "hermes_plugin/mcs_delivery/__init__.py",
@@ -4834,9 +5753,27 @@
       "lines": 12,
       "module": "hermes_plugin",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "f0eab407de8f38ce6120e7803f8e230b5692a879ffe30834d532a47badd76a25",
+      "reviewed_lines": 12,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "canonical adapter moduleを再exportする旧import互換入口。",
+      "callers": [
+        "hermes_plugin.card_workers",
+        "integration/test_hermes_slack.py",
+        "既存mcs_delivery/mcs_discord/mcs_slack callers"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          12
+        ]
+      ]
     },
     {
       "path": "hermes_plugin/mcs_discord/__init__.py",
@@ -4845,9 +5782,27 @@
       "lines": 12,
       "module": "hermes_plugin",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "4ff9611d251c4b922b0151a62110b83300e5a5f6f1add80f2e9b668861328c2e",
+      "reviewed_lines": 12,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "canonical adapter moduleを再exportする旧import互換入口。",
+      "callers": [
+        "hermes_plugin.card_workers",
+        "integration/test_hermes_slack.py",
+        "既存mcs_delivery/mcs_discord/mcs_slack callers"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          12
+        ]
+      ]
     },
     {
       "path": "hermes_plugin/mcs_slack/__init__.py",
@@ -4856,9 +5811,27 @@
       "lines": 12,
       "module": "hermes_plugin",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "25d006bbb378c48768d38dcfd5be3c3c7d9ee18d45e316f5e72f5b2800717435",
+      "reviewed_lines": 12,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "canonical adapter moduleを再exportする旧import互換入口。",
+      "callers": [
+        "hermes_plugin.card_workers",
+        "integration/test_hermes_slack.py",
+        "既存mcs_delivery/mcs_discord/mcs_slack callers"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          12
+        ]
+      ]
     },
     {
       "path": "hermes_plugin/plugin.yaml",
@@ -4867,9 +5840,26 @@
       "lines": 103,
       "module": "hermes_plugin",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "f8c00049a470e4b55138c62a4b7b05290958169006360572e553682bee092968",
+      "reviewed_lines": 103,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "Hermes plugin discovery/settings descriptor。",
+      "callers": [
+        "Hermes PluginManager.discover_and_load",
+        "hermes_plugin.register/_settings/card_workers"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          103
+        ]
+      ]
     },
     {
       "path": "hermes_plugin/projects.py",
@@ -4878,9 +5868,26 @@
       "lines": 83,
       "module": "hermes_plugin",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "1f7428a6fb418f4ea72a781872cb8340502ca13034ed042057700c524f1ee82c",
+      "reviewed_lines": 83,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "公開snapshotのproject scopeとbounded cache、summary/viewへの許可scope伝播。",
+      "callers": [
+        "hermes_plugin._authorize/_notification_receipt/_dispatch_op",
+        "adapters/{discord,slack,lineworks}/actions.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          83
+        ]
+      ]
     },
     {
       "path": "install.sh",
@@ -4951,9 +5958,26 @@
       "lines": 39,
       "module": "integration",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "bb83a8b8c6c24dc06c5691a3aedafad6f83c121bb05fbeb3ba51d9d1c3889c99",
+      "reviewed_lines": 39,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "合成検証: 固定Hermesの実public CLI config set --stdin、選択HOME別の合成credential隔離・値非argv",
+      "callers": [
+        "scripts/run_tests.sh",
+        "scripts/check_pinned_sdks.shの指定consumer"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          39
+        ]
+      ]
     },
     {
       "path": "integration/test_hermes_discord.py",
@@ -4962,9 +5986,30 @@
       "lines": 269,
       "module": "integration",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "d845dd1e19a9113c94ab20577e180a437fb1a42be57cacf933a30f74e1767138",
+      "reviewed_lines": 269,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "合成検証: 固定Hermes実discovery/nativeMessageEvent/provenance/admission/dispatch→snapshot→humanqueue→drain→receipt・duplicate/stale/policy/adoption",
+      "callers": [
+        "scripts/run_tests.sh",
+        "scripts/check_pinned_sdks.shの指定consumer"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          170
+        ],
+        [
+          171,
+          269
+        ]
+      ]
     },
     {
       "path": "integration/test_hermes_slack.py",
@@ -4973,9 +6018,30 @@
       "lines": 426,
       "module": "integration",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "e9f8f9cb701eb18c894f37688cada995aea16dcf587486aea20e85f9ce9f2e47",
+      "reviewed_lines": 426,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "合成検証: 固定Hermes実PluginManager→disabled fresh app/optin/card action・secondary SDK bind/client retry不変・realSDK thread+3stepupload+partreceipt",
+      "callers": [
+        "scripts/run_tests.sh",
+        "scripts/check_pinned_sdks.shの指定consumer"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          426
+        ]
+      ]
     },
     {
       "path": "integration/test_integration_guards.py",
@@ -5033,9 +6099,26 @@
       "lines": 189,
       "module": "integration",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "cbbe6c438b7267a776ded1044ca57a5ff27d995f8535548ef0dfd4e3e784e538",
+      "reviewed_lines": 189,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "合成検証: 固定discord.py realHTTPserialization・200/403/500の単発送信・files/text分割・nativebutton/slash・restart後IDlistener",
+      "callers": [
+        "scripts/run_tests.sh",
+        "scripts/check_pinned_sdks.shの指定consumer"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          189
+        ]
+      ]
     },
     {
       "path": "integration/test_standalone_sdk.py",
@@ -5044,9 +6127,26 @@
       "lines": 343,
       "module": "integration",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "011aa5173469b15b6017167e66c309173d006214b8407dae6b5a40aa13fb1df3",
+      "reviewed_lines": 352,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "real SDKのlocal wire/型/失敗分類を確認する完全合成統合fixture。追加ownerはResponse.content.iter_chunkedとSession.trust_envだけ。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          352
+        ]
+      ]
     },
     {
       "path": "integration/test_standalone_slack_sdk.py",
@@ -5055,9 +6155,30 @@
       "lines": 381,
       "module": "integration",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "f7e11ac8fd05ca95195b1b2b5f1a62eae64d15a6e835b9cb3fc17aebc29a8e49",
+      "reviewed_lines": 381,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "合成検証: 固定SlackSDK/Bolt/socketmode fullmodal/humanconfirm・scope/actor/doubleclick・session/URL/noProxy/redirect・scope lock beforeconnect・ambientOAuth/logredaction",
+      "callers": [
+        "scripts/run_tests.sh",
+        "scripts/check_pinned_sdks.shの指定consumer"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          190
+        ],
+        [
+          191,
+          381
+        ]
+      ]
     },
     {
       "path": "lineworks_adapter/__init__.py",
@@ -5442,9 +6563,29 @@
       "lines": 157,
       "module": "mcs/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "5db18a7e00ce7146b89ffd0c4c7e6cd3521b0cf1be0d2d20bbadd6ae0fb35c29",
+      "reviewed_lines": 161,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "薬剤surfaceだけを正規化し、検査の値・単位・対象・採血日を引用へ結合。薬剤同一性/単位変換/正常範囲/人承認を推測しない。定性値の先頭一致をF04で修復。",
+      "callers": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/v4/extract_bench.py",
+        "mcs/extract/v4/extract_llm.py",
+        "mcs/views/structured_view.py",
+        "tests/extract/test_clinical_values.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          157
+        ]
+      ]
     },
     {
       "path": "mcs/extract/drug_map.py",
@@ -5453,9 +6594,39 @@
       "lines": 404,
       "module": "mcs/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "bb59d38da7e628ad0e1011e29fea950a136958247198c6c916227439e02c2a45",
+      "reviewed_lines": 404,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "明示指定の私有・所有者・0600・no-follow・容量/SHA検査済辞書だけを読む。schema1/2・exact alias/strengthを解決候補としてcurrent sourceへ結合しmed_refをtransaction内で置換。",
+      "callers": [
+        "mcs/extract/rollup.py",
+        "mcs/ingest/run_check.py",
+        "mcs/ops/brain_export.py",
+        "mcs/ops/import_drug_master.py",
+        "mcs/views/mcs_stats.py",
+        "tests/extract/test_drug_map.py",
+        "tests/extract/test_drug_map_evaluation.py",
+        "tests/extract/test_rollup_ref_lookup.py",
+        "tests/ingest/test_drug_map_pipeline.py",
+        "tests/ops/test_import_drug_master.py",
+        "tests/views/test_drug_candidates.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          404
+        ]
+      ]
     },
     {
       "path": "mcs/extract/rollup.py",
@@ -5464,9 +6635,43 @@
       "lines": 560,
       "module": "mcs/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "f51ee79205e425d86fe38bb3e319094635ba048f047433d3a5bbcac59ac1b9ec",
+      "reviewed_lines": 563,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "hash/project/body-current抽出から患者表示用集計を構築。v4>canonical>legacy、fact_id根拠/薬剤未確認/症状否定/依頼返信段階/服薬期間/連携サマリーを保持。空current sourceを存在として扱うF03とpersisted version5を修復。",
+      "callers": [
+        "mcs/ingest/run_check.py",
+        "mcs/ops/mcs_repair.py",
+        "tests/extract/test_derive_deadline.py",
+        "tests/extract/test_drug_map.py",
+        "tests/extract/test_extract_llm.py",
+        "tests/extract/test_extract_packet4_regressions.py",
+        "tests/extract/test_extraction_review.py",
+        "tests/extract/test_rollup_canonical.py",
+        "tests/extract/test_rollup_period.py",
+        "tests/extract/test_rollup_ref_lookup.py",
+        "tests/ingest/test_drug_map_pipeline.py",
+        "tests/ops/test_mcs_repair.py",
+        "tests/semantic/test_canonical_projection.py",
+        "tests/semantic/test_review_20260930.py",
+        "tests/views/test_drug_candidates.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          560
+        ]
+      ]
     },
     {
       "path": "mcs/extract/v1/extract.py",
@@ -5475,9 +6680,42 @@
       "lines": 515,
       "module": "mcs/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "a5773aac58d2ae09f2c719526cac9fbb06cae23516be9fa2c24385064fe3be87",
+      "reviewed_lines": 515,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "stdlib規則v7で投稿本文から薬剤・症状・測定ラベル・日時/期間・候補依頼/緊急語を抽出。LLM・通知・状態の人承認を代行せず、chunk transactionとrun lockの既存writer契約を保つ。",
+      "callers": [
+        "mcs/extract/v4/extract_llm.py",
+        "mcs/ingest/run_check.py",
+        "mcs/ops/mcs_repair.py",
+        "mcs/semantic/semantic_extraction.py",
+        "tests/extract/test_derive_deadline.py",
+        "tests/extract/test_extract_llm.py",
+        "tests/extract/test_extract_packet4_regressions.py",
+        "tests/extract/test_extract_prefilter.py",
+        "tests/extract/test_extraction_review.py",
+        "tests/ingest/test_drug_map_pipeline.py",
+        "tests/ops/ops_testkit.py",
+        "tests/ops/test_mcs_features.py",
+        "tests/ops/test_mcs_repair.py",
+        "tests/views/test_structured_review_regressions.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          260
+        ],
+        [
+          261,
+          515
+        ]
+      ]
     },
     {
       "path": "mcs/extract/v2/README.md",
@@ -5486,9 +6724,25 @@
       "lines": 10,
       "module": "mcs/extract",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "4b92934942910162726a19869a0d68cdf9bcdc7124b8a8c7f6e38db7ca5016a7",
+      "reviewed_lines": 10,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "廃止世代の互換説明のみ。現行LLM実装のv4移動先と旧実装のgit履歴を示す。",
+      "callers": [
+        "README/現行v4入口"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          10
+        ]
+      ]
     },
     {
       "path": "mcs/extract/v3/README.md",
@@ -5497,9 +6751,25 @@
       "lines": 10,
       "module": "mcs/extract",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "103588efee26d47098b51b117a44def61eb8a3732193369bb6ae662c30895bbd",
+      "reviewed_lines": 10,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "廃止世代の互換説明のみ。現行v4・履歴の所在を説明し動的import入口を追加しない。",
+      "callers": [
+        "README/現行v4入口"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          10
+        ]
+      ]
     },
     {
       "path": "mcs/extract/v4/extract_bench.py",
@@ -5508,9 +6778,32 @@
       "lines": 515,
       "module": "mcs/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "1c1ce1d5ae4b5505b6ef366d4b72cc245a0aa88490b87dbc2a96fe70a3339fa1",
+      "reviewed_lines": 532,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "固定完全合成corpusのfield TP/FP/FN・forbid・reply confusion・一対一matching・cost/latency/corpus fingerprintを報告。offline期待値検査とmodel実行を分け、F06でmodel入力を既知2資産の完全一致caseだけへ制限。",
+      "callers": [
+        "tests/extract/test_extract_bench.py",
+        "tests/extract/test_extract_packet4_regressions.py",
+        "tests/extract/test_extraction_review.py",
+        "tests/extract/test_labs_evaluation.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          260
+        ],
+        [
+          261,
+          515
+        ]
+      ]
     },
     {
       "path": "mcs/extract/v4/extract_llm.py",
@@ -5519,9 +6812,112 @@
       "lines": 3187,
       "module": "mcs/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "648fd6feae5b3571207027ef37d5f9057ea6e18daf7346cb32a65b65c1ce9ab4",
+      "reviewed_lines": 3208,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "v4 legacy抽出writer。raw本文/context/hintsはデータとして囲い、body-only unique evidenceとsubject/time/negationを検証。deadline/format backoff/repair/chunks・claim lease・current CAS・QC retry・v4 admission・DB main-threadを管理し、F01/F02/F05を修復。",
+      "callers": [
+        "mcs/extract/v4/extract_bench.py",
+        "mcs/ingest/run_check.py",
+        "mcs/ops/mcs_setup.py",
+        "mcs/semantic/semantic_blind.py",
+        "mcs/semantic/semantic_observe.py",
+        "mcs/semantic/semantic_qc.py",
+        "mcs/views/mcs_view.py",
+        "tests/core/test_artifact_json_guards.py",
+        "tests/core/test_llm_admission.py",
+        "tests/core/test_local_llm.py",
+        "tests/core/test_local_llm_deadline.py",
+        "tests/extract/extract_testkit.py",
+        "tests/extract/test_clinical_values.py",
+        "tests/extract/test_extract_bench.py",
+        "tests/extract/test_extract_llm.py",
+        "tests/extract/test_extract_packet4_regressions.py",
+        "tests/extract/test_extract_prefilter.py",
+        "tests/extract/test_extract_qc.py",
+        "tests/extract/test_extract_review_regressions.py",
+        "tests/extract/test_extraction_review.py",
+        "tests/extract/test_labs_evaluation.py",
+        "tests/extract/test_lane_slot_and_lock.py",
+        "tests/extract/test_slot_routing.py",
+        "tests/ingest/test_run_check_stages.py",
+        "tests/notify/notify_testkit.py",
+        "tests/notify/test_card_buttons.py",
+        "tests/semantic/test_review_20260930.py",
+        "tests/semantic/test_semantic_blind.py",
+        "tests/semantic/test_semantic_tick_budget.py",
+        "tests/semantic/test_semantic_v4.py",
+        "tests/views/test_structured_review_regressions.py",
+        "tests/views/views_testkit.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          220
+        ],
+        [
+          221,
+          440
+        ],
+        [
+          441,
+          660
+        ],
+        [
+          661,
+          880
+        ],
+        [
+          881,
+          1100
+        ],
+        [
+          1101,
+          1320
+        ],
+        [
+          1321,
+          1540
+        ],
+        [
+          1541,
+          1760
+        ],
+        [
+          1761,
+          1980
+        ],
+        [
+          1981,
+          2200
+        ],
+        [
+          2201,
+          2420
+        ],
+        [
+          2421,
+          2640
+        ],
+        [
+          2641,
+          2860
+        ],
+        [
+          2861,
+          3080
+        ],
+        [
+          3081,
+          3187
+        ]
+      ]
     },
     {
       "path": "mcs/ingest/cross_lists.py",
@@ -7503,10 +8899,11 @@
       "lines": 103,
       "module": "mcs/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending",
-        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "full_content_read": true,
@@ -7518,7 +8915,12 @@
       ],
       "reviewed_sha256": "db77e2a25f823067f9a1e05a57637ad6a85d8641d6d390d3cb77f08d3e5b6ffa",
       "reviewed_lines": 107,
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Publication-gated cross-project mentioned/bookmarked lists; latest attempts, freshness and explicit unread-only filtering.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ]
     },
     {
       "path": "mcs/views/mcs_stats.py",
@@ -7527,9 +8929,26 @@
       "lines": 1273,
       "module": "mcs/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "efaa66022f00c74c1f35832035bb205bf7d8bdddebefadbd3e1cf5c53cf8f06d",
+      "reviewed_lines": 1274,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1273
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Read-only published snapshot statistics with period/current-generation predicates, explicit denominators, unknown capabilities and no patient names/body export.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ]
     },
     {
       "path": "mcs/views/mcs_view.py",
@@ -7538,9 +8957,26 @@
       "lines": 1070,
       "module": "mcs/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "50ac446a7bb7f314ffc9849d24b295b2d404f653b8ee81cdf1bc676fb54a7f2f",
+      "reviewed_lines": 1078,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          1070
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Published snapshot JSON CLI; project/actor scoped reads, cursors, current clinical artefacts, human command receipts and requests/loop links.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ]
     },
     {
       "path": "mcs/views/message_metadata.py",
@@ -7549,9 +8985,10 @@
       "lines": 313,
       "module": "mcs/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "full_content_read": true,
@@ -7561,7 +8998,14 @@
           313
         ]
       ],
-      "reviewed_sha256": "b1f0ffe7349af80381c7ff4cfa15a0afbcbb646799d193bbdf42e97075257ddc"
+      "reviewed_sha256": "b1f0ffe7349af80381c7ff4cfa15a0afbcbb646799d193bbdf42e97075257ddc",
+      "reviewed_lines": 313,
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Capture/shadow metadata observations and exact-self target/reaction context; no inference of clinical completion.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ]
     },
     {
       "path": "mcs/views/metadata_report.py",
@@ -7570,9 +9014,10 @@
       "lines": 160,
       "module": "mcs/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "full_content_read": true,
@@ -7582,7 +9027,14 @@
           160
         ]
       ],
-      "reviewed_sha256": "23807c61a7047c6b78e7c10518cf94da49712098d836e5255f24acf4f29f97f2"
+      "reviewed_sha256": "23807c61a7047c6b78e7c10518cf94da49712098d836e5255f24acf4f29f97f2",
+      "reviewed_lines": 160,
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Read-only metadata scope/coverage diagnostic with redacted shapes and counts, not source bodies.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ]
     },
     {
       "path": "mcs/views/project_metadata_view.py",
@@ -7591,10 +9043,11 @@
       "lines": 309,
       "module": "mcs/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
         "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending",
-        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "full_content_read": true,
@@ -7606,7 +9059,12 @@
       ],
       "reviewed_sha256": "92eed1e56de4823ec09cc35c44cd96b30e0a50de6794a12724ae037325cc7d79",
       "reviewed_lines": 315,
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Publication-gated latest dataset metadata and scoped chat comparisons; invalid values/current failure remain unknown.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ]
     },
     {
       "path": "mcs/views/read_model.py",
@@ -7615,9 +9073,10 @@
       "lines": 361,
       "module": "mcs/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "full_content_read": true,
@@ -7627,7 +9086,14 @@
           361
         ]
       ],
-      "reviewed_sha256": "588e4bb58510ee920508223cac4c66e06eb760190135bf404f37548ffe14ad91"
+      "reviewed_sha256": "588e4bb58510ee920508223cac4c66e06eb760190135bf404f37548ffe14ad91",
+      "reviewed_lines": 361,
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Versioned published aggregate/detail read model, current projection generation/QC/source binding and explicit unknown states.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ]
     },
     {
       "path": "mcs/views/response_observation_view.py",
@@ -7636,20 +9102,27 @@
       "lines": 207,
       "module": "mcs/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "reviewed_sha256": "f34919b9aafdb695189feb638fa9b32ef00efffd1a57b787c6305ec7f7a223ac",
-      "reviewed_lines": 207,
+      "reviewed_sha256": "13d274543d53eebb40a0a4c7a2385fc640b63c1c3b3b6c67c8b924d4b14d4c3a",
+      "reviewed_lines": 210,
       "read_ranges": [
         [
           1,
           207
         ]
       ],
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "full_content_read": true,
+      "responsibility": "Explicit publication/freshness-gated self-addressed observation list and snapshot/scope cursor; clinical_completion/nonresponse remain None.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ]
     },
     {
       "path": "mcs/views/structured_view.py",
@@ -7658,9 +9131,10 @@
       "lines": 436,
       "module": "mcs/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
@@ -7671,7 +9145,14 @@
       ],
       "packet": "docs/development/maintenance-notify-evidence.json",
       "full_content_read": true,
-      "reviewed_sha256": "5e082192ef31d4cd6fac63e8e7449fd3138f0b2defc0427dfba45713b772e224"
+      "reviewed_sha256": "5e082192ef31d4cd6fac63e8e7449fd3138f0b2defc0427dfba45713b772e224",
+      "reviewed_lines": 441,
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Grounded structured display from current fact generations and explicitly compatible rule fallback; evidence/unknown clinical candidate annotations.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ]
     },
     {
       "path": "mcs/views/summary_review.py",
@@ -7680,9 +9161,10 @@
       "lines": 329,
       "module": "mcs/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "5102c06e0f1421105b9d99dd35b01e010f5394c81379b60497a30a8c5cca430e",
@@ -7693,7 +9175,13 @@
           329
         ]
       ],
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "full_content_read": true,
+      "responsibility": "Bounded per-patient review summary with current evidence and conservative candidate language; renders through three platform dialects.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ]
     },
     {
       "path": "mcs_standalone/__init__.py",
@@ -8425,6 +9913,28 @@
       "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
+      "path": "tests/adapters/common/test_deep_local_state.py",
+      "sha256": null,
+      "bytes": 2228,
+      "lines": 56,
+      "module": "tests.adapters.common.test_deep_local_state",
+      "kind": "new-test",
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "46284395c3d2979445fabb71bd74c7cdd19649fdae56285c0ac6af2f2ac16c8d",
+      "reviewed_lines": 56,
+      "read_ranges": [
+        [
+          1,
+          56
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
       "path": "tests/adapters/common/test_registry_lock.py",
       "sha256": "bc6a397232dfd20a1e2d3566a4353c99fbefbf6c485bfa589aed744344199518",
       "bytes": 2073,
@@ -8447,15 +9957,49 @@
       "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
+      "path": "tests/adapters/common/test_worker_reconcile_integrity.py",
+      "sha256": null,
+      "bytes": 7806,
+      "lines": 158,
+      "module": "tests.adapters.common.test_worker_reconcile_integrity",
+      "kind": "new-test",
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "c4e07b684693180081534c8c5f715ae74beeec4ef81da5803a036af5f89e2e73",
+      "reviewed_lines": 158,
+      "read_ranges": [
+        [
+          1,
+          158
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
       "path": "tests/adapters/discord/discord_delivery_testkit.py",
       "sha256": "099e034b1e2a13e2ddc23a570866910c70f5dc70a9fc86ee140b996fd610e922",
       "bytes": 4391,
       "lines": 124,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "099e034b1e2a13e2ddc23a570866910c70f5dc70a9fc86ee140b996fd610e922",
+      "reviewed_lines": 124,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のdiscord fixture/helper。実remote id/actor/kwargs/receiptの観測可能なSDK契約を再現。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "tests/adapters/discord/discord_testkit.py",
@@ -8464,9 +10008,50 @@
       "lines": 255,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "b0c1b8386daa85dd795e3571edcca38b2a25a30f892cf68c923d1009ade34c6e",
+      "reviewed_lines": 274,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のdiscord fixture/helper。実remote id/actor/kwargs/receiptの観測可能なSDK契約を再現。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
+    },
+    {
+      "path": "tests/adapters/discord/test_discord_runtime_compat.py",
+      "sha256": null,
+      "bytes": 4186,
+      "lines": 116,
+      "module": "tests",
+      "kind": "new-source-or-test",
+      "status": "REVIEWED",
+      "evidence": [
+        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。",
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "reviewed_sha256": "093ac29c1970c5d166c52181631bbfdff3a3be9f4ff936c82d14b407905f9932",
+      "reviewed_lines": 116,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のdiscord 回帰テスト。正常系・拒否・unknown・stale UI・配送部分失敗を対象sourceの実caller経路で確認。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "read_ranges": [
+        [
+          1,
+          116
+        ]
+      ]
     },
     {
       "path": "tests/adapters/discord/test_discord_sdk_real.py",
@@ -8475,9 +10060,21 @@
       "lines": 202,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "e6c807e5b73361deb7f30e2af73c0293331b880d603aa9dcf7c9c9c4e6c87d01",
+      "reviewed_lines": 259,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のdiscord 回帰テスト。正常系・拒否・unknown・stale UI・配送部分失敗を対象sourceの実caller経路で確認。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "tests/adapters/discord/test_discord_standalone.py",
@@ -8486,9 +10083,21 @@
       "lines": 492,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "6c3a8b52e66a4b3b7dec768e444219fd3a4035e165fbb0689a5670831f17d78a",
+      "reviewed_lines": 492,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のdiscord 回帰テスト。正常系・拒否・unknown・stale UI・配送部分失敗を対象sourceの実caller経路で確認。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "tests/adapters/discord/test_mcs_discord.py",
@@ -8497,9 +10106,21 @@
       "lines": 3021,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "77a5610e4e3c976015fb7fdb646c891cb31b1988c7a7c0d6c8cad9bb06321a55",
+      "reviewed_lines": 3036,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のdiscord 回帰テスト。正常系・拒否・unknown・stale UI・配送部分失敗を対象sourceの実caller経路で確認。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "tests/adapters/discord/test_mcs_discord_delivery.py",
@@ -8508,9 +10129,21 @@
       "lines": 1920,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "6faa874e540aa9e3530161ecf9d74bbeb1e943df954a955f50704045c982d732",
+      "reviewed_lines": 1932,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のdiscord 回帰テスト。正常系・拒否・unknown・stale UI・配送部分失敗を対象sourceの実caller経路で確認。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "tests/adapters/discord/test_mcs_discord_single_post.py",
@@ -8519,9 +10152,21 @@
       "lines": 403,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "5c38afe8b375e33c2b05c7d685080e88cbad8b0d42a63a06b3cf329f375f21d8",
+      "reviewed_lines": 403,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のdiscord 回帰テスト。正常系・拒否・unknown・stale UI・配送部分失敗を対象sourceの実caller経路で確認。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "tests/adapters/lineworks/test_lineworks_actions_review.py",
@@ -8590,6 +10235,28 @@
       "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
+      "path": "tests/adapters/lineworks/test_lineworks_plain_views.py",
+      "sha256": null,
+      "bytes": 2504,
+      "lines": 47,
+      "module": "tests.adapters.lineworks.test_lineworks_plain_views",
+      "kind": "new-test",
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "8238ee6d0d8be32df57bdae183c229c1a04381a8456b4e632cf4f16a918e3e31",
+      "reviewed_lines": 47,
+      "read_ranges": [
+        [
+          1,
+          47
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
       "path": "tests/adapters/lineworks/test_lineworks_runtime.py",
       "sha256": "ff509e5f8624dc1fbd9fa28f783f1f855e6c53bfe5d1246e97b9dc9d97cb8cdc",
       "bytes": 5153,
@@ -8612,15 +10279,49 @@
       "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
+      "path": "tests/adapters/lineworks/test_lineworks_silent_text.py",
+      "sha256": null,
+      "bytes": 2211,
+      "lines": 45,
+      "module": "tests.adapters.lineworks.test_lineworks_silent_text",
+      "kind": "new-test",
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "7eee5290dd13e87f5fe99ecd6979b336bb742d0e80a7203ce21e6fe7115c20bb",
+      "reviewed_lines": 45,
+      "read_ranges": [
+        [
+          1,
+          45
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
       "path": "tests/adapters/slack/slack_card_testkit.py",
       "sha256": "e2f44aa2bbe95e41f749105cd88319760066517e3eb3f6d9d4f2ee4cdf555fe8",
       "bytes": 1615,
       "lines": 43,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "e2f44aa2bbe95e41f749105cd88319760066517e3eb3f6d9d4f2ee4cdf555fe8",
+      "reviewed_lines": 43,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のslack fixture/helper。実remote id/actor/kwargs/receiptの観測可能なSDK契約を再現。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "tests/adapters/slack/slack_testkit.py",
@@ -8629,9 +10330,21 @@
       "lines": 159,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "56804a8524760b412c149b9cb79d9810c7b5f9df33698690e089db9b48ef7ae5",
+      "reviewed_lines": 159,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のslack fixture/helper。実remote id/actor/kwargs/receiptの観測可能なSDK契約を再現。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "tests/adapters/slack/test_mcs_slack.py",
@@ -8640,9 +10353,21 @@
       "lines": 1188,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "abddd1d1828db0597da8f594e2b37c6647f7426ce4f6040ace7e9136a3216983",
+      "reviewed_lines": 1311,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のslack 回帰テスト。正常系・拒否・unknown・stale UI・配送部分失敗を対象sourceの実caller経路で確認。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "tests/adapters/slack/test_mcs_slack_actions.py",
@@ -8651,9 +10376,21 @@
       "lines": 884,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "419375484017cb8906c52e9339897f600ed7a1b2c1cb75c232af932343fb2562",
+      "reviewed_lines": 902,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のslack 回帰テスト。正常系・拒否・unknown・stale UI・配送部分失敗を対象sourceの実caller経路で確認。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "tests/adapters/slack/test_mcs_slack_cards.py",
@@ -8662,9 +10399,21 @@
       "lines": 112,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "4e8452cde46595b14303afbb4b90fb88ee9073eb41f9e256c79948d6584df1d6",
+      "reviewed_lines": 145,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のslack 回帰テスト。正常系・拒否・unknown・stale UI・配送部分失敗を対象sourceの実caller経路で確認。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "tests/adapters/slack/test_slack_human_receipt.py",
@@ -8673,9 +10422,50 @@
       "lines": 67,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "1018c93df602910a12633809bf294feb7b66e28bf2c417b5d8adde3e440ce652",
+      "reviewed_lines": 67,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のslack 回帰テスト。正常系・拒否・unknown・stale UI・配送部分失敗を対象sourceの実caller経路で確認。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
+    },
+    {
+      "path": "tests/adapters/slack/test_slack_runtime_compat.py",
+      "sha256": null,
+      "bytes": 4653,
+      "lines": 137,
+      "module": "tests",
+      "kind": "new-source-or-test",
+      "status": "REVIEWED",
+      "evidence": [
+        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。",
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "reviewed_sha256": "998f294b66b0d10d7eca99554c5ed5887df7a337c4509e15a0b5e8c1a4f454b1",
+      "reviewed_lines": 137,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のslack 回帰テスト。正常系・拒否・unknown・stale UI・配送部分失敗を対象sourceの実caller経路で確認。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "read_ranges": [
+        [
+          1,
+          137
+        ]
+      ]
     },
     {
       "path": "tests/adapters/slack/test_slack_standalone.py",
@@ -8684,9 +10474,21 @@
       "lines": 243,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "reviewed_sha256": "39b7f4852af6c56ecd3b3bc4af32f54fd123320aacd06ca6508f123c98242b11",
+      "reviewed_lines": 243,
+      "review_packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "responsibility": "完全合成のslack 回帰テスト。正常系・拒否・unknown・stale UI・配送部分失敗を対象sourceの実caller経路で確認。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest fixtures/test consumers"
+      ],
+      "full_content_read": true,
+      "read_ranges": null
     },
     {
       "path": "tests/adapters/standalone/test_native_commands.py",
@@ -9285,9 +11087,26 @@
       "lines": 81,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "86711e32c8060fff100f3b19bc78d9284be9bed4250a1d905606a62fa0e4a7c3",
+      "reviewed_lines": 81,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "一時Ledger/架空Message/hashとQC/legacy artifact seed。import helperだけで実接続なし。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "tests/extract/test_extract_packet4_regressions.py"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          81
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_clinical_values.py",
@@ -9296,9 +11115,26 @@
       "lines": 229,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "279702cbc05a96adffc0bd12e3b4658b0f7b75ac3ddd4fa865262a7ed0267695",
+      "reviewed_lines": 229,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "実validator/merge/repair/shared表示を通じwidth/kana/LASA、typed labs、単位/日付/flag/根拠/旧artifact偽normalizedを検査。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          229
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_derive_deadline.py",
@@ -9307,9 +11143,26 @@
       "lines": 49,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "6d56cf04179c5666da45b970c4b21394212a38eff5bb4f51b1a5f152ebf0b861",
+      "reviewed_lines": 49,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "派生処理deadlineの開始前・途中停止と既存成果/transactionを合成clock/DBで検査。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          49
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_drug_map.py",
@@ -9318,9 +11171,30 @@
       "lines": 417,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "57650e5e99724dfe24001007ff7c098669fb77a52a0c63cd648f4f8fe3c30abc",
+      "reviewed_lines": 417,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "私有辞書のschema、symlink/owner/permissions/SHA/容量、exact source binding、derived refs/remove/rollbackを合成JSONとDBで検査。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          417
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_drug_map_evaluation.py",
@@ -9329,9 +11203,26 @@
       "lines": 88,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "b3101dea3bb2283536cfdab1ca91e327785ce7ca8bf0dfecc925c26c2e6b2e50",
+      "reviewed_lines": 88,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "合成薬剤辞書・LASA/非同一候補・width/strengthの評価。辞書同一性と名称近似を混同しない。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          88
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_extract_bench.py",
@@ -9340,9 +11231,30 @@
       "lines": 330,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "e60492319062c94d194307dba2c2c1e77d1856943f7223225611eddae9ed7b2f",
+      "reviewed_lines": 334,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "matching/forbid/FP/FN/drop/enum/null/date/subject/request/reply、snapshot corpus/cost/percentile/CLIを検査。cost用架空approved listの注入は維持し、実allowlist違反は新回帰で別検査。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          165
+        ],
+        [
+          166,
+          330
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_extract_llm.py",
@@ -9351,9 +11263,106 @@
       "lines": 2862,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "b5c16abb26e4afcd16543f56b723690272ad90a61e2379749f5e50b76a2b55bd",
+      "reviewed_lines": 2862,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "本文型/evidence/current versions、prompt/hints/context/karte、format fallback/deadline/defer、chunk/batch/parallel/write-lock/claim/retry/CLI resident/manifest/nightly capの直接runtime検査。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          220
+        ],
+        [
+          221,
+          440
+        ],
+        [
+          441,
+          660
+        ],
+        [
+          661,
+          880
+        ],
+        [
+          881,
+          1100
+        ],
+        [
+          1101,
+          1320
+        ],
+        [
+          1321,
+          1540
+        ],
+        [
+          1541,
+          1760
+        ],
+        [
+          1761,
+          1980
+        ],
+        [
+          1981,
+          2200
+        ],
+        [
+          2201,
+          2420
+        ],
+        [
+          2421,
+          2640
+        ],
+        [
+          2641,
+          2862
+        ]
+      ]
+    },
+    {
+      "path": "tests/extract/test_extract_packet4_regressions.py",
+      "sha256": null,
+      "bytes": 11396,
+      "lines": 234,
+      "module": "tests",
+      "kind": "new-source-or-test",
+      "status": "REVIEWED",
+      "evidence": [
+        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。",
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "reviewed_sha256": "6d74e65ba202d72a08c7f486ce5e58c56cda91bf895eb52fed1496ed09ea7be0",
+      "reviewed_lines": 234,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "49新合成回帰。2 DB connection交差/削除、aware fractions/未知timezone、空3kindからrule復活防止、定性prefixとlegacy表示、finite API/CLI、bench fake marker/改変全fields、approved copy/mock、tempCWD/no PYTHONPATHでoffline入口。",
+      "callers": [
+        "pytest / release change compiler"
+      ],
+      "full_content_read": true,
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "read_ranges": [
+        [
+          1,
+          112
+        ],
+        [
+          113,
+          234
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_extract_prefilter.py",
@@ -9362,9 +11371,26 @@
       "lines": 253,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "6f354fa39361b4c03260b8f0f0b664ebc400db97e183d0550455472d30e9b1ac",
+      "reviewed_lines": 253,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "保守的な本文prefilterの明示off/rollback、未確認と空結果の区別、generation/hash/side effect境界。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          253
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_extract_qc.py",
@@ -9373,9 +11399,34 @@
       "lines": 675,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "7068e55abfa4d1720c99e32822de3fed90a3f98e27b58a29ec41749fb0aa0a3b",
+      "reviewed_lines": 675,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "exact source artifact/hash/versionへのQC結合、否定/field/subject/feedback再抽出の一回上限、失敗/invalid/deferredで公開しない。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          225
+        ],
+        [
+          226,
+          450
+        ],
+        [
+          451,
+          675
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_extract_review_regressions.py",
@@ -9384,9 +11435,26 @@
       "lines": 182,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "131a5f1806e17a7e99e8c4d42c52edb76c304733694a623a9523dc065e2db66c",
+      "reviewed_lines": 182,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "QC fallback、thin retryのsettle、非改善repair、defer、全probe endpoint一貫性、large admission before limit、disallowed endpoint no request。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          182
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_extraction_review.py",
@@ -9395,9 +11463,30 @@
       "lines": 438,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "63d32337018514b127d46d0e04c8972d358473c0ba7f220d5f25e794edf66016",
+      "reviewed_lines": 438,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "既存review異常型/CLI/worker/batch duplicate-index、oxygen flow/arrhythmia、no v1 fallback over fact omission、planned/performed date等の回帰。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          220
+        ],
+        [
+          221,
+          438
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_labs_evaluation.py",
@@ -9406,9 +11495,26 @@
       "lines": 65,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "c89419a4867571ff9f7394a845f5aeda440b8a9bf5f3ced0ec75daa497c4031d",
+      "reviewed_lines": 65,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "既知24完全合成labケースをreal normalization/validator/scorerへ通し、患者以外/予定/参照範囲/未確認/単位/日付を分離。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          65
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_lane_slot_and_lock.py",
@@ -9417,9 +11523,26 @@
       "lines": 109,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "e866c5507b5e0da43226d01ac27fd738fb5f636c9bc57c014707951c6ac06ce9",
+      "reviewed_lines": 109,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "background/realtime slot pinningとwrite-lock境界、busy時の無推論/claim保護。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          109
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_rollup_canonical.py",
@@ -9428,9 +11551,30 @@
       "lines": 392,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "2ace07d53f291a243619af82e50672140147d696668060b0ccd10d7c120ef8f1",
+      "reviewed_lines": 392,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "canonical fact_id/evidence enumerable、v4優先、stale/foreign/deleted source除外、typed fields/med candidates/返信状態のview-only集計。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          196
+        ],
+        [
+          197,
+          392
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_rollup_period.py",
@@ -9439,9 +11583,26 @@
       "lines": 136,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "a67c35ce7f13e41cf9c2f2d5efd67a8552bc3ec3d38c60676c1992e442fc991d",
+      "reviewed_lines": 136,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "服薬期間のJST未来/過去境界、expiration予定時刻、clockだけのdirty再構築、version mismatch。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          136
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_rollup_ref_lookup.py",
@@ -9450,9 +11611,26 @@
       "lines": 24,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "421b6bc980f6225ef94de1dff912327d4a01772bffa47ada347099cee21e2f57",
+      "reviewed_lines": 24,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "辞書refの実current exact-message解決が二問/全投稿へ広がらないこと。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          24
+        ]
+      ]
     },
     {
       "path": "tests/extract/test_slot_routing.py",
@@ -9461,9 +11639,26 @@
       "lines": 121,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "reviewed_sha256": "a9041ef2f1d60750a7f81baf28859122a4f1d0576374741442be031b075db4cf",
+      "reviewed_lines": 121,
+      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "responsibility": "測定済み背景slot 0/2のpin、slot選択/override復元、elastic hold・probe authority。",
+      "callers": [
+        "scripts/run_tests.sh / pytest",
+        "対象runtime/共有consumerをimportsで確認"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          121
+        ]
+      ]
     },
     {
       "path": "tests/fixtures/schema_upgrade/bootstrap-target.py",
@@ -12511,9 +14706,64 @@
       "lines": 796,
       "module": "tests/plugin",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "585301021f5cfe387d864e8814370ba748359c9455c3c3d946fb82a5babb7e89",
+      "reviewed_lines": 796,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "合成検証: native provenance/allowlists・snapshot置換・request preview/confirm/receipt・source stale/revocation・loop/policy・adoption/comparison・scan/retry/pause/resume・intID/file-location imports",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/plugin family"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          400
+        ],
+        [
+          401,
+          600
+        ],
+        [
+          601,
+          796
+        ]
+      ]
+    },
+    {
+      "path": "tests/plugin/test_hermes_plugin_signal_staleness.py",
+      "sha256": null,
+      "module": "tests/plugin",
+      "kind": "source",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "status": "REVIEWED",
+      "reviewed_sha256": "5c9d5272a9cb087c25f27add438a844fedd241a2950eeedd553090e17c687bff",
+      "reviewed_lines": 149,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "合成検証: 3チャネルlatest signal preview/confirm・壊れた/deep/nonobject/closed transition・正常pinnedqueue・実parts_textのnativeJSON見出し/脚注",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/plugin family"
+      ],
+      "full_content_read": true,
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "read_ranges": [
+        [
+          1,
+          149
+        ]
+      ]
     },
     {
       "path": "tests/plugin/test_hermes_plugin_standalone.py",
@@ -12522,9 +14772,26 @@
       "lines": 91,
       "module": "tests/plugin",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "ed46b7505df5d700ae7059f2e57f605bb720ccef8100c026ce5c896aa680fa15",
+      "reviewed_lines": 91,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "合成検証: isolated file-location loader・standalone registration抑止・broken flagprobeとfactory standdown",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/plugin family"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          91
+        ]
+      ]
     },
     {
       "path": "tests/plugin/test_update_ops.py",
@@ -12533,9 +14800,26 @@
       "lines": 161,
       "module": "tests/plugin",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+      ],
+      "review_input": "da3426afbffb45ecdd77d599cac29b41d1ef56b2",
+      "reviewed_sha256": "69d6efc199233ac2df304e102dec492b844c49ef83c1d9d140701416b7318f90",
+      "reviewed_lines": 161,
+      "review_packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "responsibility": "合成検証: projectless update preview/confirm・actor/chat/reason・hash改竄・unknownfield拒否・本当のinboxfile",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/plugin family"
+      ],
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          161
+        ]
+      ]
     },
     {
       "path": "tests/release/test_readme_release.py",
@@ -14347,9 +16631,10 @@
       "lines": 105,
       "module": "tests/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "c08ea747ca11f7ead892cdea2a7d1b2895cad99fc7cd8b997a6551c3334de37d",
@@ -14360,7 +16645,12 @@
           112
         ]
       ],
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "full_content_read": true,
+      "responsibility": "Synthetic public consumer/fixture for cross_lists_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_drug_candidates.py",
@@ -14369,9 +16659,25 @@
       "lines": 94,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "56914862ba3efaccd098ae3c5dadb241443a12dcc6b280120cd8a7f26635cbbb",
+      "reviewed_lines": 94,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          94
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for drug_candidates; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_group_consultations_view.py",
@@ -14380,9 +16686,10 @@
       "lines": 192,
       "module": "tests/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "20e954a952d905a41b57dcf127d84072b2d7419d79f802d74427f7a68da27293",
@@ -14393,7 +16700,12 @@
           192
         ]
       ],
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "full_content_read": true,
+      "responsibility": "Synthetic public consumer/fixture for group_consultations_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_interaction_latency.py",
@@ -14402,9 +16714,25 @@
       "lines": 286,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "da59bb0032f822cd7c89860a13380cd14d36c1f49b2ac791767b7a3d45074fb9",
+      "reviewed_lines": 286,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          286
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for interaction_latency; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_mcs_stats.py",
@@ -14413,9 +16741,25 @@
       "lines": 414,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "5a494545141b53cbdb5f1b2f50c0431ae8731dd540b8028eeb083e22ef54498e",
+      "reviewed_lines": 414,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          414
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for mcs_stats; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_mcs_stats_signal_feedback.py",
@@ -14424,9 +16768,25 @@
       "lines": 205,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "3c56d5444cab018a1adcfd9c7139e4ff4423f175dc278e0058979001df2a7f2a",
+      "reviewed_lines": 205,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          205
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for mcs_stats_signal_feedback; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_metadata_report.py",
@@ -14435,9 +16795,10 @@
       "lines": 168,
       "module": "tests/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "9fa4b28335df7ba634cc97fee1e292b7f55dd985d85085b97486d56e883bd98c",
@@ -14448,7 +16809,12 @@
           168
         ]
       ],
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "full_content_read": true,
+      "responsibility": "Synthetic public consumer/fixture for metadata_report; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_notification_receipt_scope.py",
@@ -14457,9 +16823,25 @@
       "lines": 91,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "59bb9273a2f72409e75565d96e86089c68fcb9eac6df95cf0b07f43562caa968",
+      "reviewed_lines": 91,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          91
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for notification_receipt_scope; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_physician_viewed.py",
@@ -14468,9 +16850,10 @@
       "lines": 66,
       "module": "tests/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "55e7b4ba06661a8a68c19a029b1a3e316931f301e523ffcecbef5934fb68ce88",
@@ -14481,7 +16864,12 @@
           66
         ]
       ],
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "full_content_read": true,
+      "responsibility": "Synthetic public consumer/fixture for physician_viewed; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_project_metadata_comparison.py",
@@ -14490,9 +16878,10 @@
       "lines": 392,
       "module": "tests/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "06de0ae0c6acc2f00e5e21e8d995e3c58a42d305451efeba137013f21a8e9522",
@@ -14503,7 +16892,12 @@
           393
         ]
       ],
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "full_content_read": true,
+      "responsibility": "Synthetic public consumer/fixture for project_metadata_comparison; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_project_metadata_view.py",
@@ -14512,9 +16906,10 @@
       "lines": 228,
       "module": "tests/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "fbe232a8128f20c723eed976f4a1aa8765c2a59138596e94e033a6591950aecc",
@@ -14525,7 +16920,12 @@
           261
         ]
       ],
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "full_content_read": true,
+      "responsibility": "Synthetic public consumer/fixture for project_metadata_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_qc_view.py",
@@ -14534,9 +16934,25 @@
       "lines": 241,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "cf4729edcbfed92aeb3ac38c6072ff409ad2cd77e8ed0ec734336baa2f9c847f",
+      "reviewed_lines": 241,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          241
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for qc_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_read_model.py",
@@ -14545,9 +16961,10 @@
       "lines": 373,
       "module": "tests/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "99a5b75e300b6608c60cb814a3e8c79dbf9b6c3b20ae8d499c7a1c5bc2a48749",
@@ -14558,7 +16975,12 @@
           373
         ]
       ],
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "full_content_read": true,
+      "responsibility": "Synthetic public consumer/fixture for read_model; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_response_observation.py",
@@ -14567,9 +16989,25 @@
       "lines": 225,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "7885f64b9ff1ee619be2c6b4054728b282b93f3f009fdf5314273c732b40ea84",
+      "reviewed_lines": 225,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          225
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for response_observation; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_response_observation_view.py",
@@ -14578,9 +17016,25 @@
       "lines": 423,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "604aebeff9c1e7afe9eb6d2ebc4c97bf1fdfa65d041d88661a7035142358056d",
+      "reviewed_lines": 423,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          423
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for response_observation_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_semantic_view.py",
@@ -14589,9 +17043,25 @@
       "lines": 141,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "4e75b092e3f8cfeb8714258618d47851c940df6c3fd4037f233e7196488f7980",
+      "reviewed_lines": 141,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          141
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for semantic_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_staff_directory.py",
@@ -14600,9 +17070,25 @@
       "lines": 94,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "e8cdebbb7cc4b4c73fa8dc0e821ee9b40ea8f6baaa5d92931b4835cd4ccd2797",
+      "reviewed_lines": 94,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          94
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for staff_directory; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_status_fetch_reason.py",
@@ -14611,9 +17097,25 @@
       "lines": 34,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "86a372e322eca9d00866d598981f7c99484ee263d05f661409edcd961c3a6168",
+      "reviewed_lines": 34,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          34
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for status_fetch_reason; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_status_view.py",
@@ -14622,9 +17124,25 @@
       "lines": 36,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "91df4e92b2b918d904e31e0177bf384508d2903ada78f1b27ab67cad3680a94e",
+      "reviewed_lines": 36,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          36
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for status_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_structured_review_regressions.py",
@@ -14633,9 +17151,10 @@
       "lines": 43,
       "module": "tests/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "full_content_read": true,
@@ -14645,7 +17164,13 @@
           43
         ]
       ],
-      "reviewed_sha256": "aeba521435f7b30d2bbe45444329ec9fdcdb937dbae0d334faf24b5c2d3c7e3b"
+      "reviewed_sha256": "aeba521435f7b30d2bbe45444329ec9fdcdb937dbae0d334faf24b5c2d3c7e3b",
+      "reviewed_lines": 43,
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for structured_review_regressions; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_structured_view.py",
@@ -14654,9 +17179,10 @@
       "lines": 416,
       "module": "tests/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "full_content_read": true,
@@ -14666,7 +17192,13 @@
           437
         ]
       ],
-      "reviewed_sha256": "300e5fe9b6da03338bd82f3d77a6cf50d72a1c1c5d5135bc5b5dd9bc7f84270e"
+      "reviewed_sha256": "300e5fe9b6da03338bd82f3d77a6cf50d72a1c1c5d5135bc5b5dd9bc7f84270e",
+      "reviewed_lines": 437,
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for structured_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_summary_review.py",
@@ -14675,9 +17207,10 @@
       "lines": 186,
       "module": "tests/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "12b3735bd6b5a74d53171b923fd04d3975deef984c8296397e0a4bc0c29122ce",
@@ -14688,7 +17221,12 @@
           186
         ]
       ],
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "full_content_read": true,
+      "responsibility": "Synthetic public consumer/fixture for summary_review; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/test_summary_review_cli.py",
@@ -14697,9 +17235,10 @@
       "lines": 49,
       "module": "tests/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "reviewed_sha256": "46f1db2667dbd4715a386499e4e01c1ce1e7a2d829ffd62a1907028752f679d2",
@@ -14710,7 +17249,31 @@
           49
         ]
       ],
-      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "full_content_read": true,
+      "responsibility": "Synthetic public consumer/fixture for summary_review_cli; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
+    },
+    {
+      "path": "tests/views/test_view_corrupt_state.py",
+      "sha256": null,
+      "module": "tests/views",
+      "kind": "source",
+      "evidence": [
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
+      ],
+      "status": "REVIEWED",
+      "reviewed_sha256": "789d5cf3ac0df900775bcc5bca2d60c87fbb15090a1cf9a1bae1c8345df9d0ac",
+      "reviewed_lines": 200,
+      "full_content_read": true,
+      "read_ranges": [],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for view_corrupt_state; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ]
     },
     {
       "path": "tests/views/views_testkit.py",
@@ -14719,9 +17282,10 @@
       "lines": 97,
       "module": "tests/views",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending",
+        "Complete parent source/test reads + all20 criteria and consumer trace; actual3.10/3.13 synthetic view families; fixed-I final gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "full_content_read": true,
@@ -14731,301 +17295,12 @@
           97
         ]
       ],
-      "reviewed_sha256": "5435276d90281e002653bceb56d36d8185e61fa3fa64c6a5c4044b8861e62478"
-    },
-    {
-      "path": "tests/adapters/common/test_deep_local_state.py",
-      "sha256": null,
-      "bytes": 2228,
-      "lines": 56,
-      "module": "tests.adapters.common.test_deep_local_state",
-      "kind": "new-test",
-      "status": "REVIEWED",
-      "evidence": [
-        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
-      ],
-      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
-      "reviewed_sha256": "46284395c3d2979445fabb71bd74c7cdd19649fdae56285c0ac6af2f2ac16c8d",
-      "reviewed_lines": 56,
-      "read_ranges": [
-        [
-          1,
-          56
-        ]
-      ],
-      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
-    },
-    {
-      "path": "tests/adapters/common/test_worker_reconcile_integrity.py",
-      "sha256": null,
-      "bytes": 7806,
-      "lines": 158,
-      "module": "tests.adapters.common.test_worker_reconcile_integrity",
-      "kind": "new-test",
-      "status": "REVIEWED",
-      "evidence": [
-        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
-      ],
-      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
-      "reviewed_sha256": "c4e07b684693180081534c8c5f715ae74beeec4ef81da5803a036af5f89e2e73",
-      "reviewed_lines": 158,
-      "read_ranges": [
-        [
-          1,
-          158
-        ]
-      ],
-      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
-    },
-    {
-      "path": "tests/adapters/lineworks/test_lineworks_plain_views.py",
-      "sha256": null,
-      "bytes": 2504,
-      "lines": 47,
-      "module": "tests.adapters.lineworks.test_lineworks_plain_views",
-      "kind": "new-test",
-      "status": "REVIEWED",
-      "evidence": [
-        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
-      ],
-      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
-      "reviewed_sha256": "8238ee6d0d8be32df57bdae183c229c1a04381a8456b4e632cf4f16a918e3e31",
-      "reviewed_lines": 47,
-      "read_ranges": [
-        [
-          1,
-          47
-        ]
-      ],
-      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
-    },
-    {
-      "path": "tests/adapters/lineworks/test_lineworks_silent_text.py",
-      "sha256": null,
-      "bytes": 2211,
-      "lines": 45,
-      "module": "tests.adapters.lineworks.test_lineworks_silent_text",
-      "kind": "new-test",
-      "status": "REVIEWED",
-      "evidence": [
-        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
-      ],
-      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
-      "reviewed_sha256": "7eee5290dd13e87f5fe99ecd6979b336bb742d0e80a7203ce21e6fe7115c20bb",
-      "reviewed_lines": 45,
-      "read_ranges": [
-        [
-          1,
-          45
-        ]
-      ],
-      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
-    },
-    {
-      "path": "changes/maintenance-notify-packet3-recovery-20261005.json",
-      "sha256": null,
-      "bytes": 1786,
-      "lines": 12,
-      "module": "changes",
-      "kind": "release-fragment",
-      "status": "REVIEWED",
-      "evidence": [
-        "日本語runtime変更・upgradeと修復sourceを親照合済み。"
-      ],
-      "reviewed_sha256": "78ff8f50b55e96fa600d2864e072e18e9ca61b1bf34526d7fb5892755be5befb",
-      "reviewed_lines": 12,
-      "read_ranges": [
-        [
-          1,
-          12
-        ]
-      ],
-      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
-    },
-    {
-      "path": "changes/maintenance-notify-packet3-private-display-20261005.json",
-      "sha256": null,
-      "bytes": 1152,
-      "lines": 8,
-      "module": "changes",
-      "kind": "release-fragment",
-      "status": "REVIEWED",
-      "evidence": [
-        "日本語runtime変更・upgradeと修復sourceを親照合済み。"
-      ],
-      "reviewed_sha256": "fc2ad3c8184ec7a1dec9013328417cb1de63aab068c8384e3f2a53de113849ad",
-      "reviewed_lines": 8,
-      "read_ranges": [
-        [
-          1,
-          8
-        ]
-      ],
-      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
-    },
-    {
-      "path": "changes/maintenance-notify-packet3-lineworks-silent-20261005.json",
-      "sha256": null,
-      "bytes": 1147,
-      "lines": 8,
-      "module": "changes",
-      "kind": "release-fragment",
-      "status": "REVIEWED",
-      "evidence": [
-        "日本語runtime変更・upgradeと修復sourceを親照合済み。"
-      ],
-      "reviewed_sha256": "e40278900656f54f28c45a1e704ba917fdd037a65517cdf18f5ed0b128d22575",
-      "reviewed_lines": 8,
-      "read_ranges": [
-        [
-          1,
-          8
-        ]
-      ],
-      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
-    },
-    {
-      "path": "changes/20261005-extraction-snapshot-evidence.json",
-      "sha256": null,
-      "bytes": 2502,
-      "lines": 15,
-      "module": "changes",
-      "kind": "task-run-record",
-      "status": "PARTIAL",
-      "evidence": [
-        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。"
-      ]
-    },
-    {
-      "path": "changes/maintenance-core-packet3-legacy-boundaries.json",
-      "sha256": null,
-      "bytes": 1373,
-      "lines": 16,
-      "module": "changes",
-      "kind": "new-source-or-test",
-      "status": "UNSEEN",
-      "evidence": [
-        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。"
-      ]
-    },
-    {
-      "path": "changes/maintenance-core-packet3-native-boundaries.json",
-      "sha256": null,
-      "bytes": 1649,
-      "lines": 18,
-      "module": "changes",
-      "kind": "new-source-or-test",
-      "status": "UNSEEN",
-      "evidence": [
-        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。"
-      ]
-    },
-    {
-      "path": "docs/development/maintenance-notify-packet3-evidence.json",
-      "sha256": null,
-      "bytes": 323455,
-      "lines": 8109,
-      "module": "docs",
-      "kind": "task-run-record",
-      "status": "REVIEWED",
-      "evidence": [
-        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。",
-        "JSON全構造・32file digest/640観点・9findings/6反証/4制約・artifact/logSHA検査済み。run記録として分類。"
-      ],
-      "reviewed_sha256": "babad73b627ca7b93958597a33b0fbccd95415f25bd1cd1d49b4682e8fc605f1",
-      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
-    },
-    {
-      "path": "tests/adapters/discord/test_discord_runtime_compat.py",
-      "sha256": null,
-      "bytes": 4186,
-      "lines": 116,
-      "module": "tests",
-      "kind": "new-source-or-test",
-      "status": "UNSEEN",
-      "evidence": [
-        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。"
-      ]
-    },
-    {
-      "path": "tests/adapters/slack/test_slack_runtime_compat.py",
-      "sha256": null,
-      "bytes": 4653,
-      "lines": 137,
-      "module": "tests",
-      "kind": "new-source-or-test",
-      "status": "UNSEEN",
-      "evidence": [
-        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。"
-      ]
-    },
-    {
-      "path": "tests/extract/test_extract_packet4_regressions.py",
-      "sha256": null,
-      "bytes": 11396,
-      "lines": 234,
-      "module": "tests",
-      "kind": "new-source-or-test",
-      "status": "UNSEEN",
-      "evidence": [
-        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。"
-      ]
-    },
-    {
-      "path": "docs/development/full-maintenance-20261005/parent-semantic-utc-evidence.json",
-      "sha256": null,
-      "bytes": 1896,
-      "lines": 28,
-      "module": "docs",
-      "kind": "task-run-record",
-      "status": "REVIEWED",
-      "read_ranges": [
-        [
-          1,
-          28
-        ]
-      ],
-      "reviewed_sha256": "9e6b81e65321866180fa02bf11fbd3d030c4614032b3ca419ed63eca2af08171",
-      "evidence": [
-        "親作成・全文確認。対象source/callerと検証ログを照合済み。"
-      ]
-    },
-    {
-      "path": "changes/maintenance-views-invalid-numbers-20261005.json",
-      "sha256": null,
-      "bytes": 1019,
-      "lines": 14,
-      "module": "changes",
-      "kind": "release-fragment",
-      "status": "REVIEWED",
-      "read_ranges": [
-        [
-          1,
-          14
-        ]
-      ],
-      "reviewed_sha256": "df956fa9164155a23348a4b866f52324959463fd7072fd7701953e920e33baea",
-      "evidence": [
-        "親作成・全文確認。対象source/callerと検証ログを照合済み。"
-      ]
-    },
-    {
-      "path": "changes/maintenance-semantic-utc-python310-20261005.json",
-      "sha256": null,
-      "bytes": 833,
-      "lines": 12,
-      "module": "changes",
-      "kind": "release-fragment",
-      "status": "REVIEWED",
-      "read_ranges": [
-        [
-          1,
-          12
-        ]
-      ],
-      "reviewed_sha256": "8cc251a18ec2110b818dc6b7eee25a5e94c5d5ee883c018fc6ff7c3fcc225ab4",
-      "evidence": [
-        "親作成・全文確認。対象source/callerと検証ログを照合済み。"
+      "reviewed_sha256": "5435276d90281e002653bceb56d36d8185e61fa3fa64c6a5c4044b8861e62478",
+      "reviewed_lines": 97,
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "responsibility": "Synthetic public consumer/fixture for views_testkit; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
       ]
     }
   ],
@@ -15054,6 +17329,36 @@
       "path_group": ".agent/, .codex/, .omo/, .senpi/, .debug-journal.md, *.log, uv.lock ignored",
       "status": "PARTIAL",
       "reason": "Local agent/runtime/run state; safety/provenance classification incomplete. Do not read secret-bearing state or execute hooks."
+    }
+  ],
+  "last_packet_imports": [
+    {
+      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "record_sha256": "2e10db192af9b7f55d95876593e65f7a5c7228a6a6bbd7ba70635c909f8129c6",
+      "matched_files": 32,
+      "mismatched": [],
+      "acceptance": "LOCAL_PACKET_ACCEPTED; FINAL_I_PENDING"
+    },
+    {
+      "packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "record_sha256": "efc0f30529b27fc1069058b6e6ff709aa7e52e394688f3d3b3b758bc5f7e8864",
+      "matched_files": 43,
+      "mismatched": [],
+      "acceptance": "LOCAL_PACKET_ACCEPTED; FINAL_I_PENDING"
+    },
+    {
+      "packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "record_sha256": "9f348947c767a1022a962a69a70caa0c08c6469393f3b70887c6acb2d4b74920",
+      "matched_files": 21,
+      "mismatched": [
+        {
+          "path": "integration/test_standalone_sdk.py",
+          "reason": "readonly prior snapshot differs from already integrated owner update",
+          "packet_W_sha": "16934192f557400653d4e8ddde7091b77be135313186a4500d6bea2485ed69f2",
+          "I_sha": "011aa5173469b15b6017167e66c309173d006214b8407dae6b5a40aa13fb1df3"
+        }
+      ],
+      "acceptance": "LOCAL_PACKET_ACCEPTED; FINAL_I_PENDING"
     }
   ]
 }

@@ -882,6 +882,253 @@
       "repair": "Normalize terminal Z only; candidate precision/equality/state untouched.",
       "evidence": "docs/development/full-maintenance-20261005/parent-semantic-utc-evidence.json",
       "integration_status": "parent local source; final fixed-I checks pending"
+    },
+    {
+      "id": "CORE-P3-F01",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/discord/delivery.py:_remote_match"
+      ],
+      "cause": "bot.user/id不在時にauthor検査を飛ばし、foreign同一bodyをdeliveredへbindできた。",
+      "change": "identity欠落ではmatchしない。authorは常に同一botであることを要求。",
+      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "source_finding": "F01",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F02",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/slack/delivery.py:_body_part/_rewrite_prior"
+      ],
+      "cause": "raw &<>がSlack manual mention/markupとなりlink_names Falseだけでは保護できない。",
+      "change": "send/edit/remote matchの同一html escape、link_names False。lossless decodeと同一id/restart dedupe回帰。",
+      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "source_finding": "F02",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F03",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/slack/actions.py:_say"
+      ],
+      "cause": "ephemeral raw text/manual mentionとUTF-8/escape膨張がnative budgetを越える。",
+      "change": "4000 UTF-8 bytes以内で文字単位にescapeしentity境界を維持して本人へ順次全文分割、blocksは先頭だけ。",
+      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "source_finding": "F03",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F04",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/slack/cards.py:render"
+      ],
+      "cause": "link URL/labelのnative区切り・manual mention・制御文字・空hostとencoded context容量が未検証。",
+      "change": "HTTPS host/whitespace/control/delimiter拒否、label/query escape、2000 context容量の最終wireを検証。",
+      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "source_finding": "F04",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F05",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/slack/delivery.py:_replies"
+      ],
+      "cause": "has_more/next_cursorを無視し一部履歴のmissを旧投稿なしとしてfresh送信許可した。",
+      "change": "有界200件readの続きがあればunknown保持しno-resend。追加ページや無制限scanは導入しない。",
+      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "source_finding": "F05",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F06",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/slack/delivery.py:_file_remote_match"
+      ],
+      "cause": "Slackが保証しないremote sha256だけを要求し、runnerのsame-hash delivered prior receiptを捨てるため同一uploadが繰返される。",
+      "change": "exact prior id+author+name/size+hosted/is_external False/editable False+remote hash矛盾なしを確認して同一fileをreuse。外国・外部・編集可・receiptなし・hash矛盾は再利用しない。",
+      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "source_finding": "F06",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F07",
+      "class": "confirmed-maintenance",
+      "status": "FIXED",
+      "paths": [
+        "tests/adapters/discord/discord_testkit.py / test_mcs_discord.py"
+      ],
+      "cause": "FakeThread.send None、history id毎回生成、kwargs不一致がunknownの正当な保持を誤って発生させ6baseline fail。旧backfillは500を再送期待していた。",
+      "change": "stable send receipt/history/fetch/edit APIを模倣し実SDK Messageable send/history/fetch/edit id不変で裏付け。400の確定未送信backfillと500 unknown no-new-render/no-new-postを独立して強化。期待値は既存in-place rewrite契約と照合。",
+      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "source_finding": "F07",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F08",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/slack/runtime_compat.py / adapters/discord/runtime_compat.py"
+      ],
+      "cause": "旧公開aliasの実SDK REST/WSがproxy/redirect/任意URLとambient OAuthを許し現行standalone guardを共有していなかった。",
+      "change": "現在のofficial URL/no-proxy/no-redirect/closed-session/専用loggerを再利用。Slack WS sessionもguardし終了時閉じる。旧API引数・戻り値とcatch-all ackは維持。",
+      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "source_finding": "F08",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F09",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/discord/runtime_compat.py:_mcs_command"
+      ],
+      "cause": "real SDK webhook followupが500後5回POSTし未知結果を重複させる。",
+      "change": "現在のsingle_postをinteraction.clientと同じsessionへ適用し、500後1POSTでunknownを保持。ephemeral/no-pings/handler呼出1回/署名を維持。",
+      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "source_finding": "F09",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P4-P4-F01",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/extract/v4/extract_llm.py"
+      ],
+      "cause": "revive_failed SELECT snapshot then artifact_id-only UPDATE overwrites a concurrently revived/succeeded meta and counts deleted rows.",
+      "change": "WHERE artifact_id=? AND meta=?; increment cur.rowcount, preserving nightly/per-input caps and exact storage shape.",
+      "packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "source_finding": "P4-F01",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P4-P4-F02",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/extract/v4/extract_llm.py"
+      ],
+      "cause": "_posted_epoch truncates fractional timestamps and implicitly assigns host timezone to naive/date-only strings, permitting future/uncertain karte context.",
+      "change": "stdlib aware datetime comparison preserving precision/offset; no context for missing/bad/date-only/unknown timezone. Explicit terminal Z is normalized to +00:00 for supported Python3.10; no timezone is inferred.",
+      "packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "source_finding": "P4-F02",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P4-P4-F03",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/extract/rollup.py"
+      ],
+      "cause": "lm truthiness conflates valid empty current artifact with no fact source, resurrecting excluded v1 vitals.",
+      "change": "Track valid source existence separately from dict content; PERIOD_CHECK_VERSION5 dirties old persisted rollups through normal maintenance.",
+      "packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "source_finding": "P4-F03",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P4-P4-F04",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/extract/clinical_values.py"
+      ],
+      "cause": "Qualitative value prefix match labels a different whole quoted result as quote_supported (陰性ではありません/疑い/etc).",
+      "change": "Require complete text value followed by optional affirmative copula and sentence delimiter/end; retain unsupported original as unverified candidate.",
+      "packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "source_finding": "P4-F04",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P4-P4-F05",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/extract/v4/extract_llm.py"
+      ],
+      "cause": "NaN/infinite budgets disable comparisons; invalid --stop-after enters unbounded resident path. CLI DB/start side effects precede rejection.",
+      "change": "Strict finite numeric run_pending budget and early finite/nonnegative CLI stop validation before DB/lock/inference.",
+      "packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "source_finding": "P4-F05",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P4-P4-F06",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/extract/v4/extract_bench.py"
+      ],
+      "cause": "Arbitrary --cases content/context is sent to model; a synthetic label cannot establish wholly fictional input required by AGENTS.",
+      "change": "Model path requires exact approved-case equality to existing2 repo corpora, with finite known-case count/no duplicates. Copies/subsets accepted; --mock-ok custom local validation preserved.",
+      "packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "source_finding": "P4-F06",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P4-N4-F01",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "hermes_plugin/__init__.py:_control_reference"
+      ],
+      "cause": "最新の破損signal transitionを除外して旧openを人承認できる",
+      "change": "最新key rowを先に選び、parse ValueError/TypeError/RecursionError、nonobject/nonopen、expectedartifact差分をsignal_changedで拒否。project scope先行保持。",
+      "packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "source_finding": "N4-F01",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P4-N4-F02",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "hermes_plugin/__init__.py:_dispatch_op summary"
+      ],
+      "cause": "native JSON summaryがDiscord形式固定でSlack/LWに不適切表示",
+      "change": "trusted identity.transportからslack/plainを選びDiscorddefaultを維持。allowed scope/names=False不変。",
+      "packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "source_finding": "N4-F02",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P4-N4-M01",
+      "class": "confirmed-maintenance",
+      "status": "FIXED",
+      "paths": [
+        "hermes_plugin/README.md:229-235"
+      ],
+      "cause": "READMEのprestarted判定条件がjournal完全性条件を欠く",
+      "change": "scope lock＋journal完全性＋自claim存在を満たした時だけnot_sent、それ以外unknown保持をpacket3sourceへ同期。",
+      "packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "source_finding": "N4-M01",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-VIEWS-003",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/views/mcs_view.py",
+        "mcs/views/mcs_stats.py",
+        "mcs/views/response_observation_view.py"
+      ],
+      "cause": "Filtering nonempty/valid rows before latest selection resurrects old clinical state; deep persisted JSON escapes existing unknown/error paths; max_age numeric overflow and terminalZ fail on supported runtime.",
+      "packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "integration_status": "Own local source fixed; fixed-I checks/review pending"
     }
   ],
   "deferred": [],
