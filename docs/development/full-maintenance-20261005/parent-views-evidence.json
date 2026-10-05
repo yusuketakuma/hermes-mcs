@@ -1,0 +1,1695 @@
+{
+  "schema_version": 1,
+  "packet": "parent-views-progress",
+  "status": "REVIEWED_LOCAL_VIEWS_MODULE; FINAL_I_PENDING",
+  "B": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+  "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+  "scope": "All10 views runtime sources +24 existing test/fixture files +1 new regression file; parent owner",
+  "read_inventory": [
+    {
+      "path": "mcs/views/cross_lists_view.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 107,
+      "P_sha256": "db77e2a25f823067f9a1e05a57637ad6a85d8641d6d390d3cb77f08d3e5b6ffa",
+      "P_read_ranges": [
+        [
+          1,
+          107
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 107,
+      "W_sha256": "db77e2a25f823067f9a1e05a57637ad6a85d8641d6d390d3cb77f08d3e5b6ffa",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Publication-gated cross-project mentioned/bookmarked lists; latest attempts, freshness and explicit unread-only filtering.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "mcs/views/mcs_stats.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 1273,
+      "P_sha256": "43e35940f5e1489f6c3e357a486a02181e9cdc27b1df60761858c47b4c2bd148",
+      "P_read_ranges": [
+        [
+          1,
+          1273
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 1274,
+      "W_sha256": "efaa66022f00c74c1f35832035bb205bf7d8bdddebefadbd3e1cf5c53cf8f06d",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Read-only published snapshot statistics with period/current-generation predicates, explicit denominators, unknown capabilities and no patient names/body export.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "mcs/views/mcs_view.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 1070,
+      "P_sha256": "ec5d000c746779260b4d043db09b88d0d07d2b16c7bbc07efa26829fb5f3fae4",
+      "P_read_ranges": [
+        [
+          1,
+          1070
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 1078,
+      "W_sha256": "50ac446a7bb7f314ffc9849d24b295b2d404f653b8ee81cdf1bc676fb54a7f2f",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Published snapshot JSON CLI; project/actor scoped reads, cursors, current clinical artefacts, human command receipts and requests/loop links.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "mcs/views/message_metadata.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 313,
+      "P_sha256": "b1f0ffe7349af80381c7ff4cfa15a0afbcbb646799d193bbdf42e97075257ddc",
+      "P_read_ranges": [
+        [
+          1,
+          313
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 313,
+      "W_sha256": "b1f0ffe7349af80381c7ff4cfa15a0afbcbb646799d193bbdf42e97075257ddc",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Capture/shadow metadata observations and exact-self target/reaction context; no inference of clinical completion.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "mcs/views/metadata_report.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 160,
+      "P_sha256": "23807c61a7047c6b78e7c10518cf94da49712098d836e5255f24acf4f29f97f2",
+      "P_read_ranges": [
+        [
+          1,
+          160
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 160,
+      "W_sha256": "23807c61a7047c6b78e7c10518cf94da49712098d836e5255f24acf4f29f97f2",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Read-only metadata scope/coverage diagnostic with redacted shapes and counts, not source bodies.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "mcs/views/project_metadata_view.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 315,
+      "P_sha256": "92eed1e56de4823ec09cc35c44cd96b30e0a50de6794a12724ae037325cc7d79",
+      "P_read_ranges": [
+        [
+          1,
+          315
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 315,
+      "W_sha256": "92eed1e56de4823ec09cc35c44cd96b30e0a50de6794a12724ae037325cc7d79",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Publication-gated latest dataset metadata and scoped chat comparisons; invalid values/current failure remain unknown.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "mcs/views/read_model.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 361,
+      "P_sha256": "588e4bb58510ee920508223cac4c66e06eb760190135bf404f37548ffe14ad91",
+      "P_read_ranges": [
+        [
+          1,
+          361
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 361,
+      "W_sha256": "588e4bb58510ee920508223cac4c66e06eb760190135bf404f37548ffe14ad91",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Versioned published aggregate/detail read model, current projection generation/QC/source binding and explicit unknown states.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "mcs/views/response_observation_view.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 207,
+      "P_sha256": "f34919b9aafdb695189feb638fa9b32ef00efffd1a57b787c6305ec7f7a223ac",
+      "P_read_ranges": [
+        [
+          1,
+          207
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 210,
+      "W_sha256": "13d274543d53eebb40a0a4c7a2385fc640b63c1c3b3b6c67c8b924d4b14d4c3a",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Explicit publication/freshness-gated self-addressed observation list and snapshot/scope cursor; clinical_completion/nonresponse remain None.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "mcs/views/structured_view.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 441,
+      "P_sha256": "5e082192ef31d4cd6fac63e8e7449fd3138f0b2defc0427dfba45713b772e224",
+      "P_read_ranges": [
+        [
+          1,
+          441
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 441,
+      "W_sha256": "5e082192ef31d4cd6fac63e8e7449fd3138f0b2defc0427dfba45713b772e224",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Grounded structured display from current fact generations and explicitly compatible rule fallback; evidence/unknown clinical candidate annotations.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "mcs/views/summary_review.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 329,
+      "P_sha256": "5102c06e0f1421105b9d99dd35b01e010f5394c81379b60497a30a8c5cca430e",
+      "P_read_ranges": [
+        [
+          1,
+          329
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 329,
+      "W_sha256": "5102c06e0f1421105b9d99dd35b01e010f5394c81379b60497a30a8c5cca430e",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Bounded per-patient review summary with current evidence and conservative candidate language; renders through three platform dialects.",
+      "callers": [
+        "mcs_view.View/read/main",
+        "hermes_plugin.__init__ / mcs/notify render consumers"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_cross_lists_view.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 112,
+      "P_sha256": "c08ea747ca11f7ead892cdea2a7d1b2895cad99fc7cd8b997a6551c3334de37d",
+      "P_read_ranges": [
+        [
+          1,
+          112
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 112,
+      "W_sha256": "c08ea747ca11f7ead892cdea2a7d1b2895cad99fc7cd8b997a6551c3334de37d",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for cross_lists_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_drug_candidates.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 94,
+      "P_sha256": "56914862ba3efaccd098ae3c5dadb241443a12dcc6b280120cd8a7f26635cbbb",
+      "P_read_ranges": [
+        [
+          1,
+          94
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 94,
+      "W_sha256": "56914862ba3efaccd098ae3c5dadb241443a12dcc6b280120cd8a7f26635cbbb",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for drug_candidates; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_group_consultations_view.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 192,
+      "P_sha256": "20e954a952d905a41b57dcf127d84072b2d7419d79f802d74427f7a68da27293",
+      "P_read_ranges": [
+        [
+          1,
+          192
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 192,
+      "W_sha256": "20e954a952d905a41b57dcf127d84072b2d7419d79f802d74427f7a68da27293",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for group_consultations_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_interaction_latency.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 286,
+      "P_sha256": "da59bb0032f822cd7c89860a13380cd14d36c1f49b2ac791767b7a3d45074fb9",
+      "P_read_ranges": [
+        [
+          1,
+          286
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 286,
+      "W_sha256": "da59bb0032f822cd7c89860a13380cd14d36c1f49b2ac791767b7a3d45074fb9",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for interaction_latency; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_mcs_stats.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 414,
+      "P_sha256": "5a494545141b53cbdb5f1b2f50c0431ae8731dd540b8028eeb083e22ef54498e",
+      "P_read_ranges": [
+        [
+          1,
+          414
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 414,
+      "W_sha256": "5a494545141b53cbdb5f1b2f50c0431ae8731dd540b8028eeb083e22ef54498e",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for mcs_stats; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_mcs_stats_signal_feedback.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 205,
+      "P_sha256": "3c56d5444cab018a1adcfd9c7139e4ff4423f175dc278e0058979001df2a7f2a",
+      "P_read_ranges": [
+        [
+          1,
+          205
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 205,
+      "W_sha256": "3c56d5444cab018a1adcfd9c7139e4ff4423f175dc278e0058979001df2a7f2a",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for mcs_stats_signal_feedback; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_metadata_report.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 168,
+      "P_sha256": "9fa4b28335df7ba634cc97fee1e292b7f55dd985d85085b97486d56e883bd98c",
+      "P_read_ranges": [
+        [
+          1,
+          168
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 168,
+      "W_sha256": "9fa4b28335df7ba634cc97fee1e292b7f55dd985d85085b97486d56e883bd98c",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for metadata_report; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_notification_receipt_scope.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 91,
+      "P_sha256": "59bb9273a2f72409e75565d96e86089c68fcb9eac6df95cf0b07f43562caa968",
+      "P_read_ranges": [
+        [
+          1,
+          91
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 91,
+      "W_sha256": "59bb9273a2f72409e75565d96e86089c68fcb9eac6df95cf0b07f43562caa968",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for notification_receipt_scope; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_physician_viewed.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 66,
+      "P_sha256": "55e7b4ba06661a8a68c19a029b1a3e316931f301e523ffcecbef5934fb68ce88",
+      "P_read_ranges": [
+        [
+          1,
+          66
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 66,
+      "W_sha256": "55e7b4ba06661a8a68c19a029b1a3e316931f301e523ffcecbef5934fb68ce88",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for physician_viewed; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_project_metadata_comparison.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 393,
+      "P_sha256": "06de0ae0c6acc2f00e5e21e8d995e3c58a42d305451efeba137013f21a8e9522",
+      "P_read_ranges": [
+        [
+          1,
+          393
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 393,
+      "W_sha256": "06de0ae0c6acc2f00e5e21e8d995e3c58a42d305451efeba137013f21a8e9522",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for project_metadata_comparison; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_project_metadata_view.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 261,
+      "P_sha256": "fbe232a8128f20c723eed976f4a1aa8765c2a59138596e94e033a6591950aecc",
+      "P_read_ranges": [
+        [
+          1,
+          261
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 261,
+      "W_sha256": "fbe232a8128f20c723eed976f4a1aa8765c2a59138596e94e033a6591950aecc",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for project_metadata_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_qc_view.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 241,
+      "P_sha256": "cf4729edcbfed92aeb3ac38c6072ff409ad2cd77e8ed0ec734336baa2f9c847f",
+      "P_read_ranges": [
+        [
+          1,
+          241
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 241,
+      "W_sha256": "cf4729edcbfed92aeb3ac38c6072ff409ad2cd77e8ed0ec734336baa2f9c847f",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for qc_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_read_model.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 373,
+      "P_sha256": "99a5b75e300b6608c60cb814a3e8c79dbf9b6c3b20ae8d499c7a1c5bc2a48749",
+      "P_read_ranges": [
+        [
+          1,
+          373
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 373,
+      "W_sha256": "99a5b75e300b6608c60cb814a3e8c79dbf9b6c3b20ae8d499c7a1c5bc2a48749",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for read_model; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_response_observation.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 225,
+      "P_sha256": "7885f64b9ff1ee619be2c6b4054728b282b93f3f009fdf5314273c732b40ea84",
+      "P_read_ranges": [
+        [
+          1,
+          225
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 225,
+      "W_sha256": "7885f64b9ff1ee619be2c6b4054728b282b93f3f009fdf5314273c732b40ea84",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for response_observation; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_response_observation_view.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 423,
+      "P_sha256": "604aebeff9c1e7afe9eb6d2ebc4c97bf1fdfa65d041d88661a7035142358056d",
+      "P_read_ranges": [
+        [
+          1,
+          423
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 423,
+      "W_sha256": "604aebeff9c1e7afe9eb6d2ebc4c97bf1fdfa65d041d88661a7035142358056d",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for response_observation_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_semantic_view.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 141,
+      "P_sha256": "4e75b092e3f8cfeb8714258618d47851c940df6c3fd4037f233e7196488f7980",
+      "P_read_ranges": [
+        [
+          1,
+          141
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 141,
+      "W_sha256": "4e75b092e3f8cfeb8714258618d47851c940df6c3fd4037f233e7196488f7980",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for semantic_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_staff_directory.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 94,
+      "P_sha256": "e8cdebbb7cc4b4c73fa8dc0e821ee9b40ea8f6baaa5d92931b4835cd4ccd2797",
+      "P_read_ranges": [
+        [
+          1,
+          94
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 94,
+      "W_sha256": "e8cdebbb7cc4b4c73fa8dc0e821ee9b40ea8f6baaa5d92931b4835cd4ccd2797",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for staff_directory; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_status_fetch_reason.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 34,
+      "P_sha256": "86a372e322eca9d00866d598981f7c99484ee263d05f661409edcd961c3a6168",
+      "P_read_ranges": [
+        [
+          1,
+          34
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 34,
+      "W_sha256": "86a372e322eca9d00866d598981f7c99484ee263d05f661409edcd961c3a6168",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for status_fetch_reason; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_status_view.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 36,
+      "P_sha256": "91df4e92b2b918d904e31e0177bf384508d2903ada78f1b27ab67cad3680a94e",
+      "P_read_ranges": [
+        [
+          1,
+          36
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 36,
+      "W_sha256": "91df4e92b2b918d904e31e0177bf384508d2903ada78f1b27ab67cad3680a94e",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for status_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_structured_review_regressions.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 43,
+      "P_sha256": "aeba521435f7b30d2bbe45444329ec9fdcdb937dbae0d334faf24b5c2d3c7e3b",
+      "P_read_ranges": [
+        [
+          1,
+          43
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 43,
+      "W_sha256": "aeba521435f7b30d2bbe45444329ec9fdcdb937dbae0d334faf24b5c2d3c7e3b",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for structured_review_regressions; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_structured_view.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 437,
+      "P_sha256": "300e5fe9b6da03338bd82f3d77a6cf50d72a1c1c5d5135bc5b5dd9bc7f84270e",
+      "P_read_ranges": [
+        [
+          1,
+          437
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 437,
+      "W_sha256": "300e5fe9b6da03338bd82f3d77a6cf50d72a1c1c5d5135bc5b5dd9bc7f84270e",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for structured_view; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_summary_review.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 186,
+      "P_sha256": "12b3735bd6b5a74d53171b923fd04d3975deef984c8296397e0a4bc0c29122ce",
+      "P_read_ranges": [
+        [
+          1,
+          186
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 186,
+      "W_sha256": "12b3735bd6b5a74d53171b923fd04d3975deef984c8296397e0a4bc0c29122ce",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for summary_review; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_summary_review_cli.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 49,
+      "P_sha256": "46f1db2667dbd4715a386499e4e01c1ce1e7a2d829ffd62a1907028752f679d2",
+      "P_read_ranges": [
+        [
+          1,
+          49
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 49,
+      "W_sha256": "46f1db2667dbd4715a386499e4e01c1ce1e7a2d829ffd62a1907028752f679d2",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for summary_review_cli; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/test_view_corrupt_state.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 0,
+      "P_sha256": null,
+      "P_read_ranges": [],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 200,
+      "W_sha256": "789d5cf3ac0df900775bcc5bca2d60c87fbb15090a1cf9a1bae1c8345df9d0ac",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for view_corrupt_state; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    },
+    {
+      "path": "tests/views/views_testkit.py",
+      "status": "REVIEWED",
+      "full_content_read": true,
+      "P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d",
+      "P_lines": 97,
+      "P_sha256": "5435276d90281e002653bceb56d36d8185e61fa3fa64c6a5c4044b8861e62478",
+      "P_read_ranges": [
+        [
+          1,
+          97
+        ]
+      ],
+      "read_method": "Complete bounded source/test reads in prior parent turns; every truncated part reread. Changed hunks/new regression file entirely inspected; generated grep/AST alone not accepted as full read.",
+      "W_lines": 97,
+      "W_sha256": "5435276d90281e002653bceb56d36d8185e61fa3fa64c6a5c4044b8861e62478",
+      "W_read_basis": "Exact P SHA reuse plus complete own patch/new test read; prior root view fixes in accepted P reused.",
+      "responsibility": "Synthetic public consumer/fixture for views_testkit; independent expected behavior, temporary DB/snapshot and safety/error/current-state controls.",
+      "callers": [
+        "scripts/run_tests.sh / temporary snapshot synthetic fixtures"
+      ],
+      "criteria_refs": [
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "C06",
+        "C07",
+        "C08",
+        "C09",
+        "C10",
+        "C11",
+        "C12",
+        "X01",
+        "X02",
+        "X03",
+        "X04",
+        "X05",
+        "X06",
+        "X07",
+        "X08"
+      ]
+    }
+  ],
+  "confirmed_fixes": [
+    {
+      "id": "PARENT-VIEWS-001",
+      "state": "CONFIRMED_FIXED",
+      "path": "mcs/views/structured_view.py",
+      "cause": "Empty selected current fact dictionaries are mistaken for absent facts and revive rule events/vitals",
+      "before": "3 failed/4 controls passed/95 deselected for extract_llm/canonical_projection/semantic_facts_v4 versus absent/stale facts",
+      "after": "214 passed in 7.08s across structured views and notification consumers",
+      "contract": "Empty current facts suppress excluded events/vitals; media reference and absent/stale rule fallback retained; symptoms/medication-candidate/request fallback unchanged",
+      "integration_status": "local repaired source; final whole-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-VIEWS-002",
+      "state": "CONFIRMED_FIXED",
+      "paths": [
+        "mcs/views/project_metadata_view.py",
+        "mcs/views/cross_lists_view.py"
+      ],
+      "cause": "Oversized JSON numbers/options raise OverflowError; parser recursion error escapes the metadata view instead of unknown.",
+      "before": "Accepted fixed P with final tests: combined 12 failed/14 controls passed/98 deselected includes 8 view regressions and 4 UTC relation regressions.",
+      "after": "259 passed in 6.05s across views/relations and metadata/cross-list ingestion consumers.",
+      "contract": "Invalid candidate numeric items excluded; unreadable current evidence yields unknown without old set as current; options rejected before SQL; API/scope/names/publication maintained.",
+      "integration_status": "local fixed source; final whole-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-VIEWS-003",
+      "state": "CONFIRMED_FIXED",
+      "paths": [
+        "mcs/views/mcs_view.py",
+        "mcs/views/mcs_stats.py",
+        "mcs/views/response_observation_view.py"
+      ],
+      "cause": "Filtering nonempty/valid rows before latest selection resurrects old clinical state; deep persisted JSON escapes existing unknown/error paths; max_age numeric overflow and terminalZ fail on supported runtime.",
+      "before": "Accepted isolated fixedP with final22 tests:19 genuinefail/3 controls in actualPython3.10; first loop fixture FK failures and intermediate statistics test omitted meds are not counted as source proof.",
+      "after": "Final unchanged broad481 case family per Python3.13/3.10 plus final22 corrected tests per runtime; details/log hashes retained.",
+      "contract": "Current empty facts suppress older meds; unreadable latest summary unknown, malformed receipts rejected; ordinary valid fields/clinical/publication/project/actor/hash/approval contracts preserved."
+    }
+  ],
+  "verification": [
+    {
+      "path": "/tmp/mcs-maintenance-structured-empty-before-20261005.log",
+      "sha256": "b89fcd46156eda0cfaa45e1625b3542acde9d1a222e45f49329d22b45e6ec0ba",
+      "result": "3 failed, 4 passed, 95 deselected in 0.27s"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-structured-empty-after-20261005.log",
+      "sha256": "70aeb7d2873685f16e516d2d3a05f7e8f2fa67bbc160a09368a0d1172ba8f0e3",
+      "result": "214 passed in 7.08s"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-views-utc-fixedP-final-before-20261005.log",
+      "sha256": "c3ceddc086deb17da1fe89c4936cbd0fffd009a9f59c4f18bffbf5c6a091df3a",
+      "result": "12 failed, 14 passed, 98 deselected in 2.48s"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-views-utc-accepted-family-20261005.log",
+      "sha256": "2b10d6b8c10890fe6fbcde8ebd1163d8da7626295068fdbc463d08f8f9e116b0",
+      "result": "259 passed in 6.05s"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-python310-family-20261005.log",
+      "sha256": "cd0383798165b782c116fe9555fc95a67147b06640483c8fbb8cab1b6b690871",
+      "result": "1 failed, 206 passed in 5.90s"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-view-corrupt-accepted-isolated-P-before310-20261005.log",
+      "sha256": "d76a80b2022360d5568e7df5a931f6b7a2d5bf1a28ff7189994df3abbf2cd52c",
+      "result": "========================= 19 failed, 3 passed in 1.43s ========================="
+    },
+    {
+      "path": "/tmp/mcs-maintenance-views-final-full-after313-20261005.log",
+      "sha256": "262a0106386c89806c6a269cdca49d8de9029645f6e2451995a21dda0c58b40b",
+      "result": "============================= 481 passed in 10.74s ============================="
+    },
+    {
+      "path": "/tmp/mcs-maintenance-views-final-full-after310-20261005.log",
+      "sha256": "3bded3b4e22e402f49556f360535ffda2609eface9c26c9880bf0938ff61914b",
+      "result": "============================= 481 passed in 13.18s ============================="
+    },
+    {
+      "path": "/tmp/mcs-maintenance-view-corrupt-accepted-after313-20261005.log",
+      "sha256": "58bc87428c721f064d6a4feb84a5d576e3f4a94a888d39c42232968ffbe38dfb",
+      "result": "============================== 22 passed in 0.67s =============================="
+    },
+    {
+      "path": "/tmp/mcs-maintenance-view-corrupt-accepted-after310-20261005.log",
+      "sha256": "b9110c7c8193df0d9ef121bd01442c9bd90321d9c578f23e5f9a9b82b696e4a4",
+      "result": "============================== 22 passed in 0.78s =============================="
+    }
+  ],
+  "criteria_status": "All C01–C12/X01–X08 evaluated for module roles, consumers and concrete limitations.",
+  "remaining_files": [],
+  "checks": {
+    "ruff": "ruff 0.16.10 changed2 Python paths passed",
+    "diff": "git diff --check passed"
+  },
+  "limitations": [
+    "Whole fixed-I full tests/lint/SDK/archive and fresh-context independent review pending.",
+    "No real services, PHI, production DB, credentials, provider screens or deployment used.",
+    "Minimum runtime test collection first failed shared NotRequired fixture; semantic behavior b28604a integrated before actual3.10 whole-view run."
+  ],
+  "fixture_correction": "初回deep JSON990は現Python C parserで正常parseできたため、不正期待の1失敗を修復数へ数えない。stdlib recursive decoderで実際のRecursionErrorをassertして経路を固定し、同じ最終testsを固定Pで12fail/14passと確認した。初回logsも保持。",
+  "minimum_runtime": "Isolated CPython3.10.22+pytest9.1.1 family206 passed/1 separate request_following_review typing ImportError. Owner semantic assigned; this is not claimed a green full minimum-runtime result.",
+  "criteria": {
+    "C01": "All10 runtime source and24 existing test/fixture files read completely; flat stdlib imports and readonly responsibilities/callers traced. Shared queries, ground-value validators and metadata readers reused; no mechanical split/new abstraction.",
+    "C02": "Latest empty fact source suppresses earlier medication/event/vital facts; newest unreadable karte state remains unknown. Date-only JST and aware offsets maintained; terminalZ corrected for3.10. Missing record is not absence of care. Finite/oversized inputs reach stable error paths.",
+    "C03": "View opens one readonly published generation/BEGIN and closes reader; no write/job/own connection in stats. UUID/hash conflict and project/actor/application/channel scope checks precede receipt disclosure. Current facts/links do not mutate ledger.",
+    "C04": "Supported snapshot user_version5–9 and published DELETE journal/snapshot_meta contract verified. Current v1/legacy/canonical/v4 and metadata shapes preserved; no schema/migration/history rewrite. Core forward migrations are separately audited.",
+    "C05": "Bound SQL parameters; project exact positive IDs and snapshot-bound cursor keys/ranges; publication gates, current source/revision and scoped notification receipt enforced. No direct external URL/credentials/authentication changes.",
+    "C06": "Temporary DB and wholly invented fixtures only. Stats and aggregate models use IDs/counts and metadata reasons, no bodies/names; QC feedback notes/actor not returned. Receipt scope denial omits foreign detail. No real data/model/Keychain access.",
+    "C07": "Public CLI/View/API signatures and defaults unchanged. Limits1–200, cursor<=2048, detail/category/bucket bounds preserved. Invalid numeric option uses existing ValueError code, corrupt receipt existing rejected code. Valid finite values and disabled publication behavior retained.",
+    "C08": "Actual readonly JSON consumer and three native-renderer paths checked through caller packets. Stale/source fingerprints and unknown labels explicit; no automatic task adoption/clinical completion. No browser/web/ARIA owner here; actual provider UI remains unexecuted under live boundary.",
+    "C09": "Bounded paginated lists, source generation binding and shared current-query predicates checked. Medication selection marks latest per-message before empty filtering and streams SQL rows instead of materializing all text. Snapshot-wide aggregate scans remain intentional; no speed/cost claim.",
+    "C10": "Malformed/deep stored JSON cannot stop status, QC, task/loop listings, receipt lookup or stat dispatch; scoped existing unknown/rejection/skip/unavailable behaviors used. Reader finally-close/BEGIN and snapshot identity remain. No retry/resend/job scheduling in this module.",
+    "C11": "All existing24 tests and shared fixtures fully reviewed; wholly synthetic snapshots exercise public entries. Accepted22 newcases fixedP3.10 before19fail/3controls, after22pass per runtime. Existing481-family passes both3.13 and3.10; one later test input strengthened and new22 rerun separately, no skipped/weak assertions.",
+    "C12": "Stdlib/runtime dependency unchanged. Real isolated Python3.10.22 and3.13.12, project isolated runner, pinned Ruff0.16.10 and diff check used. Runtime TypedDict shared-test collection fix integrated from semantic packet5; SDK/archive/final I gates remain separate.",
+    "X01": "Standalone JSON CLI uses existing bootstrap from isolated cwd; published snapshot prerequisite preserved, no live ledger fallback. Installation/update/recovery and archive-wide startup are parent lifecycle/final validation, actual gateway/adapter restart not performed.",
+    "X02": "No new runtime dependencies or external fetch in views. Existing stdlib/shared validators; license/pinned SDK supply-chain and CI permissions belong to parent/core records, no deployment/publish authorization inferred.",
+    "X03": "Deleted-body/current-generation guards prevent departed facts; newest-empty regression prevents old clinical mentions resurfacing. Old artefacts/requests/receipts untouched. Backup/key/purge/restore owner separately audited; no real deletion.",
+    "X04": "Notification receipt lookup consumes composite IDs plus exact actor/app/channel/projects and explicit operator scope; snapshot lag is not failure. Three platform render/SDK owners consume same JSON contracts. No network, signatures or real delivery exercised in views.",
+    "X05": "Offline snapshots/temporary paths and supported CPython versions verified; deep-parser differences reproduced in actual3.10. Numeric/JSON capacity/cursor guard retained. Native provider screen, other OS and filesystem durability remain stated external constraints.",
+    "X06": "LLM-derived/current candidates only display grounded evidence and require existing human approval caller. Stored arbitrary text is not tool authorization; no model/MCP/eval/provider invocation or memory transfer introduced.",
+    "X07": "Clinical unit/value/quote/current-project/subject boundaries reuse authoritative code and full synthetic fixtures. No new medical thresholds/adoption rules; unknown timezone/source/record and quote-supported versus human-confirmed distinction retained.",
+    "X08": "No public web server/forms/routes owned; protected source links only known canonical project URL and explicit publication/private scope. Native text renderer/link escaping validated in platform packets; actual public deployment not performed."
+  },
+  "new_fixture_accounting": "Initial missing source row caused3 G1 fixture failures and was corrected before canonical fixedP. Statistics deep-json initially had empty meds and was a valid P control; strengthened to nonempty valid synthetic med before accepted fixedP. All intermediate logs preserved and excluded from final defect counts.",
+  "patch_reconstruction": {
+    "P": "57dd2068465d97c8509524968945c2976e539238",
+    "W": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+    "root": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005",
+    "staging": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-parent-views-replay-20261005-1ioxw3px",
+    "patch_path": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-parent-views-replay-20261005-1ioxw3px/P-W.patch",
+    "patch_bytes": 303155,
+    "patch_sha256": "a92e1ad5610d4946354b00615e9ae0506aca5e58ffef2729ab08961cb0dbe9e1",
+    "files_compared": 880,
+    "all_bytes_modes_equal": true,
+    "test_before_P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d + final test only",
+    "source_unchanged_between_test_P_and_replay_P": true,
+    "manifest_sha256": "bbcff8fdd95535b6c7cd92f6a7c6f59bfdb0dfd7f007e862bbadd7b8cf822296"
+  }
+}

@@ -17,7 +17,8 @@ from ledger import karte_summary_block
 from mcs_adapter import project_url
 from mcs_queries import JST, incomplete_reply_roots
 from notify_render import (
-    _hhmm, _inline, _mmdd, _patient_name, actor_label, card_reaction_lines,
+    _current_generation, _hhmm, _inline, _mmdd, _patient_name, _source_fp,
+    actor_label, card_reaction_lines,
     card_reactions, today_jst)
 
 SUMMARY_CAVEAT = ("※ 取得済み投稿から自動作成した暫定集約です。未取得・未抽出・"
@@ -274,14 +275,7 @@ def unacked_view(db, transport, now=None, projects=None) -> dict:
     cards are marked. Digest cards span projects and are left out."""
     now = time.time() if now is None else now
     rows = db.execute(
-        """SELECT c.*, t.owner FROM notification_cards c
-           LEFT JOIN notification_triage t
-             ON t.card_id=c.card_id AND t.state='assigned'
-           WHERE c.kind IN ('thread','signal') AND c.transport=?
-             AND c.message_id IS NOT NULL AND c.project_id IS NOT NULL
-             AND c.delivery_state NOT IN ('revoked','message_deleted')
-             AND c.updated_at>=?
-             AND NOT EXISTS (
+        """SELECT c.*, t.owner, EXISTS (
                SELECT 1 FROM notification_acknowledgements a
                JOIN notification_view_manifests m
                  ON m.manifest_id=a.manifest_id
@@ -289,10 +283,21 @@ def unacked_view(db, transport, now=None, projects=None) -> dict:
                  AND m.source_generation=c.source_generation
                  AND m.shown=(SELECT shown FROM notification_view_manifests
                               WHERE card_id=c.card_id
-                              ORDER BY manifest_id DESC LIMIT 1))
+                              ORDER BY manifest_id DESC LIMIT 1)) AS acknowledged
+           FROM notification_cards c
+           LEFT JOIN notification_triage t
+             ON t.card_id=c.card_id AND t.state='assigned'
+           WHERE c.kind IN ('thread','signal') AND c.transport=?
+             AND c.message_id IS NOT NULL AND c.project_id IS NOT NULL
+             AND c.delivery_state NOT IN ('revoked','message_deleted')
+             AND c.updated_at>=?
            ORDER BY c.created_at, c.card_id""",
         (transport, now - UNACKED_WINDOW_S)).fetchall()
     rows = _in_scope(rows, projects)
+    # A click on another card can observe new source material before sweep
+    # persists this card's generation. Its older acknowledgement is stale.
+    rows = [r for r in rows if not r["acknowledged"]
+            or _current_generation(r, _source_fp(db, r)) != r["source_generation"]]
     groups: dict = {}
     for r in rows:
         groups.setdefault(r["project_id"], []).append(r)

@@ -909,7 +909,7 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
     else:
         content, files = _format_event(ledger, ev)
     attachment_pins = None
-    if target.startswith("lineworks:"):
+    if _hermes_free(cfg, target):
         attachment_pins = {}
         for _, path in files:
             hashes = {r[0] for r in ledger.db.execute(

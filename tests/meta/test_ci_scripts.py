@@ -192,6 +192,20 @@ def test_mine_gates_extracts_ids_from_nested_records(monkeypatch, tmp_path):
     assert "FIX-NEST9" in mg.extract_ids()["defects"]
 
 
+@pytest.mark.parametrize("decoy", [
+    "# def test_synthetic_decoy(): pass\n",
+    'text = "def test_synthetic_decoy(): pass"\n',
+    '"""def test_synthetic_decoy(): pass"""\n',
+])
+def test_mine_gates_requires_test_definitions_instead_of_text(monkeypatch, tmp_path, decoy):
+    mg = _load("ci_mine_real_defs", "ci/mine_gates.py")
+    (tmp_path / "test_synthetic.py").write_text(
+        decoy + "def test_synthetic_real(): pass\n"
+        "class TestSynthetic:\n def test_synthetic_method(self): pass\n")
+    monkeypatch.setattr(mg, "TESTS", tmp_path)
+    assert mg.test_names() == {"test_synthetic_real", "test_synthetic_method"}
+
+
 @pytest.mark.parametrize(("relative", "source", "allowed"), [
     ("mcs_discord/cards.py", "def make():\n import discord\n return discord.ui.View()\n", True),
     ("mcs_discord/cards.py", "import discord\n", False),
@@ -231,11 +245,12 @@ def test_adapter_async_gate_keeps_process_and_network_blocked(monkeypatch, tmp_p
     assert bool(gates.gate_plugin_sandbox()) is not allowed
 
 
-def test_independent_sdk_exception_keeps_core_and_ambient_secrets_blocked(monkeypatch, tmp_path):
+@pytest.mark.parametrize("filename", ["standalone.py", "runtime_compat.py"])
+def test_independent_sdk_exception_keeps_core_and_ambient_secrets_blocked(monkeypatch, tmp_path, filename):
     gates = _load("ci_standalone_sdk", "ci/gates.py")
     adapters = tmp_path / "adapters"
     standalone = tmp_path / "mcs_standalone"
-    path = adapters / "slack" / "standalone.py"
+    path = adapters / "slack" / filename
     path.parent.mkdir(parents=True)
     monkeypatch.setattr(gates, "ADAPTERS", adapters)
     monkeypatch.setattr(gates, "STANDALONE", standalone)

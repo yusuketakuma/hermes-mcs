@@ -1,0 +1,3371 @@
+{
+  "packet": "maintenance-core-packet6-rootdocs",
+  "status": "PARTIAL",
+  "packet_status": "REVIEWED",
+  "worker_scope_status": "READ_ONLY_REVIEW_COMPLETE",
+  "status_reason": "対象6正本4395行と全7module×20観点は完了。親所有README修復とnotify所有release refs修復・最終I統合検証/SDK/archive/fresh independentreviewは別工程。全域COMPLETEを宣言しない。",
+  "B": "b1846060af0e0632ce3f04d84b1196525ee6dbbf",
+  "P": "b1846060af0e0632ce3f04d84b1196525ee6dbbf",
+  "W": {
+    "root_docs_ref": "b1846060af0e0632ce3f04d84b1196525ee6dbbf",
+    "definition": "固定P正文6fileはbyte/mode不変。唯一追加はこのevidenceJSON。full Wはevidence-only commitと外部全bytes replay receiptで識別。"
+  },
+  "I": "親が別途固定する統合候補。workerWの成功をIへ転用しない。",
+  "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+  "branch": "audit/maintenance-core-packet6-20261005",
+  "start_status": "clean、旧packet5branch保存後git switch -c指定固定P。reset/rebase/stashなし。",
+  "scope": {
+    "source_docs": [
+      "README.md",
+      "SECURITY.md",
+      "AGENTS.md",
+      "CHANGELOG.md",
+      "LICENSE",
+      "openwiki/INSTRUCTIONS.md"
+    ],
+    "write_owner": [
+      "docs/development/maintenance-core-packet6-evidence.json"
+    ],
+    "readonly_consumer_sources": true,
+    "outside_owner_edits": 0,
+    "generated_openwiki_read": false
+  },
+  "counts": {
+    "root_files": 6,
+    "root_lines": 4395,
+    "REVIEWED": 6,
+    "PARTIAL": 0,
+    "UNSEEN": 0,
+    "module_count": 7,
+    "criterion_evaluations": 140,
+    "confirmed_parent_handoffs": 2,
+    "disproved": 4,
+    "local_runtime_changes": 0
+  },
+  "inventory": [
+    {
+      "path": "CHANGELOG.md",
+      "kind": "canonical_release_history",
+      "state": "REVIEWED",
+      "P_sha256": "93e35fd818850878c052accfbd49160b3a1561072f324ed818d84ad3b1fa57d1",
+      "W_sha256": "93e35fd818850878c052accfbd49160b3a1561072f324ed818d84ad3b1fa57d1",
+      "P_bytes": 321304,
+      "W_bytes": 321304,
+      "P_lines": 3492,
+      "W_lines": 3492,
+      "mode": "100644",
+      "read_ref": "b1846060af0e0632ce3f04d84b1196525ee6dbbf",
+      "read_ranges": [
+        [
+          1,
+          130
+        ],
+        [
+          131,
+          300
+        ],
+        [
+          301,
+          440
+        ],
+        [
+          441,
+          610
+        ],
+        [
+          611,
+          780
+        ],
+        [
+          781,
+          950
+        ],
+        [
+          951,
+          1111
+        ],
+        [
+          1112,
+          1280
+        ],
+        [
+          1281,
+          1460
+        ],
+        [
+          1461,
+          1640
+        ],
+        [
+          1641,
+          1825
+        ],
+        [
+          1826,
+          2010
+        ],
+        [
+          2011,
+          2190
+        ],
+        [
+          2191,
+          2380
+        ],
+        [
+          2381,
+          2570
+        ],
+        [
+          2571,
+          2760
+        ],
+        [
+          2761,
+          2950
+        ],
+        [
+          2951,
+          3140
+        ],
+        [
+          3141,
+          3330
+        ],
+        [
+          3331,
+          3492
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pの番号付き分割全文read、切断なし。全6fileを今回fresh read。親全文receiptのSHA一致を照合したがPARTIAL契約評価はそのまま完成扱いせず今回20観点を評価。",
+      "modules": [
+        "release_current",
+        "release_history"
+      ],
+      "responsibility": "14版の日付付き変更と更新時注意の正本、README生成とGitHubRelease export/syncのconsumer入力。",
+      "callers": [
+        "scripts/development/release_notes.py:section/check_changelog/main(export/build)",
+        "scripts/development/readme_release.py:render_block/check",
+        "scripts/development/sync_release_notes.py:synchronize"
+      ],
+      "criteria": {
+        "C01": [
+          "criteria.C01.release_current",
+          "criteria.C01.release_history"
+        ],
+        "C02": [
+          "criteria.C02.release_current",
+          "criteria.C02.release_history"
+        ],
+        "C03": [
+          "criteria.C03.release_current",
+          "criteria.C03.release_history"
+        ],
+        "C04": [
+          "criteria.C04.release_current",
+          "criteria.C04.release_history"
+        ],
+        "C05": [
+          "criteria.C05.release_current",
+          "criteria.C05.release_history"
+        ],
+        "C06": [
+          "criteria.C06.release_current",
+          "criteria.C06.release_history"
+        ],
+        "C07": [
+          "criteria.C07.release_current",
+          "criteria.C07.release_history"
+        ],
+        "C08": [
+          "criteria.C08.release_current",
+          "criteria.C08.release_history"
+        ],
+        "C09": [
+          "criteria.C09.release_current",
+          "criteria.C09.release_history"
+        ],
+        "C10": [
+          "criteria.C10.release_current",
+          "criteria.C10.release_history"
+        ],
+        "C11": [
+          "criteria.C11.release_current",
+          "criteria.C11.release_history"
+        ],
+        "C12": [
+          "criteria.C12.release_current",
+          "criteria.C12.release_history"
+        ],
+        "X01": [
+          "criteria.X01.release_current",
+          "criteria.X01.release_history"
+        ],
+        "X02": [
+          "criteria.X02.release_current",
+          "criteria.X02.release_history"
+        ],
+        "X03": [
+          "criteria.X03.release_current",
+          "criteria.X03.release_history"
+        ],
+        "X04": [
+          "criteria.X04.release_current",
+          "criteria.X04.release_history"
+        ],
+        "X05": [
+          "criteria.X05.release_current",
+          "criteria.X05.release_history"
+        ],
+        "X06": [
+          "criteria.X06.release_current",
+          "criteria.X06.release_history"
+        ],
+        "X07": [
+          "criteria.X07.release_current",
+          "criteria.X07.release_history"
+        ],
+        "X08": [
+          "criteria.X08.release_current",
+          "criteria.X08.release_history"
+        ]
+      },
+      "parent_read_receipts_checked": [
+        {
+          "path": "CHANGELOG.md",
+          "sha256": "93e35fd818850878c052accfbd49160b3a1561072f324ed818d84ad3b1fa57d1",
+          "bytes": 321304,
+          "lines": 3492,
+          "module": "CHANGELOG.md",
+          "kind": "text_asset",
+          "status": "UNSEEN",
+          "evidence": [],
+          "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+        }
+      ]
+    },
+    {
+      "path": "README.md",
+      "kind": "manual_canonical_text_with_generated_excerpt",
+      "state": "REVIEWED",
+      "P_sha256": "15953da31f91eedf229e30c2f5634f489d808208e7c12bef8ac81565271a822b",
+      "W_sha256": "15953da31f91eedf229e30c2f5634f489d808208e7c12bef8ac81565271a822b",
+      "P_bytes": 57981,
+      "W_bytes": 57981,
+      "P_lines": 535,
+      "W_lines": 535,
+      "mode": "100644",
+      "read_ref": "b1846060af0e0632ce3f04d84b1196525ee6dbbf",
+      "read_ranges": [
+        [
+          101,
+          280
+        ],
+        [
+          281,
+          440
+        ],
+        [
+          441,
+          535
+        ],
+        [
+          1,
+          100
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pの番号付き分割全文read、切断なし。全6fileを今回fresh read。親全文receiptのSHA一致を照合したがPARTIAL契約評価はそのまま完成扱いせず今回20観点を評価。",
+      "modules": [
+        "current_guide"
+      ],
+      "responsibility": "現在mainの利用入口・3channel表示・mode/導入・安全・生成release要約。",
+      "callers": [
+        "利用者/installer導線",
+        "scripts/development/readme_release.py:check/render",
+        "scripts/development/release_notes.py:build"
+      ],
+      "criteria": {
+        "C01": [
+          "criteria.C01.current_guide"
+        ],
+        "C02": [
+          "criteria.C02.current_guide"
+        ],
+        "C03": [
+          "criteria.C03.current_guide"
+        ],
+        "C04": [
+          "criteria.C04.current_guide"
+        ],
+        "C05": [
+          "criteria.C05.current_guide"
+        ],
+        "C06": [
+          "criteria.C06.current_guide"
+        ],
+        "C07": [
+          "criteria.C07.current_guide"
+        ],
+        "C08": [
+          "criteria.C08.current_guide"
+        ],
+        "C09": [
+          "criteria.C09.current_guide"
+        ],
+        "C10": [
+          "criteria.C10.current_guide"
+        ],
+        "C11": [
+          "criteria.C11.current_guide"
+        ],
+        "C12": [
+          "criteria.C12.current_guide"
+        ],
+        "X01": [
+          "criteria.X01.current_guide"
+        ],
+        "X02": [
+          "criteria.X02.current_guide"
+        ],
+        "X03": [
+          "criteria.X03.current_guide"
+        ],
+        "X04": [
+          "criteria.X04.current_guide"
+        ],
+        "X05": [
+          "criteria.X05.current_guide"
+        ],
+        "X06": [
+          "criteria.X06.current_guide"
+        ],
+        "X07": [
+          "criteria.X07.current_guide"
+        ],
+        "X08": [
+          "criteria.X08.current_guide"
+        ]
+      },
+      "parent_read_receipts_checked": [
+        {
+          "path": "README.md",
+          "sha256": "f8fdf9554103bf347494617de64a89df8bab966af932d41517c0adaf40090c17",
+          "bytes": 57870,
+          "lines": 533,
+          "module": "README.md",
+          "kind": "text_asset",
+          "status": "PARTIAL",
+          "evidence": [
+            "Parent complete bounded read; README truncated middle reread351–440. Contract/docs/20criteria cross-check pending; no complete review inferred from reading alone."
+          ],
+          "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+          "full_content_read": true,
+          "read_ranges": [
+            [
+              1,
+              535
+            ]
+          ],
+          "read_sha256": "15953da31f91eedf229e30c2f5634f489d808208e7c12bef8ac81565271a822b"
+        }
+      ]
+    },
+    {
+      "path": "SECURITY.md",
+      "kind": "manual_canonical_text",
+      "state": "REVIEWED",
+      "P_sha256": "41b0a8ea82e451f15a3d3e9bcf1ad217a0d01be0a1a73d60ff5f155bdbf956ce",
+      "W_sha256": "41b0a8ea82e451f15a3d3e9bcf1ad217a0d01be0a1a73d60ff5f155bdbf956ce",
+      "P_bytes": 10259,
+      "W_bytes": 10259,
+      "P_lines": 133,
+      "W_lines": 133,
+      "mode": "100644",
+      "read_ref": "b1846060af0e0632ce3f04d84b1196525ee6dbbf",
+      "read_ranges": [
+        [
+          1,
+          133
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pの番号付き分割全文read、切断なし。全6fileを今回fresh read。親全文receiptのSHA一致を照合したがPARTIAL契約評価はそのまま完成扱いせず今回20観点を評価。",
+      "modules": [
+        "safety_policy"
+      ],
+      "responsibility": "PHI/secret・通信/認可・LLM/export・backup/restore・運用信頼境界。",
+      "callers": [
+        "READMEデータ/安全導線",
+        "利用者/エージェント/運用owner"
+      ],
+      "criteria": {
+        "C01": [
+          "criteria.C01.safety_policy"
+        ],
+        "C02": [
+          "criteria.C02.safety_policy"
+        ],
+        "C03": [
+          "criteria.C03.safety_policy"
+        ],
+        "C04": [
+          "criteria.C04.safety_policy"
+        ],
+        "C05": [
+          "criteria.C05.safety_policy"
+        ],
+        "C06": [
+          "criteria.C06.safety_policy"
+        ],
+        "C07": [
+          "criteria.C07.safety_policy"
+        ],
+        "C08": [
+          "criteria.C08.safety_policy"
+        ],
+        "C09": [
+          "criteria.C09.safety_policy"
+        ],
+        "C10": [
+          "criteria.C10.safety_policy"
+        ],
+        "C11": [
+          "criteria.C11.safety_policy"
+        ],
+        "C12": [
+          "criteria.C12.safety_policy"
+        ],
+        "X01": [
+          "criteria.X01.safety_policy"
+        ],
+        "X02": [
+          "criteria.X02.safety_policy"
+        ],
+        "X03": [
+          "criteria.X03.safety_policy"
+        ],
+        "X04": [
+          "criteria.X04.safety_policy"
+        ],
+        "X05": [
+          "criteria.X05.safety_policy"
+        ],
+        "X06": [
+          "criteria.X06.safety_policy"
+        ],
+        "X07": [
+          "criteria.X07.safety_policy"
+        ],
+        "X08": [
+          "criteria.X08.safety_policy"
+        ]
+      },
+      "parent_read_receipts_checked": [
+        {
+          "path": "SECURITY.md",
+          "sha256": "41b0a8ea82e451f15a3d3e9bcf1ad217a0d01be0a1a73d60ff5f155bdbf956ce",
+          "bytes": 10259,
+          "lines": 133,
+          "module": "SECURITY.md",
+          "kind": "text_asset",
+          "status": "PARTIAL",
+          "evidence": [
+            "Parent complete bounded read; README truncated middle reread351–440. Contract/docs/20criteria cross-check pending; no complete review inferred from reading alone."
+          ],
+          "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+          "full_content_read": true,
+          "read_ranges": [
+            [
+              1,
+              133
+            ]
+          ],
+          "read_sha256": "41b0a8ea82e451f15a3d3e9bcf1ad217a0d01be0a1a73d60ff5f155bdbf956ce"
+        }
+      ]
+    },
+    {
+      "path": "LICENSE",
+      "kind": "manual_canonical_text",
+      "state": "REVIEWED",
+      "P_sha256": "2ceb424e7bb8031d488e006071d9f7d17e3022ae854608da161eea902ad0ad1a",
+      "W_sha256": "2ceb424e7bb8031d488e006071d9f7d17e3022ae854608da161eea902ad0ad1a",
+      "P_bytes": 523,
+      "W_bytes": 523,
+      "P_lines": 12,
+      "W_lines": 12,
+      "mode": "100644",
+      "read_ref": "b1846060af0e0632ce3f04d84b1196525ee6dbbf",
+      "read_ranges": [
+        [
+          1,
+          12
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pの番号付き分割全文read、切断なし。全6fileを今回fresh read。親全文receiptのSHA一致を照合したがPARTIAL契約評価はそのまま完成扱いせず今回20観点を評価。",
+      "modules": [
+        "license"
+      ],
+      "responsibility": "proprietary著作権・許可/利用責任の宣言。",
+      "callers": [
+        "README.md:535",
+        "配布物受領者"
+      ],
+      "criteria": {
+        "C01": [
+          "criteria.C01.license"
+        ],
+        "C02": [
+          "criteria.C02.license"
+        ],
+        "C03": [
+          "criteria.C03.license"
+        ],
+        "C04": [
+          "criteria.C04.license"
+        ],
+        "C05": [
+          "criteria.C05.license"
+        ],
+        "C06": [
+          "criteria.C06.license"
+        ],
+        "C07": [
+          "criteria.C07.license"
+        ],
+        "C08": [
+          "criteria.C08.license"
+        ],
+        "C09": [
+          "criteria.C09.license"
+        ],
+        "C10": [
+          "criteria.C10.license"
+        ],
+        "C11": [
+          "criteria.C11.license"
+        ],
+        "C12": [
+          "criteria.C12.license"
+        ],
+        "X01": [
+          "criteria.X01.license"
+        ],
+        "X02": [
+          "criteria.X02.license"
+        ],
+        "X03": [
+          "criteria.X03.license"
+        ],
+        "X04": [
+          "criteria.X04.license"
+        ],
+        "X05": [
+          "criteria.X05.license"
+        ],
+        "X06": [
+          "criteria.X06.license"
+        ],
+        "X07": [
+          "criteria.X07.license"
+        ],
+        "X08": [
+          "criteria.X08.license"
+        ]
+      },
+      "parent_read_receipts_checked": [
+        {
+          "path": "LICENSE",
+          "sha256": "2ceb424e7bb8031d488e006071d9f7d17e3022ae854608da161eea902ad0ad1a",
+          "bytes": 523,
+          "lines": 12,
+          "module": "LICENSE",
+          "kind": "text_asset",
+          "status": "PARTIAL",
+          "evidence": [
+            "Parent complete bounded read; README truncated middle reread351–440. Contract/docs/20criteria cross-check pending; no complete review inferred from reading alone."
+          ],
+          "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+          "full_content_read": true,
+          "read_ranges": [
+            [
+              1,
+              12
+            ]
+          ],
+          "read_sha256": "2ceb424e7bb8031d488e006071d9f7d17e3022ae854608da161eea902ad0ad1a"
+        }
+      ]
+    },
+    {
+      "path": "AGENTS.md",
+      "kind": "manual_canonical_text",
+      "state": "REVIEWED",
+      "P_sha256": "891bc4420cbc7af01b0318a7a2d4f33c73e0626399ec39cdb5ff4d580fbbc171",
+      "W_sha256": "891bc4420cbc7af01b0318a7a2d4f33c73e0626399ec39cdb5ff4d580fbbc171",
+      "P_bytes": 14336,
+      "W_bytes": 14336,
+      "P_lines": 174,
+      "W_lines": 174,
+      "mode": "100644",
+      "read_ref": "b1846060af0e0632ce3f04d84b1196525ee6dbbf",
+      "read_ranges": [
+        [
+          1,
+          174
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pの番号付き分割全文read、切断なし。全6fileを今回fresh read。親全文receiptのSHA一致を照合したがPARTIAL契約評価はそのまま完成扱いせず今回20観点を評価。",
+      "modules": [
+        "agent_instructions"
+      ],
+      "responsibility": "エージェントの入口/依存・安全・所有・合成検証・生成/リリース正本規約。",
+      "callers": [
+        "repoを扱う全エージェント",
+        "CI・生成・release作業者"
+      ],
+      "criteria": {
+        "C01": [
+          "criteria.C01.agent_instructions"
+        ],
+        "C02": [
+          "criteria.C02.agent_instructions"
+        ],
+        "C03": [
+          "criteria.C03.agent_instructions"
+        ],
+        "C04": [
+          "criteria.C04.agent_instructions"
+        ],
+        "C05": [
+          "criteria.C05.agent_instructions"
+        ],
+        "C06": [
+          "criteria.C06.agent_instructions"
+        ],
+        "C07": [
+          "criteria.C07.agent_instructions"
+        ],
+        "C08": [
+          "criteria.C08.agent_instructions"
+        ],
+        "C09": [
+          "criteria.C09.agent_instructions"
+        ],
+        "C10": [
+          "criteria.C10.agent_instructions"
+        ],
+        "C11": [
+          "criteria.C11.agent_instructions"
+        ],
+        "C12": [
+          "criteria.C12.agent_instructions"
+        ],
+        "X01": [
+          "criteria.X01.agent_instructions"
+        ],
+        "X02": [
+          "criteria.X02.agent_instructions"
+        ],
+        "X03": [
+          "criteria.X03.agent_instructions"
+        ],
+        "X04": [
+          "criteria.X04.agent_instructions"
+        ],
+        "X05": [
+          "criteria.X05.agent_instructions"
+        ],
+        "X06": [
+          "criteria.X06.agent_instructions"
+        ],
+        "X07": [
+          "criteria.X07.agent_instructions"
+        ],
+        "X08": [
+          "criteria.X08.agent_instructions"
+        ]
+      },
+      "parent_read_receipts_checked": [
+        {
+          "path": "AGENTS.md",
+          "sha256": "5022b4fbc28963d7a3ba6106ae67f39cf6839be9c64c838169804268149b84a9",
+          "bytes": 14296,
+          "lines": 174,
+          "module": "AGENTS.md",
+          "kind": "text_asset",
+          "status": "PARTIAL",
+          "evidence": [
+            "担当packetの安全/契約contextとして全文read。全repoの独立レビュー済み判定ではない。"
+          ],
+          "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+          "read_ranges": [
+            [
+              1,
+              174
+            ]
+          ],
+          "packet": "docs/development/maintenance-notify-evidence.json"
+        }
+      ]
+    },
+    {
+      "path": "openwiki/INSTRUCTIONS.md",
+      "kind": "manual_canonical_text",
+      "state": "REVIEWED",
+      "P_sha256": "4d3b26ee66727baf0d69b688fcfecb70d00a1aaacf8f64bcc03f56baac71504b",
+      "W_sha256": "4d3b26ee66727baf0d69b688fcfecb70d00a1aaacf8f64bcc03f56baac71504b",
+      "P_bytes": 3237,
+      "W_bytes": 3237,
+      "P_lines": 49,
+      "W_lines": 49,
+      "mode": "100644",
+      "read_ref": "b1846060af0e0632ce3f04d84b1196525ee6dbbf",
+      "read_ranges": [
+        [
+          1,
+          49
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pの番号付き分割全文read、切断なし。全6fileを今回fresh read。親全文receiptのSHA一致を照合したがPARTIAL契約評価はそのまま完成扱いせず今回20観点を評価。",
+      "modules": [
+        "wiki_brief"
+      ],
+      "responsibility": "ユーザー作成49行のWiki生成brief。現在sourceと歴史/未受入/PHI禁止を指示。",
+      "callers": [
+        "OpenWiki更新workflow/生成利用者（今回は起動しない）"
+      ],
+      "criteria": {
+        "C01": [
+          "criteria.C01.wiki_brief"
+        ],
+        "C02": [
+          "criteria.C02.wiki_brief"
+        ],
+        "C03": [
+          "criteria.C03.wiki_brief"
+        ],
+        "C04": [
+          "criteria.C04.wiki_brief"
+        ],
+        "C05": [
+          "criteria.C05.wiki_brief"
+        ],
+        "C06": [
+          "criteria.C06.wiki_brief"
+        ],
+        "C07": [
+          "criteria.C07.wiki_brief"
+        ],
+        "C08": [
+          "criteria.C08.wiki_brief"
+        ],
+        "C09": [
+          "criteria.C09.wiki_brief"
+        ],
+        "C10": [
+          "criteria.C10.wiki_brief"
+        ],
+        "C11": [
+          "criteria.C11.wiki_brief"
+        ],
+        "C12": [
+          "criteria.C12.wiki_brief"
+        ],
+        "X01": [
+          "criteria.X01.wiki_brief"
+        ],
+        "X02": [
+          "criteria.X02.wiki_brief"
+        ],
+        "X03": [
+          "criteria.X03.wiki_brief"
+        ],
+        "X04": [
+          "criteria.X04.wiki_brief"
+        ],
+        "X05": [
+          "criteria.X05.wiki_brief"
+        ],
+        "X06": [
+          "criteria.X06.wiki_brief"
+        ],
+        "X07": [
+          "criteria.X07.wiki_brief"
+        ],
+        "X08": [
+          "criteria.X08.wiki_brief"
+        ]
+      },
+      "parent_read_receipts_checked": [
+        {
+          "path": "openwiki/INSTRUCTIONS.md",
+          "sha256": "4d3b26ee66727baf0d69b688fcfecb70d00a1aaacf8f64bcc03f56baac71504b",
+          "bytes": 3237,
+          "lines": 49,
+          "module": "openwiki",
+          "kind": "canonical-wiki-brief",
+          "status": "PARTIAL",
+          "evidence": [
+            "Whole user-authored49line brief read; no generated classification. Maintained code/docs/PHI/source/current-versus-history contracts align; parent documentation criteria pending."
+          ],
+          "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+          "full_content_read": true,
+          "read_ranges": [
+            [
+              1,
+              49
+            ]
+          ],
+          "read_sha256": "4d3b26ee66727baf0d69b688fcfecb70d00a1aaacf8f64bcc03f56baac71504b"
+        }
+      ]
+    }
+  ],
+  "criteria_names": {
+    "C01": "設計・責務・依存・文書乖離",
+    "C02": "状態・欠損・日時・境界",
+    "C03": "transaction・排他・冪等・削除",
+    "C04": "migration・旧schema・途中失敗",
+    "C05": "認証・認可・注入・暗号",
+    "C06": "PII/PHI・log/cache/export",
+    "C07": "API/CLI・上限・互換・pagination",
+    "C08": "UI・stale・二重操作・復旧・accessibility",
+    "C09": "計算量・容量・起動・費用",
+    "C10": "race/retry/queue/timeout・観測",
+    "C11": "合成テスト・偽陽性・異常・skip",
+    "C12": "runtime・依存・script・CI",
+    "X01": "配布・起動停止・旧新版・rollback",
+    "X02": "供給網・取得元・CI権限・license",
+    "X03": "backup/restore・鍵・削除復活",
+    "X04": "外部連携・主体/宛先・順序/部分",
+    "X05": "offline・容量・OS/native",
+    "X06": "AI/MCP・tool権限・承認",
+    "X07": "医療・適用日・根拠・人承認",
+    "X08": "公開Web・link/index・公開境界"
+  },
+  "criteria": {
+    "C01": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "概要→各guides/specs/SECURITYへ案内。runtime別接続を8–10行で区別するが228行のHermes同期はmode条件欠落。親へ修正引継ぎ。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "配置・native/standalone/LW・localLLM/Jev/export境界を専用安全文書へ集約。原本コードを正本として照合。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "領域/caller/互換import/bootstrap、所有分離を明示。唯一差分は7行の5→10とMCSサーバー負荷対策。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "1.0.13 section9–1111は日本語fragment compilationと人手移行履歴を含む正本。全生成除外せず全文読取。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "1.0.12以下1112–3492は日付付き歴史。oldpaths/LLM世代/当時のpreviewボタンを現在版へ転用しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "12行のproprietaryAllRightsReservedとREADME private/明示許可の責務が一致。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "49行manual正本をgenerated23ページと分離。source/tests正本、briefunknownsは自動要件ではない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "C02": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "確認済み表示≠タスク完了、取得なし≠不存在、観測時刻≠押下時刻を43–45/139/165/272–275行に保持。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "NO_MATCH/unknown/NEEDS_REVIEWを不存在・臨床安全へ変換しない。60日QC窓と最新世代/監査の条件を保持。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "取得完全性と観測≠不存在、世代/QC/公開条件はsourceへ。歴史agmsg blockは上の廃止規則により実行しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "欠損/時点/unknown/clinical不在とpartialcompleteの区別を各契約に記録。RULE_VERSION6→7はrelease時点、現8は後続fragment。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "15分(1.0.0)→夜20分(1.0.3)→常時5分(1.0.8)の履歴。現在README10分と矛盾として一括置換しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "NOT_APPLICABLE",
+        "reason": "2026 copyrightとowner名は宣言として読む。状態機械/日時計算なし。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "datedhistorical記録と現在codeを分離、未取得≠不存在、referenceprovenance/cap/ack契約。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "C03": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "保存commitとsnapshot timestamp後の既読化274行、preview→本人確定163行。実transactionはcore/ops既存SHA一致receiptを参照。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "取得完了/commit/timestamp triple、human理由receipt、owner-only原子的保存、unknown送信は再送しない契約。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "1writer/共有schema owner、承認receipt理由、snapshot timestamp、不明変更保持を指示。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "publisher atomic/receipt/hash/排他、backup原本保持、C1集合current/tombstoneと新規復元holdを説明。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "当時のsnapshot timestamp/commit/receipt/lock/atomic/idempotent発展を保存。現契約のruntime証明は別packet。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "NOT_APPLICABLE",
+        "reason": "ライセンスはtransaction/storage実装を含まず、本packetは本文不変。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "ledgercommit/完全取得/cap-clearedを既読化前提、restore状態はcode/docs正本。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "C04": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "旧snapshot・schema9・additive migrationは399–407行の生成更新注意。旧版説明はCHANGELOG当該版へ分離。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "保存されたmigration/receipt/旧cohortを付随削除せず、backup/restoreの検査とschema rollback別承認を説明。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "旧互換入口/保存形式/既存migrationを保持しforward contractを照合。linecountでledger機械分割しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "schema8→9/additive columns/index/trigger、旧snapshot保持、停止中update復旧とruntimeguardの前提を記録。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "当時schema/migration/抽出旧版/path改革・巻戻し注意を保持。historicalsourceへ現line番号を要求しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "NOT_APPLICABLE",
+        "reason": "schema/migration実装を含まない。改変/再配布許可をmigration承認へ流用しない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "旧新履歴はcurrentguideと区別、DB migration自動解放を要求しない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "C05": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "許可user/project・本人preview/confirm・no-proxy/no-redirect・receiptを説明。初回収集はAI依頼例237行で範囲確認。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "固定origin・no-proxy/no-redirect・LW署名/JWT・loopbackLLM・暗号MACと独立SHAを明示。実鍵/secret取得なし。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "no-redirect/no-proxy/human gates、SDK/asyncio許可はexactfilesだけ。恒久安全規則の変更はない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "本文grant7型/患者scope/固定宛先/人確認/暗号MAC/独立receiptを詳細に記録。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "旧authorize/本人confirm/固定origin/プロキシ拒否の意図を保存し、現API到達性の証明には使わない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "コード利用/改変/公開にはowner明示許可。現在taskのlocalaudit許可だけを適用。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "読取り・人承認・origin/reference境界を強調、私有設定/token生出力をwikiへ含めない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "C06": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "PHIのMac/3通知先/Jev/Markdown行き先を260–277行で明示。匿名化なし、fixtureは完全創作。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "PHI原本・snapshot・添付・Jev/3通知先/brain exportの漏出経路とprivate権限を説明。実データをfixtureへ使わない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "実PHI/secrets/実投稿匿名化fixture禁止、SDK統合と実MCS/LLM/Jev/Keychainを区別。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "無記録≠不在、PHI/actor・自由文をhealth/stat/exportへ出さず、別送信/鍵/保持owner判断。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "古いsanitized表現や運用由来短例を新fixtureへ再利用せず、現在は完全創作のみ。歴史を勝手に書換えない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "利用時のPHI・情報保護責任を免除する扱いにしない。患者情報は含まない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "PHI/secret原本・私有config・live結果をwikiへ入れず、合成素材だけを参照。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "C07": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "install/setup/update/doctor、3channel共通コマンド・metadata publicationのopt-inを134–152/214–250行で照合。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "Native SDK/lazy import/限定asyncio、standalone固定公式SDK、LINE WORKS固定URLと上限・署名条件を照合。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "runner対象絞りでもscripts/run_tests.sh、flat importと互換SDK入口、既存CLIを維持。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "C1v2/wirebyte/part/envelopehash、CLI旧版互換、page/cursor契約と上限。formal sectionはexact1102行body。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "旧CLI/import/notify_target/slot/旧scriptpathは版の文脈で読む。formal exporter各14版section一意検証。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "NOT_APPLICABLE",
+        "reason": "API/CLI/wire仕様は含まない。利用許可を外部API承認と読み替えない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "ページ相対link/repo://参照、nativeSlack/Discordと独立LW、限定cross-list契約を指示。standalone正本はcurrentREADME/source。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "C08": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "画像alt・明示anchor・details、LW旧button/確認画面失効107行、本人だけの確認UI。実SDK描画は本packet未実行。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "人が元投稿を確認し承認、取消/結果不明時の自動実行を停止。UI支援≠臨床完了。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "カード/画像変更はgenerator→SVG/PNG照合、stale worker反映は配備範囲だけ再起動。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "Slack current authority human receipt 1027–1031行をsweep_followups613–686とfixtureID照合。旧token更新後も新認可は必須。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "旧hold/新メニュー/confirmation世代の履歴、当時の更新時再起動注意。現在UI仕様として誤認しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "NOT_APPLICABLE",
+        "reason": "UI/アクセシビリティ機構なし。READMElicenseリンクの表示導線だけ確認。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "画面説明は創作asset、実UI動作の全受入にしない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "C09": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "取得は最大8件、actors4件、入力過大は要確認、有限予算377行。画像・未読上限を完全性保証へ転用しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "入力/出力上限・長文要確認・bounded QC/repair・未解析添付を記載。容量保証や実性能を主張しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "行数削減/大凝集module機械分割禁止。大きい履歴も本監査全文を確認。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "bounded stage/chunk budgets/metadatawatchの合成計測を本番性能と区別。N+1解消/容量保持で自動縮小しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "当時の件数・比率・計測は当時の記録、現Pの性能保証/全域reviewへ再分類しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "NOT_APPLICABLE",
+        "reason": "費用/性能/資源上限を定義しない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "必要時だけretrieval・全generatedwikipreload禁止、上限不完全と完全を分ける。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "C10": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "途中履歴再開127行、unknown配送保留411行、収集延期377行。実ネットワーク障害試験は既存source packet証拠。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "結果不明・partialの保留、no-auto retry、endpoint/timeout診断を定義。source packet3のSDK boundary receiptを再利用。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "親の統合/文書整合を別範囲で並行し成功結果を条件一致で再利用、停滞ループ禁止。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "Partial/unknown配送と再送禁止、deadline defer/cancel/backoff、restore時texthold、runtime協調停止を記載。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "未知/4xx/retry/workercrash/restoreholdの歴史を保持、公開当時詳細detailsに区切る。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "NOT_APPLICABLE",
+        "reason": "queue/retry/timeout機構を定義しない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "partial/cap/postackgap・取得未確認を成功にしない、サービス重複起動を要求しない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "C11": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "説明図と合成成功を実機/SDK/臨床受入から分離28/145/250/519行。今回pure local checkerの成功も全体受入ではない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "テストは完全合成、一時DB/stub、SDK実型の隔離試験≠実platform接続。文書から実サービスは起動しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "実SDK統合はpinned別lane、一時DB/stubのみ、target0やPASS≠網羅を維持。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "完全合成と未検証realAPI/SDK/モデル/human/相手側受入を多数項目に明示。過去PASS件数を今回全域proofにしない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "886等のhistoricaltest申告はその版の記録。今回PのPASSや全域coverageには数えない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "ライセンスの宣言整合を確認、法的有効性や合成test成功で権利を保証しない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "合成/実SDK/実API/realmodel受入を分離、unknownreviewitem≠自動要求。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "C12": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "installer同一interpreter案内、core最低3.10/独立recovery最低3.9、固定SDK独立venvを生成注意と導線で照合。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "core stdlibとSDK例外/独立venv/pin/3.10 runtimeをsource allowlist SHA一致と照合。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "指定lint/gates/mine/generatorチェックは現source SHA一致receipt。今回はJSONのみでRuff新規対象なし。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "最低Python/SQLite危険版/公式SDK/pinnedvenv、installerstage/WAL契約、回復Pythonの明示値をsourceへ照合。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "旧Python/Ruff/pytest/SDK/pin/LLMslotは版固有。現pin/runtimesafetyは本P5/parentIへ照合。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "LICENSEがtracked配布物でREADMEから参照されることを確認。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "install→initの二段導線、実際に選択されたPython/runtime条件をcodeで確認。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "X01": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "Installed Summary→init/check、更新はUPGRADE_AGENT、再起動はmode別導線。228行の修正は親所有。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "更新はTLS/GitHub/code execution信頼で署名tag保証なし、サービス反映は別承認。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "gateway/LW再起動は明示deploy範囲のみ。localcommitは検証済自己差分だけ。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "install→init/services、tagupgrade/reinstall、standalone旧版rollbackmode条件、watchdog独立配備を記録。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "全14releaseの順/ISO日付/section境界/歴史bytes保持をlocalcheckerで検証。build未実行。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "公開/再配布は明示許可、監査reportだけcommit。実配布を起動しない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "PathB独立接続・初回導入の同意と実機未受入を区別。generatedwiki更新workflowは起動しない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "X02": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "PRIVATE/LICENSEへ532–535行。installer公開GitHub URLは既存取得契約、ここでclone/download/公開しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "秘密をIssueへ送らず管理者へ非公開連絡、固定公式SDK取得元とrepo proprietary境界。法律判断は行わない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "公開/push/PR/merge/deployは別明示承認。managed blockのagmsgは上位廃止指示に従い非実行。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "薬剤masterのlayout/edition/terms/承認/curationは実sourceオーナー判断、SDK取得先・licenseを保持。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "旧license/pinnedsource/CI改革を歴史として保持。外部compare URLは渡航/公開を行わずlinkliteralとして記録。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "owner permission/proprietaryとREADME同一。第三者SDKlicenseの全法務判断は本12行には含まれない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "source/officialdocs/pinnedSDK根拠を優先、外部Jev既定offと公開禁止を保持。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "X03": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "303–304/343/381/425行に同一Mac日次保存限界、別媒体・鍵・独立receipt・新私有復元・同意hold。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "Encrypt-then-MAC・32byte鍵・独立receipt・私有scratch・newdirrestore/hold・cleanup別owner承認。unlink≠安全消去。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "保存済履歴を消さず復旧/backupをsourceへ、他者変更reset/stash/clean禁止。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "暗号化newdir復元・鍵/receipt別保管・hold_all理由/actor、cleanup自動化なし・RPO実機保証なし。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "旧watchdog再配置/consenthold/backup/WALはrelease時点。現restore新同意とは別契約。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "ライセンスはbackup/restore/key/deletion権限を付与しない。個別承認を保持。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "保持/backup/restoreの詳細は正式guide/spec、briefから自動削除/復元許可を作らない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "X04": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "3channel PHI配送、Hermes/standalone/LW別接続、receiptとunknown再送禁止を説明。外部実接続は未実施。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "3通知先へのPHI送信/人許可/LWCallback署名・room/domain/bot/userを説明、receipt≠閲覧・臨床完了。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "3通知先の接続所有とruntime別SDK例外。agmsgを外部通知として使わない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "C1本体/part/withdraw/receipt/partialcurrent、全3channel/unknownheld/LW201≠閲覧。合成sinkだけで送信しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "旧Discordのみ→nativeSlack→LW→standaloneの段階を時点分離。運用過去receiptを新認可へ流用しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "外部送信・API接続の新許可はない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "全3channel/off≠textoff/独立LWの説明、native接続を一般的独自REST追加へ拡張しない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "X05": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "macOS13・私有ローカルSQLite、Linux/standaloneはguideへ。複数tabのWeb状態を本READMEで保証していない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "ローカルOS/account/OpenSSL/媒体/時計を信頼し端末侵害や物理消去を保証しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "OS/hostサービスはdeployment候補、編集だけで実機適用しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "macOSrecovery最低3.9、services最低3.10、安全SQLite/WAL、standalonehost・OSの制約を保持。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "当時のMac標準Python/OS/runtime制約は歴史、現runtimeとSQLitesafe版を別正本で確認。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "NOT_APPLICABLE",
+        "reason": "OS/offline/nativeの互換保証は含まれない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "macOS/PathB/独立hostの差異をcode/docs正本へ、複数tab運用保証はない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "X06": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "ローカルLLMと任意Jevは別境界。候補AI≠人承認、canonical昇格には別human G6/calibration条件。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "Jevは既定off/明示外部本文、ローカルLLMはloopback、候補をtool実行の権限としない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "OpenWikiは必要時のみ、source/tests正本、brief unknownsは自動要求ではない。今回はgenerated23fileを読まない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "canonical request_following候補/PENDING・人手220未label・G6/capacity/calibrationとdefaultoffを分離。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "旧semantic v2/v4/shadow/昇格条件は当時の実装記録、人ラベル不足を現受入完了へ読み替えない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "NOT_APPLICABLE",
+        "reason": "AIへ秘密/PHIを送る新許可はない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "optionalcontextのみ、retrievedtextをtool実行承認へ使わない。LLM/Jevを今回呼ばない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "X07": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "候補処方/臨床完了/安全/因果を断定しない139/206–208/284–287行。医学規則変更はない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "LLM候補/医学解釈/患者安全は人判断、原本/適用日/根拠を確認。医学資料の新規解釈は対象外。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "候補≠ケア不在、人承認receipt。医学判断/制度変更をこの指示編集へ混ぜない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "原文/postedと測定日/家族/可否を分離、医療正本/臨床完了を推定しない。新医学規則は追加しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "家族・否定・計測値・臨床主張は歴史の抽出変更説明。新医学ガイドラインや診療判断ではない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "医療・介護での利用責任/適用法は運用側。医学/法的適用の助言は本監査対象でない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "原本確認・候補・医療業務判断を区別、wikiの生成要約だけで臨床安全としない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    },
+    "X08": {
+      "current_guide": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "正式check_linksで全READMEローカルtargetとexplicit anchor、details数を確認。外部URLのHTTP到達性は検査しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "safety_policy": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "公開IssueへPHI/secretを掲載しない。LW公開Callbackは承認済reverseproxy署名条件。新Web公開はしない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "agent_instructions": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "README/Releaseの生成・正式export/syncと公開境界を規定。恒久instructionsを編集しない。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_current": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "正式exportはsection、syncはsamebody/nameとtag/publicationidentity保持、README同一render。refs URLの既知validator失敗はnotifyへ引継ぎ。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "過去リンクのoldpath inlinecodeは歴史。GitHub compareとreleasehrefは公開時の参照、live HTTP未検査。",
+        "evidence_refs": [
+          "verification.contracts",
+          "verification.readme_check",
+          "related_readonly",
+          "flows"
+        ]
+      },
+      "license": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "Private repository文言とLICENSEリンク一致、publish権限を与えない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      },
+      "wiki_brief": {
+        "state": "REVIEWED",
+        "applicability": "APPLICABLE",
+        "reason": "manualbriefは公開context源だがPHI禁止。generatedmanifest/provenanceは親metadata分類を再利用し本文は読まない。",
+        "evidence_refs": [
+          "inventory",
+          "flows"
+        ]
+      }
+    }
+  },
+  "flows": {
+    "current_guide": "README導入/画面入口→mode・owner/許可user/project・本人確定→source操作→ledger/receipt/snapshot→3channel利用者。本文はguide契約、画像は完全合成説明図。",
+    "safety_policy": "SECURITY/AGENTS正本→明示範囲/PHI/secret/人承認/宛先制約→sourceと合成runner→private保存/receipt→運用ownerとagent。今回はsource実操作しない。",
+    "release_current": "日本語changes→validate/render→手動承認releasebuild（今回は未実行）→CHANGELOG section→sameversion section export/README render/identity保持sync→利用者/GitHubRelease（今回はstubのみ）。",
+    "release_history": "既存datedsection→compilerはUnreleased位置だけに新section追加→既存履歴bytes保持→version別section export/同一body同期→当時の更新条件。historicalcodepathは現runtimeへ流用しない。",
+    "license": "READMEライセンス導線→owner明示許可→許可scope localaudit→LICENSE保持→配布物利用者。",
+    "wiki_brief": "49行manualbrief→source/tests正本・PHI/secret禁止→承認済workflow生成（今回は非実行）→親metadata分類済generatedindex→必要時retrieval。"
+  },
+  "release_sections": [
+    {
+      "version": "1.0.13",
+      "date": "2026-10-05",
+      "read_range": [
+        9,
+        1111
+      ],
+      "period": "compiled_latest_release"
+    },
+    {
+      "version": "1.0.12",
+      "date": "2026-10-04",
+      "read_range": [
+        1112,
+        1154
+      ],
+      "period": "historical_dated_release"
+    },
+    {
+      "version": "1.0.11",
+      "date": "2026-10-03",
+      "read_range": [
+        1155,
+        1425
+      ],
+      "period": "historical_dated_release"
+    },
+    {
+      "version": "1.0.10",
+      "date": "2026-10-02",
+      "read_range": [
+        1426,
+        1509
+      ],
+      "period": "historical_dated_release"
+    },
+    {
+      "version": "1.0.9",
+      "date": "2026-10-01",
+      "read_range": [
+        1510,
+        1825
+      ],
+      "period": "historical_dated_release"
+    },
+    {
+      "version": "1.0.8",
+      "date": "2026-10-01",
+      "read_range": [
+        1826,
+        1986
+      ],
+      "period": "historical_dated_release"
+    },
+    {
+      "version": "1.0.7",
+      "date": "2026-09-29",
+      "read_range": [
+        1987,
+        2247
+      ],
+      "period": "historical_dated_release"
+    },
+    {
+      "version": "1.0.6",
+      "date": "2026-09-29",
+      "read_range": [
+        2248,
+        2419
+      ],
+      "period": "historical_dated_release"
+    },
+    {
+      "version": "1.0.5",
+      "date": "2026-09-28",
+      "read_range": [
+        2420,
+        2610
+      ],
+      "period": "historical_dated_release"
+    },
+    {
+      "version": "1.0.4",
+      "date": "2026-09-28",
+      "read_range": [
+        2611,
+        2822
+      ],
+      "period": "historical_dated_release"
+    },
+    {
+      "version": "1.0.3",
+      "date": "2026-09-26",
+      "read_range": [
+        2823,
+        3066
+      ],
+      "period": "historical_dated_release"
+    },
+    {
+      "version": "1.0.2",
+      "date": "2026-09-23",
+      "read_range": [
+        3067,
+        3308
+      ],
+      "period": "historical_dated_release"
+    },
+    {
+      "version": "1.0.1",
+      "date": "2026-09-22",
+      "read_range": [
+        3309,
+        3418
+      ],
+      "period": "historical_dated_release"
+    },
+    {
+      "version": "1.0.0",
+      "date": "2026-09-21",
+      "read_range": [
+        3419,
+        3492
+      ],
+      "period": "historical_dated_release"
+    }
+  ],
+  "related_readonly": [
+    {
+      "path": "scripts/development/release_notes.py",
+      "sha256": "181f9551a24a1ff8f46d3cbcc9d40443651e93eee4b9934f38f7ad0987bc6be4",
+      "read_ranges": [
+        [
+          1,
+          245
+        ]
+      ],
+      "scope": "今回consumer全文readのみ、ownerは親/semantic。編集なし。"
+    },
+    {
+      "path": "scripts/development/readme_release.py",
+      "sha256": "5d83b3ca32ff48ca968d855ee16f1b1926db96798c007636fd8ac123d0c130ab",
+      "read_ranges": [
+        [
+          1,
+          158
+        ]
+      ],
+      "scope": "今回consumer全文readのみ、ownerは親/semantic。編集なし。"
+    },
+    {
+      "path": "scripts/development/sync_release_notes.py",
+      "sha256": "fea761590871e47f7b79685006c466f02afeff4d58222b43fff549e6cb1661fa",
+      "read_ranges": [
+        [
+          1,
+          122
+        ]
+      ],
+      "scope": "今回consumer全文readのみ、ownerは親/semantic。編集なし。"
+    },
+    {
+      "path": "docs/development/readme-review.json",
+      "sha256": "b68cca16cf73b155b2edd3d0a0d31e699586e4815345e941262df9844a97f9d6",
+      "read_ranges": [
+        [
+          1,
+          100
+        ]
+      ],
+      "scope": "今回consumer全文readのみ、ownerは親/semantic。編集なし。"
+    },
+    {
+      "path": "mcs/ops/mcs_cli.py",
+      "sha256": "c0dbb341d57008e1c000c7efabfbc667b0d15a4aadf8f25a9e0c09fe62bebfe7",
+      "read_ranges": [
+        [
+          1,
+          107
+        ]
+      ],
+      "scope": "今回consumer全文readのみ、ownerは親/semantic。編集なし。"
+    },
+    {
+      "path": "mcs/ops/mcs_setup.py",
+      "sha256": "6f6eabf5349611fa8a0729d344f34c37576d79359b04a131710c1d17ce56db80",
+      "read_ranges": [
+        [
+          1203,
+          1227
+        ],
+        [
+          1648,
+          1705
+        ],
+        [
+          1711,
+          1801
+        ],
+        [
+          2419,
+          2429
+        ],
+        [
+          3134,
+          3160
+        ],
+        [
+          3325,
+          3385
+        ]
+      ],
+      "scope": "root契約の関連範囲readonly。全文reviewの新主張ではない。既存receiptは同一SHAだけ再利用。"
+    },
+    {
+      "path": "mcs/ops/mcs_backup.py",
+      "sha256": "b40e6eaa90e37d1400ef5d82fc7c4282b9b946ca6c0bb5f25f7439b5ccc5f50a",
+      "read_ranges": [
+        [
+          190,
+          272
+        ]
+      ],
+      "scope": "root契約の関連範囲readonly。全文reviewの新主張ではない。既存receiptは同一SHAだけ再利用。"
+    },
+    {
+      "path": "mcs/ops/mcs_restore.py",
+      "sha256": "76ad25cfb254d25608b75da247f19926255dbb8718bd2c21be6943f7b13cbff5",
+      "read_ranges": [
+        [
+          190,
+          265
+        ]
+      ],
+      "scope": "root契約の関連範囲readonly。全文reviewの新主張ではない。既存receiptは同一SHAだけ再利用。"
+    },
+    {
+      "path": "adapters/slack/actions.py",
+      "sha256": "ecd490dd85d591c2b9189fe33a3a70453a8fcb3072fa6eef1db544ab060d417b",
+      "read_ranges": [
+        [
+          613,
+          686
+        ]
+      ],
+      "scope": "root契約の関連範囲readonly。全文reviewの新主張ではない。既存receiptは同一SHAだけ再利用。"
+    },
+    {
+      "path": "mcs/ingest/health_watch.py",
+      "sha256": "981b5ab0e68ccf49bcce05e2814b1e2702408520f369ae9f43d2bc44f1050e65",
+      "read_ranges": [
+        [
+          1,
+          70
+        ]
+      ],
+      "scope": "root契約の関連範囲readonly。全文reviewの新主張ではない。既存receiptは同一SHAだけ再利用。"
+    },
+    {
+      "path": "tests/adapters/slack/test_slack_human_receipt.py",
+      "sha256": "1018c93df602910a12633809bf294feb7b66e28bf2c417b5d8adde3e440ce652",
+      "read_ranges": [
+        [
+          1,
+          65
+        ]
+      ],
+      "scope": "root契約の関連範囲readonly。全文reviewの新主張ではない。既存receiptは同一SHAだけ再利用。"
+    }
+  ],
+  "source_review_reuse": {
+    "mcs/core/ledger.py": {
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "evidence_sha256": "b28067227e6db44217653e7b9b1fe9515f4420c273fd42a0160dbfe07c77a092",
+      "source_sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          350
+        ],
+        [
+          351,
+          720
+        ],
+        [
+          721,
+          1080
+        ],
+        [
+          1081,
+          1430
+        ],
+        [
+          1431,
+          1790
+        ],
+        [
+          1791,
+          2150
+        ],
+        [
+          2151,
+          2490
+        ],
+        [
+          2491,
+          2651
+        ]
+      ],
+      "responsibility": "SQLite source/archive、移行、FTS、世代・通知意図・メタデータ・queue・snapshotとreadonly writer/reader契約。",
+      "callers": [
+        "mcs/ingest/run_check.py",
+        "mcs/ingest/init_data.py",
+        "mcs/ingest/job_ops.py",
+        "mcs/extract/v4/extract_llm.py",
+        "mcs/semantic/semantic.py",
+        "mcs/views/mcs_view.py",
+        "mcs/ops/mcs_update.py",
+        "mcs/ops/mcs_backup.py"
+      ]
+    },
+    "mcs/core/bounded_http.py": {
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "evidence_sha256": "b28067227e6db44217653e7b9b1fe9515f4420c273fd42a0160dbfe07c77a092",
+      "source_sha256": "abf4a9613b99b9a09ec75557ff0cd7fdb46a9a998d5f2bd010397ae74f2d130b",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          244
+        ]
+      ],
+      "responsibility": "stdin-only HTTP worker、宛先/認証情報境界、byte上限、deadline kill/reap。",
+      "callers": [
+        "mcs/core/local_llm.py",
+        "mcs/semantic/semantic_jev.py",
+        "mcs/ops/mcs_setup.py"
+      ]
+    },
+    "mcs/core/local_llm.py": {
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "evidence_sha256": "b28067227e6db44217653e7b9b1fe9515f4420c273fd42a0160dbfe07c77a092",
+      "source_sha256": "843fc041e37fb41a8cb452932637e75e04c4f323c1c8928eae2965465bae5917",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          260
+        ],
+        [
+          261,
+          535
+        ]
+      ],
+      "responsibility": "loopback推論、固定slot、opt-in admission、出力制限とJSON/finish_reason/usage/timings、format probe。",
+      "callers": [
+        "mcs/extract/v4/extract_llm.py",
+        "mcs/semantic/semantic.py",
+        "mcs/ops/mcs_setup.py",
+        "mcs/ingest/run_check.py"
+      ]
+    },
+    "mcs/ingest/run_check.py": {
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "evidence_sha256": "b22532f3158c9dfe544aa5675c136623ba810c790a256b01eae6e24ba55d67ec",
+      "source_sha256": "915d6784befb59fcfffae019020dac59c92fa272571dfc325c36585b283ef00d",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          250
+        ],
+        [
+          251,
+          500
+        ],
+        [
+          501,
+          750
+        ],
+        [
+          751,
+          1000
+        ],
+        [
+          1001,
+          1250
+        ],
+        [
+          1251,
+          1369
+        ],
+        [
+          1370,
+          1535
+        ],
+        [
+          1536,
+          1759
+        ],
+        [
+          1760,
+          1928
+        ]
+      ],
+      "responsibility": "unread→self_probe→backfill、durable jobs、derive/delivery/semantic/shadow、health/snapshotの共通orchestration。",
+      "callers": [
+        "deployment/scripts/mcs_check.sh",
+        "deployment/scripts/mcs_deep.sh",
+        "deployment command workers",
+        "mcs_standalone/runtime.py"
+      ]
+    },
+    "mcs/ingest/job_ops.py": {
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "evidence_sha256": "b22532f3158c9dfe544aa5675c136623ba810c790a256b01eae6e24ba55d67ec",
+      "source_sha256": "d5b64a681b8b43a7f08decf4adddcf075465c94da1cfadcc3d515b98f2fea12f",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          230
+        ],
+        [
+          231,
+          445
+        ],
+        [
+          446,
+          650
+        ],
+        [
+          651,
+          811
+        ]
+      ],
+      "responsibility": "commandの検証・commit後消費とreply/history/discovery/trickle/reconcileのdurable drain。",
+      "callers": [
+        "run_check._run_jobs/_commands_only/_consent_only",
+        "init_data.merge_full_replies",
+        "mcs_standalone/runtime.py child"
+      ]
+    },
+    "mcs/ingest/mcs_adapter.py": {
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "evidence_sha256": "b22532f3158c9dfe544aa5675c136623ba810c790a256b01eae6e24ba55d67ec",
+      "source_sha256": "c3be0fa89a12ccc357273913c53d6c779ac391debfc4b7e179979ad694ca444d",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          275
+        ],
+        [
+          276,
+          550
+        ],
+        [
+          551,
+          825
+        ],
+        [
+          826,
+          1100
+        ],
+        [
+          1101,
+          1375
+        ],
+        [
+          1376,
+          1625
+        ],
+        [
+          1626,
+          1851
+        ]
+      ],
+      "responsibility": "固定MCS HTTP/CDP・session/cache・正規化・pagination・既読化・attachment境界。",
+      "callers": [
+        "run_check",
+        "init_data",
+        "project_metadata",
+        "cross_lists",
+        "scripts/development/probe_message_metadata.py"
+      ]
+    },
+    "mcs/ingest/health_watch.py": {
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "evidence_sha256": "b22532f3158c9dfe544aa5675c136623ba810c790a256b01eae6e24ba55d67ec",
+      "source_sha256": "981b5ab0e68ccf49bcce05e2814b1e2702408520f369ae9f43d2bc44f1050e65",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          84
+        ],
+        [
+          85,
+          106
+        ],
+        [
+          107,
+          281
+        ]
+      ],
+      "responsibility": "実APIを呼ばずlocal health producerの鮮度・欠損・破損・dedupを判定。",
+      "callers": [
+        "run_check._health/_write_health",
+        "deployment/scripts/mcs_health.sh",
+        "mcs_setup health settings"
+      ]
+    },
+    "adapters/slack/actions.py": {
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "evidence_sha256": "2e10db192af9b7f55d95876593e65f7a5c7228a6a6bbd7ba70635c909f8129c6",
+      "source_sha256": "ecd490dd85d591c2b9189fe33a3a70453a8fcb3072fa6eef1db544ab060d417b",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          675
+        ]
+      ],
+      "responsibility": "workspace/app/channel/userをpinしたSlack action、modal、confirm、個別回答とUTF-8 wire境界を所有する。",
+      "callers": [
+        "adapters/slack/tasks.py:Supervisor"
+      ]
+    },
+    "adapters/slack/delivery.py": {
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "evidence_sha256": "2e10db192af9b7f55d95876593e65f7a5c7228a6a6bbd7ba70635c909f8129c6",
+      "source_sha256": "3129b7fc6753f4b83bbc2965daced330daf68b77c9d9661b621f379027245b8b",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          495
+        ]
+      ],
+      "responsibility": "既存workspace client、single-attempt snapshot、thread本文/添付とdurable part receiptのSlack境界を所有する。",
+      "callers": [
+        "adapters/slack/tasks.py:Supervisor"
+      ]
+    },
+    "adapters/slack/runtime_compat.py": {
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "evidence_sha256": "2e10db192af9b7f55d95876593e65f7a5c7228a6a6bbd7ba70635c909f8129c6",
+      "source_sha256": "cfdb6b6c57ffcf5dc1587f83b06e3104581f082ff9a10503ff6ea296d19c749d",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          113
+        ]
+      ],
+      "responsibility": "旧独立APIの署名を保持し、Web APIとSocket Modeの現行接続制約・終了処理を再利用する。",
+      "callers": [
+        "mcs_standalone/slack_runtime.py",
+        "integration/test_standalone_sdk.py"
+      ]
+    },
+    "adapters/discord/standalone.py": {
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "evidence_sha256": "2e10db192af9b7f55d95876593e65f7a5c7228a6a6bbd7ba70635c909f8129c6",
+      "source_sha256": "d51ee1d292ab6dff21b4d3dc425afc2b7038e2f07cda7c9b72c50c13fe21fb46",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          458
+        ]
+      ],
+      "responsibility": "固定SDKの独立接続、identity/channel、設定revocation、native入力とtask停止を所有する。",
+      "callers": [
+        "mcs_standalone/__main__.py",
+        "mcs_standalone sender dispatch",
+        "adapters/discord/runtime_compat.py"
+      ]
+    },
+    "adapters/discord/runtime_compat.py": {
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "evidence_sha256": "2e10db192af9b7f55d95876593e65f7a5c7228a6a6bbd7ba70635c909f8129c6",
+      "source_sha256": "ba8ca159e89c3ceb85d558bd253aefeda3d627a47fab244c9b1bd650f671054c",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          161
+        ]
+      ],
+      "responsibility": "旧独立APIの引数・戻り値を維持し、現在のSDK接続制約とsingle_postを共有する。",
+      "callers": [
+        "mcs_standalone/discord_runtime.py",
+        "integration/test_standalone_sdk.py"
+      ]
+    },
+    "mcs/ops/mcs_operations.py": {
+      "evidence": "docs/development/maintenance-core-packet4-evidence.json",
+      "evidence_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a",
+      "source_sha256": "49e4776bbb432ef62336d2465db60416724c18c598c2e6bb64e6346afccf2e0b",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          300
+        ],
+        [
+          301,
+          620
+        ],
+        [
+          621,
+          911
+        ]
+      ],
+      "responsibility": "人承認operationのvalidationとtransaction内更新、file promotion、update/restore scheduling。",
+      "callers": [
+        "mcs_requests.validate",
+        "mcs_requests.apply_command",
+        "hermes_plugin.__init__._semantic_job",
+        "mcs/views/mcs_view.py:216,303 paused"
+      ]
+    },
+    "mcs/ops/mcs_requests.py": {
+      "evidence": "docs/development/maintenance-core-packet4-evidence.json",
+      "evidence_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a",
+      "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          461
+        ]
+      ],
+      "responsibility": "bounded command解析・人承認/request revision・receipt-first適用・atomic inbox公開・現在抽出候補。",
+      "callers": [
+        "mcs/ops/mcs_cli.py via mcs_view",
+        "mcs/ingest/job_ops.py:151",
+        "mcs/notify/notify_cmds.py:351",
+        "hermes_plugin/__init__.py:897",
+        "mcs/views/mcs_view.py"
+      ]
+    },
+    "mcs/ops/mcs_signals.py": {
+      "evidence": "docs/development/maintenance-core-packet4-evidence.json",
+      "evidence_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a",
+      "source_sha256": "e28cc9450f05cd45f97d5b22576704d544675b154c12e53379f7d6e4821d2269",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          240
+        ],
+        [
+          995,
+          1075
+        ],
+        [
+          241,
+          690
+        ],
+        [
+          691,
+          1170
+        ],
+        [
+          1171,
+          1691
+        ]
+      ],
+      "responsibility": "既存医療/依頼signalの候補・状態・通知キュー、承認policyと自己/所属identity、readonly一覧。",
+      "callers": [
+        "mcs/ingest/run_check.py:1255,1523,1543",
+        "mcs/views/mcs_view.py:834",
+        "mcs/ops/c1_records.py",
+        "mcs/ops/ext_contract.py:1308",
+        "mcs_operations._apply_signal_dismiss_tx"
+      ]
+    },
+    "mcs/ops/c1_contract.py": {
+      "evidence": "docs/development/maintenance-core-packet4-evidence.json",
+      "evidence_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a",
+      "source_sha256": "7bf70b5a580d189ab6560e837be544bc0b75ab18b922c21963167d25b07308f3",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          237
+        ]
+      ],
+      "responsibility": "C1 profile/recordのstrict schemaとrestricted canonical encoding、既存wire互換。",
+      "callers": [
+        "c1_envelopes",
+        "c1_records",
+        "c1_receiver",
+        "ext_contract._validate_authorization"
+      ]
+    },
+    "mcs/ops/c1_envelopes.py": {
+      "evidence": "docs/development/maintenance-core-packet4-evidence.json",
+      "evidence_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a",
+      "source_sha256": "da302fe72935dc9a1ef79e1deabe98e8eb5f4ee9cf4df5aa17acc18a5b62f7ae",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          433
+        ]
+      ],
+      "responsibility": "同generation対のallowlist記録を容量内partsへpack、wire/collection/withdraw directive検証。",
+      "callers": [
+        "mcs/ops/ext_contract.py:1161",
+        "GovernedExporter",
+        "ReferenceReceiver.receive_wire/withdraw_wire"
+      ]
+    },
+    "mcs/ops/c1_records.py": {
+      "evidence": "docs/development/maintenance-core-packet4-evidence.json",
+      "evidence_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a",
+      "source_sha256": "21a4c2608152bd98016b2f227fa37ae410ae8687a154db7db0d31f2c1547d422",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          252
+        ]
+      ],
+      "responsibility": "公開snapshotからC1 records/body/sender classificationを組み立て、window/facts選択。",
+      "callers": [
+        "mcs/ops/ext_contract.py:1291",
+        "tests/ops/test_c1_records.py",
+        "tests/ops/test_c1_withdraw_receive.py"
+      ]
+    },
+    "mcs/ops/c1_receiver.py": {
+      "evidence": "docs/development/maintenance-core-packet4-evidence.json",
+      "evidence_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a",
+      "source_sha256": "df7844bacd994e854bcf8cfa71c7f3acff0f20b12801e48bc31d00129a7c0163",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          400
+        ],
+        [
+          401,
+          802
+        ]
+      ],
+      "responsibility": "外部実serviceではない合成reference受信、namespace私有state・flock・atomic commit・view・withdraw/expiry。",
+      "callers": [
+        "mcs/ops/ext_contract.py:_receive",
+        "tests/ops/test_c1_receiver.py",
+        "tests/ops/test_c1_withdraw_receive.py"
+      ]
+    },
+    "mcs/extract/v1/extract.py": {
+      "evidence": "docs/development/maintenance-core-packet5-evidence.json",
+      "evidence_sha256": "e84cc7e89161839cfeca3391614a634100907834ca4e820b0c900e5367aeae4c",
+      "source_sha256": "804ea91fe97aea21f251e0605dcb6767fd741a6472a7b6ce88c4e9143bdc5d85",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          260
+        ],
+        [
+          261,
+          515
+        ]
+      ],
+      "responsibility": "保存済本文のruleextract、hash/version/deadline/staleartifact更新とCLIlock。",
+      "callers": [
+        "mcs/ingest/run_check.py:1167",
+        "mcs/extract/rollup.py",
+        "mcs/core/queries.py",
+        "mcs/views/",
+        "mcs/ops/mcs_signals.py"
+      ]
+    },
+    "ci/gates.py": {
+      "evidence": "docs/development/maintenance-core-packet5-evidence.json",
+      "evidence_sha256": "e84cc7e89161839cfeca3391614a634100907834ca4e820b0c900e5367aeae4c",
+      "source_sha256": "b255b35e2affe4566ddfe75ebda6322523c97b2e00bb08686cede06ced5dea2c",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          300
+        ],
+        [
+          301,
+          531
+        ]
+      ],
+      "responsibility": "AST/literalから10のsafety/contract静的gateを実行。",
+      "callers": [
+        ".github/workflows/ci.yml",
+        "Makefile",
+        "tests/meta/test_ci_scripts.py",
+        "tests/meta/test_c1_export_gates.py"
+      ]
+    },
+    "ci/mine_gates.py": {
+      "evidence": "docs/development/maintenance-core-packet5-evidence.json",
+      "evidence_sha256": "e84cc7e89161839cfeca3391614a634100907834ca4e820b0c900e5367aeae4c",
+      "source_sha256": "7c98b6fb0d9973bdd3dc4cc3e5028cc9d8aea2f25dbd8cfa71ee126c8595154d",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          134
+        ]
+      ],
+      "responsibility": "incident idとmanifest gate/test定義存在を照合、heatmapは情報表示。",
+      "callers": [
+        ".github/workflows/ci.yml",
+        "tests/meta/test_ci_scripts.py"
+      ]
+    },
+    "integration/sdk_safety.py": {
+      "evidence": "docs/development/maintenance-core-packet5-evidence.json",
+      "evidence_sha256": "e84cc7e89161839cfeca3391614a634100907834ca4e820b0c900e5367aeae4c",
+      "source_sha256": "cabdf08366d2af2e1632539e812fc940d2d378f1d86e0c67c8e0217de043428e",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          31
+        ]
+      ],
+      "responsibility": "explicit lane開始時にrootguardを導入しsecret/HOME/process/socketを隔離。",
+      "callers": [
+        "scripts/check_pinned_sdks.sh",
+        "tests/meta/test_sdk_ci_lanes.py"
+      ]
+    },
+    "scripts/run_tests.sh": {
+      "evidence": "docs/development/maintenance-core-packet5-evidence.json",
+      "evidence_sha256": "e84cc7e89161839cfeca3391614a634100907834ca4e820b0c900e5367aeae4c",
+      "source_sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "state": "REVIEWED",
+      "full_read_receipt": [
+        [
+          1,
+          46
+        ]
+      ],
+      "responsibility": "tempHOME/env-iを設けて指定interpreterのpytestを起動、認証環境を持ち込まない。",
+      "callers": [
+        "Makefile",
+        ".github/workflows/ci.yml",
+        "scripts/check_pinned_sdks.sh"
+      ]
+    }
+  },
+  "findings": [
+    {
+      "id": "CORE6-DOC-MODE",
+      "state": "confirmed",
+      "severity": "low",
+      "path": "README.md",
+      "lines": [
+        226,
+        228
+      ],
+      "criterion": [
+        "C01",
+        "C12",
+        "X01"
+      ],
+      "cause": "mode選択の説明直後でHermes同期をSlack/Discord一般に記載し、standaloneにも必要と読める。",
+      "proof": "固定Pの_sync_gateway実関数をASTから隔離して5合成modecase実行。standalone Slack/DiscordとHermes LWはgateway非呼出、Hermes Slack/Discordだけ既存gateway確認。",
+      "repair_owner": "parent",
+      "proposal": "HermesモードのSlack/DiscordではHermesとの同期も行います。",
+      "local_patch": null,
+      "parent_followup": "親から同一文言のREADME1文修正実装済みと受領。親I commit/最終検証は別receipt。P/W正文は変更せず固定。"
+    },
+    {
+      "id": "CORE6-REFS-GATE",
+      "state": "confirmed",
+      "severity": "medium",
+      "path": "changes/maintenance-notify-packet3-lineworks-silent-20261005.json",
+      "criterion": [
+        "C07",
+        "C11",
+        "C12",
+        "X02",
+        "X08"
+      ],
+      "cause": "https公式根拠refをfragmentのrefs構文が拒否するためP release_notes.py check exit1。",
+      "proof": "verification.release_check / invalid-fragments.json、拒否1file exact。",
+      "repair_owner": "maintenance_notify packet6",
+      "local_patch": null,
+      "parent_followup": "既知のrefs URL移動fix所有へ共有、重複編集なし。P失敗を親I成功へ読み替えない。"
+    }
+  ],
+  "disproved": [
+    {
+      "id": "CORE6-HISTORY-CADENCE",
+      "state": "disproved",
+      "reason": "旧5分/夜20分/15分は日付付き版履歴で、現在guide10分・CRON_JOBS */10/deep10,40/healthdefault600と時点分離。旧値を現設定として一括置換不要。"
+    },
+    {
+      "id": "CORE6-RELEASE-GEN8",
+      "state": "disproved",
+      "reason": "1.0.13のrule6→7記録と現RULE_VERSION8の差は後続未compilefragmentで記録済。releaseprep/build/versionbumpは今回未承認。現在READMEmain説明とrelease記録を区別。"
+    },
+    {
+      "id": "CORE6-UMASK-PROMISE",
+      "state": "disproved",
+      "reason": "CHANGELOG/READMEはresidenttemplate Umask077と定期generatedplist未対応を明示。_cron_plist/standalone serviceにUmaskなしというPと矛盾しない。"
+    },
+    {
+      "id": "CORE6-SYNTHETIC-IS-LIVE",
+      "state": "disproved",
+      "reason": "currentguide/security/changelog/briefすべて合成/SDK型/実API/人ラベル/部署受入を分離。本文中のhistoricalPASSを全域v7受入に計上しない。"
+    }
+  ],
+  "verification": {
+    "contracts": {
+      "command": "/Users/yusuke/.mcs/.venv/bin/python /tmp/mcs-maintenance-core-packet6-20261005/verify_contracts.py",
+      "exit_code": 0,
+      "log": "/tmp/mcs-maintenance-core-packet6-20261005/contracts.log",
+      "script": "/tmp/mcs-maintenance-core-packet6-20261005/verify_contracts.py",
+      "result": "14release parser/section canonical body SHA f0be550d5aee55fb3083199153c8986246c9bdba716b83557031f57baa99c33e、README exact render、historicalbytes保持、in-memory sync identity保持/stale reject、gateway5case PASS。外部calls0。pytest件数ではない。"
+    },
+    "release_check": {
+      "command": "/Users/yusuke/.mcs/.venv/bin/python scripts/development/release_notes.py check",
+      "exit_code": 1,
+      "log": "/tmp/mcs-maintenance-core-packet6-20261005/release-check.log",
+      "invalid_fragments": "/tmp/mcs-maintenance-core-packet6-20261005/invalid-fragments.json",
+      "result": "HTTPSref既知1file構文拒否。FAILを保存、notifyownerに引継ぎ。"
+    },
+    "readme_check": {
+      "command": "/Users/yusuke/.mcs/.venv/bin/python scripts/development/readme_release.py --check --version 1.0.13",
+      "exit_code": 0,
+      "log": "/tmp/mcs-maintenance-core-packet6-20261005/readme-check.log",
+      "result": "生成block同一、version/review5項目/ローカルlinks/explicitanchors/details数。"
+    },
+    "environment": {
+      "python": "/Users/yusuke/.mcs/.venv/bin/python",
+      "runtime": "Python3.13.12",
+      "network": "使わない。synchronizeのrequestは完全合成in-memory関数。setup全moduleはimportせず実関数ASTだけを隔離。",
+      "real_config_or_data_reads": 0,
+      "service_calls": 0
+    },
+    "not_run": {
+      "pytest": "JSON証拠だけでcode/test差分なし。先行source packetのSHA一致結果を再利用。",
+      "ruff": "所有変更JSONのみ、Python/lint対象は変更なし。pinnedRuffの先行source証拠を再利用。",
+      "release_build": "新release準備/versionbumpは指示範囲外。string組立の完全合成counterexampleだけ。",
+      "live_export_sync": "外部gh/API操作は禁止。formal sourceとpurelocal/stubだけ確認。"
+    }
+  },
+  "byte_replay": {
+    "source_docs_unchanged": true,
+    "root_modes_unchanged": true,
+    "changed_path_expected": [
+      "docs/development/maintenance-core-packet6-evidence.json"
+    ],
+    "receipt": "/tmp/mcs-maintenance-core-packet6-20261005/byte-replay.json",
+    "patch": "/tmp/mcs-maintenance-core-packet6-20261005/P-to-W.patch",
+    "W_manifest": "/tmp/mcs-maintenance-core-packet6-20261005/W-manifest.json",
+    "method": "固定P全trackedtreeをgit archiveへ展開し、evidence-onlybinarydiffをgit apply。新証拠を含む全trackedfile SHA/byte/modeとWを照合。reportselfhashは外部receiptへ。"
+  },
+  "read_receipt": {
+    "ranges": "/tmp/mcs-maintenance-core-packet6-20261005/read-ranges.json",
+    "inventory": "/tmp/mcs-maintenance-core-packet6-20261005/P-inventory.json",
+    "source_reuse": "/tmp/mcs-maintenance-core-packet6-20261005/source-reuse.json",
+    "read_truncation": "root6file/3492CHANGELOGの全chunkは上限内、truncationなし。supplemental readme-review+inventory混合出力だけ1回cutし、readme-reviewを単独全文再読、inventoryは構造化JSON取得/SHAで照合。",
+    "sampling": false
+  },
+  "instruction_check": {
+    "AGENTS_current_sha256": "891bc4420cbc7af01b0318a7a2d4f33c73e0626399ec39cdb5ff4d580fbbc171",
+    "from_4167697_to_P": "唯一7行がMCSサーバー負荷対策/5→10の説明。managedblock/safety規則bytes変更なし。",
+    "agent_defaults": "同一全域taskで既読skillを継続適用。data/auth/canonical/sourcecompletion境界を保持。"
+  },
+  "excluded_classifications": {
+    "generated_openwiki": "親が23file/manifest9SHA/claims9構造/datedprovenance分類済、今回は本文再読/編集なし。49行manualbriefはREVIEWED。",
+    "private_dot_state": ".agent/.codex/.omo/.debug-journalはmetadata-only/private-maycontainPHI/secretの親分類を保持。内容/hooksは読取/実行なし。",
+    "runtime_artifacts": "/tmp/mcs-maintenance-core-packet6-20261005 は非機密合成検証・log・readreceipt、productsourceではない。"
+  },
+  "safety": {
+    "only_synthetic": true,
+    "secret_phi_live_access": false,
+    "child_spawn": false,
+    "push_pr_merge_deploy": false,
+    "rootdocs_instruction_edits": false,
+    "main_changes": false,
+    "reset_stash_clean_amend": false
+  },
+  "remaining": [
+    {
+      "owner": "parent",
+      "item": "README mode説明修正のcommit/I追補確認。実装済メッセージは受領、P/W固定正文は変えない。"
+    },
+    {
+      "owner": "maintenance_notify/parent",
+      "item": "refsURL移動修復のI release_notes check確認。P exit1を消さない。"
+    },
+    {
+      "owner": "parent",
+      "item": "最終固定I全体/SDK/配布archive/元checkout保全/fresh independentreview。"
+    }
+  ],
+  "acceptance_note": "6対象の内容・契約レビューは受入可能。runtime/source正本は既存SHA一致receiptとreadonlycaller照合。live/prod/医療精度/鍵保管/実復旧/外部送付を成功扱いしない。"
+}

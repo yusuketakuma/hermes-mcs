@@ -82,8 +82,11 @@ Keychain 'mcs-adapter'               MCS パスワード
 常駐: `local.mcs-cmd`（cmd drain）・`local.mcs-int`（card drain）・
 `ai.mcs.extract-drainer{,-2}`・`ai.mcs.llamaserver`・`ai.hermes.gateway`・
 `org.mcs.recovery`📋（更新 watchdog・install.sh 所有・gateway 非依存）。
-定期: cron `mcs_check`（5分）・`mcs_deep`（durable drain）・
+定期: cron `mcs_check`（10分）・`mcs_deep`（毎時10分・40分のdurable drain）・
 `mcs_llm_catchup`・`llamacpp daily restart`・`mcs_update`📋（日次）。
+
+MCSサーバーの負荷対策として、自動取得を5分から10分間隔へ変更する。
+履歴の定期取得も10分の区切りにそろえる。
 
 ## 4. 初期インストール仕様 ✅
 
@@ -138,9 +141,10 @@ launchd PATH での `hermes` 解決・`org.mcs.recovery` の導入/drift/
 `repo_path`/ロード・llama-server agent のロード）→ config 型検証 →
 Keychain・Chrome・LLM・トークン解決・launchd 4件・gateway
 supervised（discord/slack 時）→ wrapper drift の順に検証し、末尾に
-`blockers (N) — fix in this order` を出す。`doctor` は環境の事実
-（インタプリタ・hermes 解決先・repo・launchd 状態）を出してから
-`check` を実行する。`init` は壊れた config.json では停止し、
+`blockers (N) — fix in this order` を出す。現行`doctor`は読取り専用の診断で、
+`check`・Keychain・原本DBへアクセスしない。選択Python/SQLite・設定・
+配置・復旧runtimeなどの状態を出し、`not_checked`を正常扱いしない。
+LLM・サービスの追加probeは明示した範囲だけに限る。`init` は壊れた config.json では停止し、
 `--yes` 時のみ `config.json.corrupt-<ts>` へ退避して続行する。
 
 ## 5. 更新仕様 📋
@@ -202,7 +206,7 @@ supervised（discord/slack 時）→ wrapper drift の順に検証し、末尾�
 | 対象 | 方式 | 保持 | 状態 |
 |---|---|---|---|
 | ledger.db（日次） | `daily_backup`: sqlite `.backup`→tmp→`valid_mcs_db` 検証→atomic rename | 7件（`BACKUP_KEEP`） | ✅ |
-| ledger.db（暗号化 offsite） | `mcs_backup.py offsite`: 静的日次 DB→gzip→固定 OS OpenSSL→encrypt-then-MAC→復号検証→公開・SHA照合 | 承認済み `max_snapshots` の容量上限。自動 prune なし | CLI・設定/health接続実装（親側検証中）。定期登録・実機反映は未完了 |
+| ledger.db（暗号化 offsite） | `mcs_backup.py offsite`: 静的日次 DB→gzip→固定 OS OpenSSL→encrypt-then-MAC→復号検証→公開・SHA照合 | 承認済み `max_snapshots` の容量上限。自動 prune なし | CLI・設定/health・明示scheduleの接続を合成検証。実機登録・反映は未実施（[ガイド](../guides/BACKUP.md#9-定期登録の実装と実機での確認)） |
 | ledger.db（更新前） | `preupdate-<ts>.db` 同パターン・別 prefix で日次ローテーションと分離 | **参照ベース**（actionable rollback 点が参照する限り保持） | 📋 |
 | snapshot | `publish_snapshot`: backup→tmp→DELETE journal→verify→atomic rename。plugin/CCO の読取専用コピー | 単一 latest | ✅ |
 | 添付ファイル | `prune_attachments` が古い実体を削除（行は state='pruned' で name/bytes/sha256/url 残留→再DL可） | 週ポリシー | ✅ |
@@ -259,7 +263,7 @@ grace をこの仕様から補わない。`status` は私有ローカル記録�
 `health.json` がサブシステム状態を公開（`collection`/`notify`/
 `semantic`/`extract_qc`/`cards`…）。各状態の自動応答:
 
-`health_watch.py` は24時間同じ `health.tick_interval_s`（既定300秒）と
+`health_watch.py` は24時間同じ `health.tick_interval_s`（既定600秒）と
 `health.max_missed_runs`（既定2回）から古い `health.json` を判定する。
 判定基準時刻は未読収集が最後に完了した
 `unread_at`（無い旧形式では `at`）で、未読収集をしない `--jobs-only` の deep

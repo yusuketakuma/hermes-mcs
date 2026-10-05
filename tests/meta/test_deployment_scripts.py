@@ -75,13 +75,13 @@ def test_check_incomplete_alert_names_its_cause(tmp_path):
         assert out.returncode == 0 and out.stdout == want, health
 
 
-def _llama_restart(tmp_path, launchctl_body):
+def _llama_restart(tmp_path, launchctl_body, *, curl_body="exit 7\n", extra_env=None):
     """Run llamacpp_restart_if_idle.sh with stub curl (unreachable ->
     no idle wait) and a stub launchctl; returns (proc, log text)."""
     import subprocess
     bindir = tmp_path / "stub"
     bindir.mkdir(exist_ok=True)
-    (bindir / "curl").write_text("#!/bin/sh\nexit 7\n")
+    (bindir / "curl").write_text("#!/bin/sh\n" + curl_body)
     (bindir / "launchctl").write_text("#!/bin/sh\n" + launchctl_body)
     for f in bindir.iterdir():
         f.chmod(0o755)
@@ -95,7 +95,7 @@ def _llama_restart(tmp_path, launchctl_body):
     log.unlink(missing_ok=True)
     proc = subprocess.run(["bash", str(runner)],
                           env={"HOME": str(tmp_path),
-                               "PATH": "/usr/bin:/bin"},
+                               "PATH": "/usr/bin:/bin", **(extra_env or {})},
                           capture_output=True, text=True, timeout=30)
     return proc, log.read_text() if log.exists() else ""
 
@@ -117,3 +117,17 @@ def test_llama_restart_reports_failed_kickstart(tmp_path):
     proc, log = _llama_restart(tmp_path, "exit 0\n")
     assert proc.returncode == 0
     assert "restarted ai.hermes.llamacpp" in log
+
+
+def test_llama_slot_probe_bypasses_inherited_proxy(tmp_path):
+    """A localhost-only slot probe must bypass every inherited proxy."""
+    proc, log = _llama_restart(
+        tmp_path, "exit 113\n",
+        curl_body='printf "%s\\n" "$@" > "$0.args"\nprintf "[]\\n"\n',
+        extra_env={"http_proxy": "http://synthetic-proxy.invalid:8080",
+                   "ALL_PROXY": "http://synthetic-proxy.invalid:8080"})
+    assert proc.returncode == 0 and "idle" in log
+    arguments = (tmp_path / "stub/curl.args").read_text().splitlines()
+    assert "--noproxy" in arguments
+    assert arguments[arguments.index("--noproxy") + 1] == "*"
+    assert arguments[-1] == "http://127.0.0.1:8080/slots"

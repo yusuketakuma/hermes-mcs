@@ -176,7 +176,9 @@ def message_urgency(db, mid: int) -> str | None:
     return None
 
 
-def _head_lines(llm: dict, v1: dict, urgency: str | None = None) -> list[str]:
+def _head_lines(llm: dict | None, v1: dict, urgency: str | None = None) -> list[str]:
+    selected = llm is not None
+    llm = llm or {}
     lines: list[str] = []
     if urgency in URGENCY_LABEL:
         lines.append(URGENCY_LABEL[urgency])
@@ -189,7 +191,7 @@ def _head_lines(llm: dict, v1: dict, urgency: str | None = None) -> list[str]:
         lines.append("要点: " + " / ".join(p[:40] for p in pts[:3]))
     # LLM omissions can encode negation, subject or temporal exclusions.
     rule_events = _items(v1, "events")
-    if llm:
+    if selected:
         rule_events = [event for event in rule_events if event == "media_ref"]
     events = _items(llm, "events") + rule_events
     evs = list(dict.fromkeys(event for event in events
@@ -199,12 +201,14 @@ def _head_lines(llm: dict, v1: dict, urgency: str | None = None) -> list[str]:
     return lines
 
 
-def _vital_line(llm: dict, v1: dict):
+def _vital_line(llm: dict | None, v1: dict):
+    selected = llm is not None
+    llm = llm or {}
     lv = llm.get("vitals") if isinstance(llm.get("vitals"), dict) else {}
     vv = v1.get("vitals") if isinstance(v1.get("vitals"), dict) else {}
     # A missing LLM key may be an intentional subject/time exclusion.
     # Keep a reading intact; never construct a BP pair across sources.
-    vit = lv if llm else vv
+    vit = lv if selected else vv
     if not vit:
         return None
     parts = []
@@ -411,11 +415,12 @@ def structured_lines(db, mid: int) -> list[str]:
     artifact (canonical_projection shadows extract_llm).  Returns []
     when nothing usable exists (caller falls back to raw only)."""
     v1 = latest_artifact(db, "extract_v1", mid) or {}
-    llm = latest_fact_artifact(db, mid) or {}
+    selected = latest_fact_artifact(db, mid)
+    llm = selected or {}
     if not v1 and not llm:
         return []
-    lines: list[str] = _head_lines(llm, v1, message_urgency(db, mid))
-    if (line := _vital_line(llm, v1)) is not None:
+    lines: list[str] = _head_lines(selected, v1, message_urgency(db, mid))
+    if (line := _vital_line(selected, v1)) is not None:
         lines.append(line)
     if _items(llm, "labs"):
         lab_source = db.execute(

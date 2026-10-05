@@ -274,7 +274,7 @@ class View:
             for job in self.db.execute("SELECT payload,state FROM fetch_jobs WHERE project_id=? AND kind='history'", (pid,)):
                 try:
                     payload = json.loads(job["payload"])
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, RecursionError):
                     payload = {}
                 if not isinstance(payload, dict):
                     payload = {}
@@ -289,13 +289,15 @@ class View:
         The comment itself never leaves the artifact."""
         row = self.db.execute(
             "SELECT content,meta FROM artifacts WHERE kind='karte_summary' "
-            "AND project_id=? AND json_valid(content) AND json_valid(meta) "
+            "AND project_id=? "
             "ORDER BY artifact_id DESC LIMIT 1", (pid,)).fetchone()
         if not row:
             return None, None
-        content, meta = json.loads(row["content"]), json.loads(row["meta"])
-        at = meta.get("fetched_at") if isinstance(meta, dict) else None
-        empty = content.get("empty") if isinstance(content, dict) else None
+        content, meta = loads_dict(row["content"]), loads_dict(row["meta"])
+        if content is None or meta is None:
+            return None, None
+        at = meta.get("fetched_at")
+        empty = content.get("empty")
         return (at if type(at) in (int, float) else None,
                 empty if isinstance(empty, bool) else None)
 
@@ -413,7 +415,7 @@ class View:
         for row in page["items"]:
             try:
                 content = json.loads(row.pop("content") or "{}")
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError, RecursionError):
                 content = {}
             if not isinstance(content, dict):
                 content = {}
@@ -452,7 +454,7 @@ class View:
         for r in extract_feedback(self.db, pid, limit=20):
             try:
                 c = json.loads(r["content"] or "{}")
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError, RecursionError):
                 c = {}
             c = c if isinstance(c, dict) else {}
             # ids, field and state only — the note/actor stay in the ledger
@@ -502,7 +504,10 @@ class View:
         links = []
         for row in rows:
             item = dict(row)
-            item["link"] = json.loads(item.pop("content"))
+            link = loads_dict(item.pop("content"))
+            if link is None:
+                continue
+            item["link"] = link
             links.append(item)
         return links
 
@@ -621,7 +626,7 @@ class View:
                 (pid, limit)):
             try:
                 cand = json.loads(r["content"])
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError, RecursionError):
                 continue
             if not isinstance(cand, dict):
                 continue
@@ -630,7 +635,7 @@ class View:
                 origin = {}
             try:
                 candidate_meta = json.loads(r["meta"] or "{}")
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError, RecursionError):
                 candidate_meta = {}
             if not isinstance(candidate_meta, dict):
                 candidate_meta = {}
@@ -666,7 +671,7 @@ class View:
                 try:
                     ev = json.loads(e["content"])
                     meta = json.loads(e["meta"] or "{}")
-                except (json.JSONDecodeError, TypeError):
+                except (json.JSONDecodeError, TypeError, RecursionError):
                     continue
                 if not isinstance(ev, dict):
                     continue
@@ -729,7 +734,10 @@ class View:
                               (command_id, project)).fetchone()
         if row is None:
             return {"outcome": "not_processed_or_not_in_snapshot"}
-        return json.loads(row["receipt_json"])
+        receipt = loads_dict(row["receipt_json"])
+        if receipt is None:
+            return {"outcome": "rejected", "error": "receipt_corrupt"}
+        return receipt
 
     def notification_receipt(self, command_id, payload_hash=None,
                              context=None):
@@ -757,7 +765,7 @@ class View:
             return {"outcome": "rejected", "error": "command_id_conflict"}
         try:
             receipt = json.loads(row["receipt_json"])
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError, RecursionError):
             receipt = None
         if not isinstance(receipt, dict):
             return {"outcome": "rejected", "error": "receipt_corrupt"}

@@ -12,9 +12,107 @@ import ext_contract as ext
 from test_ext_contract import NOW, _auth, _records
 
 
+@pytest.mark.parametrize("racing_kind", ["file", "symlink", "absent"])
+def test_receive_never_replaces_a_receipt_created_during_processing(
+        tmp_path, monkeypatch, capsys, racing_kind):
+    from c1_receiver import ReferenceReceiver
+    from ext_fixtures import generate
+
+    monkeypatch.setattr(ext.time, "time", lambda: 1_790_000_000.5)
+    source = tmp_path / "input.json"
+    source.write_bytes(generate()["accepted/01-basic.json"])
+    receipts = tmp_path / "receipts.ndjson"
+    foreign = tmp_path / "foreign.txt"
+    foreign.write_text("SYNTHETIC unrelated asset")
+    expire = ReferenceReceiver.expire
+
+    def racing_expiry(receiver, *args, **kwargs):
+        result = expire(receiver, *args, **kwargs)
+        if racing_kind == "file":
+            receipts.write_text("SYNTHETIC concurrent receipt")
+        elif racing_kind == "symlink":
+            receipts.symlink_to(foreign)
+        return result
+
+    monkeypatch.setattr(ReferenceReceiver, "expire", racing_expiry)
+    code = ext.main(["receive", "--receiver-root", str(tmp_path / "receiver"),
+                     "--source-label", "synthetic-race", "--input", str(source),
+                     "--receipts-out", str(receipts)])
+    result = json.loads(capsys.readouterr().out)
+    if racing_kind == "absent":
+        assert code == 0 and result["transport"] == {"accepted": 1}
+        assert receipts.stat().st_mode & 0o777 == 0o600
+        assert ext.parse_receipt(receipts.read_bytes())["status"] == "accepted"
+    else:
+        assert code == 1 and result["reason"] == "receipts_out_exists"
+        if racing_kind == "file":
+            assert receipts.read_text() == "SYNTHETIC concurrent receipt"
+        else:
+            assert receipts.is_symlink()
+            assert receipts.read_text() == "SYNTHETIC unrelated asset"
+        # Receipt publication failure must not erase receiver evidence.
+        receiver = ReferenceReceiver(tmp_path / "receiver", source_label="synthetic-race")
+        assert receiver.diagnostics()["counts"]["payloads"] == 1
+    assert foreign.read_text() == "SYNTHETIC unrelated asset"
+    assert not list(tmp_path.glob(".r-*"))
+
+
 @pytest.fixture(autouse=True)
 def fixed_clock(monkeypatch):
     monkeypatch.setattr(ext.time, "time", lambda: NOW)
+
+
+@pytest.mark.parametrize("linked", [False, True])
+def test_receive_directory_input_rejects_only_a_linked_root(
+        tmp_path, monkeypatch, capsys, linked):
+    from ext_fixtures import generate
+
+    monkeypatch.setattr(ext.time, "time", lambda: 1_790_000_000.5)
+    directory = tmp_path / "input"
+    directory.mkdir()
+    source = directory / "one.json"
+    payload = generate()["accepted/01-basic.json"]
+    source.write_bytes(payload)
+    root = tmp_path / "alias"
+    if linked:
+        root.symlink_to(directory, target_is_directory=True)
+    else:
+        root = directory
+    receipts = tmp_path / "r.ndjson"
+    code = ext.main(["receive", "--receiver-root", str(tmp_path / "receiver"),
+                     "--source-label", "synthetic-directory", "--input", str(root),
+                     "--receipts-out", str(receipts)])
+    result = json.loads(capsys.readouterr().out)
+    if linked:
+        assert code == 1 and result["reason"] == "receive_input_unsafe"
+        assert not receipts.exists()
+    else:
+        assert code == 0 and result["transport"] == {"accepted": 1}
+        assert ext.parse_receipt(receipts.read_bytes())["status"] == "accepted"
+    assert source.read_bytes() == payload
+
+
+@pytest.mark.parametrize("kind", ["fifo", "symlink"])
+def test_receive_rejects_nonregular_explicit_input_without_blocking(tmp_path, kind):
+    path = tmp_path / "input.json"
+    foreign = tmp_path / "foreign.json"
+    foreign.write_text('{"synthetic":"foreign"}')
+    if kind == "fifo":
+        os.mkfifo(path)
+    else:
+        path.symlink_to(foreign)
+    receipts = tmp_path / "r.ndjson"
+    # The normal project guard permits this synthetic local CLI. The
+    # deadline detects the actual FIFO open; no writer or service is started.
+    result = subprocess.run([
+        sys.executable, ext.__file__, "receive", "--receiver-root",
+        str(tmp_path / "receiver"), "--source-label", "synthetic-input",
+        "--input", str(path), "--receipts-out", str(receipts)],
+        capture_output=True, text=True, timeout=2, check=False)
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["reason"] == "receive_input_unsafe"
+    assert not receipts.exists()
+    assert foreign.read_text() == '{"synthetic":"foreign"}'
 
 
 @pytest.fixture

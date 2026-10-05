@@ -237,7 +237,7 @@ def main(argv=None):
             for source, _ in fragments:
                 source.rename(archive / source.name)
         return 0
-    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
+    except (ValueError, OSError, RecursionError, subprocess.CalledProcessError) as exc:
         parser.exit(1, f"release notes: {exc}\n")
 
 

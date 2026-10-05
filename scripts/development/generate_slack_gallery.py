@@ -144,16 +144,23 @@ def overview():
 
 
 def notification():
-    s = Screen(2, "通知カードから、確認と担当を共有。", "確認・担当は操作記録。MCSスタンプは反応の観測で、タスク完了とは別です。", 830)
+    s = Screen(2, "通知カードから、確認と担当を共有。", "カードは件数、スレッドは投稿ごとのスタンプと押した人。", 1070)
     x, y = s.app()
     y = s.card(x, y)
     s.line(x, y + 8, 1028, y + 8)
     s.text(x, y + 45, "確認: 田中さん / 担当: 田中さん", 18, MUTED)
-    s.text(x, y + 77, "MCS 👀5 🙆2 · 自分 2投稿", 18, GREEN)
+    s.text(x, y + 77, "スタンプ 👀5 🙆2 · 自分 2投稿", 18, GREEN)
     s.actions(x, y + 105, confirmed=True)
     s.text(x, y + 171, "MCSで開く", 19, "#1264a3")
     s.text(x, y + 204, "本文・添付はスレッドに投稿済み", 17, MUTED)
     s.text(x, y + 236, "スタンプの観測は、担当引受・タスク完了の記録ではありません。", 16, MUTED)
+    s.text(x, y + 274, "スレッドの投稿ごとの表示（押下者取得を有効にした場合）", 16, GREEN, True)
+    s.rect(x, y + 290, 788, 178, "#f3f6f4", 8, "#dce2dd")
+    s.text(x + 18, y + 321, "10-01 09:40 佐藤さん（訪問看護）", 17, MUTED)
+    s.text(x + 18, y + 353, "スタンプ 👀2 🙆1 · 観測 10-01 10:00", 18, GREEN)
+    s.paragraph(x + 18, y + 385, "押した人: 👀 田中 花子、佐藤 一郎 / 🙆 鈴木 太郎（自分） · 観測 10-01 10:00", 752, 17)
+    s.text(x + 18, y + 444, "次回訪問時に残薬を確認してください。", 18)
+    s.text(x, y + 489, "観測は取得した時点。スタンプを押した時刻ではありません。", 15, MUTED)
     return s.finish()
 
 
@@ -303,6 +310,9 @@ def verify_png(path, svg):
     decoder = zlib.decompressobj()
     raw = decoder.decompress(b"".join(compressed), raw_size + 1)
     if len(raw) != raw_size or not decoder.eof or decoder.unused_data:
+        raise ValueError(f"invalid PNG image data: {path.name}")
+    stride = 1 + width * (3 if color == 2 else 4)
+    if any(raw[offset] > 4 for offset in range(0, raw_size, stride)):
         raise ValueError(f"invalid PNG image data: {path.name}")
 
 

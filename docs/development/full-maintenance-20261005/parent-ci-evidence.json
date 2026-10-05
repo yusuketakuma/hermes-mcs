@@ -1,0 +1,344 @@
+{
+  "packet": "parent-ci-guard-wiring",
+  "input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+  "status": "PARTIAL",
+  "confirmed": [
+    {
+      "id": "ci-hermes-missing-lane-guards",
+      "priority": "medium",
+      "evidence": ".github/workflows/ci.yml:144 originally ran the companion runner directly; scripts/check_pinned_sdks.sh hermes is the entry that loads sdk_safety, checks distribution versions and imported source, and rejects missing collection.",
+      "repair": "Use the same isolated guarded Hermes lane in CI; select pinned interpreter/source/reference from the checked-out companion, with no extra external checkout.",
+      "before": {
+        "log": "/tmp/mcs-maintenance-ci-before.log",
+        "exit": 1,
+        "failed": 1,
+        "passed": 2
+      },
+      "after": {
+        "log": "/tmp/mcs-maintenance-ci-final.log",
+        "exit": 0,
+        "passed": 51,
+        "skipped": 0
+      },
+      "commands": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/meta/test_sdk_ci_lanes.py tests/meta/test_ci_scripts.py tests/meta/test_integration_guard_load.py integration/test_integration_guards.py",
+      "environment": "Python3.13.12; runner env-i and synthetic temporary HOME; zero-collection adversary exercised both SDK lanes.",
+      "limits": "Workflow itself was not executed on GitHub. Pinned SDK integration on the final integrated I remains required."
+    }
+  ],
+  "disproved": [
+    {
+      "hypothesis": "CI forbidden-path regex escaping might miss .env/config.json/token_cache.json",
+      "evidence": "Extracted the actual shell expression and ran it against a wholly synthetic temporary Git index. All forbidden fixtures were detected. No repair justified."
+    }
+  ],
+  "checks": {
+    "C01": {
+      "status": "PARTIAL",
+      "evidence": "CI command ownership and shared guard caller traced; release generator consumers still awaiting full audit."
+    },
+    "C02": {
+      "status": "verified",
+      "evidence": "Guard rejects missing or zero collected SDK tests; synthetic negative regression for both lanes."
+    },
+    "C03": {
+      "status": "PARTIAL",
+      "evidence": "Workflow concurrency and serialized release writes inspected; remote write idempotence belongs to sync_release_notes packet."
+    },
+    "C04": {
+      "status": "not_applicable",
+      "reason": "This packet changes no stored schema/migration; core owner covers DB migration."
+    },
+    "C05": {
+      "status": "verified",
+      "evidence": "CI permissions read-only default; writes only named existing jobs, trusted triggers; credential values not retrieved. Test process guards use isolated HOME and guarded live endpoints."
+    },
+    "C06": {
+      "status": "PARTIAL",
+      "evidence": "Synthetic tracked-path scan and test env cleanup checked; OpenWiki external workflow/tracing is read-only reviewed here, existing authorized execution not started."
+    },
+    "C07": {
+      "status": "verified",
+      "evidence": "check_pinned_sdks requires explicit lane and Hermes immutable source/reference; metadata checks actual installed pins and imported source."
+    },
+    "C08": {
+      "status": "not_applicable",
+      "reason": "No interactive UI in this CI wiring packet."
+    },
+    "C09": {
+      "status": "verified",
+      "evidence": "SDK archive verification is bounded by subprocess timeout; no new periodic runtime work or dependency added."
+    },
+    "C10": {
+      "status": "PARTIAL",
+      "evidence": "CI concurrency/guard restore ordering inspected; subprocess child safety must also be evaluated in scripts/installer packets."
+    },
+    "C11": {
+      "status": "verified",
+      "evidence": "Before-fail/after-pass plus zero-test adversary; failed generator check caused by added test-file count was corrected via generator, not weakened."
+    },
+    "C12": {
+      "status": "verified",
+      "evidence": "Closed CI/local SDK lane difference; exact SDK distribution/source assertions now reachable from both lanes. No core dependencies added. Ruff0.16.10 passed for authored regression; git diff --check passed."
+    },
+    "X01": {
+      "status": "PARTIAL",
+      "evidence": "No deploy or cloud run; isolated distribution/import checks required after full candidate integration."
+    },
+    "X02": {
+      "status": "PARTIAL",
+      "evidence": "Action SHAs and dependency pins read; companion reference checks committed Git archive. Vendor license/remaining supply-chain consumers not yet fully audited."
+    },
+    "X03": {
+      "status": "not_applicable",
+      "reason": "CI repair has no user backup/restore/deletion code. Authorized cleanup of two original untracked residuals has separate private receipt."
+    },
+    "X04": {
+      "status": "PARTIAL",
+      "evidence": "SDK identity and protocol boundaries checked at guard entry; external adapter routes owned by later packets."
+    },
+    "X05": {
+      "status": "PARTIAL",
+      "evidence": "Local validation on macOS only, configured CI Ubuntu source inspected. SDK source/archive semantics platform-neutral; whole distribution OS paths still awaiting packet."
+    },
+    "X06": {
+      "status": "PARTIAL",
+      "evidence": "No model/tool/environment changes or live LLM access. OpenWiki generated instructions/tracing execution not performed; generation boundary recorded."
+    },
+    "X07": {
+      "status": "not_applicable",
+      "reason": "No clinical/financial rule changed; clinical source/approval contracts belong to extract/evaluation packet."
+    },
+    "X08": {
+      "status": "not_applicable",
+      "reason": "No public Web site/form or publication request; GitHub writes/deploy explicitly not executed."
+    }
+  },
+  "remaining": [
+    "Full release/generator consumers",
+    "Full ci/gates-coverage.json and historical run records",
+    "Final I SDK/distribution checks",
+    "Fresh-context independent review"
+  ],
+  "full_read_files": [
+    {
+      "path": "conftest.py",
+      "sha256": "a1066a51c68082f7b65e346cef21e6fe8fab7e5e2f354b1c20b0fe95a43fea3a",
+      "read_ranges": [
+        [
+          1,
+          24
+        ]
+      ]
+    },
+    {
+      "path": "integration/conftest.py",
+      "sha256": "5c51bd43d7ef4e731e8ce78def5df7201e42964ee02c68ca361deabc925b920c",
+      "read_ranges": [
+        [
+          1,
+          14
+        ]
+      ]
+    },
+    {
+      "path": "integration/sdk_safety.py",
+      "sha256": "cabdf08366d2af2e1632539e812fc940d2d378f1d86e0c67c8e0217de043428e",
+      "read_ranges": [
+        [
+          1,
+          31
+        ]
+      ]
+    },
+    {
+      "path": "integration/test_pinned_sdk_versions.py",
+      "sha256": "c83cb2c3927fef4c56d16f147cf0b160e040687f6c0cd6d423ed4f85b180f224",
+      "read_ranges": [
+        [
+          1,
+          99
+        ]
+      ]
+    },
+    {
+      "path": "integration/test_integration_guards.py",
+      "sha256": "9bce7320468ad1a32e88195c7988ab0971a77c536541a38ae5db0b53071c4ecf",
+      "read_ranges": [
+        [
+          1,
+          21
+        ]
+      ]
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256": "4d9b63c62c42873bd9ee00d7c6d251c866cc44191ed2c7d16c13ab195b0ac452",
+      "read_ranges": [
+        [
+          1,
+          237
+        ]
+      ]
+    },
+    {
+      "path": "tests/meta/test_ci_scripts.py",
+      "sha256": "20d17b93801f37372e66d95085363ae8f6fa4e09f45651efa2a907f07f4d5044",
+      "read_ranges": [
+        [
+          1,
+          316
+        ]
+      ]
+    },
+    {
+      "path": "tests/meta/test_integration_guard_load.py",
+      "sha256": "bbc6cf9d19926617e890a954e03938e596abaa0a353983ad6ecdf416b1244b35",
+      "read_ranges": [
+        [
+          1,
+          23
+        ]
+      ]
+    },
+    {
+      "path": "ci/gates.py",
+      "sha256": "8fb9cef7f1922c65ac5ca1770285ec414adbb43e7161a4c23c4377c69bfa9d71",
+      "read_ranges": [
+        [
+          1,
+          531
+        ]
+      ]
+    },
+    {
+      "path": "ci/mine_gates.py",
+      "sha256": "53ccb76ed95b9a04a0f465611c8ae1451cc390b8d1043ca31d20c07c4e1be60e",
+      "read_ranges": [
+        [
+          1,
+          134
+        ]
+      ]
+    },
+    {
+      "path": "ci/gates-coverage.json",
+      "sha256": "920381489e8dae74a2d4272d3e8cd50c3b81e484d9bfa345d4af53d2dfc9fb64",
+      "read_ranges": [
+        [
+          1,
+          226
+        ]
+      ]
+    },
+    {
+      "path": "scripts/development/update_readme.py",
+      "sha256": "59087f2d7d7cb0d0a078f445d1aec1a23b1ef6e81f8b48d733d6e386a38fc7a3",
+      "read_ranges": [
+        [
+          1,
+          208
+        ]
+      ]
+    },
+    {
+      "path": "scripts/check_pinned_sdks.sh",
+      "sha256": "d40727c9b2ecc00b0acafa8b8584814e776a0d8b92e8011201bbf0adfb04dcf8",
+      "read_ranges": [
+        [
+          1,
+          32
+        ]
+      ]
+    },
+    {
+      "path": ".github/dependabot.yml",
+      "sha256": "2df1fe6f642eb8f3bd065e72bb8703ba5d566aaafb51fa16b760743ddb3549de",
+      "read_ranges": [
+        [
+          1,
+          18
+        ]
+      ]
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "5b73c57cef2d6b2e53f8d6785120573be91c8a209c2a18a9094500f772ff4d32",
+      "read_ranges": [
+        [
+          1,
+          150
+        ]
+      ]
+    },
+    {
+      "path": ".github/workflows/openwiki-update.yml",
+      "sha256": "0efcad155b445693eccb91344073f18894d905beb6c3951cf710f551e2702fd7",
+      "read_ranges": [
+        [
+          1,
+          88
+        ]
+      ]
+    },
+    {
+      "path": ".github/workflows/release-notes.yml",
+      "sha256": "036c8f65e7b7862bad2e2b450c0466fd19c79d148f81459487044afc3f8da2d2",
+      "read_ranges": [
+        [
+          1,
+          132
+        ]
+      ]
+    },
+    {
+      "path": "Makefile",
+      "sha256": "f49eac487c1e0d717bc95b2c5d110389f7e75cc047a67ca545bccc75dbaaad53",
+      "read_ranges": [
+        [
+          1,
+          32
+        ]
+      ]
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "6f15794655843128d500e5832ecbbd14861d796921a795aef5442332ce7d5722",
+      "read_ranges": [
+        [
+          1,
+          11
+        ]
+      ]
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "9562f8f7024eb99be176d9d498d12297b98327e88b45b20ffb6974d32d0d48e0",
+      "read_ranges": [
+        [
+          1,
+          23
+        ]
+      ]
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "read_ranges": [
+        [
+          1,
+          46
+        ]
+      ]
+    },
+    {
+      "path": "tests/meta/test_sdk_ci_lanes.py",
+      "sha256": "ec02b272cf01b6ceab60adfb0dabfb90f072511c237e96e428f5604406ea62a3",
+      "read_ranges": [
+        [
+          1,
+          37
+        ]
+      ]
+    }
+  ]
+}

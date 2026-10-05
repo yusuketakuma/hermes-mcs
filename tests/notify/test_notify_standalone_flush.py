@@ -82,6 +82,53 @@ def test_standalone_sends_without_hermes_using_sealed_json(tmp_path, monkeypatch
         "sha256": hashlib.sha256(b"synthetic").hexdigest()}]}
 
 
+@pytest.mark.parametrize("target", ["slack:C0SYNTHETIC", "discord:1000000000000000001"])
+@pytest.mark.parametrize("change", ["before_fingerprint", "after_fingerprint", "untracked"])
+def test_standalone_never_reseals_replaced_or_untracked_attachment(
+        tmp_path, monkeypatch, target, change):
+    attachment = tmp_path / "data" / "attachments" / "fixture.txt"
+    attachment.parent.mkdir(parents=True)
+    attachment.write_bytes(b"synthetic")
+    cfg = {"runtime_mode": "standalone", "notify_target": target}
+    monkeypatch.setattr(notify_flush, "CONF_PATH", str(tmp_path / "config.json"))
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+    monkeypatch.setattr(notify_flush, "_hermes_exe", lambda _: "/nonexistent/hermes")
+    calls = []
+    monkeypatch.setattr(notify_flush.subprocess, "run",
+                        lambda *a, **kw: calls.append(kw["input"])
+                        or SimpleNamespace(returncode=0, stdout="", stderr=""))
+
+    def render(*args):
+        if change == "before_fingerprint":
+            attachment.write_bytes(b"different-synthetic-content")
+        return "合成通知", [("fixture.txt", str(attachment))]
+
+    monkeypatch.setattr(notify_flush, "_format_event", render)
+    fingerprint = notify_flush._delivery_fingerprint
+
+    def replace_after_fingerprint(*args):
+        value = fingerprint(*args)
+        attachment.write_bytes(b"different-synthetic-content")
+        return value
+
+    if change == "after_fingerprint":
+        monkeypatch.setattr(notify_flush, "_delivery_fingerprint", replace_after_fingerprint)
+    led = Ledger(str(tmp_path / "data" / "ledger.db"))
+    try:
+        if change != "untracked":
+            stored_attachment(led, attachment)
+        eid = led.outbox_add("run_failed", None, {})
+        result = notify_flush.flush(led)
+        assert calls == [], "unverified attachment reached the sender"
+        assert result["failed"] == 1 and result.get("uncertain", 0) == 0
+        row = led.db.execute(
+            "SELECT progress,next_try FROM notify_outbox WHERE event_id=?", (eid,)).fetchone()
+        assert json.loads(row["progress"] or "{}").get("sending") is None
+        assert row["next_try"] is not None
+    finally:
+        led.close()
+
+
 @pytest.mark.parametrize("returncode,retried", [(75, True), (1, False)])
 def test_standalone_tempfail_retries_but_unknown_holds(tmp_path, monkeypatch, returncode, retried):
     cfg = {"runtime_mode": "standalone", "notify_target": "slack:C0SYNTHETIC"}

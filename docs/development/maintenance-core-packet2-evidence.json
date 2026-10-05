@@ -1,0 +1,3435 @@
+{
+  "packet": "maintenance-core-packet2-20261005",
+  "status": "PARTIAL",
+  "P": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+  "W": "0da054fee754edb25f272a6660c0518a85dda4de",
+  "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+  "branch": "audit/maintenance-core-packet2-20261005",
+  "start_status": "clean",
+  "inventory": [
+    {
+      "path": "mcs/ingest/cross_lists.py",
+      "P_sha256": "3580d54982ca68a320ab27e765a9eaa7dbd515d8edd194378575dca83661c54a",
+      "P_lines": 389,
+      "W_sha256": "3580d54982ca68a320ab27e765a9eaa7dbd515d8edd194378575dca83661c54a",
+      "W_lines": 389,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          389
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "mentioned/bookmarkedの有界GET capture・local scope検証・独立artifact保存、既定publication off。",
+      "callers": [
+        "MCSAdapter.fetch_cross_list",
+        "cross_lists.main",
+        "mcs/views/cross_lists_view.py:get_cross_list"
+      ],
+      "flow": "CLI明示read-only-get/既存DB→run.lock+cached token→bounded fixed-snapshot walk→scope検証→cross_list artifact→gated read-only views"
+    },
+    {
+      "path": "mcs/ingest/health_watch.py",
+      "P_sha256": "82b6a98c7fb2f70ef938412768bfe1dd44af5f8f2c9105888a0ddf453a90384c",
+      "P_lines": 281,
+      "W_sha256": "981b5ab0e68ccf49bcce05e2814b1e2702408520f369ae9f43d2bc44f1050e65",
+      "W_lines": 281,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          84
+        ],
+        [
+          85,
+          106
+        ],
+        [
+          107,
+          281
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "実APIを呼ばずlocal health producerの鮮度・欠損・破損・dedupを判定。",
+      "callers": [
+        "run_check._health/_write_health",
+        "deployment/scripts/mcs_health.sh",
+        "mcs_setup health settings"
+      ],
+      "flow": "CLI HOME/cfg→local health/schema/finite timestamp検証→600秒tickと欠測2回deadline→atomic watch state/status→codes/counters alert"
+    },
+    {
+      "path": "mcs/ingest/init_data.py",
+      "P_sha256": "1f805c493495edbff6f8182af0eaf1f9ee31f251c0d4181a3eb063837ed239e7",
+      "P_lines": 238,
+      "W_sha256": "17a0d32d0eb95202c0725877ad5e4dacf9fdeee06cffd21dd52004189e500dd4",
+      "W_lines": 239,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          238
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "手動の履歴初期取込。共有writer lockとdeadline、再認証、durable cursor/floorを保持。",
+      "callers": [
+        "operator CLI mcs/ingest/init_data.py",
+        "tests/core/test_core_misc.py"
+      ],
+      "flow": "CLI有限delay/positive args→run.lock+adapter authentication→bounded pages/thread merge→Ledger source/jobs/cursor/coverage/floor→later local views/analysis、通知なし"
+    },
+    {
+      "path": "mcs/ingest/job_ops.py",
+      "P_sha256": "c9f4fd2b379274618417509b339ebedd960d9e98811b6af87858bab4729e4f92",
+      "P_lines": 811,
+      "W_sha256": "d5b64a681b8b43a7f08decf4adddcf075465c94da1cfadcc3d515b98f2fea12f",
+      "W_lines": 811,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          230
+        ],
+        [
+          231,
+          445
+        ],
+        [
+          446,
+          650
+        ],
+        [
+          651,
+          811
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "commandの検証・commit後消費とreply/history/discovery/trickle/reconcileのdurable drain。",
+      "callers": [
+        "run_check._run_jobs/_commands_only/_consent_only",
+        "init_data.merge_full_replies",
+        "mcs_standalone/runtime.py child"
+      ],
+      "flow": "MCS_ROOT cmd→restore consent/schema/receipt検証→durable job/command apply→commit後consume、取得job→bounded adapter→atomic Ledger raw/notify/semantic→later drain/views"
+    },
+    {
+      "path": "mcs/ingest/mcs_adapter.py",
+      "P_sha256": "df51a3cadf46d0eb6d73c1cd8252cdb13a05b50b3f5142875a7baa594920413d",
+      "P_lines": 1851,
+      "W_sha256": "c3be0fa89a12ccc357273913c53d6c779ac391debfc4b7e179979ad694ca444d",
+      "W_lines": 1856,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          275
+        ],
+        [
+          276,
+          550
+        ],
+        [
+          551,
+          825
+        ],
+        [
+          826,
+          1100
+        ],
+        [
+          1101,
+          1375
+        ],
+        [
+          1376,
+          1625
+        ],
+        [
+          1626,
+          1851
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "固定MCS HTTP/CDP・session/cache・正規化・pagination・既読化・attachment境界。",
+      "callers": [
+        "run_check",
+        "init_data",
+        "project_metadata",
+        "cross_lists",
+        "scripts/development/probe_message_metadata.py"
+      ],
+      "flow": "caller deadline/token→API/CDP/URL/origin gate→bounded worker→typed scope/pagination/message/metadata normalize→caller Ledger/caches/private attachment→read/notify/extract consumer"
+    },
+    {
+      "path": "mcs/ingest/mcs_worker.py",
+      "P_sha256": "c0d1946942450adc1d794128ca162f84a12761171c13de94d992d44588c28747",
+      "P_lines": 191,
+      "W_sha256": "c0d1946942450adc1d794128ca162f84a12761171c13de94d992d44588c28747",
+      "W_lines": 191,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          191
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "HTTP/CDP/downloadを1操作childに閉じ、wall deadline・容量・stdin/stdout安全化を担う。",
+      "callers": [
+        "mcs_adapter._io"
+      ],
+      "flow": "adapter envelope→allowed operation/fixed API or loopback/method→one worker bounded I/O→sanitized result via stdout/temporary attachment only→adapter validates+parent commit"
+    },
+    {
+      "path": "mcs/ingest/project_metadata.py",
+      "P_sha256": "3eb9fedad1c58c991d1e6b757d05c8d2ae3a8b9f78673e0f40ea8c11a3d330a1",
+      "P_lines": 390,
+      "W_sha256": "257afe64943606ecac5f5706af8ca0564d003156e20133b2cc613cba9bad1cfa",
+      "W_lines": 394,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          220
+        ],
+        [
+          221,
+          390
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "care_team/medication/observation/group consultationの有界構造化取得と失敗artifact保存。",
+      "callers": [
+        "MCSAdapter.fetch_project_members/fetch_observation_values/fetch_group_consultations",
+        "project_metadata.main",
+        "mcs/views/project_metadata_view.py"
+      ],
+      "flow": "explicit enabled/target patient/group/item+names opt-in→run.lock/auth GET→finite fields/snapshot/totals/scope normalize→immutable attempt artifact/old complete retained→unknown/failed/stale historical read-only view"
+    },
+    {
+      "path": "mcs/ingest/run_check.py",
+      "P_sha256": "1cf0eca3d2b3384023e9dfdee4f19147832362ea6f53c785f48f64baf0fa691a",
+      "P_lines": 1928,
+      "W_sha256": "915d6784befb59fcfffae019020dac59c92fa272571dfc325c36585b283ef00d",
+      "W_lines": 1928,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          250
+        ],
+        [
+          251,
+          500
+        ],
+        [
+          501,
+          750
+        ],
+        [
+          751,
+          1000
+        ],
+        [
+          1001,
+          1250
+        ],
+        [
+          1251,
+          1369
+        ],
+        [
+          1370,
+          1535
+        ],
+        [
+          1536,
+          1759
+        ],
+        [
+          1760,
+          1928
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "unread→self_probe→backfill、durable jobs、derive/delivery/semantic/shadow、health/snapshotの共通orchestration。",
+      "callers": [
+        "deployment/scripts/mcs_check.sh",
+        "deployment/scripts/mcs_deep.sh",
+        "deployment command workers",
+        "mcs_standalone/runtime.py"
+      ],
+      "flow": "CLI/update/consent checks→run.lock+cfg/session→prioritized bounded stages+required-stage errors→Ledger tx/outbox/jobs+snapshot+health→notifications/read-only views/health watchdog"
+    },
+    {
+      "path": "tests/ingest/ingest_testkit.py",
+      "P_sha256": "03d5831494c33b78a32a2f24d95c2efd4f1367f6d0aea7b3f095b2b9da02dde4",
+      "P_lines": 34,
+      "W_sha256": "03d5831494c33b78a32a2f24d95c2efd4f1367f6d0aea7b3f095b2b9da02dde4",
+      "W_lines": 34,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          34
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "完全合成Ledger/Message/UnreadPatient helper。",
+      "callers": [
+        "tests/ingest/",
+        "tests/core/test_core_misc.py"
+      ],
+      "dependencies": [
+        "datetime",
+        "extract_testkit",
+        "mcs_adapter",
+        "time"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_acquisition_contracts.py",
+      "P_sha256": "77a4c62fd4de1f95be36bdb02a18957530cfbcbf7db09de090b52a97dd471cec",
+      "P_lines": 453,
+      "W_sha256": "510f94d404fe632c0b7775b43b4a602adfde24a26c8ca160e9ef5c38fc9fefb0",
+      "W_lines": 496,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          220
+        ],
+        [
+          221,
+          453
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "実adapter/worker正規化へ完全合成wire replay、snapshot/partial/read条件・患者scope・初期CLI delay。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "collections",
+        "datetime",
+        "email.message",
+        "init_data",
+        "io",
+        "json",
+        "mcs_adapter",
+        "mcs_util",
+        "mcs_worker",
+        "pytest",
+        "random",
+        "sys",
+        "types",
+        "urllib.error",
+        "urllib.parse"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_adapter_wire.py",
+      "P_sha256": "6ea4a5c280329d197543bda93a236531812ad8a188a97131f5d449a20b520316",
+      "P_lines": 1434,
+      "W_sha256": "26c12487b689d48f78a2719b39083bac487be7401caab84367465201d92caf5b",
+      "W_lines": 1448,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          275
+        ],
+        [
+          276,
+          550
+        ],
+        [
+          551,
+          825
+        ],
+        [
+          826,
+          1100
+        ],
+        [
+          1101,
+          1434
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "HTTP/CDP/WS/private cache/login/URL/download/deadline/worker cleanupを合成wire/socket/processで検証。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "base64",
+        "datetime",
+        "hashlib",
+        "ingest_testkit",
+        "io",
+        "json",
+        "mcs_adapter",
+        "mcs_util",
+        "mcs_worker",
+        "pathlib",
+        "pytest",
+        "subprocess",
+        "sys",
+        "time",
+        "types",
+        "urllib.error",
+        "urllib.parse"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_cross_lists.py",
+      "P_sha256": "962d20c5472c2825b4e5a095c80ac27ace295d025f09e91a6e53bde5f47b1edd",
+      "P_lines": 339,
+      "W_sha256": "962d20c5472c2825b4e5a095c80ac27ace295d025f09e91a6e53bde5f47b1edd",
+      "W_lines": 339,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          339
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "mentioned/bookmarked契約・pagination/target/scope/保存の独立性とcached sessionを検証。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "collections",
+        "cross_lists",
+        "email.message",
+        "io",
+        "json",
+        "ledger",
+        "mcs_adapter",
+        "mcs_util",
+        "mcs_worker",
+        "os",
+        "pytest",
+        "types",
+        "typing",
+        "urllib.error",
+        "urllib.parse"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_drug_map_pipeline.py",
+      "P_sha256": "13e720e558f7aa0e071f55b3365212aea470803d224f4da9f7437507edfdd57e",
+      "P_lines": 94,
+      "W_sha256": "13e720e558f7aa0e071f55b3365212aea470803d224f4da9f7437507edfdd57e",
+      "W_lines": 94,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          94
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "合成医薬品辞書とrule extractionの収集consumerを検証。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "drug_map",
+        "extract",
+        "hashlib",
+        "ingest_testkit",
+        "json",
+        "mcs_setup",
+        "mcs_signals",
+        "rollup",
+        "run_check",
+        "types"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_fixture_synthetic.py",
+      "P_sha256": "870ab4a897e9dc0b83548a6f9731991af227a25e2993ac53b128d8d99dc94a5a",
+      "P_lines": 92,
+      "W_sha256": "870ab4a897e9dc0b83548a6f9731991af227a25e2993ac53b128d8d99dc94a5a",
+      "W_lines": 92,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          92
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "対象wire fixturesのreserved ID band・SYNTHETIC/URL・no real-data制約を検証。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "ast",
+        "pathlib",
+        "pytest",
+        "re",
+        "runpy"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_group_consultations.py",
+      "P_sha256": "47b64f165e5e766813dc4e0566919021f85b8cf08ff00a7ac9d1eabf6bdfc6d2",
+      "P_lines": 228,
+      "W_sha256": "47b64f165e5e766813dc4e0566919021f85b8cf08ff00a7ac9d1eabf6bdfc6d2",
+      "W_lines": 228,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          228
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "group scope・API query・snapshot/partial・unknown patient associationを検証。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "collections",
+        "email.message",
+        "io",
+        "json",
+        "ledger",
+        "mcs_adapter",
+        "mcs_util",
+        "mcs_worker",
+        "project_metadata",
+        "pytest",
+        "types",
+        "typing",
+        "urllib.error",
+        "urllib.parse"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_health_watch.py",
+      "P_sha256": "bf7cfa184419f0f40b5692b4a3453db80b43f7ae7f9769401c74f3404671f318",
+      "P_lines": 467,
+      "W_sha256": "d4f017bdb1705cad86cb41111ac4538deec2409aa8c3c898f089ef0b994ca69e",
+      "W_lines": 496,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          250
+        ],
+        [
+          251,
+          467
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "missing/corrupt/stale/fresh/finite/boundary/deep unread/dedup/CLI安全出力・10分契約。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "health_watch",
+        "json",
+        "pathlib",
+        "pytest",
+        "time"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_job_drain.py",
+      "P_sha256": "51fcbb0983a6615372cbba8028174614a4697dbeece94251949e76496a77dfc6",
+      "P_lines": 1576,
+      "W_sha256": "6842a5576dc6adf4534137f04faf6f41ad5fee35694d6ff0731509d33bfa1ac0",
+      "W_lines": 1615,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          560
+        ],
+        [
+          561,
+          840
+        ],
+        [
+          841,
+          1120
+        ],
+        [
+          1121,
+          1400
+        ],
+        [
+          1401,
+          1576
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "durable command/reply/history/discovery/trickle/reconcile、floor/cursor/archived、receipt/consent/atomicity、MCS_ROOT分離。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "datetime",
+        "ingest_testkit",
+        "job_ops",
+        "json",
+        "ledger",
+        "mcs_adapter",
+        "mcs_requests",
+        "mcs_update",
+        "notify_cards",
+        "notify_flush",
+        "os",
+        "pathlib",
+        "pytest",
+        "subprocess",
+        "sys",
+        "time",
+        "uuid"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_job_reasons_ingest.py",
+      "P_sha256": "d6b08c095e5182de1c39c0e2d399abd2cb47c8f364917899170bfdf2c41c2726",
+      "P_lines": 85,
+      "W_sha256": "d6b08c095e5182de1c39c0e2d399abd2cb47c8f364917899170bfdf2c41c2726",
+      "W_lines": 85,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          85
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "取得jobの失敗reasonと再試行/可視化の契約。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "ingest_testkit",
+        "job_ops",
+        "json",
+        "mcs_adapter",
+        "time"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_message_metadata.py",
+      "P_sha256": "2be63c91caccb9c5effc5957421dd102c9e508d42c7e627d67bc3ab39f9d9ebc",
+      "P_lines": 801,
+      "W_sha256": "2be63c91caccb9c5effc5957421dd102c9e508d42c7e627d67bc3ab39f9d9ebc",
+      "W_lines": 801,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          560
+        ],
+        [
+          561,
+          801
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "optional capture/shadow/publication、source/semantic isolation、bounded watch/age/target、privacy probe。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "importlib.util",
+        "json",
+        "ledger",
+        "mcs_adapter",
+        "mcs_signals",
+        "message_metadata",
+        "pathlib",
+        "pytest",
+        "run_check",
+        "sqlite3",
+        "sys",
+        "time",
+        "types"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_metadata_probe_observation.py",
+      "P_sha256": "47d4cc72d024f5879e6c51c5f38ba9d6e7fa41cebe9e7c6c145f3f585ac3fe23",
+      "P_lines": 629,
+      "W_sha256": "47d4cc72d024f5879e6c51c5f38ba9d6e7fa41cebe9e7c6c145f3f585ac3fe23",
+      "W_lines": 629,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          560
+        ],
+        [
+          561,
+          629
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "independent raw unread前後観測・snapshot/identity/pagination・安全出力・CLI defer。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "copy",
+        "importlib.util",
+        "json",
+        "mcs_adapter",
+        "pathlib",
+        "pytest",
+        "sys",
+        "types"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_metadata_probe_paging.py",
+      "P_sha256": "fdfcabb7ceaa1dfe45371979eb117740edeae686d401505fd3185623a5b156f8",
+      "P_lines": 588,
+      "W_sha256": "fdfcabb7ceaa1dfe45371979eb117740edeae686d401505fd3185623a5b156f8",
+      "W_lines": 588,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          588
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "actor pagingの2独立snapshot・counts/set変化・aggregate-only出力・CLI read-state gate。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "copy",
+        "importlib.util",
+        "json",
+        "mcs_adapter",
+        "pathlib",
+        "pytest",
+        "sys"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_metadata_probe_usage.py",
+      "P_sha256": "4317e9024dd14cc90b6f4e5a142a0632f392884a77561cb75bd3fa36cf14d386",
+      "P_lines": 341,
+      "W_sha256": "4317e9024dd14cc90b6f4e5a142a0632f392884a77561cb75bd3fa36cf14d386",
+      "W_lines": 341,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          341
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "medical karte identity dedupとgroup unit、complete/unknown/zeroの区別・CLI不確定status。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "copy",
+        "importlib.util",
+        "json",
+        "mcs_adapter",
+        "pathlib",
+        "pytest",
+        "sys",
+        "types"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_project_metadata.py",
+      "P_sha256": "be85c3319ee898b1200c9051225a19d50e8c0a4ac27e1cf9dad114336a69d897",
+      "P_lines": 298,
+      "W_sha256": "a1bc35d7bd41b8d4ad7aa7b1e84a10da900f036bb8fbdd6d63dfe63308dc0e77",
+      "W_lines": 322,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          298
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "bounded structured GET/schema/CLI/privacy/artifact失敗保持・巨大数値。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "base64",
+        "copy",
+        "json",
+        "ledger",
+        "mcs_adapter",
+        "project_metadata",
+        "pytest",
+        "time",
+        "urllib.parse"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_reaction_actors.py",
+      "P_sha256": "345332fa7496fa249dbfecabd941c8d59573c624295c85fce7c8a10bf8920476",
+      "P_lines": 477,
+      "W_sha256": "345332fa7496fa249dbfecabd941c8d59573c624295c85fce7c8a10bf8920476",
+      "W_lines": 477,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          260
+        ],
+        [
+          261,
+          477
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "reaction actor snapshot/migration/names/removed_at/freshness/retain/本体非干渉/4件cap。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "copy",
+        "json",
+        "ledger",
+        "mcs_adapter",
+        "mcs_signals",
+        "message_metadata",
+        "pytest",
+        "run_check",
+        "time",
+        "types"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_run_check_stages.py",
+      "P_sha256": "515c981f4e134d47cef775e0a7d89a2be62f9d02b9c639b0cfcfaff0c03fbde9",
+      "P_lines": 2913,
+      "W_sha256": "5ec818caf83f9dd8d327ef557610c7d067dddbc130accbe3cba7e9b9c19a28aa",
+      "W_lines": 2939,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          560
+        ],
+        [
+          561,
+          840
+        ],
+        [
+          841,
+          1120
+        ],
+        [
+          1121,
+          1400
+        ],
+        [
+          1401,
+          1680
+        ],
+        [
+          1681,
+          1960
+        ],
+        [
+          1961,
+          2240
+        ],
+        [
+          2241,
+          2520
+        ],
+        [
+          2521,
+          2800
+        ],
+        [
+          2801,
+          2913
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P全文+全P→W差分を切断なし再確認、unchanged bytesはSHA一致再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "orchestration順序、unread ack/cap/cursor/self_probe/memo/semantic/health/command/lock/errorと過深health復旧。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "errno",
+        "extract_llm",
+        "health_watch",
+        "ingest_testkit",
+        "job_ops",
+        "json",
+        "ledger",
+        "maintenance",
+        "mcs_adapter",
+        "mcs_backup",
+        "mcs_requests",
+        "mcs_setup",
+        "mcs_signals",
+        "mcs_update",
+        "mcs_util",
+        "mcs_worker",
+        "notify_cards",
+        "notify_cmds",
+        "notify_flush",
+        "os",
+        "pathlib",
+        "pytest",
+        "run_check",
+        "semantic",
+        "sqlite3",
+        "sys",
+        "time",
+        "types",
+        "unittest.mock",
+        "urllib.error",
+        "uuid"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_run_watchdog.py",
+      "P_sha256": "ba09be62a9dfec332460658a791c350a383637fcb578afe12c36a4b4859966f9",
+      "P_lines": 94,
+      "W_sha256": "ba09be62a9dfec332460658a791c350a383637fcb578afe12c36a4b4859966f9",
+      "W_lines": 94,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          94
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "合成childのwhole-run期限超過を終了させ安全kindを返す。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "faulthandler",
+        "json",
+        "ledger",
+        "os",
+        "pathlib",
+        "pytest",
+        "run_check",
+        "subprocess",
+        "sys",
+        "test_run_check_stages",
+        "types",
+        "unittest.mock"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_semantic_ingest_revisions.py",
+      "P_sha256": "e306a9036680ec8416260ac859dfc8a05c85f4dc6ee896025e2f079d08015e02",
+      "P_lines": 183,
+      "W_sha256": "e306a9036680ec8416260ac859dfc8a05c85f4dc6ee896025e2f079d08015e02",
+      "W_lines": 183,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          183
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "source generation・同一replay不活性・metadata preservation・失敗時tx rollback。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "dataclasses",
+        "json",
+        "ledger",
+        "mcs_adapter",
+        "pytest",
+        "types"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_thread_count_retry.py",
+      "P_sha256": "708d993c47da2d6f466d450ad5e2cb5960f29293a223ee3e6391a8a708d3be82",
+      "P_lines": 49,
+      "W_sha256": "708d993c47da2d6f466d450ad5e2cb5960f29293a223ee3e6391a8a708d3be82",
+      "W_lines": 49,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          49
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "thread count更新とbounded retryのterminal/body状態。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "ingest_testkit",
+        "job_ops",
+        "time"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    },
+    {
+      "path": "tests/ingest/test_thread_tombstone_gap.py",
+      "P_sha256": "c1bd116a7aaf3f7fcd0281361a38e07b4266f6d818614f69ff88ad27c3c0e287",
+      "P_lines": 31,
+      "W_sha256": "c1bd116a7aaf3f7fcd0281361a38e07b4266f6d818614f69ff88ad27c3c0e287",
+      "W_lines": 31,
+      "module": "ingest",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          31
+        ]
+      ],
+      "read_ref": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "read_method": "全内容の分割read。切断箇所は再読。サンプル縮小なし。",
+      "W_review": "P/W SHA一致、全文レビューを再利用",
+      "criteria": {
+        "C01": "criteria.C01",
+        "C02": "criteria.C02",
+        "C03": "criteria.C03",
+        "C04": "criteria.C04",
+        "C05": "criteria.C05",
+        "C06": "criteria.C06",
+        "C07": "criteria.C07",
+        "C08": "criteria.C08",
+        "C09": "criteria.C09",
+        "C10": "criteria.C10",
+        "C11": "criteria.C11",
+        "C12": "criteria.C12",
+        "X01": "criteria.X01",
+        "X02": "criteria.X02",
+        "X03": "criteria.X03",
+        "X04": "criteria.X04",
+        "X05": "criteria.X05",
+        "X06": "criteria.X06",
+        "X07": "criteria.X07",
+        "X08": "criteria.X08"
+      },
+      "responsibility": "tombstone threadのterminal扱いとcoverage gap。",
+      "callers": [
+        "scripts/run_tests.sh→pytest collection"
+      ],
+      "dependencies": [
+        "ingest_testkit",
+        "job_ops",
+        "mcs_queries",
+        "mcs_repair",
+        "time"
+      ],
+      "flow": "完全合成fixture/一時DB/stub→実装boundary→独立assertions、外部サービス接続なし"
+    }
+  ],
+  "criteria": {
+    "C01": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES",
+      "judgement": "8ソースの責務、flat import、循環境界、共通rootを確認。adapterは型参照/遅延importでcross_lists/project_metadataを呼び、job_opsは共通mcs_util.HOMEへ修復。run_checkの凝集を行数だけで分割しない。",
+      "evidence": [
+        "mcs/ingest/job_ops.py:28",
+        "mcs/ingest/mcs_adapter.py:49",
+        "mcs/ingest/run_check.py:1408",
+        "public-signatures.json"
+      ]
+    },
+    "C02": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES",
+      "judgement": "unread snapshot、body_state、coverage/floor、cap解消、cursor、complete/failed/unknown/stale、日時の有限性と境界を確認。10分producerの欠測2回猶予は1800秒、1800で正常/1801でstale、deep heartbeatはunread_atを更新しない。巨大検査数値はschema_errorとして完成artifactを保持。",
+      "evidence": [
+        "tests/ingest/test_health_watch.py",
+        "tests/ingest/test_run_check_stages.py",
+        "tests/ingest/test_project_metadata.py",
+        "tests/ingest/test_semantic_ingest_revisions.py"
+      ]
+    },
+    "C03": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES",
+      "judgement": "定期/deep/manualは共有run.lock。cmdはtransaction/receipt確定後に消費し、構文途中ファイルを保持。保存・通知intent・ジョブの原子性はcore正本と全合成のrollback検証で確認。MCS_ROOT queueをDB/lockと同じrootへ統一。archived変更時のhistory_head予約、通知重複抑止を確認。",
+      "evidence": [
+        "mcs/ingest/job_ops.py:101",
+        "mcs/ingest/run_check.py:457",
+        "tests/ingest/test_job_drain.py",
+        "tests/ingest/test_semantic_ingest_revisions.py",
+        "reused_core"
+      ]
+    },
+    "C04": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES",
+      "judgement": "ingest自身はDDL/migrationを所有せずLedgerを利用。旧v6→v7の通知backfill、malformed outbox、旧reaction actor表とreader/writer互換、途中失敗をtestsで確認。core packet1のatomic migration修復後SHAを再利用し、履歴migrationや保存内容の削除はしない。",
+      "evidence": [
+        "tests/ingest/test_job_drain.py:test_interrupted_v7_migration_reruns_backfill",
+        "tests/ingest/test_reaction_actors.py:test_actor_columns_upgrade_preserves_old_snapshot_observations",
+        "docs/development/maintenance-core-evidence.json"
+      ]
+    },
+    "C05": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES",
+      "judgement": "API固定origin/no-redirect/no-proxy、CDP loopback、private cache、loginのstate/fill/click各段で厳密origin、json.dumps埋込みを確認。raw optional project_idの異常/矛盾を共通正規化入口で拒否。既読化snapshot timestampとconfirm-human/reason/receiptの承認経路を維持。root跨ぎcommand消費を修復。実認証なし。",
+      "evidence": [
+        "mcs/ingest/mcs_adapter.py:1090",
+        "mcs/ingest/mcs_adapter.py:659",
+        "mcs/ingest/mcs_worker.py:109",
+        "tests/ingest/test_adapter_wire.py",
+        "tests/ingest/test_acquisition_contracts.py"
+      ]
+    },
+    "C06": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES",
+      "judgement": "workerはcredential/bodyをstdinで渡しstderrを捨て、例外はkind/statusだけ。healthはcounter/codeのみ、初期取込はnames/bodyを出力しない。構造化/actor保存の許可フィールドと名前opt-inを確認。canaryでprobe出力に本文・名前・ID/timestampが出ない回帰を確認。全fixture完全合成、実PHI/秘密値の読取・複製なし。",
+      "evidence": [
+        "mcs/ingest/mcs_worker.py:30",
+        "mcs/ingest/health_watch.py",
+        "tests/ingest/test_metadata_probe_observation.py",
+        "tests/ingest/test_metadata_probe_paging.py",
+        "tests/ingest/test_fixture_synthetic.py"
+      ]
+    },
+    "C07": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES",
+      "judgement": "8ソースの関数signatureはP/W同一。CLI入力、singleton medication、entity/parent ID、pagination timestamp/totals、未読keep_read_status、optional metadata劣化保持を確認。WS header最終chunkでcapを再検証し、初期取込nan/inf delayをロック/認証前に拒否。公開artifact contract/schemaは保持。",
+      "evidence": [
+        "public-signatures.json",
+        "tests/ingest/test_adapter_wire.py",
+        "tests/ingest/test_acquisition_contracts.py",
+        "tests/ingest/test_cross_lists.py",
+        "tests/ingest/test_group_consultations.py"
+      ]
+    },
+    "C08": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES_BACKEND_ONLY",
+      "judgement": "所有範囲に画面/widgetはない。health stale/deep隠蔽/dedup、structured失敗時の前回完成データ、cross-list publication disabled、shadowでsource/semantic/通知を変えない状態を確認。read-only consumerでhistorical/current_known/unknownの表示契約を照合。画面accessibility自体は他packetの所有。",
+      "evidence": [
+        "mcs/views/project_metadata_view.py:135-240 readonly",
+        "mcs/views/cross_lists_view.py:1-115 readonly",
+        "tests/views/test_project_metadata_view.py",
+        "tests/ingest/test_message_metadata.py"
+      ]
+    },
+    "C09": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES",
+      "judgement": "JSON/WS/attachment容量、run/HTTP wall deadline、履歴/reply/trickle/reconcile件数、shadow25秒/8target、actor4件、memo per-run capとcarry-overを確認。sort/fair rotation、cursor再開、probe_midによる反復抑止を保持。全ページ600秒待機やLLM予算300の一括置換はしない。性能改善率は測定していない。",
+      "evidence": [
+        "mcs/ingest/mcs_worker.py",
+        "mcs/ingest/job_ops.py",
+        "tests/ingest/test_job_drain.py",
+        "tests/ingest/test_message_metadata.py",
+        "tests/ingest/test_run_check_stages.py"
+      ]
+    },
+    "C10": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES",
+      "judgement": "Worker TimeoutExpired/BaseException時kill/reap、socket失敗cleanup、deadline伝播、429/5xx retry、SessionExpired後の部分保存とbounded relogin、durable resume、permanent discovery job、watchdogを確認。旧health過深JSONをRecursionErrorで隔離し正常再出版へ修復。event dedup/failed statusを成功へ丸めない。",
+      "evidence": [
+        "tests/ingest/test_adapter_wire.py",
+        "tests/ingest/test_run_watchdog.py",
+        "tests/ingest/test_job_drain.py",
+        "tests/ingest/test_run_check_stages.py"
+      ]
+    },
+    "C11": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES",
+      "judgement": "全21テストfile全文を確認。wire replayは実adapter/worker parserを通す完全合成opener、root回帰は独立subprocess+2合成root、migrationは一時DB。PにW回帰のみを載せた隔離環境で34失敗。既存1144passを監査証拠に読み替えず全文/異常系を確認。test弱化/skipなし。HTTPError cleanup診断3passは反証後に除去し製品修復と数えない。",
+      "evidence": [
+        "baseline-ingest.log",
+        "isolated-P-before.log",
+        "final-W.log",
+        "consumer-after.log",
+        "test_inventory"
+      ]
+    },
+    "C12": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES",
+      "judgement": "標準ライブラリだけを維持（追加math）。既存scripts/run_tests.shのenv -i/temporary HOME/MCS_TEST_SANDBOX経路、Python3.13.12、pytest9.1.1、pinned Ruff0.16.10を使用。構成/manifest/dependencyの追加なし。生成DEVELOPMENTは親owner、generator --check成功、同文書へ直接編集なし。",
+      "evidence": [
+        "scripts/run_tests.sh:1-46 readonly",
+        "final-W-ruff.log",
+        "docs-check.log",
+        "public-signatures.json"
+      ]
+    },
+    "X01": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES_BOUNDARY",
+      "judgement": "code stamp/update marker/restore consent holdで旧新worker混在を検出。standaloneはconfigured_cron_jobsを取り込みMCS_ROOTをchildへ渡す。既存明示health300を破棄せずupgradeに600操作を記録。install/update/recovery/実配布・停止再起動検証は親ownerで固定Iに必要、子workerpassをIpassへ読み替えない。",
+      "evidence": [
+        "mcs_standalone/runtime.py:1-185 readonly",
+        "mcs/ingest/run_check.py:429",
+        "changes/maintenance-ingest-cadence-20261005.json",
+        "changes/maintenance-ingest-boundaries-20261005.json"
+      ]
+    },
+    "X02": {
+      "state": "REVIEWED",
+      "applicability": "NOT_APPLICABLE",
+      "judgement": "本packetは第三者依存/lockfile、CI権限、ライセンス、配布取得元を変更しない。収集API/attachment取得元の固定allowlistはC05/X04で確認。検証toolは既存cacheのpinned Ruff。repo全体の供給網は親の別packetが担当。",
+      "evidence": [
+        "git diff P W --name-only",
+        "final-W-ruff.log"
+      ]
+    },
+    "X03": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES_BOUNDARY",
+      "judgement": "restore awaiting_consent時はops.restore_approveだけを消費し他command/取得を保留。backup/snapshotはcore正本を再利用。attachment .part処理は成功後だけfinal rename、失敗で最終既存データを消さない。deleted bodyはterminalで履歴保存を機械削除しない。",
+      "evidence": [
+        "mcs/ingest/run_check.py:1263",
+        "mcs/ingest/job_ops.py:101",
+        "tests/ingest/test_job_drain.py:test_consent_hold_defers_everything_but_restore_approve",
+        "tests/ingest/test_adapter_wire.py",
+        "reused_core"
+      ]
+    },
+    "X04": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES",
+      "judgement": "MCS APIは同一固定origin/route、bearer token、no-proxy/no-redirect。外部page scopeとsnapshotを検証し、通常messagesは完成ページのみ保持、structured/cross-list失敗は部分clinical setを公開しない。raw患者ID不一致でtenant再ラベルを修復。Slack/Discord/LINE WORKSの署名/宛先はconsumer ownerへ委譲し本packetで編集しない。",
+      "evidence": [
+        "mcs/ingest/mcs_adapter.py",
+        "mcs/ingest/cross_lists.py",
+        "mcs/ingest/project_metadata.py",
+        "tests/ingest/test_acquisition_contracts.py"
+      ]
+    },
+    "X05": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES_BOUNDARY",
+      "judgement": "stdlib fcntl/subprocess/socket、Chrome CDP、KeychainのOS境界をコード/合成stubで確認。offline/session/容量/期限/worker終了時にfailed/deferred/old completeを保持。実Chrome・Keychain・OS配備差・実SDKは起動せず親の必須検証不足として残す。browser多tabの資格情報注入はorigin再確認される。",
+      "evidence": [
+        "tests/ingest/test_adapter_wire.py",
+        "tests/ingest/test_run_watchdog.py",
+        "mcs/ingest/mcs_worker.py",
+        "mcs/ingest/mcs_adapter.py:1004-1186"
+      ]
+    },
+    "X06": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES_BOUNDARY",
+      "judgement": "run_checkのderive/semantic入口はcfgのmode/feature pauseを照合し、semantic初期化失敗を可視化してoffへ。source変更は世代を更新、metadata shadowだけではsemantic/通知を変えない。raw text/metadataからtool承認を付与せずops/request commandは人承認receipt経路。LLM/MCP実行・記憶送信なし。AI実装は他packetが所有。",
+      "evidence": [
+        "mcs/ingest/run_check.py:1155",
+        "mcs/ingest/run_check.py:1392",
+        "tests/ingest/test_semantic_ingest_revisions.py",
+        "tests/ingest/test_message_metadata.py"
+      ]
+    },
+    "X07": {
+      "state": "REVIEWED",
+      "applicability": "APPLIES",
+      "judgement": "薬剤/検査の単位・definition・sourceを保持し、巨大数値を臨床値として保存しない。group consultationの患者関連はunknown、記録不在を未対応とみなさない。structured/chat比較は未確認候補、医療判定/制度/算定規則を新たに変更しない。ops/requestの人承認条件を保持。",
+      "evidence": [
+        "mcs/ingest/project_metadata.py",
+        "tests/ingest/test_group_consultations.py",
+        "tests/views/test_project_metadata_comparison.py",
+        "tests/ingest/test_job_drain.py"
+      ]
+    },
+    "X08": {
+      "state": "REVIEWED",
+      "applicability": "NOT_APPLICABLE",
+      "judgement": "公開Webやフォーム/indexは所有範囲にない。固定MCS project URLとlocal reader導線はC05/C08で照合し、cross-list publicationは既定off。外部公開・Web配備なし。README導入/安全・公開境界は親owner。",
+      "evidence": [
+        "mcs/ingest/mcs_adapter.py:62",
+        "mcs/ingest/cross_lists.py:307",
+        "mcs/views/cross_lists_view.py:45-115 readonly"
+      ]
+    }
+  },
+  "reused_core": [
+    {
+      "path": "mcs/core/bounded_http.py",
+      "sha256": "abf4a9613b99b9a09ec75557ff0cd7fdb46a9a998d5f2bd010397ae74f2d130b",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          244
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "mcs/core/ledger.py",
+      "sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          350
+        ],
+        [
+          351,
+          720
+        ],
+        [
+          721,
+          1080
+        ],
+        [
+          1081,
+          1430
+        ],
+        [
+          1431,
+          1790
+        ],
+        [
+          1791,
+          2150
+        ],
+        [
+          2151,
+          2490
+        ],
+        [
+          2491,
+          2651
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "mcs/core/ledger_audit.py",
+      "sha256": "f4867747a344fc1942621ff7fa6b9e2e405a3131a0b1408f2f0f72b3fd27a4a1",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          233
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "mcs/core/llm_admission.py",
+      "sha256": "35a5cff1767504fa1eef2f837a6075d65e929245811a49536515bbf62a46dac1",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          270
+        ],
+        [
+          271,
+          537
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "mcs/core/local_llm.py",
+      "sha256": "843fc041e37fb41a8cb452932637e75e04c4f323c1c8928eae2965465bae5917",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          260
+        ],
+        [
+          261,
+          535
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "mcs/core/maintenance.py",
+      "sha256": "479be147dcd695ca6ca81d069bd353ffbd00e4d204f5dd6467e4430cf66f6865",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          269
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "mcs/core/mcs_queries.py",
+      "sha256": "7a6c84fc645b990d77f6838bc978559b73291e38dd5bb0d2884cb088e366fa7c",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          250
+        ],
+        [
+          251,
+          494
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "mcs/core/mcs_runtime.py",
+      "sha256": "79df8cf48f3fe5da4ee4fa0dd68a41778dcc888252d15f3ff68b349cb3dc4c60",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          38
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "mcs/core/mcs_util.py",
+      "sha256": "7bd01ea343e712d3ea24c59f92fde16cc3efa8013110810a103fec9193c1f420",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          399
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_artifact_json_guards.py",
+      "sha256": "98903fe7a29b73a8c4f10f8f95a80204d363dd849a2065d5e94babd69aa55253",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          168
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_core_misc.py",
+      "sha256": "9f2299e4903644757f6be3b1c1fee39e7956e15abfe2a813d4afddc99895f3ab",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          300
+        ],
+        [
+          301,
+          630
+        ],
+        [
+          631,
+          960
+        ],
+        [
+          961,
+          1216
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_job_reasons.py",
+      "sha256": "5e74275e3f1e904af75af603090dda941b05128a8cf2bd1c1a1e19a831b05e21",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          265
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_ledger_audit.py",
+      "sha256": "ff237bca5a243c5c79005ce9017328f860a057cce6bc6e6267665c20366f7624",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          160
+        ],
+        [
+          161,
+          306
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_ledger_candidate_validation.py",
+      "sha256": "d47dd5fea867f0bbd20aaa97b9f76f5afaeaa743d1d06273df48883d4486d7b4",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          114
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_ledger_guards.py",
+      "sha256": "99d4a80f723de45448441ca32d95758a24951b0660af0f4626747c16c8a701c3",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          223
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_ledger_recovery_contract.py",
+      "sha256": "62ce3c4f925518cf1f09227d2f2183307ee6ce5872c8a883713d6808c655c71a",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          374
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_ledger_reply_recovery.py",
+      "sha256": "08bf2d8bd7d43abfcd1b40971f00393ee675eaede4162b08822b6e86dec34c4a",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          84
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_llm_admission.py",
+      "sha256": "c93985c9b5fc4f954023e33f3c35999e263f5895ca1baabcb23b153583e5cd93",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          370
+        ],
+        [
+          371,
+          724
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_local_llm.py",
+      "sha256": "c48f548b9742e1f311ec1f4644dd2d27a20f7091cb089188ebe63c4c18da4c91",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          327
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_local_llm_deadline.py",
+      "sha256": "fe83d5ef6f456b0b03eafdfa6556bb87d897d18c37f2fb6a0cbdc6923533054c",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          149
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_maintenance_root.py",
+      "sha256": "00675df942ed139b879c95d490b16426fd6f748bb8db79e8d827e350394d2a4c",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          27
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_mcs_util.py",
+      "sha256": "1c34dd400756b57cd45563b0568739e058bf2a8b88492ca62eacf189251431c0",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          77
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_message_revisions.py",
+      "sha256": "a26cdb3de149f6465ea13dec52f6fddab6cc6732c079883f5229934bfbceb0ec",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          175
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_metadata_watch.py",
+      "sha256": "930ed8fb48f1c4d749365d3a81578fa1a0a1c7f375f858ed8b97c705b4514092",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          111
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_supported_schema_upgrade.py",
+      "sha256": "6cb3d5cdbc886109ffa901dd86bf6a5a39dbc3716b887ddf28e6f32372bc21a9",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          359
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    },
+    {
+      "path": "tests/core/test_thread_reply_pairs.py",
+      "sha256": "6d916b5854162839f6d37dbf17af73d80321ea58e95b93db34218b3a6ad50e2f",
+      "state": "REVIEWED",
+      "reuse_source": "maintenance-core-evidence.json W",
+      "previous_ranges": [
+        [
+          1,
+          65
+        ]
+      ],
+      "reuse_reason": "packet1 W SHA256と完全一致",
+      "source_evidence": "docs/development/maintenance-core-evidence.json"
+    }
+  ],
+  "findings": [
+    {
+      "id": "ING-01",
+      "status": "confirmed",
+      "resolution": "REQUESTED_CHANGE_IMPLEMENTED",
+      "priority": "P2",
+      "title": "10分取得契約にhealth producerの鮮度既定を合わせる",
+      "criteria": [
+        "C01",
+        "C02",
+        "C10",
+        "X01"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/health_watch.py"
+      ],
+      "evidence": "親指定のMCSサーバー負荷対策。default300だと正常10分producerでも900秒でstaleになり欠測許容が短くなる。600へ変更し明示300を維持。",
+      "regression": "test_deadline_derives_from_config_not_hardcode + default_ten_minute_cadence 5例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log"
+    },
+    {
+      "id": "ING-02",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P1",
+      "title": "取得endpointと異なるraw患者IDの再ラベルを拒否",
+      "criteria": [
+        "C05",
+        "C07",
+        "X04"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/mcs_adapter.py"
+      ],
+      "evidence": "P _norm_messageはoptional raw project_idを無視しrequested pidへ置換。5取得経路×不正/別pid4種の後続pageをcompleteとして保存しかねない。共通入口でrejectし前完成pageを保持。",
+      "regression": "test_conflicting_message_project_does_not_relabel_a_completed_page:20例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log"
+    },
+    {
+      "id": "ING-03",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P2",
+      "title": "巨大検査数値をschema失敗として記録し旧完成artifact保持",
+      "criteria": [
+        "C02",
+        "C07",
+        "C10",
+        "X07"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/project_metadata.py"
+      ],
+      "evidence": "math.isfinite(10**400)のOverflowErrorがMCSError境界を越えattempt artifactが書かれない。有限性conversion失敗をSchemaErrorへ変換。",
+      "regression": "test_out_of_range_number_records_failure_without_losing_complete_artifact:2例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log"
+    },
+    {
+      "id": "ING-04",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P2",
+      "title": "最終受信chunkに終端があるWS headerの容量超過拒否",
+      "criteria": [
+        "C07",
+        "C09",
+        "C10"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/mcs_adapter.py"
+      ],
+      "evidence": "P _read_untilはmarker到着前だけcapを確認し、最後のchunkでmarker到着するとover capを返す。終端idxのcapを検証。正確capと後続frameは許容。",
+      "regression": "test_ws_header_terminator_cannot_bypass_header_limit:2例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log"
+    },
+    {
+      "id": "ING-05",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P2",
+      "title": "過深な旧health JSONから正常producer公開を復旧",
+      "criteria": [
+        "C02",
+        "C08",
+        "C10"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/run_check.py"
+      ],
+      "evidence": "_prev_healthのRecursionErrorが_write_healthのtryへ伝播し正常runもhealth_write_failedとなる。壊れた旧状態は{}へ隔離しatomic正常記録へ。",
+      "regression": "test_deeply_nested_previous_health_does_not_block_fresh_publication:1例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log"
+    },
+    {
+      "id": "ING-06",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P1",
+      "title": "MCS_ROOTとは別rootのcommand queueを消費する分離違反",
+      "criteria": [
+        "C01",
+        "C03",
+        "C05",
+        "X01"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/job_ops.py"
+      ],
+      "evidence": "CMD_DIRがHOME/.mcs固定、DB/lockはMCS_ROOT。2合成root subprocessでPは旧rootのprojectをselected Ledgerへ取り込みselected queueを無視。共通HOMEへ揃える。",
+      "regression": "test_default_command_drain_follows_mcs_root_and_preserves_other_root:1例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log"
+    },
+    {
+      "id": "ING-07",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P2",
+      "title": "初期取込の非有限delayをロック・認証前に拒否",
+      "criteria": [
+        "C07",
+        "C10"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/init_data.py"
+      ],
+      "evidence": "nan/infはdelay<0を通り、取得が始まってからtime.sleepでValueError/OverflowError停止。math.isfiniteをCLI validationへ追加。",
+      "regression": "test_initial_import_nonfinite_delay_rejected_before_writer_lock:2例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log"
+    },
+    {
+      "id": "ING-D01",
+      "status": "disproved",
+      "title": "mark_readのoldest_unreadキー省略はschema欠損か",
+      "evidence": "既存test_mark_read_confirms_when_oldest_unread_is_goneと_project_detail契約で省略は既読済み状態。is_archivedのboolean検証を維持。未確認を成功にする変更はしていない。"
+    },
+    {
+      "id": "ING-D02",
+      "status": "disproved",
+      "title": "login候補URLの別port/originでcredential注入可能か",
+      "evidence": "auto_loginのstate→fill→clickそれぞれでlocation.originを固定https originと厳密比較。資格情報取得/注入前にbad_originが止まる。実Keychainへアクセスしていない。"
+    },
+    {
+      "id": "ING-D03",
+      "status": "disproved",
+      "title": "download HTTPError response bodyを閉じ忘れるか",
+      "evidence": "合成allowed302/rejected302/404の3診断は修正前からpass。例外unwind/worker終了でcleanup。実益のないGC依存追加テストは除去、source変更なし。resource-before.logの3passは最終regressionとして数えない。"
+    },
+    {
+      "id": "ING-D04",
+      "status": "disproved",
+      "title": "thread_window失敗時next_pageなしでcursorを誤認するか",
+      "evidence": "実fetch_thread_windowはerror時reached=False、pagesは完成pageのみ。job_opsはcompleted rows保存とnext page durable reservation後SessionExpired伝播。acquisition/job_drain異常系で確認。"
+    },
+    {
+      "id": "ING-DEP01",
+      "status": "deferred",
+      "title": "親所有schedule/導入/upgrade説明の最終I整合",
+      "owner": "/root",
+      "evidence": "configured_cron_jobsをstandalone/runtimeが利用。parentがunread */10、deep10,40、health watcher */5と明示設定300→600必要操作を担当。子は10分health契約とroot isolationを実装したが親Iのscript/cron移行結果をここでは検証していない。"
+    },
+    {
+      "id": "ING-DEP02",
+      "status": "deferred",
+      "title": "固定Iのfresh-context独立レビューと全域最終検証",
+      "owner": "/root",
+      "evidence": "子自身の修復/検証は独立レビューではない。親で全packet統合後、非実装reviewerがI/差分/台帳/consumer境界を確認する必要がある。"
+    }
+  ],
+  "verification": [
+    {
+      "id": "baseline-ingest",
+      "kind": "baseline",
+      "input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ingest/ --junitxml=/tmp/mcs-maintenance-core-packet2-20261005/baseline-ingest.xml > /tmp/mcs-maintenance-core-packet2-20261005/baseline-ingest.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "scripts/run_tests.sh",
+        "HOME": "runner-created temporary directory",
+        "MCS_TEST_SANDBOX": "1",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 0,
+      "counts": {
+        "tests": 1144,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 1144
+      },
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/baseline-ingest.log",
+      "log_sha256": "e575e410f25d2be3b4100f9366cc61490af73f54649daedd49bdfb6af9d3a03b",
+      "junitxml": "/tmp/mcs-maintenance-core-packet2-20261005/baseline-ingest.xml",
+      "xml_sha256": "0c2d4c8007a92ee319f2305d71708bcc1f3dc1399dc7cd6077e4d5d915347952",
+      "command_note": "最終W/隔離Pは完全な保存command。初期局所commandの-kは選択意味を記録し、当時のshell履歴と独立して最終隔離P34失敗で全修復前欠陥を再現。",
+      "command_fidelity": "recorded invocation"
+    },
+    {
+      "id": "cadence-before",
+      "kind": "before",
+      "input": "999944434eaad4bdf0000b67f654a421df0ffdbe plus regression tests",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ingest/test_health_watch.py -k \"deadline_derives or default_ten_minute\" --junitxml=/tmp/mcs-maintenance-core-packet2-20261005/cadence-before.xml > /tmp/mcs-maintenance-core-packet2-20261005/cadence-before.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "scripts/run_tests.sh",
+        "HOME": "runner-created temporary directory",
+        "MCS_TEST_SANDBOX": "1",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 1,
+      "counts": {
+        "tests": 6,
+        "failures": 6,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 0
+      },
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/cadence-before.log",
+      "log_sha256": "23e508af55f805e3079a8e24b06cd15ebbb53faf3a10653186363cd9c5dcae96",
+      "junitxml": "/tmp/mcs-maintenance-core-packet2-20261005/cadence-before.xml",
+      "xml_sha256": "8389a7ac49ca2c1b8efbd2827d721806b989ef84c017343fae2e8a93857075bf",
+      "command_note": "最終W/隔離Pは完全な保存command。初期局所commandの-kは選択意味を記録し、当時のshell履歴と独立して最終隔離P34失敗で全修復前欠陥を再現。",
+      "command_fidelity": "semantically reconstructed checkpoint selection; not exact shell receipt"
+    },
+    {
+      "id": "cadence-after",
+      "kind": "after",
+      "input": "dbad454",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ingest/test_health_watch.py --junitxml=/tmp/mcs-maintenance-core-packet2-20261005/cadence-after.xml > /tmp/mcs-maintenance-core-packet2-20261005/cadence-after.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "scripts/run_tests.sh",
+        "HOME": "runner-created temporary directory",
+        "MCS_TEST_SANDBOX": "1",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 0,
+      "counts": {
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 50
+      },
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/cadence-after.log",
+      "log_sha256": "e9af81186c3ed4184ce8472e804e3615843e83c80d80eed7a0d9204d603d1809",
+      "junitxml": "/tmp/mcs-maintenance-core-packet2-20261005/cadence-after.xml",
+      "xml_sha256": "9ced3630aab9d95d910533ddfa6a146abdd8b6d0465ceea7571f5c5a812f30b0",
+      "command_note": "最終W/隔離Pは完全な保存command。初期局所commandの-kは選択意味を記録し、当時のshell履歴と独立して最終隔離P34失敗で全修復前欠陥を再現。",
+      "command_fidelity": "recorded invocation"
+    },
+    {
+      "id": "scope-number-before",
+      "kind": "before",
+      "input": "dbad454 plus regression tests, unpatched normalizer/number",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ingest/test_acquisition_contracts.py tests/ingest/test_project_metadata.py -k \"conflicting_message_project or out_of_range_number\" --junitxml=/tmp/mcs-maintenance-core-packet2-20261005/scope-number-before.xml > /tmp/mcs-maintenance-core-packet2-20261005/scope-number-before.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "scripts/run_tests.sh",
+        "HOME": "runner-created temporary directory",
+        "MCS_TEST_SANDBOX": "1",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 1,
+      "counts": {
+        "tests": 22,
+        "failures": 22,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 0
+      },
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/scope-number-before.log",
+      "log_sha256": "aaa72314225d2e2c45396f56e48d02bdfc8ff309946b40a8c8fa128d6038124a",
+      "junitxml": "/tmp/mcs-maintenance-core-packet2-20261005/scope-number-before.xml",
+      "xml_sha256": "b06331d37cb9d97402ecf402a07299612b1ca5acf03310c0466014999d1120ac",
+      "command_note": "最終W/隔離Pは完全な保存command。初期局所commandの-kは選択意味を記録し、当時のshell履歴と独立して最終隔離P34失敗で全修復前欠陥を再現。",
+      "command_fidelity": "semantically reconstructed checkpoint selection; not exact shell receipt"
+    },
+    {
+      "id": "scope-number-after",
+      "kind": "after",
+      "input": "dbad454 + scope/number patches",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ingest/test_acquisition_contracts.py tests/ingest/test_project_metadata.py tests/ingest/test_cross_lists.py tests/ingest/test_group_consultations.py tests/ingest/test_fixture_synthetic.py --junitxml=/tmp/mcs-maintenance-core-packet2-20261005/scope-number-after.xml > /tmp/mcs-maintenance-core-packet2-20261005/scope-number-after.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "scripts/run_tests.sh",
+        "HOME": "runner-created temporary directory",
+        "MCS_TEST_SANDBOX": "1",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 0,
+      "counts": {
+        "tests": 201,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 201
+      },
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/scope-number-after.log",
+      "log_sha256": "c4ece665a5a7e4d6e04327635ff90d0515b2bcb7fbfdd6474def58014705a6b0",
+      "junitxml": "/tmp/mcs-maintenance-core-packet2-20261005/scope-number-after.xml",
+      "xml_sha256": "8c1f77fcb9f566a02db2fb81031aa43432489b8cdf81faadac466099c68b1ec4",
+      "command_note": "最終W/隔離Pは完全な保存command。初期局所commandの-kは選択意味を記録し、当時のshell履歴と独立して最終隔離P34失敗で全修復前欠陥を再現。",
+      "command_fidelity": "semantically reconstructed checkpoint selection; not exact shell receipt"
+    },
+    {
+      "id": "resource-before",
+      "kind": "before+disproof diagnostic",
+      "input": "scope/number patches; no WS cap patch",
+      "command": null,
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "scripts/run_tests.sh",
+        "HOME": "runner-created temporary directory",
+        "MCS_TEST_SANDBOX": "1",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 1,
+      "counts": {
+        "tests": 5,
+        "failures": 2,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 3
+      },
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/resource-before.log",
+      "log_sha256": "0a50be5de87dcdb9790c0a106a9cab64dd7bf11cd7fa811418fda351a8c8472c",
+      "junitxml": "/tmp/mcs-maintenance-core-packet2-20261005/resource-before.xml",
+      "xml_sha256": "b3f21cece6300b124e3bc74210c2dc442936858287aefeec4399e4178e29c740",
+      "command_note": "Exact original diagnostic -k not retained after compaction. Canonical isolated-P-before command reproduces both retained WS failures on exact P; full diagnostic log remains.",
+      "command_fidelity": "semantically reconstructed checkpoint selection; not exact shell receipt",
+      "selection_description": "2 WS cap regressions + 3 transient HTTPError-close diagnostics",
+      "counts_note": "2 failed WS tests retained; 3 diagnostic passes disproved the leak and were removed, not part of final regression count."
+    },
+    {
+      "id": "health-recovery-before",
+      "kind": "before",
+      "input": "WS cap patch; no health recovery patch",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ingest/test_run_check_stages.py -k deeply_nested_previous_health --junitxml=/tmp/mcs-maintenance-core-packet2-20261005/health-recovery-before.xml > /tmp/mcs-maintenance-core-packet2-20261005/health-recovery-before.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "scripts/run_tests.sh",
+        "HOME": "runner-created temporary directory",
+        "MCS_TEST_SANDBOX": "1",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 1,
+      "counts": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 0
+      },
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/health-recovery-before.log",
+      "log_sha256": "07beaad0cd380ac3f1e485849080a843b636e09a897ef6f367e3dcdef1c52357",
+      "junitxml": "/tmp/mcs-maintenance-core-packet2-20261005/health-recovery-before.xml",
+      "xml_sha256": "4c2095741167c5ba07882a5b125b52abadc826e41c60aa90e9fc22f4d280b228",
+      "command_note": "最終W/隔離Pは完全な保存command。初期局所commandの-kは選択意味を記録し、当時のshell履歴と独立して最終隔離P34失敗で全修復前欠陥を再現。",
+      "command_fidelity": "semantically reconstructed checkpoint selection; not exact shell receipt"
+    },
+    {
+      "id": "health-resource-after",
+      "kind": "after",
+      "input": "scope/number/WS/health patches",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ingest/test_adapter_wire.py tests/ingest/test_run_check_stages.py --junitxml=/tmp/mcs-maintenance-core-packet2-20261005/health-resource-after.xml > /tmp/mcs-maintenance-core-packet2-20261005/health-resource-after.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "scripts/run_tests.sh",
+        "HOME": "runner-created temporary directory",
+        "MCS_TEST_SANDBOX": "1",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 0,
+      "counts": {
+        "tests": 267,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 267
+      },
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/health-resource-after.log",
+      "log_sha256": "aa2a9ed3f25d7ed3fa9102c64c01107fffdf2b88aac64a119638df2ed8c2a9fb",
+      "junitxml": "/tmp/mcs-maintenance-core-packet2-20261005/health-resource-after.xml",
+      "xml_sha256": "155dc43a8c119df0b33cdc1a8f832401096532f388f786e36b52009ada69fafd",
+      "command_note": "最終W/隔離Pは完全な保存command。初期局所commandの-kは選択意味を記録し、当時のshell履歴と独立して最終隔離P34失敗で全修復前欠陥を再現。",
+      "command_fidelity": "recorded invocation"
+    },
+    {
+      "id": "root-before",
+      "kind": "before",
+      "input": "dbad454 + scope/number/WS/health; no root fix",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ingest/test_job_drain.py -k default_command_drain --junitxml=/tmp/mcs-maintenance-core-packet2-20261005/root-before.xml > /tmp/mcs-maintenance-core-packet2-20261005/root-before.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "scripts/run_tests.sh",
+        "HOME": "runner-created temporary directory",
+        "MCS_TEST_SANDBOX": "1",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 1,
+      "counts": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 0
+      },
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/root-before.log",
+      "log_sha256": "9809b8dd43b85f53b10c3bffa045cc29875d965e7227701c138d399c2170474f",
+      "junitxml": "/tmp/mcs-maintenance-core-packet2-20261005/root-before.xml",
+      "xml_sha256": "14317c8e67f7e43b413a0a62442d18ad6c5a60195a641db4db01785e92519f39",
+      "command_note": "最終W/隔離Pは完全な保存command。初期局所commandの-kは選択意味を記録し、当時のshell履歴と独立して最終隔離P34失敗で全修復前欠陥を再現。",
+      "command_fidelity": "recorded invocation"
+    },
+    {
+      "id": "final-ingest",
+      "kind": "after",
+      "input": "ff50b57 code",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ingest/ tests/core/test_maintenance_root.py --junitxml=/tmp/mcs-maintenance-core-packet2-20261005/final-ingest.xml > /tmp/mcs-maintenance-core-packet2-20261005/final-ingest.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "scripts/run_tests.sh",
+        "HOME": "runner-created temporary directory",
+        "MCS_TEST_SANDBOX": "1",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 0,
+      "counts": {
+        "tests": 1176,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 1176
+      },
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-ingest.log",
+      "log_sha256": "30cada03f5e325bcf544ec389fc94fa176b4dee7312901a652f35f53003d4c89",
+      "junitxml": "/tmp/mcs-maintenance-core-packet2-20261005/final-ingest.xml",
+      "xml_sha256": "f2e45ab5ee0324668cf405b1510d4428f7487f4fc782ffb7271f417c322bde1d",
+      "command_note": "最終W/隔離Pは完全な保存command。初期局所commandの-kは選択意味を記録し、当時のshell履歴と独立して最終隔離P34失敗で全修復前欠陥を再現。",
+      "command_fidelity": "recorded invocation"
+    },
+    {
+      "id": "consumer-after",
+      "kind": "after",
+      "input": "ff50b57 code",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/core/test_core_misc.py tests/core/test_ledger_guards.py tests/views/test_project_metadata_view.py tests/views/test_project_metadata_comparison.py tests/views/test_cross_lists_view.py tests/views/test_metadata_report.py --junitxml=/tmp/mcs-maintenance-core-packet2-20261005/consumer-after.xml > /tmp/mcs-maintenance-core-packet2-20261005/consumer-after.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "scripts/run_tests.sh",
+        "HOME": "runner-created temporary directory",
+        "MCS_TEST_SANDBOX": "1",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 0,
+      "counts": {
+        "tests": 211,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 211
+      },
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/consumer-after.log",
+      "log_sha256": "16d61a9b954adf0e627184be27bc6b8506decb12e077cffe87b50d7d2c7bbd4b",
+      "junitxml": "/tmp/mcs-maintenance-core-packet2-20261005/consumer-after.xml",
+      "xml_sha256": "cc9128cf82679844320ecce4cd90d9cf3c07173dc8997cdbe2f32f85264a047f",
+      "command_note": "最終W/隔離Pは完全な保存command。初期局所commandの-kは選択意味を記録し、当時のshell履歴と独立して最終隔離P34失敗で全修復前欠陥を再現。",
+      "command_fidelity": "recorded invocation"
+    },
+    {
+      "id": "delay-before",
+      "kind": "before",
+      "input": "ff50b57 plus delay regressions",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ingest/test_acquisition_contracts.py -k initial_import_nonfinite --junitxml=/tmp/mcs-maintenance-core-packet2-20261005/delay-before.xml > /tmp/mcs-maintenance-core-packet2-20261005/delay-before.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "scripts/run_tests.sh",
+        "HOME": "runner-created temporary directory",
+        "MCS_TEST_SANDBOX": "1",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 1,
+      "counts": {
+        "tests": 2,
+        "failures": 2,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 0
+      },
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/delay-before.log",
+      "log_sha256": "0039015f4e94415e7cbabcd51de222d48e7f09508c1cbef5088fae82726f0725",
+      "junitxml": "/tmp/mcs-maintenance-core-packet2-20261005/delay-before.xml",
+      "xml_sha256": "fcf774cb8c9654996c5174afc1cebbdb5c98fffcc680ca126b2af5dc6771de33",
+      "command_note": "最終W/隔離Pは完全な保存command。初期局所commandの-kは選択意味を記録し、当時のshell履歴と独立して最終隔離P34失敗で全修復前欠陥を再現。",
+      "command_fidelity": "recorded invocation"
+    },
+    {
+      "id": "final-W",
+      "kind": "after",
+      "input": "0da054fee754edb25f272a6660c0518a85dda4de",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ingest/ tests/core/test_core_misc.py tests/core/test_maintenance_root.py --junitxml=/tmp/mcs-maintenance-core-packet2-20261005/final-W.xml > /tmp/mcs-maintenance-core-packet2-20261005/final-W.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "scripts/run_tests.sh",
+        "HOME": "runner-created temporary directory",
+        "MCS_TEST_SANDBOX": "1",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 0,
+      "counts": {
+        "tests": 1276,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 1276
+      },
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
+      "log_sha256": "f082346c11ae78196d537af5d7198b6503fad833eb86d6b606812503ba962453",
+      "junitxml": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.xml",
+      "xml_sha256": "8f846707177b5399299dadf92ee1c553cb87eb65d82fe271e53c79edc993f421",
+      "command_note": "最終W/隔離Pは完全な保存command。初期局所commandの-kは選択意味を記録し、当時のshell履歴と独立して最終隔離P34失敗で全修復前欠陥を再現。",
+      "command_fidelity": "recorded invocation"
+    },
+    {
+      "id": "isolated-P-before",
+      "kind": "all regressions before",
+      "input": "999944434eaad4bdf0000b67f654a421df0ffdbe isolated archive + final W test files only",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ingest/ -k \"ten_minute_cadence or deadline_derives_from_config_not_hardcode or conflicting_message_project or out_of_range_number_records_failure or ws_header_terminator_cannot_bypass or deeply_nested_previous_health or default_command_drain_follows_mcs_root or initial_import_nonfinite\" --junitxml=/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.xml > /tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "scripts/run_tests.sh",
+        "HOME": "runner-created temporary directory",
+        "MCS_TEST_SANDBOX": "1",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "cwd": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P",
+      "exit": 1,
+      "counts": {
+        "tests": 34,
+        "failures": 34,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 0
+      },
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "log_sha256": "98f12b90b7c92e7bfb114b1faf8d196ae26ccbf7c9abe5b2dd6e08732eb5c6e6",
+      "junitxml": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.xml",
+      "xml_sha256": "9bf33a14b97d635d160f12c8eb9b7a82c1cbd566ec0619b9344f9bd45395bfd2",
+      "command_note": "最終W/隔離Pは完全な保存command。初期局所commandの-kは選択意味を記録し、当時のshell履歴と独立して最終隔離P34失敗で全修復前欠陥を再現。",
+      "command_fidelity": "recorded invocation"
+    },
+    {
+      "id": "cadence-ruff",
+      "input": "respective checkpoint",
+      "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check mcs/ingest/health_watch.py tests/ingest/test_health_watch.py > /tmp/mcs-maintenance-core-packet2-20261005/cadence-ruff.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "environment": {
+        "Ruff": "pinned0.16.10, existing uv cache"
+      },
+      "exit": 0,
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/cadence-ruff.log",
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "command_fidelity": "recorded invocation"
+    },
+    {
+      "id": "final-ruff",
+      "input": "respective checkpoint",
+      "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check mcs/ingest/ tests/ingest/ > /tmp/mcs-maintenance-core-packet2-20261005/final-ruff.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "environment": {
+        "Ruff": "pinned0.16.10, existing uv cache"
+      },
+      "exit": 0,
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-ruff.log",
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "command_fidelity": "recorded invocation"
+    },
+    {
+      "id": "final-W-ruff",
+      "input": "0da054fee754edb25f272a6660c0518a85dda4de",
+      "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check mcs/ingest/ tests/ingest/ > /tmp/mcs-maintenance-core-packet2-20261005/final-W-ruff.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "environment": {
+        "Ruff": "pinned0.16.10, existing uv cache"
+      },
+      "exit": 0,
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W-ruff.log",
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "command_fidelity": "recorded invocation"
+    },
+    {
+      "id": "docs-check",
+      "input": "respective checkpoint",
+      "command": "env -i HOME=/tmp/mcs-maintenance-core-packet2-20261005 PATH=/usr/bin:/bin /Users/yusuke/.mcs/.venv/bin/python scripts/development/update_readme.py --check > /tmp/mcs-maintenance-core-packet2-20261005/docs-check.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "environment": {
+        "HOME": "/tmp/mcs-maintenance-core-packet2-20261005",
+        "PATH": "/usr/bin:/bin"
+      },
+      "exit": 0,
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/docs-check.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command_fidelity": "recorded invocation"
+    },
+    {
+      "id": "diff-check",
+      "input": "respective checkpoint",
+      "command": "git diff --check > /tmp/mcs-maintenance-core-packet2-20261005/diff-check.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "environment": {},
+      "exit": 0,
+      "complete_log": "/tmp/mcs-maintenance-core-packet2-20261005/diff-check.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command_fidelity": "recorded invocation"
+    },
+    {
+      "id": "patch-reproduction",
+      "input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "output": "0da054fee754edb25f272a6660c0518a85dda4de",
+      "command": "git archive --format=tar P; git diff --binary --full-index P W; git apply --check /tmp/mcs-maintenance-core-packet2-20261005/ingest-P-W.patch; git apply same patch; compare all 15 changed paths to git show W:path",
+      "environment": "stdlib-only isolated source copy; no runtime/service operation",
+      "exit": 0,
+      "receipt": "/tmp/mcs-maintenance-core-packet2-20261005/patch-reproduction.json",
+      "exact_driver": "/tmp/mcs-maintenance-core-packet2-20261005/build_evidence.py / recorded functions tool invocation",
+      "count": 15
+    },
+    {
+      "id": "public-signatures",
+      "input": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "output": "0da054fee754edb25f272a6660c0518a85dda4de",
+      "command": "stdlib ast.parse of all 8 P/W modules; compare name+ast.arguments for all functions/methods",
+      "exit": 0,
+      "receipt": "/tmp/mcs-maintenance-core-packet2-20261005/public-signatures.json",
+      "count": 8
+    }
+  ],
+  "commits": [
+    {
+      "role": "cadence implementation",
+      "sha": "dbad454ecc7b9eb2efa9a6893e96984fbb2d9762"
+    },
+    {
+      "role": "5 boundary defects",
+      "sha": "ff50b5778e71fb129cbef6b84819aaca908e87c6"
+    },
+    {
+      "role": "finite CLI delay",
+      "sha": "0da054fee754edb25f272a6660c0518a85dda4de"
+    }
+  ],
+  "cadence_contract": "MCSサーバーの負荷対策で、自動取得run開始を10分gridへ。unread */10、deep 10,40（親owner）。health監視job自体は5分、producer freshness default600。HTTPページ待機/手動初期取込/承認操作/retry due300/LLM budgetは維持。明示tick_interval_s300を破棄せず600への必要操作をupgradeへ記録。",
+  "candidate_questions": [],
+  "notes": [
+    "最初のhealth_watch結合出力は一部切断されたため85..106を再読。metadata_probe_usageの結合出力も切断検出後1..341を単独再読。その他全P read rangesはgapなし。",
+    "run_check_stagesの編集後読取はgit show P:pathで行いline shiftを回避。P全文＋全P→Wdiffの再確認でW全内容を確認。",
+    "primary owned path集合はP/Wいずれも29fileで一致。source8+tests/helper21、P17,285行、W行数は機械集計。",
+    "基準ごとのAPPLIES_BOUNDARY/BACKEND_ONLYは当該境界の適用判定。所有外path全文review完了を意味しない。",
+    "Ruff/runner/docs checksは安全境界内の局所証拠。実サービス/実SDK/配備/認証は未実施、parent finalIとfresh reviewが必要。",
+    "初期局所検証の一部-kは選択意味のみ再構成しfidelityを明記。正確な固定P/Wの34 beforefail/1276 afterpassとconsumer211passが受入の主証拠。"
+  ],
+  "required_next": [
+    "親が3code commitsを統合し固定Iでschedule/install/update/recoveryとの整合を検証",
+    "親がgenerated docsを必要時に生成器で統合",
+    "非実装fresh-context reviewerが固定I/全域inventory/未変更consumer境界を反証"
+  ],
+  "test_inventory": [
+    "tests/ingest/ingest_testkit.py",
+    "tests/ingest/test_acquisition_contracts.py",
+    "tests/ingest/test_adapter_wire.py",
+    "tests/ingest/test_cross_lists.py",
+    "tests/ingest/test_drug_map_pipeline.py",
+    "tests/ingest/test_fixture_synthetic.py",
+    "tests/ingest/test_group_consultations.py",
+    "tests/ingest/test_health_watch.py",
+    "tests/ingest/test_job_drain.py",
+    "tests/ingest/test_job_reasons_ingest.py",
+    "tests/ingest/test_message_metadata.py",
+    "tests/ingest/test_metadata_probe_observation.py",
+    "tests/ingest/test_metadata_probe_paging.py",
+    "tests/ingest/test_metadata_probe_usage.py",
+    "tests/ingest/test_project_metadata.py",
+    "tests/ingest/test_reaction_actors.py",
+    "tests/ingest/test_run_check_stages.py",
+    "tests/ingest/test_run_watchdog.py",
+    "tests/ingest/test_semantic_ingest_revisions.py",
+    "tests/ingest/test_thread_count_retry.py",
+    "tests/ingest/test_thread_tombstone_gap.py"
+  ],
+  "coverage": {
+    "owned_files": 29,
+    "sources": 8,
+    "tests_and_helper": 21,
+    "P_lines": 17285,
+    "W_lines": 17470,
+    "REVIEWED": 29,
+    "PARTIAL": 0,
+    "UNSEEN": 0,
+    "EXCLUDED_owned_text": 0,
+    "criteria_reviewed": 20,
+    "confirmed_defects_fixed": 6,
+    "requested_behavior_changes": 1,
+    "unprocessed_owned_findings": 0,
+    "run_generated_exclusions": [
+      "__pycache__/*.pyc: 検証生成bytecode、正本.py全件をレビュー",
+      "pytest cache: 検証run記録、実装正本ではない"
+    ]
+  },
+  "B": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+  "worker_scope_status": "READY_FOR_INTEGRATION",
+  "status_reason": "所有29file/20基準/修復・局所回帰・patch再現は完了。親固定I・全域統合検証・必須独立レビューは本workerの完了範囲外。",
+  "I": null,
+  "requested_model": {
+    "model": "gpt-6.1-sol",
+    "reasoning_effort": "ultra",
+    "effective_setting": "NOT_INDEPENDENTLY_OBSERVABLE",
+    "evidence": "親spawn/task指示。runtimeの実効モデル/version独立照会APIは非公開。推測値を実測として記録しない。"
+  },
+  "cadence_routes": [
+    {
+      "path": "run_check._stage_fetch",
+      "entry": "normal tick",
+      "MCS": "unread→self_probe(optional)→backfill",
+      "launcher_owner": "parent mcs_setup/deployment"
+    },
+    {
+      "path": "run_check._run_jobs",
+      "entry": "normal tick + jobs-only/deep",
+      "MCS": "discovery/reply/history/trickle/reconcile/self profile/roster + configured attachments",
+      "launcher_owner": "parent"
+    },
+    {
+      "path": "run_check.stage_karte_summary / _run_metadata_shadow",
+      "entry": "normal tick + jobs-only/deep",
+      "MCS": "bounded memo / exact metadata / reaction actors",
+      "launcher_owner": "parent"
+    },
+    {
+      "path": "mcs_standalone.Runtime.schedules/start",
+      "entry": "configured_cron_jobs/_calendar",
+      "MCS": "scheduled run_check child with MCS_ROOT",
+      "launcher_owner": "parent",
+      "readonly_evidence": "mcs_standalone/runtime.py:1-185"
+    },
+    {
+      "path": "init_data / explicit structured or cross-list CLI / command-requested import",
+      "entry": "manual authorized operation",
+      "MCS": "bounded manual run",
+      "contract": "10分自動schedule変更で契約を一律変更しない"
+    },
+    {
+      "path": "run_check --commands-only / health_watch",
+      "entry": "local interactive intake / local monitoring",
+      "MCS": "取得しない",
+      "contract": "短いローカルwatch周期を維持"
+    }
+  ],
+  "readonly_dependencies": [
+    {
+      "path": "mcs_standalone/runtime.py",
+      "state": "PARTIAL",
+      "ranges": [
+        [
+          1,
+          185
+        ]
+      ],
+      "purpose": "cron producer/child MCS_ROOTとmanual/local cmd boundary。全module reviewは親owner。",
+      "sha256": "6e0b9a8fd5dbcd8fd079ac54b288604d4f64b342b8383511baaed32a9a2fc2dc",
+      "lines": 198
+    },
+    {
+      "path": "mcs/views/project_metadata_view.py",
+      "state": "PARTIAL",
+      "ranges": [
+        [
+          135,
+          240
+        ]
+      ],
+      "purpose": "失敗時前回完成artifact/current/historical consumer契約。全moduleは別packet。",
+      "sha256": "192067dca2822d9b1b135668d0f57fc5a14872ff61a1d509153d9489af63f466",
+      "lines": 309
+    },
+    {
+      "path": "mcs/views/cross_lists_view.py",
+      "state": "PARTIAL",
+      "ranges": [
+        [
+          1,
+          115
+        ]
+      ],
+      "purpose": "publication off/scope/current_known consumer境界。",
+      "sha256": "1d565f67a33b13f9078b55227934f462dc6e99619a46a86848627528be8c3859",
+      "lines": 103
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "state": "REVIEWED",
+      "ranges": [
+        [
+          1,
+          46
+        ]
+      ],
+      "purpose": "env隔離runner、必要コマンドを実行前確認。",
+      "sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "lines": 46
+    },
+    {
+      "path": "tests/core/test_maintenance_root.py",
+      "state": "REVIEWED",
+      "reuse": "packet1 SHA一致、今回全27行を再確認",
+      "sha256": "00675df942ed139b879c95d490b16426fd6f748bb8db79e8d827e350394d2a4c",
+      "lines": 27,
+      "ranges": [
+        [
+          1,
+          27
+        ]
+      ]
+    },
+    {
+      "path": "mcs/core/mcs_util.py",
+      "state": "REVIEWED",
+      "reuse": "packet1 SHA一致、HOME/DB/run.lock正本を使用",
+      "sha256": "7bd01ea343e712d3ea24c59f92fde16cc3efa8013110810a103fec9193c1f420",
+      "lines": 399
+    },
+    {
+      "path": "scripts/development/probe_message_metadata.py",
+      "state": "PARTIAL",
+      "purpose": "ingest probe test caller、関連wire/CLI boundaryのみ、全scriptは親のpacket対象",
+      "sha256": "d548cf16d8336ec148405d8908fe06d88809a3bb6feaab7373e0ebade777e880",
+      "lines": 483
+    }
+  ],
+  "safety": {
+    "real_services_accessed": false,
+    "real_databases_read": false,
+    "PHI_PII_secrets_used": false,
+    "Keychain_LLM_Jev_accessed": false,
+    "service_started_or_deployed": false,
+    "push_PR_merge": false,
+    "child_spawn": false,
+    "fixtures": "完全合成のみ、一時DBとstub",
+    "runner_environment": "env -i; temporary HOME/TMPDIR/XDG; TZ=UTC; PYTHONDONTWRITEBYTECODE=1; MCS_TEST_SANDBOX=1; credential/proxy env不継承; pytest network guards。root子subprocessは2合成root/ローカルcommandのみ。"
+  },
+  "test_counts": {
+    "baseline_owned": 1144,
+    "final_owned": 1177,
+    "new_test_cases": 33,
+    "isolated_P_expected_failures": 34,
+    "modified_existing_requirement_case": 1,
+    "latest_run_passed": 1276,
+    "consumer_run_passed": 211,
+    "overlap": 98,
+    "unique_final_boundary_passed": 1389,
+    "failed": 0,
+    "skipped": 0,
+    "scope": "所有ingest+必要core/metadata consumerのみ。repo全域/実SDK/Iの成功とは区別。"
+  },
+  "additional_artifacts": [
+    {
+      "path": "changes/maintenance-ingest-boundaries-20261005.json",
+      "sha256": "124479f709c3cba0ba914629211aa96462999bf349c64fd98f1613d119142d85",
+      "lines": 19,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          19
+        ]
+      ],
+      "purpose": "日本語変更・upgrade記録、全P→Wdiffを読取"
+    },
+    {
+      "path": "changes/maintenance-ingest-cadence-20261005.json",
+      "sha256": "5cf1cb40a192f0d580a0f8caa968a8cca3dd24ee74724f3dafbfb225f5ac46bb",
+      "lines": 14,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          14
+        ]
+      ],
+      "purpose": "日本語変更・upgrade記録、全P→Wdiffを読取"
+    },
+    {
+      "path": "changes/maintenance-ingest-delay-20261005.json",
+      "sha256": "994676c8141df61ad997056c281e471715f6fe93e18f5a768f2f39ed459d0523",
+      "lines": 8,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "purpose": "日本語変更・upgrade記録、全P→Wdiffを読取"
+    }
+  ],
+  "patch": {
+    "path": "/tmp/mcs-maintenance-core-packet2-20261005/ingest-P-W.patch",
+    "sha256": "1d6181fc6d7037a6ffbc82b8708071a3b9ec5d8e95d169b6d39914cb27e1d948",
+    "format": "git diff --binary --full-index P W",
+    "reproduction": "/tmp/mcs-maintenance-core-packet2-20261005/patch-reproduction.json",
+    "reproduction_exit": 0,
+    "changed_paths": 15,
+    "evidence_document_excluded": "Wはcode/source/test/changes commit。後続evidence commit自体のSHAはreceipt.jsonへ記録し循環hashを避ける。"
+  },
+  "unchanged_contracts": [
+    "8source signature/CLI flag集合/保存artifact contractを維持",
+    "core/shared ledger/schemaの26SHA一致、未編集",
+    "既読化timestamp/人承認reason+receipt/no-proxy/no-redirectを維持",
+    "manual authorized import・retry/ページ待機/非取得LLM timeoutの間隔契約を維持"
+  ],
+  "worktree_final_note": "code Wまで全変更commit済み。evidence文書だけを後続commit予定、commit後cleanをreceiptへ記録。",
+  "runtime": {
+    "python": "3.13.12",
+    "pytest": "9.1.1",
+    "ruff": "0.16.10",
+    "runtime_observation_command": "env -i HOME=/tmp/mcs-maintenance-core-packet2-20261005 PATH=/usr/bin:/bin /Users/yusuke/.mcs/.venv/bin/python -c 'import sys, pytest; print(sys.version.split()[0]); print(pytest.__version__)'",
+    "exit": 0
+  }
+}

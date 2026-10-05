@@ -1,0 +1,1369 @@
+{
+  "schema": "mcs-full-maintenance-v7-scoped-evidence/1",
+  "packet": "maintenance-drug-json-20261005",
+  "status": "SCOPED_COMPLETE",
+  "generated_at_utc": "2026-10-05T03:51:37.640350+00:00",
+  "owner": "maintenance_core",
+  "role": "担当実装・構造化証拠。独立reviewerとは呼ばない。",
+  "requested_model": "parent指定 Astra→GPT-6.1-sol ultra（宣言。実効モデルは推測しない）",
+  "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-drug-json-20261005",
+  "branch": "audit/maintenance-drug-json-20261005",
+  "B": "7ecbba17a092e00bdee70ffec007159f8a96213d",
+  "P": "7ecbba17a092e00bdee70ffec007159f8a96213d",
+  "W": "2c8bdf3d4338cc355b3b4e7574b123b4b78a23ac",
+  "I": {
+    "state": "PARENT_PENDING",
+    "limit": "親fixedI統合/全体/SDK/archive/独立確認は別結果。"
+  },
+  "snapshot_definition": {
+    "P": "固定immutable source。beforeは全902raw Git blob/mode＋明示最終test overlay。ignored/private input無し。",
+    "W": "source/fragment commit2c8bdf3。後続evidence-only commitをexternal final-commit-receipt.jsonへ拘束。",
+    "self_reference": "自己JSONへ自己SHA/commitを埋める循環を避け、external final-byte-mode-replay.json/commitreceiptがreport bytes/mode/fullSHAを拘束。"
+  },
+  "owned_inventory_summary": {
+    "source": 2,
+    "test": 5,
+    "source_test_files": 7,
+    "P_full_source_test_lines": 1996,
+    "W_full_source_test_lines": 2208,
+    "new_regression_cases": 13,
+    "changed_decode_boundaries": 6,
+    "all_existing_test_AST_preserved": true
+  },
+  "inventory": [
+    {
+      "path": "mcs/extract/drug_map.py",
+      "sha256_P": "bb59d38da7e628ad0e1011e29fea950a136958247198c6c916227439e02c2a45",
+      "sha256_W": "c0daf81423adb11dffc6d2cf08ba1db663ee312ed4a0a437304b806e5c594c68",
+      "bytes_P": 17490,
+      "bytes_W": 17732,
+      "line_count_P": 404,
+      "line_count_W": 411,
+      "mode_P": "100644",
+      "mode_W": "100644",
+      "read_ranges_P": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          404
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          411
+        ]
+      ],
+      "state": "REVIEWED",
+      "responsibility": "承認済み明示辞書の私有/SHA検証、薬剤候補の根拠束縛、派生保存、読取と候補文言。",
+      "callers_or_consumers": "load→run_check.stage_derive; derive→rollup rebuild pids; current_refs→rollup.build_rollup/mcs_stats._med_candidate_breakdown; candidate_note→brain_export._patient_md",
+      "criteria_reference": "全20criteriaをこの責務に限定して適用。テストは対応する実source契約とC11/C12を検証。",
+      "W_read_basis": "P全文＋全P→source W差分hunkを切断なし読取。未変更byte範囲を再利用し、source/test AST保持をartifactで証明。",
+      "read_method": "fresh nontruncated full P read; current W complete patch composition"
+    },
+    {
+      "path": "mcs/extract/rollup.py",
+      "sha256_P": "f51ee79205e425d86fe38bb3e319094635ba048f047433d3a5bbcac59ac1b9ec",
+      "sha256_W": "9594f50c73242a9ea56ea47c6e2c9e7b33cae29fb0400d8b6613b8afbc08a698",
+      "bytes_P": 25884,
+      "bytes_W": 25916,
+      "line_count_P": 563,
+      "line_count_W": 563,
+      "mode_P": "100644",
+      "mode_W": "100644",
+      "read_ranges_P": [
+        [
+          1,
+          563
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          563
+        ]
+      ],
+      "state": "REVIEWED",
+      "responsibility": "current extractから患者集計を構築し、世代優先・未確認・返信段階・候補注記を表示用に保存する。",
+      "callers_or_consumers": "run_check.stage_derive→rebuild_many→rebuild→build_rollup; build_rollup→_llm_reply_kind/current_refs; brain_export uses resulting medications",
+      "criteria_reference": "全20criteriaをこの責務に限定して適用。テストは対応する実source契約とC11/C12を検証。",
+      "W_read_basis": "P全文＋全P→source W差分hunkを切断なし読取。未変更byte範囲を再利用し、source/test AST保持をartifactで証明。",
+      "read_method": "exact accepted W full-review reuse + focused current consumer reads",
+      "read_reuse": {
+        "report": "docs/development/maintenance-semantic-packet4-evidence.json",
+        "sha256": "efc0f30529b27fc1069058b6e6ff709aa7e52e394688f3d3b3b758bc5f7e8864",
+        "original_P_sha256": "53aa618195fa714232c991827b052f8d950ab075a3e9a9789b522ef148b41c5a",
+        "accepted_W_sha256": "f51ee79205e425d86fe38bb3e319094635ba048f047433d3a5bbcac59ac1b9ec",
+        "read_ranges_original_P": [
+          [
+            1,
+            280
+          ],
+          [
+            281,
+            560
+          ]
+        ],
+        "complete_W_lines": 563,
+        "basis": "元560行全文＋親受入済み全diffの563行。現在SHA一致を実測。今回1–94/95–122/138–178/179–310と修正2hunksを境界再読。"
+      }
+    },
+    {
+      "path": "tests/extract/test_drug_map.py",
+      "sha256_P": "79fbf122782fe40c378f461d44b522784eb4a974692ce861f9b41196b16aa20c",
+      "sha256_W": "084dcbfdea2d8cb8dc20825887abbc5423eaec977ef8cc436f70f9dc69adb421",
+      "bytes_P": 18419,
+      "bytes_W": 23204,
+      "line_count_P": 425,
+      "line_count_W": 529,
+      "mode_P": "100644",
+      "mode_W": "100644",
+      "read_ranges_P": [
+        [
+          1,
+          230
+        ],
+        [
+          231,
+          425
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          529
+        ]
+      ],
+      "state": "REVIEWED",
+      "responsibility": "完全架空辞書とsource-bound注記の検証・同一性・私有ファイル・冪等性・破損境界回帰。",
+      "callers_or_consumers": "isolated runner; _dictionary/_seed shared with existing pipeline/view/ref_lookup tests",
+      "criteria_reference": "全20criteriaをこの責務に限定して適用。テストは対応する実source契約とC11/C12を検証。",
+      "W_read_basis": "P全文＋全P→source W差分hunkを切断なし読取。未変更byte範囲を再利用し、source/test AST保持をartifactで証明。",
+      "read_method": "fresh nontruncated full P read; current W complete patch composition"
+    },
+    {
+      "path": "tests/extract/test_rollup_canonical.py",
+      "sha256_P": "2ace07d53f291a243619af82e50672140147d696668060b0ccd10d7c120ef8f1",
+      "sha256_W": "7a0e9e284e04e57310623609a4ea18592774f85dd8d3285fc9941422956b5c15",
+      "bytes_P": 17921,
+      "bytes_W": 20297,
+      "line_count_P": 392,
+      "line_count_W": 445,
+      "mode_P": "100644",
+      "mode_W": "100644",
+      "read_ranges_P": [
+        [
+          1,
+          392
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          445
+        ]
+      ],
+      "state": "REVIEWED",
+      "responsibility": "完全合成current/canonical、未確認、世代・返信の根拠と深度境界の患者集計回帰。",
+      "callers_or_consumers": "isolated runner; real Ledger/build_rollup; original assertions unchanged",
+      "criteria_reference": "全20criteriaをこの責務に限定して適用。テストは対応する実source契約とC11/C12を検証。",
+      "W_read_basis": "P全文＋全P→source W差分hunkを切断なし読取。未変更byte範囲を再利用し、source/test AST保持をartifactで証明。",
+      "read_method": "fresh nontruncated full P read; current W complete patch composition"
+    },
+    {
+      "path": "tests/extract/test_rollup_ref_lookup.py",
+      "sha256_P": "421b6bc980f6225ef94de1dff912327d4a01772bffa47ada347099cee21e2f57",
+      "sha256_W": "421b6bc980f6225ef94de1dff912327d4a01772bffa47ada347099cee21e2f57",
+      "bytes_P": 1049,
+      "bytes_W": 1049,
+      "line_count_P": 24,
+      "line_count_W": 24,
+      "mode_P": "100644",
+      "mode_W": "100644",
+      "read_ranges_P": [
+        [
+          1,
+          24
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          24
+        ]
+      ],
+      "state": "REVIEWED",
+      "responsibility": "実rollupがmed_refを持つmessageだけを照合する境界回帰。",
+      "callers_or_consumers": "isolated runner; byte-preserved existing _dictionary/_seed consumer",
+      "criteria_reference": "全20criteriaをこの責務に限定して適用。テストは対応する実source契約とC11/C12を検証。",
+      "W_read_basis": "P全文＋全P→source W差分hunkを切断なし読取。未変更byte範囲を再利用し、source/test AST保持をartifactで証明。",
+      "read_method": "fresh nontruncated full P read; current W complete patch composition"
+    },
+    {
+      "path": "tests/ingest/test_drug_map_pipeline.py",
+      "sha256_P": "13e720e558f7aa0e071f55b3365212aea470803d224f4da9f7437507edfdd57e",
+      "sha256_W": "eb3d962343d5aa0422ab4182b30c0e4a96ebf5e002b47a15a158edabfdb9f960",
+      "bytes_P": 4263,
+      "bytes_W": 5368,
+      "line_count_P": 94,
+      "line_count_W": 117,
+      "mode_P": "100644",
+      "mode_W": "100644",
+      "read_ranges_P": [
+        [
+          1,
+          94
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          117
+        ]
+      ],
+      "state": "REVIEWED",
+      "responsibility": "辞書設定→tick診断→派生→rollupの実経路を合成Ledger/LLM budget zeroで確認。",
+      "callers_or_consumers": "run_check.stage_derive with only rule extraction/signals stubs; real dictionary validation/derive/rollup",
+      "criteria_reference": "全20criteriaをこの責務に限定して適用。テストは対応する実source契約とC11/C12を検証。",
+      "W_read_basis": "P全文＋全P→source W差分hunkを切断なし読取。未変更byte範囲を再利用し、source/test AST保持をartifactで証明。",
+      "read_method": "fresh nontruncated full P read; current W complete patch composition"
+    },
+    {
+      "path": "tests/views/test_drug_candidates.py",
+      "sha256_P": "56914862ba3efaccd098ae3c5dadb241443a12dcc6b280120cd8a7f26635cbbb",
+      "sha256_W": "9718e5c90e950ba1ec6b0cb400fd8a9534aedfb2f3434c25d4df10764a678138",
+      "bytes_P": 3888,
+      "bytes_W": 5133,
+      "line_count_P": 94,
+      "line_count_W": 119,
+      "mode_P": "100644",
+      "mode_W": "100644",
+      "read_ranges_P": [
+        [
+          1,
+          94
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          119
+        ]
+      ],
+      "state": "REVIEWED",
+      "responsibility": "薬剤原名統計・未確認候補・Markdown/machine exportの実読取consumer回帰。",
+      "callers_or_consumers": "mcs_stats.run_stats→current_refs; rollup.build_rollup; brain_export._patient_md; export_schema.project_record",
+      "criteria_reference": "全20criteriaをこの責務に限定して適用。テストは対応する実source契約とC11/C12を検証。",
+      "W_read_basis": "P全文＋全P→source W差分hunkを切断なし読取。未変更byte範囲を再利用し、source/test AST保持をartifactで証明。",
+      "read_method": "fresh nontruncated full P read; current W complete patch composition"
+    }
+  ],
+  "readonly_boundary_inventory": [
+    {
+      "path": "mcs/ingest/run_check.py",
+      "sha256_P_W": "915d6784befb59fcfffae019020dac59c92fa272571dfc325c36585b283ef00d",
+      "line_count": 1928,
+      "read_ranges": [
+        [
+          1155,
+          1265
+        ]
+      ],
+      "state": "BOUNDARY_READ",
+      "modified": false,
+      "coverage_limit": "記載範囲の実consumer/guard照合のみ。範囲外全文監査を主張しない。"
+    },
+    {
+      "path": "mcs/ops/mcs_setup.py",
+      "sha256_P_W": "6f6eabf5349611fa8a0729d344f34c37576d79359b04a131710c1d17ce56db80",
+      "line_count": 3499,
+      "read_ranges": [
+        [
+          95,
+          126
+        ]
+      ],
+      "state": "BOUNDARY_READ",
+      "modified": false,
+      "coverage_limit": "記載範囲の実consumer/guard照合のみ。範囲外全文監査を主張しない。"
+    },
+    {
+      "path": "mcs/views/mcs_stats.py",
+      "sha256_P_W": "efaa66022f00c74c1f35832035bb205bf7d8bdddebefadbd3e1cf5c53cf8f06d",
+      "line_count": 1274,
+      "read_ranges": [
+        [
+          355,
+          385
+        ],
+        [
+          415,
+          460
+        ],
+        [
+          1243,
+          1274
+        ]
+      ],
+      "state": "BOUNDARY_READ",
+      "modified": false,
+      "coverage_limit": "記載範囲の実consumer/guard照合のみ。範囲外全文監査を主張しない。"
+    },
+    {
+      "path": "mcs/core/mcs_queries.py",
+      "sha256_P_W": "7a6c84fc645b990d77f6838bc978559b73291e38dd5bb0d2884cb088e366fa7c",
+      "line_count": 494,
+      "read_ranges": [
+        [
+          1,
+          200
+        ]
+      ],
+      "state": "BOUNDARY_READ",
+      "modified": false,
+      "coverage_limit": "記載範囲の実consumer/guard照合のみ。範囲外全文監査を主張しない。"
+    },
+    {
+      "path": "mcs/ops/brain_export.py",
+      "sha256_P_W": "b79d17fc401b63cfa1670cbc4e35fa992b77330e29cd19641c9214e052bc0a81",
+      "line_count": 436,
+      "read_ranges": [
+        [
+          240,
+          264
+        ]
+      ],
+      "state": "BOUNDARY_READ",
+      "modified": false,
+      "coverage_limit": "記載範囲の実consumer/guard照合のみ。範囲外全文監査を主張しない。"
+    },
+    {
+      "path": "tests/extract/test_drug_map_evaluation.py",
+      "sha256_P_W": "b3101dea3bb2283536cfdab1ca91e327785ce7ca8bf0dfecc925c26c2e6b2e50",
+      "line_count": 88,
+      "read_ranges": [
+        [
+          1,
+          88
+        ]
+      ],
+      "state": "COMPLETE_READ",
+      "modified": false,
+      "coverage_limit": "記載範囲の実consumer/guard照合のみ。範囲外全文監査を主張しない。"
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "sha256_P_W": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "line_count": 46,
+      "read_ranges": [
+        [
+          1,
+          46
+        ]
+      ],
+      "state": "COMPLETE_READ",
+      "modified": false,
+      "coverage_limit": "記載範囲の実consumer/guard照合のみ。範囲外全文監査を主張しない。"
+    },
+    {
+      "path": "conftest.py",
+      "sha256_P_W": "a1066a51c68082f7b65e346cef21e6fe8fab7e5e2f354b1c20b0fe95a43fea3a",
+      "line_count": 24,
+      "read_ranges": [
+        [
+          1,
+          24
+        ]
+      ],
+      "state": "COMPLETE_READ",
+      "modified": false,
+      "coverage_limit": "記載範囲の実consumer/guard照合のみ。範囲外全文監査を主張しない。"
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256_P_W": "4d9b63c62c42873bd9ee00d7c6d251c866cc44191ed2c7d16c13ab195b0ac452",
+      "line_count": 237,
+      "read_ranges": [
+        [
+          1,
+          237
+        ]
+      ],
+      "state": "COMPLETE_READ",
+      "modified": false,
+      "coverage_limit": "記載範囲の実consumer/guard照合のみ。範囲外全文監査を主張しない。"
+    },
+    {
+      "path": "changes/README.md",
+      "sha256_P_W": "fa8948acb3c7f2c56269b77dd6086c0c79b6a966fbbd79f5445f686c94a55b11",
+      "line_count": 25,
+      "read_ranges": [
+        [
+          1,
+          25
+        ]
+      ],
+      "state": "COMPLETE_READ",
+      "modified": false,
+      "coverage_limit": "記載範囲の実consumer/guard照合のみ。範囲外全文監査を主張しない。"
+    }
+  ],
+  "criteria": [
+    {
+      "id": "C01",
+      "criterion": "設計・責務・依存・循環・重複・dead code・文書乖離",
+      "applicability": "APPLICABLE",
+      "decision": "辞書/注記/派生と患者表示の責務を実callerで追跡。公開signature、docstring、依存、分類、schemaとclinical mappingをAST同一性で保持。",
+      "evidence": "load/current_refs/derive/candidate_note; build_rollup/_llm_reply_kind; all-source-contract-proof.json",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "C02",
+      "criterion": "状態遷移・不変条件・欠損・日時/単位/丸め/境界",
+      "applicability": "APPLICABLE",
+      "decision": "深度超過は無効辞書、利用不能候補、無事実/無返信段階へ戻す。SQL-validとPython decode成功を混同せず、3.13の正常深度999controlはvitals/replyを保持。",
+      "evidence": "F01-F04; original currentness/identity controls; rollup-before313",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "C03",
+      "criterion": "制約・transaction・upsert・排他・冪等性・削除",
+      "applicability": "APPLICABLE",
+      "decision": "読取では全DB dump/total_changes不変。deriveは原文/messagesとsource artifacts不変、既存transactionでmed_refだけretireしpids=[1]、再実行done0。",
+      "evidence": "source-depth derive/read-only tests; original pinned-idempotent/unapproved retirement tests",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "C04",
+      "criterion": "migration・旧schema・値/FK/index/trigger・途中失敗",
+      "applicability": "BOUNDARY",
+      "decision": "schema/migration/FK/index/triggerは不変更。辞書schema1/2と旧/current source互換を既存familyで保持。実履歴migrationなし。",
+      "evidence": "all-source-contract-proof.json; old dictionary/source-generation tests",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "C05",
+      "criterion": "認証/認可・tenant・injection/XSS/CSRF/SSRF・暗号",
+      "applicability": "APPLICABLE",
+      "decision": "絶対path/明示pin、owner-private/regular/no-follow/容量、SHA検証をdecodeより前に維持。patient/current hash/project/body/source SHA/approval/synthetic=False bindingとパラメタSQLを弱めない。",
+      "evidence": "load165–245/_source247–260/current_refs269–332; setup._drug_map_config; source AST",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "C06",
+      "criterion": "PII/PHI・ログ/URL/cache/storage/export/telemetry",
+      "applicability": "APPLICABLE",
+      "decision": "完全合成dict/source/DBだけ。invalid_dictionary診断にpathを出さず、annotation破損で候補値/辞書IDを表示しない。secret/PHI/private辞書/本番DBは未読未実行。",
+      "evidence": "pipeline path assertion; view/export tests; runner/conftest",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "C07",
+      "criterion": "API/CLI/イベント契約・入力上限・互換性・pagination",
+      "applicability": "APPLICABLE",
+      "decision": "function signatures/4MiB上限/entries/source schema/Resolver version/返却dict/API/既定値は保持。ValueError(drug_map_json)へ正規化し通常tick診断を利用。",
+      "evidence": "F01; source AST; old config/dictionary tests",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "C08",
+      "criterion": "UI・stale state・二重操作・入力消失・復旧・accessibility",
+      "applicability": "BOUNDARY",
+      "decision": "実stats/rollup/Markdownで注記unavailableを明示し原名統計を保持。深いsourceを根拠とするvitals/返信doneは出さず正常sourceは保持。実画面/操作/アクセシビリティは範囲外。",
+      "evidence": "view test real consumers; canonical new4cases; brain_export",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "C09",
+      "criterion": "N+1・計算量・無制限処理・memory・起動/import・費用",
+      "applicability": "APPLICABLE",
+      "decision": "4MiB以内20001byte深度10000も停止する実証。recursionlimit/容量上限を増やさず狭い例外型追加。med_ref-only lookupと正常blob decode回数を保持。",
+      "evidence": "decoder profiles; ref_lookup; test_rollup_decodes_each_llm_blob_once",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "C10",
+      "criterion": "race/retry/queue/timeout・キャンセル・例外・観測性",
+      "applicability": "APPLICABLE",
+      "decision": "6decode境界のRecursionErrorだけ既存安全診断/空候補/無事実へ扱う。SQL/memory/別I/O例外を広範捕捉しない。deadline/retry/queue/cancelは不変更。",
+      "evidence": "source diff and normalized AST; F01-F04",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "C11",
+      "criterion": "テスト偽陽性・mock依存・回帰/異常系/競合・flaky/skip",
+      "applicability": "APPLICABLE",
+      "decision": "全既存test AST不変。13新caseのP結果は3.10=12FAIL/1PASS、3.13=6FAIL/7PASS。native controlsを失敗へ算入せず、最終6file family各122PASS/0skip。",
+      "evidence": "existing-tests proof; JUnit exact nodes; failure accounting",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "C12",
+      "criterion": "build・runtime/lockfile・依存リスク・script・設定/CI差",
+      "applicability": "APPLICABLE",
+      "decision": "stdlibのみ、実Python3.10.22/3.13.12、SQLite3.53.1/3.50.4、pinned Ruff0.16.10、existing env-i/socket/process/live guards保持。SDK/service/生成器未実行。",
+      "evidence": "complete-after310/313; complete-ruff; guarded runner full reads",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "X01",
+      "criterion": "配布物・起動終了・旧新version・切戻し",
+      "applicability": "BOUNDARY",
+      "decision": "専用branch local commitのみ。CLI/bootstrap/version不変更。fragment同source commit。配備/再起動/installer/update/tagなし、親fixedI全体検証と分離。",
+      "evidence": "W source commit; fragment; git receipt",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "X02",
+      "criterion": "供給網・取得元・CI権限・ライセンス",
+      "applicability": "BOUNDARY",
+      "decision": "runtime依存/取得元/lockfile/CI permissions/licenseに差分なし。明示path SHA辞書を自動取得しない。既存固定Ruff利用、外部SDK/サービス未接続。",
+      "evidence": "import AST and owned path set; fragment",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "X03",
+      "criterion": "backup/restore/削除・派生物/鍵・削除データ復活",
+      "applicability": "APPLICABLE",
+      "decision": "読取は完全DB不変、派生はmed_refだけの既存除去/rebuild pids契約。原本source/message保存、削除/foreign/current guards保持。restore/backup/鍵不変更。",
+      "evidence": "source-depth derive; dump/total_changes; deleted/binding controls",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "X04",
+      "criterion": "外部連携・署名・主体/宛先・再送/順序・部分取込",
+      "applicability": "BOUNDARY",
+      "decision": "stage_derive→rollup順/pids伝播維持。返信はview-only根拠で、深いshadowed legacy replyからdoneを確定しない。送信/receipt/署名/外部再送は範囲外。",
+      "evidence": "run_check1155–1265; reply consumer225; shadowed reply regression",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "X05",
+      "criterion": "offline・複数tab・容量/eviction・OS差・native/FFI",
+      "applicability": "APPLICABLE",
+      "decision": "両実runtimeのdecoder/SQLite深度差を完全合成で検証。no-follow private file契約維持。OS全般/FFI全域/容量故障/実端末は保証しない。",
+      "evidence": "decoder profiles; SQL-valid999 controls; isolated runtimes",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "X06",
+      "criterion": "AI/MCP・prompt injection・tool権限・承認・記憶越境",
+      "applicability": "BOUNDARY",
+      "decision": "JSONを命令/自動承認へ昇格しない。LLM budget0とguardでmodel/Jevなし。辞書approved_by/synthetic flag保持。MCP/記憶/model権限不変更。",
+      "evidence": "pipeline llm_budget_cap=0; test guard; provenance AST",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "X07",
+      "criterion": "医療/算定/金銭の適用日/対象/根拠・監査・人の承認",
+      "applicability": "APPLICABLE",
+      "decision": "薬剤同一性・alias/stem・曖昧/総称・candidate・承認を変更しない。深度破損を根拠にしない。架空corpusは医学的妥当性/実患者精度の証明ではない。",
+      "evidence": "unchanged resolver AST; fictional evaluation; old identity/provenance tests",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    },
+    {
+      "id": "X08",
+      "criterion": "公開Webの導線・フォーム・link/index・公開境界",
+      "applicability": "NOT_APPLICABLE",
+      "decision": "ローカル辞書/SQLite/Markdown consumerだけ。公開Web form/routing/index/serverを追加変更せず外部公開なし。候補欠測表示はC08で確認。",
+      "evidence": "owned source imports/path set; brain_export boundary",
+      "modules": [
+        "mcs/extract/drug_map.py",
+        "mcs/extract/rollup.py"
+      ],
+      "limit": "本packetの確認済みJSON深度経路と維持契約のみ。親最終I/本番/全域成功へ昇格しない。"
+    }
+  ],
+  "findings": [
+    {
+      "id": "F01",
+      "status": "CONFIRMED_FIXED",
+      "boundary": "drug_map.load195",
+      "cause": "owner-private/pinned 20001byte深度10000 JSONでもRecursionErrorがValueError変換から漏れtickがgeneric exception。",
+      "fix": "except tupleへRecursionError追加→ValueError(drug_map_json)→invalid_dictionary/status invalid。",
+      "before": "dictionary load1 + pipeline tick1, both runtimes FAIL",
+      "validation": "実decoder error; empty synthetic Ledger dump不変; path無し。通常invalid設定の旧med_ref retirementは維持。"
+    },
+    {
+      "id": "F02",
+      "status": "CONFIRMED_FIXED",
+      "boundary": "drug_map.current_refs283 content/meta",
+      "cause": "注記depth10000 RecursionErrorがstats/rollupへ伝播し候補集計を中断。",
+      "fix": "既存安全[] except tupleへRecursionError追加。",
+      "before": "read content/meta2 + stats/rollup/export content/meta2, both runtimes FAIL",
+      "validation": "valid resolved control→honest unavailable、action/name統計不変、source薬剤保持、候補値/ID非表示、全dump/total_changes不変。"
+    },
+    {
+      "id": "F03",
+      "status": "CONFIRMED_FIXED",
+      "boundary": "P current_refs296/derive354",
+      "cause": "SQL-valid深度999はPython3.10 decode不能。SQL JSON制約はPython安全深度保証ではない。",
+      "fix": "refsはRecursionErrorで[]、deriveはsource=None→既存med_ref-only retirement/pids/idempotence。",
+      "before": "3.10追加2FAIL / 3.13 native2PASS control",
+      "validation": "read全DB不変、derive原文/source不変・古いrefsだけ除去、pids=[1]、再実行done0。stdlib sweepは3.10 depth995–999 SQL1/RecursionError、depth10000 SQL0。"
+    },
+    {
+      "id": "F04",
+      "status": "CONFIRMED_FIXED",
+      "boundary": "rollup facts149/158 catch163; raw reply225→_llm_reply_kind62 catch63",
+      "cause": "同SQL-valid source停止。fact catchだけ補ってもraw legacy reply再decodeで停止する同根。",
+      "fix": "2つの既存except tupleへRecursionError追加。既存empty facts/None replyを利用。",
+      "before": "3.10 v1/llm/canonical3 + shadowed reply1 FAIL / 3.13 native4PASS",
+      "validation": "全dump/total_changes不変、valid vitals/done保持、破損根拠からvitals/done無し。最初のscope外probeは親追加所有後に解消。"
+    }
+  ],
+  "disproved_findings": [
+    {
+      "id": "D01",
+      "candidate": "深度10000sourceもSQL通過してmed decodeへ到達する",
+      "result": "両SQLite SQL-valid0で既存source queryが除外。control1PASS。SQL弱化なし。depth999のPython差は別。"
+    },
+    {
+      "id": "D02",
+      "candidate": "深度999sourceも3.13で同じ欠陥",
+      "result": "固定P3.13追加native6control PASS。3.10の6FAILへ混ぜない。"
+    }
+  ],
+  "deferred_findings": [],
+  "entry_authorization_processing_storage_consumer": [
+    {
+      "entry": "stage_derive1213–1234→load165",
+      "authorization": "config path+SHA→regular owner-private/no-follow/MAX_BYTES/SHA before decode",
+      "processing": "schema/provenance/date/entry ID/kind/alias/forms/codes→immutable DrugMap",
+      "storage": "approved+current source→existing med_ref transaction; messages/source untouched",
+      "consumer": "pids→rollup dirty rebuild1242; invalid_dictionary usual diagnostic and retirement"
+    },
+    {
+      "entry": "stats/rollup→current_refs269",
+      "authorization": "current body/hash/project/fact→newest annotation exact source SHA/dict SHA/resolver/approved/synthetic=False",
+      "processing": "annotation/source decode, index/name/status/candidate shape; failure []",
+      "storage": "read only; dump/total_changes unchanged",
+      "consumer": "honest unavailable, source meds remain, no stale candidate value/ID in Markdown"
+    },
+    {
+      "entry": "build_rollup72→source149/158→reply225/_llm_reply_kind57",
+      "authorization": "existing current/fact predicate, sender/time/thread reply contract",
+      "processing": "decoder failure→existing empty facts/None reply; native-success valid controls unchanged",
+      "storage": "build read only; rebuild existing derived patient_rollup transaction unchanged",
+      "consumer": "patient fields without unsupported vitals/completed reply"
+    }
+  ],
+  "verification": [
+    {
+      "id": "before-final310",
+      "runtime": "310",
+      "source_snapshot": "7ecbba17a092e00bdee70ffec007159f8a96213d",
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-maintenance-python310-20261005/bin/python scripts/run_tests.sh tests/extract/test_drug_map.py tests/ingest/test_drug_map_pipeline.py tests/views/test_drug_candidates.py -k 'deep' -o addopts='' -q --junitxml=/tmp/mcs-maintenance-drug-json-20261005/before-final310.xml > /tmp/mcs-maintenance-drug-json-20261005/before-final310.log 2>&1",
+      "exit": 1,
+      "counts": {
+        "tests": 7,
+        "failures": 6,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 1
+      },
+      "failed_nodes": [
+        "tests.extract.test_drug_map::test_deep_dictionary_json_uses_safe_validation_error",
+        "tests.extract.test_drug_map::test_deep_annotation_json_is_unavailable_without_writes[content]",
+        "tests.extract.test_drug_map::test_deep_annotation_json_is_unavailable_without_writes[meta]",
+        "tests.ingest.test_drug_map_pipeline::test_deep_dictionary_returns_safe_tick_diagnostic_without_db_writes",
+        "tests.views.test_drug_candidates::test_deep_annotation_keeps_stats_and_rollup_available_without_writes[content]",
+        "tests.views.test_drug_candidates::test_deep_annotation_keeps_stats_and_rollup_available_without_writes[meta]"
+      ],
+      "test_nodes_sha256": "540927990b5302203df23bdad9a32b8c885c373759ca5c981478aceb049c1c32",
+      "log": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/before-final310.log",
+        "bytes": 12509,
+        "sha256": "fc3b5f783c795e861f67f7dbf2cc07802d108349b6463b7865b6bd62675371f7"
+      },
+      "junit": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/before-final310.xml",
+        "bytes": 13174,
+        "sha256": "a44664de93aedd604bd7e2e63128aa495c7e5bc612f9fc46a9db631bbfc117f7"
+      },
+      "timestamp_utc": "2026-10-05T03:26:31.881206+00:00"
+    },
+    {
+      "id": "source-med-before310",
+      "runtime": "310",
+      "source_snapshot": "7ecbba17a092e00bdee70ffec007159f8a96213d",
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-maintenance-python310-20261005/bin/python scripts/run_tests.sh tests/extract/test_drug_map.py -k 'sql_valid_source_at_python_depth_limit' -o addopts='' -q --junitxml=/tmp/mcs-maintenance-drug-json-20261005/source-med-before310.xml > /tmp/mcs-maintenance-drug-json-20261005/source-med-before310.log 2>&1",
+      "exit": 1,
+      "counts": {
+        "tests": 2,
+        "failures": 2,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 0
+      },
+      "failed_nodes": [
+        "tests.extract.test_drug_map::test_sql_valid_source_at_python_depth_limit_keeps_read_only_refs_safe",
+        "tests.extract.test_drug_map::test_sql_valid_source_at_python_depth_limit_retires_only_unreadable_refs"
+      ],
+      "test_nodes_sha256": "c9932273acca77361b6b3b85be87d04c7246fdbdba52cdb1014a4693fbab1610",
+      "log": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/source-med-before310.log",
+        "bytes": 6564,
+        "sha256": "5106a6ab6a2fc89d55cdecd65e2b210d2384e1f81497bef45083e0c0d60f578f"
+      },
+      "junit": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/source-med-before310.xml",
+        "bytes": 6756,
+        "sha256": "43a8ab4ec38f440fc2758a9938bc1c8c662a6b4ac29115c1113db7bab0b1fb14"
+      },
+      "timestamp_utc": "2026-10-05T03:34:17.024015+00:00"
+    },
+    {
+      "id": "rollup-before310",
+      "runtime": "310",
+      "source_snapshot": "7ecbba17a092e00bdee70ffec007159f8a96213d",
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-maintenance-python310-20261005/bin/python scripts/run_tests.sh tests/extract/test_rollup_canonical.py -k 'sql_valid' -o addopts='' -q --junitxml=/tmp/mcs-maintenance-drug-json-20261005/rollup-before310.xml > /tmp/mcs-maintenance-drug-json-20261005/rollup-before310.log 2>&1",
+      "exit": 1,
+      "counts": {
+        "tests": 4,
+        "failures": 4,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 0
+      },
+      "failed_nodes": [
+        "tests.extract.test_rollup_canonical::test_rollup_sql_valid_source_at_python_depth_limit_is_safe[extract_v1]",
+        "tests.extract.test_rollup_canonical::test_rollup_sql_valid_source_at_python_depth_limit_is_safe[extract_llm]",
+        "tests.extract.test_rollup_canonical::test_rollup_sql_valid_source_at_python_depth_limit_is_safe[canonical_projection]",
+        "tests.extract.test_rollup_canonical::test_rollup_sql_valid_shadowed_reply_at_python_depth_limit_is_safe"
+      ],
+      "test_nodes_sha256": "fa1c16aa4bc886699d09d204152b5177ec982beac4830c9d2ba504a2a310c274",
+      "log": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/rollup-before310.log",
+        "bytes": 11890,
+        "sha256": "a8d5fc377edcf386101dec86ecf10eef0a1827025508453049f8a58b747cf270"
+      },
+      "junit": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/rollup-before310.xml",
+        "bytes": 12282,
+        "sha256": "6656ae804a7820b0616c48bd641dc98d0f3411d0d67642d38f65fd0801634776"
+      },
+      "timestamp_utc": "2026-10-05T03:41:53.063194+00:00"
+    },
+    {
+      "id": "complete-after310",
+      "runtime": "310",
+      "source_snapshot": "2c8bdf3d4338cc355b3b4e7574b123b4b78a23ac",
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-maintenance-python310-20261005/bin/python scripts/run_tests.sh tests/extract/test_drug_map.py tests/extract/test_drug_map_evaluation.py tests/extract/test_rollup_ref_lookup.py tests/extract/test_rollup_canonical.py tests/ingest/test_drug_map_pipeline.py tests/views/test_drug_candidates.py -o addopts='' -q --junitxml=/tmp/mcs-maintenance-drug-json-20261005/complete-after310.xml > /tmp/mcs-maintenance-drug-json-20261005/complete-after310.log 2>&1",
+      "exit": 0,
+      "counts": {
+        "tests": 122,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 122
+      },
+      "failed_nodes": [],
+      "test_nodes_sha256": "51e0c6e5d3392c484b3f244cfd27fe28f15808a28f898a940587525c0437987f",
+      "log": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/complete-after310.log",
+        "bytes": 180,
+        "sha256": "e74f700cfdddae3c6f78c3506afe5df9c10a124be0c4ad0f59d7c20056e96642"
+      },
+      "junit": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/complete-after310.xml",
+        "bytes": 16727,
+        "sha256": "16b9684c80293bc5ce8313c25cb60174b7ae912b32c4ca7a2c9cee5390ae7b18"
+      },
+      "timestamp_utc": "2026-10-05T03:42:53.536572+00:00"
+    },
+    {
+      "id": "before-final313",
+      "runtime": "313",
+      "source_snapshot": "7ecbba17a092e00bdee70ffec007159f8a96213d",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/extract/test_drug_map.py tests/ingest/test_drug_map_pipeline.py tests/views/test_drug_candidates.py -k 'deep' -o addopts='' -q --junitxml=/tmp/mcs-maintenance-drug-json-20261005/before-final313.xml > /tmp/mcs-maintenance-drug-json-20261005/before-final313.log 2>&1",
+      "exit": 1,
+      "counts": {
+        "tests": 7,
+        "failures": 6,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 1
+      },
+      "failed_nodes": [
+        "tests.extract.test_drug_map::test_deep_dictionary_json_uses_safe_validation_error",
+        "tests.extract.test_drug_map::test_deep_annotation_json_is_unavailable_without_writes[content]",
+        "tests.extract.test_drug_map::test_deep_annotation_json_is_unavailable_without_writes[meta]",
+        "tests.ingest.test_drug_map_pipeline::test_deep_dictionary_returns_safe_tick_diagnostic_without_db_writes",
+        "tests.views.test_drug_candidates::test_deep_annotation_keeps_stats_and_rollup_available_without_writes[content]",
+        "tests.views.test_drug_candidates::test_deep_annotation_keeps_stats_and_rollup_available_without_writes[meta]"
+      ],
+      "test_nodes_sha256": "540927990b5302203df23bdad9a32b8c885c373759ca5c981478aceb049c1c32",
+      "log": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/before-final313.log",
+        "bytes": 13255,
+        "sha256": "2071c675f7bb99122dacc6fd817f59c7d6947d24c2f2f804062ea2b737291cf7"
+      },
+      "junit": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/before-final313.xml",
+        "bytes": 13920,
+        "sha256": "482f2269e254df0ce576978ae6f0ba053644f5aacfd27d2962d4d36635e1465c"
+      },
+      "timestamp_utc": "2026-10-05T03:26:31.831606+00:00"
+    },
+    {
+      "id": "source-med-before313",
+      "runtime": "313",
+      "source_snapshot": "7ecbba17a092e00bdee70ffec007159f8a96213d",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/extract/test_drug_map.py -k 'sql_valid_source_at_python_depth_limit' -o addopts='' -q --junitxml=/tmp/mcs-maintenance-drug-json-20261005/source-med-before313.xml > /tmp/mcs-maintenance-drug-json-20261005/source-med-before313.log 2>&1",
+      "exit": 0,
+      "counts": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 2
+      },
+      "failed_nodes": [],
+      "test_nodes_sha256": "c9932273acca77361b6b3b85be87d04c7246fdbdba52cdb1014a4693fbab1610",
+      "log": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/source-med-before313.log",
+        "bytes": 113,
+        "sha256": "63702037b88ce993d3cde48200b694a56588cb7d7c86464628fcf13f858d6489"
+      },
+      "junit": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/source-med-before313.xml",
+        "bytes": 538,
+        "sha256": "70a19768aba9d95be4c034cdcd6b9b6c4c710b9dafef2fa5cd47df18b99b378f"
+      },
+      "timestamp_utc": "2026-10-05T03:34:16.996195+00:00"
+    },
+    {
+      "id": "rollup-before313",
+      "runtime": "313",
+      "source_snapshot": "7ecbba17a092e00bdee70ffec007159f8a96213d",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/extract/test_rollup_canonical.py -k 'sql_valid' -o addopts='' -q --junitxml=/tmp/mcs-maintenance-drug-json-20261005/rollup-before313.xml > /tmp/mcs-maintenance-drug-json-20261005/rollup-before313.log 2>&1",
+      "exit": 0,
+      "counts": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 4
+      },
+      "failed_nodes": [],
+      "test_nodes_sha256": "fa1c16aa4bc886699d09d204152b5177ec982beac4830c9d2ba504a2a310c274",
+      "log": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/rollup-before313.log",
+        "bytes": 113,
+        "sha256": "c1d006910fe56b6b93ae5d2984d0a19ef6bb4f3568fde934877a0197d11d32bc"
+      },
+      "junit": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/rollup-before313.xml",
+        "bytes": 862,
+        "sha256": "d1bd03cc1e6883871e46eecd9463ca1d33d7ea61123845bc38dabe88374f510f"
+      },
+      "timestamp_utc": "2026-10-05T03:41:53.009042+00:00"
+    },
+    {
+      "id": "complete-after313",
+      "runtime": "313",
+      "source_snapshot": "2c8bdf3d4338cc355b3b4e7574b123b4b78a23ac",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/extract/test_drug_map.py tests/extract/test_drug_map_evaluation.py tests/extract/test_rollup_ref_lookup.py tests/extract/test_rollup_canonical.py tests/ingest/test_drug_map_pipeline.py tests/views/test_drug_candidates.py -o addopts='' -q --junitxml=/tmp/mcs-maintenance-drug-json-20261005/complete-after313.xml > /tmp/mcs-maintenance-drug-json-20261005/complete-after313.log 2>&1",
+      "exit": 0,
+      "counts": {
+        "tests": 122,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 122
+      },
+      "failed_nodes": [],
+      "test_nodes_sha256": "51e0c6e5d3392c484b3f244cfd27fe28f15808a28f898a940587525c0437987f",
+      "log": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/complete-after313.log",
+        "bytes": 180,
+        "sha256": "580725417f2f8ca74557f439409f5e230f3d5b1a98c3e462d3cb2895317b4c3f"
+      },
+      "junit": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/complete-after313.xml",
+        "bytes": 16727,
+        "sha256": "0a9f9b2d19503d39800135e331bf74e761325f9de67615fd93be92208091a5b7"
+      },
+      "timestamp_utc": "2026-10-05T03:42:53.494043+00:00"
+    }
+  ],
+  "before_input_test_overlays": {
+    "isolated-P-final-tests": [
+      {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/isolated-P-final-tests/tests/extract/test_drug_map.py",
+        "bytes": 20328,
+        "sha256": "689d1147adaa45cdef12b6afa5d7655fcd59ea95bc67a9c229235a8d5f142d45"
+      },
+      {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/isolated-P-final-tests/tests/ingest/test_drug_map_pipeline.py",
+        "bytes": 5368,
+        "sha256": "eb3d962343d5aa0422ab4182b30c0e4a96ebf5e002b47a15a158edabfdb9f960"
+      },
+      {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/isolated-P-final-tests/tests/views/test_drug_candidates.py",
+        "bytes": 5133,
+        "sha256": "9718e5c90e950ba1ec6b0cb400fd8a9534aedfb2f3434c25d4df10764a678138"
+      }
+    ],
+    "isolated-P-source-med-final-tests": [
+      {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/isolated-P-source-med-final-tests/tests/extract/test_drug_map.py",
+        "bytes": 23204,
+        "sha256": "084dcbfdea2d8cb8dc20825887abbc5423eaec977ef8cc436f70f9dc69adb421"
+      },
+      {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/isolated-P-source-med-final-tests/tests/ingest/test_drug_map_pipeline.py",
+        "bytes": 5368,
+        "sha256": "eb3d962343d5aa0422ab4182b30c0e4a96ebf5e002b47a15a158edabfdb9f960"
+      },
+      {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/isolated-P-source-med-final-tests/tests/views/test_drug_candidates.py",
+        "bytes": 5133,
+        "sha256": "9718e5c90e950ba1ec6b0cb400fd8a9534aedfb2f3434c25d4df10764a678138"
+      },
+      {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/isolated-P-source-med-final-tests/tests/extract/test_rollup_canonical.py",
+        "bytes": 20297,
+        "sha256": "7a0e9e284e04e57310623609a4ea18592774f85dd8d3285fc9941422956b5c15"
+      }
+    ]
+  },
+  "failure_accounting": {
+    "fixed_P_final_regressions_by_runtime": {
+      "310": {
+        "tests": 13,
+        "passed": 1,
+        "failures": 12,
+        "errors": 0,
+        "skipped": 0
+      },
+      "313": {
+        "tests": 13,
+        "passed": 7,
+        "failures": 6,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "interpretation": "13新caseは3独立before runの合計。3.10=12FAIL+1SQLguard control、3.13=6FAIL+6native control+1SQLguard。最終familyは122で両runtime各1回実行。途中結果を合計へ加算しない。",
+    "preserved_intermediate_logs": "artifactsのbefore310/313,after*-initial,after*,final-after*を保持。最終fixedP before-finalとsource-med-before/rollup-beforeだけを13caseのbeforeへ使用。",
+    "new_assertion_correction": "初期post修復新export2件は固定表見出しをcandidate本文と混同。候補値/辞書IDだけ不表示へ訂正後Pで6FAIL再現。既存test AST不変。",
+    "initial_ruff": "新views未使用json import F401を除去。ruff.log exit1保存、complete-ruff exit0。",
+    "evidence_utilities": "AST補助初版Attribute nodeをName扱いし失敗→unparse修理。apply_patch一度context不一致は未適用→再配置。証拠生成補助のunmatched braceで未実行→structured組立で修理。いずれもsource behavior結果へ算入しない。"
+  },
+  "runtime_profiles": {
+    "310": {
+      "python": "3.10.22",
+      "sqlite": "3.53.1",
+      "recursionlimit": 1000,
+      "binary": "/tmp/mcs-maintenance-python310-20261005/bin/python"
+    },
+    "313": {
+      "python": "3.13.12",
+      "sqlite": "3.50.4",
+      "recursionlimit": 1000,
+      "binary": "/Users/yusuke/.mcs/.venv/bin/python"
+    },
+    "isolation": "runner env-i temp HOME/TMP/XDG,TZ=UTC,LANG/LC_ALL=C.UTF-8,PYTHONDONTWRITEBYTECODE=1,MCS_TEST_SANDBOX=1; test guards socket/process/production LLM-Jev/MCS; rule prefilter off synthetic-only contract. No network/secret env inherited."
+  },
+  "additional_checks": {
+    "ruff": {
+      "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check mcs/extract/drug_map.py mcs/extract/rollup.py tests/extract/test_drug_map.py tests/extract/test_rollup_canonical.py tests/extract/test_rollup_ref_lookup.py tests/ingest/test_drug_map_pipeline.py tests/views/test_drug_candidates.py",
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-drug-json-20261005/complete-ruff.log"
+    },
+    "source_contract": "all-source-contract-proof.json: normalize exact drug4+rollup2 handlers→P AST identical; signatures/constants/docstrings/rules/schemas/metadata unchanged.",
+    "existing_tests": "all-existing-tests-preserved.json: remove only new test defs→P AST identical across existing4 changed files.",
+    "source_test_patch": {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/P-W-source-tests.patch",
+      "bytes": 16492,
+      "sha256": "263a34325419723ffc9e1590645424a662d9f4342642a86a49abda5d82ff8691"
+    },
+    "fragment": {
+      "path": "changes/20261005-drug-map-corrupt-json.json",
+      "bytes": 1744,
+      "sha256": "e84125206092f9c6698805f647ac3e9eb5b77d8b9703e7bf1889c535ea5c2ee8"
+    },
+    "fragment_validation": "category fixed, required exact fields/types, Japanese impact/upgrade/details, valid source refs; same source commit",
+    "diff_check": {
+      "command": "git diff --check",
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-drug-json-20261005/source-diff-check.log"
+    },
+    "generated_docs": "source docstrings/modules/CLI/table/schema/constants unchanged。生成DEVELOPMENT親所有、新releasebuild/versionbumpなし。",
+    "initial_unowned_probe": {
+      "status": "RESOLVED_BY_F04",
+      "runtime": "310",
+      "exit": 0,
+      "meaning": "1PASSはactual rollup RecursionError+stats data_error unavailableをassertする診断probe。正常runtime成功の意味ではない。",
+      "synthetic_probe": {
+        "path": "/tmp/mcs-maintenance-drug-json-20261005/isolated-P-source-med-final-tests/tests/extract/test_synthetic_unowned_source_probe.py",
+        "bytes": 1319,
+        "sha256": "cfde0709814807a32d958d9795969e04787473653aa8064d7568187f48ba9d1d"
+      },
+      "log": "/tmp/mcs-maintenance-drug-json-20261005/unowned-source-probe310.log",
+      "junit": "/tmp/mcs-maintenance-drug-json-20261005/unowned-source-probe310.xml"
+    }
+  },
+  "artifacts": [
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/P-W-source-tests.patch",
+      "bytes": 16492,
+      "sha256": "263a34325419723ffc9e1590645424a662d9f4342642a86a49abda5d82ff8691"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/after310-initial.log",
+      "bytes": 4468,
+      "sha256": "d786b4b996fdaadf47b7a8e84a5307f43dde3ddb9081bf0d5a23dd98f52d37b0"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/after310-initial.xml",
+      "bytes": 13852,
+      "sha256": "5fb4460988b52326f8d12b6577dcccd9288bd4cf33f977ca17fc8b1f6aee1656"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/after310.log",
+      "bytes": 99,
+      "sha256": "af7125ca6b84ead7a013bb5b36184820e3e37c19ece58351eaa8e7153da62427"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/after310.xml",
+      "bytes": 9233,
+      "sha256": "3b3d6b5a8d9889c9db61e9f71b5f4c9f6255caa05b7cd3fb36a6e9fa6e11d3a5"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/after313-initial.log",
+      "bytes": 4468,
+      "sha256": "bf8191372eb84a0da453e631573d0e8a2d612b30b4d68db596c861e735a7c499"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/after313-initial.xml",
+      "bytes": 13852,
+      "sha256": "04aedd144d07d0a5104c3c171b93e3df63d3fdd574cc485de3d909d0bba14d99"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/after313.log",
+      "bytes": 99,
+      "sha256": "b62b4e8bfcd69525a212a34a4be09c7a6240e879fa4980b8d1ba84bb40dc2575"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/after313.xml",
+      "bytes": 9233,
+      "sha256": "cff5d9ca1c5df6631704db5f1e6c9d2b24f98cf0b45d8969de6ed3e3bba08a3c"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/all-existing-tests-preserved.json",
+      "bytes": 1622,
+      "sha256": "4f50824c42da7ac1409807b2bcf727eead4bea056e06eb2e1ae7d458f0479272"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/all-source-contract-proof.json",
+      "bytes": 5553,
+      "sha256": "128ad145a0f80306fba688a5b3b3576471c46ee3f9dc996c983ba1c55d0308d7"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/before-final310.log",
+      "bytes": 12509,
+      "sha256": "fc3b5f783c795e861f67f7dbf2cc07802d108349b6463b7865b6bd62675371f7"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/before-final310.xml",
+      "bytes": 13174,
+      "sha256": "a44664de93aedd604bd7e2e63128aa495c7e5bc612f9fc46a9db631bbfc117f7"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/before-final313.log",
+      "bytes": 13255,
+      "sha256": "2071c675f7bb99122dacc6fd817f59c7d6947d24c2f2f804062ea2b737291cf7"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/before-final313.xml",
+      "bytes": 13920,
+      "sha256": "482f2269e254df0ce576978ae6f0ba053644f5aacfd27d2962d4d36635e1465c"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/before310.log",
+      "bytes": 12493,
+      "sha256": "2c3eadf48c385211c6964c48b36458a34ddcbacdc3ed1868e038bf9d41e8d7eb"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/before310.xml",
+      "bytes": 13158,
+      "sha256": "2e3e30da678c800670033e68ddc19954bfe37cafb8390bab5b2246d607bf3c75"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/before313.log",
+      "bytes": 13239,
+      "sha256": "f3b4740f6951835c386befe41a74c9c85c24746ca67a19b60e44cdd7bfd08815"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/before313.xml",
+      "bytes": 13904,
+      "sha256": "e684ca9dd9921618da8b4750f696ae2407aeacec5bbc2094371684599b0c0c7b"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/complete-after310.log",
+      "bytes": 180,
+      "sha256": "e74f700cfdddae3c6f78c3506afe5df9c10a124be0c4ad0f59d7c20056e96642"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/complete-after310.xml",
+      "bytes": 16727,
+      "sha256": "16b9684c80293bc5ce8313c25cb60174b7ae912b32c4ca7a2c9cee5390ae7b18"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/complete-after313.log",
+      "bytes": 180,
+      "sha256": "580725417f2f8ca74557f439409f5e230f3d5b1a98c3e462d3cb2895317b4c3f"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/complete-after313.xml",
+      "bytes": 16727,
+      "sha256": "0a9f9b2d19503d39800135e331bf74e761325f9de67615fd93be92208091a5b7"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/complete-ruff.log",
+      "bytes": 19,
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/decoder310.log",
+      "bytes": 142,
+      "sha256": "54615bdec3364cf194083a3791482b9dcda2aa3d23d6eba90d1179ebb63289ce"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/decoder313.log",
+      "bytes": 135,
+      "sha256": "ce34802e856d0162baad0ce3ffb6aa6a894899acfdd939943a0cfbfe34ad52fa"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/existing-tests-preserved.json",
+      "bytes": 1236,
+      "sha256": "00728bed809c0e45c62ea745e4b80b382c4988390b69899f0aaa8d205ea87ae5"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/final-after310.log",
+      "bytes": 99,
+      "sha256": "2c5d31b13ea8eb37eaffee6d5a5a6835eb07e707a46a54168169c2cae68ffa58"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/final-after310.xml",
+      "bytes": 9520,
+      "sha256": "a7d997d948dce571fdecd63c1345f703541dc15e24e35ea2670f6319d42a3c20"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/final-after313.log",
+      "bytes": 99,
+      "sha256": "e92488461055dd951548a95e4cbf7eb6535096bbac51c0dc377f242e9ac12649"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/final-after313.xml",
+      "bytes": 9520,
+      "sha256": "6295fab2d1a6ef1ac72e2cee03317e2b6b8ae71b4fa4028d5cc808ab7def82b7"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/final-ruff.log",
+      "bytes": 19,
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/rollup-before310.log",
+      "bytes": 11890,
+      "sha256": "a8d5fc377edcf386101dec86ecf10eef0a1827025508453049f8a58b747cf270"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/rollup-before310.xml",
+      "bytes": 12282,
+      "sha256": "6656ae804a7820b0616c48bd641dc98d0f3411d0d67642d38f65fd0801634776"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/rollup-before313.log",
+      "bytes": 113,
+      "sha256": "c1d006910fe56b6b93ae5d2984d0a19ef6bb4f3568fde934877a0197d11d32bc"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/rollup-before313.xml",
+      "bytes": 862,
+      "sha256": "d1bd03cc1e6883871e46eecd9463ca1d33d7ea61123845bc38dabe88374f510f"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/ruff-final.log",
+      "bytes": 19,
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/ruff.log",
+      "bytes": 321,
+      "sha256": "e53252759267c45ec4f385f010938b085d41bd966acd7df6e8ebd0e38ffad246"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/source-contract-proof-final.json",
+      "bytes": 4457,
+      "sha256": "5e3f80d82a1f9ac0eef9b8ec0ff7a3fbdcdeb8f1ebb5bb61f1800087f379f72b"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/source-contract-proof.json",
+      "bytes": 4177,
+      "sha256": "93c7a5d271ca836d90b0a65d7d9da5037973b80f455449655d5b512835ac2edd"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/source-diff-check.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/source-med-P-input-manifest.json",
+      "bytes": 237637,
+      "sha256": "f06744596760b9962a8641f2f38c5a94f1d06892614589ef7cbef90f53fe4f53"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/source-med-before310.log",
+      "bytes": 6564,
+      "sha256": "5106a6ab6a2fc89d55cdecd65e2b210d2384e1f81497bef45083e0c0d60f578f"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/source-med-before310.xml",
+      "bytes": 6756,
+      "sha256": "43a8ab4ec38f440fc2758a9938bc1c8c662a6b4ac29115c1113db7bab0b1fb14"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/source-med-before313.log",
+      "bytes": 113,
+      "sha256": "63702037b88ce993d3cde48200b694a56588cb7d7c86464628fcf13f858d6489"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/source-med-before313.xml",
+      "bytes": 538,
+      "sha256": "70a19768aba9d95be4c034cdcd6b9b6c4c710b9dafef2fa5cd47df18b99b378f"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/unowned-source-probe310.log",
+      "bytes": 98,
+      "sha256": "364fae48cbe8f4ef8e995f8fb3224d43792e784eb9919ceefea2fe0106918edf"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-drug-json-20261005/unowned-source-probe310.xml",
+      "bytes": 403,
+      "sha256": "44277f4a7bb731ac2d270533a676fa0c3a565d20c902ec27c25a2db4157141ca"
+    }
+  ],
+  "git": {
+    "start_clean": true,
+    "source_commit": "2c8bdf3d4338cc355b3b4e7574b123b4b78a23ac",
+    "source_parent": "7ecbba17a092e00bdee70ffec007159f8a96213d",
+    "source_commit_hooks": "core.hooksPath=/dev/null; agmsg/privatehooks未実行",
+    "source_changed_paths": [
+      "changes/20261005-drug-map-corrupt-json.json",
+      "mcs/extract/drug_map.py",
+      "mcs/extract/rollup.py",
+      "tests/extract/test_drug_map.py",
+      "tests/extract/test_rollup_canonical.py",
+      "tests/ingest/test_drug_map_pipeline.py",
+      "tests/views/test_drug_candidates.py"
+    ],
+    "evidence_only_path": "docs/development/maintenance-drug-json-evidence.json",
+    "full_P_to_final_W_replay": {
+      "status": "PASS",
+      "P_tracked_files": 902,
+      "final_W_tracked_files": 904,
+      "receipt_path": "/tmp/mcs-maintenance-drug-json-20261005/final-byte-mode-replay.json",
+      "patch_path": "/tmp/mcs-maintenance-drug-json-20261005/P-W-complete.patch",
+      "manifest_path": "/tmp/mcs-maintenance-drug-json-20261005/final-W-manifest.json",
+      "method": "raw P Git blobs/modes→binary fullindex complete patch→compare all W tracked bytes/modes; mismatch0. 実receiptをevidence commit前に作成し、自己hashは外部拘束。"
+    }
+  },
+  "constraints": [
+    "完全合成のみ。実DB/実利用者本文/秘密/私有辞書/Keychain/MCS/model/LLM/Jev/外部API/SDK/service未読未実行。",
+    "他worktree/main/settings/generator/CLI/sharedhelper/clinicalrules不編集。parent source統合は別I。",
+    "子spawn、恒久instructions、agmsg/hooks、公開/push/PR/merge/deploy/restart/tag/version bump無し。",
+    "薬剤同一性/承認/provenance/schema/method/default/metadata保持。source破損のstatsは既存data_error unavailableで、全原名統計継続を普遍保証しない。",
+    "この確認済み同根経路で閉じる。新全面監査・無変更122再実行を始めない。"
+  ],
+  "parent_handoff": {
+    "source_ready_commit": "2c8bdf3d4338cc355b3b4e7574b123b4b78a23ac",
+    "evidence_commit": "external final-commit-receipt.json",
+    "unconfirmed_owned_ranges": [],
+    "remaining_required_here": "なし。external replay PASS/commit identityを照合して受入。",
+    "parent_only_remaining": "fixedI/globalinventory/final wholetests/SDK/archive/独立確認は親。"
+  }
+}

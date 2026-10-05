@@ -835,7 +835,10 @@ def _thread_plan_ids(db, card, shown) -> list:
     in-thread card has no 📄 button to reach them)."""
     if card["kind"] != "thread":
         return list(shown)
-    covered = _announced_ids(db, card)
+    # Previously delivered named posts must also receive late actor names
+    # and stale/failed state updates, even after their card page moves away.
+    # Legacy unnamed posts keep the frozen compatibility path in _body_groups.
+    covered = _announced_ids(db, card) | _delivered_members(db, card, legacy=False)
     if not covered - set(shown):
         return list(shown)
     wanted = covered | {m for m in shown if positive(m)}
@@ -1100,8 +1103,8 @@ def _render_gates(db, card_id, cfg):
 
 
 def _parts_in_flight(db, latest) -> bool:
-    """The card message itself is delivered but thread body chunks or
-    attachments of that render are still pending. An update names the posts that
+    """The card is delivered but its thread identity is unknown, or body
+    chunks/attachments are pending or unknown. An update names the posts that
     already carry each part (``prior_remote_id``) — issued before those
     receipts land it would know none and post every chunk and file a
     second time — so it waits for the parts to settle and a later sweep
@@ -1111,7 +1114,8 @@ def _parts_in_flight(db, latest) -> bool:
         return False
     return db.execute(
         "SELECT 1 FROM notification_render_parts WHERE delivery_id=? "
-        "AND kind IN ('body_part','attachment_part') AND state='pending' "
+        "AND ((kind IN ('body_part','attachment_part') "
+        "AND state IN ('pending','unknown')) OR (kind='thread' AND state='unknown')) "
         "LIMIT 1", (latest["delivery_id"],)).fetchone() is not None
 
 

@@ -1,0 +1,1004 @@
+{
+  "schema_version": 1,
+  "record_kind": "scoped-maintenance-runtime-compatibility-evidence",
+  "generated_at_utc": "2026-10-05T04:37:41.359933+00:00",
+  "identity": {
+    "actor": "/root/maintenance_core",
+    "role": "implementation and structured evidence author; not independent reviewer",
+    "effective_model": "not inferred",
+    "parent": "/root",
+    "language": "ja"
+  },
+  "packet": {
+    "B": "fa9385c2790cbd2fdd8151a10aa04058dca797f0",
+    "P": "fa9385c2790cbd2fdd8151a10aa04058dca797f0",
+    "W_source_commit": "10526c7c232e2cc65d086503b34f534603646837",
+    "parent_source_cherry_pick": "1cf0505",
+    "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-hermes-fixture-20261005",
+    "branch": "audit/maintenance-ledger-audit-20261005",
+    "old_fixture_branch_preserved": "audit/maintenance-hermes-fixture-20261005",
+    "I_boundary": "親の統合sourceとこのWは別identity。最終fixed-I全件/SDK/配布は親担当で、この局所成功から推認しない。"
+  },
+  "scope": {
+    "owned_write_paths": [
+      "mcs/core/ledger_audit.py",
+      "tests/core/test_ledger_audit.py",
+      "changes/20261005-ledger-audit-python310.json",
+      "docs/development/maintenance-ledger-audit-evidence.json"
+    ],
+    "forbidden_actions": "実DB/PHI/PII/秘密/私有config/MCS/API/SDK/LLM/Jev/Keychain/サービス/再起動/agmsg/hooks/恒久ルール/main/外送/公開/push/PR/merge/deploy/子spawn。例外fixtureも完全合成。",
+    "completion": "確認済み同根compatibility修復に限定。追加全域監査/成功済み96再実行なし。",
+    "instructions_reuse": {
+      "AGENTS_sha256": "891bc4420cbc7af01b0318a7a2d4f33c73e0626399ec39cdb5ff4d580fbbc171",
+      "AGENTS_full_read_lines": 174,
+      "agent_defaults_skill": "/Users/yusuke/.agents/skills/agent-defaults/SKILL.md; prior full read reused",
+      "runner_sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "runner_full_read_lines": 46
+    }
+  },
+  "inventory": [
+    {
+      "path": "mcs/core/ledger_audit.py",
+      "state": "REVIEWED",
+      "P_sha256": "f4867747a344fc1942621ff7fa6b9e2e405a3131a0b1408f2f0f72b3fd27a4a1",
+      "W_sha256": "5d7e2dcb0632d12b1880cb2e7fa5b6591cbfa10e97ba46c42ee88124f4e948df",
+      "P_lines": 233,
+      "W_lines": 240,
+      "P_bytes": 10734,
+      "W_bytes": 11072,
+      "P_mode": "100644",
+      "W_mode": "100644",
+      "read_ranges_P": [
+        [
+          1,
+          233
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          240
+        ]
+      ],
+      "read_method": "P fresh full nontruncated read + every final diff hunk; unchanged bytes/AST reused",
+      "responsibility": "明示した静的SQLiteだけをreadonly transactionとVM予算で件数監査するCLI、relation guardの状態表示。",
+      "callers": [
+        "mcs/ops/mcs_repair.py",
+        "mcs/ingest/run_check.py",
+        "mcs/views/mcs_view.py",
+        "mcs/ops/mcs_backup.py"
+      ],
+      "criteria": "C01–C12/X01–X08 below",
+      "whole_read_reuse_proof": {
+        "packet": "docs/development/maintenance-core-evidence.json",
+        "reviewed_sha256": "f4867747a344fc1942621ff7fa6b9e2e405a3131a0b1408f2f0f72b3fd27a4a1",
+        "read_ranges": [
+          [
+            1,
+            233
+          ]
+        ],
+        "status": "REVIEWED",
+        "sha_matches_P": true,
+        "note": "既存旧receiptはread rangesとSHAを保持。今回Pも新規全文を読み、Wは同bytesの既存範囲と全差分を合わせた全文。独立reviewと呼ばない。"
+      }
+    },
+    {
+      "path": "tests/core/test_ledger_audit.py",
+      "state": "REVIEWED",
+      "P_sha256": "ff237bca5a243c5c79005ce9017328f860a057cce6bc6e6267665c20366f7624",
+      "W_sha256": "c45a1bd8b487e5ada22388a15dfc91ea8102635c0b94b88c0a9ec246d6f7318f",
+      "P_lines": 306,
+      "W_lines": 381,
+      "P_bytes": 12920,
+      "W_bytes": 15971,
+      "P_mode": "100644",
+      "W_mode": "100644",
+      "read_ranges_P": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          306
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          381
+        ]
+      ],
+      "read_method": "P fresh full nontruncated read + every final diff hunk; unchanged bytes/AST reused",
+      "responsibility": "静的DBの不変hash、legacy/future schema、budget、破損/違反件数、readonly CLI。",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest tests/conftest.py isolation guards"
+      ],
+      "criteria": "C01–C12/X01–X08 below",
+      "whole_read_reuse_proof": {
+        "packet": "docs/development/maintenance-core-evidence.json",
+        "reviewed_sha256": "ff237bca5a243c5c79005ce9017328f860a057cce6bc6e6267665c20366f7624",
+        "read_ranges": [
+          [
+            1,
+            160
+          ],
+          [
+            161,
+            306
+          ]
+        ],
+        "status": "REVIEWED",
+        "sha_matches_P": true,
+        "note": "既存旧receiptはread rangesとSHAを保持。今回Pも新規全文を読み、Wは同bytesの既存範囲と全差分を合わせた全文。独立reviewと呼ばない。"
+      }
+    }
+  ],
+  "prior_global_inventory": {
+    "path": "docs/development/full-maintenance-20261005/inventory.json",
+    "bytes": 1599925,
+    "sha256": "93eab873dd6dfd6cb93d9950d7d5979dd81f04fb49a647e73eeccf3c9319cec3"
+  },
+  "readonly_boundaries": [
+    {
+      "path": "mcs/core/ledger.py",
+      "SHA256_P_W": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
+      "read_ranges": [
+        [
+          2460,
+          2495
+        ]
+      ],
+      "modified": false,
+      "scope": "readonly consumer/guard boundary; no fresh whole-file review claimed"
+    },
+    {
+      "path": "mcs/ops/mcs_repair.py",
+      "SHA256_P_W": "d402ae651d2c4f5cef87f92bb108d66c59cea6eae97be1f2f932271be1e11fb6",
+      "read_ranges": [
+        [
+          1,
+          178
+        ],
+        [
+          434,
+          450
+        ]
+      ],
+      "modified": false,
+      "scope": "readonly consumer/guard boundary; no fresh whole-file review claimed"
+    },
+    {
+      "path": "tests/conftest.py",
+      "SHA256_P_W": "4d9b63c62c42873bd9ee00d7c6d251c866cc44191ed2c7d16c13ab195b0ac452",
+      "read_ranges": [
+        [
+          38,
+          114
+        ]
+      ],
+      "modified": false,
+      "scope": "readonly consumer/guard boundary; no fresh whole-file review claimed"
+    },
+    {
+      "path": "mcs/ops/mcs_setup.py",
+      "SHA256_P_W": "6f6eabf5349611fa8a0729d344f34c37576d79359b04a131710c1d17ce56db80",
+      "read_ranges": [
+        [
+          525,
+          551
+        ]
+      ],
+      "modified": false,
+      "scope": "readonly consumer/guard boundary; no fresh whole-file review claimed"
+    },
+    {
+      "path": "tests/ops/test_mcs_setup.py",
+      "SHA256_P_W": "efbdd88dc4d6a874a5c3a6532f89ea9a1268a5e6a1d08ea2091af3e193e732f7",
+      "read_ranges": [
+        [
+          1,
+          54
+        ],
+        [
+          2200,
+          2250
+        ]
+      ],
+      "modified": false,
+      "scope": "readonly consumer/guard boundary; no fresh whole-file review claimed"
+    },
+    {
+      "path": "tests/meta/test_integration_guard_load.py",
+      "SHA256_P_W": "bbc6cf9d19926617e890a954e03938e596abaa0a353983ad6ecdf416b1244b35",
+      "read_ranges": [
+        [
+          1,
+          26
+        ]
+      ],
+      "modified": false,
+      "scope": "readonly consumer/guard boundary; no fresh whole-file review claimed"
+    },
+    {
+      "path": "integration/test_integration_guards.py",
+      "SHA256_P_W": "9bce7320468ad1a32e88195c7988ab0971a77c536541a38ae5db0b53071c4ecf",
+      "read_ranges": [
+        [
+          1,
+          21
+        ]
+      ],
+      "modified": false,
+      "scope": "readonly consumer/guard boundary; no fresh whole-file review claimed"
+    }
+  ],
+  "trace": {
+    "entry": "ledger_audit.main --db / audit_db(db_path,max_steps) →明示静的DBをLedgerReader(path)で開く",
+    "authorization": "LedgerReader URI mode=ro; PRAGMA query_only=ON; busy_timeout=0; BEGIN; journal_mode=DELETE条件とschema/VM上限検査。root/共有DBは使用しない。",
+    "process": "静的固定SQLによる件数監査→sqlite3.DatabaseError handler→予算優先→error codeまたはlegacy exact classを安全分類→finally close。",
+    "persistence": "report辞書/CLI JSONだけ。DB/sidecar/write/schema変化なし。",
+    "consumers": [
+      {
+        "path": "mcs/ops/mcs_repair.py",
+        "functions": [
+          "plan: audit_db156",
+          "_backup_proof: audit_db442"
+        ],
+        "contract": "planは読取観測。backup proofはaudit.okとbackup SHA一致が必須。unreadable/unknownは安全証明不可。"
+      },
+      {
+        "path": "mcs/ingest/run_check.py",
+        "function": "guard_status consumer332",
+        "contract": "guard_status非変更"
+      },
+      {
+        "path": "mcs/views/mcs_view.py",
+        "function": "guard_status consumer211",
+        "contract": "guard_status非変更"
+      },
+      {
+        "path": "mcs/ops/mcs_backup.py",
+        "function": "_SOURCE/_BASE/SCHEMA_VERSION import437",
+        "contract": "定数/schema契約非変更"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "F01",
+      "status": "CONFIRMED_FIXED",
+      "title": "Python3.10のSQLiteエラーメタデータ欠落で監査がAttributeError停止",
+      "P_location": "mcs/core/ledger_audit.py208",
+      "W_location": "mcs/core/ledger_audit.py208–216",
+      "root_cause": "PがSQLite_CORRUPT/NOTADBを無条件に参照。Python3.10 native exceptionにsqlite_errorcodeがなくmodule constantsもない。",
+      "minimal_fix": "code=Noneかつtype(error) is sqlite3.DatabaseErrorのみ一般unreadable。code付きはgetattrでmodern既存code判定。OperationalError/IntegrityError/unknown subclassはunknown、予算優先。",
+      "meaning_limit": "legacy exact DatabaseErrorは一般読取不能のfailclosed分類であり、厳密な破損code判定の証明ではない。",
+      "controls": "modern11/26 unreadable、1/267/999 unknownを保持。既存test期待値/skip非変更。"
+    },
+    {
+      "id": "H01",
+      "status": "DISPROVED_PRODUCT_FIX_NEEDED",
+      "title": "Hermes gateway5FAILは外部検証harnessのtmp根不整合",
+      "evidence": "custom --basetempでstubstatus subprocessが既存隔離guardに拒否。canonicalrunner既定tmpで両runtime各5PASS0skip、guard/fixture/production setup同bytes。",
+      "resolution_owner": "親の外部harnessのみ。Hermes fixturefixは中止、原本非編集。",
+      "preservation": "元全件3.13の5FAILと3.10の6FAIL（同5+F01）は履歴のまま保持し今回成功へ書き換えない。"
+    }
+  ],
+  "primary_source": {
+    "title": "CPython v3.10.22 Modules/_sqlite/util.c",
+    "url": "https://raw.githubusercontent.com/python/cpython/v3.10.22/Modules/_sqlite/util.c",
+    "read_scope": "public119-line file, _pysqlite_seterror lines40–88",
+    "support": "lines55–69は各operational codeをOperationalError、70–72はCORRUPTをexact DatabaseError、83–85のdefaultもexact DatabaseErrorに分類する。NOTADBはdefault。型のみfallbackは一般unreadableへ限定。",
+    "verbatim_quote_words": 0,
+    "exfiltration": "public source read only; no repository/private payload uploaded"
+  },
+  "error_case_matrix": [
+    {
+      "class": "exact DatabaseError",
+      "sqlite_errorcode": null,
+      "budget_exceeded": false,
+      "expected": "sqlite_unreadable",
+      "count": 1
+    },
+    {
+      "class": "OperationalError",
+      "sqlite_errorcode": null,
+      "budget_exceeded": false,
+      "expected": "sqlite_query_unavailable",
+      "count": null
+    },
+    {
+      "class": "IntegrityError",
+      "sqlite_errorcode": null,
+      "budget_exceeded": false,
+      "expected": "sqlite_query_unavailable",
+      "count": null
+    },
+    {
+      "class": "custom DatabaseError subclass",
+      "sqlite_errorcode": null,
+      "budget_exceeded": false,
+      "expected": "sqlite_query_unavailable",
+      "count": null
+    },
+    {
+      "class": "exact DatabaseError",
+      "sqlite_errorcode": null,
+      "budget_exceeded": true,
+      "expected": "audit_budget_exceeded",
+      "count": null
+    },
+    {
+      "class": "exact DatabaseError",
+      "sqlite_errorcode": 11,
+      "budget_exceeded": false,
+      "expected": "sqlite_unreadable",
+      "count": 1
+    },
+    {
+      "class": "exact DatabaseError",
+      "sqlite_errorcode": 26,
+      "budget_exceeded": false,
+      "expected": "sqlite_unreadable",
+      "count": 1
+    },
+    {
+      "class": "exact DatabaseError",
+      "sqlite_errorcode": 1,
+      "budget_exceeded": false,
+      "expected": "sqlite_query_unavailable",
+      "count": null
+    },
+    {
+      "class": "exact DatabaseError",
+      "sqlite_errorcode": 267,
+      "budget_exceeded": false,
+      "expected": "sqlite_query_unavailable",
+      "count": null
+    },
+    {
+      "class": "exact DatabaseError",
+      "sqlite_errorcode": 999,
+      "budget_exceeded": false,
+      "expected": "sqlite_query_unavailable",
+      "count": null
+    }
+  ],
+  "criteria": [
+    {
+      "id": "C01",
+      "label": "設計・責務・依存・循環・重複・dead code・文書乖離",
+      "applicability": "APPLICABLE",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "audit_db の例外分類だけを変更。LedgerReader と repair の実呼出元を照合し、公開 signature/docstring・依存・SQL・出力構造は predicate 復元後 AST 同一。stdlib のみ。",
+      "references": "source-test-contract-proof.json; owned full reads; boundary reads"
+    },
+    {
+      "id": "C02",
+      "label": "状態遷移・不変条件・欠損・日時/単位/丸め/境界",
+      "applicability": "APPLICABLE",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "破損または読取不能は sqlite_unreadable=1、判別不能は sqlite_query_unavailable/count=null。legacy exact DatabaseError と派生型を分け、欠落メタデータを件数0/成功へ変えない。",
+      "references": "new parameter cases 1–4,6–10; original corrupt-file test"
+    },
+    {
+      "id": "C03",
+      "label": "制約・transaction・upsert・排他・冪等性・削除",
+      "applicability": "APPLICABLE",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "mode=ro/query_only/BEGIN/busy_timeout=0、閉じる finally を維持。全10合成回帰でDB hashとdirectory file set不変、Reader closeを確認。新規書込/DDL/DMLなし。",
+      "references": "LedgerReader2460–2495; added test; AST equality;96 family"
+    },
+    {
+      "id": "C04",
+      "label": "migration・旧schema・値/FK/index/trigger・途中失敗",
+      "applicability": "APPLICABLE_UNCHANGED",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "schema/generation/migrationは変更なし。既存legacy/future schema監査とrepair回帰をそのまま維持し、両runtimeで成功。実DB migrationは未実施。",
+      "references": "existing test AST identical;96 family; source predicate-only proof"
+    },
+    {
+      "id": "C05",
+      "label": "認証/認可・tenant・injection/XSS/CSRF/SSRF・暗号",
+      "applicability": "APPLICABLE_UNCHANGED",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "監査は明示pathの静的readonly SQLiteに限定。CLI上限、固定SQL、restore/repair承認・backup証明consumerを保持。認証/ネットワーク/SQL入力範囲は増やさない。",
+      "references": "audit_db full read; repair1–178,434–450; AST proof"
+    },
+    {
+      "id": "C06",
+      "label": "PII/PHI・ログ/URL/cache/storage/export/telemetry",
+      "applicability": "APPLICABLE",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "例外メッセージやDB本文/pathを分類に使わず出力しない。新回帰の合成secret marker・error/pathがreportに無いことを確認。ログ/fixturesは完全合成のみ。",
+      "references": "10 added parameter assertions; original corrupt/no-contents test; API stub"
+    },
+    {
+      "id": "C07",
+      "label": "API/CLI/イベント契約・入力上限・互換性・pagination",
+      "applicability": "APPLICABLE",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "audit_db/CLI引数・return schema・guard_status・exit契約を保持。3.10 attrなしをexact classで保守的分類し、modern11/26のみ既存unreadable、1/267/999はunknownを維持。",
+      "references": "AST proof;10 params; runtime native controls"
+    },
+    {
+      "id": "C08",
+      "label": "UI・stale state・二重操作・入力消失・復旧・accessibility",
+      "applicability": "APPLICABLE_BOUNDARY",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "count-only監査CLIとguard_statusのconsumerを照合。guard_status/表示/状態変更/承認UIは同bytes・同ASTで非変更。監査停止から通常安全診断へ復帰する。新Web/UI操作はなし。",
+      "references": "audit_db/guard_status full read; inherited run_check/mcs_view callers; AST proof"
+    },
+    {
+      "id": "C09",
+      "label": "N+1・計算量・無制限処理・memory・起動/import・費用",
+      "applicability": "APPLICABLE",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "max_steps=100..1e9、100VM step callback、残予算判定を維持。budget超過は型/code分類より優先しcount=null。追加query/再試行・無制限読取を導入しない。",
+      "references": "budget param5; original budget test; AST proof"
+    },
+    {
+      "id": "C10",
+      "label": "race/retry/queue/timeout・キャンセル・例外・観測性",
+      "applicability": "APPLICABLE",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "legacy attrなしOperationalError/IntegrityError/custom DatabaseError派生はunknown。exact DatabaseErrorだけunreadable fail closed。budget優先・finally closeを維持し、AttributeErrorによる監査停止を修復。",
+      "references": "before legacy4FAIL each runtime→after96PASS each; params and CPython primary"
+    },
+    {
+      "id": "C11",
+      "label": "テスト偽陽性・mock依存・回帰/異常系/競合・flaky/skip",
+      "applicability": "APPLICABLE",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "既存assertion/skip/期待値はAST同一。最終10caseをP sourceへoverlayしたbeforeは両runtime4FAIL6PASS、native corrupt既存は3.10のみFAIL・3.13PASS control。stubモデル限界とnative実証を分離。",
+      "references": "final-new-before logs/XML; existing-before logs/XML; after logs/XML; AST proof"
+    },
+    {
+      "id": "C12",
+      "label": "build・runtime/lockfile・依存リスク・script・設定/CI差",
+      "applicability": "APPLICABLE",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "canonical isolated runnerで3.10.22/SQLite3.53.1と3.13.12/SQLite3.50.4を区別。両runtime96PASS/0skip、pinned Ruff0.16.10成功。依存・guard・runner・setupは同SHA。",
+      "references": "verification;ruff.log;source-test-contract-proof.json; protected paths"
+    },
+    {
+      "id": "X01",
+      "label": "配布物・起動終了・旧新version・切戻し",
+      "applicability": "APPLICABLE_UNCHANGED",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "稼働/導入/停止/更新・rollbackのコードやfixtureは非変更。gateway5FAILは外部harness basetemp不整合と確定、親の既定temp control両runtime5PASSを別記。サービス未実行。",
+      "references": "parent controls artifacts; protected setup/test/runner SHA; harness finding"
+    },
+    {
+      "id": "X02",
+      "label": "供給網・取得元・CI権限・ライセンス",
+      "applicability": "APPLICABLE_UNCHANGED",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "公式CPython3.10.22一次コードで例外classを照合。外部依存・CI権限・取得元・license変更なし、stdlib getattrとtype比較のみ。公開資料以外を外送しない。",
+      "references": "CPython primary citation;source diff;Ruff pin"
+    },
+    {
+      "id": "X03",
+      "label": "backup/restore/削除・派生物/鍵・削除データ復活",
+      "applicability": "APPLICABLE_BOUNDARY",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "監査だけでDBを変更しない。repair._backup_proofがaudit.okとSHA一致を必要とする既存failclosed consumerを維持。backup/restore/削除実操作は非実施。",
+      "references": "repair434–450; DBhash/file-set regression; AST proof"
+    },
+    {
+      "id": "X04",
+      "label": "外部連携・署名・主体/宛先・再送/順序・部分取込",
+      "applicability": "NOT_APPLICABLE_CONFIRMED",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "この修正の入口/処理/出力はローカルSQLite件数監査。ネットワーク送信/署名/宛先/再送/receipt経路なし。既存repairのローカル証明呼出元のみ。",
+      "references": "owned source full read; concrete caller trace; source predicate-only diff"
+    },
+    {
+      "id": "X05",
+      "label": "offline・複数tab・容量/eviction・OS差・native/FFI",
+      "applicability": "APPLICABLE",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "CPython sqlite native API属性差を両runtime実証。attr欠落のAPI stubでlegacy派生型・budget、code付きstubでmodern codesを補完。OS/native SDK全般へ成功を拡張しない。",
+      "references": "existing native corrupt before/control;10 parameter model;runtime versions"
+    },
+    {
+      "id": "X06",
+      "label": "AI/MCP・prompt injection・tool権限・承認・記憶越境",
+      "applicability": "NOT_APPLICABLE_CONFIRMED",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "LLM/MCP/tool/記憶の呼出なし。新外部送信・モデル・承認権限なし。実MCS/LLM/Jev/Keychainにアクセスしない合成runnerのみ。",
+      "references": "owned fullsource/caller trace; guards unchanged"
+    },
+    {
+      "id": "X07",
+      "label": "医療/算定/金銭の適用日/対象/根拠・監査・人の承認",
+      "applicability": "APPLICABLE_BOUNDARY",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "患者本文を出さないcount-only整合監査。医療rule/適用日/世代/候補・人承認条件を変更しない。読取不能を成功/事実無しとして扱わずrepairの安全証明を拒否する。",
+      "references": "sqlite_unreadable vs unknown semantics; repair._backup_proof; AST proof"
+    },
+    {
+      "id": "X08",
+      "label": "公開Webの導線・フォーム・link/index・公開境界",
+      "applicability": "NOT_APPLICABLE_CONFIRMED",
+      "state": "REVIEWED_WITHIN_SCOPE",
+      "evidence": "公開Web/フォーム/index/link変更なし。ローカルCLIと日本語changes fragment/監査証拠だけ。配布/公開/tag/pushは実施しない。",
+      "references": "4-path ownership and complete tracked replay"
+    }
+  ],
+  "proofs": {
+    "AST": "/tmp/mcs-maintenance-ledger-audit-20261005/source-test-contract-proof.json",
+    "source_restoring_only_error_predicate_yields_P_AST": true,
+    "existing_test_AST_unchanged": true,
+    "no_guard_relaxation": true,
+    "parameters_public_signatures_schema_sql_budget_output_unchanged": true,
+    "ten_case_safety_assertions": [
+      "error class/code/budget expected safe check and count",
+      "not ok; not complete",
+      "Reader exact requested path, read-only pragma/BEGIN/journal sequence and close",
+      "synthetic DB entire SHA and file set identical",
+      "synthetic secret marker/path/error absent from report"
+    ],
+    "mock_limit": "API stub deliberately models attribute availability; real native corrupt-file existing regression separately demonstrates3.10 failure vs3.13 control. Other OS/SQLite builds are not executed."
+  },
+  "runtimes": [
+    {
+      "id": "310",
+      "python": "/tmp/mcs-maintenance-python310-20261005/bin/python",
+      "version": "3.10.22",
+      "sqlite": "3.53.1"
+    },
+    {
+      "id": "313",
+      "python": "/Users/yusuke/.mcs/.venv/bin/python",
+      "version": "3.13.12",
+      "sqlite": "3.50.4"
+    }
+  ],
+  "verification_environment": {
+    "canonical_runner": "scripts/run_tests.sh",
+    "isolation": "env-i temporary HOME/TMP/XDG, TZ=UTC, MCS_TEST_SANDBOX=1; existing socket/process/MCS/productionLLM/Jev guards unchanged; synthetic fixtures only",
+    "after_cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-hermes-fixture-20261005",
+    "final_before_cwd": "/tmp/mcs-maintenance-ledger-audit-20261005/isolated-P-final-tests",
+    "final_before_input": "P raw909tracked bytes+mode archive with only exact finaltest overlay; source remains exactP; cache outside raw tree",
+    "run_counts_note": "final-new-before contains10newcases, existing-before is1nativeexistingcontrol. 3.13 existingPASS is never counted asbeforefailure. Earlier new-before logs predate extra reader path assertion; final-new-before authoritative."
+  },
+  "verification": [
+    {
+      "id": "existing-before310",
+      "runtime": "310",
+      "source_snapshot": "fa9385c2790cbd2fdd8151a10aa04058dca797f0",
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-maintenance-python310-20261005/bin/python scripts/run_tests.sh tests/core/test_ledger_audit.py::test_corrupt_file_is_reported_without_contents -o addopts='' -q --junitxml=/tmp/mcs-maintenance-ledger-audit-20261005/existing-before310.xml > /tmp/mcs-maintenance-ledger-audit-20261005/existing-before310.log 2>&1",
+      "exit": 1,
+      "counts": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 0
+      },
+      "failed_nodes": [
+        "tests.core.test_ledger_audit::test_corrupt_file_is_reported_without_contents"
+      ],
+      "log": {
+        "path": "/tmp/mcs-maintenance-ledger-audit-20261005/existing-before310.log",
+        "bytes": 4918,
+        "sha256": "b1b4b63954cfff245492ac53a11be2e5ff7dc5010253703dd376186947b7ff92"
+      },
+      "junit": {
+        "path": "/tmp/mcs-maintenance-ledger-audit-20261005/existing-before310.xml",
+        "bytes": 5000,
+        "sha256": "b157a4ddce442fc3c9facfc5fb6d7e421e7ff2b15ccf43382030c2ec1c9fad8e"
+      }
+    },
+    {
+      "id": "final-new-before310",
+      "runtime": "310",
+      "source_snapshot": "fa9385c2790cbd2fdd8151a10aa04058dca797f0",
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-maintenance-python310-20261005/bin/python scripts/run_tests.sh tests/core/test_ledger_audit.py::test_sqlite_error_attribute_compatibility_is_readonly_and_safe -o addopts='' -o cache_dir=/tmp/mcs-maintenance-ledger-audit-20261005/P-final310-cache -q --junitxml=/tmp/mcs-maintenance-ledger-audit-20261005/final-new-before310.xml > /tmp/mcs-maintenance-ledger-audit-20261005/final-new-before310.log 2>&1",
+      "exit": 1,
+      "counts": {
+        "tests": 10,
+        "failures": 4,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 6
+      },
+      "failed_nodes": [
+        "tests.core.test_ledger_audit::test_sqlite_error_attribute_compatibility_is_readonly_and_safe[DatabaseError-None-False-sqlite_unreadable-1]",
+        "tests.core.test_ledger_audit::test_sqlite_error_attribute_compatibility_is_readonly_and_safe[OperationalError-None-False-sqlite_query_unavailable-None]",
+        "tests.core.test_ledger_audit::test_sqlite_error_attribute_compatibility_is_readonly_and_safe[IntegrityError-None-False-sqlite_query_unavailable-None]",
+        "tests.core.test_ledger_audit::test_sqlite_error_attribute_compatibility_is_readonly_and_safe[_UnknownDatabaseError-None-False-sqlite_query_unavailable-None]"
+      ],
+      "log": {
+        "path": "/tmp/mcs-maintenance-ledger-audit-20261005/final-new-before310.log",
+        "bytes": 19824,
+        "sha256": "131749854263ffcbd522c34dd2e8d4511c8c17a1ce26a882aea271282a61fec6"
+      },
+      "junit": {
+        "path": "/tmp/mcs-maintenance-ledger-audit-20261005/final-new-before310.xml",
+        "bytes": 21107,
+        "sha256": "dfc46797e6502c1890882766f6c811ee746f5c6dfbaead4e894f88daeb9bf780"
+      }
+    },
+    {
+      "id": "after310",
+      "runtime": "310",
+      "source_snapshot": "10526c7c232e2cc65d086503b34f534603646837",
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-maintenance-python310-20261005/bin/python scripts/run_tests.sh tests/core/test_ledger_audit.py tests/ops/test_mcs_repair.py -o addopts='' -q --junitxml=/tmp/mcs-maintenance-ledger-audit-20261005/after310.xml > /tmp/mcs-maintenance-ledger-audit-20261005/after310.log 2>&1",
+      "exit": 0,
+      "counts": {
+        "tests": 96,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 96
+      },
+      "failed_nodes": [],
+      "log": {
+        "path": "/tmp/mcs-maintenance-ledger-audit-20261005/after310.log",
+        "bytes": 179,
+        "sha256": "e28537785f66c0afc72c7ff20c069734dafe943a1e620cd269da3b8bdd29e936"
+      },
+      "junit": {
+        "path": "/tmp/mcs-maintenance-ledger-audit-20261005/after310.xml",
+        "bytes": 14600,
+        "sha256": "5ef147c7c80c078321a6296f32cb5bfdd0940b9d380d941428e070edebb123ea"
+      }
+    },
+    {
+      "id": "existing-before313",
+      "runtime": "313",
+      "source_snapshot": "fa9385c2790cbd2fdd8151a10aa04058dca797f0",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/core/test_ledger_audit.py::test_corrupt_file_is_reported_without_contents -o addopts='' -q --junitxml=/tmp/mcs-maintenance-ledger-audit-20261005/existing-before313.xml > /tmp/mcs-maintenance-ledger-audit-20261005/existing-before313.log 2>&1",
+      "exit": 0,
+      "counts": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 1
+      },
+      "failed_nodes": [],
+      "log": {
+        "path": "/tmp/mcs-maintenance-ledger-audit-20261005/existing-before313.log",
+        "bytes": 98,
+        "sha256": "c91dad03511eb111dba9f317cdb7962c64ec389c7d259de488e167c78aac1b31"
+      },
+      "junit": {
+        "path": "/tmp/mcs-maintenance-ledger-audit-20261005/existing-before313.xml",
+        "bytes": 371,
+        "sha256": "20d99a47b48f17695a2416ff816128632ee50c8d63c085b73a75fe83545b767c"
+      }
+    },
+    {
+      "id": "final-new-before313",
+      "runtime": "313",
+      "source_snapshot": "fa9385c2790cbd2fdd8151a10aa04058dca797f0",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/core/test_ledger_audit.py::test_sqlite_error_attribute_compatibility_is_readonly_and_safe -o addopts='' -o cache_dir=/tmp/mcs-maintenance-ledger-audit-20261005/P-final313-cache -q --junitxml=/tmp/mcs-maintenance-ledger-audit-20261005/final-new-before313.xml > /tmp/mcs-maintenance-ledger-audit-20261005/final-new-before313.log 2>&1",
+      "exit": 1,
+      "counts": {
+        "tests": 10,
+        "failures": 4,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 6
+      },
+      "failed_nodes": [
+        "tests.core.test_ledger_audit::test_sqlite_error_attribute_compatibility_is_readonly_and_safe[DatabaseError-None-False-sqlite_unreadable-1]",
+        "tests.core.test_ledger_audit::test_sqlite_error_attribute_compatibility_is_readonly_and_safe[OperationalError-None-False-sqlite_query_unavailable-None]",
+        "tests.core.test_ledger_audit::test_sqlite_error_attribute_compatibility_is_readonly_and_safe[IntegrityError-None-False-sqlite_query_unavailable-None]",
+        "tests.core.test_ledger_audit::test_sqlite_error_attribute_compatibility_is_readonly_and_safe[_UnknownDatabaseError-None-False-sqlite_query_unavailable-None]"
+      ],
+      "log": {
+        "path": "/tmp/mcs-maintenance-ledger-audit-20261005/final-new-before313.log",
+        "bytes": 20088,
+        "sha256": "2445c18af3262c0eb9fdd0cdae4e1dcadb9452c6c47738a17d0e804701b16ab5"
+      },
+      "junit": {
+        "path": "/tmp/mcs-maintenance-ledger-audit-20261005/final-new-before313.xml",
+        "bytes": 21499,
+        "sha256": "24861a9701908f7b138aae29e35ccaccb7e20fef6ec993a01997e14ab79f7fc3"
+      }
+    },
+    {
+      "id": "after313",
+      "runtime": "313",
+      "source_snapshot": "10526c7c232e2cc65d086503b34f534603646837",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/core/test_ledger_audit.py tests/ops/test_mcs_repair.py -o addopts='' -q --junitxml=/tmp/mcs-maintenance-ledger-audit-20261005/after313.xml > /tmp/mcs-maintenance-ledger-audit-20261005/after313.log 2>&1",
+      "exit": 0,
+      "counts": {
+        "tests": 96,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 96
+      },
+      "failed_nodes": [],
+      "log": {
+        "path": "/tmp/mcs-maintenance-ledger-audit-20261005/after313.log",
+        "bytes": 179,
+        "sha256": "45fc3fe514f479f2676c8ef24928baccab09df8fa4af14c80d5c71ca4f5dcc25"
+      },
+      "junit": {
+        "path": "/tmp/mcs-maintenance-ledger-audit-20261005/after313.xml",
+        "bytes": 14600,
+        "sha256": "0302eb410fc995b542599f69d627ce490420e63e28739be2522dee588d41d315"
+      }
+    }
+  ],
+  "lint": {
+    "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check mcs/core/ledger_audit.py tests/core/test_ledger_audit.py",
+    "exit": 0,
+    "result": "All checks passed",
+    "log": "/tmp/mcs-maintenance-ledger-audit-20261005/ruff.log",
+    "runtime_independent": true
+  },
+  "source_diff_check": {
+    "command": "git diff --check",
+    "exit": 0,
+    "log": "/tmp/mcs-maintenance-ledger-audit-20261005/source-diff-check.log"
+  },
+  "artifact_hashes": [
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/P-input-manifest.json",
+      "bytes": 239566,
+      "sha256": "019e4ccddacd49cfd87b94f70753c5c66958a5867da75b75f4a8c1daa7eac02c"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/after310.log",
+      "bytes": 179,
+      "sha256": "e28537785f66c0afc72c7ff20c069734dafe943a1e620cd269da3b8bdd29e936"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/after310.xml",
+      "bytes": 14600,
+      "sha256": "5ef147c7c80c078321a6296f32cb5bfdd0940b9d380d941428e070edebb123ea"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/after313.log",
+      "bytes": 179,
+      "sha256": "45fc3fe514f479f2676c8ef24928baccab09df8fa4af14c80d5c71ca4f5dcc25"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/after313.xml",
+      "bytes": 14600,
+      "sha256": "0302eb410fc995b542599f69d627ce490420e63e28739be2522dee588d41d315"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/existing-before310.log",
+      "bytes": 4918,
+      "sha256": "b1b4b63954cfff245492ac53a11be2e5ff7dc5010253703dd376186947b7ff92"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/existing-before310.xml",
+      "bytes": 5000,
+      "sha256": "b157a4ddce442fc3c9facfc5fb6d7e421e7ff2b15ccf43382030c2ec1c9fad8e"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/existing-before313.log",
+      "bytes": 98,
+      "sha256": "c91dad03511eb111dba9f317cdb7962c64ec389c7d259de488e167c78aac1b31"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/existing-before313.xml",
+      "bytes": 371,
+      "sha256": "20d99a47b48f17695a2416ff816128632ee50c8d63c085b73a75fe83545b767c"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/final-new-before310.log",
+      "bytes": 19824,
+      "sha256": "131749854263ffcbd522c34dd2e8d4511c8c17a1ce26a882aea271282a61fec6"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/final-new-before310.xml",
+      "bytes": 21107,
+      "sha256": "dfc46797e6502c1890882766f6c811ee746f5c6dfbaead4e894f88daeb9bf780"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/final-new-before313.log",
+      "bytes": 20088,
+      "sha256": "2445c18af3262c0eb9fdd0cdae4e1dcadb9452c6c47738a17d0e804701b16ab5"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/final-new-before313.xml",
+      "bytes": 21499,
+      "sha256": "24861a9701908f7b138aae29e35ccaccb7e20fef6ec993a01997e14ab79f7fc3"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/new-before310.log",
+      "bytes": 19456,
+      "sha256": "c28aef42d66346dcfec6d8066968270863986e1946fd694dac7b80137ce06e10"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/new-before310.xml",
+      "bytes": 20739,
+      "sha256": "272061b89bd3aa1201ad6b6ec8110a771cd0db4211588e7924e3460d8a1cf714"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/new-before313.log",
+      "bytes": 19720,
+      "sha256": "d47a20b3489ca6deb3ddffec9642e3d2204e5f8f3702d89e0dd9497c13570a7a"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/new-before313.xml",
+      "bytes": 21131,
+      "sha256": "1641ec91118ba86a0165a0f24fb25a6e69ec2524b839959ba137f6a0b1455ec2"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/ruff.log",
+      "bytes": 19,
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/source-diff-check.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/source-test-contract-proof.json",
+      "bytes": 1523,
+      "sha256": "6c03cbfd32377224fe5d6c58f1bf0c96f79653fba6cfd51924634157249a7aa1"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-ledger-audit-20261005/source-tests.patch",
+      "bytes": 4904,
+      "sha256": "59e871f61058134569c9bd9be78769df277aa50a96d1d1b07e0872fa14f43eea"
+    }
+  ],
+  "historical_parent_artifact_hashes": [
+    {
+      "path": "/tmp/mcs-final-I-313-20261005-fa9385c/input-manifest.json",
+      "bytes": 261138,
+      "sha256": "0997a721fff4f92856f205c1b4a21fa9114d24e750132565983f65445d6aa768"
+    },
+    {
+      "path": "/tmp/mcs-final-I-313-20261005-fa9385c/junit.xml",
+      "bytes": 1121921,
+      "sha256": "be1211ae46c3c4dbb5cc9854fb85dc8ea1742d5dfa994012f51c50bd62e4bc37"
+    },
+    {
+      "path": "/tmp/mcs-final-I-313-20261005-fa9385c/output-manifest.json",
+      "bytes": 261138,
+      "sha256": "0997a721fff4f92856f205c1b4a21fa9114d24e750132565983f65445d6aa768"
+    },
+    {
+      "path": "/tmp/mcs-final-I-313-20261005-fa9385c/pytest.log",
+      "bytes": 20868,
+      "sha256": "dde6facb9c52e695546141a27ed0858a45af529ac872cbc0e77eb093cd633061"
+    },
+    {
+      "path": "/tmp/mcs-final-I-313-20261005-fa9385c/receipt.json",
+      "bytes": 11856,
+      "sha256": "dad15e9fa70e785f2cb87c9ba41a48f17811987cf4e4000959c67bb372be75bc"
+    },
+    {
+      "path": "/tmp/mcs-final-fulltest310-fa9385c2-bldi7era/collection-exclusions.json",
+      "bytes": 702,
+      "sha256": "b681f00546bfd33353deeb1e0349d01fde1122872002c1f3f1ce2f748c17b26a"
+    },
+    {
+      "path": "/tmp/mcs-final-fulltest310-fa9385c2-bldi7era/failures.json",
+      "bytes": 16939,
+      "sha256": "d0de06ab0203b1da3f55cdd56e1698c665cf648a2b397b15f5e7d52a3c0195f4"
+    },
+    {
+      "path": "/tmp/mcs-final-fulltest310-fa9385c2-bldi7era/input-end-manifest.json",
+      "bytes": 263865,
+      "sha256": "cb5c34194e441579ac4a7eb6056c128d342bfa58c922012c5f8e682a2a3df807"
+    },
+    {
+      "path": "/tmp/mcs-final-fulltest310-fa9385c2-bldi7era/input-start-manifest.json",
+      "bytes": 263865,
+      "sha256": "cb5c34194e441579ac4a7eb6056c128d342bfa58c922012c5f8e682a2a3df807"
+    },
+    {
+      "path": "/tmp/mcs-final-fulltest310-fa9385c2-bldi7era/junit.xml",
+      "bytes": 1126133,
+      "sha256": "a98c89dddcb5eb762d37f38688a61ba22f384c42ef8624d0003ca41731f6f16c"
+    },
+    {
+      "path": "/tmp/mcs-final-fulltest310-fa9385c2-bldi7era/monitor.json",
+      "bytes": 18184,
+      "sha256": "57315b627395741cf1fc8754f5a3b46673fab9f9aad7700a1512064f1cf9d1da"
+    },
+    {
+      "path": "/tmp/mcs-final-fulltest310-fa9385c2-bldi7era/pytest-runtime-context.json",
+      "bytes": 513,
+      "sha256": "5f14c67089b8ff634c3bd628b3c88d15818eadcab5de1c0bb5a11f733bbed01b"
+    },
+    {
+      "path": "/tmp/mcs-final-fulltest310-fa9385c2-bldi7era/pytest.log",
+      "bytes": 24203,
+      "sha256": "f8bc0a85839711bcfcc67f819d952409abdf3e52ef4b5b99e4ba55b77ea7a285"
+    },
+    {
+      "path": "/tmp/mcs-final-fulltest310-fa9385c2-bldi7era/receipt.json",
+      "bytes": 33902,
+      "sha256": "5b1c5caecbcbe80d35601f5ad5927b76840447feada599508c47ae42f1d68e42"
+    },
+    {
+      "path": "/tmp/mcs-final-fulltest310-fa9385c2-bldi7era/skips.json",
+      "bytes": 2662,
+      "sha256": "8d0fa53430502826888af02f3c315cb866eb442bd0ff8614af0db11e604d7721"
+    },
+    {
+      "path": "/tmp/mcs-final-fulltest310-fa9385c2-bldi7era/subprocess-runtime-context.json",
+      "bytes": 2274,
+      "sha256": "0d3fcb08bb27ebaa90154f9eca5cc52ada011b8d9f350be61b6b66e7bf1f3006"
+    },
+    {
+      "path": "/tmp/mcs-gateway-default-temp-controls-20261005/310.json",
+      "bytes": 747,
+      "sha256": "21a5bee64148f6ff399a14cfaa4f2014c6e5f86e1e7bde5c045bcd6ac7dfc62c"
+    },
+    {
+      "path": "/tmp/mcs-gateway-default-temp-controls-20261005/310.log",
+      "bytes": 114,
+      "sha256": "3b3008d0c7045e8934eab51301c5b386975003b3cf830f7f5551690bc473d9ee"
+    },
+    {
+      "path": "/tmp/mcs-gateway-default-temp-controls-20261005/310.xml",
+      "bytes": 873,
+      "sha256": "abe6d0ef8c996c22f0d84d5dfd0fee27967f2178ed21658a236f8fc7fd56a29f"
+    },
+    {
+      "path": "/tmp/mcs-gateway-default-temp-controls-20261005/313.json",
+      "bytes": 732,
+      "sha256": "fb458766b145629b4798076932c4001218d058df551491a15fa8494772595a90"
+    },
+    {
+      "path": "/tmp/mcs-gateway-default-temp-controls-20261005/313.log",
+      "bytes": 114,
+      "sha256": "6877b4b770bcf59bcc542ad6fe9835b74c78bf9261239e91d21d1427fadb8256"
+    },
+    {
+      "path": "/tmp/mcs-gateway-default-temp-controls-20261005/313.xml",
+      "bytes": 873,
+      "sha256": "a2454afc3c4bc2f044adeb1264f2dc09f689b5e372f92a377682008f9b92d9f7"
+    }
+  ],
+  "change_fragment": {
+    "path": "changes/20261005-ledger-audit-python310.json",
+    "bytes": 1190,
+    "sha256": "b03b38489b43974798a071f8da166cd3108c1f934e1cba04d374a1a2f8616bc3",
+    "language": "ja",
+    "same_source_commit": true,
+    "mode": "100644",
+    "read_range": [
+      1,
+      12
+    ]
+  },
+  "git_preservation": {
+    "source_commit": "10526c7c232e2cc65d086503b34f534603646837",
+    "source_parent": "fa9385c2790cbd2fdd8151a10aa04058dca797f0",
+    "source_commit_paths": 3,
+    "no_other_worktree_edits": true,
+    "old_branch_kept": true,
+    "hooks_disabled_for_own_commits": true,
+    "full_replay": {
+      "P_tracked_count": 909,
+      "W_tracked_count": 911,
+      "changed_paths": 4,
+      "method": "GitP blob archive preservingmode; binary full-index P→stagedW patch applied into fresh temp archive; everyW indexedblob/worktree/replay SHA+bytes+mode+pathset compared.",
+      "external_receipt": "/tmp/mcs-maintenance-ledger-audit-20261005/final-byte-mode-replay.json",
+      "external_manifest": "/tmp/mcs-maintenance-ledger-audit-20261005/final-byte-mode-manifest.json",
+      "external_patch": "/tmp/mcs-maintenance-ledger-audit-20261005/final-P-W.patch",
+      "external_commit_receipt": "/tmp/mcs-maintenance-ledger-audit-20261005/final-commit-receipt.json",
+      "self_hash_rule": "report自己SHA/commitは外部receiptで拘束し循環参照を避ける。全delta読取とreplay成功確認後に証拠だけcommit。"
+    }
+  },
+  "limitations": [
+    "この記録は担当者の実装修復とstructured証拠で独立reviewerとは呼ばない。",
+    "両runtime96件の局所監査/repair family成功。fixedI全件/実SDK/配布物/実環境への成功拡張なし。",
+    "読取不能のlegacy exact DatabaseErrorを厳密なSQLite code検出と同一視しない。",
+    "保護source/他者worktree/private資産を変更せず、実データ/サービスを使わない。"
+  ],
+  "deferred_findings": [],
+  "owned_partial_ranges": [],
+  "additional_audit_loop_started": false
+}

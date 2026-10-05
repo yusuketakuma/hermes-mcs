@@ -17,6 +17,7 @@ report INCOMPLETE — the driver never fabricates a pass.
 """
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -34,18 +35,23 @@ def main() -> int:
                         help="use a real Jev client (TYPESAFE_API_KEY)")
     parser.add_argument("--deadline", type=float, default=300.0)
     args = parser.parse_args()
+    if not math.isfinite(args.deadline) or args.deadline <= 0:
+        parser.error("--deadline must be finite and greater than zero")
 
     import semantic
     import semantic_evaluation
 
     try:
         payload = json.loads(Path(args.cases).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, RecursionError) as error:
         print(f"cases unreadable: {error}", file=sys.stderr)
         return 1
     cases = payload.get("cases") if isinstance(payload, dict) else None
-    if not isinstance(cases, list) or not cases:
-        print("cases file has no cases list", file=sys.stderr)
+    if not isinstance(cases, list) or not cases or any(
+            not isinstance(case, dict) or case.get("messages") and (
+                not isinstance(case["messages"], list)
+                or any(not isinstance(msg, dict) for msg in case["messages"])) for case in cases):
+        print("cases file requires case objects and message objects", file=sys.stderr)
         return 1
 
     jev_client = None

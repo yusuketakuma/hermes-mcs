@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "通知の配送証拠が欠けた再起動を安全に保留",
+  "summary": "Slack・Discord・LINE WORKSの通知ワーカーは、配送journalの破損を未送信の根拠にせず、結果不明として保持します。記録を失った送信や添付・本文の自動再送を防ぎ、保存済みのclaimに対応するjournalが丸ごと欠けても結果を報告します。深い破損JSONも、旧状態の移行・サマリー設定・LINE WORKSの送信待ち情報で既存の安全な拒否・既定値経路へ進みます。",
+  "upgrade": "1.0.13へ更新後、HermesのSlack・Discordはgateway、LINE WORKSは独立アダプターの再起動時に反映されます。journalの破損を検出すると、そのワーカーの新規送信と依存する本文・添付を停止します。保存された配送証拠を保全して調査・復旧し、既存の人承認・理由・receiptの経路で結果不明の配送を扱ってください。この変更作業では実機の再起動・配送結果の確定・配備を行っていません。",
+  "details": [
+    "起動時の完全性確認は、破損行・不正な状態・改行のない末尾・読取り失敗を検出し、読めた配送事実は残す。",
+    "結果不明の配送をtombstoneで保持する一方、完全な記録で証明できる未送信は従来どおり再受付できる。",
+    "旧registryは原本を保持し、サマリーは呼出側のプロジェクト範囲を保持する。破損したLINE WORKSの待ち情報は通信前に拒否する。"
+  ],
+  "refs": ["adapters/common/journal.py", "adapters/common/worker.py", "adapters/common/registry.py", "adapters/common/summary.py", "adapters/lineworks/delivery.py"]
+}

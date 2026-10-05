@@ -1,5 +1,10 @@
 """自分の投稿への反応・自分宛メンション・しおり等の表示（読取り専用・完全合成）。"""
 import json
+import asyncio
+import sys
+from types import SimpleNamespace
+
+import pytest
 
 import ledger
 import mcs_signals
@@ -8,7 +13,7 @@ import notify_digest
 import notify_render
 import notify_views
 from message_metadata import (
-    flag_lines, get_message_metadata, mentions_self, stamp_line)
+    actor_line, flag_lines, get_message_metadata, mentions_self, stamp_line)
 from notify_testkit import CFG, NOW, _card, _dispatch, _intent, _msg, _patient, _signal_row, led
 
 __all__ = ["led"]
@@ -56,14 +61,14 @@ def test_own_post_text_counts_others_and_keeps_unfetched_distinct(led):
 
     def own():
         return stamp_line(get_message_metadata(led.db, 100) | {"own_post": True})
-    assert own() == "MCS スタンプ未取得"
+    assert own() == "スタンプ 未取得"
     _meta(led, 100, reactions=[_r("viewed", 3, True), _r("accepted", 1), _r("good", 0)])
-    assert own().startswith("MCS 👀2 🙆1（自分 👀） · 観測 ")
+    assert own().startswith("スタンプ 👀2 🙆1（自分 👀） · 観測 ")
     assert "👍" not in own()
     _meta(led, 100, reactions=[_r("viewed", 1, True)])
-    assert own().startswith("MCS 他者なし（自分 👀）")
+    assert own().startswith("スタンプ 他者なし（自分 👀）")
     _meta(led, 100, reactions=[])
-    assert own().startswith("MCS スタンプなし · 観測 ")
+    assert own().startswith("スタンプ なし · 観測 ")
 
 
 def test_card_footer_uses_sender_id_not_same_name(led):
@@ -77,11 +82,11 @@ def test_card_footer_uses_sender_id_not_same_name(led):
     footer = "\n".join(i["text"] for i in
                        notify_render._card_content(led.db, _card(led))["footer"])
     # own post counts others only (1), the other's post counts both (2)
-    assert "MCS 👀3 · 自分 2投稿" in footer
+    assert "スタンプ 👀3 · 自分 2投稿" in footer
     body = notify_render._card_body_text(
         led.db, _card(led), {"shown": "[100, 101]"}, max_chars=None)[1]
     own, other = body.split("\n\n")
-    assert "MCS 👀1（自分 👀）" in own and "MCS 👀2（自分 👀）" in other
+    assert "スタンプ 👀1（自分 👀）" in own and "スタンプ 👀2（自分 👀）" in other
 
 
 def test_unreacted_own_posts_section_only_when_published(led):
@@ -296,12 +301,13 @@ def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
     body = notify_render._card_body_text(
         led.db, _card(led), {"shown": "[100, 101]"}, max_chars=None)[1]
     for post, mid, stamps in zip(body.split("\n\n"), (100, 101),
-                                 ("MCS 🙆2 👍1（自分 🙆） · 観測 ",
-                                  "MCS スタンプ未取得")):
+                                 ("スタンプ 🙆2 👍1（自分 🙆） · 観測 ",
+                                  "スタンプ 未取得")):
         lines = post.split("\n")
         assert lines[1:3] == ["📋 構造化", f"・要約{mid}"]
         assert lines[3].startswith(stamps)
-        assert lines[4] == led.db.execute(
+        assert lines[4] == "押した人: 未取得"
+        assert lines[5] == led.db.execute(
             "SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone()[0]
 
 
@@ -309,7 +315,7 @@ def test_long_post_keeps_summary_and_stamps_with_its_body():
     """Regression: a long body started its own chunk, leaving the
     header / summary / stamp lines as a post of their own."""
     import notify_cards
-    head = "10-03 08:00 職員\n📋 構造化\n・要約\nMCS 👀9 🙏1 · 観測 10-03 08:05\n"
+    head = "10-03 08:00 職員\n📋 構造化\n・要約\nスタンプ 👀9 🙏1 · 観測 10-03 08:05\n"
     for body in ("本" * 1852, "本" * 3000, ("行\n" * 1200)):
         chunks = notify_cards._split_body_chunks(head + body)
         assert "".join(chunks) == head + body
@@ -327,18 +333,289 @@ def test_thread_post_names_who_pressed(led, monkeypatch):
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
     body = lambda: notify_render._card_body_text(  # noqa: E731
         led.db, _card(led), {"shown": "[100]"}, max_chars=None)[1]
-    assert "押した人" not in body()                 # never walked yet
+    assert "押した人: 未取得" in body()                 # never walked yet
     led.save_reaction_actors(100, [
         {"actor_id": OTHER, "reaction_type": "viewed", "name": "合成 一郎", "profession": "医師"},
         {"actor_id": 9, "reaction_type": "viewed", "name": "合成 花子"},
         {"actor_id": SELF, "reaction_type": "accepted", "name": "合成 自分"}], True, now=NOW - 50)
     monkeypatch.setattr(ledger.time, "time", lambda: NOW + 86400)
     lines = body().split("\n")
-    i = next(n for n, ln in enumerate(lines) if ln.startswith("MCS "))
-    assert lines[i + 1] == ("押した人: 👀 合成 一郎（医師）・合成 花子 / 🙆 自分"
-                            "（09-21 23:12 時点）")       # pinned clock: 24h past
+    i = next(n for n, ln in enumerate(lines) if ln.startswith("スタンプ "))
+    assert lines[i + 1] == ("押した人（古い情報）: 👀 合成 一郎（医師）・合成 花子 / 🙆 合成 自分（自分）"
+                            " · 観測 09-21 23:12")       # pinned clock: 24h past
     monkeypatch.setattr(ledger.time, "time", lambda: NOW)
     lines = body().split("\n")
-    assert lines[i + 1] == "押した人: 👀 合成 一郎（医師）・合成 花子 / 🙆 自分"
+    assert lines[i + 1] == ("押した人: 👀 合成 一郎（医師）・合成 花子 / "
+                            "🙆 合成 自分（自分） · 観測 09-21 23:12")
     footer = "\n".join(x["text"] for x in notify_render._card_content(led.db, _card(led))["footer"])
     assert "合成 一郎" not in footer
+
+
+@pytest.mark.parametrize(("summary", "expected"), [
+    (None, "押した人: 未取得"),
+    ({"complete_at": None, "state": "not_fetched"}, "押した人: 未取得"),
+    ({"complete_at": None, "state": "failed"}, "押した人: 未取得（取得失敗）"),
+    ({"complete_at": NOW - 10, "state": "complete", "actors": []},
+     "押した人: なし · 観測 09-21 23:13"),
+    ({"complete_at": NOW - 10, "state": "stale", "actors": []},
+     "押した人（古い情報）: なし · 観測 09-21 23:13"),
+    ({"complete_at": NOW - 10, "state": "failed", "actors": []},
+     "押した人（再取得失敗）: なし · 観測 09-21 23:13"),
+])
+def test_stamp_actor_fetch_states_are_explicit(summary, expected):
+    assert actor_line(summary) == expected
+
+
+def test_stamp_actor_names_self_unknown_and_kinds_are_distinct():
+    actors = [
+        {"reaction_type": "accepted", "name": "合成 自分", "profession": "医師", "self": True},
+        {"reaction_type": "viewed", "name": "合成 花子", "profession": "看護師", "self": False},
+        {"reaction_type": "good", "name": None, "profession": None, "self": False},
+        {"reaction_type": "future", "name": "合成 将来", "profession": None, "self": False},
+        {"reaction_type": "viewed", "name": "合成 自分", "profession": "医師", "self": True},
+    ]
+    assert actor_line({"state": "complete", "complete_at": NOW - 10, "actors": actors}) == (
+        "押した人: 👀 合成 花子（看護師）・合成 自分（医師）（自分） / "
+        "🙆 合成 自分（医師）（自分） / 👍 氏名不明 / ❔ 合成 将来 · 観測 09-21 23:13")
+
+
+def test_stamp_actor_names_have_one_line_and_a_finite_budget():
+    actors = [{"reaction_type": "viewed", "name": "合成\r\n\x00\u202e<@UFAKE> @everyone" + "名" * 1000,
+               "profession": "職\n" * 1000, "self": False} for _ in range(15)]
+    actors += [{"reaction_type": "accepted", "name": "合成別名", "profession": None, "self": False}]
+    text = actor_line({"state": "complete", "complete_at": NOW - 10, "actors": actors})
+    assert "\n" not in text and "\r" not in text and "\x00" not in text and "\u202e" not in text
+    assert "<" not in text and ">" not in text and "@" not in text
+    assert len(text) < 1000
+    assert text.count("合成") == 12 and "他3名" in text and "🙆 1名" in text
+    assert text.count("…") == 24
+
+
+@pytest.mark.parametrize("platform", ["slack", "discord", "lineworks"])
+def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, platform):
+    from adapters.discord import cards as discord_cards, delivery as discord_delivery
+    from adapters.lineworks import cards as lineworks_cards, delivery as lineworks_delivery
+    from adapters.slack import cards as slack_cards, delivery as slack_delivery
+    from discord_delivery_testkit import FakeHTTPClient
+    from discord_testkit import _fake_discord
+    from notify_testkit import _latest_render
+    from slack_testkit import SLACK
+    from test_notify_lineworks import LINEWORKS
+
+    monkeypatch.setattr(ledger.time, "time", lambda: NOW)
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    _patient(led)
+    _self_known(led)
+    _post(led, 100, SELF, ts=NOW - 100)
+    _post(led, 101, OTHER, ts=NOW - 50, parent=100)
+    for mid in (100, 101):
+        _meta(led, mid, reactions=[_r("viewed", 2, True)])
+        led.save_reaction_actors(mid, [
+            {"actor_id": SELF, "reaction_type": "viewed", "name": f"合成本人{mid}"},
+            {"actor_id": OTHER, "reaction_type": "viewed", "name": f"合成他者{mid}<@UFAKE>"},
+        ], True, now=NOW - 10)
+    cfg = {"slack": SLACK, "discord": CFG, "lineworks": LINEWORKS}[platform]
+    assert _dispatch(led, _intent(led), cfg)["dispatched"]
+    spec = json.loads(_latest_render(led)["spec_json"])
+    footer = "\n".join(item["text"] for item in spec["parts"]["footer"] if item["type"] == "text")
+    assert "スタンプ 👀3 · 自分 2投稿" in footer and "MCS 👀" not in footer
+    assert "合成本人" not in footer and "合成他者" not in footer
+    if platform == "slack":
+        blocks = slack_cards.render(spec)[1]
+        assert any("スタンプ 👀3" in element.get("text", "") for block in blocks
+                   for element in block.get("elements", []))
+        stamp_context = [element for block in blocks if block["type"] == "context"
+                         for element in block["elements"] if "スタンプ" in element["text"]]
+        assert len(stamp_context) == 1 and stamp_context[0]["type"] == "plain_text"
+    elif platform == "discord":
+        view = discord_cards.build_view(spec)
+        assert any("-# スタンプ 👀3" in getattr(child, "content", "")
+                   for container in view.items for child in container.children)
+    else:
+        shown = lineworks_cards.render(spec)
+        assert "スタンプ 👀3" in shown.get("contentText", shown.get("text", ""))
+
+    calls = []
+
+    async def send(text=None, **kwargs):
+        calls.append((text, kwargs))
+        return SimpleNamespace(id=123)
+
+    async def slack_send(**kwargs):
+        calls.append((kwargs["text"], kwargs))
+        return {"ok": True, "ts": "1790000000.000001", "channel": kwargs["channel"]}
+
+    if platform == "slack":
+        worker = object.__new__(slack_delivery.DeliveryWorker)
+        worker._settings = {"channel_id": "C_SYNTHETIC"}
+        worker._sender = SimpleNamespace(single_attempt=lambda: SimpleNamespace(chat_postMessage=slack_send))
+        context = {"thread_id": "1790000000.000100"}
+    elif platform == "discord":
+        worker = object.__new__(discord_delivery.DeliveryWorker)
+        worker._bot = SimpleNamespace(http=FakeHTTPClient())
+        context = {"thread": SimpleNamespace(send=send)}
+    else:
+        worker = object.__new__(lineworks_delivery.DeliveryWorker)
+        worker._sender = SimpleNamespace(route_current=lambda _spec: True,
+                                         send=lambda content: calls.append((content["text"], {})))
+        context = {"card_message_id": "lw:" + "c" * 32}
+    posts = {}
+    for part in spec["parts"]["manifest"]:
+        if part["kind"] == "body_part":
+            result = asyncio.run(worker._perform_part({"spec": spec}, part, context))
+            assert result["result"] == "delivered"
+            if part["name"].startswith("m:"):
+                mid = int(part["name"].split("#", 1)[0][2:])
+                posts.setdefault(mid, []).append(calls[-1][0])
+    assert set(posts) == {100, 101}
+    for mid in (100, 101):
+        post = "".join(posts[mid])
+        assert f"合成本人{mid}（自分）" in post and f"合成他者{mid}＜＠UFAKE＞" in post
+        assert f"合成本人{201 - mid}" not in post
+        assert "押した人: 👀" in post and " · 観測 09-21 23:13" in post
+        assert "<@" not in post and "@everyone" not in post
+    for _, kwargs in calls:
+        if platform == "slack":
+            assert kwargs["link_names"] is False and kwargs["unfurl_links"] is False
+        elif platform == "discord":
+            mentions = kwargs["allowed_mentions"]
+            assert not any((mentions.everyone, mentions.users, mentions.roles, mentions.replied_user))
+
+
+def _stamp_settle(led, render, result="delivered"):
+    import notify_cards
+    import notify_cmds
+    from adapters.common import envelopes
+
+    spec = json.loads(render["spec_json"])
+    claim = {"spec": spec, "payload_hash": render["payload_hash"],
+             "attempt_id": f"{spec['render_rev']:016x}", "worker_id": "b" * 16}
+
+    def apply(req):
+        assert notify_cmds.validate_int(req) is None
+        return notify_cmds.dispatch(led, req, CFG, notify_cards.data_root(led), now=NOW)
+
+    assert apply(envelopes.transport_begin(claim))["granted"]
+    assert apply(envelopes.transport_receipt(
+        claim, result, message_id="m-1" if result == "delivered" else None,
+        error_code="synthetic_unknown" if result == "unknown" else None))["applied"]
+    if result == "delivered":
+        for part in spec["parts"]["manifest"][1:]:
+            assert apply(envelopes.part_receipt(
+                claim, part, "delivered", remote_id="synthetic-" + part["part_id"]))["applied"]
+
+
+@pytest.mark.parametrize("state", ["queued", "delivered", "unknown"])
+def test_stamp_actor_late_names_and_fetch_state_refresh_existing_parts(led, monkeypatch, state):
+    import notify_cards
+    from notify_testkit import _latest_render
+
+    monkeypatch.setattr(ledger.time, "time", lambda: NOW)
+    _patient(led)
+    _self_known(led)
+    _post(led, 100, SELF, ts=NOW - 100)
+    _meta(led, 100, reactions=[_r("viewed", 2)])
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    first = _latest_render(led)
+    original_card = _card(led)
+    if state != "queued":
+        _stamp_settle(led, first, state)
+    led.save_reaction_actors(100, [{"actor_id": OTHER, "reaction_type": "viewed", "name": "合成後着"}],
+                             True, now=NOW - 10)
+    specs = []
+    with led.db:
+        issued = notify_cards._issue_render(led.db, 1, CFG, NOW, specs)
+    if state == "unknown":
+        assert issued is None and specs == []
+        assert _latest_render(led)["delivery_id"] == first["delivery_id"]
+        return
+    assert issued is not None
+    fresh = _latest_render(led)
+    assert fresh["render_rev"] == first["render_rev"] + 1
+    assert _card(led)["source_generation"] == original_card["source_generation"]
+    assert "合成後着" in "".join(specs[0]["parts"]["thread_body_parts"])
+    if state == "delivered":
+        assert next(p for p in specs[0]["parts"]["manifest"] if p["kind"] == "body_part")["prior_remote_id"]
+    # The next failed fetch preserves the complete names and still owes a visible state update.
+    led.save_reaction_actors(100, [], False, error="synthetic_failure", now=NOW)
+    specs = []
+    with led.db:
+        assert notify_cards._issue_render(led.db, 1, CFG, NOW, specs) is not None
+    body = "".join(specs[0]["parts"]["thread_body_parts"])
+    assert "押した人（再取得失敗）: 👀 合成後着" in body
+    assert " · 観測 09-21 23:13" in body
+
+
+def test_stamp_actor_late_name_updates_an_existing_post_outside_the_card_page(led, monkeypatch):
+    import notify_cards
+    from notify_testkit import _latest_render
+
+    monkeypatch.setattr(ledger.time, "time", lambda: NOW)
+    _patient(led)
+    mids = list(range(100, 110))
+    for mid in mids:
+        _post(led, mid, OTHER, ts=NOW - 200 + mid, parent=100 if mid != 100 else None)
+        _meta(led, mid, reactions=[_r("viewed")])
+    assert _dispatch(led, _intent(led, payload={"message_ids": mids}))["dispatched"]
+    first = _latest_render(led)
+    initial = json.loads(first["spec_json"])
+    assert 100 not in json.loads(led.db.execute(
+        "SELECT shown FROM notification_view_manifests WHERE manifest_id=?", (first["manifest_id"],)
+    ).fetchone()[0])
+    _stamp_settle(led, first)
+    led.save_reaction_actors(100, [{"actor_id": OTHER, "reaction_type": "viewed", "name": "合成前ページ"}],
+                             True, now=NOW - 10)
+    fresh = []
+    with led.db:
+        assert notify_cards._issue_render(led.db, 1, CFG, NOW, fresh) is not None
+    assert "合成前ページ" in "".join(fresh[0]["parts"]["thread_body_parts"])
+    old_body = [p for p in initial["parts"]["manifest"] if p["kind"] == "body_part"]
+    new_body = [p for p in fresh[0]["parts"]["manifest"] if p["kind"] == "body_part"]
+    assert {p["name"] for p in new_body} == {p["name"] for p in old_body}
+    assert all(p["prior_remote_id"] == "synthetic-" + p["part_id"] for p in new_body)
+    assert fresh[0]["source_generation"] == initial["source_generation"]
+
+
+def test_stamp_actor_partial_walk_is_unknown_and_preserves_the_last_complete_set(led, monkeypatch):
+    monkeypatch.setattr(ledger.time, "time", lambda: NOW)
+    _patient(led)
+    _post(led, 100, OTHER, ts=NOW - 100)
+    rows = [{"actor_id": OTHER, "reaction_type": "viewed", "name": "合成部分氏名"}]
+    led.save_reaction_actors(100, rows, False, error="incomplete", now=NOW - 10)
+    assert actor_line(ledger.reaction_actor_summary(led.db, 100)) == "押した人: 未取得（取得失敗）"
+    rows[0]["name"] = "合成完全氏名"
+    led.save_reaction_actors(100, rows, True, now=NOW - 10)
+    rows[0]["name"] = "合成失敗氏名"
+    led.save_reaction_actors(100, rows, False, error="incomplete", now=NOW)
+    assert actor_line(ledger.reaction_actor_summary(led.db, 100)) == (
+        "押した人（再取得失敗）: 👀 合成完全氏名 · 観測 09-21 23:13")
+
+
+def test_stamp_actor_refresh_keeps_human_confirmation_and_source_identity(led, monkeypatch):
+    import notify_cards
+    from adapters.common import envelopes
+    from notify_testkit import _latest_render, _token_for
+
+    monkeypatch.setattr(ledger.time, "time", lambda: NOW)
+    _patient(led)
+    _post(led, 100, OTHER, ts=NOW - 100)
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    first = _latest_render(led)
+    _stamp_settle(led, first)
+    spec = json.loads(first["spec_json"])
+    origin = {k: spec["delivery"][k] for k in ("profile", "application_id", "channel_id", "guild_id")}
+    origin["message_id"] = "m-1"
+    req = envelopes.notification(_token_for(spec, "ack"), "discord:1001", origin)
+    assert notify_cards.apply_notification(led, req, CFG, now=NOW)["outcome"] == "applied"
+    _stamp_settle(led, _latest_render(led))
+    before = _card(led)
+    led.save_reaction_actors(100, [{"actor_id": OTHER, "reaction_type": "viewed", "name": "合成後着"}],
+                             True, now=NOW - 10)
+    specs = []
+    with led.db:
+        assert notify_cards._issue_render(led.db, 1, CFG, NOW, specs) is not None
+    after = _card(led)
+    assert (after["source_generation"], after["source_fp"]) == (before["source_generation"], before["source_fp"])
+    assert after["presentation_generation"] == before["presentation_generation"] + 1
+    assert "✅ 確認: <@1001>" in "\n".join(item.get("text", "") for item in specs[0]["parts"]["footer"])
+    assert led.db.execute("SELECT count(*) FROM notification_acknowledgements WHERE withdrawn_at IS NULL").fetchone()[0] == 1

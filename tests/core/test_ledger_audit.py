@@ -11,6 +11,7 @@ import pytest
 
 from ledger import LedgerReader, SCHEMA_VERSION
 from ledger_audit import audit_db
+import ledger_audit
 from notify_cards import SCHEMA as NOTIFY_SCHEMA
 
 
@@ -222,6 +223,80 @@ def test_corrupt_file_is_reported_without_contents(tmp_path):
     assert report["checks"]["sqlite_unreadable"]["status"] == "violation"
     assert "SYNTHETIC_PRIVATE" not in json.dumps(report)
     assert _hash(path) == before
+
+
+class _UnknownDatabaseError(sqlite3.DatabaseError):
+    pass
+
+
+@pytest.mark.parametrize(("error_type", "code", "exhausted", "check", "count"), [
+    (sqlite3.DatabaseError, None, False, "sqlite_unreadable", 1),
+    (sqlite3.OperationalError, None, False, "sqlite_query_unavailable", None),
+    (sqlite3.IntegrityError, None, False, "sqlite_query_unavailable", None),
+    (_UnknownDatabaseError, None, False, "sqlite_query_unavailable", None),
+    (sqlite3.DatabaseError, None, True, "audit_budget_exceeded", None),
+    (sqlite3.DatabaseError, 11, False, "sqlite_unreadable", 1),
+    (sqlite3.DatabaseError, 26, False, "sqlite_unreadable", 1),
+    (sqlite3.DatabaseError, 1, False, "sqlite_query_unavailable", None),
+    (sqlite3.DatabaseError, 267, False, "sqlite_query_unavailable", None),
+    (sqlite3.DatabaseError, 999, False, "sqlite_query_unavailable", None),
+])
+def test_sqlite_error_attribute_compatibility_is_readonly_and_safe(
+        tmp_path, monkeypatch, error_type, code, exhausted, check, count):
+    path = _database(tmp_path)
+    before = _hash(path)
+    files = sorted(p.name for p in tmp_path.iterdir())
+    error = error_type("SYNTHETIC_PRIVATE_ERROR")
+    if code is None:
+        assert not hasattr(error, "sqlite_errorcode")
+        monkeypatch.delattr(sqlite3, "SQLITE_CORRUPT", raising=False)
+        monkeypatch.delattr(sqlite3, "SQLITE_NOTADB", raising=False)
+    else:
+        error.sqlite_errorcode = code
+        monkeypatch.setattr(sqlite3, "SQLITE_CORRUPT", 11, raising=False)
+        monkeypatch.setattr(sqlite3, "SQLITE_NOTADB", 26, raising=False)
+    calls = []
+
+    class Reader:
+        db = None
+        closed = False
+
+        def __init__(self, supplied_path):
+            assert supplied_path == str(path)
+            self.db = self
+
+        def set_progress_handler(self, callback, steps):
+            assert steps == 100
+            self.progress = callback
+
+        def execute(self, sql):
+            calls.append(sql)
+            if sql == "PRAGMA journal_mode":
+                if exhausted:
+                    assert self.progress() == 0
+                    assert self.progress() == 1
+                raise error
+            return self
+
+        def close(self):
+            self.closed = True
+
+    reader = Reader(str(path))
+    def open_reader(supplied):
+        assert supplied == str(path)
+        return reader
+    monkeypatch.setattr(ledger_audit, "LedgerReader", open_reader)
+    report = audit_db(path, max_steps=100 if exhausted else 10_000_000)
+    assert not report["ok"] and not report["complete"]
+    assert report["checks"] == {
+        check: {"status": "unknown" if count is None else "violation", "count": count}}
+    assert calls == ["PRAGMA query_only=ON", "PRAGMA busy_timeout=0", "BEGIN",
+                     "PRAGMA journal_mode"]
+    assert reader.closed
+    assert _hash(path) == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == files
+    assert "SYNTHETIC_PRIVATE" not in json.dumps(report)
+    assert str(path) not in json.dumps(report)
 
 
 def test_sqlite_integrity_detects_duplicate_btree_root(tmp_path):

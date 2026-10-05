@@ -16,6 +16,22 @@ IDENTITY = ("id", "tag_name", "draft", "prerelease", "target_commitish",
             "created_at", "published_at")
 
 
+def release_record(value):
+    """Reject missing or ill-typed release identity before planning or writing."""
+    if not isinstance(value, dict) or not isinstance(value.get("tag_name"), str):
+        raise ValueError("Release応答の形式が不正です")
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", value["tag_name"]):
+        return value  # Non-stable tags are outside the synchronization policy.
+    if (type(value.get("id")) is not int or value["id"] <= 0
+            or any(type(value.get(k)) is not bool for k in ("draft", "prerelease"))
+            or any(not isinstance(value.get(k), str) or not value[k]
+                   for k in ("target_commitish", "created_at", "updated_at"))
+            or any(k not in value or value[k] is not None and not isinstance(value[k], str)
+                   for k in ("name", "body", "published_at"))):
+        raise ValueError("Releaseの識別・公開状態の形式が不正です")
+    return value
+
+
 def api(repo, endpoint, payload=None):
     # Only the repo-relative releases endpoint is accepted; no arbitrary URL.
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
@@ -49,13 +65,12 @@ def synchronize(text, request, apply=False):
         raise ValueError("Release一覧がページ上限を超えました")
     plan, seen = [], set()
     for release in releases:
+        release = release_record(release)
         tag = release["tag_name"]
         if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
             continue  # prerelease tags are outside this stable-release policy.
         if tag in seen or tag[1:] not in versions:
             raise ValueError(f"{tag}: 重複またはCHANGELOGの対応版がありません")
-        if type(release["id"]) is not int or release["id"] <= 0:
-            raise ValueError("Release IDが不正です")
         seen.add(tag)
         body = section(text, tag[1:])
         desired = {"name": release_title(body, tag[1:]), "body": body}
@@ -66,15 +81,15 @@ def synchronize(text, request, apply=False):
     for old, desired in plan:
         if apply:
             endpoint = f"releases/{old['id']}"
-            current = request(endpoint)
+            current = release_record(request(endpoint))
             if any(current.get(k) != old.get(k)
                    for k in (*IDENTITY, "name", "body", "updated_at")):
                 raise ValueError(f"{old['tag_name']}: 取得後に変更されたため停止します")
             # Omitting tag_name can detach a draft from its existing tag.
-            updated = request(endpoint, desired | {"tag_name": old["tag_name"]})
+            updated = release_record(request(endpoint, desired | {"tag_name": old["tag_name"]}))
             if any(updated.get(k) != old.get(k) for k in IDENTITY):
                 raise ValueError("Releaseの識別・公開状態が変わったため停止します")
-            verified = request(endpoint)
+            verified = release_record(request(endpoint))
             if any(verified.get(k) != old.get(k) for k in IDENTITY):
                 raise ValueError("再取得時にReleaseの識別・公開状態が変わったため停止します")
             if any(verified.get(k) != v for k, v in desired.items()):
@@ -97,7 +112,7 @@ def main(argv=None):
                              lambda endpoint, payload=None: api(args.repo, endpoint, payload),
                              apply=args.apply)
         print(json.dumps(result, ensure_ascii=False))
-    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+    except (ValueError, OSError, RecursionError, subprocess.SubprocessError) as exc:
         # Do not print request payloads or subprocess output (which may include secrets).
         parser.exit(1, f"release sync: {type(exc).__name__}: {exc}\n")
     return 0

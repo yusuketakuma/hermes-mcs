@@ -451,3 +451,46 @@ def test_latest_raw_probe_has_no_mark_request_but_no_unread_proof(replay):
     assert len(observed) == 1 and not pending
     # This reader sends no keep_read_status. No synthetic server state
     # can establish the real endpoint's absence of read/viewed side effects.
+
+
+@pytest.mark.parametrize("reader", ["unread", "history", "thread",
+                                    "embedded_unread", "embedded_history"])
+@pytest.mark.parametrize("project_id", [PID + 1, False, str(PID), None])
+def test_conflicting_message_project_does_not_relabel_a_completed_page(replay, reader, project_id):
+    # The endpoint's project cannot replace contradictory response scope.
+    history = reader in ("history", "embedded_history")
+    thread = reader == "thread"
+    path = (f"/projects/{PID}/messages/{MID + 100}/messages" if thread
+            else f"/projects/{PID}/messages")
+    first = raw_message(project_id=PID)
+    bad = raw_message(MID + 1, project_id=project_id)
+    if reader.startswith("embedded_"):
+        bad = raw_message(MID + 2, project_id=PID, thread_messages=[bad])
+    adapter, pending, _ = replay([
+        (path, {"keep_read_status": 1, "page": 1} if thread
+         else message_query(history=history), page([first], True)),
+        (path, {"keep_read_status": 1, "page": 2} if thread
+         else message_query(2, history=history), page([bad])),
+    ])
+    batch = (adapter.fetch_thread_window(PID, MID + 100) if thread else
+             adapter.fetch_history(PID, 0) if history else
+             adapter.fetch_unread_messages(PID, STAMP))
+    assert batch.error is not None and batch.error.kind == "schema_error"
+    assert not batch.reached and batch.pages == 1
+    assert [m.message_id for m in batch.messages] == [MID]
+    assert not pending
+
+
+@pytest.mark.parametrize("delay", ["nan", "inf"])
+def test_initial_import_nonfinite_delay_rejected_before_writer_lock(monkeypatch, delay):
+    import sys
+    import init_data
+
+    monkeypatch.setattr(sys, "argv", ["init_data", "--delay", delay])
+    monkeypatch.setattr(init_data, "acquire_run_lock", lambda *args:
+                        pytest.fail("invalid delay reached writer lock"))
+    monkeypatch.setattr(init_data, "MCSAdapter", lambda *args, **kwargs:
+                        pytest.fail("invalid delay reached authentication"))
+    with pytest.raises(SystemExit) as error:
+        init_data.main()
+    assert error.value.code == 2

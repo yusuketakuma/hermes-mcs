@@ -38,6 +38,7 @@ import getpass
 import hashlib
 from html import escape as xml_escape
 import json
+import math
 import os
 import plistlib
 import re
@@ -1814,16 +1815,33 @@ def cmd_jev_value(args) -> int:
     import semantic
     import semantic_jev as jev
     import semantic_evaluation
+    if not math.isfinite(args.deadline) or args.deadline <= 0:
+        print("jev-value: deadline must be finite and positive")
+        return 1
     try:
         with open(args.cases, "rb") as stream:
             raw = stream.read(8 * 1024 * 1024)
         payload = json.loads(raw)
-    except (OSError, ValueError) as e:
-        print(f"jev-value: cases unreadable ({e})")
+    except (OSError, ValueError, RecursionError):
+        print("jev-value: cases unreadable")
         return 1
     cases = payload.get("cases") if isinstance(payload, dict) else None
     if not isinstance(cases, list) or not cases:
         print("jev-value: cases file has no cases list")
+        return 1
+    try:
+        allowed = {}
+        for name in ("extract_cases.json", "extract_cases_labs.json",
+                     "semantic_completeness_cases.json"):
+            asset = Path(__file__).resolve().parents[2] / "evaluation" / name
+            allowed.update((case["id"], case)
+                           for case in json.loads(asset.read_text(encoding="utf-8"))["cases"])
+        if any(not isinstance(case, dict) or not isinstance(case.get("id"), str)
+               or case != allowed.get(case["id"]) for case in cases) \
+                or len({case["id"] for case in cases}) != len(cases):
+            raise ValueError("synthetic_cases_required")
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        print("jev-value: checked-in synthetic cases required")
         return 1
     cfg = load_config()
     scfg = cfg.get("semantic") or {}
@@ -2137,6 +2155,8 @@ def _recovery_owned() -> bool:
         if Path(contents["pointer"].decode().strip()).resolve() != Path(REPO_ROOT).resolve():
             return False
         plist = plistlib.loads(contents["plist"])
+        if not isinstance(plist, dict):
+            return False
         argv = plist.get("ProgramArguments")
         return (plist.get("Label") == RECOVERY_LABEL and isinstance(argv, list)
                 and len(argv) == 3 and argv[1:] == [str(root / "mcs_recover.py"), "--if-stale"]
@@ -2397,9 +2417,9 @@ G6_CRITERIA_PATH = os.path.join(REPO_ROOT, "evaluation",
                                 "g6-criteria-v1.json")
 
 CRON_JOBS = [
-    ("MCS unread check", "*/5 * * * *", "mcs_check.sh"),
+    ("MCS unread check", "*/10 * * * *", "mcs_check.sh"),
     ("MCS health watch", "*/5 * * * *", "mcs_health.sh"),
-    ("MCS durable drain", "7,37 * * * *", "mcs_deep.sh"),
+    ("MCS durable drain", "10,40 * * * *", "mcs_deep.sh"),
     ("MCS retry maintenance", "0 */6 * * *", "mcs_llm_catchup.sh"),
     ("llamacpp daily restart", "0 4 * * *", "llamacpp_restart_if_idle.sh"),
     ("MCS update check", "10 5 * * *", "mcs_update.sh"),
@@ -3449,7 +3469,9 @@ def main(argv: list[str] | None = None) -> int:
                        help="run Jev incremental-value evaluation and "
                             "write the evidence report JSON")
     p.add_argument("--cases", required=True,
-                   help="labelled bench cases JSON (synthetic corpus)")
+                   help="JSON with exact copied cases from evaluation's "
+                        "extract_cases, extract_cases_labs or semantic_completeness_cases "
+                        "(unique synthetic subset allowed)")
     p.add_argument("--out", required=True, help="report output path")
     p.add_argument("--deadline", type=float, default=120.0,
                    help="evaluation deadline in seconds")

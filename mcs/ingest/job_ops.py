@@ -28,10 +28,10 @@ from contextlib import suppress
 
 from mcs_adapter import MCSError, SessionExpired
 from ledger import TERMINAL_BODY_STATES
-from mcs_util import loads_dict
+from mcs_util import HOME, loads_dict
 import mcs_requests
 
-CMD_DIR = os.path.join(os.path.expanduser("~/.mcs"), "data", "cmd")
+CMD_DIR = os.path.join(HOME, "data", "cmd")
 
 TRICKLE_PAGES = 3        # timeline pages per patient per run
 TRICKLE_PATIENTS = 3     # patients advanced per run

@@ -6,9 +6,9 @@ version's updater (missing before v1.0.3, unable to re-run install.sh
 before v1.0.11) never decides anything:
 
   git -C ~/.mcs fetch --tags origin
-  WORK=$(mktemp -d); git -C ~/.mcs show v1.0.11:scripts/mcs_upgrade.py > "$WORK/mcs_upgrade.py"
-  "$PY" "$WORK/mcs_upgrade.py" --repo ~/.mcs plan --to v1.0.11
-  "$PY" "$WORK/mcs_upgrade.py" --repo ~/.mcs apply --to v1.0.11 [--reinstall]
+  WORK=$(mktemp -d); git -C ~/.mcs show v1.0.13:scripts/mcs_upgrade.py > "$WORK/mcs_upgrade.py"
+  "$PY" "$WORK/mcs_upgrade.py" --repo ~/.mcs plan --to v1.0.13
+  "$PY" "$WORK/mcs_upgrade.py" --repo ~/.mcs apply --to v1.0.13 [--reinstall]
 
 It copies the tag's exact ``mcs/`` blobs into a private temp dir and runs
 that ``mcs/ops/mcs_update.py`` with ``MCS_UPDATE_REPO`` set to the live

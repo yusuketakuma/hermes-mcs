@@ -2,7 +2,7 @@
 """Auto-metrics benchmark for the semantic pipeline (Phase J tooling).
 
 Runs the local extract -> summarize -> audit_code path on a FROZEN
-corpus of real messages and reports finding-code rates, so prompt or
+corpus of fully synthetic fixtures and reports finding-code rates, so prompt or
 model changes can be A/B compared without human labeling. A `detect`
 subcommand sends synthetic bad-claim probes through audit_claims with
 the real Jev client to measure detection capability.
@@ -12,13 +12,14 @@ the real Jev client to measure detection capability.
   semantic_bench.py report out_base.json out_new.json
   semantic_bench.py detect            # Jev detection probes (live API)
 
-The corpus file freezes bundle members so edits to the live DB cannot
-change the measurement. `run` never writes artifacts — pure function
-calls only.
+The corpus file freezes checked-in evaluation sources. `run` refuses
+legacy or unbound corpus text before accessing models or API credentials.
+It never writes artifacts — pure function calls only.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -36,52 +37,51 @@ import semantic_jev as jev
 from semantic_audit import audit_claims, audit_code
 from semantic_llm import extract_facts, summarize
 from semantic_runtime import LLMNotSent
-from semantic_store import bundle_fingerprint, thread_bundle
+from semantic_store import bundle_fingerprint
 
 DB = os.path.join(os.path.expanduser("~/.mcs"), "data", "ledger.db")
 
 
 def _write_json_private(path: str, data) -> None:
-    """Corpus/run outputs contain patient-derived text — write them with
-    the same owner-only permissions semantic_blind uses for its outputs
-    (S-4)."""
+    """Write corpus/run outputs with owner-only permissions (S-4)."""
     atomic_write(path, lambda f: json.dump(
         data, f, ensure_ascii=False, allow_nan=False), mode=0o600)
 
 
+def _synthetic_cases() -> list[dict]:
+    """Bind benchmark inputs to the repository's synthetic evaluation asset."""
+    asset = Path(__file__).resolve().parents[2] / "evaluation" / "extract_cases.json"
+    fixtures = json.loads(asset.read_text(encoding="utf-8"))["cases"]
+    cases = []
+    for pid, fixture in enumerate(fixtures, 1):
+        texts = ([fixture["context"]] if fixture.get("context") else []) + [fixture["body"]]
+        members = []
+        for mid, body in enumerate(texts, 1):
+            members.append({"message_id": mid, "project_id": pid,
+                            "parent_id": None if mid == 1 else 1,
+                            "posted_at": fixture.get("posted_at"),
+                            "sender": {"id": mid, "name": "合成担当", "type": "staff"},
+                            "body_original": body, "body_state": "full",
+                            "revision": hashlib.sha256(body.encode()).hexdigest(),
+                            "attachments": [], "replies_complete": True,
+                            "bundle_role": "target" if mid == len(texts) else "context"})
+        cases.append({"case_id": "synthetic:" + fixture["id"], "project_id": pid,
+                      "root_id": 1, "target_id": len(texts), "members": members})
+    return cases
+
+
 def cmd_corpus(args) -> int:
-    """Freeze N recent substantive threads into a portable corpus file."""
-    db = LedgerReader(DB)
-    rows = db.db.execute(
-        """
-        SELECT m.message_id, m.project_id,
-               COALESCE(m.parent_id, m.message_id) root_id,
-               LENGTH(m.body_text) blen
-        FROM messages m
-        WHERE m.body_text IS NOT NULL AND LENGTH(m.body_text) >= 60
-          AND LENGTH(m.body_text) <= 8000
-        ORDER BY m.posted_at_ts DESC LIMIT ?
-        """, (args.n * 3,)).fetchall()
-    cases, seen_roots = [], set()
-    for r in rows:
-        key = (r["project_id"], r["root_id"])
-        if key in seen_roots:
-            continue
-        bundle = thread_bundle(db, r["project_id"], r["root_id"],
-                               [r["message_id"]])
-        if bundle is None or bundle["content_quality"] != "full":
-            continue
-        seen_roots.add(key)
-        cases.append({"case_id": f"p{r['project_id']}_m{r['message_id']}",
-                      "project_id": r["project_id"],
-                      "root_id": r["root_id"],
-                      "target_id": r["message_id"],
-                      "members": bundle["members"]})
-        if len(cases) >= args.n:
-            break
-    db.close()
+    """Freeze N checked-in synthetic cases into a portable corpus file."""
+    if type(args.n) is not int or args.n <= 0:
+        print("corpus_count_invalid", file=sys.stderr)
+        return 2
+    try:
+        cases = _synthetic_cases()[:args.n]
+    except (OSError, ValueError, KeyError, TypeError):
+        print("synthetic_corpus_unavailable", file=sys.stderr)
+        return 2
     out = {"corpus_version": 1, "created_at": int(time.time()),
-           "cases": cases}
+           "source": "fully_synthetic", "cases": cases}
     _write_json_private(args.out, out)
     print(f"corpus: {len(cases)} cases -> {args.out}")
     return 0
@@ -152,7 +152,19 @@ def cmd_run(args) -> int:
     circuit state, and semantic-mode gates that the scheduled drain
     enforces (S-5). Use sparingly and only when a live check is
     intended."""
-    corpus = json.loads(Path(args.corpus).read_text())
+    try:
+        corpus = json.loads(Path(args.corpus).read_text(encoding="utf-8"))
+        allowed = {case["case_id"]: case for case in _synthetic_cases()}
+        cases = corpus.get("cases") if isinstance(corpus, dict) else None
+        if not isinstance(cases, list) or not cases or corpus.get("corpus_version") != 1 \
+                or corpus.get("source") != "fully_synthetic" \
+                or any(not isinstance(case, dict) or case != allowed.get(case.get("case_id"))
+                       for case in cases) \
+                or len({case["case_id"] for case in cases}) != len(cases):
+            raise ValueError("synthetic_corpus_required")
+    except (OSError, ValueError, KeyError, TypeError):
+        print("synthetic_corpus_required", file=sys.stderr)
+        return 2
     import semantic
     jev_client = None
     if args.jev:

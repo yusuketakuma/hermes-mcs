@@ -1,0 +1,23 @@
+{
+  "category": "fixed",
+  "title": "復元同意の再確認と不正な保存値の扱いを修正",
+  "summary": "復元先や元の復元証拠が差し替わった場合は、採用済み同意の再実行を拒否します。復旧訓練では競合して作られた台帳を上書き・削除せず保留を維持し、壊れた抽出情報は候補なしとせず不明として扱います。",
+  "upgrade": "追加の設定変更は不要です。稼働中プロセスへの適用は通常の更新・再起動手順に従ってください。復元後は既存の配送保留とreceipt照合が続きます。",
+  "details": [
+    "同意に束縛したDB・配置先・報告・マーカーのidentityを再確認し、採用後の通常のDB更新は引き続き許容する。",
+    "復旧訓練の台帳公開を排他的なlinkに変更し、競合時の他者ファイルと配送保留を保持する。",
+    "巨大な整数の時刻・検査予算を既存の拒否コードで扱い、有効な有限値と旧保存形式を維持する。",
+    "深く壊れた依頼候補は拒否receiptを保存し、壊れた統計承認情報は有効な承認を隠さない。薬剤辞書pinの不正入力は拒否JSONで返す。",
+    "Python 3.10の標準ライブラリだけで合成レビューキューと薬剤辞書テストのrequired/optional型契約を維持する。明示UTCの末尾Zを受理し、timezoneなしの日時は引き続き拒否する。",
+    "合成レビューの入力エラーは私有パスや入力本文を含む例外文を出さず、理由コードで返す。SQLite故障注入テストの解除方法もPython 3.10に対応する。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_backup.py",
+    "mcs/ops/mcs_restore.py",
+    "mcs/ops/mcs_repair.py",
+    "mcs/ops/request_loops.py",
+    "mcs/ops/mcs_refstats.py",
+    "mcs/ops/import_drug_master.py",
+    "evaluation/request_following_review.py"
+  ]
+}

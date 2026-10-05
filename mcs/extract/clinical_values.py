@@ -112,7 +112,11 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
         elif tail.startswith(fold_surface(raw_value)) and raw_value:
             remainder = tail[len(fold_surface(raw_value)):]
             result_unit = re.match(r"[a-zμ%/0-9.^²]*", remainder)
-            if unit_key is None or (result_unit and result_unit[0] == unit_key):
+            suffix = remainder[len(unit_key):] if unit_key else remainder
+            # A prefix is not the complete result: 陰性ではありません,
+            # 陰性疑い etc. must stay candidates, without guessing their value.
+            complete = re.match(r"(?:デス|デシタ)?(?:[。、,;；]|$)", suffix)
+            if complete and (unit_key is None or (result_unit and result_unit[0] == unit_key)):
                 readings.append(match)
     supported = (len(readings) == 1 and not unverified
                  and (unit_key is None or unit_key in _LAB_UNITS)

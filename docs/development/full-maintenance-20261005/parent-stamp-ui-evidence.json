@@ -1,0 +1,171 @@
+{
+  "schema": "parent-stamp-ui-delta/v1",
+  "input": "5715e7c87311d8ac37cc03e6ed5651506ca63baa",
+  "source_report": {
+    "path": "docs/development/maintenance-stamps-evidence.json",
+    "sha256": "0611a836a0bf65c9a572105b61c2d4a930d4e66c9289719e1f86c2837c5e002a",
+    "worker_P": "22ebd08240976051edb9bfeb7f7afc6c42fa6280",
+    "worker_W": "50a661b513bf4f58cd0242e29aef4b31b2abf856"
+  },
+  "docs_commits": [
+    "d8b26fd",
+    "fdb6fc6"
+  ],
+  "full_read_basis": "Previously full reviewed files plus all canonical generator/docs/SVG primary delta content read. Two generated PNGs rendered from canonical SVG and visually inspected, manifests recomputed by canonical generators. Source/card/transport delta and20 criteria reviewed, all eight current source/test SHA matched W.",
+  "display_contract": {
+    "footer": "スタンプ 👀3 · 自分 2投稿（複数投稿合算、氏名はここに混ぜない）",
+    "complete": "押した人: 👀 合成 花子（看護師）・合成 自分（医師）（自分） · 観測 09-21 23:13",
+    "unfetched": "押した人: 未取得",
+    "first_failed": "押した人: 未取得（取得失敗）",
+    "stale": "押した人（古い情報）: 👀 合成 花子 · 観測 09-21 23:13",
+    "failed": "押した人（再取得失敗）: 👀 合成 花子 · 観測 09-21 23:13",
+    "unknown_name": "氏名不明",
+    "observation_not_press_time": true,
+    "completion_not_inferred": true,
+    "limit": "全kindで12氏名、名前40/職種20文字、省略人数と…",
+    "delivery": "Slack/Discordはthread_on時各投稿のcompanion body、thread_off時既存本文操作。LINE WORKSはchannel visible body parts。",
+    "update_method": {
+      "slack": "Edit named body parts using prior remote ID; preserve source generation/human acknowledgement.",
+      "discord": "Edit named body parts using prior remote ID; preserve source generation/human acknowledgement.",
+      "lineworks": "Official Bot API has no sent-message edit operation; publish replacement card/body, retire old button/preview tokens; synthetic logical ID differs from the old post."
+    }
+  },
+  "opt_in_contract": {
+    "metadata_shadow_default": false,
+    "metadata_actors_default": false,
+    "required_existing_opt_in": [
+      "metadata_shadow",
+      "metadata_actors"
+    ],
+    "GET_actor_cap_per_tick": 4,
+    "shared_shadow_actor_deadline_seconds": 25,
+    "actor_complete_ttl_seconds": 86400,
+    "scope": "直近7日activityのactive patient thread root/replies; error backoff unchanged",
+    "live_settings_changed": false,
+    "live_restart": false
+  },
+  "checks": [
+    {
+      "command": "python3 scripts/development/generate_slack_gallery.py --check",
+      "exit": 0,
+      "verified": 7
+    },
+    {
+      "command": "python3 scripts/development/generate_lineworks_gallery.py --check",
+      "exit": 0,
+      "verified": 2
+    },
+    {
+      "command": "uv tool run --offline --from ruff==0.16.10 ruff check scripts/development/generate_slack_gallery.py scripts/development/generate_lineworks_gallery.py",
+      "exit": 0
+    },
+    {
+      "command": "python3 scripts/development/update_readme.py",
+      "exit": 0,
+      "result": "generated blocks already up to date"
+    }
+  ],
+  "visual": "Both updated actual synthetic PNG artifacts inspected after final aligned rendering; full canvas/text visible, actor/body labels do not overlap. These explanatory illustrations do not prove native service UI.",
+  "render_receipts": [
+    "/tmp/mcs-stamp-gallery-20261005-cqyx805r/render-receipt.json",
+    "/tmp/mcs-stamp-gallery-aligned-20261005-w71fdxeu/render-receipt.json"
+  ],
+  "inventory": [
+    {
+      "path": "README.md",
+      "sha256": "02b6a6156b8aea5bbae590387b55b6a474b701b9fa6bd506566f3f707c5a8f19",
+      "bytes": 58338,
+      "kind": "full_text_delta_reviewed"
+    },
+    {
+      "path": "docs/guides/INSTALLATION.md",
+      "sha256": "2573b5fc9d9a74b080234f56de4040a977b6852c85882192a9b71ceee6b0ab93",
+      "bytes": 61585,
+      "kind": "full_text_delta_reviewed"
+    },
+    {
+      "path": "docs/guides/USER_GUIDE.md",
+      "sha256": "a4af268a78cce1010b47ac7ec32a9ed147e7ec33fa30c31d26108db4b7f01d35",
+      "bytes": 40114,
+      "kind": "full_text_delta_reviewed"
+    },
+    {
+      "path": "docs/screenshots/lineworks-gallery/01-delivery.png",
+      "sha256": "1f8099668d5572847dd5e488f599f4cb9b7da72e66d68018d30130631ab95529",
+      "bytes": 483362,
+      "kind": "generated_binary"
+    },
+    {
+      "path": "docs/screenshots/lineworks-gallery/01-delivery.svg",
+      "sha256": "355bdfdf884e684673e397c0cfc7c1d4dfc0c54fca685ebccc42881a0b53093d",
+      "bytes": 7345,
+      "kind": "full_text_delta_reviewed"
+    },
+    {
+      "path": "docs/screenshots/lineworks-gallery/README.md",
+      "sha256": "cb668d0492d7a9d51b0fd780ed2af64d382aa586e426d6bb5e0d64b811e41a79",
+      "bytes": 2886,
+      "kind": "full_text_delta_reviewed"
+    },
+    {
+      "path": "docs/screenshots/lineworks-gallery/assets.json",
+      "sha256": "da48b13171877b988ac8fafca869a0f2826d0d6b6138b40325183d9dc731e208",
+      "bytes": 369,
+      "kind": "full_text_delta_reviewed"
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/02-notification.png",
+      "sha256": "09aa7da49906ccd7ed882909bb9df22fd370ae0c24b97235fff39fb89ce5e40a",
+      "bytes": 377952,
+      "kind": "generated_binary"
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/02-notification.svg",
+      "sha256": "5ad43600957479344a9d77f24ba383c7624241caf8ee102600e3b5740c329b4e",
+      "bytes": 5098,
+      "kind": "full_text_delta_reviewed"
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/README.md",
+      "sha256": "78abe12fe831955465a7202abc3bf2030f8fdf8d8f2d4b7fbfc5dbaa23b2c765",
+      "bytes": 3512,
+      "kind": "full_text_delta_reviewed"
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/assets.json",
+      "sha256": "462760f03a63c7f7c04f114c8a10cdb4f7007a210178f62cdba682316e6909d4",
+      "bytes": 1286,
+      "kind": "full_text_delta_reviewed"
+    },
+    {
+      "path": "scripts/development/generate_lineworks_gallery.py",
+      "sha256": "b485c814506ed62c88e9ad1babf75a6a73c26c121db07b872c59c3734e1508b9",
+      "bytes": 10010,
+      "kind": "full_text_delta_reviewed"
+    },
+    {
+      "path": "scripts/development/generate_slack_gallery.py",
+      "sha256": "42b54c8eb02f082699099b274ea069e05106c4b30a0d099e3397340e8897d63e",
+      "bytes": 18423,
+      "kind": "full_text_delta_reviewed"
+    }
+  ],
+  "limitations": [
+    "No real platform messages, MCS data/settings, PHI or credentials used; collection defaults remain off.",
+    "Names arrive only under existing metadata_shadow+metadata_actors opt-in and existing bounded4/tick/25sec/7day/24h scope.",
+    "Native UI, accessibility, clinical efficacy and deployment are not inferred. Final whole-I, actual pinnedSDK/distribution and fresh-context review remain pending."
+  ],
+  "final_document_correction": {
+    "fixed_runtime_I": "fa9385c2790cbd2fdd8151a10aa04058dca797f0",
+    "changes": [
+      "docs/guides/USER_GUIDE.md stamp section two platform-specific update sentences",
+      "changes/20261005-stamp-actors-display.json details[3] limit same-ID claim to Slack/Discord and document LINE WORKS replacement"
+    ],
+    "independent_probe": "/tmp/mcs-formalreview-fa9385c-5l06576f/lineworks-late-actor-probe.json",
+    "official_sources": [
+      "https://developers.worksmobile.com/jp/docs/bot-api/?lang=ja",
+      "https://developers.worksmobile.com/jp/docs/bot-channel-message-send"
+    ],
+    "nature": "Documentation correctness; runtime code/tests/dependencies unchanged."
+  }
+}

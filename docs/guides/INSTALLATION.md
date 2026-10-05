@@ -1,7 +1,7 @@
 # インストールガイド
 
-このガイドは公開済みv1.0.12の実行可能な手順。安定稼働版1.0.13の
-install/update/setup/doctor統一は[開発・受入計画](../development/RELEASE_1.0.13.md)で追跡する。
+このガイドはv1.0.13仕様のinstall/update/setup/doctorと復旧手順に対応する。
+実機受入・公開の状況は[開発・受入計画](../development/RELEASE_1.0.13.md)で追跡する。
 
 ### 2026-10-04追記: 現在のローカル入口
 
@@ -475,7 +475,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `self_posts` | bool | `false` | 自分の投稿も取り込んで通知（latest probe 経由） |
 | `metadata_shadow` | bool | `false` | 監視対象のスタンプを保存のみ再取得。未読保持の実証と監視集合・予算の運用合意後に限り有効化する。shadowの反応値はカード・digest・CLIの反応表示に出さず、CLIでは取得状態・日時・理由のみ参照できる |
 | `metadata_refresh_publish` | bool | `false` | `metadata_shadow`の再取得が成功した値をカード・digest・CLIの反応表示へ反映する。失敗時と保存済みのshadow値は反映しない。未読保持の実証と`mcs/views/metadata_report.py`での照合後に限り有効化する |
-| `metadata_actors` | bool | `false` | 直近7日に動きのあったスレッドの全投稿（先頭・返信）について、スタンプを押した人の氏名・所属・職種を取得し、Slack等のスレッド投稿に表示する（アイコンは保存しない）。最後の観測状態は無期限に保持し、取消観測時刻を残す（再押下時は解除、全操作履歴は復元しない）（#22-D2・D3、2026-10-03）。shadowと同じtickの予算内で最大4件 |
+| `metadata_actors` | bool | `false` | `metadata_shadow=true`も必要。直近7日に動きのあったスレッドの全投稿（先頭・返信）について、スタンプを押した人の氏名・所属・職種を取得し、Slack・DiscordのスレッドとLINE WORKSの原文投稿に氏名・職種を表示する（アイコンは保存しない）。最後の観測状態は無期限に保持し、取消観測時刻を残す（再押下時は解除、全操作履歴は復元しない）（#22-D2・D3、2026-10-03）。shadowと同じtickの予算内で最大4件。氏名の保存・通知先の閲覧範囲と未読保持を確認して有効化する |
 | `deep_history` | bool | `true` | 初回に全履歴を遡って保存 |
 | `discover_archived` | bool | `false` | アーカイブ済み患者も収集対象にする |
 | `trickle_pages` | int(1-40) | `3` | 1回の実行で履歴を遡るページ数 |
@@ -502,7 +502,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `update.mode` | choice | `off` | `off`/`notify`/`auto` — 自己更新ポリシー |
 | `update.auto_delay_h` | num | — | auto 時の適用遅延（0=検出次第即適用） |
 | `update.include_prerelease` | bool | `false` | プレリリースを更新対象に含める |
-| `health.max_missed_runs` | int | `2` | 欠測許容回数。5分間隔の予定実行と完了猶予から判定 |
+| `health.max_missed_runs` | int | `2` | 欠測許容回数。10分間隔の予定実行と完了猶予から判定 |
 
 ## 5. 秘密情報の配置
 
@@ -525,7 +525,12 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 [deployment/launchagents/README.md](../../deployment/launchagents/README.md)
 に一本化している。正本はコードの `mcs/ops/mcs_setup.py` の `CRON_JOBS`
 （hermes cron）と `AGENT_LABELS`（launchd）で、`services` はこれを
-登録する。未読収集は24時間5分間隔で、`mcs_check.sh` に夜間の間引きはない。
+登録する。MCSサーバーの負荷対策として、未読収集を5分から24時間10分間隔へ変更した。
+`mcs_check.sh` に夜間の間引きはない。
+既存環境では更新後に `mcs setup services` で取得ジョブを再設定する。
+`health.tick_interval_s` を300秒と明示している場合は、
+`mcs setup init --yes --set health.tick_interval_s=600` で600秒へ変更する。
+未指定時の既定は600秒。ローカルのヘルス監視自体は5分間隔を維持する。
 
 ## 7. トラブルシューティング
 

@@ -1,0 +1,11 @@
+{
+  "category": "security",
+  "title": "独立実行の添付通知を保存済みハッシュで再確認",
+  "summary": "独立実行のSlack・Discord通知で、送信直前に内容が差し替わった添付や保存台帳で検証できない添付を送信しません。送信開始前の失敗として再試行に回し、配送結果不明の扱いにはしません。",
+  "upgrade": "追加設定は不要です。runtime_modeがstandaloneのSlack・Discordテキスト通知に適用します。配備後、独立アダプターの再起動で反映します。LINE WORKSの既存確認経路とHermesモードの送信方法は維持します。",
+  "details": [
+    "LINE WORKSと独立Slack・DiscordのJSON送信で、台帳のsha256を送信直前の添付内容と照合する。",
+    "Slack・Discordそれぞれで、描画後・配送指紋の計算後の差し替えと未登録添付を完全合成の回帰テストで確認する。"
+  ],
+  "refs": ["mcs/notify/notify_flush.py", "tests/notify/test_notify_standalone_flush.py"]
+}

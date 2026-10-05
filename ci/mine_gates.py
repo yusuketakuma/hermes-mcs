@@ -18,6 +18,7 @@ the signal to add a gate, not a failure by itself.
 """
 from __future__ import annotations
 
+import ast
 import json
 import re
 import sys
@@ -62,8 +63,10 @@ def gate_registry() -> set[str]:
 def test_names() -> set[str]:
     names = set()
     for path in TESTS.rglob("test_*.py"):
-        names.update(re.findall(r"def (test_\w+)",
-                                path.read_text(encoding="utf-8")))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        names.update(node.name for node in ast.walk(tree)
+                     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                     and node.name.startswith("test_"))
     return names
 
 

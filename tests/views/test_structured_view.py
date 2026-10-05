@@ -414,3 +414,24 @@ def test_mixed_labs_preserve_total_limit(db):
     assert joined.splitlines() == [
         "検査: 合成検査1 1・合成検査3 3・合成検査5 5",
         "検査候補（未確認）: 合成検査0 0・合成検査2 2・合成検査4 4"]
+
+
+@pytest.mark.parametrize("kind", ["extract_llm", "canonical_projection", "semantic_facts_v4"])
+def test_empty_current_facts_do_not_restore_rule_events_or_vitals(db, kind):
+    db.artifact_add("extract_v1", json.dumps({"events": ["eol", "media_ref"],
+                                              "vitals": {"spo2": 10}}),
+                    project_id=1, message_id=1, meta={"hash": "synthetic-hash"})
+    db.artifact_add(kind, "{}", project_id=1, message_id=1,
+                    meta={"hash": "synthetic-hash", "engine_version": 4})
+    assert structured_view.structured_lines(db.db, 1) == ["区分: 添付"]
+
+
+@pytest.mark.parametrize("kind", [None, "extract_llm", "canonical_projection", "semantic_facts_v4"])
+def test_absent_or_stale_facts_keep_rule_events_and_vitals(db, kind):
+    db.artifact_add("extract_v1", json.dumps({"events": ["visit"],
+                                              "vitals": {"hr": 72}}),
+                    project_id=1, message_id=1, meta={"hash": "synthetic-hash"})
+    if kind is not None:
+        db.artifact_add(kind, "{}", project_id=1, message_id=1,
+                        meta={"hash": "synthetic-stale", "engine_version": 4})
+    assert structured_view.structured_lines(db.db, 1) == ["区分: 訪問", "バイタル: HR 72"]

@@ -289,6 +289,10 @@ def test_benchmark_records_cost_and_paired_corpus(tmp_path, monkeypatch):
     cases.write_text(json.dumps({'cases': [{
         'id': 's', 'body': '合成', 'expect': {},
         'context': '[医師] 合成コンテキスト', 'posted_at': '2026-09-01 10:00'}]}))
+    # A wholly fictional approved corpus stands in for the checked-in assets;
+    # separate regressions exercise the real allowlist and reject altered data.
+    monkeypatch.setattr(extract_bench, '_synthetic_cases',
+                        lambda: extract_bench._load_cases(str(cases)))
     seen = {}
     def fake(body, **kwargs):
         kwargs['meta_out'].update(calls=2, repairs=1, usage={'total_tokens': 12})

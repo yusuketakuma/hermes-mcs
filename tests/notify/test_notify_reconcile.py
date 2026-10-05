@@ -239,6 +239,38 @@ def test_corrupt_part_journal_does_not_prove_non_delivery(world):
     assert notify_cards.restore_pending(str(world.data)) is not None
 
 
+def test_unknown_part_catches_up_from_a_journaled_factual_result(world):
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    spec = world.spec(render["delivery_id"])
+    part = next(p for p in spec["parts"]["manifest"] if p["kind"] == "body_part")
+    claim = {"attempt_id": "a" * 16, "worker_id": "b" * 16,
+             "spec": spec, "payload_hash": render["payload_hash"]}
+    envelope = envelopes.part_receipt(
+        claim, part, "delivered", remote_id="synthetic-known-body")
+    with world.led.db:
+        world.led.db.execute(
+            "UPDATE notification_render_parts SET state='unknown' "
+            "WHERE delivery_id=? AND part_id=?",
+            (render["delivery_id"], part["part_id"]))
+    journal.append(str(world.data / "discord_state"), "w1", {
+        "attempt_id": envelope["attempt_id"], "delivery_id": render["delivery_id"],
+        "part_id": part["part_id"], "phase": "result", "result": "delivered",
+        "remote_id": "synthetic-known-body", "receipt_envelope": envelope})
+    notify_cards.mark_restored(str(world.data))
+    report = notify_reconcile.reconcile_after_restore(world.led, CFG)
+    verdict = next(v for v in report["verdicts"]
+                   if v["attempt_id"] == envelope["attempt_id"])
+    assert verdict["verdict"] == "settled" and verdict["detail"] == "delivered"
+    row = world.led.db.execute(
+        "SELECT state,remote_id FROM notification_render_parts "
+        "WHERE delivery_id=? AND part_id=?",
+        (render["delivery_id"], part["part_id"])).fetchone()
+    assert tuple(row) == ("delivered", "synthetic-known-body")
+    assert not report["held"]
+
+
 def test_tainted_journal_rerun_alerts_once(world):
     """U03-F06: a tainted journal keeps the restore marker, so reconcile
     re-runs every tick; the held-scope notice must not repeat for holds
@@ -365,6 +397,151 @@ def test_rebind_delivered_releases_hold(world):
     assert card["delivery_state"] == "delivered"
     assert card["message_id"] == "999001"
     assert all(h["released_at"] is not None for h in world.holds())
+
+
+def test_rebind_delivered_completes_only_its_coverage_and_waits_for_siblings(world):
+    world.seed()
+    eid = world.dispatch()  # one intent fans out into two independent cards
+    render = world.render()
+    spec = world.spec(render["delivery_id"])
+    state = str(world.data / "discord_state")
+    aid = _journal_claim(state, "w1", spec)
+    _journal_result(state, "w1", aid, render["delivery_id"],
+                    "delivered", message_id="synthetic-rebound")
+    notify_cards.mark_restored(str(world.data))
+    notify_reconcile.reconcile_after_restore(world.led, CFG)
+    req = {"version": 1, "cmd": "ops.card_resolve",
+           "command_id": str(__import__("uuid").uuid4()),
+           "actor": "op-user", "human_confirmed": True,
+           "reason": "合成の配送済みカード確認",
+           "delivery_id": render["delivery_id"], "attempt_id": aid,
+           "result": "mark_delivered", **CFG["notify"]["discord"],
+           "message_id": "synthetic-rebound",
+           "evidence": {"method": "synthetic", "ref": "synthetic-card"}}
+    assert notify_transport.apply_card_resolve(world.led, req, CFG)["outcome"] == "applied"
+    coverage = world.led.db.execute(
+        "SELECT card_id,state FROM notification_intent_cards WHERE event_id=?",
+        (eid,)).fetchall()
+    assert len(coverage) == 2
+    assert {r["card_id"]: r["state"] for r in coverage} == {
+        render["card_id"]: "delivered", 3 - render["card_id"]: "pending"}
+    outbox = world.led.db.execute(
+        "SELECT state FROM notify_outbox WHERE event_id=?", (eid,)).fetchone()
+    assert outbox["state"] != "accepted"
+    card_part = world.led.db.execute(
+        "SELECT state,remote_id FROM notification_render_parts "
+        "WHERE delivery_id=? AND part_id='card'", (render["delivery_id"],)).fetchone()
+    assert tuple(card_part) == ("delivered", "synthetic-rebound")
+    sibling = dict(world.led.db.execute(
+        "SELECT * FROM notification_renders WHERE card_id!=?",
+        (render["card_id"],)).fetchone())
+    claim = {"attempt_id": registry.new_attempt_id(), "worker_id": "b" * 16,
+             "spec": world.spec(sibling["delivery_id"]),
+             "payload_hash": sibling["payload_hash"]}
+    assert notify_transport.apply_transport_begin(
+        world.led, envelopes.transport_begin(claim), CFG)["granted"]
+    assert notify_transport.apply_transport_receipt(
+        world.led, envelopes.transport_receipt(
+            claim, "delivered", message_id="synthetic-sibling"), CFG)["applied"]
+    assert world.led.db.execute(
+        "SELECT state FROM notify_outbox WHERE event_id=?", (eid,)).fetchone()[0] == "accepted"
+
+
+@pytest.mark.parametrize("result", ["mark_delivered", "mark_not_sent"])
+def test_rebind_never_revives_a_revoked_card(world, result):
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    spec = world.spec(render["delivery_id"])
+    aid = _journal_claim(str(world.data / "discord_state"), "w1", spec)
+    _journal_result(str(world.data / "discord_state"), "w1", aid,
+                    render["delivery_id"], "unknown")
+    notify_cards.mark_restored(str(world.data))
+    notify_reconcile.reconcile_after_restore(world.led, CFG)
+    with world.led.db:
+        notify_cards.revoke_card(world.led.db, render["card_id"], NOW)
+    req = {"version": 1, "cmd": "ops.card_resolve",
+           "command_id": str(__import__("uuid").uuid4()),
+           "actor": "op-user", "human_confirmed": True,
+           "reason": "合成の配送結果確認", "delivery_id": render["delivery_id"],
+           "attempt_id": aid, "result": result, **CFG["notify"]["discord"],
+           "message_id": "synthetic-rebound",
+           "evidence": {"method": "synthetic", "ref": "synthetic-card",
+                        "worker_stopped": True, "proof": "remote_absent"}}
+    assert notify_transport.apply_card_resolve(world.led, req, CFG)["outcome"] == "applied"
+    assert world.card(render["card_id"])["delivery_state"] == "revoked"
+
+
+@pytest.mark.parametrize(("mutation", "error"), [
+    ({"attempt_id": "f" * 16}, "attempt_mismatch"),
+    ({"message_id": "synthetic-wrong-message"}, "message_id_mismatch"),
+    ({"result": "mark_not_sent"}, "journal_contradicts_proof"),
+])
+def test_rebind_checks_the_held_attempt_and_its_journal_witness(world, mutation, error):
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    spec = world.spec(render["delivery_id"])
+    state = str(world.data / "discord_state")
+    aid = _journal_claim(state, "w1", spec)
+    _journal_result(state, "w1", aid, render["delivery_id"],
+                    "delivered", message_id="synthetic-known-message")
+    notify_cards.mark_restored(str(world.data))
+    notify_reconcile.reconcile_after_restore(world.led, CFG)
+    req = {"version": 1, "cmd": "ops.card_resolve",
+           "command_id": str(__import__("uuid").uuid4()),
+           "actor": "op-user", "human_confirmed": True,
+           "reason": "合成の配送確認", "delivery_id": render["delivery_id"],
+           "attempt_id": aid, "result": "mark_delivered",
+           "message_id": "synthetic-known-message", **CFG["notify"]["discord"],
+           "evidence": {"method": "synthetic", "ref": "synthetic-card",
+                        "worker_stopped": True, "proof": "remote_absent"},
+           **mutation}
+    out = notify_transport.apply_card_resolve(world.led, req, CFG)
+    assert out["outcome"] == "rejected" and out["error"] == error
+    assert world.card(render["card_id"])["message_id"] is None
+    assert all(h["released_at"] is None for h in world.holds())
+
+
+@pytest.mark.parametrize("scope_json", [
+    'synthetic-deep',
+    '[]', '"synthetic"', 'null', '{"transport":[]}', '{"transport":{}}',
+], ids=["deep", "array", "string", "null", "transport-array", "transport-object"])
+def test_rebind_rejects_corrupt_scope_with_a_durable_receipt(world, scope_json):
+    if scope_json == 'synthetic-deep':
+        depth = 10000  # Python 3.13's C decoder has a separate stack limit.
+        scope_json = '{"profile":' + '[' * depth + '0' + ']' * depth + '}'
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    aid = _journal_claim(str(world.data / "discord_state"), "w1",
+                         world.spec(render["delivery_id"]))
+    _journal_result(str(world.data / "discord_state"), "w1", aid,
+                    render["delivery_id"], "unknown")
+    notify_cards.mark_restored(str(world.data))
+    notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert world.holds()
+    with world.led.db:
+        world.led.db.execute(
+            "UPDATE notification_restore_holds SET scope_json=? "
+            "WHERE delivery_id=?", (scope_json, render["delivery_id"]))
+    req = {"version": 1, "cmd": "ops.card_resolve",
+           "command_id": str(__import__("uuid").uuid4()),
+           "actor": "op-user", "human_confirmed": True,
+           "reason": "合成の破損した復旧scope確認",
+           "delivery_id": render["delivery_id"], "attempt_id": aid,
+           "result": "mark_delivered", **CFG["notify"]["discord"],
+           "message_id": "synthetic-known-message",
+           "evidence": {"method": "synthetic", "ref": "synthetic-card"}}
+    receipt = notify_transport.apply_card_resolve(world.led, req, CFG)
+    assert (receipt["outcome"], receipt["error"]) == ("rejected", "hold_scope_corrupt")
+    stored = world.led.db.execute(
+        "SELECT receipt_json FROM command_receipts WHERE command_id=?",
+        (req["command_id"],)).fetchone()
+    assert json.loads(stored[0]) == receipt
+    assert notify_transport.apply_card_resolve(world.led, req, CFG) == receipt
+    assert all(h["released_at"] is None for h in world.holds())
+    assert world.card(render["card_id"])["message_id"] is None
 
 
 def test_lost_not_sent_attempt_resumes(world):

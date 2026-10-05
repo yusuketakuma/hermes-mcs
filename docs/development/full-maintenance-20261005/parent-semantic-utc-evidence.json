@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "status": "REVIEWED_LOCAL_SUPPLEMENT; GLOBAL_PARTIAL",
+  "P": "bb533f588026b3640310f4b89c6973a892fe52fa",
+  "source": "mcs/semantic/semantic_relations.py",
+  "source_full_read_lines": 228,
+  "source_current_sha256": "fb3b731cea7d94691395004410d42c44aaee19f44895d611b9bbb716f54f6f62",
+  "tests": "tests/semantic/test_semantic_relations.py",
+  "test_current_lines": 251,
+  "test_current_sha256": "6d34669d7064271c7a689115088c6af89c81fda36690b13ba7bd9c9ea8105d08",
+  "prior_module_review": "docs/development/maintenance-semantic-packet3-evidence.json",
+  "finding": "PARENT-SEMANTIC-001",
+  "change": "Normalize only terminal Z to +00:00 before datetime parse on supported Python3.10. Preserve timezone/fraction precision, candidate relation direction, date/naive mismatch, equal instants and preservation of all facts.",
+  "before": "4 failed/2 equality controls passed/37 deselected with Python3.10 parser shape; final fixedP run incorporates these same six tests.",
+  "after": "259 passed accepted combined family. Isolated real Python3.10 relation tests pass within206 pass family; unrelated review CLI ImportError handed off.",
+  "criteria_delta": {
+    "C02": "Explicit UTC instant retains fractional ordering and equality; unknown timezone/date-only rules unchanged.",
+    "C04": "No persisted fact/schema/migration rewritten.",
+    "C07": "Private parser signature unchanged; supported runtime input contract corrected.",
+    "C11": "Both axes, both relation directions and equality independently verified; facts retain original identifiers/state.",
+    "C12": "No new dependency; actual Python3.10.22 isolated execution records above.",
+    "X07": "Only datetime parsing compatibility; no medical rule/latest-wins/adoption policy changed."
+  },
+  "limits": [
+    "Final fixedI SDK/archive/fullchecks/review pending.",
+    "No model/real DB/service access."
+  ],
+  "record_correction": "Corrected line-count metadata from253 to228 after checking complete source; original read ranges1–150/151–260 covered all228 lines."
+}

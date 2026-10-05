@@ -535,3 +535,22 @@ def test_bad_recovery_init_stops_before_keychain_and_env(monkeypatch, tmp_path, 
     assert mcs_setup.main() == 1
     assert not (tmp_path / ".env").exists() and not (tmp_path / "c.json").exists()
     assert "nothing written" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("plist", [[], "synthetic-invalid-plist", 123])
+def test_services_rejects_nonobject_recovery_plist_without_mutation(
+        monkeypatch, tmp_path, capsys, plist):
+    from test_mcs_setup import _services_env
+    real_uid = os.getuid()
+    calls, args = _services_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(os, "getuid", lambda: real_uid)
+    path, _ = _owned_recovery(monkeypatch, tmp_path)
+    path.write_bytes(plistlib.dumps(plist))
+    cfg = {"recovery_python": str(tmp_path / "independent-python")}
+    monkeypatch.setattr(mcs_setup, "load_config",
+                        lambda path=None: cfg if path is None else {})
+    before = _tree(tmp_path)
+    assert mcs_setup.cmd_services(args) == 1
+    assert not mcs_setup._recovery_owned()
+    assert calls == [] and _tree(tmp_path) == before
+    assert "recovery_runtime:" in capsys.readouterr().out

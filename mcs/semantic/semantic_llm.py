@@ -282,12 +282,12 @@ def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
     claims = []
     for i, c in enumerate(claims_in):
         if not isinstance(c, dict):
-            continue
+            return result(None, "model")
         text, section = c.get("text"), c.get("section")
         kind = c.get("claim_kind", "reported_fact")
         refs = c.get("fact_refs")
         if not isinstance(text, str) or not text.strip():
-            continue
+            return result(None, "model")
         if section not in CLAIM_SECTIONS:
             section = "other"
         if kind not in CLAIM_KINDS:
@@ -309,8 +309,12 @@ def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
                       in FACT_STATUSES else "not_stated",
             "polarity": c.get("polarity") if c.get("polarity")
                         in POLARITIES else "uncertain"})
-    limitations = [x for x in
-                   (raw.get("limitations") or []) if isinstance(x, str)]
+    limitations = raw.get("limitations", [])
+    if limitations is None:
+        limitations = []
+    if not isinstance(limitations, list) \
+            or any(not isinstance(x, str) for x in limitations):
+        return result(None, "model")
     attachment_count = sum(len(m.get("attachments", [])) for m in bundle["members"])
     if attachment_count:
         limitations.append(f"対象投稿・文脈に添付{attachment_count}件があります。添付内容は解析していません。")

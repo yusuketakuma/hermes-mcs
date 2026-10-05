@@ -86,6 +86,11 @@ command ID/hashで重複を防ぎ、依頼とreceiptを同一transactionで保�
 receipt照会にはconfirm応答の **`receipt.command_id`と`receipt.payload_hash`** を使う。
 previewの`payload_hash`はoriginも含む確認用hashで、receipt用hashとは異なる。
 新snapshotにreceiptが反映されるまでは未処理／未反映として表示される。
+Slackカードの人承認結果は、適用後の再renderで古いボタンtokenが消えても、
+保存済みの結果を元の本人へ届ける。送信前にprofile・application・team・channel、
+現在の許可ユーザーとactor、interactive設定・復元保留・transport・route epoch、患者権限を
+再確認し、不一致なら届けない。新しい操作に古いtokenを使えるようにはしない。
+project_idを持たない旧receiptは、従来どおり元のtokenの照合が必要。
 
 ```text
 /mcs {"op":"read","kind":"receipt","project_id":1,"command_id":"receiptのID","payload_hash":"receiptのhash"}
@@ -227,9 +232,11 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
 動作の要点:
 
 - 配送は claim → `transport_begin` → runner の永続 grant → `started` fsync →
-  Discord HTTP → `result` fsync → `transport_receipt` の順。`started` より前の
-  クラッシュは `not_sent`、以降は `unknown` として記録し、worker は unknown を
-  自動再送しない（operator の `card_resolve` で解決）。
+  Discord HTTP → `result` fsync → `transport_receipt` の順。scope lockを取得し、
+  journalの完全性を確認できた場合だけ、`started` より前のクラッシュを
+  `not_sent` として扱う。journalが壊れている・読めない・自分のclaim記録が
+  欠けている場合や、`started` 以降のクラッシュは `unknown` として保持する。
+  workerはunknownを自動再送しない（operatorの`card_resolve`で解決）。
   discord.py 2.7 の HTTPClient は1回の送信呼出しの内部で POST も含め
   429・500/502/504/524・接続リセットで最大5回まで再送するため、作成系 POST
   （カード・スレッド作成・本文・添付）は単発に制限する: Hermes の bot が持つ
@@ -284,8 +291,8 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   Slack には allowed_mentions が無いので、worker が `<@U…>` を
   `users.info` の表示名（取得できない・`users:read` scope が無い場合は
   「メンバー」）に置き換え、フッターを plain_text で送る — Slack の
-  カードはメンション構文を一切含まず、再投稿でも通知は鳴らない。`🔗 MCSで開く` は token を持たない URL ボタン
-  （Slack はクリック通知を ack するだけ）。
+  カードはメンション構文を一切含まず、再投稿でも通知は鳴らない。`🔗 MCSで開く` は
+  DiscordではURLボタン、Slackではカード下部のテキストリンク。いずれもtokenを持たず、状態を変更しない。
 - `📝 タスク作成`/`🚫 却下`/`⚠ 抽出の誤りを報告` は runner が返す pin 済み
   params + render context から `request.create` / `ops.signal_dismiss` /
   `ops.extract_feedback` を組み立て、preview → 本人確認
@@ -357,12 +364,23 @@ client を使って同じ durable worker（claim/grant/journal/receipt）で配�
 - Slack adapter が同一プロセス内で再接続し app を作り直した場合、新しい app に
   結線された supervisor が旧 supervisor を止めて scope lock を引き継ぐ。
 - 更新時に既存返信の履歴を取得できない、または応答を検証できない場合は、本文・
-  添付を追加投稿せず配送結果を `unknown` として保持する。通知先の投稿を確認し、
+  添付を追加投稿せず配送結果を `unknown` として保持する。履歴は最大200件の
+  1回取得で、`has_more`や`next_cursor`が残る不完全な履歴も同じ扱いになる。
+  不完全なページで一致が見つからなくても、未送信とは判断しない。通知先の投稿を確認し、
   上記の配送不明の解決手順で対応する。
 - 更新 render で同じ添付を再送しないための突合せは、返信の file object の
-  name・size・sha256 一致を条件にしている。Slack の file object が sha256 を
-  返さない場合は突合せが成立せず、更新時に同じファイルが再 upload され得る
-  （安全側。実 API 応答での確認は未実施）。
+  name・sizeと、このBot/applicationによる投稿を確認する。sha256が返る場合は
+  送信対象との一致が必要。sha256が返らない場合も、runnerが同じhashの配送済み
+  添付からsealした`prior_remote_id`とfile IDが一致し、`mode: hosted`・
+  `is_external: false`・`editable: false`を全て確認した同一uploadだけ再利用する。
+  hashが矛盾する場合や、無関係な投稿・編集可能なfileを代用しない。
+  突合せできず完全な履歴を確認できた場合だけ、新しいuploadを計画する。
+  これらは完全合成回帰で検証し、実API応答での確認は実施していない。
+- 意味要約を含むrenderは、最新要約のPASS・enforce・現行policy fingerprint、
+  原文revisionとスレッド全体のfingerprintを照合する。送信前に根拠世代が変わると
+  古い表示を送らず、送信開始後の変化は保留して照合する。古いPASSや本文中の
+  リンク文字列だけを、現在の根拠・配送成功の証拠として使わない。
+  読めない保存データは有効な要約・進捗として採用しない。
 
 ## 合成入力での検証
 

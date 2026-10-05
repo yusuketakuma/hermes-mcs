@@ -1,0 +1,4106 @@
+{
+  "packet": "maintenance-core-docs7-readonly-development-records",
+  "status": "REVIEWED_HANDOFF",
+  "packet_status": "REVIEWED_WITH_PARENT_FINDING",
+  "worker_scope_status": "REVIEWED",
+  "status_reason": "指定20正本5534行を全読し7module×20criterionとconsumerを照合。原本編集権限はなく、確定した現在guidepath1件だけ親へ移管。全域I検証/公開判定をこのpacketの完了に含めない。",
+  "B": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+  "P": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+  "W": {
+    "kind": "evidence_only_commit",
+    "code_docs_input_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+    "changed_paths": [
+      "docs/development/maintenance-core-docs7-evidence.json"
+    ],
+    "commit_receipt": "/tmp/mcs-maintenance-core-docs7-20261005/commit-receipt.json",
+    "self_reference_note": "report自身のcommit/hashは循環を避け外部commit-receipt/byte-replayへ保存する。"
+  },
+  "I": {
+    "owner": "parent",
+    "value": "この固定Pとparent最新Iは別状態。取り込み・最終統合/SDK/archive/freshreviewは親が記録する。"
+  },
+  "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-docs7-20261005",
+  "branch": "audit/maintenance-core-docs7-20261005",
+  "start_status": {
+    "tracked_clean": true,
+    "index_clean": true,
+    "old_packet6_branch_preserved": true,
+    "old_packet6_commit": "e4086a59854b17dfe1d7bc079573a66f48a073b4",
+    "old_packet6_worktree_unchanged": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+    "hooks": "新worktree/commitは git -c core.hooksPath=/dev/null、設定正本は未変更"
+  },
+  "scope": {
+    "readonly_originals": [
+      "docs/dev-records/auto-update-plan.md",
+      "docs/dev-records/continuation-20260920.md",
+      "docs/dev-records/continuation-20260923.md",
+      "docs/dev-records/phase-j-record.md",
+      "docs/dev-records/phase-r-record.md",
+      "docs/dev-records/r00-baseline.md",
+      "docs/dev-records/refactor-revalidation.md",
+      "docs/dev-records/release-1.0.11-20261003.md",
+      "docs/dev-records/review-20260923.md",
+      "docs/dev-records/review-20260925.md",
+      "docs/dev-records/stability-1.0.13-20261004.md",
+      "docs/dev-records/standalone-worktree-20261002.md",
+      "docs/dev-records/acceptance-map.md",
+      "docs/dev-records/HANDOFF_CLAUDE_1.0.13_20261004.md",
+      "docs/dev-records/repo-review-20261001.md",
+      "docs/dev-records/refactor-1.0.12-20261004.md",
+      "docs/dev-records/stability-20261001.md",
+      "docs/dev-records/standalone-20261001.md",
+      "docs/dev-records/structure-20261001.md",
+      "docs/dev-records/openwiki-update-path-20261001.md"
+    ],
+    "write_only": [
+      "docs/development/maintenance-core-docs7-evidence.json"
+    ],
+    "not_executed": "文書内のlive/Keychain/service/git reset/DELETE/copy/push等commandsは記録を読むだけで、今回の実行承認ではない。"
+  },
+  "counts": {
+    "assigned_originals": 20,
+    "REVIEWED": 20,
+    "PARTIAL": 0,
+    "UNSEEN": 0,
+    "EXCLUDED_assigned": 0,
+    "full_read_lines": 5534,
+    "full_read_bytes": 473090,
+    "modules": 7,
+    "criteria_each": 20,
+    "criteria_total": 140,
+    "runtime_tests_executed": 0,
+    "group_files": {
+      "REFactor/R00/RF": 3,
+      "Semantic/AT/INV": 5,
+      "HistoricalReview": 4,
+      "Release": 3,
+      "Updater": 1,
+      "Standalone": 2,
+      "StructureWiki": 2
+    }
+  },
+  "inventory": [
+    {
+      "path": "docs/dev-records/auto-update-plan.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "e3c35797dfc0dbbd647dee6a29883977a5883bc9f89e4bcddeb32a7cb4cfd21e",
+      "W_sha256": "e3c35797dfc0dbbd647dee6a29883977a5883bc9f89e4bcddeb32a7cb4cfd21e",
+      "P_bytes": 76976,
+      "W_bytes": 76976,
+      "P_lines": 933,
+      "W_lines": 933,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          120
+        ],
+        [
+          121,
+          260
+        ],
+        [
+          261,
+          400
+        ],
+        [
+          401,
+          540
+        ],
+        [
+          541,
+          670
+        ],
+        [
+          671,
+          805
+        ],
+        [
+          806,
+          933
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/auto-update-plan.md.1-120.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/auto-update-plan.md.121-260.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/auto-update-plan.md.261-400.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/auto-update-plan.md.401-540.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/auto-update-plan.md.541-670.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/auto-update-plan.md.671-805.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/auto-update-plan.md.806-933.read.txt"
+      ],
+      "module": "update_history",
+      "responsibility": "自動更新/rollback/独立recoveryの設計と4回review、未追跡削除/WAL復元の後日訂正。",
+      "callers": [
+        "docs/README.md:13",
+        "docs/dev-records/README.md:16",
+        "docs/specs/lifecycle-spec.md:5-18,151",
+        "docs/roadmap/integrity.md:75",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "historical_scope": "2026-09-24〜2026-09-28。冒頭は後日訂正、残bodyは設計/レビュー履歴",
+      "criteria": {
+        "C01": "criteria.C01.update_history",
+        "C02": "criteria.C02.update_history",
+        "C03": "criteria.C03.update_history",
+        "C04": "criteria.C04.update_history",
+        "C05": "criteria.C05.update_history",
+        "C06": "criteria.C06.update_history",
+        "C07": "criteria.C07.update_history",
+        "C08": "criteria.C08.update_history",
+        "C09": "criteria.C09.update_history",
+        "C10": "criteria.C10.update_history",
+        "C11": "criteria.C11.update_history",
+        "C12": "criteria.C12.update_history",
+        "X01": "criteria.X01.update_history",
+        "X02": "criteria.X02.update_history",
+        "X03": "criteria.X03.update_history",
+        "X04": "criteria.X04.update_history",
+        "X05": "criteria.X05.update_history",
+        "X06": "criteria.X06.update_history",
+        "X07": "criteria.X07.update_history",
+        "X08": "criteria.X08.update_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/continuation-20260920.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "7141be091974bb68ec22896698c0158b609a676c712485116f7add28ab1d57bb",
+      "W_sha256": "7141be091974bb68ec22896698c0158b609a676c712485116f7add28ab1d57bb",
+      "P_bytes": 69073,
+      "W_bytes": 69073,
+      "P_lines": 577,
+      "W_lines": 577,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          110
+        ],
+        [
+          111,
+          210
+        ],
+        [
+          211,
+          310
+        ],
+        [
+          311,
+          410
+        ],
+        [
+          411,
+          500
+        ],
+        [
+          501,
+          577
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260920.md.1-110.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260920.md.111-210.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260920.md.211-310.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260920.md.311-410.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260920.md.411-500.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260920.md.501-577.read.txt"
+      ],
+      "module": "semantic_history",
+      "responsibility": "PhaseJ継続台帳、raw保存/意味job/人承認/評価/有限G2、sourcefingerprintと未達の時系列。",
+      "callers": [
+        "docs/dev-records/README.md:19-26",
+        "docs/roadmap/acquisition.md:51,113,171",
+        "docs/roadmap/extraction.md:39,121,141",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "historical_scope": "2026-09-20〜2026-09-23、reviewの60日追記を含む。複数固定candidateを逐次区別",
+      "criteria": {
+        "C01": "criteria.C01.semantic_history",
+        "C02": "criteria.C02.semantic_history",
+        "C03": "criteria.C03.semantic_history",
+        "C04": "criteria.C04.semantic_history",
+        "C05": "criteria.C05.semantic_history",
+        "C06": "criteria.C06.semantic_history",
+        "C07": "criteria.C07.semantic_history",
+        "C08": "criteria.C08.semantic_history",
+        "C09": "criteria.C09.semantic_history",
+        "C10": "criteria.C10.semantic_history",
+        "C11": "criteria.C11.semantic_history",
+        "C12": "criteria.C12.semantic_history",
+        "X01": "criteria.X01.semantic_history",
+        "X02": "criteria.X02.semantic_history",
+        "X03": "criteria.X03.semantic_history",
+        "X04": "criteria.X04.semantic_history",
+        "X05": "criteria.X05.semantic_history",
+        "X06": "criteria.X06.semantic_history",
+        "X07": "criteria.X07.semantic_history",
+        "X08": "criteria.X08.semantic_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/continuation-20260923.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "d69b9348ed46ca1abc6bcfa5f21358b06cb217e284bc7fed549378b78b7bafbd",
+      "W_sha256": "d69b9348ed46ca1abc6bcfa5f21358b06cb217e284bc7fed549378b78b7bafbd",
+      "P_bytes": 71384,
+      "W_bytes": 71384,
+      "P_lines": 1115,
+      "W_lines": 1115,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          110
+        ],
+        [
+          111,
+          230
+        ],
+        [
+          231,
+          350
+        ],
+        [
+          351,
+          470
+        ],
+        [
+          471,
+          590
+        ],
+        [
+          591,
+          710
+        ],
+        [
+          711,
+          830
+        ],
+        [
+          831,
+          950
+        ],
+        [
+          951,
+          1070
+        ],
+        [
+          1071,
+          1115
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260923.md.1-110.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260923.md.111-230.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260923.md.231-350.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260923.md.351-470.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260923.md.471-590.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260923.md.591-710.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260923.md.711-830.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260923.md.831-950.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260923.md.951-1070.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/continuation-20260923.md.1071-1115.read.txt"
+      ],
+      "module": "semantic_history",
+      "responsibility": "全repoaudit・canonical・LLM/slot/取得/通知の継続修復と当時実機観察、後日修理と未達。",
+      "callers": [
+        "docs/dev-records/README.md:19-26",
+        "docs/roadmap/acquisition.md:51,113,171",
+        "docs/roadmap/extraction.md:39,121,141",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "historical_scope": "2026-09-20〜2026-09-23、reviewの60日追記を含む。複数固定candidateを逐次区別",
+      "criteria": {
+        "C01": "criteria.C01.semantic_history",
+        "C02": "criteria.C02.semantic_history",
+        "C03": "criteria.C03.semantic_history",
+        "C04": "criteria.C04.semantic_history",
+        "C05": "criteria.C05.semantic_history",
+        "C06": "criteria.C06.semantic_history",
+        "C07": "criteria.C07.semantic_history",
+        "C08": "criteria.C08.semantic_history",
+        "C09": "criteria.C09.semantic_history",
+        "C10": "criteria.C10.semantic_history",
+        "C11": "criteria.C11.semantic_history",
+        "C12": "criteria.C12.semantic_history",
+        "X01": "criteria.X01.semantic_history",
+        "X02": "criteria.X02.semantic_history",
+        "X03": "criteria.X03.semantic_history",
+        "X04": "criteria.X04.semantic_history",
+        "X05": "criteria.X05.semantic_history",
+        "X06": "criteria.X06.semantic_history",
+        "X07": "criteria.X07.semantic_history",
+        "X08": "criteria.X08.semantic_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/phase-j-record.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "11928ff198532dda02212485b04fcaafef39e89ca21846461a2fcdc0f662a85f",
+      "W_sha256": "11928ff198532dda02212485b04fcaafef39e89ca21846461a2fcdc0f662a85f",
+      "P_bytes": 19887,
+      "W_bytes": 19887,
+      "P_lines": 237,
+      "W_lines": 237,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          120
+        ],
+        [
+          121,
+          237
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/phase-j-record.md.1-120.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/phase-j-record.md.121-237.read.txt"
+      ],
+      "module": "semantic_history",
+      "responsibility": "PhaseJ初期構成/不変条件/当時wire/有効化rollback/品質測定と制約。前置き現在guidepath不在。",
+      "callers": [
+        "docs/dev-records/README.md:19-26",
+        "docs/roadmap/acquisition.md:51,113,171",
+        "docs/roadmap/extraction.md:39,121,141",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "historical_scope": "2026-09-20〜2026-09-23、reviewの60日追記を含む。複数固定candidateを逐次区別",
+      "criteria": {
+        "C01": "criteria.C01.semantic_history",
+        "C02": "criteria.C02.semantic_history",
+        "C03": "criteria.C03.semantic_history",
+        "C04": "criteria.C04.semantic_history",
+        "C05": "criteria.C05.semantic_history",
+        "C06": "criteria.C06.semantic_history",
+        "C07": "criteria.C07.semantic_history",
+        "C08": "criteria.C08.semantic_history",
+        "C09": "criteria.C09.semantic_history",
+        "C10": "criteria.C10.semantic_history",
+        "C11": "criteria.C11.semantic_history",
+        "C12": "criteria.C12.semantic_history",
+        "X01": "criteria.X01.semantic_history",
+        "X02": "criteria.X02.semantic_history",
+        "X03": "criteria.X03.semantic_history",
+        "X04": "criteria.X04.semantic_history",
+        "X05": "criteria.X05.semantic_history",
+        "X06": "criteria.X06.semantic_history",
+        "X07": "criteria.X07.semantic_history",
+        "X08": "criteria.X08.semantic_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/phase-r-record.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "5f60894496e3cbc0a02f94da9153e096daecf9a18c0fe54193d59906ac11771e",
+      "W_sha256": "5f60894496e3cbc0a02f94da9153e096daecf9a18c0fe54193d59906ac11771e",
+      "P_bytes": 9214,
+      "W_bytes": 9214,
+      "P_lines": 88,
+      "W_lines": 88,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          88
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/phase-r-record.md.1-88.read.txt"
+      ],
+      "module": "refactor_history",
+      "responsibility": "RF-CODE46cffb0とRF-OPS観察を分けたREF/FIX・停止/切戻し・当時test証拠。",
+      "callers": [
+        "docs/dev-records/README.md:17-21",
+        "docs/dev-records/continuation-20260920.md:17-22,79,131",
+        "ci/mine_gates.py:extract_ids/main",
+        "ci/gates.py:gate_records_isolation"
+      ],
+      "historical_scope": "2026-09-20〜2026-09-21 / a8896ec→9d2c6d1→46cffb0、後続842125da別candidate",
+      "criteria": {
+        "C01": "criteria.C01.refactor_history",
+        "C02": "criteria.C02.refactor_history",
+        "C03": "criteria.C03.refactor_history",
+        "C04": "criteria.C04.refactor_history",
+        "C05": "criteria.C05.refactor_history",
+        "C06": "criteria.C06.refactor_history",
+        "C07": "criteria.C07.refactor_history",
+        "C08": "criteria.C08.refactor_history",
+        "C09": "criteria.C09.refactor_history",
+        "C10": "criteria.C10.refactor_history",
+        "C11": "criteria.C11.refactor_history",
+        "C12": "criteria.C12.refactor_history",
+        "X01": "criteria.X01.refactor_history",
+        "X02": "criteria.X02.refactor_history",
+        "X03": "criteria.X03.refactor_history",
+        "X04": "criteria.X04.refactor_history",
+        "X05": "criteria.X05.refactor_history",
+        "X06": "criteria.X06.refactor_history",
+        "X07": "criteria.X07.refactor_history",
+        "X08": "criteria.X08.refactor_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/r00-baseline.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "5fe13cb47836da1a1cf4328376b8c1803b1b3f44a5235068172b39e8a4bba78a",
+      "W_sha256": "5fe13cb47836da1a1cf4328376b8c1803b1b3f44a5235068172b39e8a4bba78a",
+      "P_bytes": 8183,
+      "W_bytes": 8183,
+      "P_lines": 84,
+      "W_lines": 84,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          84
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/r00-baseline.md.1-84.read.txt"
+      ],
+      "module": "refactor_history",
+      "responsibility": "a8896ec R00 baseline、D01-D15/caller/副作用/lock欠陥manifest。",
+      "callers": [
+        "docs/dev-records/README.md:17-21",
+        "docs/dev-records/continuation-20260920.md:17-22,79,131",
+        "ci/mine_gates.py:extract_ids/main",
+        "ci/gates.py:gate_records_isolation"
+      ],
+      "historical_scope": "2026-09-20〜2026-09-21 / a8896ec→9d2c6d1→46cffb0、後続842125da別candidate",
+      "criteria": {
+        "C01": "criteria.C01.refactor_history",
+        "C02": "criteria.C02.refactor_history",
+        "C03": "criteria.C03.refactor_history",
+        "C04": "criteria.C04.refactor_history",
+        "C05": "criteria.C05.refactor_history",
+        "C06": "criteria.C06.refactor_history",
+        "C07": "criteria.C07.refactor_history",
+        "C08": "criteria.C08.refactor_history",
+        "C09": "criteria.C09.refactor_history",
+        "C10": "criteria.C10.refactor_history",
+        "C11": "criteria.C11.refactor_history",
+        "C12": "criteria.C12.refactor_history",
+        "X01": "criteria.X01.refactor_history",
+        "X02": "criteria.X02.refactor_history",
+        "X03": "criteria.X03.refactor_history",
+        "X04": "criteria.X04.refactor_history",
+        "X05": "criteria.X05.refactor_history",
+        "X06": "criteria.X06.refactor_history",
+        "X07": "criteria.X07.refactor_history",
+        "X08": "criteria.X08.refactor_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/refactor-revalidation.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "f8f96e8d3e76ef0811f566a241dd9943bb3cfbe3a13060013d05776b0b408572",
+      "W_sha256": "f8f96e8d3e76ef0811f566a241dd9943bb3cfbe3a13060013d05776b0b408572",
+      "P_bytes": 21998,
+      "W_bytes": 21998,
+      "P_lines": 293,
+      "W_lines": 293,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          140
+        ],
+        [
+          141,
+          293
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/refactor-revalidation.md.1-140.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/refactor-revalidation.md.141-293.read.txt"
+      ],
+      "module": "refactor_history",
+      "responsibility": "RT001-040/歴史等価diff/合成restore/REF86とFIX88/現candidateG0 scopeの再検証台帳。",
+      "callers": [
+        "docs/dev-records/README.md:17-21",
+        "docs/dev-records/continuation-20260920.md:17-22,79,131",
+        "ci/mine_gates.py:extract_ids/main",
+        "ci/gates.py:gate_records_isolation"
+      ],
+      "historical_scope": "2026-09-20〜2026-09-21 / a8896ec→9d2c6d1→46cffb0、後続842125da別candidate",
+      "criteria": {
+        "C01": "criteria.C01.refactor_history",
+        "C02": "criteria.C02.refactor_history",
+        "C03": "criteria.C03.refactor_history",
+        "C04": "criteria.C04.refactor_history",
+        "C05": "criteria.C05.refactor_history",
+        "C06": "criteria.C06.refactor_history",
+        "C07": "criteria.C07.refactor_history",
+        "C08": "criteria.C08.refactor_history",
+        "C09": "criteria.C09.refactor_history",
+        "C10": "criteria.C10.refactor_history",
+        "C11": "criteria.C11.refactor_history",
+        "C12": "criteria.C12.refactor_history",
+        "X01": "criteria.X01.refactor_history",
+        "X02": "criteria.X02.refactor_history",
+        "X03": "criteria.X03.refactor_history",
+        "X04": "criteria.X04.refactor_history",
+        "X05": "criteria.X05.refactor_history",
+        "X06": "criteria.X06.refactor_history",
+        "X07": "criteria.X07.refactor_history",
+        "X08": "criteria.X08.refactor_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/release-1.0.11-20261003.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "8e990d6416b2af54a2a55e37aa89cdc1d65463eab681440fbf76c29d309a1179",
+      "W_sha256": "8e990d6416b2af54a2a55e37aa89cdc1d65463eab681440fbf76c29d309a1179",
+      "P_bytes": 30939,
+      "W_bytes": 30939,
+      "P_lines": 275,
+      "W_lines": 275,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          135
+        ],
+        [
+          136,
+          275
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/release-1.0.11-20261003.md.1-135.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/release-1.0.11-20261003.md.136-275.read.txt"
+      ],
+      "module": "release_history",
+      "responsibility": "1.0.11metadata/自己反応/診断/原22-Aの合成と実観測受入、schema marker事故/復旧/公開保留。",
+      "callers": [
+        "docs/development/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/ROADMAP.md:70",
+        "docs/dev-records/README.md:15",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "historical_scope": "2026-10-03〜2026-10-05 / 1.0.11準備、1.0.13候補引継ぎと外部条件",
+      "criteria": {
+        "C01": "criteria.C01.release_history",
+        "C02": "criteria.C02.release_history",
+        "C03": "criteria.C03.release_history",
+        "C04": "criteria.C04.release_history",
+        "C05": "criteria.C05.release_history",
+        "C06": "criteria.C06.release_history",
+        "C07": "criteria.C07.release_history",
+        "C08": "criteria.C08.release_history",
+        "C09": "criteria.C09.release_history",
+        "C10": "criteria.C10.release_history",
+        "C11": "criteria.C11.release_history",
+        "C12": "criteria.C12.release_history",
+        "X01": "criteria.X01.release_history",
+        "X02": "criteria.X02.release_history",
+        "X03": "criteria.X03.release_history",
+        "X04": "criteria.X04.release_history",
+        "X05": "criteria.X05.release_history",
+        "X06": "criteria.X06.release_history",
+        "X07": "criteria.X07.release_history",
+        "X08": "criteria.X08.release_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/review-20260923.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "fd4b578393b9ad22490ed0eaf4e7de1c65fe09824bc12534cfce8c75524e85fe",
+      "W_sha256": "fd4b578393b9ad22490ed0eaf4e7de1c65fe09824bc12534cfce8c75524e85fe",
+      "P_bytes": 17562,
+      "W_bytes": 17562,
+      "P_lines": 231,
+      "W_lines": 231,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          115
+        ],
+        [
+          116,
+          231
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/review-20260923.md.1-115.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/review-20260923.md.116-231.read.txt"
+      ],
+      "module": "semantic_history",
+      "responsibility": "F/C/V/O差分修理、sandbox4未検証、QC全期間→3日→60日訂正、probe slot修理と最終checkpoint。",
+      "callers": [
+        "docs/dev-records/README.md:19-26",
+        "docs/roadmap/acquisition.md:51,113,171",
+        "docs/roadmap/extraction.md:39,121,141",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "historical_scope": "2026-09-20〜2026-09-23、reviewの60日追記を含む。複数固定candidateを逐次区別",
+      "criteria": {
+        "C01": "criteria.C01.semantic_history",
+        "C02": "criteria.C02.semantic_history",
+        "C03": "criteria.C03.semantic_history",
+        "C04": "criteria.C04.semantic_history",
+        "C05": "criteria.C05.semantic_history",
+        "C06": "criteria.C06.semantic_history",
+        "C07": "criteria.C07.semantic_history",
+        "C08": "criteria.C08.semantic_history",
+        "C09": "criteria.C09.semantic_history",
+        "C10": "criteria.C10.semantic_history",
+        "C11": "criteria.C11.semantic_history",
+        "C12": "criteria.C12.semantic_history",
+        "X01": "criteria.X01.semantic_history",
+        "X02": "criteria.X02.semantic_history",
+        "X03": "criteria.X03.semantic_history",
+        "X04": "criteria.X04.semantic_history",
+        "X05": "criteria.X05.semantic_history",
+        "X06": "criteria.X06.semantic_history",
+        "X07": "criteria.X07.semantic_history",
+        "X08": "criteria.X08.semantic_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/review-20260925.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "ab17881b609fee67b947c8c37d88358ffbf5ae0f1527add2791ae592a87589a3",
+      "W_sha256": "ab17881b609fee67b947c8c37d88358ffbf5ae0f1527add2791ae592a87589a3",
+      "P_bytes": 9648,
+      "W_bytes": 9648,
+      "P_lines": 105,
+      "W_lines": 105,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          105
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/review-20260925.md.1-105.read.txt"
+      ],
+      "module": "review_history",
+      "responsibility": "全体review修理・合成性能・localHermes変更/SDKpin未統合・テスト外部操作事故・09-28文書訂正。",
+      "callers": [
+        "docs/dev-records/README.md:28,31,37",
+        "docs/dev-records/stability-1.0.13-20261004.md:13-18",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "historical_scope": "2026-09-25（09-28訂正）〜2026-10-04 / 各記載B、public1.0.12 fb87584固定",
+      "criteria": {
+        "C01": "criteria.C01.review_history",
+        "C02": "criteria.C02.review_history",
+        "C03": "criteria.C03.review_history",
+        "C04": "criteria.C04.review_history",
+        "C05": "criteria.C05.review_history",
+        "C06": "criteria.C06.review_history",
+        "C07": "criteria.C07.review_history",
+        "C08": "criteria.C08.review_history",
+        "C09": "criteria.C09.review_history",
+        "C10": "criteria.C10.review_history",
+        "C11": "criteria.C11.review_history",
+        "C12": "criteria.C12.review_history",
+        "X01": "criteria.X01.review_history",
+        "X02": "criteria.X02.review_history",
+        "X03": "criteria.X03.review_history",
+        "X04": "criteria.X04.review_history",
+        "X05": "criteria.X05.review_history",
+        "X06": "criteria.X06.review_history",
+        "X07": "criteria.X07.review_history",
+        "X08": "criteria.X08.review_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/stability-1.0.13-20261004.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "ffec811e87ab70bec8bf896942d076c9cd5556ce6daa510ed2e85edda3a10fc2",
+      "W_sha256": "ffec811e87ab70bec8bf896942d076c9cd5556ce6daa510ed2e85edda3a10fc2",
+      "P_bytes": 39066,
+      "W_bytes": 39066,
+      "P_lines": 472,
+      "W_lines": 472,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          125
+        ],
+        [
+          126,
+          250
+        ],
+        [
+          251,
+          375
+        ],
+        [
+          376,
+          472
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/stability-1.0.13-20261004.md.1-125.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/stability-1.0.13-20261004.md.126-250.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/stability-1.0.13-20261004.md.251-375.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/stability-1.0.13-20261004.md.376-472.read.txt"
+      ],
+      "module": "release_history",
+      "responsibility": "1.0.13設計/実装/引継ぎ/後続敵対的reviewの全時系列、NAS/人手/相手repo/実機公開条件。",
+      "callers": [
+        "docs/development/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/ROADMAP.md:70",
+        "docs/dev-records/README.md:15",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "historical_scope": "2026-10-03〜2026-10-05 / 1.0.11準備、1.0.13候補引継ぎと外部条件",
+      "criteria": {
+        "C01": "criteria.C01.release_history",
+        "C02": "criteria.C02.release_history",
+        "C03": "criteria.C03.release_history",
+        "C04": "criteria.C04.release_history",
+        "C05": "criteria.C05.release_history",
+        "C06": "criteria.C06.release_history",
+        "C07": "criteria.C07.release_history",
+        "C08": "criteria.C08.release_history",
+        "C09": "criteria.C09.release_history",
+        "C10": "criteria.C10.release_history",
+        "C11": "criteria.C11.release_history",
+        "C12": "criteria.C12.release_history",
+        "X01": "criteria.X01.release_history",
+        "X02": "criteria.X02.release_history",
+        "X03": "criteria.X03.release_history",
+        "X04": "criteria.X04.release_history",
+        "X05": "criteria.X05.release_history",
+        "X06": "criteria.X06.release_history",
+        "X07": "criteria.X07.release_history",
+        "X08": "criteria.X08.release_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/standalone-worktree-20261002.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "81d207b461cfe0230a03108a4af3ec2cc2864b8b01fc21ceb33c779cddfa2e0f",
+      "W_sha256": "81d207b461cfe0230a03108a4af3ec2cc2864b8b01fc21ceb33c779cddfa2e0f",
+      "P_bytes": 12957,
+      "W_bytes": 12957,
+      "P_lines": 151,
+      "W_lines": 151,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          151
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/standalone-worktree-20261002.md.1-151.read.txt"
+      ],
+      "module": "standalone_history",
+      "responsibility": "standalone統合前worktreeのcalendar案・nativeSDK同等性・レビュー修正と実機未検証。",
+      "callers": [
+        "docs/dev-records/README.md:歴史index",
+        "docs/guides/STANDALONE.md（現行操作正本、先頭で誘導）",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "historical_scope": "2026-10-01計画/c5a7716と2026-10-02 feature/standalone-mode統合前設計",
+      "criteria": {
+        "C01": "criteria.C01.standalone_history",
+        "C02": "criteria.C02.standalone_history",
+        "C03": "criteria.C03.standalone_history",
+        "C04": "criteria.C04.standalone_history",
+        "C05": "criteria.C05.standalone_history",
+        "C06": "criteria.C06.standalone_history",
+        "C07": "criteria.C07.standalone_history",
+        "C08": "criteria.C08.standalone_history",
+        "C09": "criteria.C09.standalone_history",
+        "C10": "criteria.C10.standalone_history",
+        "C11": "criteria.C11.standalone_history",
+        "C12": "criteria.C12.standalone_history",
+        "X01": "criteria.X01.standalone_history",
+        "X02": "criteria.X02.standalone_history",
+        "X03": "criteria.X03.standalone_history",
+        "X04": "criteria.X04.standalone_history",
+        "X05": "criteria.X05.standalone_history",
+        "X06": "criteria.X06.standalone_history",
+        "X07": "criteria.X07.standalone_history",
+        "X08": "criteria.X08.standalone_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/acceptance-map.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "dc280664bf24a8e8acd584f5c356393709d1bbd8ee0117c55c5dd8248dba12dd",
+      "W_sha256": "dc280664bf24a8e8acd584f5c356393709d1bbd8ee0117c55c5dd8248dba12dd",
+      "P_bytes": 22288,
+      "W_bytes": 22288,
+      "P_lines": 152,
+      "W_lines": 152,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          78
+        ],
+        [
+          79,
+          152
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/acceptance-map.md.1-78.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/acceptance-map.md.79-152.read.txt"
+      ],
+      "module": "semantic_history",
+      "responsibility": "固定PhaseJ候補のAT/INV/G0-G7要件対応、部分合成証拠と人手/実機未完の正確な分類。",
+      "callers": [
+        "docs/dev-records/README.md:19-26",
+        "docs/roadmap/acquisition.md:51,113,171",
+        "docs/roadmap/extraction.md:39,121,141",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "historical_scope": "2026-09-20〜2026-09-23、reviewの60日追記を含む。複数固定candidateを逐次区別",
+      "criteria": {
+        "C01": "criteria.C01.semantic_history",
+        "C02": "criteria.C02.semantic_history",
+        "C03": "criteria.C03.semantic_history",
+        "C04": "criteria.C04.semantic_history",
+        "C05": "criteria.C05.semantic_history",
+        "C06": "criteria.C06.semantic_history",
+        "C07": "criteria.C07.semantic_history",
+        "C08": "criteria.C08.semantic_history",
+        "C09": "criteria.C09.semantic_history",
+        "C10": "criteria.C10.semantic_history",
+        "C11": "criteria.C11.semantic_history",
+        "C12": "criteria.C12.semantic_history",
+        "X01": "criteria.X01.semantic_history",
+        "X02": "criteria.X02.semantic_history",
+        "X03": "criteria.X03.semantic_history",
+        "X04": "criteria.X04.semantic_history",
+        "X05": "criteria.X05.semantic_history",
+        "X06": "criteria.X06.semantic_history",
+        "X07": "criteria.X07.semantic_history",
+        "X08": "criteria.X08.semantic_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/HANDOFF_CLAUDE_1.0.13_20261004.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "c3c1c19c461bbcc4461dc739793f2ac4ba5bcb500797d70cf72e95bd2a944268",
+      "W_sha256": "c3c1c19c461bbcc4461dc739793f2ac4ba5bcb500797d70cf72e95bd2a944268",
+      "P_bytes": 18863,
+      "W_bytes": 18863,
+      "P_lines": 269,
+      "W_lines": 269,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          140
+        ],
+        [
+          141,
+          269
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/HANDOFF_CLAUDE_1.0.13_20261004.md.1-140.read.txt",
+        "/tmp/mcs-maintenance-core-docs7-20261005/HANDOFF_CLAUDE_1.0.13_20261004.md.141-269.read.txt"
+      ],
+      "module": "release_history",
+      "responsibility": "1.0.13 userstop時点未完16項目と後日local完了追記、private証拠参照・外部受入条件。",
+      "callers": [
+        "docs/development/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/ROADMAP.md:70",
+        "docs/dev-records/README.md:15",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "historical_scope": "2026-10-03〜2026-10-05 / 1.0.11準備、1.0.13候補引継ぎと外部条件",
+      "criteria": {
+        "C01": "criteria.C01.release_history",
+        "C02": "criteria.C02.release_history",
+        "C03": "criteria.C03.release_history",
+        "C04": "criteria.C04.release_history",
+        "C05": "criteria.C05.release_history",
+        "C06": "criteria.C06.release_history",
+        "C07": "criteria.C07.release_history",
+        "C08": "criteria.C08.release_history",
+        "C09": "criteria.C09.release_history",
+        "C10": "criteria.C10.release_history",
+        "C11": "criteria.C11.release_history",
+        "C12": "criteria.C12.release_history",
+        "X01": "criteria.X01.release_history",
+        "X02": "criteria.X02.release_history",
+        "X03": "criteria.X03.release_history",
+        "X04": "criteria.X04.release_history",
+        "X05": "criteria.X05.release_history",
+        "X06": "criteria.X06.release_history",
+        "X07": "criteria.X07.release_history",
+        "X08": "criteria.X08.release_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/repo-review-20261001.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "97c9e53d73b56d5bc90e05a2dba20cbef8a846889b648b1aed49ff9e168356f3",
+      "W_sha256": "97c9e53d73b56d5bc90e05a2dba20cbef8a846889b648b1aed49ff9e168356f3",
+      "P_bytes": 8246,
+      "W_bytes": 8246,
+      "P_lines": 103,
+      "W_lines": 103,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          103
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/repo-review-20261001.md.1-103.read.txt"
+      ],
+      "module": "review_history",
+      "responsibility": "446path/hash再利用境界・5件修理とSDK/synthetic/CI/実機制約、同日commit準備の追記。",
+      "callers": [
+        "docs/dev-records/README.md:28,31,37",
+        "docs/dev-records/stability-1.0.13-20261004.md:13-18",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "historical_scope": "2026-09-25（09-28訂正）〜2026-10-04 / 各記載B、public1.0.12 fb87584固定",
+      "criteria": {
+        "C01": "criteria.C01.review_history",
+        "C02": "criteria.C02.review_history",
+        "C03": "criteria.C03.review_history",
+        "C04": "criteria.C04.review_history",
+        "C05": "criteria.C05.review_history",
+        "C06": "criteria.C06.review_history",
+        "C07": "criteria.C07.review_history",
+        "C08": "criteria.C08.review_history",
+        "C09": "criteria.C09.review_history",
+        "C10": "criteria.C10.review_history",
+        "C11": "criteria.C11.review_history",
+        "C12": "criteria.C12.review_history",
+        "X01": "criteria.X01.review_history",
+        "X02": "criteria.X02.review_history",
+        "X03": "criteria.X03.review_history",
+        "X04": "criteria.X04.review_history",
+        "X05": "criteria.X05.review_history",
+        "X06": "criteria.X06.review_history",
+        "X07": "criteria.X07.review_history",
+        "X08": "criteria.X08.review_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/refactor-1.0.12-20261004.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "39c1fa0093ec50b38058d91204a906ec91cca65a76dcc04cdd5b94667cadb846",
+      "W_sha256": "39c1fa0093ec50b38058d91204a906ec91cca65a76dcc04cdd5b94667cadb846",
+      "P_bytes": 9050,
+      "W_bytes": 9050,
+      "P_lines": 104,
+      "W_lines": 104,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          104
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/refactor-1.0.12-20261004.md.1-104.read.txt"
+      ],
+      "module": "review_history",
+      "responsibility": "public1.0.12固定の326code AST/責務refactor、意図的重複維持・test本文read限界・SDK隔離。",
+      "callers": [
+        "docs/dev-records/README.md:28,31,37",
+        "docs/dev-records/stability-1.0.13-20261004.md:13-18",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "historical_scope": "2026-09-25（09-28訂正）〜2026-10-04 / 各記載B、public1.0.12 fb87584固定",
+      "criteria": {
+        "C01": "criteria.C01.review_history",
+        "C02": "criteria.C02.review_history",
+        "C03": "criteria.C03.review_history",
+        "C04": "criteria.C04.review_history",
+        "C05": "criteria.C05.review_history",
+        "C06": "criteria.C06.review_history",
+        "C07": "criteria.C07.review_history",
+        "C08": "criteria.C08.review_history",
+        "C09": "criteria.C09.review_history",
+        "C10": "criteria.C10.review_history",
+        "C11": "criteria.C11.review_history",
+        "C12": "criteria.C12.review_history",
+        "X01": "criteria.X01.review_history",
+        "X02": "criteria.X02.review_history",
+        "X03": "criteria.X03.review_history",
+        "X04": "criteria.X04.review_history",
+        "X05": "criteria.X05.review_history",
+        "X06": "criteria.X06.review_history",
+        "X07": "criteria.X07.review_history",
+        "X08": "criteria.X08.review_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/stability-20261001.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "4f93d71cedc5a817420a2990b50c692a0e7b2d154f051c343e06678cf675d8dd",
+      "W_sha256": "4f93d71cedc5a817420a2990b50c692a0e7b2d154f051c343e06678cf675d8dd",
+      "P_bytes": 7199,
+      "W_bytes": 7199,
+      "P_lines": 68,
+      "W_lines": 68,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          68
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/stability-20261001.md.1-68.read.txt"
+      ],
+      "module": "review_history",
+      "responsibility": "390path安定性/導入改善・deepJSON/unknown/exportrender/URI修理とgenerateWiki未解決。",
+      "callers": [
+        "docs/dev-records/README.md:28,31,37",
+        "docs/dev-records/stability-1.0.13-20261004.md:13-18",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "historical_scope": "2026-09-25（09-28訂正）〜2026-10-04 / 各記載B、public1.0.12 fb87584固定",
+      "criteria": {
+        "C01": "criteria.C01.review_history",
+        "C02": "criteria.C02.review_history",
+        "C03": "criteria.C03.review_history",
+        "C04": "criteria.C04.review_history",
+        "C05": "criteria.C05.review_history",
+        "C06": "criteria.C06.review_history",
+        "C07": "criteria.C07.review_history",
+        "C08": "criteria.C08.review_history",
+        "C09": "criteria.C09.review_history",
+        "C10": "criteria.C10.review_history",
+        "C11": "criteria.C11.review_history",
+        "C12": "criteria.C12.review_history",
+        "X01": "criteria.X01.review_history",
+        "X02": "criteria.X02.review_history",
+        "X03": "criteria.X03.review_history",
+        "X04": "criteria.X04.review_history",
+        "X05": "criteria.X05.review_history",
+        "X06": "criteria.X06.review_history",
+        "X07": "criteria.X07.review_history",
+        "X08": "criteria.X08.review_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/standalone-20261001.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "113c19240fa4e9fbef2052002567836101c134228cdd85a1a4b6742254b2d436",
+      "W_sha256": "113c19240fa4e9fbef2052002567836101c134228cdd85a1a4b6742254b2d436",
+      "P_bytes": 9261,
+      "W_bytes": 9261,
+      "P_lines": 110,
+      "W_lines": 110,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          110
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/standalone-20261001.md.1-110.read.txt"
+      ],
+      "module": "standalone_history",
+      "responsibility": "Hermesなし同等機能の初期singlehost計画・受入条件、planreview完了で実装以降未実施。",
+      "callers": [
+        "docs/dev-records/README.md:歴史index",
+        "docs/guides/STANDALONE.md（現行操作正本、先頭で誘導）",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "historical_scope": "2026-10-01計画/c5a7716と2026-10-02 feature/standalone-mode統合前設計",
+      "criteria": {
+        "C01": "criteria.C01.standalone_history",
+        "C02": "criteria.C02.standalone_history",
+        "C03": "criteria.C03.standalone_history",
+        "C04": "criteria.C04.standalone_history",
+        "C05": "criteria.C05.standalone_history",
+        "C06": "criteria.C06.standalone_history",
+        "C07": "criteria.C07.standalone_history",
+        "C08": "criteria.C08.standalone_history",
+        "C09": "criteria.C09.standalone_history",
+        "C10": "criteria.C10.standalone_history",
+        "C11": "criteria.C11.standalone_history",
+        "C12": "criteria.C12.standalone_history",
+        "X01": "criteria.X01.standalone_history",
+        "X02": "criteria.X02.standalone_history",
+        "X03": "criteria.X03.standalone_history",
+        "X04": "criteria.X04.standalone_history",
+        "X05": "criteria.X05.standalone_history",
+        "X06": "criteria.X06.standalone_history",
+        "X07": "criteria.X07.standalone_history",
+        "X08": "criteria.X08.standalone_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/structure-20261001.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "3a5c2371b867e26451c67fa262f619df10b269cf57719b3b1762e2dceda459da",
+      "W_sha256": "3a5c2371b867e26451c67fa262f619df10b269cf57719b3b1762e2dceda459da",
+      "P_bytes": 5330,
+      "W_bytes": 5330,
+      "P_lines": 81,
+      "W_lines": 81,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          81
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/structure-20261001.md.1-81.read.txt"
+      ],
+      "module": "structure_wiki_history",
+      "responsibility": "47pathの用途別移動/互換alias/namespace衝突回帰・生成源/旧record保持とlocalSDK証拠。",
+      "callers": [
+        "docs/dev-records/README.md:33,39",
+        "docs/dev-records/stability-20261001.md:61",
+        "openwiki/INSTRUCTIONS.md（manualbrief source）",
+        ".github/workflows/openwiki-update.yml（実行は別承認）",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "historical_scope": "2026-10-01 / 7a5533f構成移動、OpenWiki0.6.1の更新条件記録",
+      "criteria": {
+        "C01": "criteria.C01.structure_wiki_history",
+        "C02": "criteria.C02.structure_wiki_history",
+        "C03": "criteria.C03.structure_wiki_history",
+        "C04": "criteria.C04.structure_wiki_history",
+        "C05": "criteria.C05.structure_wiki_history",
+        "C06": "criteria.C06.structure_wiki_history",
+        "C07": "criteria.C07.structure_wiki_history",
+        "C08": "criteria.C08.structure_wiki_history",
+        "C09": "criteria.C09.structure_wiki_history",
+        "C10": "criteria.C10.structure_wiki_history",
+        "C11": "criteria.C11.structure_wiki_history",
+        "C12": "criteria.C12.structure_wiki_history",
+        "X01": "criteria.X01.structure_wiki_history",
+        "X02": "criteria.X02.structure_wiki_history",
+        "X03": "criteria.X03.structure_wiki_history",
+        "X04": "criteria.X04.structure_wiki_history",
+        "X05": "criteria.X05.structure_wiki_history",
+        "X06": "criteria.X06.structure_wiki_history",
+        "X07": "criteria.X07.structure_wiki_history",
+        "X08": "criteria.X08.structure_wiki_history"
+      }
+    },
+    {
+      "path": "docs/dev-records/openwiki-update-path-20261001.md",
+      "kind": "dated_nonexecutable_development_record",
+      "state": "REVIEWED",
+      "P_sha256": "1d022e8731f2588ab65df7d36bf96116ce382cb77aec1c53c9b37c052b34dd3e",
+      "W_sha256": "1d022e8731f2588ab65df7d36bf96116ce382cb77aec1c53c9b37c052b34dd3e",
+      "P_bytes": 5966,
+      "W_bytes": 5966,
+      "P_lines": 86,
+      "W_lines": 86,
+      "mode": "100644",
+      "read_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "read_ranges": [
+        [
+          1,
+          86
+        ]
+      ],
+      "full_read_verified": true,
+      "read_method": "固定Pを番号付き分割全文read。20件fresh、切断なし、過去hashreceiptの本文read代用なし。",
+      "read_transcripts": [
+        "/tmp/mcs-maintenance-core-docs7-20261005/openwiki-update-path-20261001.md.1-86.read.txt"
+      ],
+      "module": "structure_wiki_history",
+      "responsibility": "manualbriefと生成本文の所有区分、ACKtimestamp精密化、将来外送/trace承認・partialrun再開境界。",
+      "callers": [
+        "docs/dev-records/README.md:33,39",
+        "docs/dev-records/stability-20261001.md:61",
+        "openwiki/INSTRUCTIONS.md（manualbrief source）",
+        ".github/workflows/openwiki-update.yml（実行は別承認）",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "historical_scope": "2026-10-01 / 7a5533f構成移動、OpenWiki0.6.1の更新条件記録",
+      "criteria": {
+        "C01": "criteria.C01.structure_wiki_history",
+        "C02": "criteria.C02.structure_wiki_history",
+        "C03": "criteria.C03.structure_wiki_history",
+        "C04": "criteria.C04.structure_wiki_history",
+        "C05": "criteria.C05.structure_wiki_history",
+        "C06": "criteria.C06.structure_wiki_history",
+        "C07": "criteria.C07.structure_wiki_history",
+        "C08": "criteria.C08.structure_wiki_history",
+        "C09": "criteria.C09.structure_wiki_history",
+        "C10": "criteria.C10.structure_wiki_history",
+        "C11": "criteria.C11.structure_wiki_history",
+        "C12": "criteria.C12.structure_wiki_history",
+        "X01": "criteria.X01.structure_wiki_history",
+        "X02": "criteria.X02.structure_wiki_history",
+        "X03": "criteria.X03.structure_wiki_history",
+        "X04": "criteria.X04.structure_wiki_history",
+        "X05": "criteria.X05.structure_wiki_history",
+        "X06": "criteria.X06.structure_wiki_history",
+        "X07": "criteria.X07.structure_wiki_history",
+        "X08": "criteria.X08.structure_wiki_history"
+      }
+    }
+  ],
+  "criteria_names": {
+    "C01": "設計・責務・依存・循環・重複・dead code・文書乖離",
+    "C02": "状態遷移・不変条件・欠損・日時/単位/丸め/境界",
+    "C03": "制約・transaction・upsert・排他・冪等性・削除",
+    "C04": "migration・旧schema・値/FK/index/trigger・途中失敗",
+    "C05": "認証/認可・tenant・injection/XSS/CSRF/SSRF・暗号",
+    "C06": "PII/PHI・ログ/URL/cache/storage/export/telemetry",
+    "C07": "API/CLI/イベント契約・入力上限・互換性・pagination",
+    "C08": "UI・stale state・二重操作・入力消失・復旧・accessibility",
+    "C09": "N+1・計算量・無制限処理・memory・起動/import・費用",
+    "C10": "race/retry/queue/timeout・キャンセル・例外・観測性",
+    "C11": "テスト偽陽性・mock依存・回帰/異常系/競合・flaky/skip",
+    "C12": "build・runtime/lockfile・依存リスク・script・設定/CI差",
+    "X01": "配布物・起動終了・旧新version・切戻し",
+    "X02": "供給網・取得元・CI権限・ライセンス",
+    "X03": "backup/restore/削除・派生物/鍵・削除データ復活",
+    "X04": "外部連携・署名・主体/宛先・再送/順序・部分取込",
+    "X05": "offline・複数tab・容量/eviction・OS差・native/FFI",
+    "X06": "AI/MCP・prompt injection・tool権限・承認・記憶越境",
+    "X07": "医療/算定/金銭の適用日/対象/根拠・監査・人の承認",
+    "X08": "公開Webの導線・フォーム・link/index・公開境界"
+  },
+  "criteria": {
+    "C01": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "共通config/HTML/no-proxy/flockのREFとmanualwriterのFIXを別commitへ分類。現在flat import/互換APIの存在とは別に、行数だけで分割しない根拠を保持。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "policy/store/LLM/audit/render/drain、canonical consumer移行、compatfacadeを各段で説明。phase-j:7現在guide pathだけconfirmed missing、親へ移管。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "各reviewはpath割当/同hash再利用/本文readの範囲を明示。refactor12はAST全件と全文テスト通読の非主張を分け、globalv7の全読証拠へ転用しない。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "1.0.11/1.0.13設計レビュー・引継ぎ・後日完了追記の時間軸を全読。interim16未完を末尾local完了が更新し、globalsourcefinalIとは混同しない。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "冒頭2026-09-25/28訂正が旧外科削除/WAL削除設計を明示撤回。内部のrun→update逆記述はhistory、現在applydoc/sourceはupdate→run一致。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "10-01singlehost案と10-02calendar案を統合前記録として保持。現在Runtimeがconfigured_cron_jobs所有、後日選択に合わせて歴史を書き換えない。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "common/adapters/scripts/development移動47と互換7alias、OpenWikiuserownedbriefと生成本文を責務分離。現aliasは同module、briefは正本だがvalidatorではない。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "C02": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "v7・coverage floor・unknown ACK等は記載時点の不変条件。ID/timestampを除いた合成論理比較とbytes比較を区別し、現在schemaの証明に流用しない。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "v1/v2/v4・policy/cache・source hash・partial vs empty・数量/時制/主体、QC窓は段ごと訂正。review60日追記とP QC60日が一致。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "異常JSON/UTF8、scope/空currentprojection/資格属性、特殊URIのcorrectness修理を歴史証拠に限定。未知値を有効/ゼロとしない原則が現sourceと一致。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "metadatamissing/invalid/0/capture鮮度と本人/自局/職種分類を分ける。1.0.13known_gaps、healthpartial・v1urgencyの説明を現在rule8へ機械上書きしない。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "HEAD=旧≠tree旧、corruptstate/markerunknown、schema厳格とapplied履歴prevSHAを保持。現load_stateはinvalid/深JSONを_corruptで拒否する。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "mode未指定hermes・standaloneselect/runtimemode flags・unknownexit/statusTTLを説明。現在callback接続・jobsstatusはlocalrootだけに束縛。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "移動で保存model/source世代を変えない、wikicomplete/partial/durablestateを区別。manualbrief更新がcurrentClaim正確性を強制したとはしない。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "C03": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "当時の全writer入口のrun.lock不足をRED→FIXとして記録。現在run_check.mainのlock取得をreadonly照合、歴史git reset例を実行しない。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "raw/outbox/semanticseed同一Tx、tokenCAS、receipt先行、人手追加attempt有限、pause中新着保持の訂正を読む。公開正本requestsを候補へコピーしない。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "atomic0600 staging/fsync後の存在と失敗を区別。Tx/facade/RLock/registryclaim detached参照の契約を保存し、全input等価の推測を避ける。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "schema8加法保存と本文hash独立、initialevidence同Tx・receipt/journal束縛・restoreholdを記録。実DBmarker復旧事故は別承認のhistoryで今回Tx実行なし。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "atomicjournal/manifest、quiesceとrunlock排他、receiptcommit後spawn/cid冪等を記録。lockfreeatomicreadは物理全fault保証としない。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "scope lock/inbox二重消費防止・update中marker/所有job切替順を記録。旧launchd非重複だけで現在所有権全境界成功としない。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "bodybytes移動保持/manifestrawhash/生成保存とpartialPRを記録。生成material/managedinstructions二重編集を避けparent所有、journal/実service未操作。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "C04": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "R00はv1→7同一transaction移行。現在migration全文受入は親/core先行packet、歴史PASSはそのまま現schemaへ拡張不可。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "当時v7既存表利用と後続canonicalartifact導入は区別。古いdirtyoverlay/g1hashは新policy後に更新必要と記録、現在migrationの代替にならない。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "旧schema候補・中断migration・重複拒否の専用RED/GREENを記録。現在forward migration/sourceは親packet所有、旧review後source変化は別I。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "1.0.11旧schema7→8auto阻害/人承認backup、restoremarker事故とrecovery runtimegateを記録。適用済みmigrationrewrite/原本version変更を今回許可しない。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "new>oldauto阻害、旧コードが新版DBを拒否、schema-bumprollbackはrestore前復帰不可。現_restore_dbのdedicatedconsent/backuphash/lossbindをreadonly確認。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "保存schema変更を宣言しない案で独立runtime構成だけ追加。旧rollbackstandalone以前拒否は互換性境界でmigrationforward弱化不要。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": false,
+        "assessment": "構成移動・wiki生成はDBmigrationを定義しないためこの文書moduleは非該当。scope境界上runtime/保存schemaは変更せず、関連migrationは親sourcepacket受入。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "C05": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "no-proxy/redirect専用guardはREFで保持、Keychain/CDP認証の実機試験を現在再実行しない。候補worktreeは安全sandboxではない。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "native直接本人由来、bot/internal/relay拒否、user/chat/project/currentconfig再認可。Jevkey stdin・loopback/no-proxy/no-redirectと実機操作禁止を保持。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "redirect/proxy拒否、native由来・workspace選択、callback corrupt unknown、plugin current allowlistの修理。読み手の現在service権限保証ではない。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "本人承認/理由/actor・C1grant全患者freshness/retention/sendtime再検査、directPOSTや他人reaction不可。CLI-I/U/S/D本番起動は外部条件に残る。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "semvertag厳格・remotepeeledSHA・allowlist/projectlesssystemauth、no-proxy/no-redirect・candidate保護paths。autoはpush権限者code実行のtrust境界。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "workspace/app/channel本人scope・proxyenvremove・redirect/noDEBUGtokenlog・0600秘密ファイル。実SDK/nativeAPI呼出を今回実施しない。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "生成provider/tracing/connector・GitHubwritePR権限は別承認。currentworkflowpermissions/secret変数名のみstatic確認、秘密値/実認証を読む経路なし。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "C06": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "R00副作用一覧は一般パス/種別、患者個別値・token値を含まない。RF-OPS集計は実観測由来と分類し合成fixtureへ転記しない。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "初期historicalreal集計/性能claimは個別患者値を出さない。末尾.env/keychain例は秘密placeholderと種類のみで、値取得やコピースクリプトは実行しない。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "patientdata/config/env非読取・safe追跡sourcecopy・derivedreal文書の保留と09-28synthetic化訂正を区別。過去事故を消さず秘密本文をreportへ含めない。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "原本事故・実APIaggregateは値/ID/原文不保存と明記、創作220caseとofficialmasterpublicmetadataを区別。protected .omo証拠pathを追わず非機密metaだけreport。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "config/env/token/data保護集合、candidate追跡/ignored誤上書き防止を説明。今回privateconfig/state/actualreceiptを読まずsource境界のみ。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "独立rootprivateJSON/.env参照と~/.hermesfallback無効、statusはPID/generation/job名のみ。secretcopy/tokeninheritは歴史の確認付き操作で今回非承認。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "患者/data/config/env/export非読取のbrief、safe sourcecopy探索を明記。workflowENV参照は秘密名だけで値なし、wikigenerated23body/privatedot未読。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "C07": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "CLI exit3/lock_held・snapshot foreigncwdの試験を当時signatureへ束縛。旧adapterコマンドは現在入口として実行しない。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "pagination自然終端/FIX-AD1、整数ID・対象scope/quote/codepoint・量単位不明を保持。 current mark_patient_read timestamp必須とplainfallback制約を照合。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "partialthreadの同一例外と上限保持、HTTP200異常schema分類、specialSQLiteURI、旧signaturealiases維持。SDK戻り契約の現在再検証は先行packet。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "原22-A全確認、root/reply4区分、49/50/51/100/101合成境界とserver静的walkを分ける。C1/withdrawwire/8192bytesと旧hash互換をcurrentops受入へ接続。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "旧opcontrolenvelope/CLIupdatedeploy存在・exit/queued≠applied、tagpeel/lightweight/publicnotesfallbackを説明。現元署名/任意JCS等へ拡張しない。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "legacyruntime aliasを公開契約として保持。現mcs_standalone/slack_runtime・discord_runtimeはruntime_compatへの同一module転送をstaticで確認。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "bootstraphelper/flatmodule/CLIentry保持、timestamp必須/strictGETfallback不変をactual cap/mark sourceに照合。CLIhelp失敗を生成成功扱いにしない。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "C08": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "旧snapshot generation/reader経路の異常復旧を記録。現nativeカードのUI/アクセシビリティ保証はこの記録の対象外。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "preview/confirmのsource/revision/policy/epochとstale投影を再確認。旧UI状態の訂正/empty projectionを履歴に保持、現在カードの全表示受入は別packet。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "未確認lab区分・shortbody前のclinical属性描画・syntheticSVG局所目視を歴史として読む。今回実画面/nativeUI再表示を行わない。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "カード4000容量/footer/明示省略、stamp観測≠臨床完了、最新humanreceipt/previewstale境界を記録。ユーザー実UI受入は未完了、今回操作なし。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "preview→confirm理由/hash・unknown/escalate・復旧段階の識別が記録される。rollback通知≠全旧nativeUI成功としない。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "native/mcs/slash/modal/previewconfirmとstale allowlist取消・task回収を受入条件へ含める。Discord本文cmd非対応は仕様、全画面一致保証とはしない。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "page-relative link/repo://Claim差、unknown ACK≠成功、post_ack_gap修復を説明。rootphaseJcurrentpathcandidateと旧wikivirtualpathを分ける。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "C09": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "RT038はtinyDBのbounded smokeでPARTIALと明示。86件時間差を性能改善率とせず、実端末memory/requestbudgetは未測定。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "日次Jev要求/usage欠測/LLM容量の単位を分離。旧2slot/polite貸与/予測速度・backlogは歴史、現在3slotやrun頻度へ機械適用しない。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "501→2 SELECTや20k differentialは固定合成測定のみ。速度悪化小サイズと未測定総costを併記し現在performanceに拡張不可。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "boundedmetadata5件25秒、tickovershoot、G6modelcapacity未実測を明示。旧5分cadenceはMCS負荷対策10分の現在contractへ自動上書きしない。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "gitfinite timeout/低速閾値・dailycheck/vetodelay・backup参照保持、旧lockwait10/20分はMCS取得cadence変更と別。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "単一host/scheduled6/drainer2を条件にする。現minutegrid10/deep10,40、cmd_intはlocal10秒でMCS収集cadenceの機械置換対象外。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "readjustintime/16requestcapexit2、生成対象送りすぎ防止とbounded ACKwalk。文書が全sourceindexcache/durableparse全性能を保証しない。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "C10": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "backup中断・seed後rollback・doneCASの所有者を明記。RT018全writer duration未確認と、今回doc評価完了を区別。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "attempt retry/defer/CAS・repair1回・budget-before/afterdispatch・unknownsendを各追記で訂正。300秒semanticcooldownはMCS取得cadenceではない。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "LLMadmissionrelease/unknownsend/notificationbudget・latecallbackduplicate抑止。初回test実launchctl/Hermes到達事故は影響未確認を保持。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "receivecleanup失敗無receipt/hold解除個別判断、failedtests/fixedinputs・update selfkill・stdinEOF競合を説明。実サービスのrunningをlogだけで推定しない。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "ABBA候補訂正、quiesce前journal、gateway自己wait防止、catchupmarker、stalelock削除は現sourceのforeigngitlockガードに従う。歴史手順を実行しない。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "子cancel/reap・異常exit再接続、sendunknownnoautoresend・部分bodyacceptedと添付failedの区別を読む。実SDKretry実挙動は先行nativepacket証拠。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "partialwiki run state保全・再開/生成済み進捗PRとfailureexit分離をcurrentworkflowに照合。実モデル/生成/PR再実行なし。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "C11": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "baseline86・FIX88・観測probe1を各固定treeで区別。旧外部artifact未再読、source/hashだけの過去PASSを今回testPASSにしない。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "RED/GREEN、fixture不整合、4sandbox bindFAIL、未評価G6、old/newチェックポイントを明示。mine_gatesは定義名存在だけでpytest収集/実行証明ではない。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "初期4skip/1skip・SDK別lane・Windowsskip・toolcollect失敗を区別。以前pass後DB局所変化も時点明示、現在totalpassとして加算不可。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "6748/6755/5849チェックポイントと後続変化、SDKlane25/16・6skipを別証拠。4fixture誤判定/8constructor失敗の訂正根拠も保持しassert弱化にしない。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "障害注入方針は実施ログではない。試験fixture一時git/subprocessstubと実Git/host未検証を分離。mine_gates熱量は品質scoreではない。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "10-01表の未実施は計画時点、10-02合成/SDK結果と分ける。各レビュー人数やcaller存在だけで機能同等性・fresh独立reviewを主張しない。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "3500台historicaltest、SDK14と7112/15281sourcearchive時点差を別証拠。generatebriefreadfunction確認はmodel出力品質/Claim検証ではない。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "C12": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "3.11/3.13のtest/prod Python差を記録。現在scripts/run_tests.sh正本を維持、旧venv pathは今回の実行指示ではない。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "flat bootstrap移動と環境ガードの時点を保持。P mine_gates AST parse正常+台帳check成功、歴史682/829/886等を現在全域受入へ再利用しない。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "uv/ruff/gates/scripts旧pathはdatehistory、CI3.13とlocal3.11の差を明記。ローカルallpassがGitHubCI成功ではない。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "declaredPython3.10下限とassert_never除去、SQLite3.50.4/3.51.0影響メタを説明。公開前generatorとexactSHA CIは当時未完で現在globalgateと別。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "rawblobpreflightはarchiveexporttransformを避ける理由、stdlibgit/urllib・recovery世代隔離を説明。現在Python3.10/SQLitegate/lifecycle詳細は親sourceowner正本。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "固定公式SDKを独立venv/functionlocalimportに限定、corestdlib/asyncgateを維持。legacyもP3guardfix維持、現在SDK実行をreportへ加算しない。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "scripts/development path、update_readme generator、bootstrapnamespace collision回帰。currentworkflow0.6.1pin・continue-on-error/propagatefailure・dotstatecleanupをstatic確認。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "X01": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "46cffb0のみRF-CODE verdict、PhaseJ後candidateへ継承不可。旧revert/reset案を実行せずprotectedbranch/実機を保持。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "候補worktree未適用・旧artifact保持、OFF通信停止と削除しない復旧を明示。raw git revert/DELETE例は歴史で現行操作に流用不可。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "導入install→init・service反映/recoverytool反映は別承認、歴史push後追記がdatedscopeを訂正。現在source/public状態未操作。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "1.0.11/1.0.13未公開準備・gateway/hostrestart別受入、fixedSDKarchive照合は歴史。今回releasebuild/versionbump/tag/push不要・未実施。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "installrepo外recovery/.prev保持と旧新版postmerge subprocess、rollbackprevSHAを説明。現在installerを直接実行せず切戻し操作の新許可も出さない。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "installer方式選択・同mode保持、mode切替で旧job退役してからgateway/host切替を記録。sourceedit≠実機merge配備を明記。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "共通path変更のgateway/LINErestart必要を記録。実moduleimport/runtime/deployは先行packetとのhash再利用/静的aliasで限定し今回起動なし。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "X02": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "旧mcs-adapter remoteと後続Hermes組合せは日付付き由来。実依存取得・pin変更・公開を本packetで実施しない。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "Jev/TypeSafe公式wire参照・Hermespinは当時固定ID。9case検知やmodel調査はhistorical限定、新しい供給網安全/薬剤適正を主張しない。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "公式LINE/JWT/CallbackURLと固定SDKrefは根拠所在のみ、ネット取得なし。privateLICENSEや完全syntheticasset境界は親rootdocs受入と整合。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "officialdrugmaster公開ZIP/PDFlayout/SHA候補は非clinical患者情報、copyfixture禁止を明記。相手repoC0fixtureID/全契約同意・pin受入は未完。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "publicGithub/semver/annotatedpeel・未署名tag・auto信頼リスクは明示。署名がない歴史を現在供給網検証成功へ読み替えない。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "requirements直接/推移pinとmarker条件・相手公式情報URLを根拠位置として保持。SDK最新仕様browser取得やglobaldependency追加なし。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "actions exactpin/openwiki0.6.1/mermaid/jsdom指定、workflowwritepermissionsはwikiPRpurpose。最新供給網advisory/thirdpartytool内部は本packet確認外を明示。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "X03": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "独立restoreはDB論理関係/FTS/hashを比較しSQLitefile byteidentity不要と明示。現在の人承認loss/hold契約は実source側で確認。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "backup/restore/snapshot継続と個別reset/deletionの歴史を分ける。canonicalinvalidateは原文削除ではなく、現在restore専用consentとholdをsource照合。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "独立recovery世代隔離の重複は意図的、破損export前全患者描画/保持を説明。旧cleanup任意p*.md欠陥は当時fix、現削除権限を追加しない。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "NAS最大30manualdelete/週verify/90日drill/RPO24はowner方針、custody/実媒体/receipt未確認。DBreplacehold/ローカルrestore成功は端末喪失drillの代替不可。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "09-28訂正とcurrent_restore_dbはprivate staging→loss/専用receipt→checkpoint/sidecar拒否→holdを一致させる。rawWALdelete/untracked名だけ削除は撤回済み。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "独立recoveryrepo外・backup原本非変更、rollbackoldruntime非互換拒否を維持。実hostbackup復元保証をoffline成功から推定しない。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "47移動先ファイルloss0はhistoricalinventory、現在原本20bytesmode不変を独立receiptで実証。privatedotcontents・過去logのpurge禁止を維持。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "X04": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "R00のMCS/CDP/Discord/LLM副作用とREF不変redirect契約を記録。現在外部接続・receipt実受領は一切未実行。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "G2POST1/GET1の実結果とG4native合成結合・G5multipartreceiptを分離。現在実MCS/Jev/Discord/Keychain通信ゼロで過去承認を再利用しない。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "Slackunknown履歴≠空、callbackunknown再実行なし・nativeworkspaceclientを保持。実通知/tenant/TLSは未検証と明記。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "実GET受入とlocalstorage/metadataoptinoff、C1handoffexit0≠相手受理、receiptaccepted/rejected、withdrawtombstoneを区別。実配送/相手gate未実施を維持。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "publicRelease検出とnotes凍結・system宛先・失敗通知を分離。現全3channelformatterはnotifypacket所有、Discordだけの旧表はhistoricalroute。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "SlackSocketMode/Discord公式SDK/LINE独立、samebotHermes併存の運用制限を残す。currentlocalruntime接続スコープ・unknownreceiptはsharednative契約を優先。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "OpenAI/LangSmith/GitHub外部経路は履歴jg承認と別、Slack/LINE/MCSなどを新生成のtargetclaimへ区別。実署名callback/tenantTLS未検証。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "X05": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "foreign CWD/HOME/snapshot限定の合成証拠。macOS flock/launchdの記録をWindowsや全nativeOS成功へ拡張しない。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "Unicode/emoji/combining codepoint、容量/longchunk再開、macOSsandbox未検証4caseを保持。現他OS/nativeFFI網羅性はdocの主張外。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "Linux/macOSserviceは未適用、Windows試験skip。gallery7・LINE2は創作fixture由来で実OS/native表示保証とはしない。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "macOSinstallerprompt/launchd実行bit/異常exitとSDKofflinearchive、SQLite実runtimepathの必要操作を記録。実host/他OS配備への成功推定なし。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "casefold/NFC/ignoredfile/mode symlink/gitlink/ForeignCWDを考慮。Windows全動作やnativeサービス適用は記録の保証外。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "10-02macOSlaunchd限定案を現在Linux単一hostへ拡張しない。compatimport/nativeSDK/bytes容量は先行packetとsource、実OS未実行。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "foreignnamespace/sdkdiscord衝突・cwdbootstrapを記録、py3.11SDKとCI3.13を区別。OS/FFI全環境の意味保証ではない。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "X06": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "PhaseJ前に外部AI/Jev追加なしという歴史順序を保持。現在AItool/記憶操作への新規許可を記録から推定しない。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "facts→claim/source→facts監査、prompt外tool無し、人承認Loop/assist採用。G6syntheticlabelをhumanへ昇格しない、記憶保存や外部検索未使用。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "JevgrepHTTP402/requestlimit不完全はローカル補完と別証拠。送信権限は当時追跡sourceだけ、現在Jev/LLM/brain不使用。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "G6synthetic220pending/human0/promotionfalse、AI補助監査と人の200件を分ける。privateinstruction/hooks/LLM実行・モデルpolicy変更なし。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "AI/GitHubsource取得が任意tool権限になる経路なし。plancommandはdata扱い、confirmationhandlerは本人物originからsource承認のみ。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "HermesAIchatはMCS機能対象外、MCS機能をAItool/記憶へ無断追加しない。oldplannedgrant/CLIはhumanapprovalを維持。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "OpenWiki生成はAI外送/取得/traceを含むため勝手に起動せず、manualbriefpromptは非信頼taskdata。現在恒久AGENTS/skillmanagedblockは未変更。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "X07": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "医療sourceの業務意味/clinicalqualityはREFの等価性比較では立証不可。G6未実施との区分が明記される。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "否定/予定/家族/量/単位/相対日付と人手200件正式基準を別評価。対象年不明や未観測を臨床対応無しへ変換せず、医療ruleを本packetで変更しない。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "verified≠患者本人/肯定/実施済み、clinical品質・人手labels・capacityは未測定。抽出判定値/医学ruleをrefactorで変更しない。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "薬剤辞書/urgency/自己応答観測を医療根拠/人承認境界へ束縛。未読保持未実証や相談404を0/臨床未対応へ変換しない。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "更新で医療state喪失の可能性・人承認/理由/receiptを明示。医学判断rule/算定値をこの設計文書で変更しない。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "医療収集/抽出/正式承認の既存契約を同等再利用、recordabsence≠actionabsenceを維持。医学解釈や患者主体の判断をSDK移行に混ぜない。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "完全合成galleryとrecordabsence/clinicalquality限界を保持。生成Claimや日時集計を医学根拠/正式完了へ格上げしない。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    },
+    "X08": {
+      "refactor_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "歴史docs/adapter pathは当時位置。現docs/dev-records indexはhistoryと明示し、公開Web運用手順に格上げしない。",
+        "evidence": [
+          "r00-baseline.md:3-84",
+          "phase-r-record.md:3-88",
+          "refactor-revalidation.md:8-40,85-189,200-293"
+        ],
+        "current_source": [
+          "mcs/ingest/run_check.py:1797-1815",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "semantic_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "currentguide pathだけ実tracked不存在の反証成立。他の旧pathはrecordindex歴史分類・continuationのphaseJ手順不流用説明により現guide欠陥とはしない。",
+        "evidence": [
+          "continuation-20260920.md:6-103,225-310,443-577",
+          "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+          "phase-j-record.md:6-8,27-55,94-237",
+          "acceptance-map.md:3-5,17-152",
+          "review-20260923.md:3-5,34-89,91-133,164-231"
+        ],
+        "current_source": [
+          "mcs/semantic/semantic_qc.py:23-31",
+          "mcs/ingest/mcs_adapter.py:1816-1859",
+          "mcs/extract/v1/extract.py:87"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "review_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "生成wikiの古い4候補とmanualbrief修復を分け、生成結果未確認を保持。相対link28件は全存在、現手順とhistorytableの混同なし。",
+        "evidence": [
+          "review-20260925.md:3-14,36-105",
+          "repo-review-20261001.md:3-22,24-103",
+          "refactor-1.0.12-20261004.md:3-46,48-104",
+          "stability-20261001.md:3-68"
+        ],
+        "current_source": [
+          "ci/mine_gates.py:extract_ids/test_names/main",
+          "ci/gates.py:gate_records_isolation"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "release_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "Release本文は同版CHANGELOGexport、README同期generator、相対導線の現在正本を指す。datedrecordの公開可能保留を現在の全域audit最終判定として再利用しない。",
+        "evidence": [
+          "release-1.0.11-20261003.md:3-10,27-137,139-275",
+          "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+          "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+        ],
+        "current_source": [
+          "scripts/development/release_notes.py:section/check_changelog",
+          "mcs/ops/mcs_setup.py:3134-3175",
+          "mcs/ops/mcs_update.py:2102-2171"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "update_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "現docs/READMEは設計履歴と明示、lifecycle正本は冒頭訂正を参照。dangerous残bodyは現在実行recipe扱いしない。",
+        "evidence": [
+          "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+        ],
+        "current_source": [
+          "mcs/ops/mcs_update.py:182-235,1389-1399,2102-2171",
+          "deployment/recovery/mcs_recover.py:905-975"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "standalone_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "worktree記録先頭は現行STANDALONEを参照。歴史旧path/codeだけをbrokencurrent導線として修正せず、links28件確認と区別。",
+        "evidence": [
+          "standalone-20261001.md:3-16,30-81,100-110",
+          "standalone-worktree-20261002.md:3-65,67-151"
+        ],
+        "current_source": [
+          "mcs_standalone/runtime.py:39-54,96-135",
+          "mcs/ops/mcs_setup.py:2419-2437",
+          "mcs_standalone/slack_runtime.py:1-6",
+          "mcs_standalone/discord_runtime.py:1-6"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      },
+      "structure_wiki_history": {
+        "state": "REVIEWED",
+        "applicable": true,
+        "assessment": "28相対Markdowntarget全存在、repo-relative正本とhistoricalpath区分を確認。workflowPR/公開は禁止、生成virtualURL不整合の解消はparent別受入。",
+        "evidence": [
+          "structure-20261001.md:3-35,37-81",
+          "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+        ],
+        "current_source": [
+          "hermes_plugin/mcs_delivery/__init__.py:1-13",
+          ".github/workflows/openwiki-update.yml:1-90",
+          "mcs/ingest/run_check.py:575-629",
+          "mcs/ingest/mcs_adapter.py:1816-1859"
+        ],
+        "limits": "日付付き文書の契約/consumer照合。実機・モデル・API・当時の外部artifactを再実行/再取得した判定ではない。"
+      }
+    }
+  },
+  "flows": {
+    "refactor_history": {
+      "files": [
+        "r00-baseline.md",
+        "phase-r-record.md",
+        "refactor-revalidation.md"
+      ],
+      "period": "2026-09-20〜2026-09-21 / a8896ec→9d2c6d1→46cffb0、後続842125da別candidate",
+      "evidence": [
+        "r00-baseline.md:3-84",
+        "phase-r-record.md:3-88",
+        "refactor-revalidation.md:8-40,85-189,200-293"
+      ],
+      "callers": [
+        "docs/dev-records/README.md:17-21",
+        "docs/dev-records/continuation-20260920.md:17-22,79,131",
+        "ci/mine_gates.py:extract_ids/main",
+        "ci/gates.py:gate_records_isolation"
+      ],
+      "flow": "履歴manifest→当時の承認/REFとFIX区分→共通helper/lock差分→合成比較artifactとGit記録→人/後続台帳/incident CI。現在writerへ文書を入力する経路はない。"
+    },
+    "semantic_history": {
+      "files": [
+        "continuation-20260920.md",
+        "continuation-20260923.md",
+        "phase-j-record.md",
+        "acceptance-map.md",
+        "review-20260923.md"
+      ],
+      "period": "2026-09-20〜2026-09-23、reviewの60日追記を含む。複数固定candidateを逐次区別",
+      "evidence": [
+        "continuation-20260920.md:6-103,225-310,443-577",
+        "continuation-20260923.md:3-87,192-350,369-414,869-1115",
+        "phase-j-record.md:6-8,27-55,94-237",
+        "acceptance-map.md:3-5,17-152",
+        "review-20260923.md:3-5,34-89,91-133,164-231"
+      ],
+      "callers": [
+        "docs/dev-records/README.md:19-26",
+        "docs/roadmap/acquisition.md:51,113,171",
+        "docs/roadmap/extraction.md:39,121,141",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "flow": "原仕様/候補台帳→scope・mode・人承認→保存/解析/監査/repair/通知の当時の差分→日付/fixture/hash/未達ゲート→人の受入・incident CI。現在のQC60日・generationは実sourceを優先。"
+    },
+    "review_history": {
+      "files": [
+        "review-20260925.md",
+        "repo-review-20261001.md",
+        "refactor-1.0.12-20261004.md",
+        "stability-20261001.md"
+      ],
+      "period": "2026-09-25（09-28訂正）〜2026-10-04 / 各記載B、public1.0.12 fb87584固定",
+      "evidence": [
+        "review-20260925.md:3-14,36-105",
+        "repo-review-20261001.md:3-22,24-103",
+        "refactor-1.0.12-20261004.md:3-46,48-104",
+        "stability-20261001.md:3-68"
+      ],
+      "callers": [
+        "docs/dev-records/README.md:28,31,37",
+        "docs/dev-records/stability-1.0.13-20261004.md:13-18",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "flow": "B・hash台帳→readonly/実行権限境界→再現と局所修理/差分→当時のrunner/SDK/skip/失敗保存→後続review。今回source自己点検を独立reviewとは呼ばない。"
+    },
+    "release_history": {
+      "files": [
+        "release-1.0.11-20261003.md",
+        "stability-1.0.13-20261004.md",
+        "HANDOFF_CLAUDE_1.0.13_20261004.md"
+      ],
+      "period": "2026-10-03〜2026-10-05 / 1.0.11準備、1.0.13候補引継ぎと外部条件",
+      "evidence": [
+        "release-1.0.11-20261003.md:3-10,27-137,139-275",
+        "stability-1.0.13-20261004.md:3-36,119-348,349-472",
+        "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
+      ],
+      "callers": [
+        "docs/development/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/ROADMAP.md:70",
+        "docs/dev-records/README.md:15",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "flow": "版/開発計画→明示ローカル承認・本番別受入→metadata/C1/NAS/runtime合成実装→failed/skip/hashと手渡し記録→Release正本generator・人の本番/公開判定。記録をcompilerの直接入力とはしない。"
+    },
+    "update_history": {
+      "files": [
+        "auto-update-plan.md"
+      ],
+      "period": "2026-09-24〜2026-09-28。冒頭は後日訂正、残bodyは設計/レビュー履歴",
+      "evidence": [
+        "auto-update-plan.md:3-32,46-82,144-388,403-559,693-789,851-933"
+      ],
+      "callers": [
+        "docs/README.md:13",
+        "docs/dev-records/README.md:16",
+        "docs/specs/lifecycle-spec.md:5-18,151",
+        "docs/roadmap/integrity.md:75",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "flow": "設計history→mode/off・human receipt→tag/SHA/preflight・quiesce・update→journal/manifest/backup→旧新code/独立recovery/利用guide。実行入口は実source、本文の命令例は今回の承認ではない。"
+    },
+    "standalone_history": {
+      "files": [
+        "standalone-20261001.md",
+        "standalone-worktree-20261002.md"
+      ],
+      "period": "2026-10-01計画/c5a7716と2026-10-02 feature/standalone-mode統合前設計",
+      "evidence": [
+        "standalone-20261001.md:3-16,30-81,100-110",
+        "standalone-worktree-20261002.md:3-65,67-151"
+      ],
+      "callers": [
+        "docs/dev-records/README.md:歴史index",
+        "docs/guides/STANDALONE.md（現行操作正本、先頭で誘導）",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "flow": "計画/統合前案→mode選択/allowlist→SDK独立接続とsharedSupervisor→journal/flags/manifest→current STANDALONE/source。旧calendar方式から現在Runtime単一hostへの差は時点の差。"
+    },
+    "structure_wiki_history": {
+      "files": [
+        "structure-20261001.md",
+        "openwiki-update-path-20261001.md"
+      ],
+      "period": "2026-10-01 / 7a5533f構成移動、OpenWiki0.6.1の更新条件記録",
+      "evidence": [
+        "structure-20261001.md:3-35,37-81",
+        "openwiki-update-path-20261001.md:3-26,28-43,45-86"
+      ],
+      "callers": [
+        "docs/dev-records/README.md:33,39",
+        "docs/dev-records/stability-20261001.md:61",
+        "openwiki/INSTRUCTIONS.md（manualbrief source）",
+        ".github/workflows/openwiki-update.yml（実行は別承認）",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "flow": "構成/brief正本→生成対象とprovider/tracing承認→alias/bootstrap/将来wiki生成→Claims/provenance/PR→人とCI。生成本文23fileは親分類を再利用し本文再読・手編集なし。"
+    }
+  },
+  "related_readonly": [
+    {
+      "path": "ci/mine_gates.py",
+      "P_sha256": "7c98b6fb0d9973bdd3dc4cc3e5028cc9d8aea2f25dbd8cfa71ee126c8595154d",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "ci/gates.py",
+      "P_sha256": "b255b35e2affe4566ddfe75ebda6322523c97b2e00bb08686cede06ced5dea2c",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "ci/gates-coverage.json",
+      "P_sha256": "920381489e8dae74a2d4272d3e8cd50c3b81e484d9bfa345d4af53d2dfc9fb64",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "docs/dev-records/README.md",
+      "P_sha256": "b8b04275520a4466920d0f04ac5e08628f6f0eb523b928364297f25218739563",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "docs/README.md",
+      "P_sha256": "a91724ee1245fd2215d3e6049b5e6921e633ea50f5f77f9f7d7cc16ba801375f",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "docs/specs/lifecycle-spec.md",
+      "P_sha256": "dd49947018da5af7ef7ff1f5e2fd229e40c70dcd15ac8a7c5425bd99291560e7",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "docs/development/RELEASE_1.0.13.md",
+      "P_sha256": "6604b6984d96ff58f13647ca478f7d653c6536b79364522e733a136fbd6bcf82",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "mcs/ops/mcs_update.py",
+      "P_sha256": "c423e5227c467ef7f16703b30df7aafd7491649f7f241b96c8c7478216dd5296",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "deployment/recovery/mcs_recover.py",
+      "P_sha256": "a49fbf761a8cbb66817cded8ca281ef65bc7a701a77966f36a1aac753860597c",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "mcs/ops/mcs_setup.py",
+      "P_sha256": "6f6eabf5349611fa8a0729d344f34c37576d79359b04a131710c1d17ce56db80",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "mcs/ingest/run_check.py",
+      "P_sha256": "915d6784befb59fcfffae019020dac59c92fa272571dfc325c36585b283ef00d",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "mcs/ingest/mcs_adapter.py",
+      "P_sha256": "c3be0fa89a12ccc357273913c53d6c779ac391debfc4b7e179979ad694ca444d",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "mcs/ingest/health_watch.py",
+      "P_sha256": "981b5ab0e68ccf49bcce05e2814b1e2702408520f369ae9f43d2bc44f1050e65",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "mcs/semantic/semantic_qc.py",
+      "P_sha256": "89bbb34dbdc3e86afe809230bd6c7e17cef87516840847088897aa85a179390e",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "mcs/extract/v1/extract.py",
+      "P_sha256": "804ea91fe97aea21f251e0605dcb6767fd741a6472a7b6ce88c4e9143bdc5d85",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "mcs_standalone/runtime.py",
+      "P_sha256": "6e0b9a8fd5dbcd8fd079ac54b288604d4f64b342b8383511baaed32a9a2fc2dc",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "mcs_standalone/host.py",
+      "P_sha256": "3415d702cca37f3ebedcb0ba9d1b2ed0667a1ad96723a49f84b070cd7d9ded34",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "mcs_standalone/slack_runtime.py",
+      "P_sha256": "40c6d34e50942ed1246247acd3947de1e8c2c51cdaa291f5a4c5cc706a977a84",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "mcs_standalone/discord_runtime.py",
+      "P_sha256": "a1565406c01e079c1940205a87bb405fc2e8ddf7766c6eb3f1bb7d267f7de70b",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/__init__.py",
+      "P_sha256": "f0eab407de8f38ce6120e7803f8e230b5692a879ffe30834d532a47badd76a25",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": ".github/workflows/openwiki-update.yml",
+      "P_sha256": "0efcad155b445693eccb91344073f18894d905beb6c3951cf710f551e2702fd7",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "openwiki/INSTRUCTIONS.md",
+      "P_sha256": "4d3b26ee66727baf0d69b688fcfecb70d00a1aaacf8f64bcc03f56baac71504b",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    },
+    {
+      "path": "scripts/development/release_notes.py",
+      "P_sha256": "6a4d4d5a748cbab54027707e2be01dd7f49749f798bafcdaa2b69a3c7a9578b5",
+      "exact_P": true,
+      "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
+    }
+  ],
+  "findings": [
+    {
+      "id": "DOCS7-CURRENT-GUIDE-PATH",
+      "status": "confirmed",
+      "criteria": [
+        "C01",
+        "X08"
+      ],
+      "priority": "low",
+      "path": "docs/dev-records/phase-j-record.md",
+      "lines": [
+        6,
+        8
+      ],
+      "evidence": "前置きは「現在の操作手順には docs/DEVELOPMENT.md」と明示するがP treeに不存在。docs/development/DEVELOPMENT.mdは実在。一般のhistorical旧pathと異なる現在導線。",
+      "reproduction": {
+        "command": "verify_static.py:confirmed_current_guide_counterexample/counterexample_minimal_correction_resolves",
+        "log": "/tmp/mcs-maintenance-core-docs7-20261005/static.log",
+        "result": "不存在原パスと実在最小訂正パスを固定P tracked inventoryで実証、外部なし。"
+      },
+      "minimal_proposal": "現在guide参照1箇所を docs/development/DEVELOPMENT.md へ補正。他historical pathsは保持。",
+      "owner": "parent/rootdocs",
+      "worker_edit": "禁止に従い原本無変更",
+      "handoff": "親へcollaboration.send_messageで先に共有",
+      "I_status": "親から1行の最小修正完了報告を受領（docs/DEVELOPMENT.md → docs/development/DEVELOPMENT.md）。親Iのexact SHA/byte receiptは親が別管理。本packetのP/W原本は無変更。",
+      "parent_resolution": {
+        "state": "resolved_reported_by_parent",
+        "change": "前置きの現在手順path1箇所のみ。歴史本文・記載時点は保持。",
+        "verification_owner": "parent",
+        "fixed_P_W_original_unchanged": true
+      }
+    }
+  ],
+  "disproved": [
+    {
+      "id": "HISTORICAL-CADENCE-AND-SLOTS",
+      "status": "disproved",
+      "hypothesis": "旧15/5分run・2slot・3日QCを現要件違反として全置換する必要がある",
+      "evidence": [
+        "r00-baseline.md:3-24",
+        "continuation-20260923.md:414-950,1077-1094",
+        "review-20260923.md:3-5,126-133",
+        "docs/dev-records/README.md:8-10",
+        "mcs/ops/mcs_setup.py:2419-2437",
+        "mcs/ingest/health_watch.py:38",
+        "mcs/semantic/semantic_qc.py:23-31"
+      ],
+      "counterexample": "固定Pはunread*/10/deep10,40、health600、QC60日。記録は当時値、MCS取得10分はサーバー負荷対策で新usercontract、LLMtimeout/circuit300秒とは異なる。"
+    },
+    {
+      "id": "INTERIM-HANDOFF-GAPS",
+      "status": "disproved",
+      "hypothesis": "handoffのreceiverCLI未接続・未完16が今も未実装",
+      "evidence": [
+        "HANDOFF_CLAUDE_1.0.13_20261004.md:119,153-159,251-269",
+        "stability-1.0.13-20261004.md:349-373"
+      ],
+      "counterexample": "同file末尾の2026-10-05追記がlocal完了、実機/人手/相手repo条件は未完と明示。interimstatusを現在source未実装へ流用不可。"
+    },
+    {
+      "id": "STANDALONE-CALENDAR-CURRENT",
+      "status": "disproved",
+      "hypothesis": "10-02calendar案を現在singlehostへ書換える必要がある",
+      "evidence": [
+        "standalone-worktree-20261002.md:3,32-37,89-90",
+        "standalone-20261001.md:14-16,109-110",
+        "mcs_standalone/runtime.py:39-54,118-135"
+      ],
+      "counterexample": "原本は統合前履歴でcurrentguideへ誘導。現在Runtime configured_cron_jobs経路を確認、旧案の保全が正しい。"
+    },
+    {
+      "id": "ALL-HISTORICAL-PASS-FRESH",
+      "status": "disproved",
+      "hypothesis": "旧全件pass/独立review/SDKlaneを今回I全域受入へ加算できる",
+      "evidence": [
+        "refactor-1.0.12-20261004.md:9-13",
+        "repo-review-20261001.md:3-8,73-92",
+        "stability-1.0.13-20261004.md:438-464",
+        "refactor-revalidation.md:39-40,256-293"
+      ],
+      "counterexample": "各tree/hash/candidate/skip/runtimeが異なり、main元baseline6780passも全域全文review証明ではない。今回static150/Mine成功のみ新証拠。"
+    },
+    {
+      "id": "OLD-DESTRUCTIVE-UPDATE-RECIPE",
+      "status": "disproved",
+      "hypothesis": "auto-updateplan後段の外科的untracked削除/WAL消去が現在推奨される",
+      "evidence": [
+        "auto-update-plan.md:3-20,302-313,851-865",
+        "mcs/ops/mcs_update.py:2102-2171",
+        "deployment/recovery/mcs_recover.py:905-975"
+      ],
+      "counterexample": "冒頭で明示撤回/非current、実sourceは専用restoreconsent/loss/hash・private staging/checkpoint/sidecar拒否。historical commandsは未実行。"
+    },
+    {
+      "id": "LOCAL-RELATIVE-LINKS-BROKEN",
+      "status": "disproved",
+      "hypothesis": "対象20記録の実Markdown相対targetリンクが失われている",
+      "counterexample": "固定Pで28実Markdown相対target全てtrackedに存在。code記法の旧path/oldGitobjectsはhistoryとして別分類。",
+      "receipt": "/tmp/mcs-maintenance-core-docs7-20261005/static-receipt.json"
+    }
+  ],
+  "verification": [
+    {
+      "name": "分割全文receipt/P-W/relative-link/currentAST照合",
+      "command": "python3 /tmp/mcs-maintenance-core-docs7-20261005/verify_static.py",
+      "environment": {
+        "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-docs7-20261005",
+        "type": "stdlib AST/parserのみ、runtime source import/SDK/service無し"
+      },
+      "exit": 0,
+      "checks_passed": 150,
+      "checks_failed": 0,
+      "runtime_test_count": 0,
+      "local_links_checked": 28,
+      "full_log": "/tmp/mcs-maintenance-core-docs7-20261005/static.log",
+      "receipt": "/tmp/mcs-maintenance-core-docs7-20261005/static-receipt.json"
+    },
+    {
+      "name": "incident consumer",
+      "command": "python3 ci/mine_gates.py --check",
+      "environment": {
+        "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-docs7-20261005",
+        "type": "stdlib staticread、currentP tests AST・dev-records .md/.jsonのみ、external無し"
+      },
+      "exit": 0,
+      "result": "all extracted incidents covered or tracked",
+      "full_log": "/tmp/mcs-maintenance-core-docs7-20261005/mine-gates.log",
+      "limit": "定義名存在の静的gate。実pytest収集/実行/branchcoverage・clinical/G6/source全域無欠陥の証明ではない。"
+    },
+    {
+      "name": "git diff whitespace/allowed-path（最後実行）",
+      "command": "git diff --cached --check; git diff --cached --name-only P",
+      "environment": {
+        "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-docs7-20261005"
+      },
+      "exit": "byte-replay.json参照",
+      "full_log": "/tmp/mcs-maintenance-core-docs7-20261005/diff-check.log"
+    },
+    {
+      "name": "P→W全tracked bytes/mode replay（最後実行）",
+      "command": "python3 /tmp/mcs-maintenance-core-docs7-20261005/replay.py",
+      "environment": {
+        "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-docs7-20261005",
+        "type": "P git rawblob再構成＋evidence patchのみ、一時directory、source実行なし"
+      },
+      "exit": "byte-replay.json参照",
+      "full_log": "/tmp/mcs-maintenance-core-docs7-20261005/replay.log",
+      "receipt": "/tmp/mcs-maintenance-core-docs7-20261005/byte-replay.json"
+    }
+  ],
+  "byte_replay": {
+    "input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+    "method": "git ls-tree -rz P + git cat-file rawblob再構成。今回evidence-only P→W binary/full-index patchをgit applyし全tracked SHA256/bytes/modeをWへ照合。tar/exporttransform/devpath依存なし。",
+    "patch": "/tmp/mcs-maintenance-core-docs7-20261005/P-to-W.patch",
+    "manifest": "/tmp/mcs-maintenance-core-docs7-20261005/W-manifest.json",
+    "receipt": "/tmp/mcs-maintenance-core-docs7-20261005/byte-replay.json",
+    "self_reference": "report hashとcommitfullSHAは外部receiptへ、report自身のSHAをreport内に入れない。",
+    "originals20_unchanged": true
+  },
+  "read_receipt": {
+    "P_inventory": "/tmp/mcs-maintenance-core-docs7-20261005/P-inventory.json",
+    "ranges": "/tmp/mcs-maintenance-core-docs7-20261005/read-ranges.json",
+    "complete": "/tmp/mcs-maintenance-core-docs7-20261005/read-receipt.json",
+    "method": "全20非機密textを番号付き分割でfresh read、全出力にpath/range/SHA。各transcript全行同一の150staticassertを保存。",
+    "truncations": "担当20全文readの切断0。関連caller rg出力と/tmp既存artifactパス列挙の過大出力2回はtruncatedを検知、全文read証拠へ計上せず、必要sourceは後続のbounded read/parserで補完。"
+  },
+  "instruction_check": {
+    "agent_defaults": "/Users/yusuke/.agents/skills/agent-defaults/SKILL.md 全read・継続適用",
+    "AGENTS": "P6→P AGENTS SHA一致、既読repo正本＋現明示制約優先、managedblock未変更",
+    "audit_spec": "/Users/yusuke/.codex/attachments/9bb89786-a65f-4f06-8123-c608a4bb4464/pasted-text-1.txt C01-C12/X01-X08を全文再確認",
+    "skills": "readonly history audit、別securityexecution/brain/openwiki/Jev/再帰spawn手順は起動していない"
+  },
+  "excluded_classifications": [
+    {
+      "paths": [
+        ".agent/",
+        ".codex/",
+        ".omo/",
+        ".debug-journal/"
+      ],
+      "kind": "private_may_contain_PHI_or_secret",
+      "method": "親metadata分類のみ再利用、本文/hooks読取/実行禁止。recordのprivate証拠リンクは辿らない。"
+    },
+    {
+      "paths": [
+        "openwiki generated23files"
+      ],
+      "kind": "generated_external_evidence",
+      "method": "親manifest/claims/provenance分類を参照、生成bodyを再読/手編集しない。manualbriefはconsumer境界限定read。"
+    },
+    {
+      "paths": [
+        "real data/config/.env/tokencache/Keychain/prodlogs/patientexport"
+      ],
+      "kind": "secret_or_real_patient_material",
+      "method": "存在値照会なし、Git tracked source/textだけ。"
+    }
+  ],
+  "safety": {
+    "real_database_access": false,
+    "patient_or_secret_values_output": false,
+    "SDK_API_or_model_execution": false,
+    "MCS_Jev_Keychain_calls": false,
+    "old_agmsg_hook_execution": false,
+    "protected_dot_contents_read": false,
+    "runtime_doc_source_changes": false,
+    "permanent_instruction_changes": false,
+    "release_build_tag_push_deploy": false,
+    "child_spawn": false,
+    "source_owner_conflicts": false,
+    "commit_authorized": "今回evidenceのみ専用branch localcommit、main/旧branch保全"
+  },
+  "remaining": [
+    {
+      "item": "DOCS7-CURRENT-GUIDE-PATH親修復",
+      "owner": "parent",
+      "state": "resolved_reported_by_parent_separate_I",
+      "reason": "原本READONLY制約を保持。親より最小1行修正完了報告を受領、親Iのreceiptは別管理。今回originalshaはPのまま。"
+    },
+    {
+      "item": "historicallive/SDK/rawlog/privateartifactの再検証",
+      "state": "not_requested_for_readonly_packet",
+      "reason": "原記録は日付付き証拠所在として全読、古い外部証拠を今回新検証へ昇格しない。実機・PHI・秘密禁止。"
+    },
+    {
+      "item": "finalI全体runner/SDK/archive/freshcontext独立review",
+      "owner": "parent",
+      "state": "separate_global_acceptance",
+      "reason": "docs7自己点検をsource独立reviewと呼ばず、固定Iの親工程を代替しない。"
+    }
+  ],
+  "acceptance_note": "20件の全文/責務/consumer/140評価は完了、原本変更ゼロ。全域goal COMPLETE・公開可能判定・Iへの統合済みという主張ではない。"
+}

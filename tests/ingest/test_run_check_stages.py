@@ -984,6 +984,32 @@ def test_health_write_binds_run_and_survives_failure(tmp_path, monkeypatch):
     db.close()
 
 
+def test_deeply_nested_previous_health_does_not_block_fresh_publication(tmp_path, monkeypatch):
+    import health_watch
+
+    path = tmp_path / "health.json"
+    path.write_bytes(b'{"nested":' + b'[' * 10000 + b'0' + b']' * 10000 + b'}')
+    monkeypatch.setattr(run_check, "HEALTH_FILE", str(path))
+    monkeypatch.setattr(run_check.time, "time", lambda: 2000.0)
+    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message()])
+        result = {"errors": [], "notify": {}}
+        run_check._write_health(db, result, "ok", run_id=7, cfg={})
+        assert result["errors"] == []
+        fresh = json.loads(path.read_text())
+        assert fresh["at"] == fresh["unread_at"] == 2000
+        assert fresh["overall"] == "ok" and fresh["run_id"] == 7
+        assert health_watch.classify_health(str(path), 2001, 1800)["status"] == "ok"
+        assert db.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 1
+        assert db.db.execute(
+            "SELECT COUNT(*) FROM notify_outbox WHERE kind='health_write_failed'"
+        ).fetchone()[0] == 0
+    finally:
+        db.close()
+
+
 # ---------- self-post / latest probe ----------
 
 

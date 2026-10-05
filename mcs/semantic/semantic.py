@@ -307,37 +307,44 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
         global _FMT_MODE, _FMT_TS
         # the probe spends the caller's budget, never adds to it: the
         # runtime sized ``timeout`` to the job deadline (absolute)
-        started = time.monotonic()
+        call_deadline = time.monotonic() + timeout
         rf = {"type": "json_object"} \
             if _probe_format(endpoint, model, timeout) == "object" else None
-        timeout = max(0.5, timeout - (time.monotonic() - started))
         key = _long_key(model, prompt)
         level = _long_marks().get(key, 0)
         if level >= 2:
             return None       # even the long ceiling stopped on length
+        timeout = call_deadline - time.monotonic()
+        if timeout <= 0:
+            return None
         if level and timeout < _LONG_MIN_CALL_S:
             raise runtime.LLMNotSent("long_output_needs_budget")
         while True:
-            call_at = time.monotonic()
+            timeout = call_deadline - time.monotonic()
+            if timeout <= 0:
+                return None
             response = local_llm.chat(
                 prompt, endpoint=endpoint, model=model,
-                timeout=timeout,
+                timeout=timeout, deadline=call_deadline,
                 max_tokens=max(max_tokens, LLM_LONG_MAX_TOKENS)
                 if level else max_tokens,
                 response_format=rf,
                 extra_payload={"id_slot": local_llm.request_slot()},
                 request_fn=local_llm.bounded_request, error_out=err_out)
-            timeout = max(0.5, timeout - (time.monotonic() - call_at))
+            timeout = call_deadline - time.monotonic()
             if rf is not None and response is not None \
                     and response.get("status") in _FMT_REJECT_STATUSES:
                 # the server rejected the constraint (restart / model
                 # swap): degrade to plain for this and later calls —
                 # the retry shares what is left of the caller's budget
                 _FMT_MODE, _FMT_TS = "plain", time.monotonic()
-                remember_at = time.monotonic()
                 _remember_plain(endpoint, model)
-                timeout = max(0.5, timeout - (time.monotonic() - remember_at))
+                timeout = call_deadline - time.monotonic()
                 rf = None
+                if timeout <= 0:
+                    # A format refusal is not a plain-prompt rejection.
+                    # Exhausted work stays retryable without another send.
+                    return None
                 if level and timeout < _LONG_MIN_CALL_S:
                     # The rejected request already left: do not report a
                     # free not-sent defer, or send a long call that cannot
@@ -348,6 +355,7 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
                     and response.get("finish_reason") == "length":
                 level += 1
                 _long_mark(key, level)
+                timeout = call_deadline - time.monotonic()
                 if level == 1 and timeout >= _LONG_MIN_CALL_S:
                     continue  # one long-ceiling retry in what is left
             break

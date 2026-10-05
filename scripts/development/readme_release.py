@@ -149,7 +149,7 @@ def main(argv=None):
             check_links(args.root, text)
             path.write_text(text, encoding="utf-8")
         return 0
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, RecursionError) as exc:
         print(f"readme: {exc}", file=sys.stderr)
         return 1
 

@@ -16,6 +16,7 @@ re-running skips patients already floored at/below --since.
 """
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -52,9 +53,9 @@ def main() -> int:
                     help="restrict to specific project id(s)")
     args = ap.parse_args()
     if (args.days < 1 or args.pages < 1 or args.chunk < 1
-            or args.delay < 0 or args.deadline < 1
+            or not math.isfinite(args.delay) or args.delay < 0 or args.deadline < 1
             or any(pid <= 0 for pid in args.project)):
-        ap.error("days/pages/chunk/deadline/project must be positive; delay >= 0")
+        ap.error("days/pages/chunk/deadline/project must be positive; delay must be finite and >= 0")
 
     since = args.since or int(time.time() - args.days * 86400)
     deadline = time.monotonic() + args.deadline

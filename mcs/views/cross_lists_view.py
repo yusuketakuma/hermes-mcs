@@ -49,10 +49,14 @@ def get_cross_list(db, dataset: str, *, enabled: bool = False,
     recipient identity, response, or request completion.
     """
     _options(dataset, unread_only)
-    if (type(enabled) is not bool or type(max_age_s) not in (int, float)
+    try:
+        invalid = (type(enabled) is not bool or type(max_age_s) not in (int, float)
             or not math.isfinite(max_age_s) or max_age_s < 0
             or (now is not None and (
-                type(now) not in (int, float) or not math.isfinite(now) or now < 0))):
+                type(now) not in (int, float) or not math.isfinite(now) or now < 0)))
+    except OverflowError:
+        invalid = True
+    if invalid:
         raise ValueError("invalid cross list view options")
     result: dict[str, JSON] = {"state": "unknown", "reason": "not_fetched", "rows": [],
               "current_known": False, "historical": False, "stale": None,
@@ -95,7 +99,7 @@ def get_cross_list(db, dataset: str, *, enabled: bool = False,
                           age_s=max(0, age), timestamp=saved["timestamp"], stale=not fresh,
                           current_known=current, historical=not current,
                           state=state if attempt["complete"] else "failed")
-    except (ValueError, TypeError, KeyError, RecursionError, SchemaError):
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError, SchemaError):
         result.update(state="unknown", reason="artifact_invalid", rows=[],
                       current_known=False, historical=False, stale=None,
                       last_complete_at=None, attempted_at=None, age_s=None,

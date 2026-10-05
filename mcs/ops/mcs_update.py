@@ -1371,6 +1371,7 @@ def _run_post_merge(sha: str) -> None:
     except subprocess.TimeoutExpired:
         with suppress(OSError):
             os.killpg(child.pid, 9)
+        child.communicate()
         cout, cerr = "", "post_merge_timeout"
         child.returncode = -9
     if child.returncode != 0:
@@ -2018,7 +2019,7 @@ def _restore_consent(report: dict) -> str | None:
     for cid, rj in rows:
         try:
             rec = json.loads(rj)
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError, RecursionError):
             continue
         if not isinstance(rec, dict):
             continue

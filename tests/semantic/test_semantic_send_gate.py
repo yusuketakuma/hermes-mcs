@@ -46,6 +46,47 @@ def test_normal_gate_requires_source_target_revision_and_pass_summary(
     db.close()
 
 
+@pytest.mark.parametrize("claims", [[], [{"text": "合成の補助要約"}]])
+def test_raw_notice_keeps_all_verified_mandatory_facts(tmp_path, monkeypatch, claims):
+    db = _delivery_db(tmp_path, [_message()])
+    try:
+        cfg = _cfg("enforce")
+        monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+        _semantic_event(db)
+        row = db.db.execute("SELECT artifact_id,content FROM artifacts "
+                            "WHERE kind='semantic_summary'").fetchone()
+        summary = json.loads(row["content"])
+        facts = [f"合成必須事実{i} [fact_{i}; ev_{i}]" for i in range(41)]
+        summary.update(claims=claims, mandatory_facts=facts)
+        with db.db:
+            db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                          (json.dumps(summary, ensure_ascii=False), row["artifact_id"]))
+        raw = db.db.execute("SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
+        text = notify_flush._format_event(db, raw)[0]
+        assert all("・" + fact in text for fact in facts)
+        assert all(claim["text"] in text for claim in claims)
+    finally:
+        db.close()
+
+
+def test_chunker_preserves_embedded_footer_text_and_uses_terminal_source_link():
+    import semantic_send_gate
+    body = "■経過\n・合成事実一\n▶ MCSで確認\nhttps://untrusted.invalid/body\n・合成必須事実二"
+    text = "【合成】患者A\n取得：全件\n要約：PASS\n\n" + body + \
+        "\n\n▶ MCSで確認\nhttps://example.invalid/p/1\n"
+    parts, bodies = semantic_send_gate.semantic_chunk_parts(text, 150)
+    assert "".join(bodies) == body
+    assert all(part.endswith("▶ MCSで確認\nhttps://example.invalid/p/1") for part in parts)
+
+
+def test_chunker_rejects_unexpected_text_after_source_footer():
+    import semantic_send_gate
+    text = "【合成】患者A\n取得：全件\n要約：PASS\n\n■経過\n・合成事実\n" \
+        "▶ MCSで確認\nhttps://example.invalid/p/1\n合成の未配送末尾"
+    with pytest.raises(ValueError, match="semantic_provenance_missing"):
+        semantic_send_gate.semantic_chunk_parts(text, 200)
+
+
 def test_degraded_gate_requires_frozen_generation_and_unattempted_source(
         tmp_path, monkeypatch):
     db = _delivery_db(tmp_path, [_message()])
@@ -172,3 +213,74 @@ def test_stale_summary_rejected_by_gate_render_state_and_block(
     assert "要約（自動検査済）" not in notify_flush._format_event(db, raw)[0]
     assert calls == []
     db.close()
+
+
+@pytest.mark.parametrize("column", ["content", "meta"])
+def test_deep_summary_is_unpublishable_without_changing_saved_data(
+        tmp_path, monkeypatch, column):
+    db = _delivery_db(tmp_path, [_message()])
+    try:
+        cfg = _cfg("enforce")
+        monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+        event = _semantic_event(db)
+        payload = json.loads(event["payload"])
+        raw = db.db.execute(
+            "SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
+        deep = "[" * 10_000 + "0" + "]" * 10_000
+        with pytest.raises(RecursionError):
+            json.loads(deep)
+        with db.db:
+            db.db.execute(f"UPDATE artifacts SET {column}=? WHERE kind='semantic_summary'", (deep,))
+        before = list(db.db.iterdump())
+        assert notify_flush._semantic_render_state(db, raw) == ()
+        with pytest.raises(notify_flush._StaleSend, match="summary_stale"):
+            notify_flush._semantic_gate(db, event, payload)
+        assert "要約（自動検査済）" not in notify_flush._format_event(db, raw)[0]
+        assert list(db.db.iterdump()) == before
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("in_progress", [False, True])
+def test_deep_source_payload_preserves_stale_or_freeze_verdict(
+        tmp_path, monkeypatch, in_progress):
+    db = _delivery_db(tmp_path, [_message()])
+    try:
+        monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
+        event = _semantic_event(db)
+        payload = json.loads(event["payload"])
+        deep = "[" * 10_000 + "0" + "]" * 10_000
+        with pytest.raises(RecursionError):
+            json.loads(deep)
+        with db.db:
+            db.db.execute("UPDATE notify_outbox SET payload=? WHERE event_id=?", (deep, payload["src_event_id"]))
+        before = list(db.db.iterdump())
+        error = notify_flush._FreezeSend if in_progress else notify_flush._StaleSend
+        with pytest.raises(error, match="src_event_ineligible"):
+            notify_flush._semantic_gate(db, event, payload, in_progress=in_progress)
+        assert list(db.db.iterdump()) == before
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("in_progress", [False, True])
+def test_deep_source_progress_preserves_degraded_send_hold(
+        tmp_path, monkeypatch, in_progress):
+    db = _delivery_db(tmp_path, [_message()])
+    try:
+        monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
+        event = _semantic_event(db)
+        payload = json.loads(event["payload"])
+        payload.update(degraded=True, target_message_ids=[1])
+        deep = "[" * 10_000 + "0" + "]" * 10_000
+        with pytest.raises(RecursionError):
+            json.loads(deep)
+        with db.db:
+            db.db.execute("UPDATE notify_outbox SET state='pending',attempts=0,progress=? WHERE event_id=?", (deep, payload["src_event_id"]))
+        before = list(db.db.iterdump())
+        error = notify_flush._FreezeSend if in_progress else notify_flush._StaleSend
+        with pytest.raises(error, match="base_delivered"):
+            notify_flush._semantic_gate(db, event, payload, in_progress=in_progress)
+        assert list(db.db.iterdump()) == before
+    finally:
+        db.close()

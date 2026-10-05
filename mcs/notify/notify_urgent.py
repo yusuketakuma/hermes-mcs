@@ -80,7 +80,7 @@ def _current(db: sqlite3.Connection, mid: int) -> sqlite3.Row | None:
                a.artifact_id,a.created_at,a.kind,
                json_extract(a.content,'$.urgency') urgency
         FROM messages m JOIN patients p ON p.project_id=m.project_id
-        JOIN artifacts a ON a.message_id=m.message_id AND a.project_id=m.project_id
+        JOIN artifacts a ON a.message_id=m.message_id
         WHERE m.message_id=? AND m.body_state='full' AND COALESCE(p.is_archived,0)=0
           AND a.kind IN ({FACT_KINDS_SQL}) {current_fact_pred("a", "m")}
         ORDER BY a.artifact_id DESC LIMIT 1""", (mid,)).fetchone()
@@ -294,7 +294,7 @@ def maybe_enqueue(ledger, cfg, *, now=None) -> _EnqueueResult:
         ledger.db.execute("BEGIN IMMEDIATE")
         mids = ledger.db.execute(f"""
             SELECT DISTINCT m.message_id FROM messages m
-            JOIN artifacts a ON a.message_id=m.message_id AND a.project_id=m.project_id
+            JOIN artifacts a ON a.message_id=m.message_id
             WHERE a.kind IN ({FACT_KINDS_SQL}) {current_fact_pred("a", "m")}
               AND json_extract(a.content,'$.urgency')='high' ORDER BY m.message_id""").fetchall()
         restoring = mids and notify_cards.restore_pending(

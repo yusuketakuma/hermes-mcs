@@ -110,6 +110,33 @@ def test_malformed_lab_container_keeps_other_facts(db):
     assert rollup.build_rollup(db, 1)["summary"]["text"] == "合成要約"
 
 
+@pytest.mark.parametrize("kind", ["extract_v1", "extract_llm", "canonical_projection"])
+def test_rollup_sql_valid_source_at_python_depth_limit_is_safe(db, kind):
+    _add(db, 1, kind, {"vitals": {"temp": 37.1}}, "2026-09-18T00:00:00+09:00")
+    assert rollup.build_rollup(db, 1)["latest_vitals"]["temp"] == 37.1
+    source_id, original = db.db.execute("SELECT artifact_id,content FROM artifacts").fetchone()
+    deep = original[:-1] + ',"synthetic_unused":' + "[" * 999 + "0" + "]" * 999 + "}"
+    assert db.db.execute("SELECT json_valid(?)", (deep,)).fetchone()[0] == 1
+    try:
+        json.loads(deep)
+    except RecursionError:
+        readable = False
+    else:
+        readable = True
+    db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (deep, source_id))
+    db.db.commit()
+    before = tuple(db.db.iterdump())
+    changes = db.db.total_changes
+    out = rollup.build_rollup(db, 1)
+    assert out["msg_count"] == 1
+    if readable:
+        assert out["latest_vitals"]["temp"] == 37.1
+    else:
+        assert "latest_vitals" not in out
+    assert tuple(db.db.iterdump()) == before
+    assert db.db.total_changes == changes
+
+
 @pytest.mark.parametrize(("field", "value"), [
     ("generated_at", "broken"), ("generated_at", float("inf")),
     ("next_med_period_check", "broken"),
@@ -244,6 +271,32 @@ def test_rollup_reply_survives_canonical_projection_shadowing(db):
                     meta={"hash": _hash(db, 2)})
     rows = rollup.build_rollup(db, 1)["recent_requests"]
     assert rows[0]["reply_state"] == "done"
+
+
+def test_rollup_sql_valid_shadowed_reply_at_python_depth_limit_is_safe(db):
+    _thread(db, [(1, None, "SYNTH-A", "2026-09-19T00:30:00+09:00", _REQ),
+                 (2, 1, "SYNTH-B", "2026-09-19T01:00:00+09:00", _reply("done"))])
+    db.artifact_add("canonical_projection", json.dumps({"canonical_facts": []}),
+                    project_id=1, message_id=2, meta={"hash": _hash(db, 2)})
+    source_id, original = db.db.execute(
+        "SELECT artifact_id,content FROM artifacts WHERE kind='extract_llm' AND message_id=2"
+    ).fetchone()
+    deep = original[:-1] + ',"synthetic_unused":' + "[" * 999 + "0" + "]" * 999 + "}"
+    assert db.db.execute("SELECT json_valid(?)", (deep,)).fetchone()[0] == 1
+    try:
+        json.loads(deep)
+    except RecursionError:
+        readable = False
+    else:
+        readable = True
+    db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (deep, source_id))
+    db.db.commit()
+    before = tuple(db.db.iterdump())
+    changes = db.db.total_changes
+    rows = rollup.build_rollup(db, 1)["recent_requests"]
+    assert rows[0].get("reply_state") == ("done" if readable else None)
+    assert tuple(db.db.iterdump()) == before
+    assert db.db.total_changes == changes
 
 
 def test_rollup_ignores_non_string_reply_kind(db):

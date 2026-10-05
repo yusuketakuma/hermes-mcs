@@ -272,7 +272,7 @@ def validate_ops(req: dict, common: set[str] | None = None) -> str | None:
 def _history_payload(raw) -> dict | None:
     try:
         payload = json.loads(raw or "{}")
-    except (json.JSONDecodeError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return None
     if not isinstance(payload, dict):
         return None
@@ -287,7 +287,7 @@ def _history_payload(raw) -> dict | None:
         return None
     try:
         canonical(payload).decode("utf-8")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return None
     return payload
 
@@ -355,13 +355,13 @@ def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
         return "job_not_found", {}
     try:
         payload = json.loads(row["payload"] or "{}")
-    except (json.JSONDecodeError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return "invalid_payload", {"job_id": row["job_id"]}
     if not isinstance(payload, dict):
         return "invalid_payload", {"job_id": row["job_id"]}
     try:
         current_hash = payload_hash(payload)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return "invalid_payload", {"job_id": row["job_id"]}
     if current_hash != req["expected_payload_hash"]:
         return "payload_changed", {"job_id": row["job_id"]}
@@ -410,7 +410,7 @@ def _apply_control_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
     for row in rows:
         try:
             payload = json.loads(row["payload"] or "{}")
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             skipped += 1
             continue
         if not isinstance(payload, dict):
@@ -418,7 +418,7 @@ def _apply_control_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
             continue
         try:
             canonical(payload).decode("utf-8")
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, RecursionError):
             skipped += 1
             continue
         parsed.append((row["job_id"], payload))
@@ -521,7 +521,6 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
     row = db.execute(
         """SELECT artifact_id, project_id, content FROM artifacts
            WHERE kind='signal_v1' AND json_valid(meta)
-             AND json_valid(content)
              AND json_extract(meta,'$.key')=?
            ORDER BY artifact_id DESC LIMIT 1""",
         (req["signal_key"],)).fetchone()
@@ -537,9 +536,14 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
         return "signal_changed", {"signal_key": req["signal_key"],
                                   "current_artifact_id":
                                       row["artifact_id"]}
-    content = json.loads(row["content"])
+    try:
+        content = json.loads(row["content"])
+    except (ValueError, TypeError, RecursionError):
+        # Select the latest transition before validating it. An unreadable
+        # latest row must never revive an older open signal.
+        return "signal_corrupt", {"signal_key": req["signal_key"]}
     if not isinstance(content, dict):
-        # json_valid passed but the payload is a scalar/array — a corrupt
+        # The payload is a scalar/array — a corrupt
         # row must reject cleanly, not crash the whole command drain
         return "signal_corrupt", {"signal_key": req["signal_key"]}
     if content.get("state") != "open":

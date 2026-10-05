@@ -91,7 +91,17 @@ def split_body(text: str, limit: int = BODY_CHUNK,
 
 
 
-def body_messages(result: dict) -> list:
+def _answer_chunks(value: str) -> list:
+    chunks = split_body(value, max_chunks=BODY_MAX_CHUNKS + 1)
+    if len(chunks) <= BODY_MAX_CHUNKS:
+        return chunks
+    notice = "\n…長文のためここまで表示しています。続きはMCSで確認してください。"
+    chunks = chunks[:BODY_MAX_CHUNKS]
+    chunks[-1] = chunks[-1][:BODY_CHUNK - len(notice)] + notice
+    return chunks
+
+
+def body_messages(result: dict, *, plain: bool = False) -> list:
     """title + chunked body as sendable messages — shared by the live
     interaction path and the delayed followup sweep."""
     body = str(result.get("body") or "")
@@ -100,9 +110,10 @@ def body_messages(result: dict) -> list:
     # Titles are source-derived and may be arbitrarily long.
     if len(title) > 80:
         title = title[:79] + "…"
-    chunks = split_body(body)
-    return [f"**{title}**（{i + 1}/{len(chunks)}）\n{c}"
-            if len(chunks) > 1 else f"**{title}**\n{c}"
+    chunks = _answer_chunks(body)
+    heading = title if plain else f"**{title}**"
+    return [f"{heading}（{i + 1}/{len(chunks)}）\n{c}"
+            if len(chunks) > 1 else f"{heading}\n{c}"
             for i, c in enumerate(chunks)]
 
 
@@ -276,7 +287,8 @@ def search_query(fields: dict) -> str | None:
 LIST_SHOW = 15             # ephemeral rows before 「他N件」
 
 
-def list_messages(result: dict, allowed, markdown: bool = True) -> list:
+def list_messages(result: dict, allowed, markdown: bool = True, *,
+                  plain: bool = False) -> list:
     """A runner list view (📋 / 🗂 / 🔎) as ephemeral messages. Items of
     projects outside this deployment's scope (``allowed(pid)`` false)
     are dropped before counting; the rest is capped with 「他N件」 (the
@@ -286,7 +298,7 @@ def list_messages(result: dict, allowed, markdown: bool = True) -> list:
     view = result.get("list") or {}
     items = [i for i in view.get("items") or []
              if isinstance(i, dict) and allowed(i.get("project_id"))]
-    bold = "**" if markdown else "*"
+    bold = "" if plain else "**" if markdown else "*"
     lines = [f"{bold}{view.get('title') or '一覧'}{bold}"]
     lines += [str(x) for x in view.get("head") or []]
     group = None
@@ -301,11 +313,11 @@ def list_messages(result: dict, allowed, markdown: bool = True) -> list:
     if rest > 0:
         lines.append(f"他{rest}件")
     lines += [str(x) for x in view.get("notes") or []]
-    return split_body("\n".join(lines))
+    return _answer_chunks("\n".join(lines))
 
 
 def view_answer(result: dict | None, allowed,
-                markdown: bool = True) -> list | None:
+                markdown: bool = True, *, plain: bool = False) -> list | None:
     """An applied view click's ephemeral answer as ``[(text, tasks)]``
     — ``tasks`` is the task list whose transition buttons ride that
     message (the caller registers ``result["token_ctx"]`` first), else
@@ -320,15 +332,15 @@ def view_answer(result: dict | None, allowed,
     if action == "digest" and isinstance(result.get("text"), str):
         # rendered by the runner from the shared display model in this
         # card's transport dialect (notify_render.parts_text)
-        return [(m, None) for m in split_body(result["text"])]
+        return [(m, None) for m in _answer_chunks(result["text"])]
     if action in ("body", "summary") and result.get("body"):
-        return [(m, None) for m in body_messages(result)]
+        return [(m, None) for m in body_messages(result, plain=plain)]
     if action == "tasks":
         items = result.get("tasks") or []
-        return ([(task_list_text(items), items)] if items
+        return ([(task_list_text(items, plain=plain), items)] if items
                 else [(NO_TASKS_TEXT, None)])
     if action == "list":
-        return [(m, None) for m in list_messages(result, allowed, markdown)]
+        return [(m, None) for m in list_messages(result, allowed, markdown, plain=plain)]
     if action == "task_status":
         return [(task_done_text(result), None)]
     return None
@@ -360,11 +372,11 @@ def preview_text(action: str, payload: dict, markdown: bool) -> str:
     return out + f"\n理由: {payload['reason'][:400]}"
 
 
-def task_list_text(items: list) -> str:
+def task_list_text(items: list, *, plain: bool = False) -> str:
     """Ephemeral task list — one line per request, status mark first so
     the scan order matches the transition buttons below it."""
     marks = {"open": "⬜", "in_progress": "⏳", "done": "✅"}
-    lines = ["📋 **タスク**（このスレッド）"]
+    lines = ["📋 タスク（このスレッド）" if plain else "📋 **タスク**（このスレッド）"]
     for t in items:
         meta = []
         if t.get("assignee"):

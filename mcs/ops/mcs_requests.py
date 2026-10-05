@@ -433,7 +433,7 @@ def candidates(db, message):
         seen.add(row["kind"])
         try:
             meta, content = json.loads(row["meta"]), json.loads(row["content"])
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             continue
         if (row["project_id"] != message["project_id"] or not isinstance(meta, dict)
                 or meta.get("hash") != message["content_hash"] or meta.get("error")

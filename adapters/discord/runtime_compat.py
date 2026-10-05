@@ -12,6 +12,7 @@ from adapters.discord.tasks import Supervisor
 from hermes_plugin import _make_handler
 
 from mcs_standalone.host import Host, NotSent, Refused, log, raise_ended
+from . import standalone
 
 _DENY_CONTEXT = '{"ok":false,"error":"native_context_rejected"}'
 
@@ -19,10 +20,13 @@ _DENY_CONTEXT = '{"ok":false,"error":"native_context_rejected"}'
 def _client(*, gateway: bool):
     import discord
     from discord.ext import commands
+    standalone._quiet_sdk()
     # Default intents are non-privileged; interactions need none at all.
     intents = discord.Intents.default() if gateway else discord.Intents.none()
-    return commands.Bot(command_prefix=[], intents=intents, help_command=None,
-                        allowed_mentions=discord.AllowedMentions.none())
+    bot = commands.Bot(command_prefix=[], intents=intents, help_command=None,
+                       allowed_mentions=discord.AllowedMentions.none())
+    standalone._harden(bot)
+    return bot
 
 
 def command_context(interaction, settings: dict) -> dict | None:
@@ -50,8 +54,9 @@ def _mcs_command(settings: dict, host: Host):
         context = command_context(interaction, settings)
         answer = await asyncio.to_thread(handler, args, context) if context else _DENY_CONTEXT
         for start in range(0, len(answer), 1900):
-            await interaction.followup.send(answer[start:start + 1900], ephemeral=True,
-                                            allowed_mentions=cards.no_pings())
+            await cards.single_post(interaction.client, functools.partial(
+                interaction.followup.send, answer[start:start + 1900], ephemeral=True,
+                allowed_mentions=cards.no_pings()))
     return mcs
 
 

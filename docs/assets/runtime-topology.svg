@@ -107,7 +107,7 @@
 
   <rect x="60" y="432" width="400" height="90" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
   <text x="76" y="454" font-size="11" fill="#e6edf3" font-weight="bold">hermes cron（gateway 内）</text>
-  <text x="76" y="476" font-size="10" fill="#8b949e">MCS 未読 */5分 · 深掘り 7,37分</text>
+  <text x="76" y="476" font-size="10" fill="#8b949e">MCS 未読 */10分 · 深掘り 10,40分</text>
   <text x="76" y="496" font-size="10" fill="#8b949e">失敗再試行 6時間毎 · 更新 5:10</text>
 
   <rect x="490" y="432" width="390" height="90" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>

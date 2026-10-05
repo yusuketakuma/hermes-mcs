@@ -138,17 +138,13 @@ jobs:
         run: |
           python -m venv hermes-agent/.venv
           hermes-agent/.venv/bin/python -m pip install -e './hermes-agent[dev,messaging]'
-      # -o addopts= : this repo's pyproject adds -q; doubled with -q the
-      # pytest summary line disappears and the hermes per-file runner
-      # reports "NO TESTS RAN" (exit 1) even when every test passed
+      # Use the same isolated lane as local verification. It checks the
+      # installed distributions and imported source against the pin above,
+      # and rejects an empty or incomplete SDK test collection.
       - name: discord and slack plugin integration
-        working-directory: hermes-agent
+        working-directory: hermes-mcs
         env:
-          PYTHONPATH: ${{ github.workspace }}/hermes-agent
-        run: >-
-          scripts/run_tests.sh
-          ../hermes-mcs/integration/test_hermes_discord.py
-          ../hermes-mcs/integration/test_hermes_slack.py
-          ../hermes-mcs/integration/test_hermes_config.py
-          ../hermes-mcs/tests/adapters/discord/test_discord_sdk_real.py -x -q
-          -o addopts=
+          MCS_TEST_PYTHON: ${{ github.workspace }}/hermes-agent/.venv/bin/python
+          MCS_HERMES_SOURCE: ${{ github.workspace }}/hermes-agent
+          MCS_HERMES_REFERENCE: ${{ github.workspace }}/hermes-agent
+        run: sh scripts/check_pinned_sdks.sh hermes

@@ -1,10 +1,87 @@
 """Offline contracts for the live detection command's reported outcome."""
 from types import SimpleNamespace
 import json
+from pathlib import Path
 
 import pytest
 
 import semantic_bench as bench
+
+
+def test_corpus_cli_freezes_only_checked_in_synthetic_sources(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench, "LedgerReader", lambda *_: pytest.fail("ledger accessed"))
+    output = tmp_path / "corpus.json"
+    monkeypatch.setattr("sys.argv", ["semantic_bench", "corpus", "--n", "25", "--out", str(output)])
+    assert bench.main() == 0
+    corpus = json.loads(output.read_text())
+    sources = json.loads((Path(__file__).resolve().parents[2] /
+                          "evaluation/extract_cases.json").read_text())["cases"][:25]
+    assert corpus["corpus_version"] == 1 and len(corpus["cases"]) == 25
+    assert corpus["source"] == "fully_synthetic"
+    for case, fixture in zip(corpus["cases"], sources, strict=True):
+        assert case["members"][-1]["body_original"] == fixture["body"]
+        assert case["target_id"] == case["members"][-1]["message_id"]
+    assert output.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("damage", ["legacy", "marked_but_unbound"])
+@pytest.mark.parametrize("live_jev", [False, True])
+def test_run_refuses_unbound_corpus_before_model_or_credentials(
+        tmp_path, monkeypatch, damage, live_jev):
+    import semantic
+    member = {"message_id": 1, "body_original": "合成の未登録本文", "revision": "r1"}
+    corpus = {"corpus_version": 1, "cases": [{"case_id": "old", "project_id": 1,
+              "root_id": 1, "target_id": 1, "members": [member]}]}
+    if damage == "marked_but_unbound":
+        corpus["source"] = "fully_synthetic"
+    source, output = tmp_path / "input.json", tmp_path / "result.json"
+    source.write_text(json.dumps(corpus))
+    monkeypatch.setattr(semantic, "llm_chat", lambda *_: pytest.fail("model dispatched"))
+    monkeypatch.setattr(bench, "env_value", lambda *_: pytest.fail("credentials read"))
+    assert bench.cmd_run(SimpleNamespace(corpus=source, out=str(output), tag="synthetic",
+                                        job_budget=1, jev=live_jev)) == 2
+    assert not output.exists()
+
+
+def test_run_accepts_frozen_synthetic_corpus_with_injected_pipeline(tmp_path, monkeypatch):
+    source, output = tmp_path / "input.json", tmp_path / "result.json"
+    monkeypatch.setattr(bench, "LedgerReader", lambda *_: pytest.fail("ledger accessed"))
+    assert bench.cmd_corpus(SimpleNamespace(n=2, out=str(source))) == 0
+    import semantic
+    calls = []
+    def llm(prompt, **_):
+        calls.append(prompt)
+        return json.dumps({"facts": [], "claims": [], "limitations": []})
+    monkeypatch.setattr(semantic, "llm_chat", llm)
+    assert bench.cmd_run(SimpleNamespace(corpus=source, out=str(output), tag="synthetic",
+                                        job_budget=1, jev=False)) == 0
+    result = json.loads(output.read_text())
+    assert len(calls) == 4 and result["aggregate"]["cases"] == 2
+    assert all(case["facts_complete"] for case in result["results"])
+
+
+@pytest.mark.parametrize("count", [-1, 0, True])
+def test_corpus_rejects_invalid_count_without_ledger_or_output(tmp_path, monkeypatch, count):
+    monkeypatch.setattr(bench, "LedgerReader", lambda *_: pytest.fail("ledger accessed"))
+    output = tmp_path / "corpus.json"
+    assert bench.cmd_corpus(SimpleNamespace(n=count, out=str(output))) == 2
+    assert not output.exists()
+
+
+def test_run_rejects_malformed_json_without_dispatch_or_output(tmp_path, monkeypatch):
+    source, output = tmp_path / "input.json", tmp_path / "result.json"
+    source.write_text("{synthetic invalid json")
+    monkeypatch.setattr(bench, "env_value", lambda *_: pytest.fail("credentials read"))
+    assert bench.cmd_run(SimpleNamespace(corpus=source, out=str(output), jev=True)) == 2
+    assert not output.exists()
+
+
+def test_unavailable_synthetic_asset_cannot_fall_back_to_ledger(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench, "LedgerReader", lambda *_: pytest.fail("ledger accessed"))
+    monkeypatch.setattr(bench.Path, "read_text", lambda *_a, **_k: (_ for _ in ()).throw(FileNotFoundError()))
+    output = tmp_path / "corpus.json"
+    assert bench.cmd_corpus(SimpleNamespace(n=1, out=str(output))) == 2
+    assert not output.exists()
 
 
 @pytest.mark.parametrize("unevaluated", [0, 1, 2])

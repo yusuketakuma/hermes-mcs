@@ -3,12 +3,14 @@ Supervisor and one-shot text/file notifications."""
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 
 from adapters.slack.delivery import _failed
 from adapters.slack.tasks import Supervisor
 
 from mcs_standalone.host import Host, NotSent, log, raise_ended
+from . import standalone
 
 
 _BOLD = re.compile(r"\*\*(.+?)\*\*|\*")
@@ -33,17 +35,19 @@ def _mrkdwn(text: str) -> str:
 
 
 def _client(token: str):
-    from slack_sdk.web.async_client import AsyncWebClient
-    # No automatic connection retry: a lost response must stay "unknown",
-    # never become a second post.
-    return AsyncWebClient(token=token, retry_handlers=[])
+    # The retained alias must obey the current independent client's fixed
+    # endpoints, no-proxy/no-redirect, single-attempt and closed-session gates.
+    return standalone._client({"bot_token": token})[0]
 
 
 def _app(client):
     from slack_bolt.async_app import AsyncApp
+    if "SLACK_CLIENT_ID" in os.environ and "SLACK_CLIENT_SECRET" in os.environ:
+        raise ValueError("slack_ambient_oauth_not_allowed")
     # As Hermes builds it (single workspace, token + client): no OAuth flow,
     # and Socket Mode requests carry no HTTP signature to verify.
-    app = AsyncApp(token=client.token, client=client)
+    app = AsyncApp(token=client.token, client=client, signing_secret="",
+                   verification_token="socket-mode-only", logger=standalone._logger())
 
     async def ignore():
         # Ack every subscribed event MCS does not handle, as Hermes does
@@ -70,7 +74,13 @@ async def run(settings: dict, tokens: dict, stop: asyncio.Event) -> None:
                                 settings=settings, log=log)
         if not supervisor.start():
             raise RuntimeError("slack_worker_start_failed")
-        socket = AsyncSocketModeHandler(app, tokens["SLACK_APP_TOKEN"])
+        socket = AsyncSocketModeHandler(app, tokens["SLACK_APP_TOKEN"],
+                                       web_client=client, logger=standalone._logger())
+        socket.client.proxy = None
+        old_session = socket.client.aiohttp_client_session
+        socket.client.aiohttp_client_session = standalone._GuardedSession(
+            client.session._aiohttp, websocket=True)
+        await old_session.close()
         await socket.connect_async()
         waiter = asyncio.create_task(stop.wait())
         done, _ = await asyncio.wait({waiter, supervisor._task},
@@ -81,6 +91,7 @@ async def run(settings: dict, tokens: dict, stop: asyncio.Event) -> None:
         if socket is not None:
             await socket.close_async()
         await host.close()
+        await client.session.close()
 
 
 async def send(token: str, channel_id: str, text: str,

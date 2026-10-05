@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import re
 import sys
-from typing import NotRequired, Required, TypedDict
+from typing import TypedDict
 import unicodedata
 
 ROOT = Path(__file__).resolve().parent
@@ -21,13 +21,16 @@ REQUEST_KINDS = ("request", "question", "self_plan", "none", "unknown")
 REPLY_KINDS = ("none", "ack", "intent", "progress", "answer", "done", "cancel", "hold", "unknown")
 
 
-class SourceCase(TypedDict):
+class _SourceCaseRequired(TypedDict):
     case_id: str
     focus: str
     messages: list[list[str]]
     human_review_status: str
     promotion_eligible: bool
-    source_time: NotRequired[str]
+
+
+class SourceCase(_SourceCaseRequired, total=False):
+    source_time: str
 
 
 class Quote(TypedDict):
@@ -35,12 +38,15 @@ class Quote(TypedDict):
     quote: str
 
 
-class Proposal(TypedDict, total=False):
-    case_id: Required[str]
-    request_kind: Required[str]
+class _ProposalRequired(TypedDict):
+    case_id: str
+    request_kind: str
+    evidence: list[Quote]
+
+
+class Proposal(_ProposalRequired, total=False):
     reply_kind: str
     false_done_risk: bool
-    evidence: Required[list[Quote]]
     request_to: str
     request_from: str
     due_text: str
@@ -99,7 +105,10 @@ def validate(sources: list[SourceCase], proposals: list[Proposal]) -> ReviewRepo
                     or not message[0].startswith("架空") or len(message[1]) > 1200):
                 raise ValueError("fictional_message_invalid")
         if "source_time" in case:
-            stamp = datetime.fromisoformat(case["source_time"])
+            source_time = case["source_time"]
+            if isinstance(source_time, str) and source_time.endswith("Z"):
+                source_time = source_time[:-1] + "+00:00"
+            stamp = datetime.fromisoformat(source_time)
             if stamp.tzinfo is None:
                 raise ValueError("source_time_timezone_required")
         # Ignore identities, speaker names, whitespace and ASCII number changes.
@@ -241,8 +250,12 @@ def main(argv=None) -> int:
                 print(json.dumps({"source": "synthetic_proposal", "promotion_eligible": False,
                     **proposed, **{key: proposed.get(key, "unknown") for key in FIELDS}},
                     ensure_ascii=False, allow_nan=False))
-    except (ValueError, TypeError, KeyError, OSError) as error:
-        print(json.dumps({"state": "invalid", "reason": str(error)}, ensure_ascii=False), file=sys.stderr)
+    except (ValueError, TypeError, KeyError, OSError, RecursionError) as error:
+        reason = str(error)
+        if type(error) is not ValueError or not re.fullmatch(
+                r"[a-z][a-z0-9_]*(?::rfh-[0-9]{3}(?::[a-z_]+)?)?", reason):
+            reason = "queue_input_invalid"
+        print(json.dumps({"state": "invalid", "reason": reason}, ensure_ascii=False), file=sys.stderr)
         return 1
     return 0
 

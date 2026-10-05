@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "Jev価値評価を確認済みの合成データに限定",
+  "summary": "jev-valueは、リポジトリにある完全合成の評価ケースと内容が一致する入力だけをモデルへ渡します。来歴ラベルだけでは許可せず、本文・期待値の改変、重複、壊れたJSON、不正な期限を認証情報の読取りや評価開始前に拒否します。",
+  "upgrade": "独自または旧入力をそのまま使わず、evaluationのextract_cases.json・extract_cases_labs.json・semantic_completeness_cases.jsonからケースを変更せずコピーしてください。一部のケースを選んだJSONも使えます。通常の収集・通知・人手評価の昇格条件は変更しません。実Jevへの評価は従来どおり明示的なCLI実行で行います。今回の検証はスタブだけです。",
+  "details": ["期限は有限の正数に限定し、合成資産が欠けた場合も評価を開始しない。", "人手ラベル0件という既存の記録を維持し、合成評価をG6合格の根拠へ昇格させない。"],
+  "refs": ["mcs/ops/mcs_setup.py", "tests/ops/test_jev_value_input_boundary.py"]
+}

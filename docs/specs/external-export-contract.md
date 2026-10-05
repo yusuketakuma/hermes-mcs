@@ -210,6 +210,13 @@ faults write no receipt, so the sender stays held. Its transport tally is
 never a claim that a collection is complete or current; the receiver's own
 diagnostics report that separately. It is a local reference, not the
 counterpart's encrypted staging.
+The input may be a regular JSON file or a normal outbox directory; an
+explicit symlink input and non-regular JSON files such as FIFOs are refused.
+`--receipts-out` must be new: publication never replaces an existing file
+or symlink, including one created after the initial check. If publication
+fails after receiver storage succeeded, that failure is not evidence of
+non-receipt; keep the sender held and reconcile independent receiver evidence
+before retrying.
 Each `receive` invocation first removes expired parsed payloads, including an
 invocation without `--input`. The returned `expired` count reports this local
 maintenance; historical receipts and replay tombstones remain. This command
@@ -248,12 +255,20 @@ Refusals are audited as deliberately as sends.
 
 ## PHI classification and lifecycle
 
-Exportable records are aggregate-scope only: ids, hashes, counts,
-states, typed fact/relation identifiers. Raw patient content (message
-bodies, statements, evidence quotes, sender/patient names, attachment
-file names, signal notes) is forbidden by construction and checked at
-both producer and sink. Destination retention is bounded by
-`retention_days`; withdrawal propagates deletion per envelope.
+By default (`mcs-ext-export/1`), exportable records are aggregate-scope
+only: ids, hashes, counts, states and typed fact/relation identifiers.
+Raw patient content (message bodies, statements, evidence quotes,
+sender/patient names, attachment file names and signal notes) is forbidden
+by construction and checked at both producer and sink.
+
+The explicit C1 profile (`mcs-ext-export/2`) has one narrow exception:
+the root `body_text` of an authorized `message_body` record, paired with a
+`body_state: full` message in the same part, as specified above. This text
+can contain PHI; it is not an anonymous aggregate. The exact C1 field grant,
+human confirmation, current authorization, body byte cap and body hash
+remain required. Other forbidden fields and detail-scope export remain
+prohibited. Destination retention is bounded by `retention_days`;
+withdrawal propagates deletion per envelope.
 
 ## Incident response
 
