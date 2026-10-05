@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "LINE WORKSの個別回答を読みやすく表示",
+  "summary": "LINE WORKSの本文・タスク・一覧の個別回答で、見出し用のMarkdown記号を表示しません。本文の特殊文字やリンクはそのまま保持します。共有の本文・サマリー・一覧表示が4ページの上限を超える場合は、省略したこととMCSで続きを確認する案内を表示します。",
+  "upgrade": "1.0.13への更新後、LINE WORKSは独立アダプター、共有表示を使うHermesのSlack・Discordはgatewayを再起動すると反映されます。個別返信の上限とプロジェクトの閲覧範囲は従来どおりです。この変更作業では再起動・実サービスへの送信を行っていません。",
+  "details": ["LINE WORKSだけをプレーンテキストの見出しへ切り替え、既存のDiscord・Slackの呼出契約を維持する。", "永続的な本文・添付配送のmanifestを省略せず、個別回答の既存予算だけに省略案内を付ける。"],
+  "refs": ["adapters/common/text.py", "adapters/lineworks/actions.py"]
+}

@@ -146,7 +146,7 @@ class Registry:
             with open(os.path.join(os.path.dirname(self._path),
                                    "registry.json"), "rb") as handle:
                 legacy = json.load(handle)
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return
         if not isinstance(legacy, dict):
             return

@@ -47,7 +47,7 @@ def _config(snapshot: Path) -> dict:
     try:
         raw = json.loads((snapshot.parents[2] / "config.json").read_text(
             encoding="utf-8"))
-    except (OSError, ValueError, IndexError):
+    except (OSError, ValueError, IndexError, RecursionError):
         return {}
     return {k: raw[k] for k in _CFG_KEYS if isinstance(raw, dict) and k in raw}
 
