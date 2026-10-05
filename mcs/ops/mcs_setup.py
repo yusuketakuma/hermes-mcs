@@ -525,10 +525,21 @@ def _run(argv: list, *, timeout: int = 60, input_text: str | None = None,
         return subprocess.CompletedProcess(argv, 127, "", str(e))
 
 
+_GATEWAY_LIFECYCLE_VERBS = frozenset({"install", "uninstall", "restart", "start", "stop"})
+
+
 def _hermes_cli(exe: str, profile: str, *argv: str, input_text: str | None = None):
     """Public hermes CLI against a named profile ("" = launch/default).
     Returns the CompletedProcess, or None when the call can't run."""
     cmd = [exe] + (["-p", profile] if profile else []) + list(argv)
+    if (os.environ.get("MCS_TEST_SANDBOX") == "1" and argv[:1] == ("gateway",)
+            and argv[1:2] and argv[1] in _GATEWAY_LIFECYCLE_VERBS
+            and (os.path.exists(exe) or shutil.which(exe))):
+        # hermes writes the gateway LaunchAgent under the real account home and
+        # loads it into the real launchd, whatever HOME/HERMES_HOME a test set
+        # (the live gateway plist was rewritten this way on 2026-10-04).
+        return subprocess.CompletedProcess(
+            cmd, 126, "", "refused under MCS_TEST_SANDBOX: gateway lifecycle")
     try:
         return subprocess.run(cmd, capture_output=True, text=True,
                               timeout=30, input=input_text)
