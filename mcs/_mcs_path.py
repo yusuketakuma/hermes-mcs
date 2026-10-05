@@ -5,7 +5,7 @@ across subdirectories — each dir holding .py files is an import root,
 at any depth (e.g. extract/v1/, extract/v4/). Entry-point modules put
 the mcs/ root on sys.path and import this module; importing it
 prepends every module dir so local modules resolve ahead of any
-same-named installed package. See AGENTS.md "構成".
+same-named installed package. See AGENTS.md "システムと入口".
 """
 import os
 import sys

@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "PARTIAL": 56,
-      "EXCLUDED": 2,
-      "UNSEEN": 386,
-      "REVIEWED": 441
+      "PARTIAL": 57,
+      "EXCLUDED": 25,
+      "UNSEEN": 344,
+      "REVIEWED": 463
     },
-    "candidate_tracked": 883
+    "candidate_tracked": 886
   },
   "files": [
     {
@@ -1110,15 +1110,25 @@
     },
     {
       "path": "changes/20261005-ops-consent-and-offline-validation.json",
-      "sha256": null,
+      "sha256": "e66d5d91b1cfa8a81bb27e4aa26cdb36b32e08bc913f3c69b6f3654c2b496322",
       "bytes": 1950,
       "lines": 23,
       "module": "changes",
       "kind": "source",
-      "status": "UNSEEN",
+      "status": "REVIEWED",
       "evidence": [
-        "Current new tracked path reconciled; source review tracked by upcoming accepted owner packet."
-      ]
+        "Current new tracked path reconciled; source review tracked by upcoming accepted owner packet.",
+        "Japanese runtime/upgrade fragment fully read in parent exact source patch; shape validated by packet."
+      ],
+      "reviewed_sha256": "e66d5d91b1cfa8a81bb27e4aa26cdb36b32e08bc913f3c69b6f3654c2b496322",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          23
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json"
     },
     {
       "path": "changes/20261005-semantic-deadline-output-contract.json",
@@ -2802,6 +2812,17 @@
       ]
     },
     {
+      "path": "changes/maintenance-core-packet5-rule-repair.json",
+      "sha256": "221174b382091ce1edae0dc3cbea6bd2d889cecbdd505c221f87c4a181904cb7",
+      "bytes": 1173,
+      "lines": 11,
+      "module": "changes",
+      "kind": "source",
+      "status": "UNSEEN",
+      "evidence": [],
+      "review_input": "7e104ea04196df159c43318df5ca5a0850298e2a"
+    },
+    {
       "path": "changes/maintenance-core-preflight-20261005.json",
       "sha256": "4a825b2b91b2d2a0468f364fc586f8715761d40622c56ccc103b702188b03501",
       "bytes": 1908,
@@ -4362,6 +4383,16 @@
       ]
     },
     {
+      "path": "docs/development/full-maintenance-20261005/generated-classification.json",
+      "sha256": null,
+      "module": "docs/development/full-maintenance-20261005",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent-created structured provenance/SHA classification receipt; no self-referential SHA claim."
+      ]
+    },
+    {
       "path": "docs/development/full-maintenance-20261005/inventory.json",
       "sha256": "36e3ca539453d5b100fd641943bab0f8567bfeaf965f553e9860f21e9d7887e4",
       "bytes": 307685,
@@ -4589,6 +4620,19 @@
         "Structured whole record inspection, inventory/criterion validation, source patch review and I digest matching; run record classified separately from source text."
       ],
       "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json"
+    },
+    {
+      "path": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "sha256": "e4c3604f6a1a8c28728e6b507e0a74f97bda01fab623aefc3cfdfbd88093c724",
+      "reviewed_sha256": "e4c3604f6a1a8c28728e6b507e0a74f97bda01fab623aefc3cfdfbd88093c724",
+      "bytes": 372125,
+      "lines": 5622,
+      "module": "docs/development",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
+      "evidence": [
+        "Structured whole JSON/schema, all22 W source/test digests, all20 criteria,12findings,disproved/deferral,patch/verification and boundaries inspected; no full-repository success inferred."
+      ]
     },
     {
       "path": "docs/development/readme-review.json",
@@ -5647,23 +5691,30 @@
     },
     {
       "path": "evaluation/request_following_review.py",
-      "sha256": "966dfe8aaeab5e5a50f4d6cd0272d22e972b1898bdd7c908702d573409456691",
-      "bytes": 12037,
-      "lines": 251,
+      "sha256": "01ba3487d1723c319f074773141fd1280b675a78210a3d54da06c65799f7fd55",
+      "bytes": 12472,
+      "lines": 264,
       "module": "evaluation",
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending.",
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
       ],
-      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
-      "reviewed_sha256": "966dfe8aaeab5e5a50f4d6cd0272d22e972b1898bdd7c908702d573409456691",
-      "reviewed_lines": 251,
-      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
-      "responsibility": "offline manifest名/path/SHA・220unique source/target・11focus>=15・known fields/false_done>=20・完全exact quote/indexを検査しsource-only worksheetとproposalsを分離export。人手署名/receipt/labelを作らない。",
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "01ba3487d1723c319f074773141fd1280b675a78210a3d54da06c65799f7fd55",
+      "reviewed_lines": 264,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "fixed local synthetic manifest/fileSHA→220unique sources/targets・focus/fields/evidence/pending validation→source-first worksheetsと合成proposals別export。本人label/署名/receipt/G6昇格を生成しない。",
       "callers": [
-        "evaluation/request_following_review.py",
-        "tests/semantic/test_request_following_generation.py"
+        {
+          "path": "tests/semantic/test_canonical_human_review_assets.py",
+          "entrypoint": "importlib.spec_from_file_location and offline subprocess"
+        },
+        {
+          "path": "tests/extract/test_extract_packet4_regressions.py",
+          "entrypoint": "offline review_queue bootstrap CLI"
+        }
       ],
       "full_content_read": true,
       "read_ranges": [
@@ -5671,7 +5722,9 @@
           1,
           251
         ]
-      ]
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "evaluation/request_following_review_manifest.json",
@@ -7843,25 +7896,119 @@
     },
     {
       "path": "mcs/ops/import_drug_master.py",
-      "sha256": "a3f04a81a22b5c71827a90688ff8709a8c180cbdd2ce3bbf1d8b654f57d82d6c",
-      "bytes": 15578,
+      "sha256": "6cba602366975a25fe441048378d168f62e7f618f325549224e86ec5a64f16a6",
+      "bytes": 15594,
       "lines": 324,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "6cba602366975a25fe441048378d168f62e7f618f325549224e86ec5a64f16a6",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          324
+        ]
+      ],
+      "reviewed_lines": 324,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "explicit local medicine master bytes+approved official edition/layout/hash/terms/status pin→bounded CP932 CSV/ZIP42columns→unknown/ambiguous保留を持つ候補辞書→新規private outputのみ。実master/network/config更新なし。",
+      "callers": [
+        {
+          "path": "tests/ops/test_import_drug_master.py",
+          "line": 17
+        },
+        {
+          "path": "mcs/ops/import_drug_master.py",
+          "entrypoint": "__main__ CLI"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "mcs/ops/mcs_backup.py",
-      "sha256": "a1a39b12655d8f0dc1641eb473cd904b134aa51ac9e041fa6824b582a9d80bf5",
-      "bytes": 59861,
-      "lines": 1230,
+      "sha256": "b40e6eaa90e37d1400ef5d82fc7c4282b9b946ca6c0bb5f25f7439b5ccc5f50a",
+      "bytes": 60216,
+      "lines": 1244,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "b40e6eaa90e37d1400ef5d82fc7c4282b9b946ca6c0bb5f25f7439b5ccc5f50a",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          410
+        ],
+        [
+          411,
+          820
+        ],
+        [
+          821,
+          1230
+        ]
+      ],
+      "reviewed_lines": 1244,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "explicit private policy→静的daily snapshot検査→gzip→固定OS cipher+MAC→decode/readback→exclusive新規bundle; trusted別ディレクトリreceipt/state、health status、readonly preflight、verify/drill/restore CLI。",
+      "callers": [
+        {
+          "path": "mcs/ingest/run_check.py",
+          "line": 166
+        },
+        {
+          "path": "mcs/ops/mcs_restore.py",
+          "line": 27
+        },
+        {
+          "path": "tests/ingest/test_run_check_stages.py",
+          "line": 1856
+        },
+        {
+          "path": "tests/ops/test_backup_integration.py",
+          "line": 13
+        },
+        {
+          "path": "tests/ops/test_backup_preflight.py",
+          "line": 12
+        },
+        {
+          "path": "tests/ops/test_backup_reply_gap.py",
+          "line": 6
+        },
+        {
+          "path": "tests/ops/test_backup_restore_consent.py",
+          "line": 12
+        },
+        {
+          "path": "tests/ops/test_backup_scheduler.py",
+          "line": 10
+        },
+        {
+          "path": "tests/ops/test_mcs_backup.py",
+          "line": 18
+        },
+        {
+          "path": "mcs/ops/mcs_backup.py",
+          "entrypoint": "__main__ CLI"
+        },
+        {
+          "path": "deployment/scripts/mcs_offsite.sh",
+          "line": 34
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "mcs/ops/mcs_cli.py",
@@ -7930,25 +8077,91 @@
     },
     {
       "path": "mcs/ops/mcs_refstats.py",
-      "sha256": "ded9e6f8177a3651f48fc3aa495555cd8daf1d82bcc4bd05dc0cd29cae5750a8",
-      "bytes": 14004,
+      "sha256": "30eb47bd97531fb60093147fa34d1b9c6c1c2789058553c242c395ccae6cdf6f",
+      "bytes": 14016,
       "lines": 347,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "30eb47bd97531fb60093147fa34d1b9c6c1c2789058553c242c395ccae6cdf6f",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          347
+        ]
+      ],
+      "reviewed_lines": 347,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "readonly snapshot statsをprivate pending保存し、core ownerの人承認txによるexact approved file hash/artifact/commandreceiptを検証→match/drift/regression/unverified/superseded。原文の可視化/自動承認/外部送信を追加しない。",
+      "callers": [
+        {
+          "path": "tests/ops/test_mcs_refstats.py",
+          "line": 16
+        },
+        {
+          "path": "mcs/ops/mcs_refstats.py",
+          "entrypoint": "__main__ CLI"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "mcs/ops/mcs_repair.py",
-      "sha256": "341525a73ab4cc258ace42f3f6a3800c6b0a31334855f4d9b9d89313b76f550e",
-      "bytes": 31468,
-      "lines": 624,
+      "sha256": "d402ae651d2c4f5cef87f92bb108d66c59cea6eae97be1f2f932271be1e11fb6",
+      "bytes": 31593,
+      "lines": 626,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "d402ae651d2c4f5cef87f92bb108d66c59cea6eae97be1f2f932271be1e11fb6",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          330
+        ],
+        [
+          331,
+          624
+        ]
+      ],
+      "reviewed_lines": 626,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "explicit static snapshotのauditと既知/unknown counts→7 ordered stagesの提案→別device backupと既存receiptに束縛したprivate chain audit→未完了/保留を集計。実repairの実行権限を発行しない。",
+      "callers": [
+        {
+          "path": "mcs/ops/mcs_backup.py",
+          "line": 59
+        },
+        {
+          "path": "tests/ingest/test_thread_tombstone_gap.py",
+          "line": 6
+        },
+        {
+          "path": "tests/ops/test_backup_reply_gap.py",
+          "line": 7
+        },
+        {
+          "path": "tests/ops/test_mcs_repair.py",
+          "line": 16
+        },
+        {
+          "path": "mcs/ops/mcs_repair.py",
+          "entrypoint": "__main__ CLI"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "mcs/ops/mcs_requests.py",
@@ -7986,14 +8199,43 @@
     },
     {
       "path": "mcs/ops/mcs_restore.py",
-      "sha256": "6af2701965f36738ce7207724b6a3d709581f1267c05b235e774ca5b6533268c",
-      "bytes": 15269,
-      "lines": 358,
+      "sha256": "76ad25cfb254d25608b75da247f19926255dbb8718bd2c21be6943f7b13cbff5",
+      "bytes": 15468,
+      "lines": 361,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "76ad25cfb254d25608b75da247f19926255dbb8718bd2c21be6943f7b13cbff5",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          358
+        ]
+      ],
+      "reviewed_lines": 361,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "new-terminal復元証拠とDB/dir identity→人のplan/approve/pinnedreceipt/resume→writersのみ許可、delivery hold保持。採用後の通常DB更新は許すが元immutable証拠を継続照合。",
+      "callers": [
+        {
+          "path": "mcs/notify/notify_cards.py",
+          "line": 424
+        },
+        {
+          "path": "tests/ops/test_backup_restore_consent.py",
+          "line": 13
+        },
+        {
+          "path": "mcs/ops/mcs_restore.py",
+          "entrypoint": "__main__ CLI"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "mcs/ops/mcs_setup.py",
@@ -8094,14 +8336,59 @@
     },
     {
       "path": "mcs/ops/request_loops.py",
-      "sha256": "9bd79e5dee8b06575dd1f8a2e5143832982efae178609cdd22f4cb1d130efee7",
-      "bytes": 5752,
+      "sha256": "a8c4b701c8e038ad0824edc70704594f63cc20fceb1f634635a0406695462e68",
+      "bytes": 5758,
       "lines": 137,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "a8c4b701c8e038ad0824edc70704594f63cc20fceb1f634635a0406695462e68",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          137
+        ]
+      ],
+      "reviewed_lines": 137,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "strict human loop-ref envelopeとlive候補のproject/message/revision/exact origin quote/roots/source-policy fingerprintsをreadonly照合し、mcs_requests既存receipt txとplugin selectorへ返す。",
+      "callers": [
+        {
+          "path": "hermes_plugin/__init__.py",
+          "line": 336
+        },
+        {
+          "path": "hermes_plugin/__init__.py",
+          "line": 370
+        },
+        {
+          "path": "mcs/ops/mcs_requests.py",
+          "line": 128
+        },
+        {
+          "path": "mcs/ops/mcs_requests.py",
+          "line": 235
+        },
+        {
+          "path": "mcs/ops/mcs_requests.py",
+          "line": 293
+        },
+        {
+          "path": "mcs/views/mcs_view.py",
+          "line": 607
+        },
+        {
+          "path": "mcs/ops/request_loops.py",
+          "entrypoint": "strict selector only"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "mcs/semantic/semantic.py",
@@ -9602,10 +9889,13 @@
       "bytes": 7146,
       "lines": 68,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/.claims/architecture/human-approval-and-external-export.json",
@@ -9613,10 +9903,13 @@
       "bytes": 4716,
       "lines": 50,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/.claims/architecture/ingest-and-mcs-adapter.json",
@@ -9624,10 +9917,13 @@
       "bytes": 7460,
       "lines": 74,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/.claims/architecture/ledger-storage.json",
@@ -9635,10 +9931,13 @@
       "bytes": 5492,
       "lines": 60,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/.claims/architecture/notification-delivery.json",
@@ -9646,10 +9945,13 @@
       "bytes": 5468,
       "lines": 54,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/.claims/architecture/overview.json",
@@ -9657,10 +9959,13 @@
       "bytes": 3171,
       "lines": 34,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/.claims/operations/deployment-and-updates.json",
@@ -9668,10 +9973,13 @@
       "bytes": 4469,
       "lines": 50,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/.claims/operations/testing-and-ci.json",
@@ -9679,10 +9987,13 @@
       "bytes": 5406,
       "lines": 60,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/.claims/quickstart.json",
@@ -9690,10 +10001,13 @@
       "bytes": 2062,
       "lines": 24,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/.last-update.json",
@@ -9701,10 +10015,13 @@
       "bytes": 200,
       "lines": 8,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/.page-manifest.json",
@@ -9712,10 +10029,13 @@
       "bytes": 3802,
       "lines": 68,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/INSTRUCTIONS.md",
@@ -9723,10 +10043,20 @@
       "bytes": 3237,
       "lines": 49,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "canonical-wiki-brief",
+      "status": "PARTIAL",
+      "evidence": [
+        "Whole user-authored49line brief read; no generated classification. Maintained code/docs/PHI/source/current-versus-history contracts align; parent documentation criteria pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          49
+        ]
+      ],
+      "read_sha256": "4d3b26ee66727baf0d69b688fcfecb70d00a1aaacf8f64bcc03f56baac71504b"
     },
     {
       "path": "openwiki/architecture/extraction-and-semantic.md",
@@ -9734,10 +10064,13 @@
       "bytes": 7155,
       "lines": 84,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/architecture/human-approval-and-external-export.md",
@@ -9745,10 +10078,13 @@
       "bytes": 5664,
       "lines": 66,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/architecture/index.md",
@@ -9756,10 +10092,13 @@
       "bytes": 1746,
       "lines": 8,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/architecture/ingest-and-mcs-adapter.md",
@@ -9767,10 +10106,13 @@
       "bytes": 7105,
       "lines": 78,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/architecture/ledger-storage.md",
@@ -9778,10 +10120,13 @@
       "bytes": 5808,
       "lines": 65,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/architecture/notification-delivery.md",
@@ -9789,10 +10134,13 @@
       "bytes": 7113,
       "lines": 75,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/architecture/overview.md",
@@ -9800,10 +10148,13 @@
       "bytes": 7693,
       "lines": 74,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/index.md",
@@ -9811,10 +10162,13 @@
       "bytes": 288,
       "lines": 12,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/operations/deployment-and-updates.md",
@@ -9822,10 +10176,13 @@
       "bytes": 6369,
       "lines": 69,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/operations/index.md",
@@ -9833,10 +10190,13 @@
       "bytes": 576,
       "lines": 4,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/operations/testing-and-ci.md",
@@ -9844,10 +10204,13 @@
       "bytes": 5791,
       "lines": 60,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "openwiki/quickstart.md",
@@ -9855,10 +10218,13 @@
       "bytes": 6067,
       "lines": 56,
       "module": "openwiki",
-      "kind": "generated_evidence",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "kind": "generated-wiki-evidence",
+      "status": "EXCLUDED",
+      "evidence": [
+        "Generated provenance at2026-09-29/b2ab605 verified; all9 page manifest bytes match and all9 JSON claims schema/pageVersion/verification parse.3 generated navigation indices fully inspected. CI generator owned by core5; no OpenWiki job or external publish executed."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "exclusion_reason": "Dated generated OpenWiki output/claims/index/metadata, not implementation source. AGENTS explicitly prohibits direct generated edits. Canonical human brief and source are audited separately; current-source truth is not inferred from dated claims."
     },
     {
       "path": "pyproject.toml",
@@ -11397,23 +11763,31 @@
     },
     {
       "path": "tests/extract/test_drug_map.py",
-      "sha256": "57650e5e99724dfe24001007ff7c098669fb77a52a0c63cd648f4f8fe3c30abc",
-      "bytes": 18145,
-      "lines": 417,
+      "sha256": "79fbf122782fe40c378f461d44b522784eb4a974692ce861f9b41196b16aa20c",
+      "bytes": 18419,
+      "lines": 425,
       "module": "tests/extract",
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending.",
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
       ],
-      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
-      "reviewed_sha256": "57650e5e99724dfe24001007ff7c098669fb77a52a0c63cd648f4f8fe3c30abc",
-      "reviewed_lines": 417,
-      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
-      "responsibility": "私有辞書のschema、symlink/owner/permissions/SHA/容量、exact source binding、derived refs/remove/rollbackを合成JSONとDBで検査。",
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "79fbf122782fe40c378f461d44b522784eb4a974692ce861f9b41196b16aa20c",
+      "reviewed_lines": 425,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "合成private dictionaryのschema/owner/symlink/SHA/bound、source identity/aliases/candidates/derivation/remove/rollback/期間解釈を検査。最低Pythonで同じFictionalEntry required/optionalキーを保持。",
       "callers": [
-        "scripts/run_tests.sh / pytest",
-        "対象runtime/共有consumerをimportsで確認"
+        {
+          "path": "scripts/run_tests.sh",
+          "entrypoint": "pytest explicit synthetic targets"
+        },
+        {
+          "path": "tests/views/test_drug_candidates.py",
+          "line": 13,
+          "owner": "parent; readonly"
+        }
       ],
       "full_content_read": true,
       "read_ranges": [
@@ -11425,7 +11799,9 @@
           211,
           417
         ]
-      ]
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "tests/extract/test_drug_map_evaluation.py",
@@ -11594,6 +11970,17 @@
           234
         ]
       ]
+    },
+    {
+      "path": "tests/extract/test_extract_packet5_regressions.py",
+      "sha256": "d3b40dee06ea5aa659c463a0f29d48c6b15ec69096c6ded7e9f42932b6a9691a",
+      "bytes": 5454,
+      "lines": 110,
+      "module": "tests/extract",
+      "kind": "source",
+      "status": "UNSEEN",
+      "evidence": [],
+      "review_input": "7e104ea04196df159c43318df5ca5a0850298e2a"
     },
     {
       "path": "tests/extract/test_extract_prefilter.py",
@@ -14283,9 +14670,30 @@
       "lines": 13,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "918ca731cb9856d916cf944fbc63de6fae30d555249884a6b8e81220d29836b3",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          13
+        ]
+      ],
+      "reviewed_lines": 13,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "setup/update/recoveryのresident/watcher/excluded定数が一致することだけをimport/stub loadで検査。実install/recovery/launchctlは実行しない。",
+      "callers": [
+        {
+          "path": "scripts/run_tests.sh",
+          "entrypoint": "pytest explicit synthetic targets"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "tests/ops/test_backup_integration.py",
@@ -14294,9 +14702,30 @@
       "lines": 305,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "a5940be764b4603c217ee22aefca4f66826fc96bfcfb253806bfff8cb36f348d",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          305
+        ]
+      ],
+      "reviewed_lines": 305,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "backup CLI/private keyfd/keychain stub/state/status、schedule opt-inとhealth/import consumerの合成統合。実サービスに接続せず収集/通知を起動しない。",
+      "callers": [
+        {
+          "path": "scripts/run_tests.sh",
+          "entrypoint": "pytest explicit synthetic targets"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "tests/ops/test_backup_preflight.py",
@@ -14305,9 +14734,34 @@
       "lines": 483,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "f4776641cfa233bee1295b2b1b9172c92ae9e0cb25c6c82d767605030c2fb74d",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          250
+        ],
+        [
+          251,
+          483
+        ]
+      ],
+      "reviewed_lines": 483,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "readonly planのblocker/unknown、missing/legacy DB、capacity/RPO/drill/destination、SQLite step/time budgetとpaths/privacyの強い否定試験。",
+      "callers": [
+        {
+          "path": "scripts/run_tests.sh",
+          "entrypoint": "pytest explicit synthetic targets"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "tests/ops/test_backup_reply_gap.py",
@@ -14316,9 +14770,30 @@
       "lines": 28,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "22c124203027d046d1c6180949cabdea76fc85a45cfc6632701489d5ce3edd0c",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          28
+        ]
+      ],
+      "reviewed_lines": 28,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "backup inventoryとrepairのREPLY_GAPをtombstone返信を含む同じsynthetic SQLで照合。",
+      "callers": [
+        {
+          "path": "scripts/run_tests.sh",
+          "entrypoint": "pytest explicit synthetic targets"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "tests/ops/test_backup_restore_consent.py",
@@ -14327,9 +14802,34 @@
       "lines": 449,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "96ea6f937677040c5a35343920b429942daf845c2bd104f6fc9631b0336a362e",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          449
+        ]
+      ],
+      "reviewed_lines": 449,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "plan/approve/resumeのactor/reason/custody/receipt/dir/DB/report/marker bindingsとprivate files、lock/途中失敗/配送hold/normal writesを実tempfilesで確認。",
+      "callers": [
+        {
+          "path": "scripts/run_tests.sh",
+          "entrypoint": "pytest explicit synthetic targets"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "tests/ops/test_backup_scheduler.py",
@@ -14338,9 +14838,30 @@
       "lines": 117,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "84450bb0bdec4d42bca12189d0e4b2b12000d7da4a6a9828bb43809f03fd5a14",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          117
+        ]
+      ],
+      "reviewed_lines": 117,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "明示policy scheduled/default-off/explicit snapshotdir、状態時刻/拒否/health結果を合成stubで確認。",
+      "callers": [
+        {
+          "path": "scripts/run_tests.sh",
+          "entrypoint": "pytest explicit synthetic targets"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "tests/ops/test_brain_export.py",
@@ -14621,9 +15142,30 @@
       "lines": 368,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "ab5292bbca20bcb02c43b984908e69127cf2be3930a14cc6efe4659f1e3f8a87",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          368
+        ]
+      ],
+      "reviewed_lines": 368,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "offline approved-pin/hash/edition/layout/42columns/CP932/zip/rows/dates/terms/status-policy/unknown/ambiguous/new output/permissions/readonly/dry-runを完全合成。",
+      "callers": [
+        {
+          "path": "scripts/run_tests.sh",
+          "entrypoint": "pytest explicit synthetic targets"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "tests/ops/test_jev_value_input_boundary.py",
@@ -14670,14 +15212,43 @@
     },
     {
       "path": "tests/ops/test_mcs_backup.py",
-      "sha256": "14b55a9a8c6c1fa4a1ea33a78a7717a0b5bb4bee4d5868aad63e30cc06e167d7",
-      "bytes": 36454,
+      "sha256": "6758701ea363111c33c5a607b024558c4e5990d3d10b312618d45efce73c6220",
+      "bytes": 36450,
       "lines": 797,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "6758701ea363111c33c5a607b024558c4e5990d3d10b312618d45efce73c6220",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          560
+        ],
+        [
+          561,
+          797
+        ]
+      ],
+      "reviewed_lines": 797,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "checked-in synthetic key/temporary DBのOS cipher実試験、MAC/tamper/size/RPO/private/type/symlink/atomic fsync/drill/new restore/collision/old generation preservation。",
+      "callers": [
+        {
+          "path": "scripts/run_tests.sh",
+          "entrypoint": "pytest explicit synthetic targets"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "tests/ops/test_mcs_cli.py",
@@ -14709,14 +15280,39 @@
     },
     {
       "path": "tests/ops/test_mcs_features.py",
-      "sha256": "0a9038659657cd766aa9d26ebef4efa2e94b0419addb45bd2413181d1ec6df54",
-      "bytes": 25744,
-      "lines": 481,
+      "sha256": "5cca434f1b6d18f33d86f09a4113787e51b22ac74465d36171204e58da24e93c",
+      "bytes": 25870,
+      "lines": 482,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "5cca434f1b6d18f33d86f09a4113787e51b22ac74465d36171204e58da24e93c",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          245
+        ],
+        [
+          246,
+          481
+        ]
+      ],
+      "reviewed_lines": 482,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "request/signal/reference-stat sharedcontractsのhuman guards/snapshot/read-only paths、source edits/revisions/concurrency/replay/tx/inbox fsync unknown/receipt-before-unlinkを一時DBとstubで検査。",
+      "callers": [
+        {
+          "path": "scripts/run_tests.sh",
+          "entrypoint": "pytest explicit synthetic targets"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "tests/ops/test_mcs_operation_cli.py",
@@ -14784,14 +15380,39 @@
     },
     {
       "path": "tests/ops/test_mcs_refstats.py",
-      "sha256": "56a29454593d3633b3021c148848204ba4c229f4c97cd315824a338888d0435c",
-      "bytes": 16132,
-      "lines": 442,
+      "sha256": "772abdec00bd66ea82391fa9590a2c715045ed5c448d71858452299d8c01d5ce",
+      "bytes": 16230,
+      "lines": 443,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "772abdec00bd66ea82391fa9590a2c715045ed5c448d71858452299d8c01d5ce",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          230
+        ],
+        [
+          231,
+          442
+        ]
+      ],
+      "reviewed_lines": 443,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "pending capture→actual human command tx→exact file/artifact/receipt approval、reapproval各fault/COMMIT denial rollback、drift/regression/rolledback file/superseded、safe input/errorを合成statsで確認。",
+      "callers": [
+        {
+          "path": "scripts/run_tests.sh",
+          "entrypoint": "pytest explicit synthetic targets"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "tests/ops/test_mcs_repair.py",
@@ -14800,20 +15421,66 @@
       "lines": 557,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "a0d6187c390370aa52502d7eee6f1850e18c9dcd712f8124e753b3f4df64ebd3",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          280
+        ],
+        [
+          281,
+          557
+        ]
+      ],
+      "reviewed_lines": 557,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "static snapshot unknown/old columns/schema/step bound、stages/no authority、ordered private append/hash binding、backup proof、human commandreceipt/不正log/record/finalizeを完全合成。",
+      "callers": [
+        {
+          "path": "scripts/run_tests.sh",
+          "entrypoint": "pytest explicit synthetic targets"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "tests/ops/test_mcs_request_loops.py",
-      "sha256": "1580ed497e2efdc079ee1a016c50757edb55745c4b3f4ec0960e16ae3d4fb4c9",
-      "bytes": 6793,
-      "lines": 159,
+      "sha256": "72b366df44ff3a7942a07647341197df7091f860ab11490257887dbadab4ea78",
+      "bytes": 6896,
+      "lines": 160,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "72b366df44ff3a7942a07647341197df7091f860ab11490257887dbadab4ea78",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          159
+        ]
+      ],
+      "reviewed_lines": 160,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "actual candidate producer→current exact evidence/tenant/revision/policy→request+link+receipt same tx、source stale拒否、link insert denial rollback。",
+      "callers": [
+        {
+          "path": "scripts/run_tests.sh",
+          "entrypoint": "pytest explicit synthetic targets"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "tests/ops/test_mcs_request_reason.py",
@@ -15075,15 +15742,33 @@
     },
     {
       "path": "tests/ops/test_ops_packet5_regressions.py",
-      "sha256": null,
+      "sha256": "64d8b56d67e9e25eff08a81e1edf2340c3a2565b9ee24cc14066d7e7337dbab4",
       "bytes": 8024,
       "lines": 181,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
+      "status": "REVIEWED",
       "evidence": [
-        "Current new tracked path reconciled; source review tracked by upcoming accepted owner packet."
-      ]
+        "Current new tracked path reconciled; source review tracked by upcoming accepted owner packet.",
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
+      ],
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "64d8b56d67e9e25eff08a81e1edf2340c3a2565b9ee24cc14066d7e7337dbab4",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          181
+        ]
+      ],
+      "reviewed_lines": 181,
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "responsibility": "Pの確定欠陥に対する16parametrized behavior cases。実tempDBと同一bytes異inode置換/dir move・競合・巨大int・deep JSON・unknown metaを検査し、正常live DB updatesと正規旧approvalをpositive controlとする。",
+      "callers": [
+        "scripts/run_tests.sh / synthetic fixture consumer"
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "New complete file read in exact source patch, regression and criteria in owning report."
     },
     {
       "path": "tests/ops/test_receipt_contract.py",
@@ -15464,29 +16149,40 @@
     },
     {
       "path": "tests/semantic/test_canonical_human_review_assets.py",
-      "sha256": "ea65c64d2771e9814b89689f5dfbae5b7a136ddfde6d272b8e191fe47869bda1",
-      "bytes": 7106,
-      "lines": 161,
+      "sha256": "bec54ad88a3d6ac6c7fc77f447f1e887b38df7db2373c124b1e8f4e74e39b473",
+      "bytes": 8933,
+      "lines": 199,
       "module": "tests/semantic",
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending",
+        "Full owned P contents/all20criteria + exact W patch and consumer boundary reviewed; matching I SHA. Local worker proof retained; final fixed-I gates/reviewer pending."
       ],
-      "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
-      "reviewed_sha256": "ea65c64d2771e9814b89689f5dfbae5b7a136ddfde6d272b8e191fe47869bda1",
-      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "review_input": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "reviewed_sha256": "bec54ad88a3d6ac6c7fc77f447f1e887b38df7db2373c124b1e8f4e74e39b473",
+      "review_packet": "docs/development/maintenance-semantic-packet5-evidence.json",
       "read_ranges": [
         [
           1,
           161
         ]
       ],
-      "responsibility": "固定220件の合成held-out資産・pending人手評価・identity/引用/manifest改変の拒否と実offline CLI。",
+      "responsibility": "heldout220 synthetic pendingのsource uniqueness/count/quotes/focus/hash/source-first export/G6不成立とreal offline CLIを検査。追加schemaキー/explicit UTC/diagnostic privacy regression。",
       "callers_or_consumers": [
         "pytest collection",
         "tests/conftest.py"
-      ]
+      ],
+      "full_content_read": true,
+      "reviewed_lines": 199,
+      "callers": [
+        {
+          "path": "scripts/run_tests.sh",
+          "entrypoint": "pytest explicit synthetic targets"
+        }
+      ],
+      "criteria_ref": "docs/development/maintenance-semantic-packet5-evidence.json#criteria",
+      "W_review_basis": "P complete full-read + ALL exact P→W changed hunks read in nontruncated source/test groups + relevant synthetic after verification; unchanged portions reuse only exact git byte delta. Unchanged SHA reuses entire P read."
     },
     {
       "path": "tests/semantic/test_canonical_projection.py",
@@ -17892,5 +18588,17 @@
     "accepted_files": 22,
     "source_W": "1b94f04d8253a29195d709f1f66d1f3c11f28343",
     "report_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a"
+  },
+  "last_semantic5_import": {
+    "report": "docs/development/maintenance-semantic-packet5-evidence.json",
+    "report_sha256": "e4c3604f6a1a8c28728e6b507e0a74f97bda01fab623aefc3cfdfbd88093c724",
+    "source_W": "b28604aaf7af5c305efaf08944c02a5486b4e35b",
+    "accepted_files": 22,
+    "readonly_deferrals": {
+      "H01": "producer _STALE fixed in parent328c integration; core5 evidence pending",
+      "H02": "root PARENT-VIEWS-003 reproduced/fixed and both runtimes verified",
+      "H03": "final fixed-I validation/reviewer pending",
+      "H04": "authorized synthetic/local scope safety boundary"
+    }
   }
 }

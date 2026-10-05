@@ -1178,6 +1178,152 @@
       "change": "fake executableが既存_runtime_probe仕様の完全合成Python/SQLite/packages JSONを返す。returncodeのSQLite安全判定・secret非表示・合成files不変更assertionは維持。",
       "packet": "docs/development/maintenance-core-packet4-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F01",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_restore.py"
+      ],
+      "cause": "復元済みresumeが失効bindingを再確認しない; same activation alone granted true although writers_resumed false after equal-byte DB/report/marker inode replacement, dir move, missing marker",
+      "change": "再試行時static=Falseで同じ証拠/identity照合。通常DB更新positive controlは許可、hold_all/receipt/actor/reasonとBLOCKED防止は維持。",
+      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F02",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_backup.py"
+      ],
+      "cause": "drillのos.replaceが競合ledgerを上書き/cleanup対象にする; mark-restored then synthetic concurrent ledger was replaced and operation succeeded",
+      "change": "fsync+exclusive os.link、published flag、collision時他者ledgerとhold保持。自身partial destination failure cleanupは既存試験のseamだけ変更し同じassert保持。",
+      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F03",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_backup.py"
+      ],
+      "cause": "finite判定で巨大intがOverflowErrorを漏らす; 10**1000 in trusted timestamp or max_seconds escaped stable refusal",
+      "change": "既存numeric bool/type/NaN/Inf拒否意味を局所finite helperで共有、OverflowError=False。status/plan/fresh/metricの同じ判定を整合。有効値/保存形/既定budgetは変更なし。",
+      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F04",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_repair.py"
+      ],
+      "cause": "malformed v1 metaをrepairがstale候補0と報告; valid structural audit plus invalid artifact JSON produced zero, satisfying skip zero criterion",
+      "change": "SQL JSON guardを保持し不明meta/content_hashならNone、既存valid count/dedupは維持。原snapshot bytes不変/完了偽証なし。producer _STALEは所有外handoff。",
+      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F05",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/request_loops.py"
+      ],
+      "cause": "深いLoop候補JSONのRecursionErrorが拒否receiptを中断; actual minimum Python parser raised in shared receipt tx for candidate content/meta",
+      "change": "decode失敗だけValueError/codeへ整合。current source/project/exact quote/hash/policy/人承認を緩めずrejected receipt1/request0/link0を実DBで確認。",
+      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F06",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_refstats.py"
+      ],
+      "cause": "壊れた承認JSONが正規旧reference baselineを隠す; corrupt latest artifact or receipt yielded RecursionError instead of verifying older real approval",
+      "change": "JSON解析不可行は承認根拠にならず無視。正常baselineはexact filehash+artifact id+committed commandreceipt一致のままmatch。",
+      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F07",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "evaluation/request_following_review.py"
+      ],
+      "cause": "review queueがminimum Pythonで起動せず型required集合も誤る; NotRequired/Required unavailable on 3.10; deferred annotations also yielded wrong runtime required/optional keys on 3.13",
+      "change": "stdlib TypedDict required基底＋total=False継承。Quote契約/SourceCase5required1optional/Proposal3required6optionalを維持。実3.10 outside-repo CLIと全220synthetic export。",
+      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F08",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/import_drug_master.py"
+      ],
+      "cause": "medicine pin deep JSONのCLI traceback; bounded local pin raised RecursionError before source open",
+      "change": "existing CLI refusal handlerへRecursionErrorだけ追加。report shape/code/dryrun/local/private/source hash/medicine policyは維持、output/source writes0。",
+      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F09",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "evaluation/request_following_review.py"
+      ],
+      "cause": "review source_time明示UTC Zが3.10で拒否; Z valid on 3.13 but actual3.10 fromisoformat rejects; +00/+09 controls pass",
+      "change": "末尾Zのみ+00:00に正規化。naive/unknown TZは推定せず拒否保持、元worksheet原文日時/hashを変更しない。",
+      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F10",
+      "class": "confirmed-test-maintenance",
+      "status": "FIXED",
+      "paths": [
+        "tests/ops/test_mcs_request_loops.py",
+        "tests/ops/test_mcs_refstats.py",
+        "tests/ops/test_mcs_features.py"
+      ],
+      "cause": "3.10 fault testのNone authorizer解除が全SQLを拒否; 7 real fault tests failed after intended release, not at denial/rollback contract",
+      "change": "fault期間のDENY callbackは維持しcleanupのみSQLITE_OK callableへ。minimum full related46とmodern7control成功、rollback/oldfile/receipt/inbox assertionを削除/弱化/skipしていない。",
+      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F11",
+      "class": "confirmed-test-maintenance",
+      "status": "FIXED",
+      "paths": [
+        "tests/extract/test_drug_map.py"
+      ],
+      "cause": "drug_map testのNotRequired importが3.10 collectionを阻害; collection error before test execution; parent views consumer imports shared DOCUMENT/_dictionary/_seed",
+      "change": "required6基底+total=False source_codes optional1、実3.10 test family49 pass、fixture contents/consumer helpers/clinical candidate logic unchanged。",
+      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F12",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "evaluation/request_following_review.py"
+      ],
+      "cause": "queue不正入力の例外境界でtraceback/私有path漏洩; deep manifest uncaught; missing manifest stderr reason included synthetic private-directory path",
+      "change": "parse/IO/schema不正を理由codeへ。既知ValueError tokens/caseid/field codesは保持し、raw parser/OS exception textをqueue_input_invalidにする。stdout export0、existing queue_manifest_invalid互換保持。",
+      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
     }
   ],
   "deferred": [],

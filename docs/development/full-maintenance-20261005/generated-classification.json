@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "classification": "generated-wiki-output-not-current-source-proof",
+  "generated_files": [
+    {
+      "path": "openwiki/.claims/architecture/extraction-and-semantic.json",
+      "sha256": "a04d8d8445ca626f4e5cd13315e7fdb44a1f961a69c5991e75b307a916c30162",
+      "bytes": 7146
+    },
+    {
+      "path": "openwiki/.claims/architecture/human-approval-and-external-export.json",
+      "sha256": "3cd40318c7d9e60e827ea68dbd29a3e352aae09a6300c08c6f53e79eee4e370a",
+      "bytes": 4716
+    },
+    {
+      "path": "openwiki/.claims/architecture/ingest-and-mcs-adapter.json",
+      "sha256": "9eb3f51e7ea810a57072fc1fedf035e9d938d8c02c2be1b63c7da1e75101d866",
+      "bytes": 7460
+    },
+    {
+      "path": "openwiki/.claims/architecture/ledger-storage.json",
+      "sha256": "221c340955879f5d5e179d39eeddcf40972f91b5798303ff414cc76c485f7f57",
+      "bytes": 5492
+    },
+    {
+      "path": "openwiki/.claims/architecture/notification-delivery.json",
+      "sha256": "a3e84f5d19455e35612152ba9042a7768c5294ad2d07e41b11b7ec0c2d35c929",
+      "bytes": 5468
+    },
+    {
+      "path": "openwiki/.claims/architecture/overview.json",
+      "sha256": "a01a4becec2bdc04bcd1da62b8e73cd9ea9bd56aec8f3a84d83c95f22d2ff11f",
+      "bytes": 3171
+    },
+    {
+      "path": "openwiki/.claims/operations/deployment-and-updates.json",
+      "sha256": "97d6aa501fc2344d00d1f8ac60a02e1aea849d85e624ba4d95eb716b81900821",
+      "bytes": 4469
+    },
+    {
+      "path": "openwiki/.claims/operations/testing-and-ci.json",
+      "sha256": "e54508270611239f58f265649bea9ebe43e6a80c7e8ffa233a5b331390a20960",
+      "bytes": 5406
+    },
+    {
+      "path": "openwiki/.claims/quickstart.json",
+      "sha256": "b26c3b3beb6864b87d9b6bb81b7ed28cfa9e0579ae48cbc44a125d96ee863972",
+      "bytes": 2062
+    },
+    {
+      "path": "openwiki/.last-update.json",
+      "sha256": "aee976735d7feeef61ffe3d76e12f28c520c7d14fdbc7d40777e17b72e20daac",
+      "bytes": 200
+    },
+    {
+      "path": "openwiki/.page-manifest.json",
+      "sha256": "68421d1e1791953f481a0d5f50de817561f88e61272809cdbb6f8116e30fc9d8",
+      "bytes": 3802
+    },
+    {
+      "path": "openwiki/architecture/extraction-and-semantic.md",
+      "sha256": "9acb429bdc05492ac21a8b86b4cb15e33968c9c3199dfec8716814559657da45",
+      "bytes": 7155
+    },
+    {
+      "path": "openwiki/architecture/human-approval-and-external-export.md",
+      "sha256": "9548c9571d53b85c0d6052483282449e7c1c6fe08421d94de98a8e0eceb1b58e",
+      "bytes": 5664
+    },
+    {
+      "path": "openwiki/architecture/index.md",
+      "sha256": "7345daaf25972a9e7138039b4d8bb5a5a91044807615f0b2b62e42c4a8bbbe31",
+      "bytes": 1746
+    },
+    {
+      "path": "openwiki/architecture/ingest-and-mcs-adapter.md",
+      "sha256": "79099f5bfa5b97d9333ff699b55005acbe86244f6a2d3df7b8aaca8d01fcf958",
+      "bytes": 7105
+    },
+    {
+      "path": "openwiki/architecture/ledger-storage.md",
+      "sha256": "8470fabce9a2e3ab879eec7f64f84ed1b546157019cdaa8cc2c5842d9dfea564",
+      "bytes": 5808
+    },
+    {
+      "path": "openwiki/architecture/notification-delivery.md",
+      "sha256": "71116014e8aa3508d38d3f453900727803b7e030cab9efc44f56d85a21d2e272",
+      "bytes": 7113
+    },
+    {
+      "path": "openwiki/architecture/overview.md",
+      "sha256": "b5b9a7021efa43e4ce8e104013b67d2fb210de74cadc345327e14f20993cd50e",
+      "bytes": 7693
+    },
+    {
+      "path": "openwiki/index.md",
+      "sha256": "270c26f6a39498cde64cf79067e17fc32095ee00044de1d79870cc6a8036f74f",
+      "bytes": 288
+    },
+    {
+      "path": "openwiki/operations/deployment-and-updates.md",
+      "sha256": "5562e686da0855a729e708c7032e2102bee60fdc23093d5b2807c6d9dbcec318",
+      "bytes": 6369
+    },
+    {
+      "path": "openwiki/operations/index.md",
+      "sha256": "ecb208efebfd1d4837a7b7a966f94dd7baeec635e13867c2b9fca0c94fcd9a65",
+      "bytes": 576
+    },
+    {
+      "path": "openwiki/operations/testing-and-ci.md",
+      "sha256": "3bcfb6efa7e5ba2be5cb8244f6bcf2d875f1b8ed25c1c4e0bd90df7e88155720",
+      "bytes": 5791
+    },
+    {
+      "path": "openwiki/quickstart.md",
+      "sha256": "412fb1f693863471ec5c364a54c8d15d50949fac65428108bb3c4bd06b13dd09",
+      "bytes": 6067
+    }
+  ],
+  "page_manifest_matches": 9,
+  "claims_valid_structure": 9,
+  "dated_provenance": {
+    "updatedAt": "2026-09-29T04:02:05.632Z",
+    "command": "init",
+    "gitHead": "b2ab6054e46abc576f4e67870477d42294304be3",
+    "model": "host-agent/claude",
+    "status": "complete",
+    "language": "en"
+  },
+  "human_brief": "openwiki/INSTRUCTIONS.md",
+  "source_owner_packet": "core5 .github/workflows/openwiki-update.yml; semantic6 maintained generator docs; notify6 maintainedguides",
+  "limits": [
+    "No page claim truth inferred for current I",
+    "No live service, secret, patient or external wiki data accessed",
+    "No generated page hand edits or workflow run"
+  ]
+}
