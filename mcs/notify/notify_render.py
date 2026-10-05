@@ -14,6 +14,7 @@ import re
 import sqlite3
 import time
 
+from ledger import reaction_actor_summary
 from mcs_queries import EXTRACT_FEEDBACK_KIND, JST, feedback_current
 from mcs_requests import payload_hash, positive
 from message_metadata import (get_message_metadata, is_self_sender,
@@ -407,7 +408,6 @@ def _message_post(db, mid, m, sender, head="") -> str:
     sid = m["sender_id"] if "sender_id" in m.keys() else None
     meta["own_post"] = is_self_sender(db, sid)
     out.append(stamp_line(meta))
-    from ledger import reaction_actor_summary
     who = actor_line(reaction_actor_summary(db, mid))
     if who:
         out.append(who)
@@ -566,10 +566,18 @@ def _card_content(db, card) -> dict:
     shown, footer, toggles = page_states[page]
     for i in pages_idx[page]:
         containers.extend(rendered[i])
+    # Names belong to each post's body, never the aggregate card footer.
+    # Their displayed state still participates in presentation drift so a
+    # late complete walk, expiry or failure refreshes an already posted body.
+    actor_fp = payload_hash([
+        (mid, actor_line(reaction_actor_summary(db, mid)))
+        for mid, _meta in card_reactions(
+            db, card, None if kind == "thread" else shown)])
     return {"containers": containers, "footer": footer,
             "shown": shown, "shown_kind": shown_kind,
             "page": page, "pages": pages,
-            "source_fp": source_fp, "toggles": toggles}
+            "source_fp": source_fp, "toggles": toggles,
+            "actor_fp": actor_fp}
 
 
 def _current_generation(card, source_fp) -> int:
@@ -689,7 +697,7 @@ def card_reaction_lines(reactions) -> list:
             totals[e] = totals.get(e, 0) + n
         mine += bool(self_stamps(meta))
     parts = [" ".join(f"{e}{n}" for e, n in totals.items())
-             or ("スタンプなし" if not mine and unfetched < len(reactions)
+             or ("なし" if not mine and unfetched < len(reactions)
                  else "")]
     if mine:
         parts.append(f"自分 {mine}投稿")
@@ -697,7 +705,7 @@ def card_reaction_lines(reactions) -> list:
         parts.append(f"未取得 {unfetched}投稿")
     if any(meta["last_error"] for _mid, meta in reactions):
         parts.append("再取得失敗")
-    return ["MCS " + " · ".join(p for p in parts if p)]
+    return ["スタンプ " + " · ".join(p for p in parts if p)]
 
 
 def today_jst(now=None) -> str:
@@ -792,4 +800,5 @@ def _footer(db, card, shown, generation) -> tuple:
 
 def _content_fp(content: dict) -> str:
     return payload_hash({"c": content["containers"], "f": content["footer"],
-                "s": content["shown"], "p": content["page"]})
+                "s": content["shown"], "p": content["page"],
+                "a": content.get("actor_fp")})
