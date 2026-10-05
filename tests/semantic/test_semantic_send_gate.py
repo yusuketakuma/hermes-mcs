@@ -213,3 +213,74 @@ def test_stale_summary_rejected_by_gate_render_state_and_block(
     assert "要約（自動検査済）" not in notify_flush._format_event(db, raw)[0]
     assert calls == []
     db.close()
+
+
+@pytest.mark.parametrize("column", ["content", "meta"])
+def test_deep_summary_is_unpublishable_without_changing_saved_data(
+        tmp_path, monkeypatch, column):
+    db = _delivery_db(tmp_path, [_message()])
+    try:
+        cfg = _cfg("enforce")
+        monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+        event = _semantic_event(db)
+        payload = json.loads(event["payload"])
+        raw = db.db.execute(
+            "SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
+        deep = "[" * 10_000 + "0" + "]" * 10_000
+        with pytest.raises(RecursionError):
+            json.loads(deep)
+        with db.db:
+            db.db.execute(f"UPDATE artifacts SET {column}=? WHERE kind='semantic_summary'", (deep,))
+        before = list(db.db.iterdump())
+        assert notify_flush._semantic_render_state(db, raw) == ()
+        with pytest.raises(notify_flush._StaleSend, match="summary_stale"):
+            notify_flush._semantic_gate(db, event, payload)
+        assert "要約（自動検査済）" not in notify_flush._format_event(db, raw)[0]
+        assert list(db.db.iterdump()) == before
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("in_progress", [False, True])
+def test_deep_source_payload_preserves_stale_or_freeze_verdict(
+        tmp_path, monkeypatch, in_progress):
+    db = _delivery_db(tmp_path, [_message()])
+    try:
+        monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
+        event = _semantic_event(db)
+        payload = json.loads(event["payload"])
+        deep = "[" * 10_000 + "0" + "]" * 10_000
+        with pytest.raises(RecursionError):
+            json.loads(deep)
+        with db.db:
+            db.db.execute("UPDATE notify_outbox SET payload=? WHERE event_id=?", (deep, payload["src_event_id"]))
+        before = list(db.db.iterdump())
+        error = notify_flush._FreezeSend if in_progress else notify_flush._StaleSend
+        with pytest.raises(error, match="src_event_ineligible"):
+            notify_flush._semantic_gate(db, event, payload, in_progress=in_progress)
+        assert list(db.db.iterdump()) == before
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("in_progress", [False, True])
+def test_deep_source_progress_preserves_degraded_send_hold(
+        tmp_path, monkeypatch, in_progress):
+    db = _delivery_db(tmp_path, [_message()])
+    try:
+        monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
+        event = _semantic_event(db)
+        payload = json.loads(event["payload"])
+        payload.update(degraded=True, target_message_ids=[1])
+        deep = "[" * 10_000 + "0" + "]" * 10_000
+        with pytest.raises(RecursionError):
+            json.loads(deep)
+        with db.db:
+            db.db.execute("UPDATE notify_outbox SET state='pending',attempts=0,progress=? WHERE event_id=?", (deep, payload["src_event_id"]))
+        before = list(db.db.iterdump())
+        error = notify_flush._FreezeSend if in_progress else notify_flush._StaleSend
+        with pytest.raises(error, match="base_delivered"):
+            notify_flush._semantic_gate(db, event, payload, in_progress=in_progress)
+        assert list(db.db.iterdump()) == before
+    finally:
+        db.close()

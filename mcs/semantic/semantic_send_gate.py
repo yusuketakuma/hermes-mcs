@@ -67,7 +67,7 @@ def _summary_current(ledger, project_id: int, message_id: int,
     try:
         content = json.loads(row["content"] or "null")
         meta = json.loads(row["meta"] or "{}")
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError, RecursionError):
         return None
     if not isinstance(content, dict) or not isinstance(meta, dict):
         return None
@@ -103,7 +103,7 @@ def _source_event(ledger, project_id: int, event_id: int):
         return None, None
     try:
         source = json.loads(row["payload"] or "{}")
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError, RecursionError):
         return row, None
     return row, source if isinstance(source, dict) else None
 
@@ -168,7 +168,7 @@ def semantic_gate(ledger, ev, payload: dict, cfg: dict,
             raise ValueError("payload_invalid")
         try:
             progress = json.loads(source_row["progress"] or "{}")
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError, RecursionError):
             progress = None
         if (source_row["state"] == "accepted"
                 or source_row["attempts"] > 0

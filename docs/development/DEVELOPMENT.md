@@ -1,9 +1,9 @@
 # 開発・運用リファレンス — hermes-mcs
 
-開発中の安定稼働版1.0.13は[開発・受入計画](RELEASE_1.0.13.md)で追跡する。
+1.0.13の開発・受入項目は[開発・受入計画](RELEASE_1.0.13.md)で追跡する。
 旧1.0.13〜1.0.15・追加提案・バグ修正とinstall/update/setup/doctor統一を集約。
-統一入口（[共通CLI](../../mcs/ops/mcs_cli.py)）はローカル実装済みだが未公開で実機受入は未確認。
-未公開版を公開版の導入手順として使わない。
+統一入口（[共通CLI](../../mcs/ops/mcs_cli.py)）はローカル実装と合成検証が完了している。
+実機・実API・人手・相手側の受入条件は同計画の§6で確認する。導入する版の手順はCHANGELOGと導入ガイドを参照する。
 
 開発者・運用担当者向けの詳細リファレンス。
 利用者向けの概要は [README.md](../../README.md)、画面イメージ・データ解説は [USER_GUIDE.md](../guides/USER_GUIDE.md)、導入は [INSTALLATION.md](../guides/INSTALLATION.md) を参照。
@@ -147,12 +147,13 @@
 
 ## 運用
 
-- スケジューラ: hermes cron `MCS unread check`（`*/5 * * * *`,
+- スケジューラ: hermes cron `MCS unread check`（`*/10 * * * *`,
   `--no-agent` script `~/.hermes/scripts/mcs_check.sh`） — ログ `data/run.log`。
   実行履歴・incident は `hermes cron runs` / `hermes cron incidents` に残る。
-  収集は24時間5分間隔。health watcher は同じ固定間隔と
-  `health.max_missed_runs` から欠測許容を判定する。
-- 深掘り trickle: hermes cron `MCS durable drain`（`7,37 * * * *`, `--jobs-only`） —
+  MCSサーバーの負荷対策として、収集は24時間10分間隔に変更した。
+  health watcher 自身は5分間隔でローカルの状態を確認し、
+  `health.tick_interval_s`（既定600秒）と`health.max_missed_runs`から欠測許容を判定する。
+- 深掘り trickle: hermes cron `MCS durable drain`（`10,40 * * * *`, `--jobs-only`） —
   未読取得を飛ばし fetch_jobs のみ消化。全患者の全履歴を
   `since=0` まで少しずつ取得(1run=最大8患者×3頁、cursor は payload に
   耐久保存、中断しても次 run で続きから)。config `deep_history` で
@@ -238,8 +239,8 @@ $PY mcs/ingest/init_data.py --project <id>       # 患者個別
 
 既定は `data/snapshots/ledger-snapshot.db` の読み取り専用接続。
 `--snapshot PATH --cmd-dir DIR` でコンテナのマウント先を指定できる。
-原本DBは不要で、未公開DB・旧スキーマでは利用を拒否する。
-導入後、通常の定期実行がschema v7へ移行し新snapshotを公開すると利用可能になる。
+原本DBは不要で、未公開DB・読取り対応外のスキーマでは利用を拒否する。
+現行Viewは公開snapshotのschema v5〜v9を読取り、通常の定期実行は原本を現行schema v9へ移行して新snapshotを公開する。
 
 ```bash
 PY=~/.hermes/hermes-agent/venv/bin/python
@@ -464,7 +465,7 @@ $PY mcs/views/mcs_view.py signals --project 123
   共起 — 「退院」文字列ではなく抽出イベントを使う）。
 - 候補は「原記録の確認を求める提示」であり、記録が見つからないことは
   対応の欠如を意味しない。文言もその旨を明記する。
-- 自己同一性: 毎回のチェックで MCS の `GET /users/self` から氏名・
+- 自己同一性: 深掘り実行（`--jobs-only`）と自己プロフィール未記録のtickで、MCSの`GET /users/self`から氏名・
   職種・所属施設を取得し `self_profile_v1` artifact として記録する
   （変化時のみ追記）。その施設の投稿由来の言及はアラートにせず、
   その施設・職種の投稿は応答者として数える。config `signals.*` は

@@ -225,7 +225,7 @@ cd hermes-mcs
 事前チェックのNG行に表示される`fix:`を確認し、`0 blocker(s)`になってから導入します。
 初回の`./install.sh`は、Hermes経由かHermesなし（[スタンドアローン](docs/guides/STANDALONE.md)）かを尋ねます。`--mode standalone`で直接指定もできます。
 最後の`Installed. Summary:`に表示される初回設定コマンドを、そのままコピーして実行してください。
-設定ウィザードが通知先・本体の設定・最終チェックまで案内します。Slack/DiscordではHermesとの同期も行います。
+設定ウィザードが通知先・本体の設定・最終チェックまで案内します。HermesモードのSlack/DiscordではHermesとの同期も行います。
 本体の初回設定後は、ブラウザーの準備など診断に残った項目を解消します。LINE WORKSの認証・Callback・常駐設定と再診断は[接続ガイド](docs/guides/LINEWORKS.md)で続けます。
 既存環境を更新する場合は[更新エージェント手順](docs/guides/UPGRADE_AGENT.md)を使います。移行先版の更新コードで計画・バックアップ・適用を行い、再導入は必要な場合に明示指定します。
 
