@@ -112,3 +112,38 @@ def test_clean_signal_confirmation_still_queues_pinned_command(tmp_path, transpo
         assert payload["actor"] == actor and payload["human_confirmed"] is True
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("transport,heading", [("discord", "## 合成サマリー"),
+                                             ("slack", "*合成サマリー*"),
+                                             ("lineworks", "【合成サマリー】")])
+def test_native_json_summary_uses_channel_display_contract(tmp_path, monkeypatch, transport, heading):
+    from adapters.common import summary
+    import notify_render
+
+    parts = {"containers": [{"type": "heading", "text": "合成サマリー"}],
+             "footer": [{"type": "text", "text": "合成データの確認結果"}]}
+
+    def computed(_snapshot, _scope, *, allowed, dialect, names):
+        assert allowed == [1] and names is False
+        return {"text": notify_render.parts_text(parts, dialect), "parts": parts}
+
+    monkeypatch.setattr(summary, "answer", computed)
+    ctx = Context(tmp_path)
+    if transport == "discord":
+        answer = hermes_plugin._make_handler(ctx)(
+            '{"op":"summary","scope":"all"}', command_context=IDENTITY)
+    else:
+        # _caller parses JSON responses, while summary intentionally returns display text.
+        _caller(tmp_path, transport)
+        from adapters.common import commands
+        settings = {**ctx.settings, "data_root": str(tmp_path / "data"),
+                    "transport": transport, "team_id": "synthetic-team",
+                    "application_id": "synthetic-app", "channel_id": "room",
+                    "profile": "default", "route_epoch": 1}
+        answer = commands.answer(settings, '{"op":"summary","scope":"all"}',
+                                 user="human", channel="room")
+    assert answer.splitlines()[0] == heading
+    assert "合成データの確認結果" in answer
+    if transport == "lineworks":
+        assert "## " not in answer and "-# " not in answer
