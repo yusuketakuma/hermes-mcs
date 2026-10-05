@@ -73,7 +73,7 @@
   <line x1="446" y1="398" x2="894" y2="398" stroke="#30363d" stroke-width="1"/>
   <text x="446" y="420" font-size="9" fill="#6e7681">関連する新しい投稿も同じスレッドに続きます</text>
   <text x="446" y="440" font-size="9" fill="#6e7681">配送は card→thread→本文chunk→添付 の parts ジャーナルで管理</text>
-  <text x="446" y="458" font-size="9" fill="#6e7681">中断・再起動後も中断点から再開し、重複投稿しません</text>
+  <text x="446" y="458" font-size="9" fill="#6e7681">中断点から再開。送信結果が不明なときは保留し、人が確認します</text>
 
   <!-- captions -->
   <text x="185" y="412" font-size="10" fill="#8b949e" text-anchor="middle">カードは読みやすく</text>

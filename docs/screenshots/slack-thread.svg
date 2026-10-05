@@ -118,7 +118,7 @@
   <!-- thread notes -->
   <line x1="472" y1="428" x2="944" y2="428" stroke="#3a3d42" stroke-width="1"/>
   <text x="472" y="450" font-size="9" fill="#6e7681">返信ごとに1投稿 — 関連する新着も同じスレッドに続きます</text>
-  <text x="472" y="468" font-size="9" fill="#6e7681">後から届いた返信・抽出結果は投稿を増やさず書き換え（parts ジャーナルで中断点から再開・重複なし）</text>
+  <text x="472" y="468" font-size="9" fill="#6e7681">後着の返信・抽出結果は更新配送。送信結果が不明なときは保留し、人が確認します</text>
 
   <!-- reply input -->
   <rect x="472" y="486" width="472" height="40" rx="8" fill="#222529" stroke="#565a5e"/>

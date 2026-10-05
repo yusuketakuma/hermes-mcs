@@ -145,7 +145,7 @@ def render(readme: str) -> tuple[str, list[str]]:
     for name, gen in GENERATORS.items():
         begin = f"<!-- BEGIN GENERATED:{name} -->"
         end = f"<!-- END GENERATED:{name} -->"
-        if name == "release" and (begin in out or end in out) and (
+        if (begin in out or end in out) and (
                 out.count(begin) != 1 or out.count(end) != 1
                 or out.index(begin) > out.index(end)):
             failed.append(name)
@@ -171,6 +171,10 @@ def main() -> int:
                     help="fail when a doc differs from generated output")
     args = ap.parse_args()
     targets = [p for p in (README, DEV_DOC) if p.exists()]
+    if not targets:
+        print("error: no documentation targets — freshness cannot be verified",
+              file=sys.stderr)
+        return 1
     rendered = []
     failed_all = []
     for path in targets:

@@ -1,0 +1,21 @@
+{
+  "category": "fixed",
+  "title": "開発用の文書・画像・評価検査を確実に停止",
+  "summary": "文書の生成マーカー不正や検査対象の欠落、PNGの不正な画像データを検出します。リリース同期は識別・公開状態の形式を更新前に検証し、Python 3.10でも深いJSON入力を診断して停止します。合成評価の期限に無限大・無効値を受け付けません。",
+  "upgrade": "追加の設定変更やサービス再起動は不要です。合成評価は有限の正の期限を指定してください。文書・画像の更新と既存リリース同期は従来の明示操作で行います。",
+  "details": [
+    "全生成ブロックの開始・終了マーカーを検証し、壊れた文書を部分更新しません。片方の文書だけを使用する既存契約は維持します。",
+    "RGB/RGBA PNGの全走査行で標準フィルター0〜4を検査し、正常な画像・保存形式を維持します。",
+    "GitHub Releaseの必要な識別・公開状態の型を事前検査し、取得後の競合・更新後の再照合も維持します。",
+    "合成shadow評価の任意fixture入口と有効な期限は維持し、不正なcase型をモデル呼出し前に拒否します。実データ・実APIを使わず回帰を検証しました。"
+  ],
+  "refs": [
+    "scripts/development/update_readme.py",
+    "scripts/development/generate_slack_gallery.py",
+    "scripts/development/release_notes.py",
+    "scripts/development/readme_release.py",
+    "scripts/development/sync_release_notes.py",
+    "scripts/development/semantic_shadow_e2e.py",
+    "tests/meta/test_maintenance_development_regressions.py"
+  ]
+}
