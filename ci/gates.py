@@ -238,7 +238,7 @@ def gate_plugin_sandbox() -> list[str]:
         if independent:
             permitted |= {"asyncio"}
         environment_lines = set()
-        if independent and identity == "mcs_slack/standalone.py":
+        if independent and identity in {"mcs_slack/standalone.py", "mcs_slack/runtime_compat.py"}:
             # Only this negative membership guard is allowed. Token/value
             # reads from the ambient environment remain forbidden.
             guard = ast.dump(ast.parse(
@@ -451,7 +451,7 @@ def gate_records_isolation() -> list[str]:
 
 
 # C1 export layer (connector.md C1 deliverables): the contract/schema
-# modules stay pure transforms, and the 5-minute tick never loads them.
+# modules stay pure transforms, and the 10-minute tick never loads them.
 # Both gates check direct imports/references only: mcs_util (imported by
 # ext_contract/c1_receiver) loads urllib.request transitively.
 _EXT_REFERENCE = re.compile(r"\b(?:ext_contract|export_schema|c1_\w+)\b")
