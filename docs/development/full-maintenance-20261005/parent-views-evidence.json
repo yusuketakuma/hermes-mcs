@@ -52,29 +52,29 @@
       "path": "mcs/views/cross_lists_view.py",
       "status": "PARTIAL",
       "full_content_read": true,
-      "lines": 103,
+      "lines": 107,
       "read_ranges": [
         [
           1,
-          103
+          107
         ]
       ],
-      "reviewed_sha256": "1d565f67a33b13f9078b55227934f462dc6e99619a46a86848627528be8c3859",
-      "review_note": "全文読取済み。views全34filesのcaller/20観点照合は進行中で、全文読取だけを完了と扱わない。"
+      "reviewed_sha256": "db77e2a25f823067f9a1e05a57637ad6a85d8641d6d390d3cb77f08d3e5b6ffa",
+      "review_note": "全文と関連callerを読取。mcs_view/mcs_statsおよび残testsを含む全20観点評価は進行中。"
     },
     {
       "path": "mcs/views/project_metadata_view.py",
       "status": "PARTIAL",
       "full_content_read": true,
-      "lines": 309,
+      "lines": 315,
       "read_ranges": [
         [
           1,
-          309
+          315
         ]
       ],
-      "reviewed_sha256": "192067dca2822d9b1b135668d0f57fc5a14872ff61a1d509153d9489af63f466",
-      "review_note": "全文読取済み。views全34filesのcaller/20観点照合は進行中で、全文読取だけを完了と扱わない。"
+      "reviewed_sha256": "92eed1e56de4823ec09cc35c44cd96b30e0a50de6794a12724ae037325cc7d79",
+      "review_note": "全文と関連callerを読取。mcs_view/mcs_statsおよび残testsを含む全20観点評価は進行中。"
     },
     {
       "path": "mcs/views/read_model.py",
@@ -131,6 +131,160 @@
       ],
       "reviewed_sha256": "5435276d90281e002653bceb56d36d8185e61fa3fa64c6a5c4044b8861e62478",
       "review_note": "全文読取済み。views全34filesのcaller/20観点照合は進行中で、全文読取だけを完了と扱わない。"
+    },
+    {
+      "path": "mcs/views/response_observation_view.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 207,
+      "read_ranges": [
+        [
+          1,
+          207
+        ]
+      ],
+      "reviewed_sha256": "f34919b9aafdb695189feb638fa9b32ef00efffd1a57b787c6305ec7f7a223ac",
+      "review_note": "全文と関連callerを読取。mcs_view/mcs_statsおよび残testsを含む全20観点評価は進行中。"
+    },
+    {
+      "path": "mcs/views/summary_review.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 329,
+      "read_ranges": [
+        [
+          1,
+          329
+        ]
+      ],
+      "reviewed_sha256": "5102c06e0f1421105b9d99dd35b01e010f5394c81379b60497a30a8c5cca430e",
+      "review_note": "全文と関連callerを読取。mcs_view/mcs_statsおよび残testsを含む全20観点評価は進行中。"
+    },
+    {
+      "path": "tests/views/test_cross_lists_view.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 112,
+      "read_ranges": [
+        [
+          1,
+          112
+        ]
+      ],
+      "reviewed_sha256": "c08ea747ca11f7ead892cdea2a7d1b2895cad99fc7cd8b997a6551c3334de37d",
+      "review_note": "全文と関連callerを読取。mcs_view/mcs_statsおよび残testsを含む全20観点評価は進行中。"
+    },
+    {
+      "path": "tests/views/test_project_metadata_comparison.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 393,
+      "read_ranges": [
+        [
+          1,
+          393
+        ]
+      ],
+      "reviewed_sha256": "06de0ae0c6acc2f00e5e21e8d995e3c58a42d305451efeba137013f21a8e9522",
+      "review_note": "全文と関連callerを読取。mcs_view/mcs_statsおよび残testsを含む全20観点評価は進行中。"
+    },
+    {
+      "path": "tests/views/test_project_metadata_view.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 261,
+      "read_ranges": [
+        [
+          1,
+          261
+        ]
+      ],
+      "reviewed_sha256": "fbe232a8128f20c723eed976f4a1aa8765c2a59138596e94e033a6591950aecc",
+      "review_note": "全文と関連callerを読取。mcs_view/mcs_statsおよび残testsを含む全20観点評価は進行中。"
+    },
+    {
+      "path": "tests/views/test_physician_viewed.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 66,
+      "read_ranges": [
+        [
+          1,
+          66
+        ]
+      ],
+      "reviewed_sha256": "55e7b4ba06661a8a68c19a029b1a3e316931f301e523ffcecbef5934fb68ce88",
+      "review_note": "全文と関連callerを読取。mcs_view/mcs_statsおよび残testsを含む全20観点評価は進行中。"
+    },
+    {
+      "path": "tests/views/test_metadata_report.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 168,
+      "read_ranges": [
+        [
+          1,
+          168
+        ]
+      ],
+      "reviewed_sha256": "9fa4b28335df7ba634cc97fee1e292b7f55dd985d85085b97486d56e883bd98c",
+      "review_note": "全文と関連callerを読取。mcs_view/mcs_statsおよび残testsを含む全20観点評価は進行中。"
+    },
+    {
+      "path": "tests/views/test_group_consultations_view.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 192,
+      "read_ranges": [
+        [
+          1,
+          192
+        ]
+      ],
+      "reviewed_sha256": "20e954a952d905a41b57dcf127d84072b2d7419d79f802d74427f7a68da27293",
+      "review_note": "全文と関連callerを読取。mcs_view/mcs_statsおよび残testsを含む全20観点評価は進行中。"
+    },
+    {
+      "path": "tests/views/test_read_model.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 373,
+      "read_ranges": [
+        [
+          1,
+          373
+        ]
+      ],
+      "reviewed_sha256": "99a5b75e300b6608c60cb814a3e8c79dbf9b6c3b20ae8d499c7a1c5bc2a48749",
+      "review_note": "全文と関連callerを読取。mcs_view/mcs_statsおよび残testsを含む全20観点評価は進行中。"
+    },
+    {
+      "path": "tests/views/test_summary_review.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 186,
+      "read_ranges": [
+        [
+          1,
+          186
+        ]
+      ],
+      "reviewed_sha256": "12b3735bd6b5a74d53171b923fd04d3975deef984c8296397e0a4bc0c29122ce",
+      "review_note": "全文と関連callerを読取。mcs_view/mcs_statsおよび残testsを含む全20観点評価は進行中。"
+    },
+    {
+      "path": "tests/views/test_summary_review_cli.py",
+      "status": "PARTIAL",
+      "full_content_read": true,
+      "lines": 49,
+      "read_ranges": [
+        [
+          1,
+          49
+        ]
+      ],
+      "reviewed_sha256": "46f1db2667dbd4715a386499e4e01c1ce1e7a2d829ffd62a1907028752f679d2",
+      "review_note": "全文と関連callerを読取。mcs_view/mcs_statsおよび残testsを含む全20観点評価は進行中。"
     }
   ],
   "confirmed_fixes": [
@@ -143,6 +297,19 @@
       "after": "214 passed in 7.08s across structured views and notification consumers",
       "contract": "Empty current facts suppress excluded events/vitals; media reference and absent/stale rule fallback retained; symptoms/medication-candidate/request fallback unchanged",
       "integration_status": "local repaired source; final whole-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-VIEWS-002",
+      "state": "CONFIRMED_FIXED",
+      "paths": [
+        "mcs/views/project_metadata_view.py",
+        "mcs/views/cross_lists_view.py"
+      ],
+      "cause": "Oversized JSON numbers/options raise OverflowError; parser recursion error escapes the metadata view instead of unknown.",
+      "before": "Accepted fixed P with final tests: combined 12 failed/14 controls passed/98 deselected includes 8 view regressions and 4 UTC relation regressions.",
+      "after": "259 passed in 6.05s across views/relations and metadata/cross-list ingestion consumers.",
+      "contract": "Invalid candidate numeric items excluded; unreadable current evidence yields unknown without old set as current; options rejected before SQL; API/scope/names/publication maintained.",
+      "integration_status": "local fixed source; final whole-I checks and independent review pending"
     }
   ],
   "verification": [
@@ -155,35 +322,39 @@
       "path": "/tmp/mcs-maintenance-structured-empty-after-20261005.log",
       "sha256": "70aeb7d2873685f16e516d2d3a05f7e8f2fa67bbc160a09368a0d1172ba8f0e3",
       "result": "214 passed in 7.08s"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-views-utc-fixedP-final-before-20261005.log",
+      "sha256": "c3ceddc086deb17da1fe89c4936cbd0fffd009a9f59c4f18bffbf5c6a091df3a",
+      "result": "12 failed, 14 passed, 98 deselected in 2.48s"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-views-utc-accepted-family-20261005.log",
+      "sha256": "2b10d6b8c10890fe6fbcde8ebd1163d8da7626295068fdbc463d08f8f9e116b0",
+      "result": "259 passed in 6.05s"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-python310-family-20261005.log",
+      "sha256": "cd0383798165b782c116fe9555fc95a67147b06640483c8fbb8cab1b6b690871",
+      "result": "1 failed, 206 passed in 5.90s"
     }
   ],
   "criteria_status": "C01-C12/X01-X08 module review remains in progress; 9 full-content reads are prerequisites, not whole-module completion.",
   "remaining_files": [
     "mcs/views/mcs_stats.py",
     "mcs/views/mcs_view.py",
-    "mcs/views/response_observation_view.py",
-    "mcs/views/summary_review.py",
-    "tests/views/test_cross_lists_view.py",
     "tests/views/test_drug_candidates.py",
-    "tests/views/test_group_consultations_view.py",
     "tests/views/test_interaction_latency.py",
     "tests/views/test_mcs_stats.py",
     "tests/views/test_mcs_stats_signal_feedback.py",
-    "tests/views/test_metadata_report.py",
     "tests/views/test_notification_receipt_scope.py",
-    "tests/views/test_physician_viewed.py",
-    "tests/views/test_project_metadata_comparison.py",
-    "tests/views/test_project_metadata_view.py",
     "tests/views/test_qc_view.py",
-    "tests/views/test_read_model.py",
     "tests/views/test_response_observation.py",
     "tests/views/test_response_observation_view.py",
     "tests/views/test_semantic_view.py",
     "tests/views/test_staff_directory.py",
     "tests/views/test_status_fetch_reason.py",
-    "tests/views/test_status_view.py",
-    "tests/views/test_summary_review.py",
-    "tests/views/test_summary_review_cli.py"
+    "tests/views/test_status_view.py"
   ],
   "checks": {
     "ruff": "ruff 0.16.10 changed2 Python paths passed",
@@ -192,5 +363,7 @@
   "limitations": [
     "No real snapshots, patient data, services, credentials, live SDK transport or model/API accessed.",
     "All remaining files, final fixed I SDK/distribution and fresh independent review are pending."
-  ]
+  ],
+  "fixture_correction": "初回deep JSON990は現Python C parserで正常parseできたため、不正期待の1失敗を修復数へ数えない。stdlib recursive decoderで実際のRecursionErrorをassertして経路を固定し、同じ最終testsを固定Pで12fail/14passと確認した。初回logsも保持。",
+  "minimum_runtime": "Isolated CPython3.10.22+pytest9.1.1 family206 passed/1 separate request_following_review typing ImportError. Owner semantic assigned; this is not claimed a green full minimum-runtime result."
 }

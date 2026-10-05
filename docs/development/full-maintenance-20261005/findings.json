@@ -703,6 +703,185 @@
       "contract": "Empty current facts suppress excluded events/vitals; media reference and absent/stale rule fallback retained; symptoms/medication-candidate/request fallback unchanged",
       "integration_status": "local repaired source; final whole-I checks and independent review pending",
       "packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
+    },
+    {
+      "id": "NOTIFY-P3-F01",
+      "status": "confirmed_and_fixed",
+      "priority": "高",
+      "before": "破損行を黙ってskipするとstarted欠落を未送信と誤確定する。deep JSONはstartupを中断する。",
+      "fix": "scan_checkedが構造/改行/IOの完全性を返し、taint時はunknown receiptとして保持、valid rowsは保持。",
+      "paths": [
+        "adapters/common/journal.py",
+        "adapters/common/worker.py"
+      ],
+      "regression": "tests/adapters/common/test_worker_reconcile_integrity.py",
+      "before_fail_count": 7,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F02",
+      "status": "confirmed_and_fixed",
+      "priority": "高",
+      "before": "persisted claimに対応するjournal全欠落をstartup reconcileが訪問せず、receiptが未報告になる。",
+      "fix": "記録のないown claimからunknown receiptを作り、registry tombstoneを耐久保持。",
+      "paths": [
+        "adapters/common/worker.py"
+      ],
+      "regression": "tests/adapters/common/test_worker_reconcile_integrity.py",
+      "before_fail_count": 2,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F03",
+      "status": "confirmed_and_fixed",
+      "priority": "高",
+      "before": "既存カードのpart started行が破損すると、残るcard factからdependent partを未送信と推測して再投稿する。",
+      "fix": "tainted startupを送信gateへ保持し、新primary/part wireを止める。unknownを自動解除しない。",
+      "paths": [
+        "adapters/common/worker.py"
+      ],
+      "regression": "tests/adapters/common/test_worker_reconcile_integrity.py",
+      "before_fail_count": 1,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F04",
+      "status": "confirmed_and_fixed",
+      "priority": "低",
+      "before": "旧registryのdeep破損JSONは既存の安全な非移行経路ではなくRecursionErrorで起動を止める。",
+      "fix": "既存OSError/ValueError拒否にRecursionErrorを追加。旧ファイル/権限を保持。",
+      "paths": [
+        "adapters/common/registry.py"
+      ],
+      "regression": "tests/adapters/common/test_deep_local_state.py",
+      "before_fail_count": 1,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F05",
+      "status": "confirmed_and_fixed",
+      "priority": "低",
+      "before": "snapshot脇configのdeep破損JSONがサマリーの既存defaults経路を中断する。",
+      "fix": "限定config helperだけRecursionErrorを既存defaultsへ含め、project範囲/readonly snapshotを維持。",
+      "paths": [
+        "adapters/common/summary.py"
+      ],
+      "regression": "tests/adapters/common/test_deep_local_state.py",
+      "before_fail_count": 1,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F06",
+      "status": "confirmed_and_fixed",
+      "priority": "中",
+      "before": "LINE WORKS shared cooldownのdeep破損はwire前失敗なのにunknown配送結果になる。",
+      "fix": "通信前のrate_state_invalid/not_sentへ安定拒否。ファイルを保持。",
+      "paths": [
+        "adapters/lineworks/delivery.py"
+      ],
+      "regression": "tests/adapters/common/test_deep_local_state.py",
+      "before_fail_count": 1,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F07",
+      "status": "confirmed_and_fixed",
+      "priority": "低",
+      "before": "LW private body/tasks/listの見出しにMarkdown記号をraw表示する。",
+      "fix": "keyword-only plainを共有APIへ互換追加し、LW consumerだけplain=True。原文とprivate scopeを保持。",
+      "paths": [
+        "adapters/common/text.py",
+        "adapters/lineworks/actions.py"
+      ],
+      "regression": "tests/adapters/lineworks/test_lineworks_plain_views.py",
+      "before_fail_count": 3,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F08",
+      "status": "confirmed_and_fixed",
+      "priority": "中",
+      "before": "既存4page個別表示予算を超えたbody/digest/listの末尾を黙って省略する。",
+      "fix": "既存上限を維持し最終ページに省略/MCS確認を表示。durable splitter(None)は全件保持。",
+      "paths": [
+        "adapters/common/text.py"
+      ],
+      "regression": "tests/adapters/lineworks/test_lineworks_plain_views.py",
+      "before_fail_count": 6,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F09",
+      "status": "confirmed_and_fixed",
+      "priority": "中",
+      "before": "LW native mention記法を原文の表示値としてraw wireへ渡すと、公式仕様上のmember/all通知になる。",
+      "fix": "唯一のclient wire境界でnative <mだけ同長の全角括弧へ変換。多言語textも対象、入力/URI/postback/容量/通常特殊文字を維持。大文字形は保守的な無音化。",
+      "paths": [
+        "adapters/lineworks/client.py"
+      ],
+      "regression": "tests/adapters/lineworks/test_lineworks_silent_text.py",
+      "before_fail_count": 5,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "7601c88db3a61866c04e76263691a9aaaf8853c0",
+      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-VIEWS-002",
+      "state": "CONFIRMED_FIXED",
+      "paths": [
+        "mcs/views/project_metadata_view.py",
+        "mcs/views/cross_lists_view.py"
+      ],
+      "cause": "Oversized JSON numbers/options raise OverflowError; parser recursion error escapes the metadata view instead of unknown.",
+      "before": "Accepted fixed P with final tests: combined 12 failed/14 controls passed/98 deselected includes 8 view regressions and 4 UTC relation regressions.",
+      "after": "259 passed in 6.05s across views/relations and metadata/cross-list ingestion consumers.",
+      "contract": "Invalid candidate numeric items excluded; unreadable current evidence yields unknown without old set as current; options rejected before SQL; API/scope/names/publication maintained.",
+      "integration_status": "local fixed source; final whole-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-SEMANTIC-001",
+      "status": "FIXED",
+      "paths": [
+        "mcs/semantic/semantic_relations.py"
+      ],
+      "root_cause": "Terminal explicit UTC Z unsupported by datetime.fromisoformat on Python3.10.",
+      "repair": "Normalize terminal Z only; candidate precision/equality/state untouched.",
+      "evidence": "docs/development/full-maintenance-20261005/parent-semantic-utc-evidence.json",
+      "integration_status": "parent local source; final fixed-I checks pending"
     }
   ],
   "deferred": [],

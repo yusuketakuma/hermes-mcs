@@ -92,6 +92,8 @@ def _entity_overlap(left: dict, right: dict) -> set:
 def _iso(value) -> date | datetime | None:
     if not isinstance(value, str) or not re.match(r"^\d{4}-\d{2}-\d{2}", value):
         return None
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
     try:
         return date.fromisoformat(value) if len(value) == 10 else datetime.fromisoformat(value)
     except ValueError:

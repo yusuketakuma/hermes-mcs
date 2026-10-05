@@ -318,6 +318,7 @@ def test_old_message_is_historical_even_with_current_extraction_hash(store, tmp_
     ("observation_values", 55, {"labs": [{"name": "fiction", "value": True}]}),
     ("observation_values", 55, {"labs": [{"name": "fiction", "value": 2, "unit": {}}]}),
     ("observation_values", 55, {"labs": [{"name": "fiction", "value": float("inf")}]}),
+    ("observation_values", 55, {"labs": [{"name": "fiction", "value": 10 ** 400}]}),
 ])
 def test_unknown_candidate_shapes_are_excluded_safely(store, tmp_path, dataset, item_id, bad):
     _structured(store, dataset, item_id=item_id, definition=LAB if item_id else None)

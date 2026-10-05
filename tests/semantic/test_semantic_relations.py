@@ -6,6 +6,7 @@ Contradictions, temporal order, and repetition are all preserved as
 typed relations between surviving facts.
 """
 import copy
+from datetime import datetime
 
 import pytest
 
@@ -82,6 +83,30 @@ def test_temporal_relations_require_valid_comparable_instants(axis, first, secon
     else:
         assert rel["type"] == "EXPLICIT_SUPERSESSION"
         assert rel["left_fact_id"] == earlier
+
+
+@pytest.mark.parametrize("axis", ["event_time", "valid_time"])
+@pytest.mark.parametrize("first,second,earlier", [
+    ("2026-10-04T01:00:00.100Z", "2026-10-04T10:00:00.200+09:00", "fact_aaaa"),
+    ("2026-10-04T10:00:00.200+09:00", "2026-10-04T01:00:00.100Z", "fact_bbbb"),
+    ("2026-10-04T01:00:00.100Z", "2026-10-04T10:00:00.100+09:00", None),
+])
+def test_utc_suffix_keeps_relation_order_on_python310(monkeypatch, axis, first, second, earlier):
+    class Python310Datetime(datetime):
+        @classmethod
+        def fromisoformat(cls, value):
+            if value.endswith("Z"):
+                raise ValueError("Python 3.10 rejects terminal Z")
+            return super().fromisoformat(value)
+
+    monkeypatch.setattr(sr, "datetime", Python310Datetime)
+    left = _fact("fact_aaaa", "合成薬剤A開始", action="start")
+    right = _fact("fact_bbbb", "合成薬剤A中止", action="stop")
+    left[axis], right[axis] = first, second
+    relation = sr.classify_pair(left, right)
+    assert relation["type"] == ("EXPLICIT_SUPERSESSION" if earlier else "CONTRADICTION")
+    if earlier:
+        assert relation["left_fact_id"] == earlier
 
 
 def test_reversed_temporal_order_swaps_relation_direction():

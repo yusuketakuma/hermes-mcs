@@ -226,3 +226,36 @@ def test_invalid_artifact_never_leaks_reason_or_partial_rows(store):
     # Then
     assert result["state"] == "unknown" and result["reason"] == "artifact_invalid"
     assert result["rows"] == [] and "BODY_CANARY" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("problem", ["oversized_timestamp", "deep_json"])
+def test_unparseable_latest_metadata_is_unknown_without_reviving_previous(store, monkeypatch, problem):
+    capture(store)
+    payload = json.loads(store.artifacts(ARTIFACT_KIND)[0]["content"])
+    if problem == "oversized_timestamp":
+        payload["attempted_at"] = 10 ** 400
+        content = json.dumps(payload)
+    else:
+        content = json.dumps(payload)[:-1] + ',"extra":' + "[" * 990 + "0" + "]" * 990 + "}"
+    assert store.db.execute("SELECT json_valid(?)", (content,)).fetchone()[0] == 1
+    store.artifact_add(ARTIFACT_KIND, content, project_id=1)
+    if problem == "deep_json":
+        # Exercise stdlib's recursive decoder, independently of the C decoder's
+        # interpreter-specific recursion ceiling (SQLite accepts this depth).
+        decoder = json.JSONDecoder()
+        decoder.scan_once = json.scanner.py_make_scanner(decoder)
+        with pytest.raises(RecursionError):
+            decoder.decode(content)
+        original = json.loads
+        monkeypatch.setattr(json, "loads", lambda value, *args, **kwargs:
+                            decoder.decode(value) if value == content else
+                            original(value, *args, **kwargs))
+    result = get_project_metadata(store.db, 1, "care_team", now=110)
+    assert result["state"] == "unknown" and result["reason"] == "artifact_invalid"
+    assert result["rows"] == [] and not result["current_known"]
+
+
+@pytest.mark.parametrize("option", ["now", "max_age_s"])
+def test_oversized_numeric_options_are_rejected_before_sql(option):
+    with pytest.raises(ValueError, match="metadata view options"):
+        get_project_metadata(None, 1, "care_team", **{option: 10 ** 400})

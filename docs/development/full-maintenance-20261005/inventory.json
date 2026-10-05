@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "PARTIAL": 69,
+      "PARTIAL": 80,
       "EXCLUDED": 2,
-      "UNSEEN": 543,
-      "REVIEWED": 238
+      "UNSEEN": 510,
+      "REVIEWED": 277
     },
-    "candidate_tracked": 857
+    "candidate_tracked": 867
   },
   "files": [
     {
@@ -255,9 +255,20 @@
       "lines": 1,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "dd30c38589a16589d0ad79829cf72146bee90fe21b50d7930e2985fb5211d56b",
+      "reviewed_lines": 1,
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/common/commands.py",
@@ -266,9 +277,20 @@
       "lines": 38,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "4a1c1011caabba83c9b8b2ccdc51e3f0903c603e1ba2f7928e85b619d659915b",
+      "reviewed_lines": 38,
+      "read_ranges": [
+        [
+          1,
+          38
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/common/envelopes.py",
@@ -277,9 +299,20 @@
       "lines": 283,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "c2a645b0570bb402db6675722fa04e166ba6f400ae90d2cb6bd05db5c09fa885",
+      "reviewed_lines": 283,
+      "read_ranges": [
+        [
+          1,
+          283
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/common/journal.py",
@@ -288,9 +321,20 @@
       "lines": 335,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "066ed5c9571b4566b60c8da204c2fea0adea8c835fe4b9741ebf55b1a8003b6b",
+      "reviewed_lines": 356,
+      "read_ranges": [
+        [
+          1,
+          356
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/common/paths.py",
@@ -299,9 +343,20 @@
       "lines": 147,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "5d1cff058cfb855406bbc74ffa53dda86df86626850006a53eb538d12ab810bc",
+      "reviewed_lines": 147,
+      "read_ranges": [
+        [
+          1,
+          147
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/common/registry.py",
@@ -310,9 +365,20 @@
       "lines": 460,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "3bee93f668e90807946c605c611c22a82e82595568e55ff34b19c46d19ea82d8",
+      "reviewed_lines": 460,
+      "read_ranges": [
+        [
+          1,
+          460
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/common/spec.py",
@@ -321,9 +387,20 @@
       "lines": 396,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "a45f0ba4f9a4d7375068662dd7f46f0dddc81a9aaabb33e6ea43e5731a15e1e4",
+      "reviewed_lines": 396,
+      "read_ranges": [
+        [
+          1,
+          396
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/common/summary.py",
@@ -332,18 +409,22 @@
       "lines": 88,
       "module": "adapters",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "担当packetの安全/契約contextとして全文read。全repoの独立レビュー済み判定ではない。"
+        "担当packetの安全/契約contextとして全文read。全repoの独立レビュー済み判定ではない。",
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
       "read_ranges": [
         [
           1,
           88
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "reviewed_sha256": "922efc6f390011fd588b6e2bbda8538a9080d5a6dcf2cf23903a14961b75da5c",
+      "reviewed_lines": 88,
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/common/text.py",
@@ -352,9 +433,20 @@
       "lines": 385,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "f7525792d18b44fa022b1afc0b75ed52938f7767d6dc0e910c4166122e1eb476",
+      "reviewed_lines": 397,
+      "read_ranges": [
+        [
+          1,
+          397
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/common/worker.py",
@@ -363,9 +455,20 @@
       "lines": 988,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "2173cd096d25a83f3e2ad32a98c5818c23b50991edf25a7e7c333b3414b1d23b",
+      "reviewed_lines": 1014,
+      "read_ranges": [
+        [
+          1,
+          1014
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/discord/__init__.py",
@@ -451,9 +554,20 @@
       "lines": 11,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "123e9023ad3914863eed4ce305b0d6c9055c32b751b9ba6b47ea46ce82db1ed9",
+      "reviewed_lines": 11,
+      "read_ranges": [
+        [
+          1,
+          11
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/lineworks/__main__.py",
@@ -462,9 +576,20 @@
       "lines": 229,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "32a5a462a3f4446389c2c87e92073c2e2ad8c923448390d213f9ce67361a0f2e",
+      "reviewed_lines": 229,
+      "read_ranges": [
+        [
+          1,
+          229
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/lineworks/actions.py",
@@ -473,9 +598,20 @@
       "lines": 336,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "fb679d7d0aeb79d26caabdd978033c943c285373e59cf0faf0ecc41f0a21e639",
+      "reviewed_lines": 337,
+      "read_ranges": [
+        [
+          1,
+          337
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/lineworks/cards.py",
@@ -484,9 +620,20 @@
       "lines": 77,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "e9ad022e8755ed5ce65249cd925c7e0f7a92bdff5d1bb6447d6a9f4bcf26e6e4",
+      "reviewed_lines": 77,
+      "read_ranges": [
+        [
+          1,
+          77
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/lineworks/client.py",
@@ -495,9 +642,20 @@
       "lines": 378,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "8e93538143ebb51b2340e64eb4333bfba4197812eb0aa89dfd77cc4787494042",
+      "reviewed_lines": 398,
+      "read_ranges": [
+        [
+          1,
+          398
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/lineworks/config.py",
@@ -506,9 +664,20 @@
       "lines": 67,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "81d398f6facae4e97660ab4a19515dead988f5a3732072816d8b7fdfd19a8d54",
+      "reviewed_lines": 67,
+      "read_ranges": [
+        [
+          1,
+          67
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/lineworks/delivery.py",
@@ -517,9 +686,20 @@
       "lines": 203,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "b8e813d72487e6d6928977c15921fcccc16a47710e132db4fba9c91991b06090",
+      "reviewed_lines": 203,
+      "read_ranges": [
+        [
+          1,
+          203
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/lineworks/server.py",
@@ -528,9 +708,20 @@
       "lines": 171,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "e4b457f8daef2055bd870afbea7b2f2d20021fc1092cc3d62cae9b3ac926cff5",
+      "reviewed_lines": 171,
+      "read_ranges": [
+        [
+          1,
+          171
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/lineworks/service.py",
@@ -539,9 +730,20 @@
       "lines": 65,
       "module": "adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "53631613494cbdaa1eb5c65262288425dee43618aff6e9a63f4d7665feddd4fd",
+      "reviewed_lines": 65,
+      "read_ranges": [
+        [
+          1,
+          65
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "adapters/slack/__init__.py",
@@ -4864,9 +5066,20 @@
       "lines": 4,
       "module": "lineworks_adapter",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "969cdc82d7a785516592ddd633fc7b9cdf47ad5e179b8a5623b3aab7a9b01862",
+      "reviewed_lines": 4,
+      "read_ranges": [
+        [
+          1,
+          4
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "lineworks_adapter/__main__.py",
@@ -4875,9 +5088,20 @@
       "lines": 11,
       "module": "lineworks_adapter",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "87231e560c93987bc624d149e605d68b9a430b0ebaec0a74951ea374145ac406",
+      "reviewed_lines": 11,
+      "read_ranges": [
+        [
+          1,
+          11
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "mcs/_mcs_path.py",
@@ -7049,15 +7273,16 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending",
+        "Parent UTC末尾互換修復。全source/test再読・元packet20観点とdelta/合成検証を照合。"
       ],
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
-      "reviewed_sha256": "224e48fed98d49769ace102c1409457ec0627f96d1700355dc7265b75348f116",
+      "reviewed_sha256": "fb3b731cea7d94691395004410d42c44aaee19f44895d611b9bbb716f54f6f62",
       "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
       "read_ranges": [
         [
           1,
-          215
+          228
         ]
       ],
       "responsibility": "事実を削除せず、明示時系列・主体・entity・臨床属性を保持する候補関係とpromotion用fingerprint。",
@@ -7067,7 +7292,8 @@
         "mcs/semantic/semantic_projection.py",
         "tests/semantic/test_jev_value.py",
         "tests/semantic/test_semantic_relations.py"
-      ]
+      ],
+      "supplement": "docs/development/full-maintenance-20261005/parent-semantic-utc-evidence.json"
     },
     {
       "path": "mcs/semantic/semantic_render.py",
@@ -7279,17 +7505,20 @@
       "kind": "source",
       "status": "PARTIAL",
       "evidence": [
-        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending",
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "full_content_read": true,
       "read_ranges": [
         [
           1,
-          103
+          107
         ]
       ],
-      "reviewed_sha256": "1d565f67a33b13f9078b55227934f462dc6e99619a46a86848627528be8c3859"
+      "reviewed_sha256": "db77e2a25f823067f9a1e05a57637ad6a85d8641d6d390d3cb77f08d3e5b6ffa",
+      "reviewed_lines": 107,
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
     },
     {
       "path": "mcs/views/mcs_stats.py",
@@ -7364,17 +7593,20 @@
       "kind": "source",
       "status": "PARTIAL",
       "evidence": [
-        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending"
+        "Parent full-content read and targeted fix; parent-views-evidence.json, module criterion review still pending",
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "full_content_read": true,
       "read_ranges": [
         [
           1,
-          309
+          315
         ]
       ],
-      "reviewed_sha256": "192067dca2822d9b1b135668d0f57fc5a14872ff61a1d509153d9489af63f466"
+      "reviewed_sha256": "92eed1e56de4823ec09cc35c44cd96b30e0a50de6794a12724ae037325cc7d79",
+      "reviewed_lines": 315,
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
     },
     {
       "path": "mcs/views/read_model.py",
@@ -7404,9 +7636,20 @@
       "lines": 207,
       "module": "mcs/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "f34919b9aafdb695189feb638fa9b32ef00efffd1a57b787c6305ec7f7a223ac",
+      "reviewed_lines": 207,
+      "read_ranges": [
+        [
+          1,
+          207
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
     },
     {
       "path": "mcs/views/structured_view.py",
@@ -7437,9 +7680,20 @@
       "lines": 329,
       "module": "mcs/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "5102c06e0f1421105b9d99dd35b01e010f5394c81379b60497a30a8c5cca430e",
+      "reviewed_lines": 329,
+      "read_ranges": [
+        [
+          1,
+          329
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
     },
     {
       "path": "mcs_standalone/__init__.py",
@@ -8133,9 +8387,20 @@
       "lines": 189,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "cad36d3750fed0965fb63d7d000d8a0d2263d3668354e1861b4d5da1980fdc81",
+      "reviewed_lines": 189,
+      "read_ranges": [
+        [
+          1,
+          189
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "tests/adapters/common/test_card_buttons_render.py",
@@ -8144,9 +8409,20 @@
       "lines": 256,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "c3ebd0ddb085ab59f6a8718fb541c43c89115cd6ed540024bc755d96972b6316",
+      "reviewed_lines": 256,
+      "read_ranges": [
+        [
+          1,
+          256
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "tests/adapters/common/test_registry_lock.py",
@@ -8155,9 +8431,20 @@
       "lines": 61,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "bc6a397232dfd20a1e2d3566a4353c99fbefbf6c485bfa589aed744344199518",
+      "reviewed_lines": 61,
+      "read_ranges": [
+        [
+          1,
+          61
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "tests/adapters/discord/discord_delivery_testkit.py",
@@ -8243,9 +8530,20 @@
       "lines": 281,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "c2d83107044f04f7aa0831e21124f761d9fe6a320e24985496c0cf1a753e1e73",
+      "reviewed_lines": 281,
+      "read_ranges": [
+        [
+          1,
+          281
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "tests/adapters/lineworks/test_lineworks_adapter.py",
@@ -8254,9 +8552,20 @@
       "lines": 727,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "fa687f1b0896fd41dc0881bda7180f799bd5961f1986463e4765fc2f215b604c",
+      "reviewed_lines": 727,
+      "read_ranges": [
+        [
+          1,
+          727
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "tests/adapters/lineworks/test_lineworks_client.py",
@@ -8265,9 +8574,20 @@
       "lines": 309,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "a2982e6427d6e6b1f50f5430cd378fdcc09a4bce7336acc37b0b15ac225d1262",
+      "reviewed_lines": 309,
+      "read_ranges": [
+        [
+          1,
+          309
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "tests/adapters/lineworks/test_lineworks_runtime.py",
@@ -8276,9 +8596,20 @@
       "lines": 132,
       "module": "tests/adapters",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "ff509e5f8624dc1fbd9fa28f783f1f855e6c53bfe5d1246e97b9dc9d97cb8cdc",
+      "reviewed_lines": 132,
+      "read_ranges": [
+        [
+          1,
+          132
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
     },
     {
       "path": "tests/adapters/slack/slack_card_testkit.py",
@@ -13630,22 +13961,24 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending",
+        "Parent UTC末尾互換修復。全source/test再読・元packet20観点とdelta/合成検証を照合。"
       ],
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
-      "reviewed_sha256": "da06a457be402bb53666ac76f11433ce2291186946c8121bd09cb4113233e8b4",
+      "reviewed_sha256": "6d34669d7064271c7a689115088c6af89c81fda36690b13ba7bd9c9ea8105d08",
       "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
       "read_ranges": [
         [
           1,
-          204
+          251
         ]
       ],
       "responsibility": "重複/主体/属性/関係fingerprint、offset/同時刻/無効日/精度不一致の時系列非推測。",
       "callers_or_consumers": [
         "pytest collection",
         "tests/conftest.py"
-      ]
+      ],
+      "supplement": "docs/development/full-maintenance-20261005/parent-semantic-utc-evidence.json"
     },
     {
       "path": "tests/semantic/test_semantic_repair.py",
@@ -14014,9 +14347,20 @@
       "lines": 105,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "c08ea747ca11f7ead892cdea2a7d1b2895cad99fc7cd8b997a6551c3334de37d",
+      "reviewed_lines": 112,
+      "read_ranges": [
+        [
+          1,
+          112
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
     },
     {
       "path": "tests/views/test_drug_candidates.py",
@@ -14036,9 +14380,20 @@
       "lines": 192,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "20e954a952d905a41b57dcf127d84072b2d7419d79f802d74427f7a68da27293",
+      "reviewed_lines": 192,
+      "read_ranges": [
+        [
+          1,
+          192
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
     },
     {
       "path": "tests/views/test_interaction_latency.py",
@@ -14080,9 +14435,20 @@
       "lines": 168,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "9fa4b28335df7ba634cc97fee1e292b7f55dd985d85085b97486d56e883bd98c",
+      "reviewed_lines": 168,
+      "read_ranges": [
+        [
+          1,
+          168
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
     },
     {
       "path": "tests/views/test_notification_receipt_scope.py",
@@ -14102,9 +14468,20 @@
       "lines": 66,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "55e7b4ba06661a8a68c19a029b1a3e316931f301e523ffcecbef5934fb68ce88",
+      "reviewed_lines": 66,
+      "read_ranges": [
+        [
+          1,
+          66
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
     },
     {
       "path": "tests/views/test_project_metadata_comparison.py",
@@ -14113,9 +14490,20 @@
       "lines": 392,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "06de0ae0c6acc2f00e5e21e8d995e3c58a42d305451efeba137013f21a8e9522",
+      "reviewed_lines": 393,
+      "read_ranges": [
+        [
+          1,
+          393
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
     },
     {
       "path": "tests/views/test_project_metadata_view.py",
@@ -14124,9 +14512,20 @@
       "lines": 228,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "fbe232a8128f20c723eed976f4a1aa8765c2a59138596e94e033a6591950aecc",
+      "reviewed_lines": 261,
+      "read_ranges": [
+        [
+          1,
+          261
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
     },
     {
       "path": "tests/views/test_qc_view.py",
@@ -14146,9 +14545,20 @@
       "lines": 373,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "99a5b75e300b6608c60cb814a3e8c79dbf9b6c3b20ae8d499c7a1c5bc2a48749",
+      "reviewed_lines": 373,
+      "read_ranges": [
+        [
+          1,
+          373
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
     },
     {
       "path": "tests/views/test_response_observation.py",
@@ -14265,9 +14675,20 @@
       "lines": 186,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "12b3735bd6b5a74d53171b923fd04d3975deef984c8296397e0a4bc0c29122ce",
+      "reviewed_lines": 186,
+      "read_ranges": [
+        [
+          1,
+          186
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
     },
     {
       "path": "tests/views/test_summary_review_cli.py",
@@ -14276,9 +14697,20 @@
       "lines": 49,
       "module": "tests/views",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "親による非切断全文読取と合成snapshot/publication/人数集計/候補混入境界の照合。"
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "46f1db2667dbd4715a386499e4e01c1ce1e7a2d829ffd62a1907028752f679d2",
+      "reviewed_lines": 49,
+      "read_ranges": [
+        [
+          1,
+          49
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
     },
     {
       "path": "tests/views/views_testkit.py",
@@ -14300,6 +14732,301 @@
         ]
       ],
       "reviewed_sha256": "5435276d90281e002653bceb56d36d8185e61fa3fa64c6a5c4044b8861e62478"
+    },
+    {
+      "path": "tests/adapters/common/test_deep_local_state.py",
+      "sha256": null,
+      "bytes": 2228,
+      "lines": 56,
+      "module": "tests.adapters.common.test_deep_local_state",
+      "kind": "new-test",
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "46284395c3d2979445fabb71bd74c7cdd19649fdae56285c0ac6af2f2ac16c8d",
+      "reviewed_lines": 56,
+      "read_ranges": [
+        [
+          1,
+          56
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
+      "path": "tests/adapters/common/test_worker_reconcile_integrity.py",
+      "sha256": null,
+      "bytes": 7806,
+      "lines": 158,
+      "module": "tests.adapters.common.test_worker_reconcile_integrity",
+      "kind": "new-test",
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "c4e07b684693180081534c8c5f715ae74beeec4ef81da5803a036af5f89e2e73",
+      "reviewed_lines": 158,
+      "read_ranges": [
+        [
+          1,
+          158
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
+      "path": "tests/adapters/lineworks/test_lineworks_plain_views.py",
+      "sha256": null,
+      "bytes": 2504,
+      "lines": 47,
+      "module": "tests.adapters.lineworks.test_lineworks_plain_views",
+      "kind": "new-test",
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "8238ee6d0d8be32df57bdae183c229c1a04381a8456b4e632cf4f16a918e3e31",
+      "reviewed_lines": 47,
+      "read_ranges": [
+        [
+          1,
+          47
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
+      "path": "tests/adapters/lineworks/test_lineworks_silent_text.py",
+      "sha256": null,
+      "bytes": 2211,
+      "lines": 45,
+      "module": "tests.adapters.lineworks.test_lineworks_silent_text",
+      "kind": "new-test",
+      "status": "REVIEWED",
+      "evidence": [
+        "Packet3全文・責務/利用側・20観点の記録とW SHAを親Iで照合。親は全source/test patchを確認。最終I全体検証は別。"
+      ],
+      "review_input": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "reviewed_sha256": "7eee5290dd13e87f5fe99ecd6979b336bb742d0e80a7203ce21e6fe7115c20bb",
+      "reviewed_lines": 45,
+      "read_ranges": [
+        [
+          1,
+          45
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
+      "path": "changes/maintenance-notify-packet3-recovery-20261005.json",
+      "sha256": null,
+      "bytes": 1786,
+      "lines": 12,
+      "module": "changes",
+      "kind": "release-fragment",
+      "status": "REVIEWED",
+      "evidence": [
+        "日本語runtime変更・upgradeと修復sourceを親照合済み。"
+      ],
+      "reviewed_sha256": "78ff8f50b55e96fa600d2864e072e18e9ca61b1bf34526d7fb5892755be5befb",
+      "reviewed_lines": 12,
+      "read_ranges": [
+        [
+          1,
+          12
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
+      "path": "changes/maintenance-notify-packet3-private-display-20261005.json",
+      "sha256": null,
+      "bytes": 1152,
+      "lines": 8,
+      "module": "changes",
+      "kind": "release-fragment",
+      "status": "REVIEWED",
+      "evidence": [
+        "日本語runtime変更・upgradeと修復sourceを親照合済み。"
+      ],
+      "reviewed_sha256": "fc2ad3c8184ec7a1dec9013328417cb1de63aab068c8384e3f2a53de113849ad",
+      "reviewed_lines": 8,
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
+      "path": "changes/maintenance-notify-packet3-lineworks-silent-20261005.json",
+      "sha256": null,
+      "bytes": 1147,
+      "lines": 8,
+      "module": "changes",
+      "kind": "release-fragment",
+      "status": "REVIEWED",
+      "evidence": [
+        "日本語runtime変更・upgradeと修復sourceを親照合済み。"
+      ],
+      "reviewed_sha256": "e40278900656f54f28c45a1e704ba917fdd037a65517cdf18f5ed0b128d22575",
+      "reviewed_lines": 8,
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
+      "path": "changes/20261005-extraction-snapshot-evidence.json",
+      "sha256": null,
+      "bytes": 2502,
+      "lines": 15,
+      "module": "changes",
+      "kind": "task-run-record",
+      "status": "PARTIAL",
+      "evidence": [
+        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。"
+      ]
+    },
+    {
+      "path": "changes/maintenance-core-packet3-legacy-boundaries.json",
+      "sha256": null,
+      "bytes": 1373,
+      "lines": 16,
+      "module": "changes",
+      "kind": "new-source-or-test",
+      "status": "UNSEEN",
+      "evidence": [
+        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。"
+      ]
+    },
+    {
+      "path": "changes/maintenance-core-packet3-native-boundaries.json",
+      "sha256": null,
+      "bytes": 1649,
+      "lines": 18,
+      "module": "changes",
+      "kind": "new-source-or-test",
+      "status": "UNSEEN",
+      "evidence": [
+        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。"
+      ]
+    },
+    {
+      "path": "docs/development/maintenance-notify-packet3-evidence.json",
+      "sha256": null,
+      "bytes": 323455,
+      "lines": 8109,
+      "module": "docs",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
+      "evidence": [
+        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。",
+        "JSON全構造・32file digest/640観点・9findings/6反証/4制約・artifact/logSHA検査済み。run記録として分類。"
+      ],
+      "reviewed_sha256": "babad73b627ca7b93958597a33b0fbccd95415f25bd1cd1d49b4682e8fc605f1",
+      "review_packet": "docs/development/maintenance-notify-packet3-evidence.json"
+    },
+    {
+      "path": "tests/adapters/discord/test_discord_runtime_compat.py",
+      "sha256": null,
+      "bytes": 4186,
+      "lines": 116,
+      "module": "tests",
+      "kind": "new-source-or-test",
+      "status": "UNSEEN",
+      "evidence": [
+        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。"
+      ]
+    },
+    {
+      "path": "tests/adapters/slack/test_slack_runtime_compat.py",
+      "sha256": null,
+      "bytes": 4653,
+      "lines": 137,
+      "module": "tests",
+      "kind": "new-source-or-test",
+      "status": "UNSEEN",
+      "evidence": [
+        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。"
+      ]
+    },
+    {
+      "path": "tests/extract/test_extract_packet4_regressions.py",
+      "sha256": null,
+      "bytes": 11396,
+      "lines": 234,
+      "module": "tests",
+      "kind": "new-source-or-test",
+      "status": "UNSEEN",
+      "evidence": [
+        "今回の追加pathを集合へ反映。内容レビューは各packet/親の記録に従う。"
+      ]
+    },
+    {
+      "path": "docs/development/full-maintenance-20261005/parent-semantic-utc-evidence.json",
+      "sha256": null,
+      "bytes": 1896,
+      "lines": 28,
+      "module": "docs",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          28
+        ]
+      ],
+      "reviewed_sha256": "9e6b81e65321866180fa02bf11fbd3d030c4614032b3ca419ed63eca2af08171",
+      "evidence": [
+        "親作成・全文確認。対象source/callerと検証ログを照合済み。"
+      ]
+    },
+    {
+      "path": "changes/maintenance-views-invalid-numbers-20261005.json",
+      "sha256": null,
+      "bytes": 1019,
+      "lines": 14,
+      "module": "changes",
+      "kind": "release-fragment",
+      "status": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          14
+        ]
+      ],
+      "reviewed_sha256": "df956fa9164155a23348a4b866f52324959463fd7072fd7701953e920e33baea",
+      "evidence": [
+        "親作成・全文確認。対象source/callerと検証ログを照合済み。"
+      ]
+    },
+    {
+      "path": "changes/maintenance-semantic-utc-python310-20261005.json",
+      "sha256": null,
+      "bytes": 833,
+      "lines": 12,
+      "module": "changes",
+      "kind": "release-fragment",
+      "status": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          12
+        ]
+      ],
+      "reviewed_sha256": "8cc251a18ec2110b818dc6b7eee25a5e94c5d5ee883c018fc6ff7c3fcc225ab4",
+      "evidence": [
+        "親作成・全文確認。対象source/callerと検証ログを照合済み。"
+      ]
     }
   ],
   "protected_or_derived_groups": [

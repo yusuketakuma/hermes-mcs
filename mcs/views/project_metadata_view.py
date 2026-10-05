@@ -39,9 +39,11 @@ def _chat_item(item, *, medication: bool, rule: bool) -> dict[str, JSON] | None:
         keys = ("name", *fields, "prn", "negated")
     else:
         value = item.get("value")
-        if (not ((isinstance(value, (int, float)) and not isinstance(value, bool)
-                  and math.isfinite(value))
-                 or _text(value)) or item.get("flag") not in (None, "high", "low")):
+        try:
+            numeric = type(value) in (int, float) and math.isfinite(value)
+        except OverflowError:
+            numeric = False
+        if not (numeric or _text(value)) or item.get("flag") not in (None, "high", "low"):
             return None
         keys = ("name", "value", *fields)
     row: dict[str, JSON] = {key: item.get(key) for key in keys}
@@ -146,14 +148,18 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
     """
     from mcs_adapter import _valid_id
 
-    if (type(show_names) is not bool or type(include_chat) is not bool
+    try:
+        invalid = (type(show_names) is not bool or type(include_chat) is not bool
             or (include_chat and dataset not in _CLINICAL)
             or type(max_age_s) not in (int, float)
             or not math.isfinite(max_age_s) or max_age_s < 0
             or (now is not None and (type(now) not in (int, float)
                                     or not math.isfinite(now) or now < 0))
             or (dataset == "observation_values" and not _valid_id(item_id))
-            or (dataset != "observation_values" and item_id is not None)):
+            or (dataset != "observation_values" and item_id is not None))
+    except OverflowError:
+        invalid = True
+    if invalid:
         raise ValueError("invalid metadata view options")
     target = metadata_target(db, project_id, dataset)
     result: dict[str, JSON] = {"state": "unknown", "reason": "not_fetched", "rows": [],
@@ -265,7 +271,7 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
             result["historical"] = not result["current_known"]
             if provenance is not None:
                 provenance["complete_artifact_id"] = complete["artifact_id"]
-    except (ValueError, KeyError, TypeError, AttributeError, SchemaError):
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError, OverflowError, SchemaError):
         result.update(state="unknown", reason="artifact_invalid", rows=[],
                       definition=None, http_status=None, attempted_at=None,
                       current_known=False, historical=False, stale=None)

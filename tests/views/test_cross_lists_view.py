@@ -66,6 +66,7 @@ def test_datasets_and_filters_are_separate_sets(store, replay):
 @pytest.mark.parametrize("field,value", [
     ("rows", [{"project_id": PID}]), ("complete", "yes"),
     ("attempted_at", float("nan")), ("reason", "unsupported"),
+    ("attempted_at", 10 ** 400),
     ("rows", None), ("timestamp", True),
 ])
 def test_invalid_artifact_is_unknown_not_empty(store, replay, field, value):
@@ -76,6 +77,12 @@ def test_invalid_artifact_is_unknown_not_empty(store, replay, field, value):
     view = get_cross_list(store.db, "mentioned", enabled=True, now=100)
     assert view["state"] == "unknown" and view["reason"] == "artifact_invalid"
     assert view["rows"] == [] and not view["current_known"]
+
+
+@pytest.mark.parametrize("option", ["now", "max_age_s"])
+def test_oversized_numeric_options_are_rejected_before_sql(option):
+    with pytest.raises(ValueError, match="cross list view options"):
+        get_cross_list(None, "mentioned", enabled=True, **{option: 10 ** 400})
 
 
 def test_metadata_capture_can_be_read_without_source_body_or_false_unread(store, replay):
