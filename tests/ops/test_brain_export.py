@@ -205,7 +205,7 @@ def test_patient_cleanup_preserves_symbolic_link(env, tmp_path):
     assert foreign.read_text() == "SYNTHETIC unrelated asset"
 
 
-def test_write_refuses_directory_changed_after_check(tmp_path, monkeypatch):
+def test_write_refuses_directory_changed_before_open(tmp_path, monkeypatch):
     root = tmp_path / "exports"
     directory = root / "patients"
     directory.mkdir(parents=True)
@@ -213,15 +213,19 @@ def test_write_refuses_directory_changed_after_check(tmp_path, monkeypatch):
     foreign.mkdir()
     marker = foreign / "p1.md"
     marker.write_text("SYNTHETIC unrelated asset")
-    check = brain_export._check_directory
+    open_file = brain_export.os.open
 
-    def changed_after_observation(path):
-        check(path)
-        if path == directory:
+    def changed_before_open(path, *args, **kwargs):
+        candidate = Path(path)
+        # The old writer opens a pathname-based staging file; the fixed
+        # writer opens the child directory before creating its staging FD.
+        if candidate.name == "patients" or candidate.parent == directory \
+                and candidate.name.startswith(".p1.md-"):
             directory.rmdir()
             directory.symlink_to(foreign, target_is_directory=True)
+        return open_file(path, *args, **kwargs)
 
-    monkeypatch.setattr(brain_export, "_check_directory", changed_after_observation)
+    monkeypatch.setattr(brain_export.os, "open", changed_before_open)
     with pytest.raises(ValueError, match="export_directory_unsafe"):
         brain_export._write(root, "patients/p1.md", "SYNTHETIC export")
     assert marker.read_text() == "SYNTHETIC unrelated asset"
