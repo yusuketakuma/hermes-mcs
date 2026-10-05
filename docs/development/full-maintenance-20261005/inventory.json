@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "REVIEWED": 634,
+      "REVIEWED": 655,
       "EXCLUDED": 25,
       "PARTIAL": 28,
-      "UNSEEN": 216
+      "UNSEEN": 196
     },
-    "candidate_tracked": 901
+    "candidate_tracked": 902
   },
   "files": [
     {
@@ -5516,9 +5516,57 @@
       "lines": 269,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "c3c1c19c461bbcc4461dc739793f2ac4ba5bcb500797d70cf72e95bd2a944268",
+      "reviewed_lines": 269,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          140
+        ],
+        [
+          141,
+          269
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "1.0.13 userstop時点未完16項目と後日local完了追記、private証拠参照・外部受入条件。",
+      "callers": [
+        "docs/development/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/ROADMAP.md:70",
+        "docs/dev-records/README.md:15",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "flow": "版/開発計画→明示ローカル承認・本番別受入→metadata/C1/NAS/runtime合成実装→failed/skip/hashと手渡し記録→Release正本generator・人の本番/公開判定。記録をcompilerの直接入力とはしない。",
+      "criteria": {
+        "C01": "criteria.C01.release_history",
+        "C02": "criteria.C02.release_history",
+        "C03": "criteria.C03.release_history",
+        "C04": "criteria.C04.release_history",
+        "C05": "criteria.C05.release_history",
+        "C06": "criteria.C06.release_history",
+        "C07": "criteria.C07.release_history",
+        "C08": "criteria.C08.release_history",
+        "C09": "criteria.C09.release_history",
+        "C10": "criteria.C10.release_history",
+        "C11": "criteria.C11.release_history",
+        "C12": "criteria.C12.release_history",
+        "X01": "criteria.X01.release_history",
+        "X02": "criteria.X02.release_history",
+        "X03": "criteria.X03.release_history",
+        "X04": "criteria.X04.release_history",
+        "X05": "criteria.X05.release_history",
+        "X06": "criteria.X06.release_history",
+        "X07": "criteria.X07.release_history",
+        "X08": "criteria.X08.release_history"
+      },
+      "historical_scope": "2026-10-03〜2026-10-05 / 1.0.11準備、1.0.13候補引継ぎと外部条件"
     },
     {
       "path": "docs/dev-records/README.md",
@@ -5538,9 +5586,56 @@
       "lines": 152,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "dc280664bf24a8e8acd584f5c356393709d1bbd8ee0117c55c5dd8248dba12dd",
+      "reviewed_lines": 152,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          78
+        ],
+        [
+          79,
+          152
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "固定PhaseJ候補のAT/INV/G0-G7要件対応、部分合成証拠と人手/実機未完の正確な分類。",
+      "callers": [
+        "docs/dev-records/README.md:19-26",
+        "docs/roadmap/acquisition.md:51,113,171",
+        "docs/roadmap/extraction.md:39,121,141",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "flow": "原仕様/候補台帳→scope・mode・人承認→保存/解析/監査/repair/通知の当時の差分→日付/fixture/hash/未達ゲート→人の受入・incident CI。現在のQC60日・generationは実sourceを優先。",
+      "criteria": {
+        "C01": "criteria.C01.semantic_history",
+        "C02": "criteria.C02.semantic_history",
+        "C03": "criteria.C03.semantic_history",
+        "C04": "criteria.C04.semantic_history",
+        "C05": "criteria.C05.semantic_history",
+        "C06": "criteria.C06.semantic_history",
+        "C07": "criteria.C07.semantic_history",
+        "C08": "criteria.C08.semantic_history",
+        "C09": "criteria.C09.semantic_history",
+        "C10": "criteria.C10.semantic_history",
+        "C11": "criteria.C11.semantic_history",
+        "C12": "criteria.C12.semantic_history",
+        "X01": "criteria.X01.semantic_history",
+        "X02": "criteria.X02.semantic_history",
+        "X03": "criteria.X03.semantic_history",
+        "X04": "criteria.X04.semantic_history",
+        "X05": "criteria.X05.semantic_history",
+        "X06": "criteria.X06.semantic_history",
+        "X07": "criteria.X07.semantic_history",
+        "X08": "criteria.X08.semantic_history"
+      },
+      "historical_scope": "2026-09-20〜2026-09-23、reviewの60日追記を含む。複数固定candidateを逐次区別"
     },
     {
       "path": "docs/dev-records/auto-update-plan.md",
@@ -5549,9 +5644,77 @@
       "lines": 933,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "e3c35797dfc0dbbd647dee6a29883977a5883bc9f89e4bcddeb32a7cb4cfd21e",
+      "reviewed_lines": 933,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          120
+        ],
+        [
+          121,
+          260
+        ],
+        [
+          261,
+          400
+        ],
+        [
+          401,
+          540
+        ],
+        [
+          541,
+          670
+        ],
+        [
+          671,
+          805
+        ],
+        [
+          806,
+          933
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "自動更新/rollback/独立recoveryの設計と4回review、未追跡削除/WAL復元の後日訂正。",
+      "callers": [
+        "docs/README.md:13",
+        "docs/dev-records/README.md:16",
+        "docs/specs/lifecycle-spec.md:5-18,151",
+        "docs/roadmap/integrity.md:75",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "flow": "設計history→mode/off・human receipt→tag/SHA/preflight・quiesce・update→journal/manifest/backup→旧新code/独立recovery/利用guide。実行入口は実source、本文の命令例は今回の承認ではない。",
+      "criteria": {
+        "C01": "criteria.C01.update_history",
+        "C02": "criteria.C02.update_history",
+        "C03": "criteria.C03.update_history",
+        "C04": "criteria.C04.update_history",
+        "C05": "criteria.C05.update_history",
+        "C06": "criteria.C06.update_history",
+        "C07": "criteria.C07.update_history",
+        "C08": "criteria.C08.update_history",
+        "C09": "criteria.C09.update_history",
+        "C10": "criteria.C10.update_history",
+        "C11": "criteria.C11.update_history",
+        "C12": "criteria.C12.update_history",
+        "X01": "criteria.X01.update_history",
+        "X02": "criteria.X02.update_history",
+        "X03": "criteria.X03.update_history",
+        "X04": "criteria.X04.update_history",
+        "X05": "criteria.X05.update_history",
+        "X06": "criteria.X06.update_history",
+        "X07": "criteria.X07.update_history",
+        "X08": "criteria.X08.update_history"
+      },
+      "historical_scope": "2026-09-24〜2026-09-28。冒頭は後日訂正、残bodyは設計/レビュー履歴"
     },
     {
       "path": "docs/dev-records/continuation-20260920.md",
@@ -5560,9 +5723,72 @@
       "lines": 577,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "7141be091974bb68ec22896698c0158b609a676c712485116f7add28ab1d57bb",
+      "reviewed_lines": 577,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          110
+        ],
+        [
+          111,
+          210
+        ],
+        [
+          211,
+          310
+        ],
+        [
+          311,
+          410
+        ],
+        [
+          411,
+          500
+        ],
+        [
+          501,
+          577
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "PhaseJ継続台帳、raw保存/意味job/人承認/評価/有限G2、sourcefingerprintと未達の時系列。",
+      "callers": [
+        "docs/dev-records/README.md:19-26",
+        "docs/roadmap/acquisition.md:51,113,171",
+        "docs/roadmap/extraction.md:39,121,141",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "flow": "原仕様/候補台帳→scope・mode・人承認→保存/解析/監査/repair/通知の当時の差分→日付/fixture/hash/未達ゲート→人の受入・incident CI。現在のQC60日・generationは実sourceを優先。",
+      "criteria": {
+        "C01": "criteria.C01.semantic_history",
+        "C02": "criteria.C02.semantic_history",
+        "C03": "criteria.C03.semantic_history",
+        "C04": "criteria.C04.semantic_history",
+        "C05": "criteria.C05.semantic_history",
+        "C06": "criteria.C06.semantic_history",
+        "C07": "criteria.C07.semantic_history",
+        "C08": "criteria.C08.semantic_history",
+        "C09": "criteria.C09.semantic_history",
+        "C10": "criteria.C10.semantic_history",
+        "C11": "criteria.C11.semantic_history",
+        "C12": "criteria.C12.semantic_history",
+        "X01": "criteria.X01.semantic_history",
+        "X02": "criteria.X02.semantic_history",
+        "X03": "criteria.X03.semantic_history",
+        "X04": "criteria.X04.semantic_history",
+        "X05": "criteria.X05.semantic_history",
+        "X06": "criteria.X06.semantic_history",
+        "X07": "criteria.X07.semantic_history",
+        "X08": "criteria.X08.semantic_history"
+      },
+      "historical_scope": "2026-09-20〜2026-09-23、reviewの60日追記を含む。複数固定candidateを逐次区別"
     },
     {
       "path": "docs/dev-records/continuation-20260923.md",
@@ -5571,9 +5797,88 @@
       "lines": 1115,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "d69b9348ed46ca1abc6bcfa5f21358b06cb217e284bc7fed549378b78b7bafbd",
+      "reviewed_lines": 1115,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          110
+        ],
+        [
+          111,
+          230
+        ],
+        [
+          231,
+          350
+        ],
+        [
+          351,
+          470
+        ],
+        [
+          471,
+          590
+        ],
+        [
+          591,
+          710
+        ],
+        [
+          711,
+          830
+        ],
+        [
+          831,
+          950
+        ],
+        [
+          951,
+          1070
+        ],
+        [
+          1071,
+          1115
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "全repoaudit・canonical・LLM/slot/取得/通知の継続修復と当時実機観察、後日修理と未達。",
+      "callers": [
+        "docs/dev-records/README.md:19-26",
+        "docs/roadmap/acquisition.md:51,113,171",
+        "docs/roadmap/extraction.md:39,121,141",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "flow": "原仕様/候補台帳→scope・mode・人承認→保存/解析/監査/repair/通知の当時の差分→日付/fixture/hash/未達ゲート→人の受入・incident CI。現在のQC60日・generationは実sourceを優先。",
+      "criteria": {
+        "C01": "criteria.C01.semantic_history",
+        "C02": "criteria.C02.semantic_history",
+        "C03": "criteria.C03.semantic_history",
+        "C04": "criteria.C04.semantic_history",
+        "C05": "criteria.C05.semantic_history",
+        "C06": "criteria.C06.semantic_history",
+        "C07": "criteria.C07.semantic_history",
+        "C08": "criteria.C08.semantic_history",
+        "C09": "criteria.C09.semantic_history",
+        "C10": "criteria.C10.semantic_history",
+        "C11": "criteria.C11.semantic_history",
+        "C12": "criteria.C12.semantic_history",
+        "X01": "criteria.X01.semantic_history",
+        "X02": "criteria.X02.semantic_history",
+        "X03": "criteria.X03.semantic_history",
+        "X04": "criteria.X04.semantic_history",
+        "X05": "criteria.X05.semantic_history",
+        "X06": "criteria.X06.semantic_history",
+        "X07": "criteria.X07.semantic_history",
+        "X08": "criteria.X08.semantic_history"
+      },
+      "historical_scope": "2026-09-20〜2026-09-23、reviewの60日追記を含む。複数固定candidateを逐次区別"
     },
     {
       "path": "docs/dev-records/coverage-20260925.json",
@@ -5703,9 +6008,53 @@
       "lines": 86,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "1d022e8731f2588ab65df7d36bf96116ce382cb77aec1c53c9b37c052b34dd3e",
+      "reviewed_lines": 86,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          86
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "manualbriefと生成本文の所有区分、ACKtimestamp精密化、将来外送/trace承認・partialrun再開境界。",
+      "callers": [
+        "docs/dev-records/README.md:33,39",
+        "docs/dev-records/stability-20261001.md:61",
+        "openwiki/INSTRUCTIONS.md（manualbrief source）",
+        ".github/workflows/openwiki-update.yml（実行は別承認）",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "flow": "構成/brief正本→生成対象とprovider/tracing承認→alias/bootstrap/将来wiki生成→Claims/provenance/PR→人とCI。生成本文23fileは親分類を再利用し本文再読・手編集なし。",
+      "criteria": {
+        "C01": "criteria.C01.structure_wiki_history",
+        "C02": "criteria.C02.structure_wiki_history",
+        "C03": "criteria.C03.structure_wiki_history",
+        "C04": "criteria.C04.structure_wiki_history",
+        "C05": "criteria.C05.structure_wiki_history",
+        "C06": "criteria.C06.structure_wiki_history",
+        "C07": "criteria.C07.structure_wiki_history",
+        "C08": "criteria.C08.structure_wiki_history",
+        "C09": "criteria.C09.structure_wiki_history",
+        "C10": "criteria.C10.structure_wiki_history",
+        "C11": "criteria.C11.structure_wiki_history",
+        "C12": "criteria.C12.structure_wiki_history",
+        "X01": "criteria.X01.structure_wiki_history",
+        "X02": "criteria.X02.structure_wiki_history",
+        "X03": "criteria.X03.structure_wiki_history",
+        "X04": "criteria.X04.structure_wiki_history",
+        "X05": "criteria.X05.structure_wiki_history",
+        "X06": "criteria.X06.structure_wiki_history",
+        "X07": "criteria.X07.structure_wiki_history",
+        "X08": "criteria.X08.structure_wiki_history"
+      },
+      "historical_scope": "2026-10-01 / 7a5533f構成移動、OpenWiki0.6.1の更新条件記録"
     },
     {
       "path": "docs/dev-records/phase-j-record.md",
@@ -5714,9 +6063,56 @@
       "lines": 237,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "2e93a9c110d182f34f05a99059c78cd033362014d8c150408ac43798ed502784",
+      "reviewed_lines": 237,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          120
+        ],
+        [
+          121,
+          237
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "PhaseJ初期構成/不変条件/当時wire/有効化rollback/品質測定と制約。前置き現在guidepath不在。",
+      "callers": [
+        "docs/dev-records/README.md:19-26",
+        "docs/roadmap/acquisition.md:51,113,171",
+        "docs/roadmap/extraction.md:39,121,141",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "flow": "原仕様/候補台帳→scope・mode・人承認→保存/解析/監査/repair/通知の当時の差分→日付/fixture/hash/未達ゲート→人の受入・incident CI。現在のQC60日・generationは実sourceを優先。",
+      "criteria": {
+        "C01": "criteria.C01.semantic_history",
+        "C02": "criteria.C02.semantic_history",
+        "C03": "criteria.C03.semantic_history",
+        "C04": "criteria.C04.semantic_history",
+        "C05": "criteria.C05.semantic_history",
+        "C06": "criteria.C06.semantic_history",
+        "C07": "criteria.C07.semantic_history",
+        "C08": "criteria.C08.semantic_history",
+        "C09": "criteria.C09.semantic_history",
+        "C10": "criteria.C10.semantic_history",
+        "C11": "criteria.C11.semantic_history",
+        "C12": "criteria.C12.semantic_history",
+        "X01": "criteria.X01.semantic_history",
+        "X02": "criteria.X02.semantic_history",
+        "X03": "criteria.X03.semantic_history",
+        "X04": "criteria.X04.semantic_history",
+        "X05": "criteria.X05.semantic_history",
+        "X06": "criteria.X06.semantic_history",
+        "X07": "criteria.X07.semantic_history",
+        "X08": "criteria.X08.semantic_history"
+      },
+      "historical_scope": "2026-09-20〜2026-09-23、reviewの60日追記を含む。複数固定candidateを逐次区別"
     },
     {
       "path": "docs/dev-records/phase-r-record.md",
@@ -5725,9 +6121,52 @@
       "lines": 88,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "5f60894496e3cbc0a02f94da9153e096daecf9a18c0fe54193d59906ac11771e",
+      "reviewed_lines": 88,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          88
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "RF-CODE46cffb0とRF-OPS観察を分けたREF/FIX・停止/切戻し・当時test証拠。",
+      "callers": [
+        "docs/dev-records/README.md:17-21",
+        "docs/dev-records/continuation-20260920.md:17-22,79,131",
+        "ci/mine_gates.py:extract_ids/main",
+        "ci/gates.py:gate_records_isolation"
+      ],
+      "flow": "履歴manifest→当時の承認/REFとFIX区分→共通helper/lock差分→合成比較artifactとGit記録→人/後続台帳/incident CI。現在writerへ文書を入力する経路はない。",
+      "criteria": {
+        "C01": "criteria.C01.refactor_history",
+        "C02": "criteria.C02.refactor_history",
+        "C03": "criteria.C03.refactor_history",
+        "C04": "criteria.C04.refactor_history",
+        "C05": "criteria.C05.refactor_history",
+        "C06": "criteria.C06.refactor_history",
+        "C07": "criteria.C07.refactor_history",
+        "C08": "criteria.C08.refactor_history",
+        "C09": "criteria.C09.refactor_history",
+        "C10": "criteria.C10.refactor_history",
+        "C11": "criteria.C11.refactor_history",
+        "C12": "criteria.C12.refactor_history",
+        "X01": "criteria.X01.refactor_history",
+        "X02": "criteria.X02.refactor_history",
+        "X03": "criteria.X03.refactor_history",
+        "X04": "criteria.X04.refactor_history",
+        "X05": "criteria.X05.refactor_history",
+        "X06": "criteria.X06.refactor_history",
+        "X07": "criteria.X07.refactor_history",
+        "X08": "criteria.X08.refactor_history"
+      },
+      "historical_scope": "2026-09-20〜2026-09-21 / a8896ec→9d2c6d1→46cffb0、後続842125da別candidate"
     },
     {
       "path": "docs/dev-records/r00-baseline.md",
@@ -5736,9 +6175,52 @@
       "lines": 84,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "5fe13cb47836da1a1cf4328376b8c1803b1b3f44a5235068172b39e8a4bba78a",
+      "reviewed_lines": 84,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          84
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "a8896ec R00 baseline、D01-D15/caller/副作用/lock欠陥manifest。",
+      "callers": [
+        "docs/dev-records/README.md:17-21",
+        "docs/dev-records/continuation-20260920.md:17-22,79,131",
+        "ci/mine_gates.py:extract_ids/main",
+        "ci/gates.py:gate_records_isolation"
+      ],
+      "flow": "履歴manifest→当時の承認/REFとFIX区分→共通helper/lock差分→合成比較artifactとGit記録→人/後続台帳/incident CI。現在writerへ文書を入力する経路はない。",
+      "criteria": {
+        "C01": "criteria.C01.refactor_history",
+        "C02": "criteria.C02.refactor_history",
+        "C03": "criteria.C03.refactor_history",
+        "C04": "criteria.C04.refactor_history",
+        "C05": "criteria.C05.refactor_history",
+        "C06": "criteria.C06.refactor_history",
+        "C07": "criteria.C07.refactor_history",
+        "C08": "criteria.C08.refactor_history",
+        "C09": "criteria.C09.refactor_history",
+        "C10": "criteria.C10.refactor_history",
+        "C11": "criteria.C11.refactor_history",
+        "C12": "criteria.C12.refactor_history",
+        "X01": "criteria.X01.refactor_history",
+        "X02": "criteria.X02.refactor_history",
+        "X03": "criteria.X03.refactor_history",
+        "X04": "criteria.X04.refactor_history",
+        "X05": "criteria.X05.refactor_history",
+        "X06": "criteria.X06.refactor_history",
+        "X07": "criteria.X07.refactor_history",
+        "X08": "criteria.X08.refactor_history"
+      },
+      "historical_scope": "2026-09-20〜2026-09-21 / a8896ec→9d2c6d1→46cffb0、後続842125da別candidate"
     },
     {
       "path": "docs/dev-records/refactor-1.0.12-20261004.md",
@@ -5747,9 +6229,51 @@
       "lines": 104,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "39c1fa0093ec50b38058d91204a906ec91cca65a76dcc04cdd5b94667cadb846",
+      "reviewed_lines": 104,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          104
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "public1.0.12固定の326code AST/責務refactor、意図的重複維持・test本文read限界・SDK隔離。",
+      "callers": [
+        "docs/dev-records/README.md:28,31,37",
+        "docs/dev-records/stability-1.0.13-20261004.md:13-18",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "flow": "B・hash台帳→readonly/実行権限境界→再現と局所修理/差分→当時のrunner/SDK/skip/失敗保存→後続review。今回source自己点検を独立reviewとは呼ばない。",
+      "criteria": {
+        "C01": "criteria.C01.review_history",
+        "C02": "criteria.C02.review_history",
+        "C03": "criteria.C03.review_history",
+        "C04": "criteria.C04.review_history",
+        "C05": "criteria.C05.review_history",
+        "C06": "criteria.C06.review_history",
+        "C07": "criteria.C07.review_history",
+        "C08": "criteria.C08.review_history",
+        "C09": "criteria.C09.review_history",
+        "C10": "criteria.C10.review_history",
+        "C11": "criteria.C11.review_history",
+        "C12": "criteria.C12.review_history",
+        "X01": "criteria.X01.review_history",
+        "X02": "criteria.X02.review_history",
+        "X03": "criteria.X03.review_history",
+        "X04": "criteria.X04.review_history",
+        "X05": "criteria.X05.review_history",
+        "X06": "criteria.X06.review_history",
+        "X07": "criteria.X07.review_history",
+        "X08": "criteria.X08.review_history"
+      },
+      "historical_scope": "2026-09-25（09-28訂正）〜2026-10-04 / 各記載B、public1.0.12 fb87584固定"
     },
     {
       "path": "docs/dev-records/refactor-20260927-progress.json",
@@ -5791,9 +6315,56 @@
       "lines": 293,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "f8f96e8d3e76ef0811f566a241dd9943bb3cfbe3a13060013d05776b0b408572",
+      "reviewed_lines": 293,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          140
+        ],
+        [
+          141,
+          293
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "RT001-040/歴史等価diff/合成restore/REF86とFIX88/現candidateG0 scopeの再検証台帳。",
+      "callers": [
+        "docs/dev-records/README.md:17-21",
+        "docs/dev-records/continuation-20260920.md:17-22,79,131",
+        "ci/mine_gates.py:extract_ids/main",
+        "ci/gates.py:gate_records_isolation"
+      ],
+      "flow": "履歴manifest→当時の承認/REFとFIX区分→共通helper/lock差分→合成比較artifactとGit記録→人/後続台帳/incident CI。現在writerへ文書を入力する経路はない。",
+      "criteria": {
+        "C01": "criteria.C01.refactor_history",
+        "C02": "criteria.C02.refactor_history",
+        "C03": "criteria.C03.refactor_history",
+        "C04": "criteria.C04.refactor_history",
+        "C05": "criteria.C05.refactor_history",
+        "C06": "criteria.C06.refactor_history",
+        "C07": "criteria.C07.refactor_history",
+        "C08": "criteria.C08.refactor_history",
+        "C09": "criteria.C09.refactor_history",
+        "C10": "criteria.C10.refactor_history",
+        "C11": "criteria.C11.refactor_history",
+        "C12": "criteria.C12.refactor_history",
+        "X01": "criteria.X01.refactor_history",
+        "X02": "criteria.X02.refactor_history",
+        "X03": "criteria.X03.refactor_history",
+        "X04": "criteria.X04.refactor_history",
+        "X05": "criteria.X05.refactor_history",
+        "X06": "criteria.X06.refactor_history",
+        "X07": "criteria.X07.refactor_history",
+        "X08": "criteria.X08.refactor_history"
+      },
+      "historical_scope": "2026-09-20〜2026-09-21 / a8896ec→9d2c6d1→46cffb0、後続842125da別candidate"
     },
     {
       "path": "docs/dev-records/release-1.0.10-20261002.md",
@@ -5813,9 +6384,57 @@
       "lines": 275,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "8e990d6416b2af54a2a55e37aa89cdc1d65463eab681440fbf76c29d309a1179",
+      "reviewed_lines": 275,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          135
+        ],
+        [
+          136,
+          275
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "1.0.11metadata/自己反応/診断/原22-Aの合成と実観測受入、schema marker事故/復旧/公開保留。",
+      "callers": [
+        "docs/development/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/ROADMAP.md:70",
+        "docs/dev-records/README.md:15",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "flow": "版/開発計画→明示ローカル承認・本番別受入→metadata/C1/NAS/runtime合成実装→failed/skip/hashと手渡し記録→Release正本generator・人の本番/公開判定。記録をcompilerの直接入力とはしない。",
+      "criteria": {
+        "C01": "criteria.C01.release_history",
+        "C02": "criteria.C02.release_history",
+        "C03": "criteria.C03.release_history",
+        "C04": "criteria.C04.release_history",
+        "C05": "criteria.C05.release_history",
+        "C06": "criteria.C06.release_history",
+        "C07": "criteria.C07.release_history",
+        "C08": "criteria.C08.release_history",
+        "C09": "criteria.C09.release_history",
+        "C10": "criteria.C10.release_history",
+        "C11": "criteria.C11.release_history",
+        "C12": "criteria.C12.release_history",
+        "X01": "criteria.X01.release_history",
+        "X02": "criteria.X02.release_history",
+        "X03": "criteria.X03.release_history",
+        "X04": "criteria.X04.release_history",
+        "X05": "criteria.X05.release_history",
+        "X06": "criteria.X06.release_history",
+        "X07": "criteria.X07.release_history",
+        "X08": "criteria.X08.release_history"
+      },
+      "historical_scope": "2026-10-03〜2026-10-05 / 1.0.11準備、1.0.13候補引継ぎと外部条件"
     },
     {
       "path": "docs/dev-records/release-1.0.12-20261004.md",
@@ -5846,9 +6465,51 @@
       "lines": 103,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "97c9e53d73b56d5bc90e05a2dba20cbef8a846889b648b1aed49ff9e168356f3",
+      "reviewed_lines": 103,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          103
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "446path/hash再利用境界・5件修理とSDK/synthetic/CI/実機制約、同日commit準備の追記。",
+      "callers": [
+        "docs/dev-records/README.md:28,31,37",
+        "docs/dev-records/stability-1.0.13-20261004.md:13-18",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "flow": "B・hash台帳→readonly/実行権限境界→再現と局所修理/差分→当時のrunner/SDK/skip/失敗保存→後続review。今回source自己点検を独立reviewとは呼ばない。",
+      "criteria": {
+        "C01": "criteria.C01.review_history",
+        "C02": "criteria.C02.review_history",
+        "C03": "criteria.C03.review_history",
+        "C04": "criteria.C04.review_history",
+        "C05": "criteria.C05.review_history",
+        "C06": "criteria.C06.review_history",
+        "C07": "criteria.C07.review_history",
+        "C08": "criteria.C08.review_history",
+        "C09": "criteria.C09.review_history",
+        "C10": "criteria.C10.review_history",
+        "C11": "criteria.C11.review_history",
+        "C12": "criteria.C12.review_history",
+        "X01": "criteria.X01.review_history",
+        "X02": "criteria.X02.review_history",
+        "X03": "criteria.X03.review_history",
+        "X04": "criteria.X04.review_history",
+        "X05": "criteria.X05.review_history",
+        "X06": "criteria.X06.review_history",
+        "X07": "criteria.X07.review_history",
+        "X08": "criteria.X08.review_history"
+      },
+      "historical_scope": "2026-09-25（09-28訂正）〜2026-10-04 / 各記載B、public1.0.12 fb87584固定"
     },
     {
       "path": "docs/dev-records/review-20260923.md",
@@ -5857,9 +6518,56 @@
       "lines": 231,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "fd4b578393b9ad22490ed0eaf4e7de1c65fe09824bc12534cfce8c75524e85fe",
+      "reviewed_lines": 231,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          115
+        ],
+        [
+          116,
+          231
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "F/C/V/O差分修理、sandbox4未検証、QC全期間→3日→60日訂正、probe slot修理と最終checkpoint。",
+      "callers": [
+        "docs/dev-records/README.md:19-26",
+        "docs/roadmap/acquisition.md:51,113,171",
+        "docs/roadmap/extraction.md:39,121,141",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "flow": "原仕様/候補台帳→scope・mode・人承認→保存/解析/監査/repair/通知の当時の差分→日付/fixture/hash/未達ゲート→人の受入・incident CI。現在のQC60日・generationは実sourceを優先。",
+      "criteria": {
+        "C01": "criteria.C01.semantic_history",
+        "C02": "criteria.C02.semantic_history",
+        "C03": "criteria.C03.semantic_history",
+        "C04": "criteria.C04.semantic_history",
+        "C05": "criteria.C05.semantic_history",
+        "C06": "criteria.C06.semantic_history",
+        "C07": "criteria.C07.semantic_history",
+        "C08": "criteria.C08.semantic_history",
+        "C09": "criteria.C09.semantic_history",
+        "C10": "criteria.C10.semantic_history",
+        "C11": "criteria.C11.semantic_history",
+        "C12": "criteria.C12.semantic_history",
+        "X01": "criteria.X01.semantic_history",
+        "X02": "criteria.X02.semantic_history",
+        "X03": "criteria.X03.semantic_history",
+        "X04": "criteria.X04.semantic_history",
+        "X05": "criteria.X05.semantic_history",
+        "X06": "criteria.X06.semantic_history",
+        "X07": "criteria.X07.semantic_history",
+        "X08": "criteria.X08.semantic_history"
+      },
+      "historical_scope": "2026-09-20〜2026-09-23、reviewの60日追記を含む。複数固定candidateを逐次区別"
     },
     {
       "path": "docs/dev-records/review-20260925.md",
@@ -5868,9 +6576,51 @@
       "lines": 105,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "ab17881b609fee67b947c8c37d88358ffbf5ae0f1527add2791ae592a87589a3",
+      "reviewed_lines": 105,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          105
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "全体review修理・合成性能・localHermes変更/SDKpin未統合・テスト外部操作事故・09-28文書訂正。",
+      "callers": [
+        "docs/dev-records/README.md:28,31,37",
+        "docs/dev-records/stability-1.0.13-20261004.md:13-18",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "flow": "B・hash台帳→readonly/実行権限境界→再現と局所修理/差分→当時のrunner/SDK/skip/失敗保存→後続review。今回source自己点検を独立reviewとは呼ばない。",
+      "criteria": {
+        "C01": "criteria.C01.review_history",
+        "C02": "criteria.C02.review_history",
+        "C03": "criteria.C03.review_history",
+        "C04": "criteria.C04.review_history",
+        "C05": "criteria.C05.review_history",
+        "C06": "criteria.C06.review_history",
+        "C07": "criteria.C07.review_history",
+        "C08": "criteria.C08.review_history",
+        "C09": "criteria.C09.review_history",
+        "C10": "criteria.C10.review_history",
+        "C11": "criteria.C11.review_history",
+        "C12": "criteria.C12.review_history",
+        "X01": "criteria.X01.review_history",
+        "X02": "criteria.X02.review_history",
+        "X03": "criteria.X03.review_history",
+        "X04": "criteria.X04.review_history",
+        "X05": "criteria.X05.review_history",
+        "X06": "criteria.X06.review_history",
+        "X07": "criteria.X07.review_history",
+        "X08": "criteria.X08.review_history"
+      },
+      "historical_scope": "2026-09-25（09-28訂正）〜2026-10-04 / 各記載B、public1.0.12 fb87584固定"
     },
     {
       "path": "docs/dev-records/signal-priorities-20260924.md",
@@ -5890,9 +6640,65 @@
       "lines": 472,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "ffec811e87ab70bec8bf896942d076c9cd5556ce6daa510ed2e85edda3a10fc2",
+      "reviewed_lines": 472,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          125
+        ],
+        [
+          126,
+          250
+        ],
+        [
+          251,
+          375
+        ],
+        [
+          376,
+          472
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "1.0.13設計/実装/引継ぎ/後続敵対的reviewの全時系列、NAS/人手/相手repo/実機公開条件。",
+      "callers": [
+        "docs/development/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/ROADMAP.md:70",
+        "docs/dev-records/README.md:15",
+        "ci/mine_gates.py:extract_ids/main"
+      ],
+      "flow": "版/開発計画→明示ローカル承認・本番別受入→metadata/C1/NAS/runtime合成実装→failed/skip/hashと手渡し記録→Release正本generator・人の本番/公開判定。記録をcompilerの直接入力とはしない。",
+      "criteria": {
+        "C01": "criteria.C01.release_history",
+        "C02": "criteria.C02.release_history",
+        "C03": "criteria.C03.release_history",
+        "C04": "criteria.C04.release_history",
+        "C05": "criteria.C05.release_history",
+        "C06": "criteria.C06.release_history",
+        "C07": "criteria.C07.release_history",
+        "C08": "criteria.C08.release_history",
+        "C09": "criteria.C09.release_history",
+        "C10": "criteria.C10.release_history",
+        "C11": "criteria.C11.release_history",
+        "C12": "criteria.C12.release_history",
+        "X01": "criteria.X01.release_history",
+        "X02": "criteria.X02.release_history",
+        "X03": "criteria.X03.release_history",
+        "X04": "criteria.X04.release_history",
+        "X05": "criteria.X05.release_history",
+        "X06": "criteria.X06.release_history",
+        "X07": "criteria.X07.release_history",
+        "X08": "criteria.X08.release_history"
+      },
+      "historical_scope": "2026-10-03〜2026-10-05 / 1.0.11準備、1.0.13候補引継ぎと外部条件"
     },
     {
       "path": "docs/dev-records/stability-20261001-progress.json",
@@ -5912,9 +6718,51 @@
       "lines": 68,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "4f93d71cedc5a817420a2990b50c692a0e7b2d154f051c343e06678cf675d8dd",
+      "reviewed_lines": 68,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          68
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "390path安定性/導入改善・deepJSON/unknown/exportrender/URI修理とgenerateWiki未解決。",
+      "callers": [
+        "docs/dev-records/README.md:28,31,37",
+        "docs/dev-records/stability-1.0.13-20261004.md:13-18",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "flow": "B・hash台帳→readonly/実行権限境界→再現と局所修理/差分→当時のrunner/SDK/skip/失敗保存→後続review。今回source自己点検を独立reviewとは呼ばない。",
+      "criteria": {
+        "C01": "criteria.C01.review_history",
+        "C02": "criteria.C02.review_history",
+        "C03": "criteria.C03.review_history",
+        "C04": "criteria.C04.review_history",
+        "C05": "criteria.C05.review_history",
+        "C06": "criteria.C06.review_history",
+        "C07": "criteria.C07.review_history",
+        "C08": "criteria.C08.review_history",
+        "C09": "criteria.C09.review_history",
+        "C10": "criteria.C10.review_history",
+        "C11": "criteria.C11.review_history",
+        "C12": "criteria.C12.review_history",
+        "X01": "criteria.X01.review_history",
+        "X02": "criteria.X02.review_history",
+        "X03": "criteria.X03.review_history",
+        "X04": "criteria.X04.review_history",
+        "X05": "criteria.X05.review_history",
+        "X06": "criteria.X06.review_history",
+        "X07": "criteria.X07.review_history",
+        "X08": "criteria.X08.review_history"
+      },
+      "historical_scope": "2026-09-25（09-28訂正）〜2026-10-04 / 各記載B、public1.0.12 fb87584固定"
     },
     {
       "path": "docs/dev-records/stamps-pullforward-plan-20261003.md",
@@ -5934,9 +6782,51 @@
       "lines": 110,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "113c19240fa4e9fbef2052002567836101c134228cdd85a1a4b6742254b2d436",
+      "reviewed_lines": 110,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          110
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "Hermesなし同等機能の初期singlehost計画・受入条件、planreview完了で実装以降未実施。",
+      "callers": [
+        "docs/dev-records/README.md:歴史index",
+        "docs/guides/STANDALONE.md（現行操作正本、先頭で誘導）",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "flow": "計画/統合前案→mode選択/allowlist→SDK独立接続とsharedSupervisor→journal/flags/manifest→current STANDALONE/source。旧calendar方式から現在Runtime単一hostへの差は時点の差。",
+      "criteria": {
+        "C01": "criteria.C01.standalone_history",
+        "C02": "criteria.C02.standalone_history",
+        "C03": "criteria.C03.standalone_history",
+        "C04": "criteria.C04.standalone_history",
+        "C05": "criteria.C05.standalone_history",
+        "C06": "criteria.C06.standalone_history",
+        "C07": "criteria.C07.standalone_history",
+        "C08": "criteria.C08.standalone_history",
+        "C09": "criteria.C09.standalone_history",
+        "C10": "criteria.C10.standalone_history",
+        "C11": "criteria.C11.standalone_history",
+        "C12": "criteria.C12.standalone_history",
+        "X01": "criteria.X01.standalone_history",
+        "X02": "criteria.X02.standalone_history",
+        "X03": "criteria.X03.standalone_history",
+        "X04": "criteria.X04.standalone_history",
+        "X05": "criteria.X05.standalone_history",
+        "X06": "criteria.X06.standalone_history",
+        "X07": "criteria.X07.standalone_history",
+        "X08": "criteria.X08.standalone_history"
+      },
+      "historical_scope": "2026-10-01計画/c5a7716と2026-10-02 feature/standalone-mode統合前設計"
     },
     {
       "path": "docs/dev-records/standalone-worktree-20261002.md",
@@ -5945,9 +6835,51 @@
       "lines": 151,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "81d207b461cfe0230a03108a4af3ec2cc2864b8b01fc21ceb33c779cddfa2e0f",
+      "reviewed_lines": 151,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          151
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "standalone統合前worktreeのcalendar案・nativeSDK同等性・レビュー修正と実機未検証。",
+      "callers": [
+        "docs/dev-records/README.md:歴史index",
+        "docs/guides/STANDALONE.md（現行操作正本、先頭で誘導）",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "flow": "計画/統合前案→mode選択/allowlist→SDK独立接続とsharedSupervisor→journal/flags/manifest→current STANDALONE/source。旧calendar方式から現在Runtime単一hostへの差は時点の差。",
+      "criteria": {
+        "C01": "criteria.C01.standalone_history",
+        "C02": "criteria.C02.standalone_history",
+        "C03": "criteria.C03.standalone_history",
+        "C04": "criteria.C04.standalone_history",
+        "C05": "criteria.C05.standalone_history",
+        "C06": "criteria.C06.standalone_history",
+        "C07": "criteria.C07.standalone_history",
+        "C08": "criteria.C08.standalone_history",
+        "C09": "criteria.C09.standalone_history",
+        "C10": "criteria.C10.standalone_history",
+        "C11": "criteria.C11.standalone_history",
+        "C12": "criteria.C12.standalone_history",
+        "X01": "criteria.X01.standalone_history",
+        "X02": "criteria.X02.standalone_history",
+        "X03": "criteria.X03.standalone_history",
+        "X04": "criteria.X04.standalone_history",
+        "X05": "criteria.X05.standalone_history",
+        "X06": "criteria.X06.standalone_history",
+        "X07": "criteria.X07.standalone_history",
+        "X08": "criteria.X08.standalone_history"
+      },
+      "historical_scope": "2026-10-01計画/c5a7716と2026-10-02 feature/standalone-mode統合前設計"
     },
     {
       "path": "docs/dev-records/structure-20261001.md",
@@ -5956,9 +6888,53 @@
       "lines": 81,
       "module": "docs",
       "kind": "run_record",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "docs7全20原本5534行/140観点/28リンク/150static検査/893全tracked再生を親受入。現在sourceの成功へ歴史PASSを転用しない。phaseJ現在手順リンクだけ親d836818で1行修復。"
+      ],
+      "review_input": "421bfa08651baa95d453db6c8c9c199aaba830c5",
+      "reviewed_sha256": "3a5c2371b867e26451c67fa262f619df10b269cf57719b3b1762e2dceda459da",
+      "reviewed_lines": 81,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          81
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "responsibility": "47pathの用途別移動/互換alias/namespace衝突回帰・生成源/旧record保持とlocalSDK証拠。",
+      "callers": [
+        "docs/dev-records/README.md:33,39",
+        "docs/dev-records/stability-20261001.md:61",
+        "openwiki/INSTRUCTIONS.md（manualbrief source）",
+        ".github/workflows/openwiki-update.yml（実行は別承認）",
+        "ci/mine_gates.py:extract_ids/heatmap"
+      ],
+      "flow": "構成/brief正本→生成対象とprovider/tracing承認→alias/bootstrap/将来wiki生成→Claims/provenance/PR→人とCI。生成本文23fileは親分類を再利用し本文再読・手編集なし。",
+      "criteria": {
+        "C01": "criteria.C01.structure_wiki_history",
+        "C02": "criteria.C02.structure_wiki_history",
+        "C03": "criteria.C03.structure_wiki_history",
+        "C04": "criteria.C04.structure_wiki_history",
+        "C05": "criteria.C05.structure_wiki_history",
+        "C06": "criteria.C06.structure_wiki_history",
+        "C07": "criteria.C07.structure_wiki_history",
+        "C08": "criteria.C08.structure_wiki_history",
+        "C09": "criteria.C09.structure_wiki_history",
+        "C10": "criteria.C10.structure_wiki_history",
+        "C11": "criteria.C11.structure_wiki_history",
+        "C12": "criteria.C12.structure_wiki_history",
+        "X01": "criteria.X01.structure_wiki_history",
+        "X02": "criteria.X02.structure_wiki_history",
+        "X03": "criteria.X03.structure_wiki_history",
+        "X04": "criteria.X04.structure_wiki_history",
+        "X05": "criteria.X05.structure_wiki_history",
+        "X06": "criteria.X06.structure_wiki_history",
+        "X07": "criteria.X07.structure_wiki_history",
+        "X08": "criteria.X08.structure_wiki_history"
+      },
+      "historical_scope": "2026-10-01 / 7a5533f構成移動、OpenWiki0.6.1の更新条件記録"
     },
     {
       "path": "docs/development/ACCEPTANCE_1.0.11.md",
@@ -26306,6 +27282,17 @@
       "evidence": [
         "親の静的SVG3件実preview・source/outputhashとtool限界。"
       ]
+    },
+    {
+      "path": "docs/development/maintenance-core-docs7-evidence.json",
+      "module": "run-record",
+      "kind": "run_record",
+      "status": "REVIEWED",
+      "sha256": "7d46676877f4094dfce6126e85c193512f33bc2ad89b1d609eea69d70961cddd",
+      "structured_record_reviewed": true,
+      "evidence": [
+        "全文receipt/140観点allassessment・同一refs/flow/findings/limits/全byte replayとcommit receiptを親受入。runtime/freshreviewとは別。"
+      ]
     }
   ],
   "protected_or_derived_groups": [
@@ -26422,5 +27409,20 @@
       "fb488c8",
       "a525f96"
     ]
+  },
+  "last_core_docs7_import": {
+    "report": "docs/development/maintenance-core-docs7-evidence.json",
+    "report_sha256": "7d46676877f4094dfce6126e85c193512f33bc2ad89b1d609eea69d70961cddd",
+    "full_original_files": 20,
+    "full_original_lines": 5534,
+    "parent_read_all_criteria": 140,
+    "same_sha_current": 19,
+    "exact_minimal_parent_delta": {
+      "path": "docs/dev-records/phase-j-record.md",
+      "commit": "d836818",
+      "replacements": 1
+    },
+    "source_changed_by_worker": false,
+    "final_I_tests_or_fresh_review": false
   }
 }

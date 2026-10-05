@@ -1906,6 +1906,112 @@
       "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending",
       "parent_resolution": "core6全3492行manualhistory全文/140観点受入7c90b16/a525f96"
+    },
+    {
+      "id": "CORE-DOCS7-DOCS7-CURRENT-GUIDE-PATH",
+      "status": "FIXED",
+      "criteria": [
+        "C01",
+        "X08"
+      ],
+      "priority": "low",
+      "path": "docs/dev-records/phase-j-record.md",
+      "lines": [
+        6,
+        8
+      ],
+      "evidence": "前置きは「現在の操作手順には docs/DEVELOPMENT.md」と明示するがP treeに不存在。docs/development/DEVELOPMENT.mdは実在。一般のhistorical旧pathと異なる現在導線。",
+      "reproduction": {
+        "command": "verify_static.py:confirmed_current_guide_counterexample/counterexample_minimal_correction_resolves",
+        "log": "/tmp/mcs-maintenance-core-docs7-20261005/static.log",
+        "result": "不存在原パスと実在最小訂正パスを固定P tracked inventoryで実証、外部なし。"
+      },
+      "minimal_proposal": "現在guide参照1箇所を docs/development/DEVELOPMENT.md へ補正。他historical pathsは保持。",
+      "owner": "parent/rootdocs",
+      "worker_edit": "禁止に従い原本無変更",
+      "handoff": "親へcollaboration.send_messageで先に共有",
+      "I_status": "親から1行の最小修正完了報告を受領（docs/DEVELOPMENT.md → docs/development/DEVELOPMENT.md）。親Iのexact SHA/byte receiptは親が別管理。本packetのP/W原本は無変更。",
+      "parent_resolution": {
+        "state": "resolved_reported_by_parent",
+        "change": "前置きの現在手順path1箇所のみ。歴史本文・記載時点は保持。",
+        "verification_owner": "parent",
+        "fixed_P_W_original_unchanged": true
+      },
+      "packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "parent_fix_commit": "d836818",
+      "parent_verification": "P本文を1回byte置換した結果とcurrent Iが完全一致。対象currentpath実在、historicalbody保持。"
+    },
+    {
+      "id": "CORE-DOCS7-HISTORICAL-CADENCE-AND-SLOTS",
+      "status": "DISPROVED",
+      "hypothesis": "旧15/5分run・2slot・3日QCを現要件違反として全置換する必要がある",
+      "evidence": [
+        "r00-baseline.md:3-24",
+        "continuation-20260923.md:414-950,1077-1094",
+        "review-20260923.md:3-5,126-133",
+        "docs/dev-records/README.md:8-10",
+        "mcs/ops/mcs_setup.py:2419-2437",
+        "mcs/ingest/health_watch.py:38",
+        "mcs/semantic/semantic_qc.py:23-31"
+      ],
+      "counterexample": "固定Pはunread*/10/deep10,40、health600、QC60日。記録は当時値、MCS取得10分はサーバー負荷対策で新usercontract、LLMtimeout/circuit300秒とは異なる。",
+      "packet": "docs/development/maintenance-core-docs7-evidence.json"
+    },
+    {
+      "id": "CORE-DOCS7-INTERIM-HANDOFF-GAPS",
+      "status": "DISPROVED",
+      "hypothesis": "handoffのreceiverCLI未接続・未完16が今も未実装",
+      "evidence": [
+        "HANDOFF_CLAUDE_1.0.13_20261004.md:119,153-159,251-269",
+        "stability-1.0.13-20261004.md:349-373"
+      ],
+      "counterexample": "同file末尾の2026-10-05追記がlocal完了、実機/人手/相手repo条件は未完と明示。interimstatusを現在source未実装へ流用不可。",
+      "packet": "docs/development/maintenance-core-docs7-evidence.json"
+    },
+    {
+      "id": "CORE-DOCS7-STANDALONE-CALENDAR-CURRENT",
+      "status": "DISPROVED",
+      "hypothesis": "10-02calendar案を現在singlehostへ書換える必要がある",
+      "evidence": [
+        "standalone-worktree-20261002.md:3,32-37,89-90",
+        "standalone-20261001.md:14-16,109-110",
+        "mcs_standalone/runtime.py:39-54,118-135"
+      ],
+      "counterexample": "原本は統合前履歴でcurrentguideへ誘導。現在Runtime configured_cron_jobs経路を確認、旧案の保全が正しい。",
+      "packet": "docs/development/maintenance-core-docs7-evidence.json"
+    },
+    {
+      "id": "CORE-DOCS7-ALL-HISTORICAL-PASS-FRESH",
+      "status": "DISPROVED",
+      "hypothesis": "旧全件pass/独立review/SDKlaneを今回I全域受入へ加算できる",
+      "evidence": [
+        "refactor-1.0.12-20261004.md:9-13",
+        "repo-review-20261001.md:3-8,73-92",
+        "stability-1.0.13-20261004.md:438-464",
+        "refactor-revalidation.md:39-40,256-293"
+      ],
+      "counterexample": "各tree/hash/candidate/skip/runtimeが異なり、main元baseline6780passも全域全文review証明ではない。今回static150/Mine成功のみ新証拠。",
+      "packet": "docs/development/maintenance-core-docs7-evidence.json"
+    },
+    {
+      "id": "CORE-DOCS7-OLD-DESTRUCTIVE-UPDATE-RECIPE",
+      "status": "DISPROVED",
+      "hypothesis": "auto-updateplan後段の外科的untracked削除/WAL消去が現在推奨される",
+      "evidence": [
+        "auto-update-plan.md:3-20,302-313,851-865",
+        "mcs/ops/mcs_update.py:2102-2171",
+        "deployment/recovery/mcs_recover.py:905-975"
+      ],
+      "counterexample": "冒頭で明示撤回/非current、実sourceは専用restoreconsent/loss/hash・private staging/checkpoint/sidecar拒否。historical commandsは未実行。",
+      "packet": "docs/development/maintenance-core-docs7-evidence.json"
+    },
+    {
+      "id": "CORE-DOCS7-LOCAL-RELATIVE-LINKS-BROKEN",
+      "status": "DISPROVED",
+      "hypothesis": "対象20記録の実Markdown相対targetリンクが失われている",
+      "counterexample": "固定Pで28実Markdown相対target全てtrackedに存在。code記法の旧path/oldGitobjectsはhistoryとして別分類。",
+      "receipt": "/tmp/mcs-maintenance-core-docs7-20261005/static-receipt.json",
+      "packet": "docs/development/maintenance-core-docs7-evidence.json"
     }
   ],
   "deferred": [],
