@@ -1384,6 +1384,117 @@
       "change": "対象4catchへRecursionError追加、authunreadable/journalunreadableまたはNone/False→hold、savedbytesを変更せず。delete receiptは既にsafeで変更不要。",
       "packet": "docs/development/maintenance-notify-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "CORE-P5-F01",
+      "status": "FIXED",
+      "disposition": "fixed",
+      "criteria": [
+        "C02",
+        "C03",
+        "X03"
+      ],
+      "source": "mcs/extract/v1/extract.py:_STALE",
+      "cause": "json_valid(meta)=falseでELSE0、破損artifactが存在するとrun_pendingがstaleと認識せず永久に旧結果を残す。",
+      "fix": "ELSE1、正常currenthashとtransaction/deadline/原message境界を維持。",
+      "regression": "invalidmetadata4×bodystate3 + deadline4",
+      "commit": "328c7ec6e7e1ca0bea29f2393762b783f583fffc",
+      "packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI checks and independent review pending"
+    },
+    {
+      "id": "CORE-P5-F02",
+      "status": "FIXED",
+      "disposition": "fixed",
+      "criteria": [
+        "C02",
+        "C12",
+        "X07"
+      ],
+      "source": "mcs/extract/v1/extract.py:extract_message",
+      "cause": "実Python3.10 fromisoformatは末尾Zを拒否し、等価+00:00に対し訪問日/次回/薬剤期間の年anchorが失われる。",
+      "fix": "時刻成分を持つ末尾Zだけ+00:00へ正規化、naive/date/invalidは既存境界、RULE_VERSION8。",
+      "regression": "Z/offset3、naive/date2、invalid6、v7matchinghash再抽出1",
+      "commit": "328c7ec6e7e1ca0bea29f2393762b783f583fffc",
+      "packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI checks and independent review pending"
+    },
+    {
+      "id": "CORE-P5-F03",
+      "status": "FIXED",
+      "disposition": "fixed",
+      "criteria": [
+        "C11",
+        "C12"
+      ],
+      "source": "integration/test_pinned_sdk_versions.py:module import",
+      "cause": "3.11専用tomllibのmoduleimportがcore最低3.10 optionalcollectionを壊す。",
+      "fix": "既存>=3.11強制Hermeslane分岐でのみimport、pinassertion不変更。",
+      "regression": "実3.10 beforecollectionerror+simulatedmissingstdlib newmeta、actualSDK25/17pass",
+      "commit": "89d7f32628db3d66d48d96a08ea6fecb30618769",
+      "packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI checks and independent review pending"
+    },
+    {
+      "id": "CORE-P5-F04",
+      "status": "FIXED",
+      "disposition": "fixed",
+      "criteria": [
+        "C11",
+        "C12"
+      ],
+      "source": "ci/mine_gates.py:test_names",
+      "cause": "regex def test_ がcomment/説明string/docstringをtest存在として誤認。",
+      "fix": "AST FunctionDef/AsyncFunctionDef名を照合、SyntaxErrorを隠さない。",
+      "regression": "three decoys before3fail→pass、currentmanifest50参照は実pytest収集に存在",
+      "commit": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI checks and independent review pending"
+    },
+    {
+      "id": "CORE-P5-F05",
+      "status": "FIXED",
+      "disposition": "fixed",
+      "criteria": [
+        "C05",
+        "C11",
+        "C12"
+      ],
+      "source": "ci/gates.py:gate_plugin_sandbox",
+      "cause": "独立Slacklegacy入口は公開互換境界で同じnegativeOAuth拒否guardを持つが、CI例外がstandalone.pyだけで実P9/10fail。",
+      "fix": "sameASTguardを独立Slack2入口のみへ、環境秘密値読む/code変更したguard/一般adapterは依然拒否。",
+      "regression": "legacybefore1fail、standalonecontrolpass、bothsecret/topSDK拒否assertion維持",
+      "commit": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI checks and independent review pending"
+    },
+    {
+      "id": "CORE-P5-Q01",
+      "status": "DISPROVED",
+      "disposition": "documented_static_limit",
+      "criteria": [
+        "C11"
+      ],
+      "source": "mine_gates:AST nested def/ifFalse",
+      "cause": "ast.walkはnested/ifFalse定義も存在名へ含める。sourcedoc/main/record規約は既存定義参照の整合ゲートで実行成功の証明ではない。",
+      "evidence": "50 currentmanifestrefs全部が実pytestcollectionに存在。3decoyは定義自体が存在しなかった独立欠陥として修復。",
+      "limit": "到達性/collection/successを一般に証明しない。今後実行保証が必要ならpytest結果をconsumerが使う。未定義を黙認する新例外はない。",
+      "packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI checks and independent review pending"
+    },
+    {
+      "id": "CORE-P5-Q02",
+      "status": "DISPROVED",
+      "disposition": "documented_historical_boundary",
+      "criteria": [
+        "C04",
+        "X01"
+      ],
+      "source": "schema_upgrade/update-paths.json",
+      "cause": "historical26は旧binary実行証明ではなくroute分類manifest。14historical origins/6distinct staticDDL shapes+current16pathsでforward/consent契約を合成検証。",
+      "evidence": "origins.json fullread、originalcolumns/allrows/FK/FTS/hash tests、test names explicitlyclassify。",
+      "packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI checks and independent review pending"
     }
   ],
   "deferred": [],

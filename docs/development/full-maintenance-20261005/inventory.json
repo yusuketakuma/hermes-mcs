@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "PARTIAL": 56,
+      "REVIEWED": 568,
       "EXCLUDED": 25,
-      "UNSEEN": 287,
-      "REVIEWED": 528
+      "PARTIAL": 35,
+      "UNSEEN": 269
     },
-    "candidate_tracked": 894
+    "candidate_tracked": 895
   },
   "files": [
     {
@@ -41,36 +41,100 @@
       "lines": 18,
       "module": ".github",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read."
+        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           18
         ]
-      ]
+      ],
+      "reviewed_sha256": "2df1fe6f642eb8f3bd065e72bb8703ba5d566aaafb51fa16b760743ddb3549de",
+      "reviewed_lines": 18,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "weeklyactions/python依存提案の既存config。",
+      "callers": [
+        "GitHub Dependabot"
+      ],
+      "flow": "PR/push/schedule/tag/manual workflow→permissions/branch/pin/secret指定→test/lint/generator又は承認済workflow機能→CI artifacts/docs/release draft→reviewer。今回はworkflowを起動せず全文契約確認だけ。",
+      "criteria": {
+        "C01": "criteria.C01.workflow",
+        "C02": "criteria.C02.workflow",
+        "C03": "criteria.C03.workflow",
+        "C04": "criteria.C04.workflow",
+        "C05": "criteria.C05.workflow",
+        "C06": "criteria.C06.workflow",
+        "C07": "criteria.C07.workflow",
+        "C08": "criteria.C08.workflow",
+        "C09": "criteria.C09.workflow",
+        "C10": "criteria.C10.workflow",
+        "C11": "criteria.C11.workflow",
+        "C12": "criteria.C12.workflow",
+        "X01": "criteria.X01.workflow",
+        "X02": "criteria.X02.workflow",
+        "X03": "criteria.X03.workflow",
+        "X04": "criteria.X04.workflow",
+        "X05": "criteria.X05.workflow",
+        "X06": "criteria.X06.workflow",
+        "X07": "criteria.X07.workflow",
+        "X08": "criteria.X08.workflow"
+      }
     },
     {
       "path": ".github/workflows/ci.yml",
-      "sha256": "1bf2c9690fd55a90b58f92547c794ccb951f26e31c2df860f0e5c69ad9cd7683",
-      "bytes": 6618,
-      "lines": 154,
+      "sha256": "5b73c57cef2d6b2e53f8d6785120573be91c8a209c2a18a9094500f772ff4d32",
+      "bytes": 6504,
+      "lines": 150,
       "module": ".github",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read."
+        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
-          154
+          150
         ]
-      ]
+      ],
+      "reviewed_sha256": "5b73c57cef2d6b2e53f8d6785120573be91c8a209c2a18a9094500f772ff4d32",
+      "reviewed_lines": 150,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "synthetic tests/lint/gates/生成整合/SDK lanes/secret hygieneとmain生成sync。",
+      "callers": [
+        "GitHub PR/push triggers"
+      ],
+      "flow": "PR/push/schedule/tag/manual workflow→permissions/branch/pin/secret指定→test/lint/generator又は承認済workflow機能→CI artifacts/docs/release draft→reviewer。今回はworkflowを起動せず全文契約確認だけ。",
+      "criteria": {
+        "C01": "criteria.C01.workflow",
+        "C02": "criteria.C02.workflow",
+        "C03": "criteria.C03.workflow",
+        "C04": "criteria.C04.workflow",
+        "C05": "criteria.C05.workflow",
+        "C06": "criteria.C06.workflow",
+        "C07": "criteria.C07.workflow",
+        "C08": "criteria.C08.workflow",
+        "C09": "criteria.C09.workflow",
+        "C10": "criteria.C10.workflow",
+        "C11": "criteria.C11.workflow",
+        "C12": "criteria.C12.workflow",
+        "X01": "criteria.X01.workflow",
+        "X02": "criteria.X02.workflow",
+        "X03": "criteria.X03.workflow",
+        "X04": "criteria.X04.workflow",
+        "X05": "criteria.X05.workflow",
+        "X06": "criteria.X06.workflow",
+        "X07": "criteria.X07.workflow",
+        "X08": "criteria.X08.workflow"
+      }
     },
     {
       "path": ".github/workflows/openwiki-update.yml",
@@ -79,17 +143,49 @@
       "lines": 88,
       "module": ".github",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read."
+        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           88
         ]
-      ]
+      ],
+      "reviewed_sha256": "0efcad155b445693eccb91344073f18894d905beb6c3951cf710f551e2702fd7",
+      "reviewed_lines": 88,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "既存schedule/manualOpenWiki生成とpartialpagesPR/stepfailure報告。",
+      "callers": [
+        "GitHub schedule/workflow_dispatch"
+      ],
+      "flow": "PR/push/schedule/tag/manual workflow→permissions/branch/pin/secret指定→test/lint/generator又は承認済workflow機能→CI artifacts/docs/release draft→reviewer。今回はworkflowを起動せず全文契約確認だけ。",
+      "criteria": {
+        "C01": "criteria.C01.workflow",
+        "C02": "criteria.C02.workflow",
+        "C03": "criteria.C03.workflow",
+        "C04": "criteria.C04.workflow",
+        "C05": "criteria.C05.workflow",
+        "C06": "criteria.C06.workflow",
+        "C07": "criteria.C07.workflow",
+        "C08": "criteria.C08.workflow",
+        "C09": "criteria.C09.workflow",
+        "C10": "criteria.C10.workflow",
+        "C11": "criteria.C11.workflow",
+        "C12": "criteria.C12.workflow",
+        "X01": "criteria.X01.workflow",
+        "X02": "criteria.X02.workflow",
+        "X03": "criteria.X03.workflow",
+        "X04": "criteria.X04.workflow",
+        "X05": "criteria.X05.workflow",
+        "X06": "criteria.X06.workflow",
+        "X07": "criteria.X07.workflow",
+        "X08": "criteria.X08.workflow"
+      }
     },
     {
       "path": ".github/workflows/release-notes.yml",
@@ -98,17 +194,49 @@
       "lines": 132,
       "module": ".github",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read."
+        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           132
         ]
-      ]
+      ],
+      "reviewed_sha256": "036c8f65e7b7862bad2e2b450c0466fd19c79d148f81459487044afc3f8da2d2",
+      "reviewed_lines": 132,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "canonicalCHANGELOG/READMEcheckからdraftreleaseとmain既存Release本文同期。",
+      "callers": [
+        "GitHub tag/manual/main triggers"
+      ],
+      "flow": "PR/push/schedule/tag/manual workflow→permissions/branch/pin/secret指定→test/lint/generator又は承認済workflow機能→CI artifacts/docs/release draft→reviewer。今回はworkflowを起動せず全文契約確認だけ。",
+      "criteria": {
+        "C01": "criteria.C01.workflow",
+        "C02": "criteria.C02.workflow",
+        "C03": "criteria.C03.workflow",
+        "C04": "criteria.C04.workflow",
+        "C05": "criteria.C05.workflow",
+        "C06": "criteria.C06.workflow",
+        "C07": "criteria.C07.workflow",
+        "C08": "criteria.C08.workflow",
+        "C09": "criteria.C09.workflow",
+        "C10": "criteria.C10.workflow",
+        "C11": "criteria.C11.workflow",
+        "C12": "criteria.C12.workflow",
+        "X01": "criteria.X01.workflow",
+        "X02": "criteria.X02.workflow",
+        "X03": "criteria.X03.workflow",
+        "X04": "criteria.X04.workflow",
+        "X05": "criteria.X05.workflow",
+        "X06": "criteria.X06.workflow",
+        "X07": "criteria.X07.workflow",
+        "X08": "criteria.X08.workflow"
+      }
     },
     {
       "path": ".gitignore",
@@ -117,17 +245,50 @@
       "lines": 23,
       "module": ".gitignore",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read."
+        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           23
         ]
-      ]
+      ],
+      "reviewed_sha256": "9562f8f7024eb99be176d9d498d12297b98327e88b45b20ffb6974d32d0d48e0",
+      "reviewed_lines": 23,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "localdata/config/env/log/cache/exportsをtrackedrepoから除外。",
+      "callers": [
+        "git",
+        "CI hygiene"
+      ],
+      "flow": "PR/push/schedule/tag/manual workflow→permissions/branch/pin/secret指定→test/lint/generator又は承認済workflow機能→CI artifacts/docs/release draft→reviewer。今回はworkflowを起動せず全文契約確認だけ。",
+      "criteria": {
+        "C01": "criteria.C01.workflow",
+        "C02": "criteria.C02.workflow",
+        "C03": "criteria.C03.workflow",
+        "C04": "criteria.C04.workflow",
+        "C05": "criteria.C05.workflow",
+        "C06": "criteria.C06.workflow",
+        "C07": "criteria.C07.workflow",
+        "C08": "criteria.C08.workflow",
+        "C09": "criteria.C09.workflow",
+        "C10": "criteria.C10.workflow",
+        "C11": "criteria.C11.workflow",
+        "C12": "criteria.C12.workflow",
+        "X01": "criteria.X01.workflow",
+        "X02": "criteria.X02.workflow",
+        "X03": "criteria.X03.workflow",
+        "X04": "criteria.X04.workflow",
+        "X05": "criteria.X05.workflow",
+        "X06": "criteria.X06.workflow",
+        "X07": "criteria.X07.workflow",
+        "X08": "criteria.X08.workflow"
+      }
     },
     {
       "path": "8",
@@ -202,17 +363,50 @@
       "lines": 32,
       "module": "Makefile",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read."
+        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           32
         ]
-      ]
+      ],
+      "reviewed_sha256": "f49eac487c1e0d717bc95b2c5d110389f7e75cc047a67ca545bccc75dbaaad53",
+      "reviewed_lines": 32,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "localtest/lint/生成check入口、ephemeral固定依存版、setup-checkは実機向け。",
+      "callers": [
+        "developer local commands",
+        ".github/workflows/ci.yml"
+      ],
+      "flow": "PR/push/schedule/tag/manual workflow→permissions/branch/pin/secret指定→test/lint/generator又は承認済workflow機能→CI artifacts/docs/release draft→reviewer。今回はworkflowを起動せず全文契約確認だけ。",
+      "criteria": {
+        "C01": "criteria.C01.workflow",
+        "C02": "criteria.C02.workflow",
+        "C03": "criteria.C03.workflow",
+        "C04": "criteria.C04.workflow",
+        "C05": "criteria.C05.workflow",
+        "C06": "criteria.C06.workflow",
+        "C07": "criteria.C07.workflow",
+        "C08": "criteria.C08.workflow",
+        "C09": "criteria.C09.workflow",
+        "C10": "criteria.C10.workflow",
+        "C11": "criteria.C11.workflow",
+        "C12": "criteria.C12.workflow",
+        "X01": "criteria.X01.workflow",
+        "X02": "criteria.X02.workflow",
+        "X03": "criteria.X03.workflow",
+        "X04": "criteria.X04.workflow",
+        "X05": "criteria.X05.workflow",
+        "X06": "criteria.X06.workflow",
+        "X07": "criteria.X07.workflow",
+        "X08": "criteria.X08.workflow"
+      }
     },
     {
       "path": "README.md",
@@ -2828,8 +3022,13 @@
       "lines": 8,
       "module": "changes",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": []
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 source/criteria/findings/verification/replay/provenance accepted; Japanese runtime fragments read in full and source refs checked."
+      ],
+      "reviewed_sha256": "16b17950e4b451d5073bab172ff3baebe46c511c485adee39b64a9ec7223df94",
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "structured_record_reviewed": false
     },
     {
       "path": "changes/maintenance-core-packet5-rule-repair.json",
@@ -2838,9 +3037,14 @@
       "lines": 11,
       "module": "changes",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "7e104ea04196df159c43318df5ca5a0850298e2a"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 source/criteria/findings/verification/replay/provenance accepted; Japanese runtime fragments read in full and source refs checked."
+      ],
+      "review_input": "7e104ea04196df159c43318df5ca5a0850298e2a",
+      "reviewed_sha256": "221174b382091ce1edae0dc3cbea6bd2d889cecbdd505c221f87c4a181904cb7",
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "structured_record_reviewed": false
     },
     {
       "path": "changes/maintenance-core-preflight-20261005.json",
@@ -3284,55 +3488,155 @@
       "lines": 226,
       "module": "ci",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json."
+        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           226
         ]
-      ]
+      ],
+      "reviewed_sha256": "920381489e8dae74a2d4272d3e8cd50c3b81e484d9bfa345d4af53d2dfc9fb64",
+      "reviewed_lines": 226,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "旧incidentと現在gate/回帰定義の対応台帳、historical集計で実行成功の証明とは別。",
+      "callers": [
+        "ci/mine_gates.py"
+      ],
+      "flow": "CI/make→指定source/recordの構文/参照制約→AST/literal gateとincident照合→stdout/exit→workflow fail。判定成功はruntime動作保証ではない。",
+      "criteria": {
+        "C01": "criteria.C01.ci",
+        "C02": "criteria.C02.ci",
+        "C03": "criteria.C03.ci",
+        "C04": "criteria.C04.ci",
+        "C05": "criteria.C05.ci",
+        "C06": "criteria.C06.ci",
+        "C07": "criteria.C07.ci",
+        "C08": "criteria.C08.ci",
+        "C09": "criteria.C09.ci",
+        "C10": "criteria.C10.ci",
+        "C11": "criteria.C11.ci",
+        "C12": "criteria.C12.ci",
+        "X01": "criteria.X01.ci",
+        "X02": "criteria.X02.ci",
+        "X03": "criteria.X03.ci",
+        "X04": "criteria.X04.ci",
+        "X05": "criteria.X05.ci",
+        "X06": "criteria.X06.ci",
+        "X07": "criteria.X07.ci",
+        "X08": "criteria.X08.ci"
+      }
     },
     {
       "path": "ci/gates.py",
-      "sha256": "8fb9cef7f1922c65ac5ca1770285ec414adbb43e7161a4c23c4377c69bfa9d71",
-      "bytes": 23690,
+      "sha256": "b255b35e2affe4566ddfe75ebda6322523c97b2e00bb08686cede06ced5dea2c",
+      "bytes": 23724,
       "lines": 531,
       "module": "ci",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json."
+        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           531
         ]
-      ]
+      ],
+      "reviewed_sha256": "b255b35e2affe4566ddfe75ebda6322523c97b2e00bb08686cede06ced5dea2c",
+      "reviewed_lines": 531,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "AST/literalから10のsafety/contract静的gateを実行。",
+      "callers": [
+        ".github/workflows/ci.yml",
+        "Makefile",
+        "tests/meta/test_ci_scripts.py",
+        "tests/meta/test_c1_export_gates.py"
+      ],
+      "flow": "CI/make→指定source/recordの構文/参照制約→AST/literal gateとincident照合→stdout/exit→workflow fail。判定成功はruntime動作保証ではない。",
+      "criteria": {
+        "C01": "criteria.C01.ci",
+        "C02": "criteria.C02.ci",
+        "C03": "criteria.C03.ci",
+        "C04": "criteria.C04.ci",
+        "C05": "criteria.C05.ci",
+        "C06": "criteria.C06.ci",
+        "C07": "criteria.C07.ci",
+        "C08": "criteria.C08.ci",
+        "C09": "criteria.C09.ci",
+        "C10": "criteria.C10.ci",
+        "C11": "criteria.C11.ci",
+        "C12": "criteria.C12.ci",
+        "X01": "criteria.X01.ci",
+        "X02": "criteria.X02.ci",
+        "X03": "criteria.X03.ci",
+        "X04": "criteria.X04.ci",
+        "X05": "criteria.X05.ci",
+        "X06": "criteria.X06.ci",
+        "X07": "criteria.X07.ci",
+        "X08": "criteria.X08.ci"
+      }
     },
     {
       "path": "ci/mine_gates.py",
-      "sha256": "53ccb76ed95b9a04a0f465611c8ae1451cc390b8d1043ca31d20c07c4e1be60e",
-      "bytes": 4889,
-      "lines": 134,
+      "sha256": "7c98b6fb0d9973bdd3dc4cc3e5028cc9d8aea2f25dbd8cfa71ee126c8595154d",
+      "bytes": 5057,
+      "lines": 137,
       "module": "ci",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json."
+        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
-          134
+          137
         ]
-      ]
+      ],
+      "reviewed_sha256": "7c98b6fb0d9973bdd3dc4cc3e5028cc9d8aea2f25dbd8cfa71ee126c8595154d",
+      "reviewed_lines": 137,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "incident idとmanifest gate/test定義存在を照合、heatmapは情報表示。",
+      "callers": [
+        ".github/workflows/ci.yml",
+        "tests/meta/test_ci_scripts.py"
+      ],
+      "flow": "CI/make→指定source/recordの構文/参照制約→AST/literal gateとincident照合→stdout/exit→workflow fail。判定成功はruntime動作保証ではない。",
+      "criteria": {
+        "C01": "criteria.C01.ci",
+        "C02": "criteria.C02.ci",
+        "C03": "criteria.C03.ci",
+        "C04": "criteria.C04.ci",
+        "C05": "criteria.C05.ci",
+        "C06": "criteria.C06.ci",
+        "C07": "criteria.C07.ci",
+        "C08": "criteria.C08.ci",
+        "C09": "criteria.C09.ci",
+        "C10": "criteria.C10.ci",
+        "C11": "criteria.C11.ci",
+        "C12": "criteria.C12.ci",
+        "X01": "criteria.X01.ci",
+        "X02": "criteria.X02.ci",
+        "X03": "criteria.X03.ci",
+        "X04": "criteria.X04.ci",
+        "X05": "criteria.X05.ci",
+        "X06": "criteria.X06.ci",
+        "X07": "criteria.X07.ci",
+        "X08": "criteria.X08.ci"
+      }
     },
     {
       "path": "conftest.py",
@@ -3341,17 +3645,49 @@
       "lines": 24,
       "module": "conftest.py",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json."
+        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           24
         ]
-      ]
+      ],
+      "reviewed_sha256": "a1066a51c68082f7b65e346cef21e6fe8fab7e5e2f354b1c20b0fe95a43fea3a",
+      "reviewed_lines": 24,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "rootでtests import helper登録と既存合成guardをintegrationにも導入。",
+      "callers": [
+        "pytest tests/integration collection"
+      ],
+      "flow": "pytest/root conftest→isolated HOME・env消去・socket/process遮断→synthetic fixture実行→temp DB/files/log→pytest assertion。worktree自体はsandboxではない。",
+      "criteria": {
+        "C01": "criteria.C01.safety",
+        "C02": "criteria.C02.safety",
+        "C03": "criteria.C03.safety",
+        "C04": "criteria.C04.safety",
+        "C05": "criteria.C05.safety",
+        "C06": "criteria.C06.safety",
+        "C07": "criteria.C07.safety",
+        "C08": "criteria.C08.safety",
+        "C09": "criteria.C09.safety",
+        "C10": "criteria.C10.safety",
+        "C11": "criteria.C11.safety",
+        "C12": "criteria.C12.safety",
+        "X01": "criteria.X01.safety",
+        "X02": "criteria.X02.safety",
+        "X03": "criteria.X03.safety",
+        "X04": "criteria.X04.safety",
+        "X05": "criteria.X05.safety",
+        "X06": "criteria.X06.safety",
+        "X07": "criteria.X07.safety",
+        "X08": "criteria.X08.safety"
+      }
     },
     {
       "path": "deployment/README.md",
@@ -4595,6 +4931,21 @@
       "evidence": [
         "Whole JSON structure, source W digests,20criteria×3modules,4findings/constraints, API signatures and P→W/log evidence inspected. Run record classified separately."
       ]
+    },
+    {
+      "path": "docs/development/maintenance-core-packet5-evidence.json",
+      "module": "run-record",
+      "kind": "run_record",
+      "evidence": [
+        "Core5 source/criteria/findings/verification/replay/provenance accepted; Japanese runtime fragments read in full and source refs checked."
+      ],
+      "status": "REVIEWED",
+      "sha256": "e84cc7e89161839cfeca3391614a634100907834ca4e820b0c900e5367aeae4c",
+      "reviewed_sha256": "e84cc7e89161839cfeca3391614a634100907834ca4e820b0c900e5367aeae4c",
+      "bytes": 180479,
+      "lines": 4582,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "structured_record_reviewed": true
     },
     {
       "path": "docs/development/maintenance-notify-evidence.json",
@@ -6188,17 +6539,49 @@
       "lines": 14,
       "module": "integration",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json."
+        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           14
         ]
-      ]
+      ],
+      "reviewed_sha256": "5c51bd43d7ef4e731e8ce78def5df7201e42964ee02c68ca361deabc925b920c",
+      "reviewed_lines": 14,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "standalone SDK用にsocket guard導入済markerを確認。",
+      "callers": [
+        "pytest integration collection"
+      ],
+      "flow": "pytest/root conftest→isolated HOME・env消去・socket/process遮断→synthetic fixture実行→temp DB/files/log→pytest assertion。worktree自体はsandboxではない。",
+      "criteria": {
+        "C01": "criteria.C01.safety",
+        "C02": "criteria.C02.safety",
+        "C03": "criteria.C03.safety",
+        "C04": "criteria.C04.safety",
+        "C05": "criteria.C05.safety",
+        "C06": "criteria.C06.safety",
+        "C07": "criteria.C07.safety",
+        "C08": "criteria.C08.safety",
+        "C09": "criteria.C09.safety",
+        "C10": "criteria.C10.safety",
+        "C11": "criteria.C11.safety",
+        "C12": "criteria.C12.safety",
+        "X01": "criteria.X01.safety",
+        "X02": "criteria.X02.safety",
+        "X03": "criteria.X03.safety",
+        "X04": "criteria.X04.safety",
+        "X05": "criteria.X05.safety",
+        "X06": "criteria.X06.safety",
+        "X07": "criteria.X07.safety",
+        "X08": "criteria.X08.safety"
+      }
     },
     {
       "path": "integration/sdk_safety.py",
@@ -6207,17 +6590,50 @@
       "lines": 31,
       "module": "integration",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json."
+        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           31
         ]
-      ]
+      ],
+      "reviewed_sha256": "cabdf08366d2af2e1632539e812fc940d2d378f1d86e0c67c8e0217de043428e",
+      "reviewed_lines": 31,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "explicit lane開始時にrootguardを導入しsecret/HOME/process/socketを隔離。",
+      "callers": [
+        "scripts/check_pinned_sdks.sh",
+        "tests/meta/test_sdk_ci_lanes.py"
+      ],
+      "flow": "pytest/root conftest→isolated HOME・env消去・socket/process遮断→synthetic fixture実行→temp DB/files/log→pytest assertion。worktree自体はsandboxではない。",
+      "criteria": {
+        "C01": "criteria.C01.safety",
+        "C02": "criteria.C02.safety",
+        "C03": "criteria.C03.safety",
+        "C04": "criteria.C04.safety",
+        "C05": "criteria.C05.safety",
+        "C06": "criteria.C06.safety",
+        "C07": "criteria.C07.safety",
+        "C08": "criteria.C08.safety",
+        "C09": "criteria.C09.safety",
+        "C10": "criteria.C10.safety",
+        "C11": "criteria.C11.safety",
+        "C12": "criteria.C12.safety",
+        "X01": "criteria.X01.safety",
+        "X02": "criteria.X02.safety",
+        "X03": "criteria.X03.safety",
+        "X04": "criteria.X04.safety",
+        "X05": "criteria.X05.safety",
+        "X06": "criteria.X06.safety",
+        "X07": "criteria.X07.safety",
+        "X08": "criteria.X08.safety"
+      }
     },
     {
       "path": "integration/test_hermes_config.py",
@@ -6318,17 +6734,50 @@
       "lines": 21,
       "module": "integration",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json."
+        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           21
         ]
-      ]
+      ],
+      "reviewed_sha256": "9bce7320468ad1a32e88195c7988ab0971a77c536541a38ae5db0b53071c4ecf",
+      "reviewed_lines": 21,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "root/integration両側guard loadの異常系を合成確認。",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "pytest/root conftest→isolated HOME・env消去・socket/process遮断→synthetic fixture実行→temp DB/files/log→pytest assertion。worktree自体はsandboxではない。",
+      "criteria": {
+        "C01": "criteria.C01.safety",
+        "C02": "criteria.C02.safety",
+        "C03": "criteria.C03.safety",
+        "C04": "criteria.C04.safety",
+        "C05": "criteria.C05.safety",
+        "C06": "criteria.C06.safety",
+        "C07": "criteria.C07.safety",
+        "C08": "criteria.C08.safety",
+        "C09": "criteria.C09.safety",
+        "C10": "criteria.C10.safety",
+        "C11": "criteria.C11.safety",
+        "C12": "criteria.C12.safety",
+        "X01": "criteria.X01.safety",
+        "X02": "criteria.X02.safety",
+        "X03": "criteria.X03.safety",
+        "X04": "criteria.X04.safety",
+        "X05": "criteria.X05.safety",
+        "X06": "criteria.X06.safety",
+        "X07": "criteria.X07.safety",
+        "X08": "criteria.X08.safety"
+      }
     },
     {
       "path": "integration/test_mcs_recovery_narrative.py",
@@ -6337,28 +6786,100 @@
       "lines": 919,
       "module": "integration",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
-    },
-    {
-      "path": "integration/test_pinned_sdk_versions.py",
-      "sha256": "c83cb2c3927fef4c56d16f147cf0b160e040687f6c0cd6d423ed4f85b180f224",
-      "bytes": 4211,
-      "lines": 99,
-      "module": "integration",
-      "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json."
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "94a507574e758b8cdc88898ab60b0bf3fc6d5085d626035a5c9f3e788d77fad1",
+      "reviewed_lines": 919,
+      "full_content_read": true,
       "read_ranges": [
         [
           1,
-          99
+          919
         ]
-      ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "合成ingest→admission/v4→全parts→consentrestore/reconcile→readmodel/export世代のorderedE2E。",
+      "callers": [
+        "scripts/run_tests.sh integration/test_mcs_recovery_narrative.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "integration/test_pinned_sdk_versions.py",
+      "sha256": "39e9f42c4c1c7e0e309eb8b44a61a5de9b6ee4a4b528dbbdb3b02d934d0c69b4",
+      "bytes": 4220,
+      "lines": 100,
+      "module": "integration",
+      "kind": "source",
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "read_ranges": [
+        [
+          1,
+          100
+        ]
+      ],
+      "reviewed_sha256": "39e9f42c4c1c7e0e309eb8b44a61a5de9b6ee4a4b528dbbdb3b02d934d0c69b4",
+      "reviewed_lines": 100,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "actualdistribution pinsとimmutableHermes archive/sourcebyteを実SDKlaneで検証。",
+      "callers": [
+        "scripts/check_pinned_sdks.sh",
+        ".github/workflows/ci.yml"
+      ],
+      "flow": "check_pinned_sdks.sh→explicit immutable source/interpreter/pins/nonempty lane検証→公式SDKの合成transportを実呼出→synthetic receipt/collection→独立lane result。実service起動なし。",
+      "criteria": {
+        "C01": "criteria.C01.sdk",
+        "C02": "criteria.C02.sdk",
+        "C03": "criteria.C03.sdk",
+        "C04": "criteria.C04.sdk",
+        "C05": "criteria.C05.sdk",
+        "C06": "criteria.C06.sdk",
+        "C07": "criteria.C07.sdk",
+        "C08": "criteria.C08.sdk",
+        "C09": "criteria.C09.sdk",
+        "C10": "criteria.C10.sdk",
+        "C11": "criteria.C11.sdk",
+        "C12": "criteria.C12.sdk",
+        "X01": "criteria.X01.sdk",
+        "X02": "criteria.X02.sdk",
+        "X03": "criteria.X03.sdk",
+        "X04": "criteria.X04.sdk",
+        "X05": "criteria.X05.sdk",
+        "X06": "criteria.X06.sdk",
+        "X07": "criteria.X07.sdk",
+        "X08": "criteria.X08.sdk"
+      }
     },
     {
       "path": "integration/test_standalone_discord.py",
@@ -6947,47 +7468,58 @@
     },
     {
       "path": "mcs/extract/v1/extract.py",
-      "sha256": "a5773aac58d2ae09f2c719526cac9fbb06cae23516be9fa2c24385064fe3be87",
-      "bytes": 22123,
-      "lines": 515,
+      "sha256": "804ea91fe97aea21f251e0605dcb6767fd741a6472a7b6ce88c4e9143bdc5d85",
+      "bytes": 22434,
+      "lines": 520,
       "module": "mcs/extract",
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending."
+        "Parent verified complete packet structure, all criterion references, responsibility/caller trace, current I W digest and source/test patch. Whole I gates/review pending.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
-      "reviewed_sha256": "a5773aac58d2ae09f2c719526cac9fbb06cae23516be9fa2c24385064fe3be87",
-      "reviewed_lines": 515,
-      "review_packet": "docs/development/maintenance-semantic-packet4-evidence.json",
-      "responsibility": "stdlib規則v7で投稿本文から薬剤・症状・測定ラベル・日時/期間・候補依頼/緊急語を抽出。LLM・通知・状態の人承認を代行せず、chunk transactionとrun lockの既存writer契約を保つ。",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "804ea91fe97aea21f251e0605dcb6767fd741a6472a7b6ce88c4e9143bdc5d85",
+      "reviewed_lines": 520,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "保存済本文のruleextract、hash/version/deadline/staleartifact更新とCLIlock。",
       "callers": [
-        "mcs/extract/v4/extract_llm.py",
-        "mcs/ingest/run_check.py",
-        "mcs/ops/mcs_repair.py",
-        "mcs/semantic/semantic_extraction.py",
-        "tests/extract/test_derive_deadline.py",
-        "tests/extract/test_extract_llm.py",
-        "tests/extract/test_extract_packet4_regressions.py",
-        "tests/extract/test_extract_prefilter.py",
-        "tests/extract/test_extraction_review.py",
-        "tests/ingest/test_drug_map_pipeline.py",
-        "tests/ops/ops_testkit.py",
-        "tests/ops/test_mcs_features.py",
-        "tests/ops/test_mcs_repair.py",
-        "tests/views/test_structured_review_regressions.py"
+        "mcs/ingest/run_check.py:1167",
+        "mcs/extract/rollup.py",
+        "mcs/core/queries.py",
+        "mcs/views/",
+        "mcs/ops/mcs_signals.py"
       ],
       "full_content_read": true,
       "read_ranges": [
         [
           1,
-          260
-        ],
-        [
-          261,
-          515
+          520
         ]
-      ]
+      ],
+      "flow": "run_check/main→run.lock+保存済full本文/current hash→run_pendingのbounded chunkと純粋extract_message→extract_v1 artifact hash/RULE_VERSION→rollup/queries/views/signals。LLM/MCS再取得なし。",
+      "criteria": {
+        "C01": "criteria.C01.rules",
+        "C02": "criteria.C02.rules",
+        "C03": "criteria.C03.rules",
+        "C04": "criteria.C04.rules",
+        "C05": "criteria.C05.rules",
+        "C06": "criteria.C06.rules",
+        "C07": "criteria.C07.rules",
+        "C08": "criteria.C08.rules",
+        "C09": "criteria.C09.rules",
+        "C10": "criteria.C10.rules",
+        "C11": "criteria.C11.rules",
+        "C12": "criteria.C12.rules",
+        "X01": "criteria.X01.rules",
+        "X02": "criteria.X02.rules",
+        "X03": "criteria.X03.rules",
+        "X04": "criteria.X04.rules",
+        "X05": "criteria.X05.rules",
+        "X06": "criteria.X06.rules",
+        "X07": "criteria.X07.rules",
+        "X08": "criteria.X08.rules"
+      }
     },
     {
       "path": "mcs/extract/v2/README.md",
@@ -10428,17 +10960,51 @@
       "lines": 11,
       "module": "pyproject.toml",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read."
+        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           11
         ]
-      ]
+      ],
+      "reviewed_sha256": "6f15794655843128d500e5832ecbbd14861d796921a795aef5442332ce7d5722",
+      "reviewed_lines": 11,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "Python>=3.10とRuff/pytest project検証設定。",
+      "callers": [
+        "pytest",
+        "ruff",
+        "Makefile"
+      ],
+      "flow": "PR/push/schedule/tag/manual workflow→permissions/branch/pin/secret指定→test/lint/generator又は承認済workflow機能→CI artifacts/docs/release draft→reviewer。今回はworkflowを起動せず全文契約確認だけ。",
+      "criteria": {
+        "C01": "criteria.C01.workflow",
+        "C02": "criteria.C02.workflow",
+        "C03": "criteria.C03.workflow",
+        "C04": "criteria.C04.workflow",
+        "C05": "criteria.C05.workflow",
+        "C06": "criteria.C06.workflow",
+        "C07": "criteria.C07.workflow",
+        "C08": "criteria.C08.workflow",
+        "C09": "criteria.C09.workflow",
+        "C10": "criteria.C10.workflow",
+        "C11": "criteria.C11.workflow",
+        "C12": "criteria.C12.workflow",
+        "X01": "criteria.X01.workflow",
+        "X02": "criteria.X02.workflow",
+        "X03": "criteria.X03.workflow",
+        "X04": "criteria.X04.workflow",
+        "X05": "criteria.X05.workflow",
+        "X06": "criteria.X06.workflow",
+        "X07": "criteria.X07.workflow",
+        "X08": "criteria.X08.workflow"
+      }
     },
     {
       "path": "recover",
@@ -10461,17 +11027,50 @@
       "lines": 32,
       "module": "scripts",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json."
+        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           32
         ]
-      ]
+      ],
+      "reviewed_sha256": "d40727c9b2ecc00b0acafa8b8584814e776a0d8b92e8011201bbf0adfb04dcf8",
+      "reviewed_lines": 32,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "immutableHermes/standalone exactSDK laneをnonemptyrequiredcollectionで起動。",
+      "callers": [
+        ".github/workflows/ci.yml",
+        "tests/meta/test_sdk_ci_lanes.py"
+      ],
+      "flow": "check_pinned_sdks.sh→explicit immutable source/interpreter/pins/nonempty lane検証→公式SDKの合成transportを実呼出→synthetic receipt/collection→独立lane result。実service起動なし。",
+      "criteria": {
+        "C01": "criteria.C01.sdk",
+        "C02": "criteria.C02.sdk",
+        "C03": "criteria.C03.sdk",
+        "C04": "criteria.C04.sdk",
+        "C05": "criteria.C05.sdk",
+        "C06": "criteria.C06.sdk",
+        "C07": "criteria.C07.sdk",
+        "C08": "criteria.C08.sdk",
+        "C09": "criteria.C09.sdk",
+        "C10": "criteria.C10.sdk",
+        "C11": "criteria.C11.sdk",
+        "C12": "criteria.C12.sdk",
+        "X01": "criteria.X01.sdk",
+        "X02": "criteria.X02.sdk",
+        "X03": "criteria.X03.sdk",
+        "X04": "criteria.X04.sdk",
+        "X05": "criteria.X05.sdk",
+        "X06": "criteria.X06.sdk",
+        "X07": "criteria.X07.sdk",
+        "X08": "criteria.X08.sdk"
+      }
     },
     {
       "path": "scripts/development/generate_lineworks_gallery.py",
@@ -10648,17 +11247,51 @@
       "lines": 46,
       "module": "scripts",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read."
+        "Parent full-content read; consumer/criteria review in progress; not complete based solely on read.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           46
         ]
-      ]
+      ],
+      "reviewed_sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "reviewed_lines": 46,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "tempHOME/env-iを設けて指定interpreterのpytestを起動、認証環境を持ち込まない。",
+      "callers": [
+        "Makefile",
+        ".github/workflows/ci.yml",
+        "scripts/check_pinned_sdks.sh"
+      ],
+      "flow": "check_pinned_sdks.sh→explicit immutable source/interpreter/pins/nonempty lane検証→公式SDKの合成transportを実呼出→synthetic receipt/collection→独立lane result。実service起動なし。",
+      "criteria": {
+        "C01": "criteria.C01.sdk",
+        "C02": "criteria.C02.sdk",
+        "C03": "criteria.C03.sdk",
+        "C04": "criteria.C04.sdk",
+        "C05": "criteria.C05.sdk",
+        "C06": "criteria.C06.sdk",
+        "C07": "criteria.C07.sdk",
+        "C08": "criteria.C08.sdk",
+        "C09": "criteria.C09.sdk",
+        "C10": "criteria.C10.sdk",
+        "C11": "criteria.C11.sdk",
+        "C12": "criteria.C12.sdk",
+        "X01": "criteria.X01.sdk",
+        "X02": "criteria.X02.sdk",
+        "X03": "criteria.X03.sdk",
+        "X04": "criteria.X04.sdk",
+        "X05": "criteria.X05.sdk",
+        "X06": "criteria.X06.sdk",
+        "X07": "criteria.X07.sdk",
+        "X08": "criteria.X08.sdk"
+      }
     },
     {
       "path": "tests/adapters/common/test_adapter_layout.py",
@@ -11377,17 +12010,51 @@
       "lines": 237,
       "module": "tests/conftest.py",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json."
+        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           237
         ]
-      ]
+      ],
+      "reviewed_sha256": "4d9b63c62c42873bd9ee00d7c6d251c866cc44191ed2c7d16c13ab195b0ac452",
+      "reviewed_lines": 237,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "helperflat import・tempHOME・env消去・network/process/runtimeguard。",
+      "callers": [
+        "root conftest.py",
+        "integration/sdk_safety.py",
+        "all synthetic tests"
+      ],
+      "flow": "pytest/root conftest→isolated HOME・env消去・socket/process遮断→synthetic fixture実行→temp DB/files/log→pytest assertion。worktree自体はsandboxではない。",
+      "criteria": {
+        "C01": "criteria.C01.safety",
+        "C02": "criteria.C02.safety",
+        "C03": "criteria.C03.safety",
+        "C04": "criteria.C04.safety",
+        "C05": "criteria.C05.safety",
+        "C06": "criteria.C06.safety",
+        "C07": "criteria.C07.safety",
+        "C08": "criteria.C08.safety",
+        "C09": "criteria.C09.safety",
+        "C10": "criteria.C10.safety",
+        "C11": "criteria.C11.safety",
+        "C12": "criteria.C12.safety",
+        "X01": "criteria.X01.safety",
+        "X02": "criteria.X02.safety",
+        "X03": "criteria.X03.safety",
+        "X04": "criteria.X04.safety",
+        "X05": "criteria.X05.safety",
+        "X06": "criteria.X06.safety",
+        "X07": "criteria.X07.safety",
+        "X08": "criteria.X08.safety"
+      }
     },
     {
       "path": "tests/core/test_artifact_json_guards.py",
@@ -12173,9 +12840,49 @@
       "lines": 110,
       "module": "tests/extract",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "7e104ea04196df159c43318df5ca5a0850298e2a"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "d3b40dee06ea5aa659c463a0f29d48c6b15ec69096c6ded7e9f42932b6a9691a",
+      "reviewed_lines": 110,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          110
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成回帰: extract.py badmeta/UTC/date/deadline/generation",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "run_check/main→run.lock+保存済full本文/current hash→run_pendingのbounded chunkと純粋extract_message→extract_v1 artifact hash/RULE_VERSION→rollup/queries/views/signals。LLM/MCS再取得なし。",
+      "criteria": {
+        "C01": "criteria.C01.rules",
+        "C02": "criteria.C02.rules",
+        "C03": "criteria.C03.rules",
+        "C04": "criteria.C04.rules",
+        "C05": "criteria.C05.rules",
+        "C06": "criteria.C06.rules",
+        "C07": "criteria.C07.rules",
+        "C08": "criteria.C08.rules",
+        "C09": "criteria.C09.rules",
+        "C10": "criteria.C10.rules",
+        "C11": "criteria.C11.rules",
+        "C12": "criteria.C12.rules",
+        "X01": "criteria.X01.rules",
+        "X02": "criteria.X02.rules",
+        "X03": "criteria.X03.rules",
+        "X04": "criteria.X04.rules",
+        "X05": "criteria.X05.rules",
+        "X06": "criteria.X06.rules",
+        "X07": "criteria.X07.rules",
+        "X08": "criteria.X08.rules"
+      }
     },
     {
       "path": "tests/extract/test_extract_prefilter.py",
@@ -12480,9 +13187,49 @@
       "lines": 8,
       "module": "tests/fixtures",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "a02cda79680d0dd64a2845309aa4fb2d62b137d7ceb9f6a0e0ef344166bc6520",
+      "reviewed_lines": 8,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/fixtures/schema_upgrade/core-seed.sql",
@@ -12491,9 +13238,49 @@
       "lines": 73,
       "module": "tests/fixtures",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "6e5ea26cd4d6519dce1b86cf5d80f5e5665a739218089eebfaa86b8a91ba1feb",
+      "reviewed_lines": 73,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          73
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/fixtures/schema_upgrade/metadata-seed.sql",
@@ -12502,9 +13289,49 @@
       "lines": 8,
       "module": "tests/fixtures",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "c91a27d1adf9451e8922113c8f3d586adc12b21c9f52051e234067fd2ed36cb6",
+      "reviewed_lines": 8,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/fixtures/schema_upgrade/notification-seed.sql",
@@ -12513,9 +13340,49 @@
       "lines": 38,
       "module": "tests/fixtures",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "bb75f29bdeb1e0081c9ccf5cd20e16edf94b12e4c59f1b1b48be09bc784e6200",
+      "reviewed_lines": 38,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          38
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/fixtures/schema_upgrade/origins.json",
@@ -12526,9 +13393,10 @@
       "kind": "text_asset",
       "status": "REVIEWED",
       "evidence": [
-        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "owner": "root",
       "reviewed_sha256": "a3c29282fbfd0f7090f4cb4419fc0342b0168992a692360103449a00130e3bb2",
       "read_ranges": [
@@ -12539,7 +13407,37 @@
       ],
       "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "full_content_read": true,
-      "review_module": "lifecycle"
+      "review_module": "lifecycle",
+      "reviewed_lines": 258,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/fixtures/schema_upgrade/shape-1.sql",
@@ -12548,9 +13446,49 @@
       "lines": 126,
       "module": "tests/fixtures",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "9b5b75dc8b1df92facb2cec7360859220cfe8e9a701c32a912448bfe1621bcce",
+      "reviewed_lines": 126,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          126
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/fixtures/schema_upgrade/shape-2.sql",
@@ -12559,9 +13497,49 @@
       "lines": 292,
       "module": "tests/fixtures",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "0a8f4bc5ed9a3da27c43fb3dd5884e4a79e6c47f649b0d5f5a9c9266f221ced0",
+      "reviewed_lines": 292,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          292
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/fixtures/schema_upgrade/shape-3.sql",
@@ -12570,9 +13548,49 @@
       "lines": 301,
       "module": "tests/fixtures",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "8b994ecf27ded0737ca407d19115ef078f5c3d29ef6ba3a6a97342515bd162c0",
+      "reviewed_lines": 301,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          301
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/fixtures/schema_upgrade/shape-4.sql",
@@ -12581,9 +13599,49 @@
       "lines": 301,
       "module": "tests/fixtures",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "f3c21805eaca20dd23b6b02bc4233ee4462e658fb9b22cadcbfeb7645483df7b",
+      "reviewed_lines": 301,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          301
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/fixtures/schema_upgrade/shape-5.sql",
@@ -12592,9 +13650,49 @@
       "lines": 318,
       "module": "tests/fixtures",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "c6b1f02feb9e1be8a3eae3dea811a89951d1dfc80aedc9b0f976b8c2fae2625b",
+      "reviewed_lines": 318,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          318
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/fixtures/schema_upgrade/shape-6.sql",
@@ -12603,9 +13701,49 @@
       "lines": 120,
       "module": "tests/fixtures",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "af4ae0860944ed07a489b08906eba22a3fad93a66dd292b16874ce8886ef4b7a",
+      "reviewed_lines": 120,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          120
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/fixtures/schema_upgrade/update-paths.json",
@@ -12616,9 +13754,10 @@
       "kind": "text_asset",
       "status": "REVIEWED",
       "evidence": [
-        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "owner": "root",
       "reviewed_sha256": "863bb8aca3541c8120a8fe1029f5920164e9b5034f6757e4cb08bc183c9ca509",
       "read_ranges": [
@@ -12629,7 +13768,37 @@
       ],
       "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "full_content_read": true,
-      "review_module": "lifecycle"
+      "review_module": "lifecycle",
+      "reviewed_lines": 92,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/ingest/ingest_testkit.py",
@@ -13293,41 +14462,115 @@
       "lines": 50,
       "module": "tests/meta",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
-    },
-    {
-      "path": "tests/meta/test_ci_scripts.py",
-      "sha256": "20d17b93801f37372e66d95085363ae8f6fa4e09f45651efa2a907f07f4d5044",
-      "bytes": 14449,
-      "lines": 316,
-      "module": "tests/meta",
-      "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json."
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "66133e3ddc5a2cb2b152202b5e5b1ba392a2b574ec50fe9a22e1810e0ed18583",
+      "reviewed_lines": 50,
+      "full_content_read": true,
       "read_ranges": [
         [
           1,
-          316
+          50
         ]
-      ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成回帰: ci/gates.py:C1/extension import境界",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "CI/make→指定source/recordの構文/参照制約→AST/literal gateとincident照合→stdout/exit→workflow fail。判定成功はruntime動作保証ではない。",
+      "criteria": {
+        "C01": "criteria.C01.ci",
+        "C02": "criteria.C02.ci",
+        "C03": "criteria.C03.ci",
+        "C04": "criteria.C04.ci",
+        "C05": "criteria.C05.ci",
+        "C06": "criteria.C06.ci",
+        "C07": "criteria.C07.ci",
+        "C08": "criteria.C08.ci",
+        "C09": "criteria.C09.ci",
+        "C10": "criteria.C10.ci",
+        "C11": "criteria.C11.ci",
+        "C12": "criteria.C12.ci",
+        "X01": "criteria.X01.ci",
+        "X02": "criteria.X02.ci",
+        "X03": "criteria.X03.ci",
+        "X04": "criteria.X04.ci",
+        "X05": "criteria.X05.ci",
+        "X06": "criteria.X06.ci",
+        "X07": "criteria.X07.ci",
+        "X08": "criteria.X08.ci"
+      }
     },
     {
-      "path": "tests/meta/test_deployment_scripts.py",
-      "sha256": "bdc242d02e24d0651c38d9680a59e3df87444c61ff850f28144001c21a565969",
-      "bytes": 5430,
-      "lines": 119,
+      "path": "tests/meta/test_ci_scripts.py",
+      "sha256": "98cd0e4fef934b52baa8fc420d3858cc6e0aac10bce09b0226dfffa7b84ab871",
+      "bytes": 15163,
+      "lines": 331,
       "module": "tests/meta",
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
+        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "read_ranges": [
+        [
+          1,
+          331
+        ]
+      ],
+      "reviewed_sha256": "98cd0e4fef934b52baa8fc420d3858cc6e0aac10bce09b0226dfffa7b84ab871",
+      "reviewed_lines": 331,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成回帰: ci/gates.py,ci/mine_gates.py,scripts/development/update_readme.py",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "CI/make→指定source/recordの構文/参照制約→AST/literal gateとincident照合→stdout/exit→workflow fail。判定成功はruntime動作保証ではない。",
+      "criteria": {
+        "C01": "criteria.C01.ci",
+        "C02": "criteria.C02.ci",
+        "C03": "criteria.C03.ci",
+        "C04": "criteria.C04.ci",
+        "C05": "criteria.C05.ci",
+        "C06": "criteria.C06.ci",
+        "C07": "criteria.C07.ci",
+        "C08": "criteria.C08.ci",
+        "C09": "criteria.C09.ci",
+        "C10": "criteria.C10.ci",
+        "C11": "criteria.C11.ci",
+        "C12": "criteria.C12.ci",
+        "X01": "criteria.X01.ci",
+        "X02": "criteria.X02.ci",
+        "X03": "criteria.X03.ci",
+        "X04": "criteria.X04.ci",
+        "X05": "criteria.X05.ci",
+        "X06": "criteria.X06.ci",
+        "X07": "criteria.X07.ci",
+        "X08": "criteria.X08.ci"
+      }
+    },
+    {
+      "path": "tests/meta/test_deployment_scripts.py",
+      "sha256": "ffe0f86c54ef70839f0f76f2dc16b02ee15bcb94b137f698549d4f89ea066896",
+      "bytes": 6189,
+      "lines": 133,
+      "module": "tests/meta",
+      "kind": "source",
+      "status": "REVIEWED",
+      "evidence": [
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "reviewed_sha256": "ffe0f86c54ef70839f0f76f2dc16b02ee15bcb94b137f698549d4f89ea066896",
       "read_ranges": [
         [
@@ -13336,7 +14579,37 @@
         ]
       ],
       "full_content_read": true,
-      "review_module": "deployment"
+      "review_module": "deployment",
+      "reviewed_lines": 133,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成回帰: deployment/scripts mcs_check/llamacpp wrapper",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/meta/test_install_sh.py",
@@ -13347,9 +14620,10 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "owner": "root",
       "reviewed_sha256": "1366b56c68139b2be1deaa373b19b3c71788dd70ac2061c0dbfaf3e074d7c7be",
       "read_ranges": [
@@ -13360,7 +14634,37 @@
       ],
       "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "full_content_read": true,
-      "review_module": "lifecycle"
+      "review_module": "lifecycle",
+      "reviewed_lines": 1162,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成回帰: install.sh 六段階/一時HOME/PATHstub",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/meta/test_install_sh_standalone.py",
@@ -13371,9 +14675,10 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "owner": "root",
       "reviewed_sha256": "d00fa437730d56db44504347f323578846659da80d5874c2f1d85f045e880369",
       "read_ranges": [
@@ -13384,7 +14689,37 @@
       ],
       "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "full_content_read": true,
-      "review_module": "lifecycle"
+      "review_module": "lifecycle",
+      "reviewed_lines": 118,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成回帰: install.sh mode選択/standalone/noHermes",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/meta/test_integration_guard_load.py",
@@ -13393,17 +14728,50 @@
       "lines": 23,
       "module": "tests/meta",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json."
+        "Parent full-content read in untruncated chunks; CI/process guard/generator consumers traced. Packet remaining criteria and integrated evidence are tracked in parent-ci-evidence.json.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "read_ranges": [
         [
           1,
           23
         ]
-      ]
+      ],
+      "reviewed_sha256": "bbc6cf9d19926617e890a954e03938e596abaa0a353983ad6ecdf416b1244b35",
+      "reviewed_lines": 23,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成回帰: root/integration conftest",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "pytest/root conftest→isolated HOME・env消去・socket/process遮断→synthetic fixture実行→temp DB/files/log→pytest assertion。worktree自体はsandboxではない。",
+      "criteria": {
+        "C01": "criteria.C01.safety",
+        "C02": "criteria.C02.safety",
+        "C03": "criteria.C03.safety",
+        "C04": "criteria.C04.safety",
+        "C05": "criteria.C05.safety",
+        "C06": "criteria.C06.safety",
+        "C07": "criteria.C07.safety",
+        "C08": "criteria.C08.safety",
+        "C09": "criteria.C09.safety",
+        "C10": "criteria.C10.safety",
+        "C11": "criteria.C11.safety",
+        "C12": "criteria.C12.safety",
+        "X01": "criteria.X01.safety",
+        "X02": "criteria.X02.safety",
+        "X03": "criteria.X03.safety",
+        "X04": "criteria.X04.safety",
+        "X05": "criteria.X05.safety",
+        "X06": "criteria.X06.safety",
+        "X07": "criteria.X07.safety",
+        "X08": "criteria.X08.safety"
+      }
     },
     {
       "path": "tests/meta/test_launchagent_templates.py",
@@ -13414,9 +14782,10 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "reviewed_sha256": "a7a4d6c30da2e595d9cfaed3fcbcee47e09618e06900e8cc6b7b37578476f4b1",
       "read_ranges": [
         [
@@ -13425,7 +14794,37 @@
         ]
       ],
       "full_content_read": true,
-      "review_module": "deployment"
+      "review_module": "deployment",
+      "reviewed_lines": 13,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成回帰: deployment/launchagents private umask",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/meta/test_lineworks_service.py",
@@ -13434,9 +14833,49 @@
       "lines": 104,
       "module": "tests/meta",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "28fcb1e57e8df43c742b8b024566f6cbf8649354fbc1d87b09b8ba810de4fb2f",
+      "reviewed_lines": 104,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          104
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成回帰: adapters/lineworks/service.py private native candidates",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/meta/test_maintenance_development_regressions.py",
@@ -13457,9 +14896,10 @@
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending"
+        "parent-lifecycle-evidence.json module criteria and supplemental regression review; final whole-I pending",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
       ],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
       "owner": "root",
       "reviewed_sha256": "b6b98f7203315117773c372a57b4b090c3049c96a45db2e591d38f92b0a520fa",
       "read_ranges": [
@@ -13470,7 +14910,37 @@
       ],
       "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "full_content_read": true,
-      "review_module": "lifecycle"
+      "review_module": "lifecycle",
+      "reviewed_lines": 1443,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成回帰: deployment/recovery/mcs_recover.py interruptedapply/consent/locks",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/meta/test_mcs_recover_py39.py",
@@ -13479,29 +14949,102 @@
       "lines": 42,
       "module": "tests/meta",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
-    },
-    {
-      "path": "tests/meta/test_sdk_ci_lanes.py",
-      "sha256": "ec02b272cf01b6ceab60adfb0dabfb90f072511c237e96e428f5604406ea62a3",
-      "bytes": 1591,
-      "lines": 37,
-      "module": "tests/meta",
-      "kind": "source",
-      "status": "PARTIAL",
-      "origin": "parent repair new file",
-      "review_input": "authored current candidate",
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "c2f2ebd49392c4c775a5238c823f59155f3d1c765c5618ebe50e35a41b0c0b97",
+      "reviewed_lines": 42,
+      "full_content_read": true,
       "read_ranges": [
         [
           1,
-          37
+          42
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成回帰: deployment/recovery/mcs_recover.py grammar3.9限定",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/meta/test_sdk_ci_lanes.py",
+      "sha256": "74d1fe08a16bb5f8757a5ca9150d706cc133a642cf6a347afa2706cf6fea9539",
+      "bytes": 2203,
+      "lines": 53,
+      "module": "tests/meta",
+      "kind": "source",
+      "status": "REVIEWED",
+      "origin": "parent repair new file",
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "read_ranges": [
+        [
+          1,
+          53
         ]
       ],
       "evidence": [
-        "CI missing lane and zero-collection regression; before fail and 51 pass after, Ruff passes; final integrated reviewer pending."
-      ]
+        "CI missing lane and zero-collection regression; before fail and 51 pass after, Ruff passes; final integrated reviewer pending.",
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "reviewed_sha256": "74d1fe08a16bb5f8757a5ca9150d706cc133a642cf6a347afa2706cf6fea9539",
+      "reviewed_lines": 53,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成回帰: integration/sdk_safety.py,check_pinned_sdks.sh",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "check_pinned_sdks.sh→explicit immutable source/interpreter/pins/nonempty lane検証→公式SDKの合成transportを実呼出→synthetic receipt/collection→独立lane result。実service起動なし。",
+      "criteria": {
+        "C01": "criteria.C01.sdk",
+        "C02": "criteria.C02.sdk",
+        "C03": "criteria.C03.sdk",
+        "C04": "criteria.C04.sdk",
+        "C05": "criteria.C05.sdk",
+        "C06": "criteria.C06.sdk",
+        "C07": "criteria.C07.sdk",
+        "C08": "criteria.C08.sdk",
+        "C09": "criteria.C09.sdk",
+        "C10": "criteria.C10.sdk",
+        "C11": "criteria.C11.sdk",
+        "C12": "criteria.C12.sdk",
+        "X01": "criteria.X01.sdk",
+        "X02": "criteria.X02.sdk",
+        "X03": "criteria.X03.sdk",
+        "X04": "criteria.X04.sdk",
+        "X05": "criteria.X05.sdk",
+        "X06": "criteria.X06.sdk",
+        "X07": "criteria.X07.sdk",
+        "X08": "criteria.X08.sdk"
+      }
     },
     {
       "path": "tests/meta/test_watchdog_wrappers.py",
@@ -13510,9 +15053,49 @@
       "lines": 48,
       "module": "tests/meta",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core5 full P/W content and all20 criteria accepted; SHA matches current I; worker1110 families both3.10/3.13 and pinned SDK results retained separately from final I."
+      ],
+      "review_input": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "reviewed_sha256": "caaa601f86731eacd3f0397bfffc661388b826b4c1fc7e11831f9472b0d2182e",
+      "reviewed_lines": 48,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          48
+        ]
+      ],
+      "review_packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "responsibility": "完全合成回帰: deployment mcs_check/deep+setup grace contract",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
     },
     {
       "path": "tests/notify/notify_testkit.py",
@@ -19649,5 +21232,12 @@
       "docs/specs/external-export-contract.md"
     ],
     "source_W": "2eac0eee5ea3a8d63b32d5e1e0fec2c175e61a69"
+  },
+  "last_core5_import": {
+    "report": "docs/development/maintenance-core-packet5-evidence.json",
+    "record_sha256": "e84cc7e89161839cfeca3391614a634100907834ca4e820b0c900e5367aeae4c",
+    "matched_reviewed_files": 45,
+    "source_W": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+    "parent_criteria_read": "C01..C06 reused prior uninterrupted reads; C07..X08 full read this goal continuation"
   }
 }
