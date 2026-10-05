@@ -1,0 +1,4582 @@
+{
+  "packet": "maintenance-core-packet5-20261005",
+  "status": "PARTIAL_GLOBAL_AUDIT",
+  "packet_status": "REVIEWED_AND_REPAIRED",
+  "B": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+  "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+  "W": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+  "I": {
+    "owner": "parent",
+    "worker_W_is_not_I": "親source統合は進行、parentreported0d5ec4aCI/094261fprior。全I必須検証/fresh independentreviewは親継続。"
+  },
+  "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+  "branch": "audit/maintenance-core-packet5-20261005",
+  "start_status": "clean, existingpacket4branch preserved, git switch -c from fixedP; no reset/rebase/stash",
+  "scope": {
+    "original_files": 44,
+    "original_lines": 8707,
+    "W_files": 45,
+    "W_lines": 8857,
+    "REVIEWED": 45,
+    "PARTIAL": 0,
+    "UNSEEN": 0,
+    "EXCLUDED_owned_text": 0,
+    "actual_glob_note": "metaは実在12、schema_upgradeは実在12。予告7/10へ縮小せず全44実在pathを列挙/全読。newrule回帰1追加。semantic専任新meta maintenance_development_regressionsは固定Pに不存在/所有外。",
+    "non_source_artifacts": "2日本語changes＋このevidenceは源/test inventoryとは別。生成文書は親owner、秘密・実DB等は全域安全境界で除外。"
+  },
+  "safety": {
+    "data": "完全合成のみ、実サービス/DB/PHI/PII/秘密/Keychain/LLM/Jev不使用",
+    "external": "push/PR/merge/deploy/workflow/service再起動なし",
+    "shared": "ledger/schema/common/ops/views/lifecycle/semantichelper readonly; own source3repair groups only",
+    "new_parent_guard": "mainの外部c26a009e2bfe17d57779d7028eb3ac8601ddf503 _hermes_cli実gateway拒否guardはP外。親I097807b前5FAIL→I161PASSとのreceipt。worker成功をこの最終Iguard成功へ読み替えない。",
+    "model": "GPT-6.1-sol ultra assigned; no model/budget/permanentinstruction modifications, no childspawn"
+  },
+  "inventory": [
+    {
+      "path": ".github/dependabot.yml",
+      "P_sha256": "2df1fe6f642eb8f3bd065e72bb8703ba5d566aaafb51fa16b760743ddb3549de",
+      "P_bytes": 630,
+      "P_lines": 18,
+      "W_sha256": "2df1fe6f642eb8f3bd065e72bb8703ba5d566aaafb51fa16b760743ddb3549de",
+      "W_bytes": 630,
+      "W_lines": 18,
+      "module": "workflow",
+      "kind": "CI",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          18
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "weeklyactions/python依存提案の既存config。",
+      "callers": [
+        "GitHub Dependabot"
+      ],
+      "flow": "PR/push/schedule/tag/manual workflow→permissions/branch/pin/secret指定→test/lint/generator又は承認済workflow機能→CI artifacts/docs/release draft→reviewer。今回はworkflowを起動せず全文契約確認だけ。",
+      "criteria": {
+        "C01": "criteria.C01.workflow",
+        "C02": "criteria.C02.workflow",
+        "C03": "criteria.C03.workflow",
+        "C04": "criteria.C04.workflow",
+        "C05": "criteria.C05.workflow",
+        "C06": "criteria.C06.workflow",
+        "C07": "criteria.C07.workflow",
+        "C08": "criteria.C08.workflow",
+        "C09": "criteria.C09.workflow",
+        "C10": "criteria.C10.workflow",
+        "C11": "criteria.C11.workflow",
+        "C12": "criteria.C12.workflow",
+        "X01": "criteria.X01.workflow",
+        "X02": "criteria.X02.workflow",
+        "X03": "criteria.X03.workflow",
+        "X04": "criteria.X04.workflow",
+        "X05": "criteria.X05.workflow",
+        "X06": "criteria.X06.workflow",
+        "X07": "criteria.X07.workflow",
+        "X08": "criteria.X08.workflow"
+      }
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "P_sha256": "5b73c57cef2d6b2e53f8d6785120573be91c8a209c2a18a9094500f772ff4d32",
+      "P_bytes": 6504,
+      "P_lines": 150,
+      "W_sha256": "5b73c57cef2d6b2e53f8d6785120573be91c8a209c2a18a9094500f772ff4d32",
+      "W_bytes": 6504,
+      "W_lines": 150,
+      "module": "workflow",
+      "kind": "CI",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          150
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "synthetic tests/lint/gates/生成整合/SDK lanes/secret hygieneとmain生成sync。",
+      "callers": [
+        "GitHub PR/push triggers"
+      ],
+      "flow": "PR/push/schedule/tag/manual workflow→permissions/branch/pin/secret指定→test/lint/generator又は承認済workflow機能→CI artifacts/docs/release draft→reviewer。今回はworkflowを起動せず全文契約確認だけ。",
+      "criteria": {
+        "C01": "criteria.C01.workflow",
+        "C02": "criteria.C02.workflow",
+        "C03": "criteria.C03.workflow",
+        "C04": "criteria.C04.workflow",
+        "C05": "criteria.C05.workflow",
+        "C06": "criteria.C06.workflow",
+        "C07": "criteria.C07.workflow",
+        "C08": "criteria.C08.workflow",
+        "C09": "criteria.C09.workflow",
+        "C10": "criteria.C10.workflow",
+        "C11": "criteria.C11.workflow",
+        "C12": "criteria.C12.workflow",
+        "X01": "criteria.X01.workflow",
+        "X02": "criteria.X02.workflow",
+        "X03": "criteria.X03.workflow",
+        "X04": "criteria.X04.workflow",
+        "X05": "criteria.X05.workflow",
+        "X06": "criteria.X06.workflow",
+        "X07": "criteria.X07.workflow",
+        "X08": "criteria.X08.workflow"
+      }
+    },
+    {
+      "path": ".github/workflows/openwiki-update.yml",
+      "P_sha256": "0efcad155b445693eccb91344073f18894d905beb6c3951cf710f551e2702fd7",
+      "P_bytes": 3379,
+      "P_lines": 88,
+      "W_sha256": "0efcad155b445693eccb91344073f18894d905beb6c3951cf710f551e2702fd7",
+      "W_bytes": 3379,
+      "W_lines": 88,
+      "module": "workflow",
+      "kind": "CI",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          88
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "既存schedule/manualOpenWiki生成とpartialpagesPR/stepfailure報告。",
+      "callers": [
+        "GitHub schedule/workflow_dispatch"
+      ],
+      "flow": "PR/push/schedule/tag/manual workflow→permissions/branch/pin/secret指定→test/lint/generator又は承認済workflow機能→CI artifacts/docs/release draft→reviewer。今回はworkflowを起動せず全文契約確認だけ。",
+      "criteria": {
+        "C01": "criteria.C01.workflow",
+        "C02": "criteria.C02.workflow",
+        "C03": "criteria.C03.workflow",
+        "C04": "criteria.C04.workflow",
+        "C05": "criteria.C05.workflow",
+        "C06": "criteria.C06.workflow",
+        "C07": "criteria.C07.workflow",
+        "C08": "criteria.C08.workflow",
+        "C09": "criteria.C09.workflow",
+        "C10": "criteria.C10.workflow",
+        "C11": "criteria.C11.workflow",
+        "C12": "criteria.C12.workflow",
+        "X01": "criteria.X01.workflow",
+        "X02": "criteria.X02.workflow",
+        "X03": "criteria.X03.workflow",
+        "X04": "criteria.X04.workflow",
+        "X05": "criteria.X05.workflow",
+        "X06": "criteria.X06.workflow",
+        "X07": "criteria.X07.workflow",
+        "X08": "criteria.X08.workflow"
+      }
+    },
+    {
+      "path": ".github/workflows/release-notes.yml",
+      "P_sha256": "036c8f65e7b7862bad2e2b450c0466fd19c79d148f81459487044afc3f8da2d2",
+      "P_bytes": 5096,
+      "P_lines": 132,
+      "W_sha256": "036c8f65e7b7862bad2e2b450c0466fd19c79d148f81459487044afc3f8da2d2",
+      "W_bytes": 5096,
+      "W_lines": 132,
+      "module": "workflow",
+      "kind": "CI",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          132
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "canonicalCHANGELOG/READMEcheckからdraftreleaseとmain既存Release本文同期。",
+      "callers": [
+        "GitHub tag/manual/main triggers"
+      ],
+      "flow": "PR/push/schedule/tag/manual workflow→permissions/branch/pin/secret指定→test/lint/generator又は承認済workflow機能→CI artifacts/docs/release draft→reviewer。今回はworkflowを起動せず全文契約確認だけ。",
+      "criteria": {
+        "C01": "criteria.C01.workflow",
+        "C02": "criteria.C02.workflow",
+        "C03": "criteria.C03.workflow",
+        "C04": "criteria.C04.workflow",
+        "C05": "criteria.C05.workflow",
+        "C06": "criteria.C06.workflow",
+        "C07": "criteria.C07.workflow",
+        "C08": "criteria.C08.workflow",
+        "C09": "criteria.C09.workflow",
+        "C10": "criteria.C10.workflow",
+        "C11": "criteria.C11.workflow",
+        "C12": "criteria.C12.workflow",
+        "X01": "criteria.X01.workflow",
+        "X02": "criteria.X02.workflow",
+        "X03": "criteria.X03.workflow",
+        "X04": "criteria.X04.workflow",
+        "X05": "criteria.X05.workflow",
+        "X06": "criteria.X06.workflow",
+        "X07": "criteria.X07.workflow",
+        "X08": "criteria.X08.workflow"
+      }
+    },
+    {
+      "path": ".gitignore",
+      "P_sha256": "9562f8f7024eb99be176d9d498d12297b98327e88b45b20ffb6974d32d0d48e0",
+      "P_bytes": 277,
+      "P_lines": 23,
+      "W_sha256": "9562f8f7024eb99be176d9d498d12297b98327e88b45b20ffb6974d32d0d48e0",
+      "W_bytes": 277,
+      "W_lines": 23,
+      "module": "workflow",
+      "kind": "config",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          23
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "localdata/config/env/log/cache/exportsをtrackedrepoから除外。",
+      "callers": [
+        "git",
+        "CI hygiene"
+      ],
+      "flow": "PR/push/schedule/tag/manual workflow→permissions/branch/pin/secret指定→test/lint/generator又は承認済workflow機能→CI artifacts/docs/release draft→reviewer。今回はworkflowを起動せず全文契約確認だけ。",
+      "criteria": {
+        "C01": "criteria.C01.workflow",
+        "C02": "criteria.C02.workflow",
+        "C03": "criteria.C03.workflow",
+        "C04": "criteria.C04.workflow",
+        "C05": "criteria.C05.workflow",
+        "C06": "criteria.C06.workflow",
+        "C07": "criteria.C07.workflow",
+        "C08": "criteria.C08.workflow",
+        "C09": "criteria.C09.workflow",
+        "C10": "criteria.C10.workflow",
+        "C11": "criteria.C11.workflow",
+        "C12": "criteria.C12.workflow",
+        "X01": "criteria.X01.workflow",
+        "X02": "criteria.X02.workflow",
+        "X03": "criteria.X03.workflow",
+        "X04": "criteria.X04.workflow",
+        "X05": "criteria.X05.workflow",
+        "X06": "criteria.X06.workflow",
+        "X07": "criteria.X07.workflow",
+        "X08": "criteria.X08.workflow"
+      }
+    },
+    {
+      "path": "Makefile",
+      "P_sha256": "f49eac487c1e0d717bc95b2c5d110389f7e75cc047a67ca545bccc75dbaaad53",
+      "P_bytes": 1266,
+      "P_lines": 32,
+      "W_sha256": "f49eac487c1e0d717bc95b2c5d110389f7e75cc047a67ca545bccc75dbaaad53",
+      "W_bytes": 1266,
+      "W_lines": 32,
+      "module": "workflow",
+      "kind": "config",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          32
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "localtest/lint/生成check入口、ephemeral固定依存版、setup-checkは実機向け。",
+      "callers": [
+        "developer local commands",
+        ".github/workflows/ci.yml"
+      ],
+      "flow": "PR/push/schedule/tag/manual workflow→permissions/branch/pin/secret指定→test/lint/generator又は承認済workflow機能→CI artifacts/docs/release draft→reviewer。今回はworkflowを起動せず全文契約確認だけ。",
+      "criteria": {
+        "C01": "criteria.C01.workflow",
+        "C02": "criteria.C02.workflow",
+        "C03": "criteria.C03.workflow",
+        "C04": "criteria.C04.workflow",
+        "C05": "criteria.C05.workflow",
+        "C06": "criteria.C06.workflow",
+        "C07": "criteria.C07.workflow",
+        "C08": "criteria.C08.workflow",
+        "C09": "criteria.C09.workflow",
+        "C10": "criteria.C10.workflow",
+        "C11": "criteria.C11.workflow",
+        "C12": "criteria.C12.workflow",
+        "X01": "criteria.X01.workflow",
+        "X02": "criteria.X02.workflow",
+        "X03": "criteria.X03.workflow",
+        "X04": "criteria.X04.workflow",
+        "X05": "criteria.X05.workflow",
+        "X06": "criteria.X06.workflow",
+        "X07": "criteria.X07.workflow",
+        "X08": "criteria.X08.workflow"
+      }
+    },
+    {
+      "path": "ci/gates-coverage.json",
+      "P_sha256": "920381489e8dae74a2d4272d3e8cd50c3b81e484d9bfa345d4af53d2dfc9fb64",
+      "P_bytes": 9841,
+      "P_lines": 226,
+      "W_sha256": "920381489e8dae74a2d4272d3e8cd50c3b81e484d9bfa345d4af53d2dfc9fb64",
+      "W_bytes": 9841,
+      "W_lines": 226,
+      "module": "ci",
+      "kind": "config",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          226
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "旧incidentと現在gate/回帰定義の対応台帳、historical集計で実行成功の証明とは別。",
+      "callers": [
+        "ci/mine_gates.py"
+      ],
+      "flow": "CI/make→指定source/recordの構文/参照制約→AST/literal gateとincident照合→stdout/exit→workflow fail。判定成功はruntime動作保証ではない。",
+      "criteria": {
+        "C01": "criteria.C01.ci",
+        "C02": "criteria.C02.ci",
+        "C03": "criteria.C03.ci",
+        "C04": "criteria.C04.ci",
+        "C05": "criteria.C05.ci",
+        "C06": "criteria.C06.ci",
+        "C07": "criteria.C07.ci",
+        "C08": "criteria.C08.ci",
+        "C09": "criteria.C09.ci",
+        "C10": "criteria.C10.ci",
+        "C11": "criteria.C11.ci",
+        "C12": "criteria.C12.ci",
+        "X01": "criteria.X01.ci",
+        "X02": "criteria.X02.ci",
+        "X03": "criteria.X03.ci",
+        "X04": "criteria.X04.ci",
+        "X05": "criteria.X05.ci",
+        "X06": "criteria.X06.ci",
+        "X07": "criteria.X07.ci",
+        "X08": "criteria.X08.ci"
+      }
+    },
+    {
+      "path": "ci/gates.py",
+      "P_sha256": "8fb9cef7f1922c65ac5ca1770285ec414adbb43e7161a4c23c4377c69bfa9d71",
+      "P_bytes": 23690,
+      "P_lines": 531,
+      "W_sha256": "b255b35e2affe4566ddfe75ebda6322523c97b2e00bb08686cede06ced5dea2c",
+      "W_bytes": 23724,
+      "W_lines": 531,
+      "module": "ci",
+      "kind": "source",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          300
+        ],
+        [
+          301,
+          531
+        ]
+      ],
+      "W_review": "P全文＋全P→Wdiff hunk全文の合成確認",
+      "full_read_verified": true,
+      "responsibility": "AST/literalから10のsafety/contract静的gateを実行。",
+      "callers": [
+        ".github/workflows/ci.yml",
+        "Makefile",
+        "tests/meta/test_ci_scripts.py",
+        "tests/meta/test_c1_export_gates.py"
+      ],
+      "flow": "CI/make→指定source/recordの構文/参照制約→AST/literal gateとincident照合→stdout/exit→workflow fail。判定成功はruntime動作保証ではない。",
+      "criteria": {
+        "C01": "criteria.C01.ci",
+        "C02": "criteria.C02.ci",
+        "C03": "criteria.C03.ci",
+        "C04": "criteria.C04.ci",
+        "C05": "criteria.C05.ci",
+        "C06": "criteria.C06.ci",
+        "C07": "criteria.C07.ci",
+        "C08": "criteria.C08.ci",
+        "C09": "criteria.C09.ci",
+        "C10": "criteria.C10.ci",
+        "C11": "criteria.C11.ci",
+        "C12": "criteria.C12.ci",
+        "X01": "criteria.X01.ci",
+        "X02": "criteria.X02.ci",
+        "X03": "criteria.X03.ci",
+        "X04": "criteria.X04.ci",
+        "X05": "criteria.X05.ci",
+        "X06": "criteria.X06.ci",
+        "X07": "criteria.X07.ci",
+        "X08": "criteria.X08.ci"
+      }
+    },
+    {
+      "path": "ci/mine_gates.py",
+      "P_sha256": "53ccb76ed95b9a04a0f465611c8ae1451cc390b8d1043ca31d20c07c4e1be60e",
+      "P_bytes": 4889,
+      "P_lines": 134,
+      "W_sha256": "7c98b6fb0d9973bdd3dc4cc3e5028cc9d8aea2f25dbd8cfa71ee126c8595154d",
+      "W_bytes": 5057,
+      "W_lines": 137,
+      "module": "ci",
+      "kind": "source",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          134
+        ]
+      ],
+      "W_review": "P全文＋全P→Wdiff hunk全文の合成確認",
+      "full_read_verified": true,
+      "responsibility": "incident idとmanifest gate/test定義存在を照合、heatmapは情報表示。",
+      "callers": [
+        ".github/workflows/ci.yml",
+        "tests/meta/test_ci_scripts.py"
+      ],
+      "flow": "CI/make→指定source/recordの構文/参照制約→AST/literal gateとincident照合→stdout/exit→workflow fail。判定成功はruntime動作保証ではない。",
+      "criteria": {
+        "C01": "criteria.C01.ci",
+        "C02": "criteria.C02.ci",
+        "C03": "criteria.C03.ci",
+        "C04": "criteria.C04.ci",
+        "C05": "criteria.C05.ci",
+        "C06": "criteria.C06.ci",
+        "C07": "criteria.C07.ci",
+        "C08": "criteria.C08.ci",
+        "C09": "criteria.C09.ci",
+        "C10": "criteria.C10.ci",
+        "C11": "criteria.C11.ci",
+        "C12": "criteria.C12.ci",
+        "X01": "criteria.X01.ci",
+        "X02": "criteria.X02.ci",
+        "X03": "criteria.X03.ci",
+        "X04": "criteria.X04.ci",
+        "X05": "criteria.X05.ci",
+        "X06": "criteria.X06.ci",
+        "X07": "criteria.X07.ci",
+        "X08": "criteria.X08.ci"
+      }
+    },
+    {
+      "path": "conftest.py",
+      "P_sha256": "a1066a51c68082f7b65e346cef21e6fe8fab7e5e2f354b1c20b0fe95a43fea3a",
+      "P_bytes": 1097,
+      "P_lines": 24,
+      "W_sha256": "a1066a51c68082f7b65e346cef21e6fe8fab7e5e2f354b1c20b0fe95a43fea3a",
+      "W_bytes": 1097,
+      "W_lines": 24,
+      "module": "safety",
+      "kind": "source",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          24
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "rootでtests import helper登録と既存合成guardをintegrationにも導入。",
+      "callers": [
+        "pytest tests/integration collection"
+      ],
+      "flow": "pytest/root conftest→isolated HOME・env消去・socket/process遮断→synthetic fixture実行→temp DB/files/log→pytest assertion。worktree自体はsandboxではない。",
+      "criteria": {
+        "C01": "criteria.C01.safety",
+        "C02": "criteria.C02.safety",
+        "C03": "criteria.C03.safety",
+        "C04": "criteria.C04.safety",
+        "C05": "criteria.C05.safety",
+        "C06": "criteria.C06.safety",
+        "C07": "criteria.C07.safety",
+        "C08": "criteria.C08.safety",
+        "C09": "criteria.C09.safety",
+        "C10": "criteria.C10.safety",
+        "C11": "criteria.C11.safety",
+        "C12": "criteria.C12.safety",
+        "X01": "criteria.X01.safety",
+        "X02": "criteria.X02.safety",
+        "X03": "criteria.X03.safety",
+        "X04": "criteria.X04.safety",
+        "X05": "criteria.X05.safety",
+        "X06": "criteria.X06.safety",
+        "X07": "criteria.X07.safety",
+        "X08": "criteria.X08.safety"
+      }
+    },
+    {
+      "path": "integration/conftest.py",
+      "P_sha256": "5c51bd43d7ef4e731e8ce78def5df7201e42964ee02c68ca361deabc925b920c",
+      "P_bytes": 636,
+      "P_lines": 14,
+      "W_sha256": "5c51bd43d7ef4e731e8ce78def5df7201e42964ee02c68ca361deabc925b920c",
+      "W_bytes": 636,
+      "W_lines": 14,
+      "module": "safety",
+      "kind": "source",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          14
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "standalone SDK用にsocket guard導入済markerを確認。",
+      "callers": [
+        "pytest integration collection"
+      ],
+      "flow": "pytest/root conftest→isolated HOME・env消去・socket/process遮断→synthetic fixture実行→temp DB/files/log→pytest assertion。worktree自体はsandboxではない。",
+      "criteria": {
+        "C01": "criteria.C01.safety",
+        "C02": "criteria.C02.safety",
+        "C03": "criteria.C03.safety",
+        "C04": "criteria.C04.safety",
+        "C05": "criteria.C05.safety",
+        "C06": "criteria.C06.safety",
+        "C07": "criteria.C07.safety",
+        "C08": "criteria.C08.safety",
+        "C09": "criteria.C09.safety",
+        "C10": "criteria.C10.safety",
+        "C11": "criteria.C11.safety",
+        "C12": "criteria.C12.safety",
+        "X01": "criteria.X01.safety",
+        "X02": "criteria.X02.safety",
+        "X03": "criteria.X03.safety",
+        "X04": "criteria.X04.safety",
+        "X05": "criteria.X05.safety",
+        "X06": "criteria.X06.safety",
+        "X07": "criteria.X07.safety",
+        "X08": "criteria.X08.safety"
+      }
+    },
+    {
+      "path": "integration/sdk_safety.py",
+      "P_sha256": "cabdf08366d2af2e1632539e812fc940d2d378f1d86e0c67c8e0217de043428e",
+      "P_bytes": 1263,
+      "P_lines": 31,
+      "W_sha256": "cabdf08366d2af2e1632539e812fc940d2d378f1d86e0c67c8e0217de043428e",
+      "W_bytes": 1263,
+      "W_lines": 31,
+      "module": "safety",
+      "kind": "source",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          31
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "explicit lane開始時にrootguardを導入しsecret/HOME/process/socketを隔離。",
+      "callers": [
+        "scripts/check_pinned_sdks.sh",
+        "tests/meta/test_sdk_ci_lanes.py"
+      ],
+      "flow": "pytest/root conftest→isolated HOME・env消去・socket/process遮断→synthetic fixture実行→temp DB/files/log→pytest assertion。worktree自体はsandboxではない。",
+      "criteria": {
+        "C01": "criteria.C01.safety",
+        "C02": "criteria.C02.safety",
+        "C03": "criteria.C03.safety",
+        "C04": "criteria.C04.safety",
+        "C05": "criteria.C05.safety",
+        "C06": "criteria.C06.safety",
+        "C07": "criteria.C07.safety",
+        "C08": "criteria.C08.safety",
+        "C09": "criteria.C09.safety",
+        "C10": "criteria.C10.safety",
+        "C11": "criteria.C11.safety",
+        "C12": "criteria.C12.safety",
+        "X01": "criteria.X01.safety",
+        "X02": "criteria.X02.safety",
+        "X03": "criteria.X03.safety",
+        "X04": "criteria.X04.safety",
+        "X05": "criteria.X05.safety",
+        "X06": "criteria.X06.safety",
+        "X07": "criteria.X07.safety",
+        "X08": "criteria.X08.safety"
+      }
+    },
+    {
+      "path": "integration/test_integration_guards.py",
+      "P_sha256": "9bce7320468ad1a32e88195c7988ab0971a77c536541a38ae5db0b53071c4ecf",
+      "P_bytes": 778,
+      "P_lines": 21,
+      "W_sha256": "9bce7320468ad1a32e88195c7988ab0971a77c536541a38ae5db0b53071c4ecf",
+      "W_bytes": 778,
+      "W_lines": 21,
+      "module": "safety",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          21
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "root/integration両側guard loadの異常系を合成確認。",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "pytest/root conftest→isolated HOME・env消去・socket/process遮断→synthetic fixture実行→temp DB/files/log→pytest assertion。worktree自体はsandboxではない。",
+      "criteria": {
+        "C01": "criteria.C01.safety",
+        "C02": "criteria.C02.safety",
+        "C03": "criteria.C03.safety",
+        "C04": "criteria.C04.safety",
+        "C05": "criteria.C05.safety",
+        "C06": "criteria.C06.safety",
+        "C07": "criteria.C07.safety",
+        "C08": "criteria.C08.safety",
+        "C09": "criteria.C09.safety",
+        "C10": "criteria.C10.safety",
+        "C11": "criteria.C11.safety",
+        "C12": "criteria.C12.safety",
+        "X01": "criteria.X01.safety",
+        "X02": "criteria.X02.safety",
+        "X03": "criteria.X03.safety",
+        "X04": "criteria.X04.safety",
+        "X05": "criteria.X05.safety",
+        "X06": "criteria.X06.safety",
+        "X07": "criteria.X07.safety",
+        "X08": "criteria.X08.safety"
+      }
+    },
+    {
+      "path": "integration/test_mcs_recovery_narrative.py",
+      "P_sha256": "94a507574e758b8cdc88898ab60b0bf3fc6d5085d626035a5c9f3e788d77fad1",
+      "P_bytes": 40062,
+      "P_lines": 919,
+      "W_sha256": "94a507574e758b8cdc88898ab60b0bf3fc6d5085d626035a5c9f3e788d77fad1",
+      "W_bytes": 40062,
+      "W_lines": 919,
+      "module": "lifecycle",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          490
+        ],
+        [
+          491,
+          740
+        ],
+        [
+          741,
+          919
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "合成ingest→admission/v4→全parts→consentrestore/reconcile→readmodel/export世代のorderedE2E。",
+      "callers": [
+        "scripts/run_tests.sh integration/test_mcs_recovery_narrative.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "integration/test_pinned_sdk_versions.py",
+      "P_sha256": "c83cb2c3927fef4c56d16f147cf0b160e040687f6c0cd6d423ed4f85b180f224",
+      "P_bytes": 4211,
+      "P_lines": 99,
+      "W_sha256": "39e9f42c4c1c7e0e309eb8b44a61a5de9b6ee4a4b528dbbdb3b02d934d0c69b4",
+      "W_bytes": 4220,
+      "W_lines": 100,
+      "module": "sdk",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          99
+        ]
+      ],
+      "W_review": "P全文＋全P→Wdiff hunk全文の合成確認",
+      "full_read_verified": true,
+      "responsibility": "actualdistribution pinsとimmutableHermes archive/sourcebyteを実SDKlaneで検証。",
+      "callers": [
+        "scripts/check_pinned_sdks.sh",
+        ".github/workflows/ci.yml"
+      ],
+      "flow": "check_pinned_sdks.sh→explicit immutable source/interpreter/pins/nonempty lane検証→公式SDKの合成transportを実呼出→synthetic receipt/collection→独立lane result。実service起動なし。",
+      "criteria": {
+        "C01": "criteria.C01.sdk",
+        "C02": "criteria.C02.sdk",
+        "C03": "criteria.C03.sdk",
+        "C04": "criteria.C04.sdk",
+        "C05": "criteria.C05.sdk",
+        "C06": "criteria.C06.sdk",
+        "C07": "criteria.C07.sdk",
+        "C08": "criteria.C08.sdk",
+        "C09": "criteria.C09.sdk",
+        "C10": "criteria.C10.sdk",
+        "C11": "criteria.C11.sdk",
+        "C12": "criteria.C12.sdk",
+        "X01": "criteria.X01.sdk",
+        "X02": "criteria.X02.sdk",
+        "X03": "criteria.X03.sdk",
+        "X04": "criteria.X04.sdk",
+        "X05": "criteria.X05.sdk",
+        "X06": "criteria.X06.sdk",
+        "X07": "criteria.X07.sdk",
+        "X08": "criteria.X08.sdk"
+      }
+    },
+    {
+      "path": "mcs/extract/v1/extract.py",
+      "P_sha256": "a5773aac58d2ae09f2c719526cac9fbb06cae23516be9fa2c24385064fe3be87",
+      "P_bytes": 22123,
+      "P_lines": 515,
+      "W_sha256": "804ea91fe97aea21f251e0605dcb6767fd741a6472a7b6ce88c4e9143bdc5d85",
+      "W_bytes": 22434,
+      "W_lines": 520,
+      "module": "rules",
+      "kind": "source",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          260
+        ],
+        [
+          261,
+          515
+        ]
+      ],
+      "W_review": "P全文＋全P→Wdiff hunk全文の合成確認",
+      "full_read_verified": true,
+      "responsibility": "保存済本文のruleextract、hash/version/deadline/staleartifact更新とCLIlock。",
+      "callers": [
+        "mcs/ingest/run_check.py:1167",
+        "mcs/extract/rollup.py",
+        "mcs/core/queries.py",
+        "mcs/views/",
+        "mcs/ops/mcs_signals.py"
+      ],
+      "flow": "run_check/main→run.lock+保存済full本文/current hash→run_pendingのbounded chunkと純粋extract_message→extract_v1 artifact hash/RULE_VERSION→rollup/queries/views/signals。LLM/MCS再取得なし。",
+      "criteria": {
+        "C01": "criteria.C01.rules",
+        "C02": "criteria.C02.rules",
+        "C03": "criteria.C03.rules",
+        "C04": "criteria.C04.rules",
+        "C05": "criteria.C05.rules",
+        "C06": "criteria.C06.rules",
+        "C07": "criteria.C07.rules",
+        "C08": "criteria.C08.rules",
+        "C09": "criteria.C09.rules",
+        "C10": "criteria.C10.rules",
+        "C11": "criteria.C11.rules",
+        "C12": "criteria.C12.rules",
+        "X01": "criteria.X01.rules",
+        "X02": "criteria.X02.rules",
+        "X03": "criteria.X03.rules",
+        "X04": "criteria.X04.rules",
+        "X05": "criteria.X05.rules",
+        "X06": "criteria.X06.rules",
+        "X07": "criteria.X07.rules",
+        "X08": "criteria.X08.rules"
+      }
+    },
+    {
+      "path": "pyproject.toml",
+      "P_sha256": "6f15794655843128d500e5832ecbbd14861d796921a795aef5442332ce7d5722",
+      "P_bytes": 298,
+      "P_lines": 11,
+      "W_sha256": "6f15794655843128d500e5832ecbbd14861d796921a795aef5442332ce7d5722",
+      "W_bytes": 298,
+      "W_lines": 11,
+      "module": "workflow",
+      "kind": "config",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          11
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "Python>=3.10とRuff/pytest project検証設定。",
+      "callers": [
+        "pytest",
+        "ruff",
+        "Makefile"
+      ],
+      "flow": "PR/push/schedule/tag/manual workflow→permissions/branch/pin/secret指定→test/lint/generator又は承認済workflow機能→CI artifacts/docs/release draft→reviewer。今回はworkflowを起動せず全文契約確認だけ。",
+      "criteria": {
+        "C01": "criteria.C01.workflow",
+        "C02": "criteria.C02.workflow",
+        "C03": "criteria.C03.workflow",
+        "C04": "criteria.C04.workflow",
+        "C05": "criteria.C05.workflow",
+        "C06": "criteria.C06.workflow",
+        "C07": "criteria.C07.workflow",
+        "C08": "criteria.C08.workflow",
+        "C09": "criteria.C09.workflow",
+        "C10": "criteria.C10.workflow",
+        "C11": "criteria.C11.workflow",
+        "C12": "criteria.C12.workflow",
+        "X01": "criteria.X01.workflow",
+        "X02": "criteria.X02.workflow",
+        "X03": "criteria.X03.workflow",
+        "X04": "criteria.X04.workflow",
+        "X05": "criteria.X05.workflow",
+        "X06": "criteria.X06.workflow",
+        "X07": "criteria.X07.workflow",
+        "X08": "criteria.X08.workflow"
+      }
+    },
+    {
+      "path": "scripts/check_pinned_sdks.sh",
+      "P_sha256": "d40727c9b2ecc00b0acafa8b8584814e776a0d8b92e8011201bbf0adfb04dcf8",
+      "P_bytes": 1506,
+      "P_lines": 32,
+      "W_sha256": "d40727c9b2ecc00b0acafa8b8584814e776a0d8b92e8011201bbf0adfb04dcf8",
+      "W_bytes": 1506,
+      "W_lines": 32,
+      "module": "sdk",
+      "kind": "source",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          32
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "immutableHermes/standalone exactSDK laneをnonemptyrequiredcollectionで起動。",
+      "callers": [
+        ".github/workflows/ci.yml",
+        "tests/meta/test_sdk_ci_lanes.py"
+      ],
+      "flow": "check_pinned_sdks.sh→explicit immutable source/interpreter/pins/nonempty lane検証→公式SDKの合成transportを実呼出→synthetic receipt/collection→独立lane result。実service起動なし。",
+      "criteria": {
+        "C01": "criteria.C01.sdk",
+        "C02": "criteria.C02.sdk",
+        "C03": "criteria.C03.sdk",
+        "C04": "criteria.C04.sdk",
+        "C05": "criteria.C05.sdk",
+        "C06": "criteria.C06.sdk",
+        "C07": "criteria.C07.sdk",
+        "C08": "criteria.C08.sdk",
+        "C09": "criteria.C09.sdk",
+        "C10": "criteria.C10.sdk",
+        "C11": "criteria.C11.sdk",
+        "C12": "criteria.C12.sdk",
+        "X01": "criteria.X01.sdk",
+        "X02": "criteria.X02.sdk",
+        "X03": "criteria.X03.sdk",
+        "X04": "criteria.X04.sdk",
+        "X05": "criteria.X05.sdk",
+        "X06": "criteria.X06.sdk",
+        "X07": "criteria.X07.sdk",
+        "X08": "criteria.X08.sdk"
+      }
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "P_sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "P_bytes": 1358,
+      "P_lines": 46,
+      "W_sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "W_bytes": 1358,
+      "W_lines": 46,
+      "module": "sdk",
+      "kind": "source",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          46
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "tempHOME/env-iを設けて指定interpreterのpytestを起動、認証環境を持ち込まない。",
+      "callers": [
+        "Makefile",
+        ".github/workflows/ci.yml",
+        "scripts/check_pinned_sdks.sh"
+      ],
+      "flow": "check_pinned_sdks.sh→explicit immutable source/interpreter/pins/nonempty lane検証→公式SDKの合成transportを実呼出→synthetic receipt/collection→独立lane result。実service起動なし。",
+      "criteria": {
+        "C01": "criteria.C01.sdk",
+        "C02": "criteria.C02.sdk",
+        "C03": "criteria.C03.sdk",
+        "C04": "criteria.C04.sdk",
+        "C05": "criteria.C05.sdk",
+        "C06": "criteria.C06.sdk",
+        "C07": "criteria.C07.sdk",
+        "C08": "criteria.C08.sdk",
+        "C09": "criteria.C09.sdk",
+        "C10": "criteria.C10.sdk",
+        "C11": "criteria.C11.sdk",
+        "C12": "criteria.C12.sdk",
+        "X01": "criteria.X01.sdk",
+        "X02": "criteria.X02.sdk",
+        "X03": "criteria.X03.sdk",
+        "X04": "criteria.X04.sdk",
+        "X05": "criteria.X05.sdk",
+        "X06": "criteria.X06.sdk",
+        "X07": "criteria.X07.sdk",
+        "X08": "criteria.X08.sdk"
+      }
+    },
+    {
+      "path": "tests/conftest.py",
+      "P_sha256": "4d9b63c62c42873bd9ee00d7c6d251c866cc44191ed2c7d16c13ab195b0ac452",
+      "P_bytes": 9335,
+      "P_lines": 237,
+      "W_sha256": "4d9b63c62c42873bd9ee00d7c6d251c866cc44191ed2c7d16c13ab195b0ac452",
+      "W_bytes": 9335,
+      "W_lines": 237,
+      "module": "safety",
+      "kind": "source",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          237
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "helperflat import・tempHOME・env消去・network/process/runtimeguard。",
+      "callers": [
+        "root conftest.py",
+        "integration/sdk_safety.py",
+        "all synthetic tests"
+      ],
+      "flow": "pytest/root conftest→isolated HOME・env消去・socket/process遮断→synthetic fixture実行→temp DB/files/log→pytest assertion。worktree自体はsandboxではない。",
+      "criteria": {
+        "C01": "criteria.C01.safety",
+        "C02": "criteria.C02.safety",
+        "C03": "criteria.C03.safety",
+        "C04": "criteria.C04.safety",
+        "C05": "criteria.C05.safety",
+        "C06": "criteria.C06.safety",
+        "C07": "criteria.C07.safety",
+        "C08": "criteria.C08.safety",
+        "C09": "criteria.C09.safety",
+        "C10": "criteria.C10.safety",
+        "C11": "criteria.C11.safety",
+        "C12": "criteria.C12.safety",
+        "X01": "criteria.X01.safety",
+        "X02": "criteria.X02.safety",
+        "X03": "criteria.X03.safety",
+        "X04": "criteria.X04.safety",
+        "X05": "criteria.X05.safety",
+        "X06": "criteria.X06.safety",
+        "X07": "criteria.X07.safety",
+        "X08": "criteria.X08.safety"
+      }
+    },
+    {
+      "path": "tests/fixtures/schema_upgrade/bootstrap-target.py",
+      "P_sha256": "a02cda79680d0dd64a2845309aa4fb2d62b137d7ceb9f6a0e0ef344166bc6520",
+      "P_bytes": 298,
+      "P_lines": 8,
+      "W_sha256": "a02cda79680d0dd64a2845309aa4fb2d62b137d7ceb9f6a0e0ef344166bc6520",
+      "W_bytes": 298,
+      "W_lines": 8,
+      "module": "lifecycle",
+      "kind": "fixture",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/fixtures/schema_upgrade/core-seed.sql",
+      "P_sha256": "6e5ea26cd4d6519dce1b86cf5d80f5e5665a739218089eebfaa86b8a91ba1feb",
+      "P_bytes": 4365,
+      "P_lines": 73,
+      "W_sha256": "6e5ea26cd4d6519dce1b86cf5d80f5e5665a739218089eebfaa86b8a91ba1feb",
+      "W_bytes": 4365,
+      "W_lines": 73,
+      "module": "lifecycle",
+      "kind": "fixture",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          73
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/fixtures/schema_upgrade/metadata-seed.sql",
+      "P_sha256": "c91a27d1adf9451e8922113c8f3d586adc12b21c9f52051e234067fd2ed36cb6",
+      "P_bytes": 478,
+      "P_lines": 8,
+      "W_sha256": "c91a27d1adf9451e8922113c8f3d586adc12b21c9f52051e234067fd2ed36cb6",
+      "W_bytes": 478,
+      "W_lines": 8,
+      "module": "lifecycle",
+      "kind": "fixture",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/fixtures/schema_upgrade/notification-seed.sql",
+      "P_sha256": "bb75f29bdeb1e0081c9ccf5cd20e16edf94b12e4c59f1b1b48be09bc784e6200",
+      "P_bytes": 2442,
+      "P_lines": 38,
+      "W_sha256": "bb75f29bdeb1e0081c9ccf5cd20e16edf94b12e4c59f1b1b48be09bc784e6200",
+      "W_bytes": 2442,
+      "W_lines": 38,
+      "module": "lifecycle",
+      "kind": "fixture",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          38
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/fixtures/schema_upgrade/origins.json",
+      "P_sha256": "a3c29282fbfd0f7090f4cb4419fc0342b0168992a692360103449a00130e3bb2",
+      "P_bytes": 11575,
+      "P_lines": 258,
+      "W_sha256": "a3c29282fbfd0f7090f4cb4419fc0342b0168992a692360103449a00130e3bb2",
+      "W_bytes": 11575,
+      "W_lines": 258,
+      "module": "lifecycle",
+      "kind": "fixture",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          258
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/fixtures/schema_upgrade/shape-1.sql",
+      "P_sha256": "9b5b75dc8b1df92facb2cec7360859220cfe8e9a701c32a912448bfe1621bcce",
+      "P_bytes": 5113,
+      "P_lines": 126,
+      "W_sha256": "9b5b75dc8b1df92facb2cec7360859220cfe8e9a701c32a912448bfe1621bcce",
+      "W_bytes": 5113,
+      "W_lines": 126,
+      "module": "lifecycle",
+      "kind": "fixture",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          126
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/fixtures/schema_upgrade/shape-2.sql",
+      "P_sha256": "0a8f4bc5ed9a3da27c43fb3dd5884e4a79e6c47f649b0d5f5a9c9266f221ced0",
+      "P_bytes": 11226,
+      "P_lines": 292,
+      "W_sha256": "0a8f4bc5ed9a3da27c43fb3dd5884e4a79e6c47f649b0d5f5a9c9266f221ced0",
+      "W_bytes": 11226,
+      "W_lines": 292,
+      "module": "lifecycle",
+      "kind": "fixture",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          292
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/fixtures/schema_upgrade/shape-3.sql",
+      "P_sha256": "8b994ecf27ded0737ca407d19115ef078f5c3d29ef6ba3a6a97342515bd162c0",
+      "P_bytes": 11508,
+      "P_lines": 301,
+      "W_sha256": "8b994ecf27ded0737ca407d19115ef078f5c3d29ef6ba3a6a97342515bd162c0",
+      "W_bytes": 11508,
+      "W_lines": 301,
+      "module": "lifecycle",
+      "kind": "fixture",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          301
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/fixtures/schema_upgrade/shape-4.sql",
+      "P_sha256": "f3c21805eaca20dd23b6b02bc4233ee4462e658fb9b22cadcbfeb7645483df7b",
+      "P_bytes": 11602,
+      "P_lines": 301,
+      "W_sha256": "f3c21805eaca20dd23b6b02bc4233ee4462e658fb9b22cadcbfeb7645483df7b",
+      "W_bytes": 11602,
+      "W_lines": 301,
+      "module": "lifecycle",
+      "kind": "fixture",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          301
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/fixtures/schema_upgrade/shape-5.sql",
+      "P_sha256": "c6b1f02feb9e1be8a3eae3dea811a89951d1dfc80aedc9b0f976b8c2fae2625b",
+      "P_bytes": 12366,
+      "P_lines": 318,
+      "W_sha256": "c6b1f02feb9e1be8a3eae3dea811a89951d1dfc80aedc9b0f976b8c2fae2625b",
+      "W_bytes": 12366,
+      "W_lines": 318,
+      "module": "lifecycle",
+      "kind": "fixture",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          318
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/fixtures/schema_upgrade/shape-6.sql",
+      "P_sha256": "af4ae0860944ed07a489b08906eba22a3fad93a66dd292b16874ce8886ef4b7a",
+      "P_bytes": 4892,
+      "P_lines": 120,
+      "W_sha256": "af4ae0860944ed07a489b08906eba22a3fad93a66dd292b16874ce8886ef4b7a",
+      "W_bytes": 4892,
+      "W_lines": 120,
+      "module": "lifecycle",
+      "kind": "fixture",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          120
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/fixtures/schema_upgrade/update-paths.json",
+      "P_sha256": "863bb8aca3541c8120a8fe1029f5920164e9b5034f6757e4cb08bc183c9ca509",
+      "P_bytes": 7791,
+      "P_lines": 92,
+      "W_sha256": "863bb8aca3541c8120a8fe1029f5920164e9b5034f6757e4cb08bc183c9ca509",
+      "W_bytes": 7791,
+      "W_lines": 92,
+      "module": "lifecycle",
+      "kind": "fixture",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          92
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成schema upgrade資産。DDLは空のhistorical DBから、seedはsyntheticだけ。origin/provenance/SHA/current経路の正本。",
+      "callers": [
+        "tests/core/test_supported_schema_upgrade.py",
+        "tests/ops/test_supported_update_paths.py"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/meta/test_c1_export_gates.py",
+      "P_sha256": "66133e3ddc5a2cb2b152202b5e5b1ba392a2b574ec50fe9a22e1810e0ed18583",
+      "P_bytes": 2181,
+      "P_lines": 50,
+      "W_sha256": "66133e3ddc5a2cb2b152202b5e5b1ba392a2b574ec50fe9a22e1810e0ed18583",
+      "W_bytes": 2181,
+      "W_lines": 50,
+      "module": "ci",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          50
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成回帰: ci/gates.py:C1/extension import境界",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "CI/make→指定source/recordの構文/参照制約→AST/literal gateとincident照合→stdout/exit→workflow fail。判定成功はruntime動作保証ではない。",
+      "criteria": {
+        "C01": "criteria.C01.ci",
+        "C02": "criteria.C02.ci",
+        "C03": "criteria.C03.ci",
+        "C04": "criteria.C04.ci",
+        "C05": "criteria.C05.ci",
+        "C06": "criteria.C06.ci",
+        "C07": "criteria.C07.ci",
+        "C08": "criteria.C08.ci",
+        "C09": "criteria.C09.ci",
+        "C10": "criteria.C10.ci",
+        "C11": "criteria.C11.ci",
+        "C12": "criteria.C12.ci",
+        "X01": "criteria.X01.ci",
+        "X02": "criteria.X02.ci",
+        "X03": "criteria.X03.ci",
+        "X04": "criteria.X04.ci",
+        "X05": "criteria.X05.ci",
+        "X06": "criteria.X06.ci",
+        "X07": "criteria.X07.ci",
+        "X08": "criteria.X08.ci"
+      }
+    },
+    {
+      "path": "tests/meta/test_ci_scripts.py",
+      "P_sha256": "20d17b93801f37372e66d95085363ae8f6fa4e09f45651efa2a907f07f4d5044",
+      "P_bytes": 14449,
+      "P_lines": 316,
+      "W_sha256": "98cd0e4fef934b52baa8fc420d3858cc6e0aac10bce09b0226dfffa7b84ab871",
+      "W_bytes": 15163,
+      "W_lines": 331,
+      "module": "ci",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          316
+        ]
+      ],
+      "W_review": "P全文＋全P→Wdiff hunk全文の合成確認",
+      "full_read_verified": true,
+      "responsibility": "完全合成回帰: ci/gates.py,ci/mine_gates.py,scripts/development/update_readme.py",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "CI/make→指定source/recordの構文/参照制約→AST/literal gateとincident照合→stdout/exit→workflow fail。判定成功はruntime動作保証ではない。",
+      "criteria": {
+        "C01": "criteria.C01.ci",
+        "C02": "criteria.C02.ci",
+        "C03": "criteria.C03.ci",
+        "C04": "criteria.C04.ci",
+        "C05": "criteria.C05.ci",
+        "C06": "criteria.C06.ci",
+        "C07": "criteria.C07.ci",
+        "C08": "criteria.C08.ci",
+        "C09": "criteria.C09.ci",
+        "C10": "criteria.C10.ci",
+        "C11": "criteria.C11.ci",
+        "C12": "criteria.C12.ci",
+        "X01": "criteria.X01.ci",
+        "X02": "criteria.X02.ci",
+        "X03": "criteria.X03.ci",
+        "X04": "criteria.X04.ci",
+        "X05": "criteria.X05.ci",
+        "X06": "criteria.X06.ci",
+        "X07": "criteria.X07.ci",
+        "X08": "criteria.X08.ci"
+      }
+    },
+    {
+      "path": "tests/meta/test_deployment_scripts.py",
+      "P_sha256": "ffe0f86c54ef70839f0f76f2dc16b02ee15bcb94b137f698549d4f89ea066896",
+      "P_bytes": 6189,
+      "P_lines": 133,
+      "W_sha256": "ffe0f86c54ef70839f0f76f2dc16b02ee15bcb94b137f698549d4f89ea066896",
+      "W_bytes": 6189,
+      "W_lines": 133,
+      "module": "lifecycle",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          133
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成回帰: deployment/scripts mcs_check/llamacpp wrapper",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/meta/test_install_sh.py",
+      "P_sha256": "1366b56c68139b2be1deaa373b19b3c71788dd70ac2061c0dbfaf3e074d7c7be",
+      "P_bytes": 50401,
+      "P_lines": 1162,
+      "W_sha256": "1366b56c68139b2be1deaa373b19b3c71788dd70ac2061c0dbfaf3e074d7c7be",
+      "W_bytes": 50401,
+      "W_lines": 1162,
+      "module": "lifecycle",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          260
+        ],
+        [
+          1,
+          260
+        ],
+        [
+          261,
+          520
+        ],
+        [
+          521,
+          780
+        ],
+        [
+          781,
+          1040
+        ],
+        [
+          1041,
+          1162
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成回帰: install.sh 六段階/一時HOME/PATHstub",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/meta/test_install_sh_standalone.py",
+      "P_sha256": "d00fa437730d56db44504347f323578846659da80d5874c2f1d85f045e880369",
+      "P_bytes": 5705,
+      "P_lines": 118,
+      "W_sha256": "d00fa437730d56db44504347f323578846659da80d5874c2f1d85f045e880369",
+      "W_bytes": 5705,
+      "W_lines": 118,
+      "module": "lifecycle",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          118
+        ],
+        [
+          100,
+          118
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成回帰: install.sh mode選択/standalone/noHermes",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/meta/test_integration_guard_load.py",
+      "P_sha256": "bbc6cf9d19926617e890a954e03938e596abaa0a353983ad6ecdf416b1244b35",
+      "P_bytes": 1118,
+      "P_lines": 23,
+      "W_sha256": "bbc6cf9d19926617e890a954e03938e596abaa0a353983ad6ecdf416b1244b35",
+      "W_bytes": 1118,
+      "W_lines": 23,
+      "module": "safety",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          23
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成回帰: root/integration conftest",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "pytest/root conftest→isolated HOME・env消去・socket/process遮断→synthetic fixture実行→temp DB/files/log→pytest assertion。worktree自体はsandboxではない。",
+      "criteria": {
+        "C01": "criteria.C01.safety",
+        "C02": "criteria.C02.safety",
+        "C03": "criteria.C03.safety",
+        "C04": "criteria.C04.safety",
+        "C05": "criteria.C05.safety",
+        "C06": "criteria.C06.safety",
+        "C07": "criteria.C07.safety",
+        "C08": "criteria.C08.safety",
+        "C09": "criteria.C09.safety",
+        "C10": "criteria.C10.safety",
+        "C11": "criteria.C11.safety",
+        "C12": "criteria.C12.safety",
+        "X01": "criteria.X01.safety",
+        "X02": "criteria.X02.safety",
+        "X03": "criteria.X03.safety",
+        "X04": "criteria.X04.safety",
+        "X05": "criteria.X05.safety",
+        "X06": "criteria.X06.safety",
+        "X07": "criteria.X07.safety",
+        "X08": "criteria.X08.safety"
+      }
+    },
+    {
+      "path": "tests/meta/test_launchagent_templates.py",
+      "P_sha256": "a7a4d6c30da2e595d9cfaed3fcbcee47e09618e06900e8cc6b7b37578476f4b1",
+      "P_bytes": 434,
+      "P_lines": 13,
+      "W_sha256": "a7a4d6c30da2e595d9cfaed3fcbcee47e09618e06900e8cc6b7b37578476f4b1",
+      "W_bytes": 434,
+      "W_lines": 13,
+      "module": "lifecycle",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          13
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成回帰: deployment/launchagents private umask",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/meta/test_lineworks_service.py",
+      "P_sha256": "28fcb1e57e8df43c742b8b024566f6cbf8649354fbc1d87b09b8ba810de4fb2f",
+      "P_bytes": 4781,
+      "P_lines": 104,
+      "W_sha256": "28fcb1e57e8df43c742b8b024566f6cbf8649354fbc1d87b09b8ba810de4fb2f",
+      "W_bytes": 4781,
+      "W_lines": 104,
+      "module": "lifecycle",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          104
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成回帰: adapters/lineworks/service.py private native candidates",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/meta/test_mcs_recover.py",
+      "P_sha256": "b6b98f7203315117773c372a57b4b090c3049c96a45db2e591d38f92b0a520fa",
+      "P_bytes": 60735,
+      "P_lines": 1443,
+      "W_sha256": "b6b98f7203315117773c372a57b4b090c3049c96a45db2e591d38f92b0a520fa",
+      "W_bytes": 60735,
+      "W_lines": 1443,
+      "module": "lifecycle",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          500
+        ],
+        [
+          501,
+          750
+        ],
+        [
+          751,
+          1000
+        ],
+        [
+          1001,
+          1250
+        ],
+        [
+          1251,
+          1443
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成回帰: deployment/recovery/mcs_recover.py interruptedapply/consent/locks",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/meta/test_mcs_recover_py39.py",
+      "P_sha256": "c2f2ebd49392c4c775a5238c823f59155f3d1c765c5618ebe50e35a41b0c0b97",
+      "P_bytes": 1791,
+      "P_lines": 42,
+      "W_sha256": "c2f2ebd49392c4c775a5238c823f59155f3d1c765c5618ebe50e35a41b0c0b97",
+      "W_bytes": 1791,
+      "W_lines": 42,
+      "module": "lifecycle",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          42
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成回帰: deployment/recovery/mcs_recover.py grammar3.9限定",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/meta/test_sdk_ci_lanes.py",
+      "P_sha256": "ec02b272cf01b6ceab60adfb0dabfb90f072511c237e96e428f5604406ea62a3",
+      "P_bytes": 1591,
+      "P_lines": 37,
+      "W_sha256": "74d1fe08a16bb5f8757a5ca9150d706cc133a642cf6a347afa2706cf6fea9539",
+      "W_bytes": 2203,
+      "W_lines": 53,
+      "module": "sdk",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          37
+        ]
+      ],
+      "W_review": "P全文＋全P→Wdiff hunk全文の合成確認",
+      "full_read_verified": true,
+      "responsibility": "完全合成回帰: integration/sdk_safety.py,check_pinned_sdks.sh",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "check_pinned_sdks.sh→explicit immutable source/interpreter/pins/nonempty lane検証→公式SDKの合成transportを実呼出→synthetic receipt/collection→独立lane result。実service起動なし。",
+      "criteria": {
+        "C01": "criteria.C01.sdk",
+        "C02": "criteria.C02.sdk",
+        "C03": "criteria.C03.sdk",
+        "C04": "criteria.C04.sdk",
+        "C05": "criteria.C05.sdk",
+        "C06": "criteria.C06.sdk",
+        "C07": "criteria.C07.sdk",
+        "C08": "criteria.C08.sdk",
+        "C09": "criteria.C09.sdk",
+        "C10": "criteria.C10.sdk",
+        "C11": "criteria.C11.sdk",
+        "C12": "criteria.C12.sdk",
+        "X01": "criteria.X01.sdk",
+        "X02": "criteria.X02.sdk",
+        "X03": "criteria.X03.sdk",
+        "X04": "criteria.X04.sdk",
+        "X05": "criteria.X05.sdk",
+        "X06": "criteria.X06.sdk",
+        "X07": "criteria.X07.sdk",
+        "X08": "criteria.X08.sdk"
+      }
+    },
+    {
+      "path": "tests/meta/test_watchdog_wrappers.py",
+      "P_sha256": "caaa601f86731eacd3f0397bfffc661388b826b4c1fc7e11831f9472b0d2182e",
+      "P_bytes": 2072,
+      "P_lines": 48,
+      "W_sha256": "caaa601f86731eacd3f0397bfffc661388b826b4c1fc7e11831f9472b0d2182e",
+      "W_bytes": 2072,
+      "W_lines": 48,
+      "module": "lifecycle",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "read_ranges": [
+        [
+          1,
+          48
+        ]
+      ],
+      "W_review": "P/W SHA一致で全文確認を再利用",
+      "full_read_verified": true,
+      "responsibility": "完全合成回帰: deployment mcs_check/deep+setup grace contract",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+      "criteria": {
+        "C01": "criteria.C01.lifecycle",
+        "C02": "criteria.C02.lifecycle",
+        "C03": "criteria.C03.lifecycle",
+        "C04": "criteria.C04.lifecycle",
+        "C05": "criteria.C05.lifecycle",
+        "C06": "criteria.C06.lifecycle",
+        "C07": "criteria.C07.lifecycle",
+        "C08": "criteria.C08.lifecycle",
+        "C09": "criteria.C09.lifecycle",
+        "C10": "criteria.C10.lifecycle",
+        "C11": "criteria.C11.lifecycle",
+        "C12": "criteria.C12.lifecycle",
+        "X01": "criteria.X01.lifecycle",
+        "X02": "criteria.X02.lifecycle",
+        "X03": "criteria.X03.lifecycle",
+        "X04": "criteria.X04.lifecycle",
+        "X05": "criteria.X05.lifecycle",
+        "X06": "criteria.X06.lifecycle",
+        "X07": "criteria.X07.lifecycle",
+        "X08": "criteria.X08.lifecycle"
+      }
+    },
+    {
+      "path": "tests/extract/test_extract_packet5_regressions.py",
+      "P_sha256": null,
+      "P_bytes": 0,
+      "P_lines": 0,
+      "W_sha256": "d3b40dee06ea5aa659c463a0f29d48c6b15ec69096c6ded7e9f42932b6a9691a",
+      "W_bytes": 5454,
+      "W_lines": 110,
+      "module": "rules",
+      "kind": "test",
+      "state": "REVIEWED",
+      "read_ref": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "read_ranges": [
+        [
+          1,
+          110
+        ]
+      ],
+      "W_review": "newfile全文read",
+      "full_read_verified": true,
+      "responsibility": "完全合成回帰: extract.py badmeta/UTC/date/deadline/generation",
+      "callers": [
+        "pytest",
+        "scripts/run_tests.sh"
+      ],
+      "flow": "run_check/main→run.lock+保存済full本文/current hash→run_pendingのbounded chunkと純粋extract_message→extract_v1 artifact hash/RULE_VERSION→rollup/queries/views/signals。LLM/MCS再取得なし。",
+      "criteria": {
+        "C01": "criteria.C01.rules",
+        "C02": "criteria.C02.rules",
+        "C03": "criteria.C03.rules",
+        "C04": "criteria.C04.rules",
+        "C05": "criteria.C05.rules",
+        "C06": "criteria.C06.rules",
+        "C07": "criteria.C07.rules",
+        "C08": "criteria.C08.rules",
+        "C09": "criteria.C09.rules",
+        "C10": "criteria.C10.rules",
+        "C11": "criteria.C11.rules",
+        "C12": "criteria.C12.rules",
+        "X01": "criteria.X01.rules",
+        "X02": "criteria.X02.rules",
+        "X03": "criteria.X03.rules",
+        "X04": "criteria.X04.rules",
+        "X05": "criteria.X05.rules",
+        "X06": "criteria.X06.rules",
+        "X07": "criteria.X07.rules",
+        "X08": "criteria.X08.rules"
+      }
+    }
+  ],
+  "flows": {
+    "ci": "CI/make→指定source/recordの構文/参照制約→AST/literal gateとincident照合→stdout/exit→workflow fail。判定成功はruntime動作保証ではない。",
+    "safety": "pytest/root conftest→isolated HOME・env消去・socket/process遮断→synthetic fixture実行→temp DB/files/log→pytest assertion。worktree自体はsandboxではない。",
+    "sdk": "check_pinned_sdks.sh→explicit immutable source/interpreter/pins/nonempty lane検証→公式SDKの合成transportを実呼出→synthetic receipt/collection→独立lane result。実service起動なし。",
+    "workflow": "PR/push/schedule/tag/manual workflow→permissions/branch/pin/secret指定→test/lint/generator又は承認済workflow機能→CI artifacts/docs/release draft→reviewer。今回はworkflowを起動せず全文契約確認だけ。",
+    "lifecycle": "synthetic installer/recovery/update test→private root/path/consent/runtime/owner/lock検証→real local migration/backup/reconcileとstub service/Git/HTTP→temp state/DB/receipts→assertion。実OS service適用の証明ではない。",
+    "rules": "run_check/main→run.lock+保存済full本文/current hash→run_pendingのbounded chunkと純粋extract_message→extract_v1 artifact hash/RULE_VERSION→rollup/queries/views/signals。LLM/MCS再取得なし。"
+  },
+  "criteria": {
+    "C01": {
+      "ci": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "10 gateの責務とincident manifestを全文照合。F04/F05はregex/既存独立入口guardの局所整合、抽象化追加なし。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "rootとintegration conftestは既存tests/conftest guardを同一プロセスへ導入。socket markerの二重導入回避とimport rootsを確認。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "SDK専用script/laneとcore runnerを分離。F03はoptional module importのtomllibを既存3.11 Hermes lane内へ移動。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "CI checksとmain-only generated sync、OpenWiki生成、release notes draft jobsの責務/branch triggerを全文確認。今回workflow編集なし。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "12schemafixturesとmeta installer/recovery/wrappers/native service tests、919行E2Eのsource→consumerを全文確認。親所有install/update/recovery sourceはreadonlyでstub境界を照合。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "純粋extract_messageとDBrun_pending/mainの責務を維持。全515行+新110行回帰を確認、共有helper編集なし。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "C02": {
+      "ci": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "covered/open/manifest欠落/parse失敗は別状態。AST SyntaxErrorを空集合や成功へ変換しない。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "MCS_TEST_SANDBOX=1、temp HOME/XDG/TMP、認証env除去を保持。SDK lane collectionはguard load後に行う。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "明示laneなしは既存skip契約、required laneはSDK/source不一致・空collectionを拒否。skipをpinned lane成功に数えない。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "PRcheck生成drift、tagversion条件、OpenWiki partial結果→PR保存後failureなど成功/部分失敗状態を区別。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "六段階install/partialfailure rerun、consenthold/unknownjournal/backup ownership、runtime/SHA/日時境界を異常系で確認。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "F01 invalidmetaがstalefalseになり再生成停止→ELSE1。F02 Python3.10 Z日時だけ正規化し同等+00:00の日付結果へ。naive/date/invalid境界保持。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "C03": {
+      "ci": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "CI gateはreadonlyでDB transaction/upsert/削除を行わない。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "temp DB/fixtureだけ。pytest設定復元はmonkeypatch、original HOMEを読み込まない。production ledger transactionを開かない。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "SDK pin検査はproduction DB/writerを所有しない。stub transportはsynthetic stateのみ。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "publish concurrency groupとgit diff-empty確認を維持。実GitHub書込み/remote mergeを今回実行しない。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "更新/run flock、commandreceipt、backup byte不変、原column/rows、reopen idempotencyをfixtureconsumerが実SQLiteでassert。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "chunk transactionで旧derived rowsをreplace、正常currenthash冪等、deadline前は旧artifact保持。full以外bodyのstale derived結果は削除、原message/他artifact不変。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "C04": {
+      "ci": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "DDL/migrationを実行せず、既存schemaを改変しない。migration専用fixtureはlifecycle moduleで評価。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "テストguardにmigrationなし。synthetic DB migrationはlifecycle側だけ。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "schema/保存形式のmigrationなし。SDK型は実固定版で確認。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "workflowはDBmigrationを実行しない。fixture CIはsyntheticのみ。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "originのreleasedv1.0.0–12とprerelease schema5/6 staticDDL+hashを照合。FK/index/FTS triggerと途中migration失敗、現forward修復は既存corepacket1再利用。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "RULE_VERSION7→8で既存正常hash旧世代もローカル再生成。DBschema/migration/history保存形式は変更なし。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "C05": {
+      "ci": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "秘密取得禁止、SDK lazy import/file別asyncio/URI readonlyを維持。F05は厳密なnegative OAuth guardを独立Slack2入口だけ許可。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "socket.connect/create_connection/urlopen/CDP/MCS child/Keychain/browser/live authorityを拒否。安全例外は明示monkeypatch/fake transport、設定値から自動解除しない。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "公式SDKの送信/HTTPは合成transport、socket遮断・no-proxy/no-redirectの拒否assertion維持。認証秘密を読まない。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "既定contents read、writeは既存sync/docs/release jobsに限定。GitHub token/LLM secret値を読まずtrigger権限を照合。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "私有path/0700/0600/no-follow、URI delimiters、owner pair、runtime safetygate、human consentreport bindingを維持。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "run.lock配下、SQLparameter化、入力textは命令実行しない。認可/人承認操作を抽出処理に追加しない。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "C06": {
+      "ci": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "dev-recordsはmd/jsonのみ再帰走査。raw PHI/token fixtureなし、結果はソース位置/incident idであり秘密を出力しない。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "env -iとsensitive-name除去、private HOME/state。source fixtureは完全合成、ログは本文/secret実値を含まない。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "分離venv/source metadataのみ、real Hermes設定を読まない。git referenceはarchive byte照合に限定。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "git hygieneはtracked secret/data/envを拒否。OpenWikiの外部LLM送信は既存workflow正本であり今回未実行、audit成果を外部送信しない。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "core/metadata/notification seedとattachmentは完全合成。real DB/secret/PHIなし。ログ/fixture resetはtemp reposだけ。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "保存済本文からだけ再生成、realPHI/secret使わない。JapanesefragmentがMCS再取得不要を明記。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "C07": {
+      "ci": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "gate関数/main exit契約をAST signature比較。--checkだけ問題をexit1、通常heatmapは情報表示。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "runner対象argument/interpreterを明示しPATH/PYTHON/SDK_SOURCE以外の実認証環境を持ち込まない。core stdlib/runtime契約維持。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "lane必須test file collection、immutable source digest/distribution versionsを照合。SDKsend/history型契約はpacket3とisolated integrationで再確認。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "workflow_dispatch/tag/main条件とreleaseversionregexを確認。Makefile/test/lint/script pathは現配置と一致。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "install flag/CLI readonly plan/standalone external apply禁止、recovery grammar3.9限定probeとruntime>=3.10別境界を明示。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "公開9関数signature同一、extract_v1 content/meta構造保持、rule_version値のみ8へ。LLM/ネットワーク依存なし。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "C08": {
+      "ci": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "画面・ユーザー入力保存はない。CI失敗診断はstdout/exitでconsumerに渡す。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "native UI/staleボタンは所有外。guardはUI操作を起動しない。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "native画面描画はSDK contract fakeであり実UI受入を主張しない。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "生成README/DEVELOPMENT・release draftがconsumer。表示契約は生成器へ依存し、RULE8driftは親owner再生成に委譲。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "CLI案内のshell/XML literalpathsとservicecandidateの不正行注入を検証。runtime SDK画面/OS serviceはfakeで実受入とは区別。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "rollup/views/signalsの世代current表示をsourcecallerから照合。UIは所有外で、旧値に戻るfalsecurrentを防ぐ。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "C09": {
+      "ci": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "全Python/record walkはrepo規模の静的処理。新AST parseはfileごと一度、巨大CFG/新外部依存なし。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "guard importはローカルPython/stdlibだけ。bounded workerのlocalhost/127.0.0.1全path拒否を確認。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "import時SDK接続しない。tomllibはHermeslaneのみ遅延、core3.10 collectionに新依存不要。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "uv ephemeral固定pytest/ruff、SDK別job、scheduledwikiのみ外部LLM費用。今回費用/設定を変更しない。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "corpus41facts/多数bodyparts/attachmentsを実moduleで処理、モデル/Jevはfakeと限定budget。deadline/reapの境界をassert。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "bounded100message chunk/単純regex/既存deadline。無根拠な臨床regex追加や機械分割なし。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "C10": {
+      "ci": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "parse/invalid manifestが例外を隠さず失敗。送信/retry/queueは行わずtimeoutはrunner側。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "実process起動前拒否、fake hung childはkill/waitでreap。guard失敗をskipへ変えない。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "sdk_safety guard未導入ならcollection error、expected filesゼロならUsageError。run再試行/実送信なし。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "CI checksの失敗はfail、OpenWikiはalways差分を保存しstep failureを隠さない。release jobは生成checkを先に通す。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "途中update/reinstall失敗、busylock、hungprocess killwait、失われたjournal/ackをunknown/holdに保持し二重送信しない。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "deadline cuts後retryは次run、旧artifactはreplacement前に消さない。無効metaはfresh処理へ、realMCS/LLM呼出なし。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "C11": {
+      "ci": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "F04はcomment/string/docstringの3偽陽性をbefore fail→after pass。F05はlegacy拒否guardのbefore1failとstandalone安全control、秘密取得拒否を維持。名前存在は実行成功/到達性の証明とせず現50参照を別pytest収集照合。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "integration guardloadとmeta live authority異常系は合成拒否をassert。テストfakesはprocess/SDK戻り型契約を維持。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "F03実3.10 collection exit2→new meta regression before1fail→afterpass。固定standalone25/Hermes17件0skipは独立laneの実SDK型で成功。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "workflow sourceとtest_sdk_ci_lanes/mine regressions/生成器bootstrapのconsumerを照合。一時Wcopyではgenerated DEVELOPMENTだけ生成しfamilyの同sourcebytesを維持。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "実SQLite schema原columnと全row/FTS/hash/attachment保存、local shell/Git一部realはtemprepo、network/service/SDK/modelはfake。historical26はroute分類で旧binary実行ではない。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "new28case: badmeta4×bodystate3、deadline4、Zoffset3、naive/date2、invalid6、v7hash1。固定P12fail16safecontrols→Wpass、fullfamilyと最低runtimeも検証。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "C12": {
+      "ci": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "3.10/3.13 runner、Ruff0.16.10、gates10/10、mine --check。shellを誤ってRuffへ渡した非canonical失敗も保持しPython対象/別sh -nへ修正。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "3.10/3.13で同family。shellrunnerはenv-i、TMP trap cleanup、MCS_TEST_PYTHON設定を使い実setup-checkなし。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "pytest9.1.1/固定requirements、actual distribution versions、fd50a275 Hermes15281archive byte照合。3.10 optional import回帰成功。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "pyproject requires-python>=3.10、Ruff/pytest固定版、Makefile commandsとCIを照合。shellはsh -nで検査。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "fixtures動作は3.10/3.13 family、recoverypy39はgrammarだけと明記。plutilは生成candidateのみ、固定SDKは別lane。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "実3.10/3.13比較、stdlib datetime/reだけ、generation8Japanesechangesと親generated DEVELOPMENT。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "X01": {
+      "ci": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "互換runtime公開契約を拒否guard込み照合し廃止しない。配布/起動本体はpacket3証拠と親I。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "実install/start/stopを行わない。独立SDK guardはexplicit lane以外を起動せず別moduleで評価。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "独立install requirementsとHermes pin別contractを維持。venv reuseで新SDK導入/既存実環境更新なし。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "タグはdraft release、mainCHANGELOG同期。今回publish/tag/push/deployなし、生成文書手編集なし。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "install/update/rollback/standalone scheduler/独立recovery/旧newcode契約をsyntheticで検証。実サービス稼働/配備は親承認境界外。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "旧RULE7は保存済本文で自動ローカル再生成、途中deadline次run継続。API/CLI/bootstrap/daemon契約不変更。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "X02": {
+      "ci": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "pin40hex・lazy SDK exact allowlist・CIの依存固定を検査。新取得元/ライセンス/一般adapter権限追加なし。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "PATH shadowはsynthetic executable、SDK assetsは親指定immutable source/venvを再利用。新network installなし。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "固定依存ver/公式source SHA/source byteをassert。親指定referenceとisolated assets、CI pin変更なし。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "actions/checkout@v4/setup-python@v5/cache@v4/uv setup等現pin、npmOpenWiki version、Hermes40hex/SDKfixedを確認。versiontagがimmutableSHAではない既存供給網限界を明記し承認なく全workflow改定しない。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "originsはempty DBのhistoricalDDL provenance+SHAで実患者資料なし。取得origin/referenceとcurrentpathmanifestを保持、新依存追加なし。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "新依存/取得元/SDK/CI権限/ライセンス追加なし。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "X03": {
+      "ci": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "backup/restore/削除を実行しない。records isolationは既存履歴を保持。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "一時HOMEの自作成果物のみtrap清掃、既存履歴/real DB/秘密を複製・削除しない。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "backup/restore/鍵削除をSDK検証では行わない。実認証設定/秘密未アクセス。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "archive/history/生成fragmentを保持。実backup/restore/データ削除をworkflow経由で行わない。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "backup/snapshot/nonmutation/consentheld restore→reconcileを検証。旧journal結果不明は送信完了にせず、派生物再生成と原DB保持を区別。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "本文削除/unknownに旧派生artifactを残さず、fullbodyのrepairdeadlineは旧結果保持。原messageと無関係artifact保持をassert。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "X04": {
+      "ci": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "platform adapterの直接network/process/ambient secret参照を制限。independent例外は既存API契約内、実API不使用。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "socket遮断をHTTP/SDKより下で維持。署名/宛先テストはfake、外部送信なし。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "実SDKクラスとfaketransportによるno-redirect/no-proxy/宛先固定/キャンセル停止を検証。platform APIは一切到達しない。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "OpenWiki外部LLM/ReleaseGitHub連携は明示secret/job権限の既存操作。署名/宛先設定を今回触らず外部call未実行。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "合成Slack/Discordカード/body/file部分配送、SDK型fake、lostack・journal部分欠落と再送保留をE2Eでassert。LINE WORKScandidateもselfhost/Hermes境界を保持。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "ルール抽出は外部送信/署名/配送/取込APIを所有しない。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "X05": {
+      "ci": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "ローカルoffline静的判定。OS service/SDK操作は静的gateだけでは保証せず他module合成検証と区別。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "macOS native plist lintだけ生成candidateへ実行、launchctl/hermes/security等はfake/blocked。OS差のskipは集計に明示。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "offlineローカルSDKのみ。SDKlanelib>=3.11契約を維持、core最低3.10を同一条件に変更しない。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "ローカル3.10/3.13とCI別SDKlaneのOS/runtime差を記録。実Linuxrunner/nativeサービス受入は親最終I境界。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "OSliteralpath/シンボリックリンク、launchd/systemd candidate、SQLiteFTS差を照合。複数schedulerを作らず実systemd/launchd導入なし。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "localoffline、minimumPython3.10Z差を実測修復。新native/FFIなし。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "X06": {
+      "ci": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "plugin sandbox/tick_no_extがtool/ambient権限拡張を防止。実Jev/LLM/MCP呼出なし。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "LLM/Jev実authorityはendpoint pathに関係なく拒否。fake回答/合成医療文だけ処理。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "LLM/MCP/Jev workerは起動しない。Hermes source archiveはimport型照合のみ、gateway実config/実行なし。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "OpenWiki生成LLMのexistingworkflow権限はread source/doc writeに限定。実prompt/tool/secret送信は今回起動しない。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "fakeQwen/Jevのみ、admission token/RT-BACKLOG排他、PASS-onlyv4/readmodelgenerationをE2E確認。外部toolを実起動しない。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "extract/v1はLLM/MCP/tool/記憶を使わない純粋ルール。医療textは実行権限を持たない。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "X07": {
+      "ci": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "医療判断/算定/金銭の規則を所有しない。incident参照整合だけ。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "医療規則は変更せずsynthetic fixtureによる日付/証拠の境界だけ検証。人承認receiptの本条件を弱めない。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "医学規則/適用日/人操作承認の変更なし。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "医学/算定判断をworkflowが変更する契約はない。生成規則はsource文書に従う。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "医療syntheticfactsの落ち/診断状態を区別、記録不足を対応なしと判断しない。restoreは人receiptなしno swap、医学規則変更なし。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "訪問日/予定/薬剤期間の年anchorだけ同等UTC入力へ整合。臨床語彙・閾値・制度解釈・naive日時を変更せず合成同等性で検証。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    },
+    "X08": {
+      "ci": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "公開Web/フォーム/公開導線はない。",
+        "evidence": [
+          "flows.ci",
+          "file inventory module=ci",
+          "verification"
+        ]
+      },
+      "safety": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "公開Web試験を起動しない。テスト隔離は安全境界であり公開承認ではない。",
+        "evidence": [
+          "flows.safety",
+          "file inventory module=safety",
+          "verification"
+        ]
+      },
+      "sdk": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "公開Web/導線/フォーム変更なし。",
+        "evidence": [
+          "flows.sdk",
+          "file inventory module=sdk",
+          "verification"
+        ]
+      },
+      "workflow": {
+        "applicability": "APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "release draft/publicdocsの境界、README drift→main syncを確認。公開実行なし、リンクの最終I照合は親owner。",
+        "evidence": [
+          "flows.workflow",
+          "file inventory module=workflow",
+          "verification"
+        ]
+      },
+      "lifecycle": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "publicWebフォーム/indexをfixtureは所有しない。guide文字列はCLIconsumer契約としてのみ確認。",
+        "evidence": [
+          "flows.lifecycle",
+          "file inventory module=lifecycle",
+          "verification"
+        ]
+      },
+      "rules": {
+        "applicability": "NOT_APPLICABLE",
+        "state": "REVIEWED",
+        "basis": "公開Webの導線/フォーム/indexなし。",
+        "evidence": [
+          "flows.rules",
+          "file inventory module=rules",
+          "verification"
+        ]
+      }
+    }
+  },
+  "findings": [
+    {
+      "id": "CORE-P5-F01",
+      "status": "confirmed",
+      "disposition": "fixed",
+      "criteria": [
+        "C02",
+        "C03",
+        "X03"
+      ],
+      "source": "mcs/extract/v1/extract.py:_STALE",
+      "cause": "json_valid(meta)=falseでELSE0、破損artifactが存在するとrun_pendingがstaleと認識せず永久に旧結果を残す。",
+      "fix": "ELSE1、正常currenthashとtransaction/deadline/原message境界を維持。",
+      "regression": "invalidmetadata4×bodystate3 + deadline4",
+      "commit": "328c7ec6e7e1ca0bea29f2393762b783f583fffc"
+    },
+    {
+      "id": "CORE-P5-F02",
+      "status": "confirmed",
+      "disposition": "fixed",
+      "criteria": [
+        "C02",
+        "C12",
+        "X07"
+      ],
+      "source": "mcs/extract/v1/extract.py:extract_message",
+      "cause": "実Python3.10 fromisoformatは末尾Zを拒否し、等価+00:00に対し訪問日/次回/薬剤期間の年anchorが失われる。",
+      "fix": "時刻成分を持つ末尾Zだけ+00:00へ正規化、naive/date/invalidは既存境界、RULE_VERSION8。",
+      "regression": "Z/offset3、naive/date2、invalid6、v7matchinghash再抽出1",
+      "commit": "328c7ec6e7e1ca0bea29f2393762b783f583fffc"
+    },
+    {
+      "id": "CORE-P5-F03",
+      "status": "confirmed",
+      "disposition": "fixed",
+      "criteria": [
+        "C11",
+        "C12"
+      ],
+      "source": "integration/test_pinned_sdk_versions.py:module import",
+      "cause": "3.11専用tomllibのmoduleimportがcore最低3.10 optionalcollectionを壊す。",
+      "fix": "既存>=3.11強制Hermeslane分岐でのみimport、pinassertion不変更。",
+      "regression": "実3.10 beforecollectionerror+simulatedmissingstdlib newmeta、actualSDK25/17pass",
+      "commit": "89d7f32628db3d66d48d96a08ea6fecb30618769"
+    },
+    {
+      "id": "CORE-P5-F04",
+      "status": "confirmed",
+      "disposition": "fixed",
+      "criteria": [
+        "C11",
+        "C12"
+      ],
+      "source": "ci/mine_gates.py:test_names",
+      "cause": "regex def test_ がcomment/説明string/docstringをtest存在として誤認。",
+      "fix": "AST FunctionDef/AsyncFunctionDef名を照合、SyntaxErrorを隠さない。",
+      "regression": "three decoys before3fail→pass、currentmanifest50参照は実pytest収集に存在",
+      "commit": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e"
+    },
+    {
+      "id": "CORE-P5-F05",
+      "status": "confirmed",
+      "disposition": "fixed",
+      "criteria": [
+        "C05",
+        "C11",
+        "C12"
+      ],
+      "source": "ci/gates.py:gate_plugin_sandbox",
+      "cause": "独立Slacklegacy入口は公開互換境界で同じnegativeOAuth拒否guardを持つが、CI例外がstandalone.pyだけで実P9/10fail。",
+      "fix": "sameASTguardを独立Slack2入口のみへ、環境秘密値読む/code変更したguard/一般adapterは依然拒否。",
+      "regression": "legacybefore1fail、standalonecontrolpass、bothsecret/topSDK拒否assertion維持",
+      "commit": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e"
+    },
+    {
+      "id": "CORE-P5-Q01",
+      "status": "disproved",
+      "disposition": "documented_static_limit",
+      "criteria": [
+        "C11"
+      ],
+      "source": "mine_gates:AST nested def/ifFalse",
+      "cause": "ast.walkはnested/ifFalse定義も存在名へ含める。sourcedoc/main/record規約は既存定義参照の整合ゲートで実行成功の証明ではない。",
+      "evidence": "50 currentmanifestrefs全部が実pytestcollectionに存在。3decoyは定義自体が存在しなかった独立欠陥として修復。",
+      "limit": "到達性/collection/successを一般に証明しない。今後実行保証が必要ならpytest結果をconsumerが使う。未定義を黙認する新例外はない。"
+    },
+    {
+      "id": "CORE-P5-Q02",
+      "status": "disproved",
+      "disposition": "documented_historical_boundary",
+      "criteria": [
+        "C04",
+        "X01"
+      ],
+      "source": "schema_upgrade/update-paths.json",
+      "cause": "historical26は旧binary実行証明ではなくroute分類manifest。14historical origins/6distinct staticDDL shapes+current16pathsでforward/consent契約を合成検証。",
+      "evidence": "origins.json fullread、originalcolumns/allrows/FK/FTS/hash tests、test names explicitlyclassify。"
+    }
+  ],
+  "verification": {
+    "canonical_before310": {
+      "command": "scripts/run_tests.sh tests/extract/test_extract_packet5_regressions.py tests/meta/test_sdk_ci_lanes.py::test_optional_sdk_module_can_collect_without_python311_tomllib tests/meta/test_ci_scripts.py::test_mine_gates_requires_test_definitions_instead_of_text tests/meta/test_ci_scripts.py::test_independent_sdk_exception_keeps_core_and_ambient_secrets_blocked[runtime_compat.py] --junitxml=/tmp/mcs-maintenance-core-packet5-20261005/canonical-before310.xml",
+      "env": {
+        "MCS_TEST_PYTHON": "/tmp/mcs-maintenance-python310-20261005/bin/python"
+      },
+      "cwd": "/tmp/mcs-maintenance-core-packet5-20261005/isolated-P",
+      "exit": 1,
+      "full_log": "/tmp/mcs-maintenance-core-packet5-20261005/canonical-before310.log",
+      "full_log_sha256": "4cfc348f076c284c8acf6d16b5e3954167b334d743d971e9cdd5e139cfbd3afd",
+      "meaning": "全修復sourceは固定P exactbytes、新規回帰だけoverlay。17fail16safecontrol、PとW/Iを区別。",
+      "counts": {
+        "tests": 33,
+        "failures": 17,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 16
+      },
+      "junit": "/tmp/mcs-maintenance-core-packet5-20261005/canonical-before310.xml"
+    },
+    "family313": {
+      "command": "scripts/run_tests.sh tests/meta/ tests/core/test_supported_schema_upgrade.py tests/ops/test_supported_update_paths.py integration/test_integration_guards.py integration/test_mcs_recovery_narrative.py tests/extract/ --junitxml=/tmp/mcs-maintenance-core-packet5-20261005/packet-family.xml",
+      "env": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python"
+      },
+      "cwd": "/tmp/mcs-maintenance-core-packet5-20261005/W-validation",
+      "exit": 0,
+      "full_log": "/tmp/mcs-maintenance-core-packet5-20261005/packet-family.log",
+      "full_log_sha256": "5f1b07f99a58e4198c3ae461df8966f859e2a139766cc7358c3811276f27d9e8",
+      "meaning": "source/testはW exactbytes、親所有DEVELOPMENTだけ一時copy生成器で更新。",
+      "counts": {
+        "tests": 1110,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 1110
+      },
+      "junit": "/tmp/mcs-maintenance-core-packet5-20261005/packet-family.xml"
+    },
+    "family310": {
+      "command": "scripts/run_tests.sh tests/meta/ tests/core/test_supported_schema_upgrade.py tests/ops/test_supported_update_paths.py integration/test_integration_guards.py integration/test_mcs_recovery_narrative.py tests/extract/ --junitxml=/tmp/mcs-maintenance-core-packet5-20261005/packet-family310.xml",
+      "env": {
+        "MCS_TEST_PYTHON": "/tmp/mcs-maintenance-python310-20261005/bin/python"
+      },
+      "cwd": "/tmp/mcs-maintenance-core-packet5-20261005/W-validation",
+      "exit": 0,
+      "full_log": "/tmp/mcs-maintenance-core-packet5-20261005/packet-family310.log",
+      "full_log_sha256": "c1ab8936ded26d342845504acec31c3cb0ea66a2060b8f8accb026bed9cb93b4",
+      "meaning": "source/test同一で実最低runtimeを確認。",
+      "counts": {
+        "tests": 1110,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 1110
+      },
+      "junit": "/tmp/mcs-maintenance-core-packet5-20261005/packet-family310.xml"
+    },
+    "ci_local_after310": {
+      "command": "scripts/run_tests.sh tests/meta/test_ci_scripts.py -k 'mine_gates_requires_test_definitions or independent_sdk_exception' --junitxml=/tmp/mcs-maintenance-core-packet5-20261005/ci-local-after310.xml",
+      "env": {
+        "MCS_TEST_PYTHON": "/tmp/mcs-maintenance-python310-20261005/bin/python"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 0,
+      "full_log": "/tmp/mcs-maintenance-core-packet5-20261005/ci-local-after310.log",
+      "full_log_sha256": "f8059a4e0bfe51efb143018c08a23dcd704deebc9cc2021ddc277b2f1d27036a",
+      "meaning": "",
+      "counts": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 5
+      },
+      "junit": "/tmp/mcs-maintenance-core-packet5-20261005/ci-local-after310.xml"
+    },
+    "rules_family313": {
+      "command": "scripts/run_tests.sh tests/extract/ --junitxml=/tmp/mcs-maintenance-core-packet5-20261005/rules-family.xml",
+      "env": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 0,
+      "full_log": "/tmp/mcs-maintenance-core-packet5-20261005/rules-family.log",
+      "full_log_sha256": "9cc074202ddfb930763572650ef6be6067d6b3aa04c9850fc744bbb84160d726",
+      "meaning": "",
+      "counts": {
+        "tests": 654,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 654
+      },
+      "junit": "/tmp/mcs-maintenance-core-packet5-20261005/rules-family.xml"
+    },
+    "sdk_collection_before310": {
+      "command": "scripts/run_tests.sh integration/test_pinned_sdk_versions.py --junitxml=/tmp/mcs-maintenance-core-packet5-20261005/sdk-collection-before310.xml",
+      "env": {
+        "MCS_TEST_PYTHON": "/tmp/mcs-maintenance-python310-20261005/bin/python"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 2,
+      "full_log": "/tmp/mcs-maintenance-core-packet5-20261005/sdk-collection-before310.log",
+      "full_log_sha256": "36632a4513526a94ae52b3de423325253bd9f348434d83f92db7f1ea5deb81b5",
+      "meaning": "P source時に実3.10 tomllib moduleimportがcollection error、collection成功と誤記しない。",
+      "counts": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 1,
+        "skipped": 0,
+        "passed": 0
+      },
+      "junit": "/tmp/mcs-maintenance-core-packet5-20261005/sdk-collection-before310.xml"
+    },
+    "standalone_sdk": {
+      "command": "sh scripts/check_pinned_sdks.sh standalone",
+      "env": {
+        "MCS_TEST_PYTHON": "/tmp/mcs-maintenance-core-packet3-20261005/sdk-venv/bin/python"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 0,
+      "full_log": "/tmp/mcs-maintenance-core-packet5-20261005/sdk-lane-after.log",
+      "full_log_sha256": "ed28ab2e0f34d1ce53c273249334f9ce639c0f280bb6ac6f1c2922dc9189b756",
+      "meaning": "actualfixedSDK lane25pass0skip、socket/process guard＋synthetictransport。",
+      "counts": {
+        "tests": 25,
+        "passed": 25,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "hermes_sdk": {
+      "command": "sh scripts/check_pinned_sdks.sh hermes",
+      "env": {
+        "MCS_TEST_PYTHON": "/tmp/mcs-pinned-sdk-Hy9hxx/hermes-venv/bin/python",
+        "MCS_HERMES_SOURCE": "/tmp/mcs-pinned-sdk-Hy9hxx/hermes-source",
+        "MCS_HERMES_REFERENCE": "/Users/yusuke/.hermes/hermes-agent"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 0,
+      "full_log": "/tmp/mcs-maintenance-core-packet5-20261005/hermes-sdk-lane-after.log",
+      "full_log_sha256": "bb7b21414dfd845b1f9aa1dfb83415c7c845f7d320038c904dabde2818183b1f",
+      "meaning": "actualfixedSDK lane17pass0skip、fd50a275source15281files archive exactbytes。referenceはgitarchiveだけ、realconfig/executionなし。",
+      "counts": {
+        "tests": 17,
+        "passed": 17,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "gates": {
+      "command": "/Users/yusuke/.mcs/.venv/bin/python ci/gates.py",
+      "env": {},
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 0,
+      "full_log": "/tmp/mcs-maintenance-core-packet5-20261005/gates-final.log",
+      "full_log_sha256": "6d3e27382794f6b740cc62e0f2c74a2b4a2f33de32aab94287063b63b53befab",
+      "meaning": "10/10gate pass。"
+    },
+    "mine": {
+      "command": "/Users/yusuke/.mcs/.venv/bin/python ci/mine_gates.py --check",
+      "env": {},
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 0,
+      "full_log": "/tmp/mcs-maintenance-core-packet5-20261005/mine-check-after.log",
+      "full_log_sha256": "e9ad907742a002a8c7b823f4fd224ccb23b01f45f52bc31a3013b295c70da208",
+      "meaning": ""
+    },
+    "ruff": {
+      "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check ci/ conftest.py tests/conftest.py integration/conftest.py integration/sdk_safety.py integration/test_integration_guards.py integration/test_mcs_recovery_narrative.py integration/test_pinned_sdk_versions.py tests/meta/ tests/fixtures/schema_upgrade/bootstrap-target.py mcs/extract/v1/extract.py tests/extract/test_extract_packet5_regressions.py",
+      "env": {},
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 0,
+      "full_log": "/tmp/mcs-maintenance-core-packet5-20261005/owned-python-ruff.log",
+      "full_log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "meaning": ""
+    },
+    "noncanonical_generated_drift": {
+      "command": "scripts/run_tests.sh tests/meta/test_ci_scripts.py tests/meta/test_sdk_ci_lanes.py --junitxml=/tmp/mcs-maintenance-core-packet5-20261005/ci-after.xml",
+      "env": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python"
+      },
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 1,
+      "full_log": "/tmp/mcs-maintenance-core-packet5-20261005/ci-after.log",
+      "full_log_sha256": "737e2f1b2a780c918b997c76d1224814ccf9a9f16ef42bc816fe124805946468",
+      "meaning": "52pass1fail generatedDEVELOPMENT stale afterRULE8。assertion維持、一時generatorcopyで整合。最終I生成check親が実施済とのreceiptあり。",
+      "counts": {
+        "tests": 53,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 52
+      },
+      "junit": "/tmp/mcs-maintenance-core-packet5-20261005/ci-after.xml"
+    },
+    "noncanonical_ruff_shell_extension": {
+      "command": "pinned Ruff command erroneously included scripts/*.sh",
+      "env": {},
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 1,
+      "full_log": "/tmp/mcs-maintenance-core-packet5-20261005/owned-ruff.log",
+      "full_log_sha256": "bb2fd3bc16a1066c50ad6714f98e60c195ac73fe07a40c6f017bed67a78da8cb",
+      "meaning": "shellをPythonparserへ渡した130syntaxerrors。コード不具合として数えず完全log保持、正しい所有Python全件Ruffとsh -nで代替。"
+    },
+    "generated_overlay": {
+      "source_W_identical": true,
+      "only_differences": [
+        {
+          "path": "docs/development/DEVELOPMENT.md",
+          "W_sha256": "d11de0bc3e152f8f7723c604478b601984136e1bdb675ebb66286ae60af062d6",
+          "validation_sha256": "440529e6f37a963040860b6e42965a92f27c02f01eedbd24a2051c784c849c88"
+        }
+      ],
+      "reason": "親所有生成文書はworktreeで変更せず、一時コピーの生成器のみで再生成。最終I生成checkは親必須。",
+      "generator_command": "/Users/yusuke/.mcs/.venv/bin/python scripts/development/update_readme.py",
+      "generator_log": "/tmp/mcs-maintenance-core-packet5-20261005/validation-generator.log",
+      "generator_exit": 0
+    },
+    "coverage_reference_collection": {
+      "unique_manifest_test_refs": 50,
+      "missing_from_real_pytest_collection": [],
+      "collected_test_names": 3759,
+      "collection_tail": "7240 tests collected in 14.10s",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ -o addopts= --collect-only -q",
+      "cwd": "/tmp/mcs-maintenance-core-packet5-20261005/W-validation",
+      "exit": 0,
+      "full_log": "/tmp/mcs-maintenance-core-packet5-20261005/coverage-reference-nodes.log",
+      "definition_gate_contract": "ci/mine_gates.py doc/main checks existing definition references, not pytest success/reachability. Nested definitions/if False remain a documented static limit, not execution evidence. Current manifest50refs separately compared with actual isolated pytest collection.",
+      "full_log_sha256": "1d33c041259d6e19f960953838185cf43966c13b19c6600459839d32f9553939"
+    },
+    "shell_syntax": {
+      "command": "sh -n scripts/run_tests.sh scripts/check_pinned_sdks.sh",
+      "env": {},
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "exit": 0,
+      "meaning": "shell parse成功、実収集/SDK起動なし。"
+    }
+  },
+  "byte_replay": {
+    "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+    "W": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+    "patch": "/tmp/mcs-maintenance-core-packet5-20261005/P-to-W.patch",
+    "patch_sha256": "fa72aaeb8286aa34c4571742d9d6018ff901cad105961ea09de1b765e3fc4bb9",
+    "changed_paths": [
+      "changes/maintenance-core-packet5-ci-test-definitions.json",
+      "changes/maintenance-core-packet5-rule-repair.json",
+      "ci/gates.py",
+      "ci/mine_gates.py",
+      "integration/test_pinned_sdk_versions.py",
+      "mcs/extract/v1/extract.py",
+      "tests/extract/test_extract_packet5_regressions.py",
+      "tests/meta/test_ci_scripts.py",
+      "tests/meta/test_sdk_ci_lanes.py"
+    ],
+    "apply_exit": 0,
+    "reconstructed_tracked_files": 883,
+    "all_modes_and_bytes_match": true,
+    "manifest": "/tmp/mcs-maintenance-core-packet5-20261005/W-tracked-manifest.json",
+    "manifest_sha256": "7ad817d324bfe7e154c8fa9a5167a27874600b69d041bac68ddac0700bb087dc",
+    "signature_comparison": [
+      {
+        "path": "mcs/extract/v1/extract.py",
+        "signatures_unchanged": true,
+        "declarations": 9
+      },
+      {
+        "path": "ci/gates.py",
+        "signatures_unchanged": true,
+        "declarations": 18
+      },
+      {
+        "path": "ci/mine_gates.py",
+        "signatures_unchanged": true,
+        "declarations": 5
+      }
+    ],
+    "canonical_before_owned_source": [
+      {
+        "path": "mcs/extract/v1/extract.py",
+        "sha256": "a5773aac58d2ae09f2c719526cac9fbb06cae23516be9fa2c24385064fe3be87",
+        "matches_fixed_P": true
+      },
+      {
+        "path": "ci/gates.py",
+        "sha256": "8fb9cef7f1922c65ac5ca1770285ec414adbb43e7161a4c23c4377c69bfa9d71",
+        "matches_fixed_P": true
+      },
+      {
+        "path": "ci/mine_gates.py",
+        "sha256": "53ccb76ed95b9a04a0f465611c8ae1451cc390b8d1043ca31d20c07c4e1be60e",
+        "matches_fixed_P": true
+      },
+      {
+        "path": "integration/test_pinned_sdk_versions.py",
+        "sha256": "c83cb2c3927fef4c56d16f147cf0b160e040687f6c0cd6d423ed4f85b180f224",
+        "matches_fixed_P": true
+      }
+    ],
+    "W_definition": "source/test/日本語fragment確定commit。evidence自身は後続receipt commitとして分離し自己hash循環を避ける。"
+  },
+  "read_receipt": {
+    "range_file": "/tmp/mcs-maintenance-core-packet5-20261005/read-ranges.json",
+    "range_sha256": "677a163311e8da6ced69e7dde2892676fa588664910532c2889c0d7eb987a777",
+    "P_inventory": "/tmp/mcs-maintenance-core-packet5-20261005/P-inventory.json",
+    "truncation_handling": "originalfile chunkreadsは最大output未切断で確認。orchestratedoutputのinstall1–260/standalone末尾115–118切断は同range再readした。Wchangedは全P→Wpatchhunks、newtest1–110全read。",
+    "full_diff_reviewed": true,
+    "diff_whitespace_command": "git diff --check; git diff P W --check",
+    "diff_whitespace_exit": 0
+  },
+  "readonly_consumer_reads": [
+    {
+      "path": "tests/core/test_supported_schema_upgrade.py",
+      "sha256": "6cb3d5cdbc886109ffa901dd86bf6a5a39dbc3716b887ddf28e6f32372bc21a9",
+      "read_ranges": [
+        [
+          1,
+          359
+        ]
+      ],
+      "state": "REVIEWED_READONLY_CONSUMER",
+      "purpose": "全fixtureconsumer originalcolumns/FK/FTS/snapshot/consent検証全文"
+    },
+    {
+      "path": "tests/ops/test_supported_update_paths.py",
+      "sha256": "e8fe3a17e0abeeabe3b1efdd28e66f7d00508ec55e39992a522436d7e1184571",
+      "read_ranges": [
+        [
+          1,
+          411
+        ]
+      ],
+      "state": "REVIEWED_READONLY_CONSUMER",
+      "purpose": "26historical routeclassification/16currentpath/testbootstrap/consent全文"
+    },
+    {
+      "path": "tests/extract/extract_testkit.py",
+      "sha256": "86711e32c8060fff100f3b19bc78d9284be9bed4250a1d905606a62fa0e4a7c3",
+      "read_ranges": [
+        [
+          1,
+          81
+        ]
+      ],
+      "state": "REVIEWED_READONLY_CONSUMER",
+      "purpose": "newregressionの純粋synthetichelper全文"
+    },
+    {
+      "path": "tests/extract/test_extract_packet4_regressions.py",
+      "sha256": "6d74e65ba202d72a08c7f486ce5e58c56cda91bf895eb52fed1496ed09ea7be0",
+      "read_ranges": [
+        [
+          1,
+          234
+        ]
+      ],
+      "state": "REVIEWED_READONLY_CONSUMER",
+      "purpose": "priorrawcorrupt/version/deadline/body境界全文"
+    }
+  ],
+  "prior_reviews_reused": [
+    {
+      "path": "mcs/core/bounded_http.py",
+      "sha256": "abf4a9613b99b9a09ec75557ff0cd7fdb46a9a998d5f2bd010397ae74f2d130b",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/core/ledger.py",
+      "sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/core/ledger_audit.py",
+      "sha256": "f4867747a344fc1942621ff7fa6b9e2e405a3131a0b1408f2f0f72b3fd27a4a1",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/core/llm_admission.py",
+      "sha256": "35a5cff1767504fa1eef2f837a6075d65e929245811a49536515bbf62a46dac1",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/core/local_llm.py",
+      "sha256": "843fc041e37fb41a8cb452932637e75e04c4f323c1c8928eae2965465bae5917",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/core/maintenance.py",
+      "sha256": "479be147dcd695ca6ca81d069bd353ffbd00e4d204f5dd6467e4430cf66f6865",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/core/mcs_queries.py",
+      "sha256": "7a6c84fc645b990d77f6838bc978559b73291e38dd5bb0d2884cb088e366fa7c",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/core/mcs_runtime.py",
+      "sha256": "79df8cf48f3fe5da4ee4fa0dd68a41778dcc888252d15f3ff68b349cb3dc4c60",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/core/mcs_util.py",
+      "sha256": "7bd01ea343e712d3ea24c59f92fde16cc3efa8013110810a103fec9193c1f420",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_artifact_json_guards.py",
+      "sha256": "98903fe7a29b73a8c4f10f8f95a80204d363dd849a2065d5e94babd69aa55253",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_core_misc.py",
+      "sha256": "9f2299e4903644757f6be3b1c1fee39e7956e15abfe2a813d4afddc99895f3ab",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_job_reasons.py",
+      "sha256": "5e74275e3f1e904af75af603090dda941b05128a8cf2bd1c1a1e19a831b05e21",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_ledger_audit.py",
+      "sha256": "ff237bca5a243c5c79005ce9017328f860a057cce6bc6e6267665c20366f7624",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_ledger_candidate_validation.py",
+      "sha256": "d47dd5fea867f0bbd20aaa97b9f76f5afaeaa743d1d06273df48883d4486d7b4",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_ledger_guards.py",
+      "sha256": "99d4a80f723de45448441ca32d95758a24951b0660af0f4626747c16c8a701c3",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_ledger_recovery_contract.py",
+      "sha256": "62ce3c4f925518cf1f09227d2f2183307ee6ce5872c8a883713d6808c655c71a",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_ledger_reply_recovery.py",
+      "sha256": "08bf2d8bd7d43abfcd1b40971f00393ee675eaede4162b08822b6e86dec34c4a",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_llm_admission.py",
+      "sha256": "c93985c9b5fc4f954023e33f3c35999e263f5895ca1baabcb23b153583e5cd93",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_local_llm.py",
+      "sha256": "c48f548b9742e1f311ec1f4644dd2d27a20f7091cb089188ebe63c4c18da4c91",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_local_llm_deadline.py",
+      "sha256": "fe83d5ef6f456b0b03eafdfa6556bb87d897d18c37f2fb6a0cbdc6923533054c",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_maintenance_root.py",
+      "sha256": "00675df942ed139b879c95d490b16426fd6f748bb8db79e8d827e350394d2a4c",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_mcs_util.py",
+      "sha256": "1c34dd400756b57cd45563b0568739e058bf2a8b88492ca62eacf189251431c0",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_message_revisions.py",
+      "sha256": "a26cdb3de149f6465ea13dec52f6fddab6cc6732c079883f5229934bfbceb0ec",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_metadata_watch.py",
+      "sha256": "930ed8fb48f1c4d749365d3a81578fa1a0a1c7f375f858ed8b97c705b4514092",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_supported_schema_upgrade.py",
+      "sha256": "6cb3d5cdbc886109ffa901dd86bf6a5a39dbc3716b887ddf28e6f32372bc21a9",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/core/test_thread_reply_pairs.py",
+      "sha256": "6d916b5854162839f6d37dbf17af73d80321ea58e95b93db34218b3a6ad50e2f",
+      "evidence": "docs/development/maintenance-core-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/ingest/cross_lists.py",
+      "sha256": "3580d54982ca68a320ab27e765a9eaa7dbd515d8edd194378575dca83661c54a",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/ingest/health_watch.py",
+      "sha256": "981b5ab0e68ccf49bcce05e2814b1e2702408520f369ae9f43d2bc44f1050e65",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/ingest/init_data.py",
+      "sha256": "17a0d32d0eb95202c0725877ad5e4dacf9fdeee06cffd21dd52004189e500dd4",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/ingest/job_ops.py",
+      "sha256": "d5b64a681b8b43a7f08decf4adddcf075465c94da1cfadcc3d515b98f2fea12f",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/ingest/mcs_adapter.py",
+      "sha256": "c3be0fa89a12ccc357273913c53d6c779ac391debfc4b7e179979ad694ca444d",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/ingest/mcs_worker.py",
+      "sha256": "c0d1946942450adc1d794128ca162f84a12761171c13de94d992d44588c28747",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/ingest/project_metadata.py",
+      "sha256": "257afe64943606ecac5f5706af8ca0564d003156e20133b2cc613cba9bad1cfa",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "mcs/ingest/run_check.py",
+      "sha256": "915d6784befb59fcfffae019020dac59c92fa272571dfc325c36585b283ef00d",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/ingest_testkit.py",
+      "sha256": "03d5831494c33b78a32a2f24d95c2efd4f1367f6d0aea7b3f095b2b9da02dde4",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_acquisition_contracts.py",
+      "sha256": "510f94d404fe632c0b7775b43b4a602adfde24a26c8ca160e9ef5c38fc9fefb0",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_adapter_wire.py",
+      "sha256": "26c12487b689d48f78a2719b39083bac487be7401caab84367465201d92caf5b",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_cross_lists.py",
+      "sha256": "962d20c5472c2825b4e5a095c80ac27ace295d025f09e91a6e53bde5f47b1edd",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_drug_map_pipeline.py",
+      "sha256": "13e720e558f7aa0e071f55b3365212aea470803d224f4da9f7437507edfdd57e",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_fixture_synthetic.py",
+      "sha256": "870ab4a897e9dc0b83548a6f9731991af227a25e2993ac53b128d8d99dc94a5a",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_group_consultations.py",
+      "sha256": "47b64f165e5e766813dc4e0566919021f85b8cf08ff00a7ac9d1eabf6bdfc6d2",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_health_watch.py",
+      "sha256": "d4f017bdb1705cad86cb41111ac4538deec2409aa8c3c898f089ef0b994ca69e",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_job_drain.py",
+      "sha256": "6842a5576dc6adf4534137f04faf6f41ad5fee35694d6ff0731509d33bfa1ac0",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_job_reasons_ingest.py",
+      "sha256": "d6b08c095e5182de1c39c0e2d399abd2cb47c8f364917899170bfdf2c41c2726",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_message_metadata.py",
+      "sha256": "2be63c91caccb9c5effc5957421dd102c9e508d42c7e627d67bc3ab39f9d9ebc",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_metadata_probe_observation.py",
+      "sha256": "47d4cc72d024f5879e6c51c5f38ba9d6e7fa41cebe9e7c6c145f3f585ac3fe23",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_metadata_probe_paging.py",
+      "sha256": "fdfcabb7ceaa1dfe45371979eb117740edeae686d401505fd3185623a5b156f8",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_metadata_probe_usage.py",
+      "sha256": "4317e9024dd14cc90b6f4e5a142a0632f392884a77561cb75bd3fa36cf14d386",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_project_metadata.py",
+      "sha256": "a1bc35d7bd41b8d4ad7aa7b1e84a10da900f036bb8fbdd6d63dfe63308dc0e77",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_reaction_actors.py",
+      "sha256": "345332fa7496fa249dbfecabd941c8d59573c624295c85fce7c8a10bf8920476",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_run_check_stages.py",
+      "sha256": "5ec818caf83f9dd8d327ef557610c7d067dddbc130accbe3cba7e9b9c19a28aa",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_run_watchdog.py",
+      "sha256": "ba09be62a9dfec332460658a791c350a383637fcb578afe12c36a4b4859966f9",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_semantic_ingest_revisions.py",
+      "sha256": "e306a9036680ec8416260ac859dfc8a05c85f4dc6ee896025e2f079d08015e02",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_thread_count_retry.py",
+      "sha256": "708d993c47da2d6f466d450ad5e2cb5960f29293a223ee3e6391a8a708d3be82",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/ingest/test_thread_tombstone_gap.py",
+      "sha256": "c1bd116a7aaf3f7fcd0281361a38e07b4266f6d818614f69ff88ad27c3c0e287",
+      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "adapters/discord/__init__.py",
+      "sha256": "b7060721cd27ed534ef3edf580f29829bb649331542a97fbbfd3bf6118da218c",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "adapters/discord/actions.py",
+      "sha256": "a1f6fe925ffa5e87d1e8ec77ab8b78b32f30dad9a047ad56790be84035aac527",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "adapters/discord/cards.py",
+      "sha256": "bccbc08e862a31b5c46fe1db6e0b06347f82bbe3ed5020f5ee71f222c2650dac",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "adapters/discord/delivery.py",
+      "sha256": "678d279ef9097bf55871e5abe5ca1b237f991023ffb9b57a6fc7e423fd583bf0",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "adapters/discord/runtime_compat.py",
+      "sha256": "ba8ca159e89c3ceb85d558bd253aefeda3d627a47fab244c9b1bd650f671054c",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "adapters/discord/standalone.py",
+      "sha256": "d51ee1d292ab6dff21b4d3dc425afc2b7038e2f07cda7c9b72c50c13fe21fb46",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "adapters/discord/tasks.py",
+      "sha256": "9d8097b152441f26d17469351bcf15f09f3358b82e2bcc076f088f08d712da56",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "adapters/slack/__init__.py",
+      "sha256": "179cbcb2e57b187d300652bbdf60dce120170eb2ee9d986a7db25a1a8bbe551b",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "adapters/slack/actions.py",
+      "sha256": "ecd490dd85d591c2b9189fe33a3a70453a8fcb3072fa6eef1db544ab060d417b",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "adapters/slack/cards.py",
+      "sha256": "080400362ed3876a8e202bf5ba789bed91858f1dbb41954386bdff8e3027b807",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "adapters/slack/delivery.py",
+      "sha256": "3129b7fc6753f4b83bbc2965daced330daf68b77c9d9661b621f379027245b8b",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "adapters/slack/paths.py",
+      "sha256": "bffc8204582e5bc00f71c5d37a686287d479c6d936fd6b1cb54e61ab6e1e4486",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "adapters/slack/runtime_compat.py",
+      "sha256": "cfdb6b6c57ffcf5dc1587f83b06e3104581f082ff9a10503ff6ea296d19c749d",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "adapters/slack/standalone.py",
+      "sha256": "2d25aef0679b535cd8afeb5cf7588cd813f55b97f639f9c2c8422790fb79b1e5",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "adapters/slack/tasks.py",
+      "sha256": "05f8eee2d706f9c17a1a2480f8d905d9abb3f1e1615e6f50e289e614600b5b9a",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/discord/discord_delivery_testkit.py",
+      "sha256": "099e034b1e2a13e2ddc23a570866910c70f5dc70a9fc86ee140b996fd610e922",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/discord/discord_testkit.py",
+      "sha256": "b0c1b8386daa85dd795e3571edcca38b2a25a30f892cf68c923d1009ade34c6e",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/discord/test_discord_sdk_real.py",
+      "sha256": "e6c807e5b73361deb7f30e2af73c0293331b880d603aa9dcf7c9c9c4e6c87d01",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/discord/test_discord_standalone.py",
+      "sha256": "6c3a8b52e66a4b3b7dec768e444219fd3a4035e165fbb0689a5670831f17d78a",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/discord/test_mcs_discord.py",
+      "sha256": "77a5610e4e3c976015fb7fdb646c891cb31b1988c7a7c0d6c8cad9bb06321a55",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/discord/test_mcs_discord_delivery.py",
+      "sha256": "6faa874e540aa9e3530161ecf9d74bbeb1e943df954a955f50704045c982d732",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/discord/test_mcs_discord_single_post.py",
+      "sha256": "5c38afe8b375e33c2b05c7d685080e88cbad8b0d42a63a06b3cf329f375f21d8",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/slack/slack_card_testkit.py",
+      "sha256": "e2f44aa2bbe95e41f749105cd88319760066517e3eb3f6d9d4f2ee4cdf555fe8",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/slack/slack_testkit.py",
+      "sha256": "56804a8524760b412c149b9cb79d9810c7b5f9df33698690e089db9b48ef7ae5",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/slack/test_mcs_slack.py",
+      "sha256": "abddd1d1828db0597da8f594e2b37c6647f7426ce4f6040ace7e9136a3216983",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/slack/test_mcs_slack_actions.py",
+      "sha256": "419375484017cb8906c52e9339897f600ed7a1b2c1cb75c232af932343fb2562",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/slack/test_mcs_slack_cards.py",
+      "sha256": "4e8452cde46595b14303afbb4b90fb88ee9073eb41f9e256c79948d6584df1d6",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/slack/test_slack_human_receipt.py",
+      "sha256": "1018c93df602910a12633809bf294feb7b66e28bf2c417b5d8adde3e440ce652",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/slack/test_slack_standalone.py",
+      "sha256": "39b7f4852af6c56ecd3b3bc4af32f54fd123320aacd06ca6508f123c98242b11",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "integration/test_standalone_sdk.py",
+      "sha256": "011aa5173469b15b6017167e66c309173d006214b8407dae6b5a40aa13fb1df3",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/discord/test_discord_runtime_compat.py",
+      "sha256": "093ac29c1970c5d166c52181631bbfdff3a3be9f4ff936c82d14b407905f9932",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    },
+    {
+      "path": "tests/adapters/slack/test_slack_runtime_compat.py",
+      "sha256": "998f294b66b0d10d7eca99554c5ed5887df7a337c4509e15a0b5e8c1a4f454b1",
+      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "state": "REVIEWED_SHA_MATCH_REUSED"
+    }
+  ],
+  "prior_reviews_not_reused": [],
+  "commits": [
+    "328c7ec6e7e1ca0bea29f2393762b783f583fffc",
+    "89d7f32628db3d66d48d96a08ea6fecb30618769",
+    "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e"
+  ],
+  "all_confirmed_owned_findings_fixed": true,
+  "remaining": {
+    "owned_files_unread": [],
+    "owned_confirmed_unfixed": [],
+    "parent_required": [
+      "最終I source/runtime/生成docs/全域inventory統合検証とfresh-context independent review。",
+      "親に所有があるrootdocs/dot-state packetは次固定B/Pで継続。"
+    ],
+    "not_performed": [
+      "実install/update/recovery/service稼働、実MCS/API/秘密アクセス、LinuxCIクラウド実行、publish/deploy。"
+    ],
+    "static_limits": [
+      "writer_lockgateはcallgraph近似で実行順序/全分岐支配を証明しない。現CLIruntimeは既存run.lock回帰/所有source監査で確認。",
+      "mine_gatesは定義存在でpytest成功/到達性を一般に証明しない。",
+      "既存workflowaction versiontagsはSHA不変性保証でなく、pin全面改定は未依頼の供給網方針変更。"
+    ]
+  },
+  "runtime": {
+    "core_default": {
+      "interpreter": "/Users/yusuke/.mcs/.venv/bin/python",
+      "actual_version": "Python 3.13.12 (main, Feb 12 2026, 01:06:02) [Clang 21.1.4 ]"
+    },
+    "core_minimum": {
+      "interpreter": "/tmp/mcs-maintenance-python310-20261005/bin/python",
+      "actual_version": "Python 3.10.22 (main, Oct  3 2026, 00:53:54) [Clang 22.1.3 ]"
+    },
+    "standalone_sdk": {
+      "interpreter": "/tmp/mcs-maintenance-core-packet3-20261005/sdk-venv/bin/python",
+      "actual_version": "Python 3.13.12 (main, Feb 12 2026, 01:06:02) [Clang 21.1.4 ]"
+    },
+    "hermes_sdk": {
+      "interpreter": "/tmp/mcs-pinned-sdk-Hy9hxx/hermes-venv/bin/python",
+      "actual_version": "Python 3.13.16 (main, Sep 30 2026, 18:57:20) [Clang 21.0.0 (clang-2100.3.34.2)]"
+    }
+  }
+}
