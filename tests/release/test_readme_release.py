@@ -51,6 +51,17 @@ class ReadmeReleaseTest(unittest.TestCase):
         self.assertNotIn("内部の詳細です。", new)
         self.assertEqual(readme.render(new, self.changelog()), new)
 
+    def test_comparison_table_keeps_rows_and_stays_out_of_summary(self):
+        table = ("| 変更 | 以前 | 今回 | 利用者のメリット |\n"
+                 "|---|---|---|---|\n"
+                 "| 表示 | 別々 | 同じ場所 | 比較できる |")
+        changelog = self.changelog().replace("### 新機能", table + "\n\n### 新機能")
+        rendered = readme.render(self.template(), changelog)
+        self.assertEqual(rendered.count(table), 1)
+        self.assertIn("合成データだけを使用します。\n\n", rendered)
+        self.assertLess(rendered.index(table), rendered.index("<details>"))
+        self.assertEqual(readme.render(rendered, changelog), rendered)
+
     def test_malformed_markers_never_mutate_release_build_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

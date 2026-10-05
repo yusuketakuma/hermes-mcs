@@ -32,11 +32,14 @@ def render_block(changelog):
     paragraphs = [p.strip() for p in intro.strip().split("\n\n") if p.strip()]
     headline = paragraphs[0]
     summary = " ".join(p.replace("\n", " ") for p in paragraphs[1:]
-                       if not p.startswith(">"))
+                       if not p.startswith((">", "|")))
     warnings = [p for p in paragraphs[1:] if p.startswith(">")]
     out = [f"**v{version} · {date}** — {headline}", "", summary, ""]
     for warning in warnings:
         out += [warning, ""]
+    for comparison in paragraphs[1:]:
+        if comparison.startswith("|"):
+            out += [comparison, ""]
     out += ["<details>", "<summary>主な変更と更新時の注意を開く</summary>", ""]
     highlights = []
     # One item from each category keeps the excerpt balanced; full notes
