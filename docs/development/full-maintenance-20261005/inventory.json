@@ -26,9 +26,9 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "REVIEWED": 655,
+      "REVIEWED": 644,
       "EXCLUDED": 25,
-      "PARTIAL": 28,
+      "PARTIAL": 39,
       "UNSEEN": 196
     },
     "candidate_tracked": 902
@@ -734,7 +734,7 @@
       "lines": 535,
       "module": "README.md",
       "kind": "text_asset",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "Parent complete bounded read; README truncated middle reread351–440. Contract/docs/20criteria cross-check pending; no complete review inferred from reading alone.",
         "Core6全4395行・7module×20criterionを親が確認。READMEはP全文と親mode限定1文deltaのみ、その他5文書は現I SHA一致。"
@@ -830,7 +830,10 @@
         "X08": [
           "criteria.X08.current_guide"
         ]
-      }
+      },
+      "current_delta_commit": "d8b26fd",
+      "current_delta_sha256": "02b6a6156b8aea5bbae590387b55b6a474b701b9fa6bd506566f3f707c5a8f19",
+      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
     },
     {
       "path": "SECURITY.md",
@@ -7761,7 +7764,10 @@
           500
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "current_delta_commit": "d8b26fd",
+      "current_delta_sha256": "2573b5fc9d9a74b080234f56de4040a977b6852c85882192a9b71ceee6b0ab93",
+      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
     },
     {
       "path": "docs/guides/LINEWORKS.md",
@@ -7838,7 +7844,10 @@
           125
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "current_delta_commit": "d8b26fd",
+      "current_delta_sha256": "e79a23cdeeabd500c53839ac06adc1ba9d29b150b77dd0f25663f04b4c00cdc5",
+      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
     },
     {
       "path": "docs/releases/archive/CHANGELOG-before-format.md",
@@ -8187,7 +8196,7 @@
       "lines": null,
       "module": "docs",
       "kind": "binary",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
@@ -8275,7 +8284,10 @@
         "docs/screenshots/lineworks-gallery/README.md"
       ],
       "visual_checked": true,
-      "classification_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。"
+      "classification_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。",
+      "current_delta_commit": "d8b26fd",
+      "current_delta_sha256": "400c265b65f22fae8e796ae6dd83f67b1284c2f617397fde8d731b1f0d1c4b19",
+      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
     },
     {
       "path": "docs/screenshots/lineworks-gallery/01-delivery.svg",
@@ -8284,7 +8296,7 @@
       "lines": 70,
       "module": "docs",
       "kind": "text_asset",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
@@ -8369,7 +8381,10 @@
         "X08": [
           "modules.gallery.all_20_criteria.X08"
         ]
-      }
+      },
+      "current_delta_commit": "d8b26fd",
+      "current_delta_sha256": "7da5f985adb7d861f56610c2d29953b85c5d136edc4cece086e45cb1d047b275",
+      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
     },
     {
       "path": "docs/screenshots/lineworks-gallery/02-task-confirm.png",
@@ -8569,7 +8584,7 @@
       "lines": 38,
       "module": "docs",
       "kind": "text_asset",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
@@ -8654,7 +8669,10 @@
         "X08": [
           "modules.gallery.all_20_criteria.X08"
         ]
-      }
+      },
+      "current_delta_commit": "d8b26fd",
+      "current_delta_sha256": "cb668d0492d7a9d51b0fd780ed2af64d382aa586e426d6bb5e0d64b811e41a79",
+      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
     },
     {
       "path": "docs/screenshots/lineworks-gallery/assets.json",
@@ -8663,7 +8681,7 @@
       "lines": 10,
       "module": "docs",
       "kind": "text_asset",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
@@ -8748,7 +8766,10 @@
         "X08": [
           "modules.gallery.all_20_criteria.X08"
         ]
-      }
+      },
+      "current_delta_commit": "d8b26fd",
+      "current_delta_sha256": "c906530317c16602454f9b28e5e6e2b87dce8be0277775298264a1b79458e5db",
+      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
     },
     {
       "path": "docs/screenshots/signals-cli.svg",
@@ -9134,7 +9155,7 @@
       "lines": null,
       "module": "docs",
       "kind": "binary",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
@@ -9222,7 +9243,10 @@
         "docs/screenshots/slack-gallery/README.md"
       ],
       "visual_checked": true,
-      "classification_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。"
+      "classification_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。",
+      "current_delta_commit": "d8b26fd",
+      "current_delta_sha256": "08cec0361bb9ad611b018372c96c413bdbc8377646faa43d72aa47e50a8ad3a8",
+      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
     },
     {
       "path": "docs/screenshots/slack-gallery/02-notification.svg",
@@ -9231,7 +9255,7 @@
       "lines": 45,
       "module": "docs",
       "kind": "text_asset",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
@@ -9316,7 +9340,10 @@
         "X08": [
           "modules.gallery.all_20_criteria.X08"
         ]
-      }
+      },
+      "current_delta_commit": "d8b26fd",
+      "current_delta_sha256": "b9bb11a982ccafbd58df5a7dd55e87034564641789782ac5958aff3c051b0560",
+      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
     },
     {
       "path": "docs/screenshots/slack-gallery/03-actions.png",
@@ -10280,7 +10307,7 @@
       "lines": 44,
       "module": "docs",
       "kind": "text_asset",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
@@ -10365,7 +10392,10 @@
         "X08": [
           "modules.gallery.all_20_criteria.X08"
         ]
-      }
+      },
+      "current_delta_commit": "d8b26fd",
+      "current_delta_sha256": "78abe12fe831955465a7202abc3bf2030f8fdf8d8f2d4b7fbfc5dbaa23b2c765",
+      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
     },
     {
       "path": "docs/screenshots/slack-gallery/assets.json",
@@ -10374,7 +10404,7 @@
       "lines": 30,
       "module": "docs",
       "kind": "text_asset",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
@@ -10459,7 +10489,10 @@
         "X08": [
           "modules.gallery.all_20_criteria.X08"
         ]
-      }
+      },
+      "current_delta_commit": "d8b26fd",
+      "current_delta_sha256": "09d13b1e9ab5b7f980c81fcac39b63ad44834121288fd1effbe97f7706d30692",
+      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
     },
     {
       "path": "docs/screenshots/slack-thread.svg",
@@ -16135,7 +16168,7 @@
       "lines": 180,
       "module": "scripts",
       "kind": "source",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
@@ -16220,7 +16253,10 @@
         "X08": [
           "modules.gallery.all_20_criteria.X08"
         ]
-      }
+      },
+      "current_delta_commit": "d8b26fd",
+      "current_delta_sha256": "2eca00b354a4410c9c4b030698e6dc734abc23695eeda46cd825d111e4a6d95b",
+      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
     },
     {
       "path": "scripts/development/generate_slack_gallery.py",
@@ -16229,7 +16265,7 @@
       "lines": 366,
       "module": "scripts",
       "kind": "source",
-      "status": "REVIEWED",
+      "status": "PARTIAL",
       "evidence": [
         "親がpacket120観点・flow/findings/replay/両runtime修正前後証拠を受入。current IのW SHA一致53/53。final I全体成功とは区別。"
       ],
@@ -16318,7 +16354,10 @@
         "X08": [
           "modules.gallery.all_20_criteria.X08"
         ]
-      }
+      },
+      "current_delta_commit": "d8b26fd",
+      "current_delta_sha256": "6b8554f716b88b7c4459d5bd0db5d31a20644e6e4c8a1fc293152e43c919bb83",
+      "recheck_required": "親stamp UI/doc delta全文/PNG実目視・両gallery/generator/lint成功。stamp runtime実装の統合とsource仕様整合後に受入、final固定I未検証。"
     },
     {
       "path": "scripts/development/probe_message_metadata.py",
