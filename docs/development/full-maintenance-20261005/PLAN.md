@@ -2,7 +2,7 @@
 
 仕様正本は添付pasted-text-1.txt。対象はhermes-mcs 1 repoの全workspace/package。
 B=main 4167697（既存未追跡8/recoverは調査後、明示された条件付き削除承認に従って復元可能な私有コピーを残して削除。別worktree既存変更は保持）。
-P=各writerとも4167697のclean worktree。Iはaudit/full-maintenance-20261005専用候補。
+初回Pは4167697のclean worktree。後続packetの固定P/W・専用refは各evidenceを正本とする。Iはaudit/full-maintenance-20261005専用候補。
 前goal turnはprogress（main統合・修復・検証）。既存baseline 6780 passは全域coverageではない。
 
 ## 所有と継続順
@@ -10,9 +10,9 @@ P=各writerとも4167697のclean worktree。Iはaudit/full-maintenance-20261005�
 | owner | 専用worktree/branch | 現packet | 次packet候補 |
 |---|---|---|---|
 | root | full-maintenance-20261005 / audit/full-maintenance-20261005 | 共有台帳・親統合・文書境界 | 固定Iの全体/SDK/隔離配布物検証 → fresh-context独立レビュー |
-| maintenance_core | maintenance-core-20261005 / audit/maintenance-core-packet5-20261005 | CI・隔離runner・schema fixture・v1抽出の残確認 | root文書・CHANGELOGの全文と契約照合 |
-| maintenance_notify | maintenance-notify-20261005 / audit/maintenance-notify-packet5-20261005 | ローカルexport・参照受信と全fixture | 残guides/specs/roadmap/履歴記録/changes文書 |
-| maintenance_semantic | maintenance-semantic-20261005 / audit/maintenance-semantic-packet6-20261005 | 開発script・release検証・説明画像/生成元 | 最終Iの生成整合依存を親へ引継ぎ |
+| maintenance_core | maintenance-core-docs7-20261005 / audit/maintenance-core-docs7-20261005 | root文書・CHANGELOG・歴史20文書を受入済み、旧run記録9件の読取り専用照合 | 固定Iの必須検証（親が入力を固定して別指示） |
+| maintenance_notify | maintenance-notify-20261005 / audit/maintenance-notify-packet6-20261005 | guides/specs/roadmap/履歴記録/changes文書259件の正式受入記録 | 固定Iの必須検証（親が入力を固定して別指示） |
+| maintenance_semantic | maintenance-stamps-20261005 / audit/maintenance-stamps-20261005 | 各投稿の押下者氏名・取得状態、件数ラベル、後着表示更新の合成回帰 | stamp成果の親統合・文書整合 |
 
 ユーザー指定はGPT-6.1-sol ultra。実効モデル名は子のAPI応答から確認できないため、要求設定と実測を混同しない。再帰spawnなし、1 worktree/1 writer。共有ledger/schemaはcore owner。
 親は必要境界をreadonlyで照合し、検証済みcommit/patchを順次直列統合。
@@ -44,5 +44,7 @@ COMPLETEは全適用source対象REVIEWED、確定修復/有用保守解消、統
 1. MCSサーバーの負荷対策として、MCS定期アクセスを5分から10分へ変更。変更理由を利用者向けガイド・仕様・変更記録に明記する。取得jobとhealth欠測判定・Hermes/standalone登録を整合させ、LLM timeout等の無関係な300秒は維持する。
 2. install/update/recoveryの1.0.13実経路を修復・検証する。旧版からの移行、途中失敗・再試行、service ownership、独立Python/SQLite検査を維持し、合成・隔離fixtureで証明する。
 3. Slack/Discord/LINE WORKSの表示を全件追跡。長文/分割、添付、ボタン、metadata、escaping、権限scope、stale/更新/receiptを合成で検証する。実サービス表示や実機配備を未実施のまま成功扱いしない。
+4. スタンプ件数のラベルを「MCS」から「スタンプ」へ統一し、各投稿で押した人の氏名と本人識別を表示する。未取得・古い一覧・再取得失敗・氏名不明・長い一覧の省略を区別し、後から取得した氏名も既配信本文へ反映する。既定offの取得条件・7日対象・1回最大4投稿と予算、人承認・正式タスク完了の境界を維持する。
+5. ponytailの最新版への更新は公式の管理経路で4.11.0へ完了。private receiptを保存済み。現在のskill catalogは旧版のため、作業中のCodexを中断せず完了後の再起動で反映する。
 
-親はmcs_setup/installer/updater/recoveryとdeployment schedulingを所有。core次packetはingest/healthの10分化、notify次packetは全チャネル表示。仕様全域の残確認も継続する。
+親は共有台帳・直列統合・README/ガイド・説明図の正本と生成を所有する。sourceの修復は受入済みpacketを再利用し、追加stampの変更と依存だけ再確認する。全件の正式受入と固定Iの全体検証・実SDK検証・配布物の隔離起動・fresh-context独立レビューは引き続き必須。
