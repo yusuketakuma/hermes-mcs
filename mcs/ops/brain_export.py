@@ -7,6 +7,7 @@ import re
 import sqlite3
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
@@ -30,6 +31,7 @@ OUT_DIR = HOME / "data" / "exports"
 # they expire on a bounded retention; the original ledger/messages are
 # never touched by this sweep (T15)
 EXPORT_RETENTION_DAYS = 62
+_JST = timezone(timedelta(hours=9))
 HONESTY = ("候補・数値は公開スナップショット由来です。"
            "記録の欠如は対応の欠如を意味しません。")
 FACTS_HEADER = ("| # | claim | kind | who | weight | since | source "
@@ -37,9 +39,16 @@ FACTS_HEADER = ("| # | claim | kind | who | weight | since | source "
 FACTS_SEP = "| - | ----- | ---- | --- | ------ | ----- | ------ | -------- | ------- | -------- | ----- | ---- | -- |"
 
 
+def _check_directory(directory: Path) -> None:
+    if directory.is_symlink() or directory.exists() and not directory.is_dir():
+        raise ValueError("export_directory_unsafe")
+
+
 def _write(root: Path, rel: str, text: str) -> None:
     """Atomic rewrite — a crash mid-write must not leave a torn file."""
     dest = root / rel
+    if dest.parent != root:
+        _check_directory(dest.parent)
     # Exported summaries can contain PHI; staging must be private and
     # exclusively created, including in a user-selected shared directory.
     atomic_write(str(dest), lambda stream: stream.write(text),
@@ -53,10 +62,14 @@ def _fm(title: str) -> str:
             "type: note\ntags: [mcs, export]\n---\n\n")
 
 
+def _jst(timestamp: float, pattern: str) -> str:
+    return datetime.fromtimestamp(timestamp, _JST).strftime(pattern)
+
+
 def _banner(view) -> str:
     # deterministic for a fixed snapshot: identical input -> identical bytes
     return (f"> snapshot gen={view.meta['generation_id']} "
-            f"at {time.strftime('%Y-%m-%d %H:%M JST', time.localtime(view.meta['generated_at']))}\n"
+            f"at {_jst(view.meta['generated_at'], '%Y-%m-%d %H:%M JST')}\n"
             f"> {HONESTY}\n\n")
 
 
@@ -64,7 +77,7 @@ def _meta_md(view) -> str:
     gen_at = view.meta["generated_at"]
     return (_fm("MCS export meta") + "# MCS export meta\n\n" + _banner(view)
             + f"- snapshot generation: {view.meta['generation_id']}\n"
-            + f"- snapshot generated_at: {time.strftime('%Y-%m-%dT%H:%M:%S%z', time.localtime(gen_at))}\n"
+            + f"- snapshot generated_at: {_jst(gen_at, '%Y-%m-%dT%H:%M:%S%z')}\n"
             + "- source: published snapshot (read-only; live ledger untouched)\n")
 
 
@@ -91,7 +104,7 @@ def _health_md(view) -> str:
     lines.append("## recent runs\n\n| finished | status | error |\n| --- | --- | --- |\n")
     for r in db.execute(
             "SELECT finished_at,status,error FROM runs ORDER BY run_id DESC LIMIT 10"):
-        ts = time.strftime("%m-%d %H:%M", time.localtime(r["finished_at"])) \
+        ts = _jst(r["finished_at"], "%m-%d %H:%M") \
             if r["finished_at"] else "?"
         err = (r["error"] or "")[:60]
         lines.append(f"| {ts} | {r['status']} | {err} |\n")
@@ -120,7 +133,7 @@ def _metrics(db, snap_ts: float, open_signals: int) -> list[tuple]:
 def _facts_block(db, snap_ts: float, open_signals: int) -> str:
     # `since` is the SNAPSHOT's date — an unchanged snapshot yields byte-
     # identical output across days (the dated file name carries wall time).
-    since = time.strftime("%Y-%m-%d", time.localtime(snap_ts))
+    since = _jst(snap_ts, "%Y-%m-%d")
     rows = [FACTS_HEADER, FACTS_SEP]
     for i, (name, val) in enumerate(_metrics(db, snap_ts, open_signals), 1):
         rows.append(f"| {i} | {name} | metric | mcs | 1.0 | {since} "
@@ -158,7 +171,7 @@ def _signals_md(view, res: dict) -> str:
         typ = c.get("type") or "?"
         pid = c.get("project_id", "?")
         at = c.get("detected_at")
-        detected = time.strftime("%Y-%m-%d", time.localtime(at)) if at else "?"
+        detected = _jst(at, "%Y-%m-%d") if at else "?"
         note = str(c.get("note") or "")[:120].replace("|", "\\|")
         ev = json.dumps(c.get("evidence"), ensure_ascii=False)[:120] \
             if c.get("evidence") else ""
@@ -276,7 +289,7 @@ def _sweep_exports(out_dir: Path, now: float) -> list:
             if not m or f.is_symlink() or not f.is_file():
                 continue
             try:
-                day = time.mktime(time.strptime(m.group(1), "%Y-%m-%d"))
+                day = datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=_JST).timestamp()
             except (ValueError, OverflowError):
                 continue
             if day >= cutoff:
@@ -289,6 +302,11 @@ def _sweep_exports(out_dir: Path, now: float) -> list:
 def run(out_dir: Path, snapshot: Path) -> dict:
     view = mcs_view.View(str(snapshot))
     try:
+        # Generated subdirectories must belong to this export, including
+        # when no patient pages remain and only cleanup would visit them.
+        for name in ("patients", "stats", "signals"):
+            directory = out_dir / name
+            _check_directory(directory)
         info = {r["project_id"]: dict(r) for r in view.db.execute(
             "SELECT project_id,patient_name,project_type,disease,station_name"
             " FROM patients")}
@@ -309,7 +327,7 @@ def run(out_dir: Path, snapshot: Path) -> dict:
                     + "\n---\n\n" + _banner(view))
             except (AttributeError, TypeError, ValueError, RecursionError):
                 raise ValueError("patient_rollup_invalid") from None
-        today = time.strftime("%Y-%m-%d")
+        today = _jst(time.time(), "%Y-%m-%d")
         sig_res = mcs_signals.current_open(view.db, limit=200)
         model = read_model.read_model(view.db, scope="aggregate")
         _write(out_dir, "meta.md", _meta_md(view))
@@ -332,12 +350,13 @@ def run(out_dir: Path, snapshot: Path) -> dict:
         for filename, text in pages.items():
             _write(out_dir, f"patients/{filename}", text)
         pdir = out_dir / "patients"
+        _check_directory(pdir)
         if pdir.is_dir():
             for stale in pdir.glob("p*.md"):
                 # generated names are always p<int>.md — anything else in a
                 # user-chosen --out dir (plan.md, p-notes.md) is not ours to
                 # delete (FIX-BE2)
-                if stale.name not in seen \
+                if not stale.is_symlink() and stale.is_file() and stale.name not in seen \
                         and re.fullmatch(r"p\d+\.md", stale.name):
                     stale.unlink()
         expired = _sweep_exports(out_dir, time.time())

@@ -36,9 +36,10 @@ import os
 import re
 import stat
 import sys
+import tempfile
 import time
 from collections import Counter
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import TypedDict
 
@@ -90,7 +91,7 @@ def load_authorization(path, now: float | None = None, *, c1: bool = False) -> d
     now = time.time() if now is None else now
     try:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError, UnicodeError) as e:
+    except (OSError, ValueError, UnicodeError, RecursionError) as e:
         raise ContractError(f"auth_unreadable:{type(e).__name__}") from e
     return _validate_authorization(raw, now, c1=c1)
 
@@ -487,7 +488,7 @@ class LocalSink:
             return None
         try:
             return json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return None
 
     def matches(self, envelope_id: str, records_sha256: str, intent_sha256: str) -> bool:
@@ -499,7 +500,7 @@ class LocalSink:
             return stored["envelope_id"] == envelope_id \
                 and stored["records_sha256"] == records_sha256 \
                 and _intent_hash(stored) == intent_sha256
-        except (OSError, ValueError, TypeError, ContractError):
+        except (OSError, ValueError, TypeError, ContractError, RecursionError):
             return False
 
 
@@ -587,7 +588,7 @@ class GovernedExporter:
             return None
         try:
             entry = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, RecursionError) as e:
             raise ContractError("journal_unreadable") from e
         if not isinstance(entry, dict) or entry.get("envelope_id") != envelope_id \
                 or entry.get("status") not in (
@@ -1081,6 +1082,31 @@ _RECEIVER_FAULTS = ("receiver_capacity", "receiver_state", "receiver_directory",
                     "receiver_lock", "receiver_source", "receiver_limits", "receiver_time")
 
 
+def _write_new_receipts(path: str, bundle: str) -> None:
+    # Publish a complete private file without replacing any competing file
+    # or symlink. The initial --receipts-out check alone cannot protect it.
+    parent = str(Path(path).parent)
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".r-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(bundle)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            raise ContractError("receipts_out_exists") from None
+        dfd = os.open(parent, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    finally:
+        with suppress(OSError):
+            os.unlink(tmp)
+
+
 def _receive(args) -> dict:
     """Feed handed-over files to the synthetic reference receiver.
 
@@ -1108,7 +1134,13 @@ def _receive(args) -> dict:
         files = sorted(p for p in source.rglob("*.json") if p.is_file() and not p.is_symlink()
                        and not p.name.startswith(".")) if source.is_dir() else [source]
         for path in files:
-            with path.open("rb") as stream:
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            except OSError:
+                raise ContractError("receive_input_unsafe") from None
+            with os.fdopen(fd, "rb") as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                    raise ContractError("receive_input_unsafe")
                 raw = stream.read(MAX_WIRE_BYTES + 1)
             try:
                 peek = json.loads(raw)
@@ -1149,8 +1181,7 @@ def _receive(args) -> dict:
                     receipt["records_sha256"] = claimed
                 receipts.append(receipt)
         bundle = "".join(_canonical(parse_receipt(r)) + "\n" for r in receipts)
-        atomic_write(args.receipts_out, lambda fh: fh.write(bundle), mode=0o600,
-                     tmp_prefix=".r-")
+        _write_new_receipts(args.receipts_out, bundle)
     return {"transport": dict(transport), "receipts": len(receipts),
             "expired": expiry["expired"],
             "receiver": receiver.diagnostics(), "binding": "synthetic_reference_receiver"}

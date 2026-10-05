@@ -56,6 +56,52 @@ def test_auth_unknown_field_rejected(tmp_path):
         ext.load_authorization(p, NOW)
 
 
+def test_deep_authorization_is_a_contract_refusal(tmp_path):
+    path = tmp_path / "auth.json"
+    path.write_text("[" * 10000 + "0" + "]" * 10000)
+    with pytest.raises(ContractError, match="auth_unreadable:RecursionError"):
+        ext.load_authorization(path, NOW)
+
+
+@pytest.mark.parametrize("corrupt", ["ack", "payload", "journal", "deletion"])
+def test_deep_json_preserves_unknown_delivery_or_deletion(
+        tmp_path, corrupt):
+    auth_path = _auth(tmp_path)
+    auth = ext.load_authorization(auth_path, NOW)
+    envelope = ext.build_envelope(_records(), auth, NOW - 10, now=NOW)
+    eid = envelope["envelope_id"]
+    sink = ext.LocalSink(tmp_path / "sink")
+    exp = ext.GovernedExporter(tmp_path / "state")
+    sink.drop_ack = True
+    assert exp.deliver(envelope, sink, auth_path=auth_path)["status"] == "held"
+    journal = exp.dir / "journal" / f"{eid}.json"
+    if corrupt == "deletion":
+        sink.drop_delete_ack = True
+        assert exp.withdraw(eid, sink)["status"] == "delete_held"
+        path = sink.root / "deletions" / f"{eid}.json"
+    elif corrupt == "payload":
+        # Integrity must be checked even if a matching receipt is present.
+        ext._write_json(sink.root / "acks" / f"{eid}.json", {
+            "envelope_id": eid, "records_sha256": envelope["records_sha256"],
+            "records": envelope["record_count"], "acked_at": NOW})
+        path = sink.root / "envelopes" / f"{eid}.json"
+    elif corrupt == "ack":
+        path = sink.root / "acks" / f"{eid}.json"
+    else:
+        path = journal
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("[" * 10000 + "0" + "]" * 10000)
+    before = journal.read_bytes()
+    if corrupt == "journal":
+        with pytest.raises(ContractError, match="journal_unreadable"):
+            exp.reconcile(eid, sink)
+    else:
+        assert exp.reconcile(eid, sink)["status"] == (
+            "delete_held" if corrupt == "deletion" else "held")
+    assert journal.read_bytes() == before
+    assert path.read_text() == "[" * 10000 + "0" + "]" * 10000
+
+
 def test_auth_expired_revoked_unconfirmed_rejected(tmp_path):
     for over, match in (
             ({"expires_at": NOW - 1}, "auth_expired"),
