@@ -774,6 +774,53 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
     return snap
 
 
+# ---------- stage: thread read acknowledgement ----------
+
+THREAD_READ_WINDOW_S = 7 * 86400   # stored replies this recent qualify
+THREAD_READ_MAX = 10               # threads checked per tick (MCS load)
+
+
+def stage_thread_read(adapter, ledger, result, deadline):
+    """Acknowledge stored replies on MCS. A reply's unread state is
+    per thread — the project flag stage_unread clears never covers it,
+    and replies imported by history/probe/reply jobs are never
+    acknowledged at all (owner report 2026-10-06). A thread is cleared
+    only when every reply the server lists is already stored; the
+    intent is recorded before the clearing read, and only a re-check
+    that finds no unread reply confirms it."""
+    done = result.setdefault("threads_marked_read", [])
+    for pid, parent, last in ledger.thread_read_candidates(
+            time.time() - THREAD_READ_WINDOW_S, THREAD_READ_MAX):
+        if time.monotonic() > deadline - 30:
+            result["errors"].append("deadline_exceeded")
+            break
+        try:
+            if not adapter.thread_unread(pid, parent):
+                ledger.mark_thread_read(pid, parent, last, "confirmed")
+                continue
+            server = {m.message_id for m in adapter.fetch_thread(pid, parent)}
+            missing = server - ledger.stored_reply_ids(parent)
+            if missing:
+                # store them first (reply jobs notify as usual); this
+                # thread is acknowledged on a later tick
+                for rid in sorted(missing):
+                    ledger.job_add("reply", pid, rid, parent_id=parent)
+                continue
+            ledger.mark_thread_read(pid, parent, last, "unknown")
+            seen = adapter.read_thread(pid, parent)
+            for rid in sorted(seen - server):
+                # posted between the check and the clearing read: it is
+                # now read on MCS but not yet stored — fetch it
+                ledger.job_add("reply", pid, rid, parent_id=parent)
+            if not adapter.thread_unread(pid, parent):
+                ledger.mark_thread_read(pid, parent, last, "confirmed")
+                done.append(parent)
+        except SessionExpired:
+            raise
+        except MCSError as e:
+            result["errors"].append(f"thread_read: {_err_str(e)}")
+
+
 # ---------- stage: coverage backfill ----------
 
 def stage_backfill(adapter, ledger, result, deadline, run_id,
@@ -1488,6 +1535,10 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
     _with_relogin(adapter, ledger, result, "history_jobs",
                   job_ops.run_history_jobs, adapter, ledger, result,
                   deadline, trickle=False, semantic=sem_on)
+    if getattr(args, "mark_read", False):
+        # after every import path of this tick has stored its replies
+        _with_relogin(adapter, ledger, result, "thread_read",
+                      stage_thread_read, adapter, ledger, result, deadline)
 
     if args.download_files:
         stage_attachments(adapter, ledger, result, deadline, semantic=sem_on)

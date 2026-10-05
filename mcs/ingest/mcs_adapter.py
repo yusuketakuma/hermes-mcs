@@ -1813,6 +1813,48 @@ class MCSAdapter:
 
     # ---------- write (guarded) ----------
 
+    def thread_unread(self, project_id: int, parent_id: int) -> bool:
+        """Whether the server still holds an unread reply in this
+        thread. Reply read state is tracked per thread, not by the
+        project flag or the reply rows (verified live 2026-10-06: the
+        thread route carries no per-reply flag and the project detail
+        stays clear while the root reports ``oldest_unread_thread_
+        message``). A root missing from the answer is a SchemaError,
+        never 'read'."""
+        r = self._get("/messages", {
+            "message_ids": parent_id,
+            "include_oldest_unread_thread_message_id": 1})
+        items = r.get("messages")
+        if not isinstance(items, list):
+            raise SchemaError("messages: list invalid")
+        root = next((m for m in items if isinstance(m, dict)
+                     and m.get("id") == parent_id), None)
+        if root is None:
+            raise SchemaError(f"messages[{project_id}]: root missing")
+        oldest = root.get("oldest_unread_thread_message")
+        if oldest is not None and not isinstance(oldest, dict):
+            raise SchemaError("messages: oldest_unread_thread_message invalid")
+        return oldest is not None
+
+    def read_thread(self, project_id: int, parent_id: int,
+                    max_pages: int = 10) -> set[int]:
+        """Read every thread page WITHOUT keep_read_status — like the
+        web client opening the thread, this clears the thread's unread
+        replies (verified live 2026-10-06). Returns the reply ids seen,
+        so a reply that landed after the caller stored the thread can
+        be fetched instead of silently staying read-but-unstored."""
+        seen: set[int] = set()
+        for page in range(1, max_pages + 1):
+            r = self._get(
+                f"/projects/{project_id}/messages/{parent_id}/messages",
+                {"page": page})
+            for m in _norm_threads(r.get("messages"), project_id, parent_id):
+                seen.add(m.message_id)
+            pag = r.get("paginate")
+            if not isinstance(pag, dict) or not _has_next(pag, "thread"):
+                return seen
+        raise MCSError("thread_incomplete", retryable=True)
+
     def mark_patient_read(self, project_id: int, snapshot_ts: int,
                           fallback_plain: bool = False) -> dict:
         """snapshot_ts is still mandatory and still sent — but the POST

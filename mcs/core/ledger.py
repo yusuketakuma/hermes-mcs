@@ -448,6 +448,14 @@ class Ledger:
                 kind = "REAL" if col == "removed_at" else "TEXT"
                 self.db.execute(
                     f"ALTER TABLE message_reaction_actors ADD COLUMN {col} {kind}")
+        # per-thread read acknowledgement: a reply's unread state lives
+        # on its thread, not on the project flag the unread stage clears
+        self.db.execute("""
+          CREATE TABLE IF NOT EXISTS thread_read_marks(
+            parent_id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL,
+            last_reply_id INTEGER NOT NULL, status TEXT NOT NULL,
+            marked_at REAL NOT NULL)
+        """)
         self.db.execute("""
           CREATE TABLE IF NOT EXISTS message_reaction_actor_fetch(
             message_id INTEGER PRIMARY KEY, complete_at REAL,
@@ -2408,6 +2416,39 @@ class Ledger:
           WHERE project_id=? AND snapshot_ts=? AND status='confirmed'
         """, (project_id, ts)).fetchone()
         return r is not None
+
+    def thread_read_candidates(self, since: float, limit: int) -> list:
+        """(project_id, parent_id, last_reply_id) of threads holding a
+        stored reply newer than their last confirmed read — newest first.
+        Only stored replies qualify: a thread is never cleared before
+        its replies (and their notify intents) are in the ledger."""
+        return self.db.execute("""
+          SELECT m.project_id, m.parent_id, MAX(m.message_id) AS last_reply_id
+          FROM messages m
+          LEFT JOIN thread_read_marks t ON t.parent_id=m.parent_id
+          WHERE m.parent_id IS NOT NULL AND m.first_seen>=?
+            AND (t.parent_id IS NULL OR t.status!='confirmed'
+                 OR m.message_id>t.last_reply_id)
+          GROUP BY m.project_id, m.parent_id
+          ORDER BY MAX(m.first_seen) DESC LIMIT ?
+        """, (since, limit)).fetchall()
+
+    def stored_reply_ids(self, parent_id: int) -> set:
+        return {r[0] for r in self.db.execute(
+            "SELECT message_id FROM messages WHERE parent_id=?", (parent_id,))}
+
+    def mark_thread_read(self, project_id: int, parent_id: int,
+                         last_reply_id: int, status: str) -> None:
+        self.db.execute("""
+          INSERT INTO thread_read_marks(parent_id,project_id,last_reply_id,
+                                        status,marked_at)
+          VALUES(?,?,?,?,?)
+          ON CONFLICT(parent_id) DO UPDATE SET
+            project_id=excluded.project_id,
+            last_reply_id=excluded.last_reply_id,
+            status=excluded.status, marked_at=excluded.marked_at
+        """, (parent_id, project_id, last_reply_id, status, time.time()))
+        self.db.commit()
 
     # ---------- reuse queries ----------
 
