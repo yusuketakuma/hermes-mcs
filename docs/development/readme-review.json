@@ -2,97 +2,74 @@
   "version": "1.0.13",
   "sections": {
     "features": {
-      "notes": "1.0.13候補の先行レビュー。既存の収集・暫定集約・人承認を維持し、新しいローカル支援を候補欄へ分離した。mcs_cliのinstall/setup/update/doctor引数転送、backupのpolicy・専用鍵・同意待ち復元、metadataのpublicationとinclude_chat既定off、med_refの辞書承認・hash束縛をソースと変更記録で照合した。standaloneの全機能保証を削除し、SDK版metadataだけでは実機接続・worker反映の受入にならないと明記した。canonicalの人手held-out 200件以上/G6/calibration・昇格、urgencyのcaller/応答者/通知先/room冷却、有効化と統合は未受入として残す。この記録は公開版や全32項目の受入を宣言しない。 2026-10-05の最終照合: 1.0.13 build後、候補・未公開の表現を1.0.13のローカル支援（既定off・実機受入は別途）へ改め、構造化データの入口を実在するproject_metadata.pyへ訂正した。C1の撤回指示書・合成参照受信側・明示opt-inのsender分類、ケアチーム医師の見ました未観測人数はREADMEに追加せずCHANGELOGと仕様書へ置く。外部条件は計画§6で追跡する。 継続敵対的レビュー: text初報のE2抑止とE1維持、C1 receiveの期限処理、標準backup配置の診断をソースと回帰で再照合。実API・人手評価・実機運用は引き続き未受入。 全ブランチ統合: スタンプカードの絵文字集計1行、各本文の要約→スタンプ→押下者→本文、全senderの活動thread再取得とactor氏名/所属保存をソースへ照合。取得は既定off、最新観測状態の保持であり全取消イベント履歴ではない。 最終統合修正: 押下者の候補選択は加法thread索引で取得対象を変えず軽量化。共有25秒の予算と既定offは維持し、実機性能は未計測。",
+      "notes": "2026-10-05最終ソース照合。自動取得10分・履歴10/40分、スタンプ集計と投稿別押下者氏名/職種、古い/失敗/未取得の区別を確認。actor取得と第1層公開、構造化併記、urgencyは既定offを維持。保守修正の現行根拠/抽出世代/送信境界を131件の変更記録と照合。READMEの候補段落をSDK・配布物の合成受入完了と実API/人手/実運用の別条件へ訂正。モデル・人承認条件の変更は追加しない。",
       "sources": [
-        "CHANGELOG.md",
         "README.md",
-        "changes/archive/1.0.13/20261004-canonical-evaluation.json",
-        "changes/archive/1.0.13/20261004-canonical-following.json",
-        "changes/archive/1.0.13/20261004-runtime-compatibility.json",
-        "changes/archive/1.0.13/20261004-urgency-followup.json",
-        "mcs/extract/drug_map.py",
-        "mcs/notify/notify_urgent.py",
-        "mcs/ops/mcs_backup.py",
-        "mcs/ops/mcs_cli.py",
+        "CHANGELOG.md",
         "mcs/ops/mcs_setup.py",
-        "mcs/semantic/semantic_facts.py",
-        "mcs/views/mcs_view.py",
-        "mcs/views/project_metadata_view.py",
-        "changes/archive/1.0.13/20261005-urgency-route-render-binding.json",
-        "changes/archive/1.0.13/20261005-c1-receiver-retention.json",
-        "changes/archive/1.0.13/20261005-backup-plan-standard-source.json",
-        "mcs/core/ledger.py",
+        "mcs/views/message_metadata.py",
         "mcs/notify/notify_render.py",
-        "docs/guides/INSTALLATION.md",
-        "changes/archive/1.0.13/20261005-stamp-selection-thread-index.json"
+        "mcs/extract/rollup.py",
+        "mcs/notify/notify_urgent.py",
+        "changes/archive/1.0.13/maintenance-ten-minute-schedule-20261005.json",
+        "changes/archive/1.0.13/20261005-extraction-snapshot-evidence.json"
       ]
     },
     "demos": {
-      "notes": "Slackを先頭に保ち、7枚のPNGを直接確認した。01の本文/添付スレッド、02の確認・担当と本人スタンプの観測日時の分離、03の状態依存メニュー、04の入力、05の本人向けpreview/確定、06の本人向けタスク状態操作、07の取得範囲・暫定薬・原本確認を対応表と実装に照合した。生成器の--checkは成功し、7組のSVG/PNGとhash記録は整合した。既存の説明例に対するstaleな表示変更は見つからず画像は変更不要。backup・辞書候補・構造化併記・urgencyの新しい画面やSDK実機受入をこの図で証明しない。候補の表示変更が確定した場合は親が生成器の該当例を更新し、SVG/PNG/assets.jsonを再生成・再確認する。実データ・実投稿の匿名化例は追加しない。 2026-10-05の最終照合: 生成器の--checkで7組のSVG/PNGとhashが一致した。今回の修正は表示例の画面要素を変えないため画像は変更不要。 全ブランチ統合で02-notificationのスタンプ行を絵文字集計へ更新。SVGを生成器から再生成し、既存Chromeの隔離headless profileでPNG化して画面を直接確認。残り6組は変更不要。7組のPNG寸法・CJK画素・hashと生成SVGの整合を検証。Inkscapeが未導入のためChromeを使用した。",
+      "notes": "Slack先頭の7画面、Discord図、LINE WORKSの配送/本人1:1入力と確定図を実装対応表と照合。スタンプは絵文字件数、押下者は投稿別本文の氏名/職種/自分と観測日時でありタスク完了と区別。今回の保守は既存説明図の要素を変えず画像変更不要。名前と数値は架空、実画面キャプチャ・実SDK接続成功の証明ではない。今回Slack/LINE WORKS生成器のcheckを実施する。",
       "sources": [
-        "CHANGELOG.md",
         "README.md",
-        "adapters/common/text.py",
-        "adapters/slack/actions.py",
-        "adapters/slack/cards.py",
-        "changes/archive/1.0.13/20261004-summary-rendering.json",
         "docs/screenshots/slack-gallery/README.md",
         "docs/screenshots/slack-gallery/assets.json",
-        "mcs/notify/notify_views.py",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "adapters/slack/cards.py",
+        "adapters/slack/actions.py",
         "mcs/views/message_metadata.py",
-        "scripts/development/generate_slack_gallery.py"
+        "mcs/notify/notify_render.py"
       ]
     },
     "quickstart": {
-      "notes": "install.shの既存preflight・Hermes/standalone分岐を維持し、scripts/mcsの初回installとmcs_cliの4入口を照合した。Installed. Summaryの初回設定コマンドを利用する説明へ直し、旧mcs_setup.py init固定の文言を除いた。候補のmcs doctorは選択runtimeを診断し、LLM/サービスprobeは明示指定することを追記した。INSTALLATION・STANDALONE・UPGRADE_AGENTの導線、固定standalone SDKと実機受入が別であることを確認した。インストール・通信・サービス起動・更新・実機反映は実行しておらず、standaloneの外部apply阻害や実runtime/SDKの受入を解消したとは扱わない。 2026-10-05の最終照合: 新規Macでinstall.shが理由なく終了する不具合の修正、--recovery-pythonの要否、1.0.12からの更新で復旧用Pythonの選択が必要になる点をINSTALLATION・UPGRADE_AGENTとCHANGELOGの更新時の注意で照合した。 全ブランチ統合後も導入・更新・診断入口の説明は維持。INSTALLATIONのmetadata_actorsは全投稿4件、氏名/所属保存・無期限の最新状態保持へ整合。gateway/adapter再起動は配備時のオーナー作業で本タスク未実施。",
+      "notes": "scripts/mcs→mcs_cli→install/setup/update/doctor、install.shのpreflightとHermes/standalone分岐、導入後設定をソースへ照合。macOSの復旧Pythonはcheckout外の安全なSQLiteを持つ明示選択またはno-recoveryが必要。10分取得へのサービス再設定・worker/gateway/独立adapter再起動をCHANGELOGに保持。旧版更新はupdate-pathsの16経路を合成で追跡し、旧0～2手動/standalone host条件を維持。新規・過去版の受入と実機未確認はACCEPTANCEへ明記。",
       "sources": [
-        "CHANGELOG.md",
         "README.md",
-        "changes/archive/1.0.13/20261004-lifecycle-cli.json",
-        "changes/archive/1.0.13/20261004-runtime-compatibility.json",
-        "deployment/requirements-standalone.txt",
-        "docs/guides/INSTALLATION.md",
-        "docs/guides/STANDALONE.md",
-        "docs/guides/UPGRADE_AGENT.md",
+        "CHANGELOG.md",
         "install.sh",
+        "scripts/mcs",
         "mcs/ops/mcs_cli.py",
         "mcs/ops/mcs_setup.py",
-        "scripts/mcs"
+        "docs/guides/INSTALLATION.md",
+        "docs/guides/UPGRADE_AGENT.md",
+        "docs/guides/STANDALONE.md",
+        "tests/fixtures/schema_upgrade/update-paths.json",
+        "docs/development/ACCEPTANCE_1.0.13.md"
       ]
     },
     "safety": {
-      "notes": "外部通知に患者名・本文・送信対象添付が出ること、AI候補・確認記録と処方/対応完了の区別、未取得を不存在にしない注意を維持した。backup FAQを同一端末の日次保存と候補offsite支援に分け、鍵・独立SHA receipt・保持・平文scratchの承認、外部escrow drill、新規私有配置、復元後holdと別途reason/receiptの停止点をBACKUP/SECURITYと照合した。辞書のcustody/license/approved_by、構造化GETのsession・未読保持・権限受入、氏名非表示とpublication/include_chatの別gateを確認した。暗号化や合成テスト成功をDB監査、実データ復旧、臨床的正しさや配送履歴の完全性の保証にはしない。 2026-10-05の最終照合: テストから実Hermes・launchctlへ到達しないガード、復元後の新着text待機、受理済みenvelopeへの後着拒否の保留を確認した。外部送付・実データ復旧・本番有効化を宣言しない。 全ブランチ統合でmetadata_actors有効時の氏名/職種表示・所属保存、最新観測状態の無期限保持を明示。取得/公開の既定off、未読保持の実受入、PHI非使用の合成検証を維持。未来/削除済み投稿を監視活動から除外。",
+      "notes": "患者名・本文・対象添付の設定先への送信、未取得≠不存在、候補≠処方/対応完了、人承認+reason+receiptをREADME/SECURITYと照合。暗号化復元は新規私有配置と同意待ち・配送保留、辞書は出所/hash/承認、metadataは保存/公開の別gateと氏名保存を維持。送信前の世代/根拠再検証・同意の期限・不正JSONを保守修正記録へ照合。実データ復旧・実API・本番機能opt-inを合成受入から推定しない。",
       "sources": [
-        "CHANGELOG.md",
         "README.md",
         "SECURITY.md",
-        "changes/archive/1.0.13/20261004-backup-lifecycle.json",
-        "changes/archive/1.0.13/20261004-metadata-view-entry.json",
-        "changes/archive/1.0.13/20261004-structured-comparison.json",
-        "docs/guides/BACKUP.md",
-        "docs/roadmap/mcs-api-survey.md",
-        "docs/specs/lifecycle-spec.md",
-        "mcs/extract/drug_map.py",
+        "CHANGELOG.md",
         "mcs/ops/mcs_backup.py",
-        "mcs/views/mcs_view.py",
+        "deployment/recovery/mcs_recover.py",
+        "mcs/extract/drug_map.py",
         "mcs/views/project_metadata_view.py",
-        "mcs/core/ledger.py",
-        "mcs/notify/notify_render.py",
-        "docs/guides/INSTALLATION.md"
+        "docs/guides/BACKUP.md",
+        "changes/archive/1.0.13/maintenance-semantic-send-gate-deep-json-20261005.json",
+        "changes/archive/1.0.13/maintenance-restore-consent-20261005.json"
       ]
     },
     "docs": {
-      "notes": "候補入口からBACKUP・MCS API調査・抽出条件・更新ガイドへ案内し、長いpolicy/承認一覧はREADMEに複製しない。文書表のバックアップ欄にも端末喪失ガイドを追加した。旧『レビュー・文書整合だけ』の段階表現をSDK/canonical/urgency/統合受入継続へ修正した。GENERATED:releaseの公開済みv1.0.12要約は保持し、CHANGELOG・生成表・release計画・他文書は編集しない。既存schemaで候補versionを記録するため、最新CHANGELOG版との最終一致は親の同版release build後に検証する。候補記録の構造・参照・READMEリンク検査と、最終公開の技術受入を区別する。 2026-10-05の最終照合: GENERATED:releaseを1.0.13へ同期し、ドキュメント節の計画説明を完了状態と§6の外部条件へ更新した。候補記録readme-review-1.0.13.jsonは本記録へ統合した。 全ブランチ統合でROADMAP #22-D1〜D3・stamps・INSTALLATIONの現行契約を整合し、公開済み旧版のCHANGELOG/変更記録は改変しない。",
+      "notes": "1.0.13の全131記録から既存generatorでCHANGELOG/README要約を再buildし、1.0.12以下と既存archive88件の内容を保持。5領域を新たに照合し旧候補の未受入表現を訂正。READMEの導入/更新/バックアップ/安全/利用/開発のリンクと主要アンカーをcheckで検証。全体監査の最終receipt H3b58ba7と統合ソース一致を受入票へ束縛し、最終CI/公開/本番適用は親の後工程として未実施を保持。",
       "sources": [
-        "CHANGELOG.md",
         "README.md",
-        "docs/development/README_MAINTENANCE.md",
+        "CHANGELOG.md",
         "docs/development/RELEASE_NOTES.md",
-        "docs/guides/BACKUP.md",
-        "docs/guides/UPGRADE_AGENT.md",
-        "docs/roadmap/extraction.md",
-        "docs/roadmap/mcs-api-survey.md",
-        "docs/specs/lifecycle-spec.md",
+        "docs/development/README_MAINTENANCE.md",
+        "docs/development/full-maintenance-20261005/PLAN.md",
+        "docs/development/ACCEPTANCE_1.0.13.md",
+        "docs/dev-records/release-1.0.13-20261005.md",
+        "scripts/development/release_notes.py",
         "scripts/development/readme_release.py"
       ]
     }
