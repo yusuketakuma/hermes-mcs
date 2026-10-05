@@ -159,6 +159,8 @@ def _delivered(db, pid: int, mid: int, fp: str, policy: str, revision,
         prefix, fingerprint = _accepted_prefix(row, len(chunks))
         if prefix is None:
             return None, "notice_receipt_unprovable"
+        if prefix == 0:
+            continue              # provably nothing accepted: delivers no fact
         partial = row["state"] != "accepted" or prefix < len(chunks)
         if partial:
             target = notify_flush._target(cfg or {}, "semantic_notice")

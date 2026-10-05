@@ -33,7 +33,7 @@ import _mcs_path  # noqa: F401
 from semantic_policy import JOB_KIND, QC_JOB_KIND  # noqa: E402
 from semantic_drain import SCHED_KIND  # noqa: E402
 
-HOME = os.path.expanduser("~/.mcs")
+from mcs_util import HOME  # noqa: E402 — honours MCS_ROOT
 DB = os.path.join(HOME, "data", "ledger.db")
 
 

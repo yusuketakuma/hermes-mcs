@@ -28,9 +28,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
 from ledger import Ledger, LedgerReader
-from mcs_util import acquire_run_lock
+from mcs_util import HOME, acquire_run_lock
 
-HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "extract_v1"
 
@@ -63,8 +62,8 @@ _URGENT_NONCURRENT = re.compile(
 _URGENT_REQUEST = re.compile(r"ください|下さい|お願い|ほしい|欲しい|願います")
 _URGENT_INACTIVE = re.compile(
     r"^(?:性|(?:の|な|に)?(?:対応|連絡|確認|受診|処置|搬送|要請))?"
-    r"の?(?:は|も|が|を)?(?:で(?:は)?|じゃ|し|する)?"
-    r"(?:ありません|ません|ない|なく|なし|"
+    r"の?(?:は|も|が|を)?(?:で(?:は)?|じゃ|(?:し|され)(?:て(?:い|おり?)?)?|する)?"
+    r"(?:ありません|ません|なかった|ない|なく|なし|"
     r"不要(?!では(?:ありません|ない))|必要(?:は|が)?(?:ありません|ない|なし)|"
     r"済み|完了|(?:た|ました|された|されました)"
     # A past ending closes the phrase; 「ただちに」「たすけて」 are not past tense.
@@ -84,7 +83,7 @@ _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬
 _MED_PERIOD = re.compile(
     r"(?<![\d/])(?:(\d{4})/)?(\d{1,2}/\d{1,2})"
     r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
-RULE_VERSION = 8
+RULE_VERSION = 9
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問|診察|往診)")
@@ -93,7 +92,7 @@ _PLANNED_BEFORE = re.compile(r"次回|予定(?!通り|どおり)|明日|明後�
 _PLANNED_IF = re.compile(r"予定(?:通り|どおり)なら[　\s、,，]*$")
 _PLANNED_AFTER = re.compile(r"[　\s]*(?:の|を)?[　\s]*(?:予定|します|いたします|致します)")
 _VITAL_PATTERNS = {
-    "bt":   r"(?:体温|BT)[:：は]?\s*(\d{2}(?:\.\d)?)\s*[℃度]?",
+    "bt":   r"(?:体温|BT)[:：は]?\s*(\d{2}(?:[.．]\d)?)\s*[℃度]?",
     # 不整脈 is a finding, not a pulse label ("不整脈は20回" ≠ HR 20)
     "hr":   r"(?:脈拍|(?<!静)(?<!動)(?<!整)脈|HR|心拍数?)[:：は]?\s*(\d{2,3})",
     "rr":   r"(?:呼吸(?:数)?|RR)[:：は]?\s*(\d{1,2})",
@@ -224,9 +223,12 @@ def extract_message(body: str, posted_at: str) -> dict:
         break
 
     # --- next planned date — a FUTURE date ---
-    m = re.search(r"次回.{0,8}?(\d{1,2})[/月](\d{1,2})", body)
+    m = re.search(
+        r"次回.{0,8}?(?<!\d)(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})", body)
     if m:
-        d = _ymd(int(m.group(1)), int(m.group(2)), year, posted, "future")
+        d = _ymd(int(m.group(2)), int(m.group(3)),
+                 int(m.group(1)) if m.group(1) else year,
+                 posted, "any" if m.group(1) else "future")
         if d:
             out["next_planned"] = d
 
@@ -287,8 +289,8 @@ def extract_message(body: str, posted_at: str) -> dict:
             if k == "sbp":
                 vit["sbp"], vit["dbp"] = int(m.group(1)), int(m.group(2))
             else:
-                vit[k] = float(m.group(1)) if "." in m.group(1) \
-                    else int(m.group(1))
+                v = m.group(1).replace("．", ".")  # int/float take full-width digits
+                vit[k] = float(v) if "." in v else int(v)
     if vit:
         out["vitals"] = vit
 

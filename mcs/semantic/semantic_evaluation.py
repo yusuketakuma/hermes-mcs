@@ -324,9 +324,9 @@ def _validate_candidate(candidate: dict, manifest: dict, attachment_ids: set) ->
         if len(ids) != len(set(ids)):
             raise EvaluationError(f"candidate_{stage}_fact_id_duplicate")
     for row in _items(candidate.get("relations", []), "candidate_relations"):
-        _id(row.get("left_fact_id"), "candidate_relation_left")
-        _id(row.get("right_fact_id"), "candidate_relation_right")
-        if row.get("left_fact_id") == row.get("right_fact_id"):
+        left = _id(row.get("left_fact_id"), "candidate_relation_left")
+        right = _id(row.get("right_fact_id"), "candidate_relation_right")
+        if left == right:
             raise EvaluationError("candidate_relation_self_loop")
         if row.get("type") not in RELATION_TYPES:
             raise EvaluationError("candidate_relation_type_invalid")
@@ -540,11 +540,16 @@ def _case_counts(record: dict) -> dict:
     mandatory = {key for key, row in gold.items()
                  if row.get("mandatory") is True}
     mandatory_found = mandatory & predicted.keys()
-    rendered_ids = set(candidate.get("rendered_fact_ids") or [])
+    # stage ids and refs trimmed like the predicted fact ids (_fact_map)
+    stage_ids = {stage: {ref.strip() for ref in
+                         candidate.get(f"{stage}_fact_ids") or []}
+                 for stage in LIFECYCLE_STAGES}
+    rendered_ids = stage_ids["rendered"]
     mandatory_rendered = mandatory & rendered_ids
-    delivered_ids = set(candidate.get("delivered_fact_ids") or [])
+    delivered_ids = stage_ids["delivered"]
     mandatory_delivered = mandatory & delivered_ids
-    unresolved_refs = {row.get("fact_ref")
+    unresolved_refs = {_id(row.get("fact_ref"),
+                           "candidate_unresolved_fact_ref")
                        for row in _items(candidate.get("unresolved", []),
                                          "candidate_unresolved")}
     silently_dropped = mandatory - predicted.keys() - unresolved_refs
@@ -557,10 +562,7 @@ def _case_counts(record: dict) -> dict:
     lifecycle = {"complete": int(observed), "missing": 0, "extra": 0,
                  "missing_observations": int(not observed)}
     for stage in LIFECYCLE_STAGES:
-        # trimmed like the predicted fact ids (_fact_map) they are
-        # compared against
-        ids = {ref.strip() for ref in candidate.get(f"{stage}_fact_ids")
-               or []}
+        ids = stage_ids[stage]
         lost = len(predicted.keys() - ids)
         added = len(ids - predicted.keys())
         lifecycle["missing"] += lost
@@ -571,12 +573,13 @@ def _case_counts(record: dict) -> dict:
     gold_relations = _items(label.get("relations", []), "label_relations")
     pred_relations = _items(candidate.get("relations", []),
                             "candidate_relations")
-    pred_rel_triples = {(row.get("left_fact_id"),
-                         row.get("right_fact_id"), row.get("type"))
-                        for row in pred_relations}
-    relation_hits = sum(
-        (row.get("left_fact_id"), row.get("right_fact_id"),
-         row.get("type")) in pred_rel_triples for row in gold_relations)
+    def _triple(row):
+        return (_id(row.get("left_fact_id"), "relation_left"),
+                _id(row.get("right_fact_id"), "relation_right"),
+                row.get("type"))
+    pred_rel_triples = {_triple(row) for row in pred_relations}
+    relation_hits = sum(_triple(row) in pred_rel_triples
+                        for row in gold_relations)
     evidenced = sum(bool(row.get("evidence_ids"))
                     for row in predicted.values())
 

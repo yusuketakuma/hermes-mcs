@@ -31,11 +31,10 @@ import _mcs_path  # noqa: F401
 from ledger import Ledger, karte_summary_block
 from mcs_queries import (JST, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
-from mcs_util import acquire_run_lock
+from mcs_util import HOME, acquire_run_lock
 from mcs_signals import normalize_sender_id
 from drug_map import KIND as REF_KIND, current_refs
 
-HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "patient_rollup"
 STALE_DAYS = 21          # message unseen this long while siblings refresh
@@ -422,10 +421,21 @@ _REF_SIG_SQL = ("SELECT COUNT(*) || ':' || IFNULL(MAX(artifact_id), '') "
                 "FROM artifacts WHERE kind=? AND project_id={pid}")
 
 
+def _newest_source_ts(ledger, project_id: int) -> float:
+    """Newest source stamp dirty_projects compares to generated_at."""
+    return ledger.db.execute(
+        "SELECT MAX(IFNULL((SELECT MAX(created_at) FROM artifacts"
+        " WHERE project_id=:p AND kind IN ('extract_v1','extract_llm',"
+        "'canonical_projection','semantic_facts_v4','karte_summary')), 0),"
+        " IFNULL((SELECT MAX(updated_seen) FROM messages"
+        " WHERE project_id=:p), 0))", {"p": project_id}).fetchone()[0]
+
+
 def rebuild(ledger, project_id: int) -> int:
     """Atomic replace — a crash between delete and insert must not leave
     a patient with NO rollup (Oracle B22). An unchanged rebuild (all
-    but generated_at equal) writes nothing and returns the existing id."""
+    but generated_at equal) keeps the content and id; it only advances
+    meta.generated_at when a newer source would otherwise keep it dirty."""
     # sign before building: a rewrite racing the build stays dirty (M5)
     ref_sig = ledger.db.execute(_REF_SIG_SQL.format(pid="?"),
                                 (REF_KIND, project_id)).fetchone()[0]
@@ -452,6 +462,18 @@ def rebuild(ledger, project_id: int) -> int:
                         and om.get("next_med_period_check")
                         == d.get("_next_med_period_check")
                         and om.get("med_ref_sig") == ref_sig):
+                    # a no-op source write (LLM error row, unchanged
+                    # re-save) must still clear dirty_projects, else the
+                    # patient is rebuilt every tick; the stamp was taken
+                    # before the sources were read, so a racing write
+                    # stays dirty
+                    g = om.get("generated_at")
+                    if type(g) not in (int, float) or not 0 <= g < 1e12 \
+                            or _newest_source_ts(ledger, project_id) > g:
+                        om["generated_at"] = d["generated_at"]
+                        ledger.db.execute(
+                            "UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                            (json.dumps(om), old[0]["artifact_id"]))
                     return old[0]["artifact_id"]
         ledger.db.execute(
             "DELETE FROM artifacts WHERE kind=? AND project_id=?",

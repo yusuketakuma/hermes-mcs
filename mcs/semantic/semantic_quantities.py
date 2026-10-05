@@ -26,10 +26,11 @@ _AMOUNT_RE = re.compile(
     re.IGNORECASE,
 )
 _UNKNOWN_AMOUNT_RE = re.compile(
-    r"(?<![A-Za-z_])"
+    # A letter-glued percent (``HbA1c8.0%``) is still a value to hold.
+    r"(?:(?<![A-Za-z_])|(?=[0-9.,]*\s*%))"
     r"(?P<value>[+\-−＋]?(?:[0-9][0-9,]*(?:\.[0-9]+)?|\.[0-9]+))\s*"
     r"(?P<unit>[A-Za-zμµ]+(?:\s*[／/]\s*[0-9]*[A-Za-zμµ一-龥々ヶ]+)+"
-    r"|[A-Za-zμµ]+|[一-龥々ヶ]+)"
+    r"|[A-Za-zμµ]+|[一-龥々ヶ]+|%)"
 )
 _PER_DAY_RE = re.compile(
     r"(?P<days>[0-9]+)\s*日\s*(?P<count>[0-9]+)\s*回(?:量)?"
@@ -150,8 +151,9 @@ def extract_quantities(text: object) -> list[dict]:
         if any(start < known_end and end > known_start
                for known_start, known_end in known_amount_spans):
             continue
-        # 回/日 are frequency tokens, not unsupported amount units.
-        if match.group("unit") in {"回", "日"}:
+        # 回/日 are frequency/duration tokens, not unsupported amount units;
+        # the greedy kanji unit may run on (``3回内服``, ``7日分``).
+        if match.group("unit")[:1] in {"回", "日"}:
             continue
         item = _unknown_amount(match.group("value"), match.group("unit"),
                                raw=match.group(0))

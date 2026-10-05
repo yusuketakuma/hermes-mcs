@@ -43,12 +43,11 @@ from ledger import Ledger
 from mcs_queries import (EXTRACT_FEEDBACK_KIND, current_extract_pred,
                          current_qc_pred,
                          current_v4_id, json_or_null, qc_source_id)
-from mcs_util import (CONF_PATH, acquire_run_lock, circuit_failure, circuit_open_s,
+from mcs_util import (CONF_PATH, HOME, acquire_run_lock, circuit_failure, circuit_open_s,
                       circuit_success, disk_floor_mb, disk_free_mb,
                       json_object, load_config, locate_quote_span,
                       text_chunks)
 
-HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "extract_llm"
 # defaults — config.json local_llm.url/local_llm.model override them
@@ -462,12 +461,17 @@ _VITAL_KEYS = {"bt", "hr", "rr", "sbp", "dbp", "spo2", "bs"}
 # inside the N/M pair decides which.
 _VITAL_LABELS = {
     "bt":   re.compile(r"体温|BT|Bt|bt|℃"),
-    "hr":   re.compile(r"脈拍|(?<!静)(?<!動)脈|心拍|HR|Hr|hr"),
+    # Bare P (BT36.5 P72) — not the P of BP/SpO2/PM.
+    "hr":   re.compile(r"脈拍|(?<!静)(?<!動)脈|心拍|HR|Hr|hr"
+                       r"|(?<![A-Za-z])P(?![A-Za-z])"),
     "rr":   re.compile(r"呼吸|RR|Rr|rr"),
     "bp":   re.compile(r"血圧|BP|Bp|bp|収縮|拡張|mmHg"),
     "spo2": re.compile(r"SpO2|Spo2|SPO2|spo2|酸素飽和|酸素"),
     "bs":   re.compile(r"血糖|BS|Bs|bs|Glu|glu|血糖値"),
 }
+# Forward window: only units that sit right after the number. A label
+# word after it (P72 SpO2…) names the NEXT reading, not this one.
+_VITAL_UNITS = {"bt": re.compile(r"℃"), "bp": re.compile(r"mmHg")}
 _VITAL_CLASS = {"bt": "bt", "hr": "hr", "rr": "rr",
                 "sbp": "bp", "dbp": "bp", "spo2": "spo2", "bs": "bs"}
 _VITAL_WIN_BACK = 14
@@ -486,8 +490,8 @@ def _vitals_guard(body: str | None, vit: dict,
     (same policy as evidence)."""
     if not body or not vit:
         return vit
-    toks = [(m.start(), m.end(), float(m.group()))
-            for m in re.finditer(r"\d+(?:\.\d+)?", body)]
+    toks = [(m.start(), m.end(), float(m.group().replace("．", ".")))
+            for m in re.finditer(r"\d+(?:[.．]\d+)?", body)]
     issues = drops.setdefault("vitals", []) if drops is not None else []
 
     def note(s):
@@ -508,7 +512,7 @@ def _vitals_guard(body: str | None, vit: dict,
                 dist = len(back) - m_end
                 if best is None or dist < best[0]:
                     best = (dist, cls)
-        for cls, rx in _VITAL_LABELS.items():
+        for cls, rx in _VITAL_UNITS.items():
             fm = rx.search(body[e:e + _VITAL_WIN_FWD])
             if fm is not None:
                 dist = 100 + fm.start()
@@ -1904,6 +1908,10 @@ def _thin_pending_sql() -> str:
     counts = [f"COALESCE(json_array_length({content},'$.{field}'),0)"
               for field in _FACT_LIST_FIELDS]
     counts.append(f"(SELECT COUNT(*) FROM json_each({content},'$.vitals'))")
+    # _facts also counts a reply classification (reply.kind truthy).
+    counts.append(f"(CASE WHEN json_type({content},'$.reply')='object' "
+                  f"AND COALESCE(json_extract({content},'$.reply.kind'),'') "
+                  f"NOT IN ('',0) THEN 1 ELSE 0 END)")
     return f"""SELECT t.artifact_id FROM artifacts t
         WHERE t.kind='{KIND}' AND t.message_id=m.message_id
           {current_extract_pred('t')}

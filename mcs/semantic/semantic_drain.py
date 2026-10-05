@@ -811,7 +811,11 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         if existing is not None and prev_status in ("PASS",
                                                     "NEEDS_REVIEW"):
             results[mid] = {"summary": existing["content"],
-                            "status": prev_status, "findings": [],
+                            "status": prev_status,
+                            # stored findings keep v4.diagnostic's
+                            # (status, doc_hash, findings) dedup intact
+                            "findings": list(prev_audit["content"].get(
+                                "findings") or []),
                             "repaired": False, "fresh": False}
             continue
         if time.monotonic() > deadline - 5:
@@ -831,10 +835,11 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     summary, summary_reason = summarize(
                         llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
                         deadline=deadline, return_reason=True)
-                except runtime.LLMNotSent as e:
-                    # the local model never got this target's request:
-                    # stop here like any incomplete pass, so targets
-                    # already audited are still committed below
+                except (runtime.LLMNotSent, runtime.RuntimeBudget) as e:
+                    # the local model never got (or ran out of budget
+                    # for) this target's request: stop here like any
+                    # incomplete pass, so targets already audited are
+                    # still committed below; re-raised for _process_job
                     not_sent = e
                     summary, summary_reason = None, "not_sent"
         if summary is None:

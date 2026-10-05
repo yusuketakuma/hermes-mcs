@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 from ledger import LedgerReader
+import mcs_util
 from mcs_util import atomic_write, env_value
 import semantic_jev as jev
 from semantic_audit import audit_claims, audit_code
@@ -39,7 +40,7 @@ from semantic_llm import extract_facts, summarize
 from semantic_runtime import LLMNotSent
 from semantic_store import bundle_fingerprint
 
-DB = os.path.join(os.path.expanduser("~/.mcs"), "data", "ledger.db")
+DB = os.path.join(mcs_util.HOME, "data", "ledger.db")
 
 
 def _write_json_private(path: str, data) -> None:
@@ -113,6 +114,7 @@ def _run_case(case: dict, llm_fn, jev_client=None,
                                   deadline=deadline, return_reason=True)
     findings = []
     if summary:
+        summary["_facts"] = facts   # evidence context for the Jev audit
         findings = audit_code(bundle, facts, summary)
         if jev_client is not None:
             jf, evaluated = audit_claims(jev_client, bundle, summary,

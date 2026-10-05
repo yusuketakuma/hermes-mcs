@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 import local_llm
 from ledger import Ledger, LedgerReader
-from mcs_util import acquire_run_lock, load_config, loads_dict
+from mcs_util import HOME, acquire_run_lock, load_config, loads_dict
 import semantic_jev as jev  # noqa: F401 — facade patch point for tests
 import semantic_runtime as runtime
 
@@ -108,7 +108,6 @@ __all__ = [
     "update_loops",
 ]
 
-HOME = os.path.expanduser("~/.mcs")
 DB = os.path.join(HOME, "data", "ledger.db")
 CONF_PATH = os.path.join(HOME, "config.json")
 

@@ -178,17 +178,23 @@ def fixed_bundle_outputs(bundle: dict, target_id: int, candidate: dict,
     # The production extractor receives earlier thread members as
     # reference context — the baseline must see the same input or it
     # measures a different configuration than production.
+    # Mirror extract_llm._thread_context: epoch timestamps, root always,
+    # replies strictly earlier (same second -> lower id), NULL excluded.
     from extract_llm import _ctx_lines
-    t_ts = target.get("posted_at") or ""
-    ctx_rows = [
-        {"message_id": m["message_id"], "body_text": m["body_original"],
-         "posted_at_ts": m.get("posted_at") or "",
-         "who": m.get("sender") or "投稿者"}
-        for m in members
-        if m.get("body_state") == "full" and m.get("body_original")
-        and (m["message_id"] == root or m.get("parent_id") == root)
-        and (m.get("posted_at") or "") < t_ts
-    ]
+    from ledger import _posted_epoch
+    t_ts = _posted_epoch(target.get("posted_at")) or 0
+    ctx_rows = []
+    for m in members:
+        ts = _posted_epoch(m.get("posted_at"))
+        if (m.get("body_state") != "full" or not m.get("body_original")
+                or m["message_id"] == target_id):
+            continue
+        if m["message_id"] != root and (ts is None or (ts, m["message_id"]) >= (t_ts, target_id)):
+            continue
+        sender = m.get("sender") if isinstance(m.get("sender"), dict) else {}
+        ctx_rows.append({"message_id": m["message_id"], "body_text": m["body_original"],
+                         "posted_at_ts": ts,
+                         "who": sender.get("profession") or sender.get("type") or "投稿者"})
     ctx = "\n".join(_ctx_lines(ctx_rows, root)) or None
     baseline = baseline_fn(target["body_original"], context=ctx)
     if not isinstance(baseline, dict) or not _validate_baseline(baseline):

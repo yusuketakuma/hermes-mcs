@@ -1086,6 +1086,16 @@ def extract_facts_v2(llm_fn, member: dict,
                         else fid for fid in ob["fact_ids"]))
                 if oid not in existing["obligation_ids"]:
                     existing["obligation_ids"].append(oid)
+        elif fact["validation_status"] == "unverified":
+            # A hint quote is a bare token (name or normalised value) that
+            # may be ambiguous or absent verbatim; an unverifiable
+            # deterministic candidate is dropped, not reported as an
+            # unverified fact — category signals still hold coverage.
+            for oid in fact["obligation_ids"]:
+                ob = obligations.get(oid)
+                if ob is not None:
+                    ob["fact_ids"] = [fid for fid in ob["fact_ids"]
+                                      if fid != fact["fact_id"]]
         else:
             seen[key] = fact
             facts.append(fact)
@@ -1471,6 +1481,18 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
             if fact.get("_evidence") and not existing.get("_evidence"):
                 existing["_evidence"] = fact["_evidence"]
 
+    # A covered jev_pre obligation snapshots its deterministic
+    # counterpart's links at extraction; re-sync so repaired facts
+    # keep a "present" verdict covered instead of reopening it.
+    det_by_owner = {(ob["owner_id"], ob["category"]): ob
+                    for ob in obligations.values()
+                    if ob.get("source") == "deterministic"}
+    for ob in obligations.values():
+        det = det_by_owner.get((ob["owner_id"], ob["category"]))
+        if (ob.get("source") == "jev_pre" and ob["status"] == "covered"
+                and det is not None):
+            ob["fact_ids"] = list(det["fact_ids"])
+
     # Evidence surviving from the original doc stays keyed by id;
     # repaired facts contribute their fresh _evidence entries.
     evidence = {e["evidence_id"]: e for e in doc.get("evidence", [])
@@ -1492,7 +1514,9 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
             ob["status"] = "failed"
         elif owner_status == "pending":
             ob["status"] = "open"
-        elif ob["fact_ids"]:
+        elif ob["fact_ids"] and ob["status"] not in ("ambiguous", "failed"):
+            # ambiguous/failed were held open by verdicts or jev_pre;
+            # links alone never upgrade them.
             ob["status"] = "covered"
         elif ob["status"] == "covered":
             ob["status"] = "open"
