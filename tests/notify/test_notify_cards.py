@@ -517,7 +517,7 @@ def test_card_thread_shows_structured_lines(led, tmp_path):
     card["ui_state"] = json.dumps({"page": 0})
     c = notify_render._card_content(led.db, card)
     texts = [b.get("text") or "" for b in c["containers"]]
-    struct = [t for t in texts if t.startswith("📋 構造化")]
+    struct = [t for t in texts if t.startswith("📋 要約")]
     assert struct and "症状" in struct[0] and "疼痛" in struct[0]
     # the header line remains alongside the structured block; the raw
     # body itself stays off the card (📄本文表示 serves it)
@@ -558,7 +558,7 @@ def test_card_stale_and_bad_extraction_not_shown(led, tmp_path):
     card["ui_state"] = json.dumps({"page": 0})
     c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
-    assert "📋 構造化" not in joined and "疼痛" not in joined
+    assert "📋 要約" not in joined and "疼痛" not in joined
     # the card still renders the message headers (bodies stay off-card)
     assert "職員" in joined and "本文" not in joined
 
@@ -580,7 +580,7 @@ def test_card_deleted_message_hides_structured_data(led, tmp_path):
     c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     assert "（削除済み）" in joined
-    assert "📋 構造化" not in joined and "疼痛" not in joined
+    assert "📋 要約" not in joined and "疼痛" not in joined
 
 
 def test_card_sender_tag_shows_time_profession_org(led, tmp_path):
@@ -612,8 +612,9 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
         led.db, card, {"shown": "[100, 101]"})
     assert "09-24 08:" in text
     # header -> (summary) -> stamps -> posted body, in that order
-    assert "08:40 職員（薬剤師・薬局Y）\nスタンプ 未取得\n押した人: 未取得\n本文" in text
-    assert "08:41 職員\nスタンプ 未取得\n押した人: 未取得\n本文" in text
+    rule = notify_render.SECTION_RULE
+    assert f"08:40 職員（薬剤師・薬局Y）\nスタンプ 未取得\n押した人: 未取得\n{rule}\n本文" in text
+    assert f"08:41 職員\nスタンプ 未取得\n押した人: 未取得\n{rule}\n本文" in text
 
 
 def test_signal_quote_shows_sender_metadata(led, tmp_path):
@@ -653,10 +654,10 @@ def test_card_signal_structured_evidence(led, tmp_path):
     c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     assert "note sig-x" in joined
-    assert "📋 構造化" not in joined and "退院後フォローの記録" not in joined
+    assert "📋 要約" not in joined and "退院後フォローの記録" not in joined
     _, body = notify_render._card_body_text(
         led.db, card, {"shown": json.dumps(c["shown"])})
-    assert "📋 構造化" in body and "要約: 状態安定" in body
+    assert "📋 要約" in body and "要約: 状態安定" in body
     assert "退院後フォローの記録" in body        # raw body still there
 
 

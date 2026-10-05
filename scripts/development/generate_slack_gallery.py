@@ -106,7 +106,7 @@ class Screen:
         y += 35
         self.text(x, y, "10-01 09:40 訪問看護 佐藤さん", 17, MUTED)
         y += 32
-        self.text(x, y, "構造化（抽出候補）", 17, GREEN, True)
+        self.text(x, y, "要約（抽出候補）", 17, GREEN, True)
         y += 30
         y = self.paragraph(x, y, "要約: 次回訪問時に残薬を確認してほしいとの連絡", width, 19)
         self.text(x, y + 5, "区分: 依頼", 19)
@@ -159,7 +159,8 @@ def notification():
     s.text(x + 18, y + 321, "10-01 09:40 佐藤さん（訪問看護）", 17, MUTED)
     s.text(x + 18, y + 353, "スタンプ 👀2 🙆1 · 観測 10-01 10:00", 18, GREEN)
     s.paragraph(x + 18, y + 385, "押した人: 👀 田中 花子、佐藤 一郎 / 🙆 鈴木 太郎（自分） · 観測 10-01 10:00", 752, 17)
-    s.text(x + 18, y + 444, "次回訪問時に残薬を確認してください。", 18)
+    s.line(x + 18, y + 420, x + 770, y + 420, "#c4ccc6")
+    s.text(x + 18, y + 450, "次回訪問時に残薬を確認してください。", 18)
     s.text(x, y + 489, "観測は取得した時点。スタンプを押した時刻ではありません。", 15, MUTED)
     return s.finish()
 

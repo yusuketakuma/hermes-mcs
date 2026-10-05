@@ -28,12 +28,12 @@
   <text x="80" y="146" font-size="12" fill="#d1d2d3" font-weight="bold">💬 山田 太郎 — 09-28</text>
 
   <text x="80" y="168" font-size="9" fill="#d1d2d3" font-weight="bold">09-28 09:40 訪問看護 佐藤さん</text>
-  <text x="80" y="186" font-size="9" fill="#ababad" font-weight="bold">📋 構造化</text>
+  <text x="80" y="186" font-size="9" fill="#ababad" font-weight="bold">📋 要約</text>
   <text x="80" y="202" font-size="9" fill="#d1d2d3">・バイタル: BP 142/88  HR 76  SpO2 96%</text>
   <text x="80" y="218" font-size="9" fill="#d1d2d3">・症状: めまい(中等度・起立時)</text>
 
   <text x="80" y="244" font-size="9" fill="#d1d2d3" font-weight="bold">09-28 09:50 ケアマネ 鈴木さん</text>
-  <text x="80" y="262" font-size="9" fill="#ababad" font-weight="bold">📋 構造化</text>
+  <text x="80" y="262" font-size="9" fill="#ababad" font-weight="bold">📋 要約</text>
   <text x="80" y="278" font-size="9" fill="#d1d2d3">・薬剤: フェロキシピン[中止]、カルベジロール 2.5mg[開始]</text>
   <text x="80" y="294" font-size="9" fill="#d1d2d3">・依頼: 確認依頼:次回訪問時に残薬を確認(期限:次回訪問時)</text>
 
@@ -50,7 +50,7 @@
 
   <!-- link as context text -->
   <text x="80" y="372" font-size="10" fill="#1d9bd1">🔗 MCSで開く</text>
-  <text x="80" y="394" font-size="9" fill="#6e7681">カード本体は送信者行と構造化だけ — 本文はスレッドへ</text>
+  <text x="80" y="394" font-size="9" fill="#6e7681">カード本体は送信者行と要約だけ — 本文はスレッドへ</text>
 
   <!-- Slack reply bar -->
   <rect x="60" y="420" width="356" height="44" rx="6" fill="#1a1d21" stroke="#35373c"/>
@@ -77,7 +77,7 @@
   <text x="482" y="83" font-size="10" fill="#fff" text-anchor="middle">M</text>
   <text x="502" y="78" font-size="11" fill="#d1d2d3" font-weight="bold">MCSボット</text>
   <text x="566" y="78" font-size="9" fill="#ababad">10:02</text>
-  <text x="502" y="96" font-size="9" fill="#ababad">💬 山田 太郎 — 09-28（構造化カード）</text>
+  <text x="502" y="96" font-size="9" fill="#ababad">💬 山田 太郎 — 09-28（要約カード）</text>
 
   <!-- replies divider -->
   <line x1="472" y1="122" x2="830" y2="122" stroke="#3a3d42" stroke-width="1"/>

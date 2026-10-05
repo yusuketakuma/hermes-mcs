@@ -26,7 +26,7 @@
 <text x="343" y="244" font-size="14" fill="#66716f">10:02</text>
 <text x="240" y="283" font-size="23" fill="#202124" font-weight="bold">山田さん — 10-01</text>
 <text x="240" y="318" font-size="17" fill="#66716f">10-01 09:40 訪問看護 佐藤さん</text>
-<text x="240" y="350" font-size="17" fill="#087f5b" font-weight="bold">構造化（抽出候補）</text>
+<text x="240" y="350" font-size="17" fill="#087f5b" font-weight="bold">要約（抽出候補）</text>
 <text x="240" y="380" font-size="19" fill="#202124">要約: 次回訪問時に残薬を確認してほしいとの連絡</text>
 <text x="240" y="415.4" font-size="19" fill="#202124">区分: 依頼</text>
 <text x="240" y="448.4" font-size="19" fill="#202124">依頼: 残薬確認 / 期限表現: 次回訪問時</text>
@@ -47,6 +47,7 @@
 <text x="258" y="811.8" font-size="17" fill="#66716f">10-01 09:40 佐藤さん（訪問看護）</text>
 <text x="258" y="843.8" font-size="18" fill="#087f5b">スタンプ 👀2 🙆1 · 観測 10-01 10:00</text>
 <text x="258" y="875.8" font-size="17" fill="#202124">押した人: 👀 田中 花子、佐藤 一郎 / 🙆 鈴木 太郎（自分） · 観測 10-01 10:00</text>
-<text x="258" y="934.8" font-size="18" fill="#202124">次回訪問時に残薬を確認してください。</text>
+<path d="M258 910.8 L1010 910.8" stroke="#c4ccc6" fill="none"/>
+<text x="258" y="940.8" font-size="18" fill="#202124">次回訪問時に残薬を確認してください。</text>
 <text x="240" y="979.8" font-size="15" fill="#66716f">観測は取得した時点。スタンプを押した時刻ではありません。</text>
 </svg>

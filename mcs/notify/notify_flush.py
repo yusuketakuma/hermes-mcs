@@ -433,7 +433,7 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
         att_line = f"\n{indent}📎 {'、'.join(marks[:5])}{more}"
     if s_lines:
         struct = "\n".join(f"{indent}・{ln}" for ln in s_lines)
-        return (f"{head}\n{indent}📋 構造化\n{struct}\n"
+        return (f"{head}\n{indent}📋 要約\n{struct}\n"
                 f"{indent}───── 原文 ─────\n"
                 f"{indent}{body or '(本文なし)'}{att_line}")
     return f"{head}\n{indent}{body or '(本文なし)'}{att_line}"

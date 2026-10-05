@@ -15,7 +15,7 @@
   <text x="48" y="94" font-size="10" fill="#e6edf3">山田さん· 09-28</text>
   <text x="48" y="110" font-size="9" fill="#8b949e">09:40 訪問看護 佐藤 / 09:50 ケアマネ 鈴木</text>
   <rect x="44" y="122" width="282" height="118" rx="6" fill="#0d1117" stroke="#30363d"/>
-  <text x="56" y="142" font-size="10" fill="#58a6ff">📋 構造化</text>
+  <text x="56" y="142" font-size="10" fill="#58a6ff">📋 要約</text>
   <text x="56" y="162" font-size="9" fill="#b5bac1">要約: 服薬変更の連絡を共有</text>
   <text x="56" y="180" font-size="9" fill="#b5bac1">区分: 服薬変更</text>
   <text x="56" y="198" font-size="9" fill="#b5bac1">バイタル: BP 142/88・脈 76・SpO2 96%</text>

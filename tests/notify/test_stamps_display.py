@@ -296,7 +296,7 @@ def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
     _post(led, 101, SELF, ts=NOW - 50, parent=100)
     _meta(led, 100, reactions=[_r("accepted", 2, True), _r("good", 1)])
     monkeypatch.setattr(notify_render, "_structured_block", lambda db, mid: {
-        "type": "text", "text": f"📋 構造化\n・要約{mid}"})
+        "type": "text", "text": f"📋 要約\n・要約{mid}"})
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
     body = notify_render._card_body_text(
         led.db, _card(led), {"shown": "[100, 101]"}, max_chars=None)[1]
@@ -304,10 +304,11 @@ def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
                                  ("スタンプ 🙆2 👍1（自分 🙆） · 観測 ",
                                   "スタンプ 未取得")):
         lines = post.split("\n")
-        assert lines[1:3] == ["📋 構造化", f"・要約{mid}"]
-        assert lines[3].startswith(stamps)
-        assert lines[4] == "押した人: 未取得"
-        assert lines[5] == led.db.execute(
+        assert lines[1:4] == ["📋 要約", f"・要約{mid}", notify_render.SECTION_RULE]
+        assert lines[4].startswith(stamps)
+        assert lines[5] == "押した人: 未取得"
+        assert lines[6] == notify_render.SECTION_RULE
+        assert lines[7] == led.db.execute(
             "SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone()[0]
 
 
@@ -315,7 +316,7 @@ def test_long_post_keeps_summary_and_stamps_with_its_body():
     """Regression: a long body started its own chunk, leaving the
     header / summary / stamp lines as a post of their own."""
     import notify_cards
-    head = "10-03 08:00 職員\n📋 構造化\n・要約\nスタンプ 👀9 🙏1 · 観測 10-03 08:05\n"
+    head = "10-03 08:00 職員\n📋 要約\n・要約\nスタンプ 👀9 🙏1 · 観測 10-03 08:05\n"
     for body in ("本" * 1852, "本" * 3000, ("行\n" * 1200)):
         chunks = notify_cards._split_body_chunks(head + body)
         assert "".join(chunks) == head + body

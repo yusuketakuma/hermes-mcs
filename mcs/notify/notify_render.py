@@ -264,7 +264,7 @@ def _page_caption(kind, indices, page, pages, total) -> dict:
 
 
 def _structured_block(db, mid) -> dict | None:
-    """Per-message 📋 構造化 block — the same lines the text notify_flush
+    """Per-message 📋 要約 block — the same lines the text notify_flush
     shows, via the shared extractor view. Artifact freshness and the
     deleted-message gate live in structured_view's SQL; a build failure
     must never sink the card."""
@@ -275,7 +275,7 @@ def _structured_block(db, mid) -> dict | None:
     if not lines:
         return None
     return {"type": "text",
-            "text": "📋 構造化\n" + "\n".join("・" + ln for ln in lines)}
+            "text": "📋 要約\n" + "\n".join("・" + ln for ln in lines)}
 
 
 def _source_fp(db, card) -> str:
@@ -375,7 +375,7 @@ def _signal_evidence(db, sig) -> tuple[int | None, sqlite3.Row | None]:
 def _signal_compact(db, pid, contents: list) -> list:
     """Card-face item for one patient's candidate signals — the
     patient name plus each signal's note (the key point). The
-    evidence quote and 📋構造化 stay on the companion thread
+    evidence quote and 📋要約 stay on the companion thread
     (or behind the 📄本文 action when no thread carries them)."""
     name = _patient_name(db, pid) or f"project {pid}"
     lines = []
@@ -395,15 +395,21 @@ def _signal_compact(db, pid, contents: list) -> list:
                       {"type": "text", "text": "\n".join(lines)}])
 
 
+# Plain-text rule between a thread post's sections (owner request
+# 2026-10-05): thread text on every transport has no native divider.
+SECTION_RULE = "─" * 12
+
+
 def _message_post(db, mid, m, sender, head="") -> str:
     """One MCS post as a thread message, always in the owner's order
-    (2026-10-03): header, 📋 summary, MCS stamps, then the posted body."""
+    (2026-10-03): header, 📋 summary, MCS stamps, then the posted body,
+    with SECTION_RULE between summary, stamps and body."""
     if m["body_state"] == "deleted":
         return f"{head}{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} {sender}（削除済み）"
     out = [f"{head}{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} {sender}"]
     sblk = _structured_block(db, mid)
     if sblk:
-        out.append(sblk["text"])
+        out += [sblk["text"], SECTION_RULE]
     meta = get_message_metadata(db, mid)
     sid = m["sender_id"] if "sender_id" in m.keys() else None
     meta["own_post"] = is_self_sender(db, sid)
@@ -411,14 +417,14 @@ def _message_post(db, mid, m, sender, head="") -> str:
     who = actor_line(reaction_actor_summary(db, mid))
     if who:
         out.append(who)
-    out.append(m["body_text"] or "")
+    out += [SECTION_RULE, m["body_text"] or ""]
     return "\n".join(out)
 
 
 def _signal_body(db, sig: dict) -> str:
     """Full-text view of one signal — the thread post and 'body'
     action surface: notice text, patient, the untruncated evidence
-    quote and the 📋構造化 block."""
+    quote and the 📋要約 block."""
     import mcs_signals
     lines = [mcs_signals.signal_notice_text(sig)]
     name = _patient_name(db, sig.get("project_id"))
@@ -517,7 +523,7 @@ def _card_content(db, card) -> dict:
         sigs = _latest_signals(db, keys, card["project_id"])
         ordered = [k for k in keys if k in sigs]
         # one face item per patient — the card stays at key points;
-        # the evidence quote and 📋構造化 ride the companion thread
+        # the evidence quote and 📋要約 ride the companion thread
         # (or the 📄本文 action when no thread carries them)
         groups, gidx = [], {}
         for k in ordered:

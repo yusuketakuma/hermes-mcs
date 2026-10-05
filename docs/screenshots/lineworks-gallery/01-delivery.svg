@@ -24,7 +24,7 @@
 <rect x="66" y="286" width="422" height="273" rx="9" fill="#fff" stroke="#d5e1e5"/>
 <text x="82" y="318" font-size="20" fill="#202124" font-weight="bold">💬 山田さん — 10-01</text>
 <text x="82" y="350" font-size="15" fill="#66716f">10-01 09:40 佐藤さん（訪問看護）</text>
-<text x="82" y="406" font-size="18" fill="#087f5b" font-weight="bold">📋 構造化</text>
+<text x="82" y="406" font-size="18" fill="#087f5b" font-weight="bold">📋 要約</text>
 <text x="82" y="439" font-size="18" fill="#202124">依頼: 次回訪問時に残薬を確認</text>
 <text x="82" y="467.8" font-size="18" fill="#202124">期限表現: 次回訪問時</text>
 <text x="82" y="534" font-size="15" fill="#087f5b">スタンプ 👀2 🙆1 · 自分 1投稿</text>
@@ -54,7 +54,7 @@
 <rect x="610" y="286" width="422" height="350" rx="9" fill="#fff" stroke="#d5e1e5"/>
 <text x="626" y="320" font-size="19" fill="#087f5b" font-weight="bold">MCS 1234abcd（1/1）</text>
 <text x="626" y="356" font-size="15" fill="#66716f">10-01 09:40 佐藤さん（訪問看護）</text>
-<text x="626" y="386" font-size="17" fill="#087f5b" font-weight="bold">構造化（抽出候補）</text>
+<text x="626" y="386" font-size="17" fill="#087f5b" font-weight="bold">要約（抽出候補）</text>
 <text x="626" y="417" font-size="16" fill="#202124">依頼: 次回訪問時に残薬確認</text>
 <text x="626" y="451" font-size="15" fill="#087f5b">スタンプ 👀2 🙆1 · 観測 10-01 10:00</text>
 <text x="626" y="484" font-size="15" fill="#202124">押した人: 👀 田中 花子、佐藤 一郎 / 🙆 鈴木 太郎</text>

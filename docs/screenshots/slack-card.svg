@@ -26,7 +26,7 @@
 
   <!-- message 1 sender line + structured block -->
   <text x="82" y="144" font-size="11" fill="#d1d2d3" font-weight="bold">09-28 09:40 訪問看護 佐藤さん（あおぞら訪問看護）</text>
-  <text x="82" y="166" font-size="11" fill="#ababad" font-weight="bold">📋 構造化</text>
+  <text x="82" y="166" font-size="11" fill="#ababad" font-weight="bold">📋 要約</text>
   <text x="82" y="184" font-size="11" fill="#d1d2d3">・要約: 夕方バイタル測定と添付共有の報告</text>
   <text x="82" y="202" font-size="11" fill="#d1d2d3">・区分: 訪問・添付</text>
   <text x="82" y="220" font-size="11" fill="#d1d2d3">・バイタル: BP 142/88  HR 76  SpO2 96%</text>
@@ -36,7 +36,7 @@
 
   <!-- message 2 sender line + structured block -->
   <text x="82" y="268" font-size="11" fill="#d1d2d3" font-weight="bold">09-28 09:50 ケアマネ 鈴木さん（ひなた居宅介護支援）</text>
-  <text x="82" y="290" font-size="11" fill="#ababad" font-weight="bold">📋 構造化</text>
+  <text x="82" y="290" font-size="11" fill="#ababad" font-weight="bold">📋 要約</text>
   <text x="82" y="308" font-size="11" fill="#d1d2d3">・要約: かかりつけ医より服薬変更の連絡</text>
   <text x="82" y="326" font-size="11" fill="#d1d2d3">・薬剤: フェロキシピン[中止]、カルベジロール 2.5mg[開始](内服・1日1回)</text>
   <text x="82" y="344" font-size="11" fill="#d1d2d3">・依頼: 確認依頼:次回訪問時に残薬を確認(期限:次回訪問時)</text>
@@ -91,7 +91,7 @@
   <text x="40" y="668" font-size="11" fill="#ababad">送信者行 — 投稿日時・職種・氏名・組織（本文はスレッドへ）</text>
   <circle cx="24" cy="686" r="8" fill="#1d9bd1"/>
   <text x="24" y="690" font-size="9" fill="#fff" text-anchor="middle">2</text>
-  <text x="40" y="690" font-size="11" fill="#ababad">📋 構造化 — 投稿ごとのローカルLLM抽出（要約・区分・バイタル・症状・薬剤・依頼 など。候補扱い）</text>
+  <text x="40" y="690" font-size="11" fill="#ababad">📋 要約 — 投稿ごとのローカルLLM抽出（要約・区分・バイタル・症状・薬剤・依頼 など。候補扱い）</text>
   <circle cx="640" cy="664" r="8" fill="#1d9bd1"/>
   <text x="640" y="668" font-size="9" fill="#fff" text-anchor="middle">3</text>
   <text x="656" y="668" font-size="11" fill="#ababad">操作 — 確認・担当の2ボタンと選択メニュー</text>

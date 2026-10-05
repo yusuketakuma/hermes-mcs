@@ -362,7 +362,7 @@ def preview_text(action: str, payload: dict, markdown: bool) -> str:
         return (f"{bold}確認 — 抽出の誤り報告{bold}\n"
                 f"箇所: {dict(FEEDBACK_FIELDS).get(payload['field'], '?')}\n"
                 f"メモ: {payload['reason'][:400]}\n"
-                "確定すると、この投稿の構造化抽出を1回だけ再実行します。")
+                "確定すると、この投稿の要約の抽出を1回だけ再実行します。")
     out = (f"{bold}確認 — タスク作成{bold}\n"
            f"内容: {payload['title'][:200]}")
     if payload.get("assignee"):

@@ -22,12 +22,12 @@
   <text x="92" y="146" font-size="12" fill="#dbdee1">09:40 訪問看護 佐藤さん（あおぞら訪問看護）</text>
   <circle cx="745" cy="141" r="9" fill="#5865f2"/>
   <text x="745" y="145" font-size="10" fill="#fff" text-anchor="middle">1</text>
-  <text x="92" y="168" font-size="11" fill="#a6a9ad">📋 構造化</text>
+  <text x="92" y="168" font-size="11" fill="#a6a9ad">📋 要約</text>
   <text x="102" y="188" font-size="12" fill="#b5bac1">・要約: 夕方バイタル測定の報告</text>
   <text x="102" y="206" font-size="12" fill="#b5bac1">・区分: バイタル報告</text>
   <line x1="92" y1="220" x2="750" y2="220" stroke="#3a3c42" stroke-width="1"/>
   <text x="92" y="240" font-size="12" fill="#dbdee1">09:50 ケアマネ 鈴木さん（ひなた居宅介護支援）</text>
-  <text x="92" y="262" font-size="11" fill="#a6a9ad">📋 構造化</text>
+  <text x="92" y="262" font-size="11" fill="#a6a9ad">📋 要約</text>
   <circle cx="745" cy="258" r="9" fill="#5865f2"/>
   <text x="745" y="262" font-size="10" fill="#fff" text-anchor="middle">2</text>
   <text x="102" y="282" font-size="12" fill="#b5bac1">・要約: かかりつけ医より服薬変更の連絡を共有</text>
@@ -75,7 +75,7 @@
   <text x="40" y="614" font-size="11" fill="#b5bac1">送信者行 — 記入時刻・職種・氏名・組織</text>
   <circle cx="24" cy="632" r="8" fill="#5865f2"/>
   <text x="24" y="636" font-size="9" fill="#fff" text-anchor="middle">2</text>
-  <text x="40" y="636" font-size="11" fill="#b5bac1">📋構造化 — ローカルLLMの抽出結果（要約・区分・バイタル・症状・依頼。候補扱い）</text>
+  <text x="40" y="636" font-size="11" fill="#b5bac1">📋要約 — ローカルLLMの抽出結果（要約・区分・バイタル・症状・依頼。候補扱い）</text>
   <circle cx="500" cy="610" r="8" fill="#5865f2"/>
   <text x="500" y="614" font-size="9" fill="#fff" text-anchor="middle">3</text>
   <text x="516" y="614" font-size="11" fill="#b5bac1">操作ボタン — 確認・担当・タスク作成・患者サマリー・MCSで開く</text>
