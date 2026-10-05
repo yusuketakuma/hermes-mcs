@@ -1129,6 +1129,55 @@
       "cause": "Filtering nonempty/valid rows before latest selection resurrects old clinical state; deep persisted JSON escapes existing unknown/error paths; max_age numeric overflow and terminalZ fail on supported runtime.",
       "packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
       "integration_status": "Own local source fixed; fixed-I checks/review pending"
+    },
+    {
+      "id": "CORE-P4-F01",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_operations.py"
+      ],
+      "cause": "_apply_signal_dismiss_txのSQL json_valid(content)が同keyの破損最新行を先に捨て、旧openを現在として処理する。",
+      "change": "最新row→project scope→expected artifact pin→JSON object/state/evidence検証。破損はsignal_corrupt receipt、staleはsignal_changed。",
+      "packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "CORE-P4-F02",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_signals.py"
+      ],
+      "cause": "_approved_policy/_latest_self_profile/latest_station_staffのjson_valid(content)先行filterが破損最新を捨て、古い承認閾値・自己主体・所属を復活。",
+      "change": "最新kind行を先に取得しJSON/object/approvalを検証。不正は既存default policy/unknown identity、明示config優先と閾値既定は保持。",
+      "packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "CORE-P4-F03",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_operations.py",
+        "mcs/ops/mcs_requests.py"
+      ],
+      "cause": "深い保存JSONでPython3.10はRecursionErrorを返すが、job操作/candidatesのcatchがValueError等だけでcommand receiptや候補表示を中断。3.13ではValueError系で既存catchが通り環境差が隠れる。",
+      "change": "json parse/canonical hashの既存不正入力経路にRecursionErrorを加える。scan/retryは拒否receipt、pause/resumeはskipped_jobs、candidateは同kind latest seen維持で古い抽出へ戻らない。",
+      "packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "CORE-P4-F04",
+      "class": "confirmed-test-harness",
+      "status": "FIXED",
+      "paths": [
+        "tests/ops/test_mcs_cli.py"
+      ],
+      "cause": "CLI doctorのfake selected pythonがexit0/stdout空でruntime metadataを返さず必ず安全拒否。3.13の現SQLite3.50.4では期待1で隠れるが、3.10の安全SQLite3.53.1では本来期待0に失敗。",
+      "change": "fake executableが既存_runtime_probe仕様の完全合成Python/SQLite/packages JSONを返す。returncodeのSQLite安全判定・secret非表示・合成files不変更assertionは維持。",
+      "packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
     }
   ],
   "deferred": [],

@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "PARTIAL": 59,
+      "PARTIAL": 56,
       "EXCLUDED": 2,
-      "UNSEEN": 405,
-      "REVIEWED": 412
+      "UNSEEN": 386,
+      "REVIEWED": 441
     },
-    "candidate_tracked": 874
+    "candidate_tracked": 883
   },
   "files": [
     {
@@ -181,9 +181,19 @@
       "lines": 12,
       "module": "LICENSE",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Parent complete bounded read; README truncated middle reread351–440. Contract/docs/20criteria cross-check pending; no complete review inferred from reading alone."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          12
+        ]
+      ],
+      "read_sha256": "2ceb424e7bb8031d488e006071d9f7d17e3022ae854608da161eea902ad0ad1a"
     },
     {
       "path": "Makefile",
@@ -211,9 +221,19 @@
       "lines": 533,
       "module": "README.md",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Parent complete bounded read; README truncated middle reread351–440. Contract/docs/20criteria cross-check pending; no complete review inferred from reading alone."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          535
+        ]
+      ],
+      "read_sha256": "15953da31f91eedf229e30c2f5634f489d808208e7c12bef8ac81565271a822b"
     },
     {
       "path": "SECURITY.md",
@@ -222,9 +242,19 @@
       "lines": 133,
       "module": "SECURITY.md",
       "kind": "text_asset",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "PARTIAL",
+      "evidence": [
+        "Parent complete bounded read; README truncated middle reread351–440. Contract/docs/20criteria cross-check pending; no complete review inferred from reading alone."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          133
+        ]
+      ],
+      "read_sha256": "41b0a8ea82e451f15a3d3e9bcf1ad217a0d01be0a1a73d60ff5f155bdbf956ce"
     },
     {
       "path": "adapters/README.md",
@@ -1076,6 +1106,18 @@
           1,
           15
         ]
+      ]
+    },
+    {
+      "path": "changes/20261005-ops-consent-and-offline-validation.json",
+      "sha256": null,
+      "bytes": 1950,
+      "lines": 23,
+      "module": "changes",
+      "kind": "source",
+      "status": "UNSEEN",
+      "evidence": [
+        "Current new tracked path reconciled; source review tracked by upcoming accepted owner packet."
       ]
     },
     {
@@ -2727,15 +2769,36 @@
       ]
     },
     {
+      "path": "changes/maintenance-core-packet4-deep-stored-json.json",
+      "sha256": null,
+      "module": "changes",
+      "kind": "release-fragment",
+      "status": "REVIEWED",
+      "reviewed_sha256": "8b1e73bfbd4417628ff8e7301a0311fa41b07fd79af20baccc3e30978081d59d",
+      "evidence": [
+        "Parent full Japanese fragment and associated source/test patch read; criteria in core packet4."
+      ]
+    },
+    {
+      "path": "changes/maintenance-core-packet4-latest-identity-policy.json",
+      "sha256": null,
+      "module": "changes",
+      "kind": "release-fragment",
+      "status": "REVIEWED",
+      "reviewed_sha256": "63a45b89c9c56db06b9e718290f03ae45f8cfdb57b77b27ba803fc5a147b176b",
+      "evidence": [
+        "Parent full Japanese fragment and associated source/test patch read; criteria in core packet4."
+      ]
+    },
+    {
       "path": "changes/maintenance-core-packet4-signal-latest.json",
       "sha256": null,
-      "bytes": 875,
-      "lines": 11,
       "module": "changes",
-      "kind": "source",
-      "status": "UNSEEN",
+      "kind": "release-fragment",
+      "status": "REVIEWED",
+      "reviewed_sha256": "b7ce421ab5bd11bcc4bd566c707a699aaf78a554a3e78ed2610f6b272b479e6d",
       "evidence": [
-        "New tracked path added; no complete review inferred."
+        "Parent full Japanese fragment and associated source/test patch read; criteria in core packet4."
       ]
     },
     {
@@ -2750,6 +2813,30 @@
         "New task-authored record; schema/consistency validation pending final integration."
       ],
       "review_input": "999944434eaad4bdf0000b67f654a421df0ffdbe"
+    },
+    {
+      "path": "changes/maintenance-export-boundaries-20261005.json",
+      "sha256": null,
+      "bytes": 1387,
+      "lines": 12,
+      "module": "changes",
+      "kind": "source",
+      "status": "UNSEEN",
+      "evidence": [
+        "Current new tracked path reconciled; source review tracked by upcoming accepted owner packet."
+      ]
+    },
+    {
+      "path": "changes/maintenance-export-jst-20261005.json",
+      "sha256": null,
+      "bytes": 879,
+      "lines": 8,
+      "module": "changes",
+      "kind": "source",
+      "status": "UNSEEN",
+      "evidence": [
+        "Current new tracked path reconciled; source review tracked by upcoming accepted owner packet."
+      ]
     },
     {
       "path": "changes/maintenance-ingest-boundaries-20261005.json",
@@ -4266,11 +4353,12 @@
       "bytes": 194,
       "lines": 10,
       "module": "docs",
-      "kind": "run_record",
-      "status": "PARTIAL",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
       "origin": "new maintenance record",
       "evidence": [
-        "JSON parsed and patch inspected; final path/evidence reconciliation pending."
+        "JSON parsed and patch inspected; final path/evidence reconciliation pending.",
+        "Parent-owned structured receipt/criteria/inventory record inspected as task output; full fixedI final checks/review remain pending."
       ]
     },
     {
@@ -4279,11 +4367,12 @@
       "bytes": 307685,
       "lines": 9265,
       "module": "docs",
-      "kind": "run_record",
-      "status": "PARTIAL",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
       "origin": "new maintenance record",
       "evidence": [
-        "JSON parsed and patch inspected; final path/evidence reconciliation pending."
+        "JSON parsed and patch inspected; final path/evidence reconciliation pending.",
+        "Parent-owned structured receipt/criteria/inventory record inspected as task output; full fixedI final checks/review remain pending."
       ]
     },
     {
@@ -4328,7 +4417,8 @@
       ],
       "reviewed_sha256": "9e6b81e65321866180fa02bf11fbd3d030c4614032b3ca419ed63eca2af08171",
       "evidence": [
-        "親作成・全文確認。対象source/callerと検証ログを照合済み。"
+        "親作成・全文確認。対象source/callerと検証ログを照合済み。",
+        "Parent-owned structured receipt/criteria/inventory record inspected as task output; full fixedI final checks/review remain pending."
       ]
     },
     {
@@ -4337,10 +4427,11 @@
       "bytes": 7318,
       "lines": 196,
       "module": "docs",
-      "kind": "source",
-      "status": "PARTIAL",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
       "evidence": [
-        "Authored task record; final fixed-I classification/reconciliation pending."
+        "Authored task record; final fixed-I classification/reconciliation pending.",
+        "Parent-owned structured receipt/criteria/inventory record inspected as task output; full fixedI final checks/review remain pending."
       ]
     },
     {
@@ -4381,6 +4472,17 @@
         "Structured whole record inspection, inventory/criterion validation, source patch review and I digest matching; run record classified separately from source text."
       ],
       "review_packet": "docs/development/maintenance-core-packet3-evidence.json"
+    },
+    {
+      "path": "docs/development/maintenance-core-packet4-evidence.json",
+      "sha256": null,
+      "module": "docs/development",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
+      "reviewed_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a",
+      "evidence": [
+        "Whole JSON structure, source W digests,20criteria×3modules,4findings/constraints, API signatures and P→W/log evidence inspected. Run record classified separately."
+      ]
     },
     {
       "path": "docs/development/maintenance-notify-evidence.json",
@@ -7603,9 +7705,28 @@
       "lines": 237,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "7bf70b5a580d189ab6560e837be544bc0b75ab18b922c21963167d25b07308f3",
+      "reviewed_lines": 237,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "C1 profile/recordのstrict schemaとrestricted canonical encoding、既存wire互換。",
+      "callers": [
+        "c1_envelopes",
+        "c1_records",
+        "c1_receiver",
+        "ext_contract._validate_authorization"
+      ],
+      "read_ranges": [
+        [
+          1,
+          237
+        ]
+      ]
     },
     {
       "path": "mcs/ops/c1_envelopes.py",
@@ -7614,9 +7735,27 @@
       "lines": 433,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "da302fe72935dc9a1ef79e1deabe98e8eb5f4ee9cf4df5aa17acc18a5b62f7ae",
+      "reviewed_lines": 433,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "同generation対のallowlist記録を容量内partsへpack、wire/collection/withdraw directive検証。",
+      "callers": [
+        "mcs/ops/ext_contract.py:1161",
+        "GovernedExporter",
+        "ReferenceReceiver.receive_wire/withdraw_wire"
+      ],
+      "read_ranges": [
+        [
+          1,
+          433
+        ]
+      ]
     },
     {
       "path": "mcs/ops/c1_receiver.py",
@@ -7625,9 +7764,31 @@
       "lines": 802,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "df7844bacd994e854bcf8cfa71c7f3acff0f20b12801e48bc31d00129a7c0163",
+      "reviewed_lines": 802,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "外部実serviceではない合成reference受信、namespace私有state・flock・atomic commit・view・withdraw/expiry。",
+      "callers": [
+        "mcs/ops/ext_contract.py:_receive",
+        "tests/ops/test_c1_receiver.py",
+        "tests/ops/test_c1_withdraw_receive.py"
+      ],
+      "read_ranges": [
+        [
+          1,
+          400
+        ],
+        [
+          401,
+          802
+        ]
+      ]
     },
     {
       "path": "mcs/ops/c1_records.py",
@@ -7636,9 +7797,27 @@
       "lines": 252,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "21a4c2608152bd98016b2f227fa37ae410ae8687a154db7db0d31f2c1547d422",
+      "reviewed_lines": 252,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "公開snapshotからC1 records/body/sender classificationを組み立て、window/facts選択。",
+      "callers": [
+        "mcs/ops/ext_contract.py:1291",
+        "tests/ops/test_c1_records.py",
+        "tests/ops/test_c1_withdraw_receive.py"
+      ],
+      "read_ranges": [
+        [
+          1,
+          252
+        ]
+      ]
     },
     {
       "path": "mcs/ops/export_schema.py",
@@ -7715,20 +7894,39 @@
       "lines": 911,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet."
+        "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet.",
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "reviewed_sha256": "c564dc2db5f0bc0e5b396ef6fad425aca67d0556b93591945d035f99eaa4f149",
+      "reviewed_sha256": "49e4776bbb432ef62336d2465db60416724c18c598c2e6bb64e6346afccf2e0b",
       "read_ranges": [
         [
-          883,
+          1,
+          300
+        ],
+        [
+          301,
+          620
+        ],
+        [
+          621,
           911
         ]
       ],
       "packet": "docs/development/maintenance-semantic-evidence.json",
-      "owner": "semantic"
+      "owner": "semantic",
+      "reviewed_lines": 915,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "人承認operationのvalidationとtransaction内更新、file promotion、update/restore scheduling。",
+      "callers": [
+        "mcs_requests.validate",
+        "mcs_requests.apply_command",
+        "hermes_plugin.__init__._semantic_job",
+        "mcs/views/mcs_view.py:216,303 paused"
+      ]
     },
     {
       "path": "mcs/ops/mcs_refstats.py",
@@ -7759,20 +7957,32 @@
       "lines": 461,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet."
+        "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet.",
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "reviewed_sha256": "49170be641eb7d838981d37e1d08161468ff98d730cd228645ca6f5b20b47b21",
+      "reviewed_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d",
       "read_ranges": [
         [
           1,
-          53
+          461
         ]
       ],
       "packet": "docs/development/maintenance-semantic-evidence.json",
-      "owner": "semantic"
+      "owner": "semantic",
+      "reviewed_lines": 461,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "bounded command解析・人承認/request revision・receipt-first適用・atomic inbox公開・現在抽出候補。",
+      "callers": [
+        "mcs/ops/mcs_cli.py via mcs_view",
+        "mcs/ingest/job_ops.py:151",
+        "mcs/notify/notify_cmds.py:351",
+        "hermes_plugin/__init__.py:897",
+        "mcs/views/mcs_view.py"
+      ]
     },
     {
       "path": "mcs/ops/mcs_restore.py",
@@ -7816,26 +8026,47 @@
       "lines": 1691,
       "module": "mcs/ops",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。",
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
         [
-          325,
-          365
+          1,
+          240
         ],
         [
-          990,
-          1035
+          995,
+          1075
         ],
         [
-          1390,
-          1640
+          241,
+          690
+        ],
+        [
+          691,
+          1170
+        ],
+        [
+          1171,
+          1691
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "reviewed_sha256": "e28cc9450f05cd45f97d5b22576704d544675b154c12e53379f7d6e4821d2269",
+      "reviewed_lines": 1694,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "既存医療/依頼signalの候補・状態・通知キュー、承認policyと自己/所属identity、readonly一覧。",
+      "callers": [
+        "mcs/ingest/run_check.py:1255,1523,1543",
+        "mcs/views/mcs_view.py:834",
+        "mcs/ops/c1_records.py",
+        "mcs/ops/ext_contract.py:1308",
+        "mcs_operations._apply_signal_dismiss_tx"
+      ]
     },
     {
       "path": "mcs/ops/mcs_update.py",
@@ -14129,9 +14360,26 @@
       "lines": 80,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "d0870c0db34accc1eb8f3b3e704c913e3c9637b78e9f717c5e1849fd4a08d298",
+      "reviewed_lines": 80,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_authorization.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "read_ranges": [
+        [
+          1,
+          80
+        ]
+      ]
     },
     {
       "path": "tests/ops/test_c1_cli.py",
@@ -14140,9 +14388,26 @@
       "lines": 182,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "4de983caf8223f631f58f3afba120e332d562c8472dc27057a7172d7bf1011dd",
+      "reviewed_lines": 182,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_cli.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "read_ranges": [
+        [
+          1,
+          182
+        ]
+      ]
     },
     {
       "path": "tests/ops/test_c1_contract.py",
@@ -14151,9 +14416,26 @@
       "lines": 296,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "ed49cfd1681a61495ed65a4fecd6e750604adf1ad067f20fa524ca1908389dc6",
+      "reviewed_lines": 296,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_contract.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "read_ranges": [
+        [
+          1,
+          296
+        ]
+      ]
     },
     {
       "path": "tests/ops/test_c1_delivery.py",
@@ -14162,9 +14444,26 @@
       "lines": 177,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "85a52d6277cb1a39887db60f3694a96fc87c75675c56b6df66fc98a9942c6d0f",
+      "reviewed_lines": 177,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_delivery.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "read_ranges": [
+        [
+          1,
+          177
+        ]
+      ]
     },
     {
       "path": "tests/ops/test_c1_envelopes.py",
@@ -14173,9 +14472,26 @@
       "lines": 464,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "4136f5761228a0e04a12abce53a4b6e1f8e43e273fe3fbdd5b23af8be8dde595",
+      "reviewed_lines": 464,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_envelopes.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "read_ranges": [
+        [
+          1,
+          464
+        ]
+      ]
     },
     {
       "path": "tests/ops/test_c1_receiver.py",
@@ -14184,9 +14500,30 @@
       "lines": 525,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "74c277e2bfff89c41763b452aa115e12214240b49791274951eabf449705b736",
+      "reviewed_lines": 525,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_receiver.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "read_ranges": [
+        [
+          1,
+          300
+        ],
+        [
+          301,
+          525
+        ]
+      ]
     },
     {
       "path": "tests/ops/test_c1_records.py",
@@ -14195,9 +14532,26 @@
       "lines": 343,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "5d0e4aec2a0a8abcb45048b35d0cc18183128aecb9a05091644eda1dcd9c2f67",
+      "reviewed_lines": 343,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_records.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "read_ranges": [
+        [
+          1,
+          343
+        ]
+      ]
     },
     {
       "path": "tests/ops/test_c1_withdraw_receive.py",
@@ -14206,9 +14560,26 @@
       "lines": 313,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "77b394a61a9784bb94f3a3d0c062e9d853aab4264c768040b4da04929df9f25c",
+      "reviewed_lines": 313,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_withdraw_receive.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "read_ranges": [
+        [
+          1,
+          313
+        ]
+      ]
     },
     {
       "path": "tests/ops/test_ext_contract.py",
@@ -14315,9 +14686,26 @@
       "lines": 205,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "b8652511171e21b4264e5ed3622c57795e9659cc6dc45bf2ed6e285903c0c357",
+      "reviewed_lines": 208,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "完全合成fixtureでCLI/request/operation/reason/receipt境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_mcs_cli.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "read_ranges": [
+        [
+          1,
+          205
+        ]
+      ]
     },
     {
       "path": "tests/ops/test_mcs_features.py",
@@ -14337,9 +14725,26 @@
       "lines": 44,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "56c569ea75ec4a637e72086256c5ce481a3f5a75ec18259f75b270c0f0ba55d5",
+      "reviewed_lines": 44,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "完全合成fixtureでCLI/request/operation/reason/receipt境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_mcs_operation_cli.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "read_ranges": [
+        [
+          1,
+          44
+        ]
+      ]
     },
     {
       "path": "tests/ops/test_mcs_operations.py",
@@ -14348,9 +14753,34 @@
       "lines": 452,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "c8d6028f3ff8c0bf1b34e2462edc7c819da4e0604088558fe3d463ba02cc2303",
+      "reviewed_lines": 531,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "完全合成fixtureでCLI/request/operation/reason/receipt境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_mcs_operations.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "read_ranges": [
+        [
+          1,
+          300
+        ],
+        [
+          301,
+          452
+        ],
+        [
+          301,
+          452
+        ]
+      ]
     },
     {
       "path": "tests/ops/test_mcs_refstats.py",
@@ -14392,9 +14822,26 @@
       "lines": 54,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "78417c57ddaee0e818a4cceda2cec99fdc6cdde0c2999c62ebf9f629b0d5c01e",
+      "reviewed_lines": 77,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "完全合成fixtureでCLI/request/operation/reason/receipt境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_mcs_request_reason.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "read_ranges": [
+        [
+          1,
+          54
+        ]
+      ]
     },
     {
       "path": "tests/ops/test_mcs_setup.py",
@@ -14515,9 +14962,26 @@
       "lines": 238,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "b4e32ae57c38900f0bd83f53c14ae6ac9aec59200a4d1a94b3342e4e48c1c910",
+      "reviewed_lines": 238,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "完全合成fixtureでsignal候補・latest/通知/approval/identity境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_mcs_signal_feedback.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "read_ranges": [
+        [
+          1,
+          238
+        ]
+      ]
     },
     {
       "path": "tests/ops/test_mcs_signals.py",
@@ -14526,9 +14990,42 @@
       "lines": 2069,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "3776c9d939c051b6dd6f33d24c940f337bac7a397c339d0134cc3b7ebb8cb47f",
+      "reviewed_lines": 2113,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "完全合成fixtureでsignal候補・latest/通知/approval/identity境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_mcs_signals.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "read_ranges": [
+        [
+          1,
+          460
+        ],
+        [
+          461,
+          860
+        ],
+        [
+          861,
+          1260
+        ],
+        [
+          1261,
+          1680
+        ],
+        [
+          1681,
+          2069
+        ]
+      ]
     },
     {
       "path": "tests/ops/test_mcs_update.py",
@@ -14577,15 +15074,44 @@
       "review_module": "lifecycle"
     },
     {
+      "path": "tests/ops/test_ops_packet5_regressions.py",
+      "sha256": null,
+      "bytes": 8024,
+      "lines": 181,
+      "module": "tests/ops",
+      "kind": "source",
+      "status": "UNSEEN",
+      "evidence": [
+        "Current new tracked path reconciled; source review tracked by upcoming accepted owner packet."
+      ]
+    },
+    {
       "path": "tests/ops/test_receipt_contract.py",
       "sha256": "d90505781616746d2177a66e84a52ffa0c0c104745808ecb9263b772308ae244",
       "bytes": 13276,
       "lines": 273,
       "module": "tests/ops",
       "kind": "source",
-      "status": "UNSEEN",
-      "evidence": [],
-      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654"
+      "status": "REVIEWED",
+      "evidence": [
+        "Core packet4 full22file/3module20criteria record accepted after parent primary source/test patches, all criterion decisions and exact I digest verification. Full-I gates/review pending."
+      ],
+      "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "reviewed_sha256": "d90505781616746d2177a66e84a52ffa0c0c104745808ecb9263b772308ae244",
+      "reviewed_lines": 273,
+      "full_content_read": true,
+      "review_packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "responsibility": "完全合成fixtureでCLI/request/operation/reason/receipt境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_receipt_contract.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "read_ranges": [
+        [
+          1,
+          273
+        ]
+      ]
     },
     {
       "path": "tests/ops/test_recovery_corrupt_receipts.py",
@@ -17360,5 +17886,11 @@
       ],
       "acceptance": "LOCAL_PACKET_ACCEPTED; FINAL_I_PENDING"
     }
-  ]
+  ],
+  "last_core4_import": {
+    "report": "docs/development/maintenance-core-packet4-evidence.json",
+    "accepted_files": 22,
+    "source_W": "1b94f04d8253a29195d709f1f66d1f3c11f28343",
+    "report_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a"
+  }
 }

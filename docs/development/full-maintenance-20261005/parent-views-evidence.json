@@ -1677,5 +1677,19 @@
     "X07": "Clinical unit/value/quote/current-project/subject boundaries reuse authoritative code and full synthetic fixtures. No new medical thresholds/adoption rules; unknown timezone/source/record and quote-supported versus human-confirmed distinction retained.",
     "X08": "No public web server/forms/routes owned; protected source links only known canonical project URL and explicit publication/private scope. Native text renderer/link escaping validated in platform packets; actual public deployment not performed."
   },
-  "new_fixture_accounting": "Initial missing source row caused3 G1 fixture failures and was corrected before canonical fixedP. Statistics deep-json initially had empty meds and was a valid P control; strengthened to nonempty valid synthetic med before accepted fixedP. All intermediate logs preserved and excluded from final defect counts."
+  "new_fixture_accounting": "Initial missing source row caused3 G1 fixture failures and was corrected before canonical fixedP. Statistics deep-json initially had empty meds and was a valid P control; strengthened to nonempty valid synthetic med before accepted fixedP. All intermediate logs preserved and excluded from final defect counts.",
+  "patch_reconstruction": {
+    "P": "57dd2068465d97c8509524968945c2976e539238",
+    "W": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+    "root": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005",
+    "staging": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-parent-views-replay-20261005-1ioxw3px",
+    "patch_path": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-parent-views-replay-20261005-1ioxw3px/P-W.patch",
+    "patch_bytes": 303155,
+    "patch_sha256": "a92e1ad5610d4946354b00615e9ae0506aca5e58ffef2729ab08961cb0dbe9e1",
+    "files_compared": 880,
+    "all_bytes_modes_equal": true,
+    "test_before_P": "684d5004b1a1bcdf911f2ee99ff8316efb31ac7d + final test only",
+    "source_unchanged_between_test_P_and_replay_P": true,
+    "manifest_sha256": "bbcff8fdd95535b6c7cd92f6a7c6f59bfdb0dfd7f007e862bbadd7b8cf822296"
+  }
 }
