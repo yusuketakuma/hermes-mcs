@@ -168,6 +168,9 @@ def test_real_socket_mode_card_modal_preview_and_actor_confirm(tmp_path, monkeyp
                     "project_ids": frozenset({123})}
         for name in ("slack_render", "cmd_int", "cmd_results", "flags"):
             (tmp_path / "data" / name).mkdir(parents=True)
+        (tmp_path / "data" / "flags" / "notify.json").write_text(
+            json.dumps({"interactive": True, "transport": "slack",
+                        "route_epoch": settings["route_epoch"]}), encoding="utf-8")
         dirs = ensure_dirs(settings["data_root"])
         reg = registry.Registry(dirs["state"], scope=settings)
         sender = SlackCardAdapter(app, team_id=settings["team_id"],

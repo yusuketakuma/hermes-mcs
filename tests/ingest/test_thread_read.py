@@ -11,12 +11,12 @@ import run_check
 from ingest_testkit import _ledger
 
 
-def _store(db, mid, parent=None, pid=1, first_seen=None):
+def _store(db, mid, parent=None, pid=1, first_seen=None, body_state="full"):
     db.db.execute(
         "INSERT INTO messages(message_id,project_id,parent_id,posted_at,"
         "posted_at_ts,body_text,body_state,content_hash,first_seen) "
         "VALUES(?,?,?,?,?,?,?,?,?)",
-        (mid, pid, parent, "2026-10-06T09:00", 1, "本文", "full",
+        (mid, pid, parent, "2026-10-06T09:00", 1, "本文", body_state,
          f"{mid:064x}", time.time() if first_seen is None else first_seen))
     db.db.commit()
 
@@ -60,6 +60,16 @@ def test_read_thread_walks_every_page_without_keep_read_status():
     assert [p for p, _ in wire.calls] == ["/projects/1/messages/10/messages"] * 2
 
 
+@pytest.mark.parametrize("paginate,kind", [
+    ([], "schema_error"), ({"has_next": True}, "thread_incomplete"),
+])
+def test_read_thread_does_not_certify_invalid_or_incomplete_pages(paginate, kind):
+    wire = _Wire(lambda p, q: {"messages": [], "paginate": paginate})
+    with pytest.raises(mcs_adapter.MCSError) as error:
+        wire.read_thread(1, 10, max_pages=1)
+    assert error.value.kind == kind
+
+
 def _adapter(unread, server, seen=None):
     """unread: successive thread_unread answers."""
     answers = list(unread)
@@ -95,6 +105,18 @@ def test_stored_unread_thread_is_cleared_and_confirmed_once(tmp_path):
     assert [tuple(r) for r in db.thread_read_candidates(0, 10)] == [(1, 10, 12)]
 
 
+@pytest.mark.parametrize("body_state", ["snippet", "unknown"])
+def test_incomplete_stored_reply_is_fetched_without_clearing(tmp_path, body_state):
+    db = _ledger(tmp_path)
+    _store(db, 11, parent=10, body_state=body_state)
+    adapter = _adapter([True], server=[11])
+    run_check.stage_thread_read(adapter, db, _result(), time.monotonic() + 120)
+    assert adapter.calls == ["check"]
+    assert db.stored_reply_ids(10) == set()
+    jobs = db.db.execute("SELECT kind,message_id,parent_id FROM fetch_jobs").fetchall()
+    assert [tuple(j) for j in jobs] == [("reply", 11, 10)]
+
+
 def test_unstored_reply_blocks_the_clear_and_is_fetched_first(tmp_path):
     db = _ledger(tmp_path)
     _store(db, 10)
@@ -127,6 +149,23 @@ def test_unconfirmed_clear_stays_unknown_and_a_racing_reply_is_fetched(tmp_path)
     assert jobs == [("reply", 13, 10)]
     # unknown is retried on the next tick
     assert [tuple(r) for r in db.thread_read_candidates(0, 10)] == [(1, 10, 11)]
+
+
+def test_failed_clear_keeps_durable_unknown_intent(tmp_path):
+    db = _ledger(tmp_path)
+    _store(db, 11, parent=10)
+    adapter = _adapter([True], server=[11])
+
+    def fail(pid, parent):
+        assert db.db.execute("SELECT status FROM thread_read_marks").fetchone()[0] == "unknown"
+        raise mcs_adapter.MCSError("network_error", retryable=True)
+
+    adapter.read_thread = fail
+    result = _result()
+    run_check.stage_thread_read(adapter, db, result, time.monotonic() + 120)
+    assert result["threads_marked_read"] == []
+    assert result["errors"]
+    assert db.db.execute("SELECT status FROM thread_read_marks").fetchone()[0] == "unknown"
 
 
 def test_old_replies_and_mcs_errors_stay_bounded(tmp_path):

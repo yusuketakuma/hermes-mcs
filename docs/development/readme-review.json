@@ -1,22 +1,21 @@
 {
-  "version": "1.0.13",
+  "version": "1.0.14",
   "sections": {
     "features": {
-      "notes": "2026-10-05最終ソース照合。自動取得10分・履歴10/40分、スタンプ集計と投稿別押下者氏名/職種、古い/失敗/未取得の区別を確認。actor取得と第1層公開、構造化併記、urgencyは既定offを維持。保守修正の現行根拠/抽出世代/送信境界を131件の変更記録と照合。READMEの候補段落をSDK・配布物の合成受入完了と実API/人手/実運用の別条件へ訂正。モデル・人承認条件の変更は追加しない。 公開後の文章改善: 1.0.13本文を利用者の目的別19項目へまとめ、任意機能の明示有効化、候補と完了の区別を本文に保持。131件の原記録は変更せず、全summary/upgrade/詳細/根拠を開発者向け折りたたみへ置く。実行ソース・モデル・取得対象は変更しない。 2026-10-05全14版の履歴再編集: 最新版の比較表をREADME生成へ保持。実行機能・既定値・説明図は不変。画像は別のローカル準備のみで未公開、Release本文は比較表と文章で理解できる形にする。",
+      "notes": "2026-10-06、1.0.14の17変更記録と実ソースを照合。カードの概要・投稿別要約・状態・操作の4区画、固定主操作とメニュー、要約の省略撤廃と処理待ち/作成失敗、抽出保存/押下者取得直後の再描画を確認。常駐抽出は新着優先、ルール世代9の順次再抽出を確認。通常モデル、自動取得10分、任意機能の既定offと人承認は維持。",
       "sources": [
         "README.md",
         "CHANGELOG.md",
-        "mcs/ops/mcs_setup.py",
-        "mcs/views/message_metadata.py",
         "mcs/notify/notify_render.py",
-        "mcs/extract/rollup.py",
-        "mcs/notify/notify_urgent.py",
-        "changes/archive/1.0.13/maintenance-ten-minute-schedule-20261005.json",
-        "changes/archive/1.0.13/20261005-extraction-snapshot-evidence.json"
+        "mcs/notify/notify_cards.py",
+        "mcs/views/structured_view.py",
+        "mcs/extract/v4/extract_llm.py",
+        "mcs/extract/v1/extract.py",
+        "mcs/ingest/run_check.py"
       ]
     },
     "demos": {
-      "notes": "Slack先頭の7画面、Discord図、LINE WORKSの配送/本人1:1入力と確定図を実装対応表と照合。スタンプは絵文字件数、押下者は投稿別本文の氏名/職種/自分と観測日時でありタスク完了と区別。今回の保守は既存説明図の要素を変えず画像変更不要。名前と数値は架空、実画面キャプチャ・実SDK接続成功の証明ではない。今回Slack/LINE WORKS生成器のcheckを実施する。 公開後の文章改善は説明文と生成要約だけ。図と実装は不変で、画像再生成は不要。絵文字集計/氏名の明示有効化/観測日時と押下時刻の区別を本文へ保持。 2026-10-05全14版の履歴再編集: 最新版の比較表をREADME生成へ保持。実行機能・既定値・説明図は不変。画像は別のローカル準備のみで未公開、Release本文は比較表と文章で理解できる形にする。",
+      "notes": "Slack先頭の7画面とDiscord/LINE WORKS説明図を現行配置・操作名・本人向け回答条件に照合。Slack02のPNGを目視し、4区画・確認する/担当する/タスク作成/操作を選ぶ・MCSで開くが実装に対応することを確認。既存画像を再利用し、変更前画面は推測しない。架空データの説明図で実画面キャプチャではなく、画像内操作は不可。Releaseの固定tag画像は公開後に到達/実画面表示を別途確認する。",
       "sources": [
         "README.md",
         "docs/screenshots/slack-gallery/README.md",
@@ -24,15 +23,14 @@
         "docs/screenshots/lineworks-gallery/README.md",
         "adapters/slack/cards.py",
         "adapters/slack/actions.py",
-        "mcs/views/message_metadata.py",
-        "mcs/notify/notify_render.py"
+        "adapters/lineworks/cards.py",
+        "adapters/lineworks/actions.py"
       ]
     },
     "quickstart": {
-      "notes": "scripts/mcs→mcs_cli→install/setup/update/doctor、install.shのpreflightとHermes/standalone分岐、導入後設定をソースへ照合。macOSの復旧Pythonはcheckout外の安全なSQLiteを持つ明示選択またはno-recoveryが必要。10分取得へのサービス再設定・worker/gateway/独立adapter再起動をCHANGELOGに保持。旧版更新はupdate-pathsの16経路を合成で追跡し、旧0～2手動/standalone host条件を維持。新規・過去版の受入と実機未確認はACCEPTANCEへ明記。 公開後の文章改善: 再設定・再起動、安全な復旧Python、health.tick_interval_s300→600の操作を共通注意へ整理。更新ガイドへの導線と新旧入口を維持。 2026-10-05全14版の履歴再編集: 最新版の比較表をREADME生成へ保持。実行機能・既定値・説明図は不変。画像は別のローカル準備のみで未公開、Release本文は比較表と文章で理解できる形にする。",
+      "notes": "導入前提、install.shのpreflight/モード選択、setup/doctor/update入口と導入・更新ガイドを照合。1.0.14は追加設定不要、カード表示はgatewayまたは独立adapter/host、抽出優先順と保存直後反映は抽出worker再起動が必要。LINE WORKSの名前辞書は任意。配布物の隔離受入と実接続/稼働サービス反映は別条件として維持。",
       "sources": [
         "README.md",
-        "CHANGELOG.md",
         "install.sh",
         "scripts/mcs",
         "mcs/ops/mcs_cli.py",
@@ -40,38 +38,32 @@
         "docs/guides/INSTALLATION.md",
         "docs/guides/UPGRADE_AGENT.md",
         "docs/guides/STANDALONE.md",
-        "tests/fixtures/schema_upgrade/update-paths.json",
-        "docs/development/ACCEPTANCE_1.0.13.md"
+        "docs/guides/LINEWORKS.md"
       ]
     },
     "safety": {
-      "notes": "患者名・本文・対象添付の設定先への送信、未取得≠不存在、候補≠処方/対応完了、人承認+reason+receiptをREADME/SECURITYと照合。暗号化復元は新規私有配置と同意待ち・配送保留、辞書は出所/hash/承認、metadataは保存/公開の別gateと氏名保存を維持。送信前の世代/根拠再検証・同意の期限・不正JSONを保守修正記録へ照合。実データ復旧・実API・本番機能opt-inを合成受入から推定しない。 公開後の文章改善: 外部取得/公開/氏名/再通知/バックアップの明示有効化、無期限の最終観測保持、復元の専用人承認・通知保留、結果不明の自動再送禁止を本文に残す。内部引数や検証過程だけを折りたたむ。 2026-10-05全14版の履歴再編集: 最新版の比較表をREADME生成へ保持。実行機能・既定値・説明図は不変。画像は別のローカル準備のみで未公開、Release本文は比較表と文章で理解できる形にする。",
+      "notes": "2026-10-06の明示指示で返信自動既読のsnapshot契約確認制限を撤廃。未保存/snippet返信の先行取得、unknown intentと再確認、直近7日/最大10スレッドを照合。収集後の返信も既読になり得る制約をREADME・利用ガイド・変更記録へ明記。患者既読は保存commitとsnapshot条件を維持。任意外部抽出/押下者取得の既定off、人承認/reason/receipt、通知停止後の確定拒否、Slack原文メンション抑止を保持。",
       "sources": [
         "README.md",
         "SECURITY.md",
-        "CHANGELOG.md",
-        "mcs/ops/mcs_backup.py",
-        "deployment/recovery/mcs_recover.py",
-        "mcs/extract/drug_map.py",
-        "mcs/views/project_metadata_view.py",
-        "docs/guides/BACKUP.md",
-        "changes/archive/1.0.13/maintenance-semantic-send-gate-deep-json-20261005.json",
-        "changes/archive/1.0.13/maintenance-restore-consent-20261005.json"
+        "mcs/ingest/run_check.py",
+        "mcs/ingest/mcs_adapter.py",
+        "mcs/core/ledger.py",
+        "adapters/slack/standalone.py",
+        "adapters/slack/actions.py",
+        "adapters/discord/actions.py"
       ]
     },
     "docs": {
-      "notes": "1.0.13の全131記録から既存generatorでCHANGELOG/README要約を再buildし、1.0.12以下と既存archive88件の内容を保持。5領域を新たに照合し旧候補の未受入表現を訂正。READMEの導入/更新/バックアップ/安全/利用/開発のリンクと主要アンカーをcheckで検証。全体監査の最終receipt H3b58ba7と統合ソース一致を受入票へ束縛し、最終CI/公開/本番適用は親の後工程として未実施を保持。 公開後の文章改善: 1.0.13のみ編集し、過去1.0.12以下とarchive131件のbytes保持を検証する。CHANGELOG→README生成→Release exportを既存手順で同期。RELEASE_NOTESに利用者向け本文と開発者向け折りたたみ・共通更新注意の文体規約を追加。 2026-10-05全14版の履歴再編集: 最新版の比較表をREADME生成へ保持。実行機能・既定値・説明図は不変。画像は別のローカル準備のみで未公開、Release本文は比較表と文章で理解できる形にする。",
+      "notes": "1.0.14は既存release_notes buildで全17記録をarchiveへ保存し、本文を利用目的で統合、比較3件と合成Slackカード図を添える。過去版と過去archiveは変更しない。READMEの5領域を新しく照合し、CHANGELOG正本から生成要約とRelease exportを同期。導入/操作/安全/更新/開発の相対リンクと主要アンカーは既存readme検査で確認する。",
       "sources": [
         "README.md",
         "CHANGELOG.md",
         "docs/development/RELEASE_NOTES.md",
         "docs/development/README_MAINTENANCE.md",
-        "docs/development/full-maintenance-20261005/PLAN.md",
-        "docs/development/ACCEPTANCE_1.0.13.md",
-        "docs/dev-records/release-1.0.13-20261005.md",
+        "docs/guides/USER_GUIDE.md",
         "scripts/development/release_notes.py",
-        "scripts/development/readme_release.py",
-        "docs/releases/VISUAL_PREPARATION.md"
+        "scripts/development/readme_release.py"
       ]
     }
   }

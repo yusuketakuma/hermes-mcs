@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "取り込んだ返信のスレッドを自動で既読にする",
+  "summary": "患者単位の既読化では消えない返信の未読状態を、スレッドを開く方法で既読にします。未保存または抜粋のみの返信は先に取得し、既読化の直前に確認した返信がすべて保存済みの場合だけ実行します。収集時点に限定する条件は使用しないため、確認後に届いた返信も既読になる場合があります。読取り時に見つかった追加返信は取得ジョブへ登録します。",
+  "upgrade": "追加設定は不要です。--mark-read を付けた定期収集で直近7日以内に保存した返信のスレッドを最大10件確認します。収集後の返信も既読になり得る制約があります。患者単位の既読化には従来どおり snapshot timestamp が必要です。",
+  "details": [
+    "2026-10-06のユーザー指示で、返信に限りsnapshot契約の事前確認による停止を撤廃。親投稿の oldest_unread_thread_message を一括GETで確認（この経路はkeep_read_status指定で400となる既存記録あり）。full/deletedで永続保存されていない返信は取得ジョブへ登録する。",
+    "既読化前にthread_read_marksへunknown intentをcommitし、keep_read_statusなしのスレッドGET後に未読状態を再確認する。失敗・未確認はunknownのまま再試行し、確認できた場合だけconfirmedへ進める。通信制限・人承認操作・患者単位のtimestamp条件は維持する。"
+  ],
+  "refs": [
+    "mcs/ingest/run_check.py",
+    "mcs/ingest/mcs_adapter.py",
+    "mcs/core/ledger.py"
+  ]
+}

@@ -2435,7 +2435,8 @@ class Ledger:
 
     def stored_reply_ids(self, parent_id: int) -> set:
         return {r[0] for r in self.db.execute(
-            "SELECT message_id FROM messages WHERE parent_id=?", (parent_id,))}
+            "SELECT message_id FROM messages WHERE parent_id=? "
+            "AND body_state IN ('full','deleted')", (parent_id,))}
 
     def mark_thread_read(self, project_id: int, parent_id: int,
                          last_reply_id: int, status: str) -> None:

@@ -1842,20 +1842,23 @@ class MCSAdapter:
 
     def read_thread(self, project_id: int, parent_id: int,
                     max_pages: int = 10) -> set[int]:
-        """Read every thread page WITHOUT keep_read_status — like the
-        web client opening the thread, this clears the thread's unread
-        replies (verified live 2026-10-06). Returns the reply ids seen,
-        so a reply that landed after the caller stored the thread can
-        be fetched instead of silently staying read-but-unstored."""
+        """Read thread pages to acknowledge replies and return observed reply ids."""
+        # Owner authorized thread acknowledgement without a snapshot gate
+        # on 2026-10-06. New replies can also be acknowledged; callers queue
+        # any newly observed ids for durable acquisition.
         seen: set[int] = set()
         for page in range(1, max_pages + 1):
             r = self._get(
                 f"/projects/{project_id}/messages/{parent_id}/messages",
                 {"page": page})
-            for m in _norm_threads(r.get("messages"), project_id, parent_id):
-                seen.add(m.message_id)
-            pag = r.get("paginate")
-            if not isinstance(pag, dict) or not _has_next(pag, "thread"):
+            seen.update(m.message_id for m in _norm_threads(
+                r.get("messages"), project_id, parent_id))
+            if "paginate" not in r:
+                return seen
+            pag = r["paginate"]
+            if not isinstance(pag, dict):
+                raise SchemaError("thread: paginate invalid")
+            if not _has_next(pag, "thread"):
                 return seen
         raise MCSError("thread_incomplete", retryable=True)
 

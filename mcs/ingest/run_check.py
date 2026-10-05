@@ -781,13 +781,7 @@ THREAD_READ_MAX = 10               # threads checked per tick (MCS load)
 
 
 def stage_thread_read(adapter, ledger, result, deadline):
-    """Acknowledge stored replies on MCS. A reply's unread state is
-    per thread — the project flag stage_unread clears never covers it,
-    and replies imported by history/probe/reply jobs are never
-    acknowledged at all (owner report 2026-10-06). A thread is cleared
-    only when every reply the server lists is already stored; the
-    intent is recorded before the clearing read, and only a re-check
-    that finds no unread reply confirms it."""
+    """Acknowledge stored thread replies, queue gaps, and confirm read status."""
     done = result.setdefault("threads_marked_read", [])
     for pid, parent, last in ledger.thread_read_candidates(
             time.time() - THREAD_READ_WINDOW_S, THREAD_READ_MAX):
@@ -801,16 +795,13 @@ def stage_thread_read(adapter, ledger, result, deadline):
             server = {m.message_id for m in adapter.fetch_thread(pid, parent)}
             missing = server - ledger.stored_reply_ids(parent)
             if missing:
-                # store them first (reply jobs notify as usual); this
-                # thread is acknowledged on a later tick
+                # Store full replies before acknowledging the thread.
                 for rid in sorted(missing):
                     ledger.job_add("reply", pid, rid, parent_id=parent)
                 continue
             ledger.mark_thread_read(pid, parent, last, "unknown")
             seen = adapter.read_thread(pid, parent)
             for rid in sorted(seen - server):
-                # posted between the check and the clearing read: it is
-                # now read on MCS but not yet stored — fetch it
                 ledger.job_add("reply", pid, rid, parent_id=parent)
             if not adapter.thread_unread(pid, parent):
                 ledger.mark_thread_read(pid, parent, last, "confirmed")

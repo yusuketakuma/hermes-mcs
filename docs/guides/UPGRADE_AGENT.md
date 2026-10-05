@@ -1,7 +1,8 @@
 # MCS 更新実行手順書（AIエージェント用）
 
-このガイドはv1.0.13仕様のinstall/update/setup/doctorと復旧手順に対応する。
-実機受入・公開の状況は[開発・受入計画](../development/RELEASE_1.0.13.md)で追跡する。
+このガイドはv1.0.14仕様のinstall/update/setup/doctorと復旧手順に対応する。
+1.0.14の合成検証・公開の状況は[リリース受入票](../development/ACCEPTANCE_1.0.14.md)で追跡する。
+過去の1.0.13実機受入計画は[開発・受入計画](../development/RELEASE_1.0.13.md)に残す。
 
 ### 2026-10-04追記: 現在の更新入口と回帰資産
 
@@ -13,11 +14,11 @@ v1.0.0〜1.0.2は手動更新条件を保持し、standaloneの外部applyは阻
 schema巻戻しの個別復旧同意を更新承認で代用できません。
 
 [更新経路manifest](../../tests/fixtures/schema_upgrade/update-paths.json)は過去26経路の根拠と、
-現行13公開版・16構成のplan/apply/rollback/bootstrap/reinstall回帰を区別します。
+現行14公開版・18構成のplan/apply/rollback/bootstrap/reinstall回帰を区別します。
 テストは完全合成でGit履歴に依存しませんが、旧target updater全体の26経路再実行、
 実Git・host協調停止・SDK導入・実機配備を検証したものではありません。
-launcherの選択runtime追随とbackup lifecycleは統合検証中であり、
-ローカルCLI提供を1.0.13の実機受入・公開完了と読み替えません。
+launcherの選択runtime追随とbackup lifecycleは合成回帰で検証し、
+ローカルCLI提供や合成検証を実機受入・配備完了と読み替えません。
 
 > **この文書は AI エージェント（Claude Code / Codex / Devin 等）が読み込み、
 > 既存の MCS 導入を過去版（v1.0.0〜）から新しい版へ、データ移行を含めて
@@ -50,7 +51,7 @@ launcherの選択runtime追随とbackup lifecycleは統合検証中であり、
 
 ## 2. 起動役の取得と計画（書込みなし）
 
-【実行】移行先タグ（ユーザー指定。無ければ最新リリース。以下 `$TAG`、例 `v1.0.13`）から
+【実行】移行先タグ（ユーザー指定。無ければ最新リリース。以下 `$TAG`、例 `v1.0.14`）から
 起動役を取り出し、計画を出す。`fetch` はタグを取り込むだけで checkout を変えない。
 
 ```bash

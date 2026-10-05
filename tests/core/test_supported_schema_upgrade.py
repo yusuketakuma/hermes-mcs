@@ -73,7 +73,11 @@ def _historical(root: Path, origin: Origin) -> Path:
         db.commit()
         assert db.execute("PRAGMA user_version").fetchone()[0] == origin["schema_version"]
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert "reason_code" not in {r[1] for r in db.execute("PRAGMA table_info(fetch_jobs)")}
+        columns = {r[1] for r in db.execute("PRAGMA table_info(fetch_jobs)")}
+        assert ("reason_code" in columns) is (origin["schema_version"] >= 9)
+        if origin["schema_version"] >= 9:
+            db.execute("UPDATE fetch_jobs SET reason_code='network_error' WHERE job_id=502")
+            db.commit()
     (root / "attachments").mkdir()
     (root / "attachments" / "synthetic.txt").write_bytes(ATTACHMENT)
     assert ledger.valid_mcs_db(str(path))
@@ -128,7 +132,7 @@ def test_released_schema_upgrade_preserves_original_records(tmp_path, origin):
         assert db.db.execute("PRAGMA user_version").fetchone()[0] == ledger.SCHEMA_VERSION
         assert [tuple(row) for row in db.db.execute(
             "SELECT job_id,reason_code FROM fetch_jobs ORDER BY job_id")
-        ] == [(501, None), (502, None)]
+        ] == [(501, None), (502, "network_error" if origin["schema_version"] >= 9 else None)]
     finally:
         db.close()
 
@@ -272,10 +276,20 @@ def test_released_schema_update_rollback_requires_bound_consent(
     monkeypatch.setattr(updater, "restart_agents",
                         lambda bounce=True: restarts.append(bounce) or [])
     state = updater._default_state()
+    bump = origin["schema_version"] < ledger.SCHEMA_VERSION
     state["applied"] = [{
         "tag": origin["release"], "sha": "b" * 40, "prev_sha": "a" * 40,
-        "schema_bump": True, "backup_path": str(backup), "at": 100}]
+        "schema_bump": bump, "backup_path": str(backup), "at": 100}]
     updater.save_state(state)
+
+    if not bump:
+        latest = _records(live)
+        assert updater.rollback("synthetic-rollback") == 0
+        assert head[0] == "a" * 40 and restarts == [True]
+        assert not Path(updater.RESTORE_REPORT_PATH).exists()
+        _preserved(live, latest)
+        assert _sha(source) == original_hash and _sha(backup) == backup_hash
+        return
 
     assert updater.rollback("synthetic-rollback") == 2
     assert _sha(live) == live_hash

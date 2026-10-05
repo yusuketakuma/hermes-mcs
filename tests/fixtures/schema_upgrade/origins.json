@@ -1,9 +1,9 @@
 {
   "format": 1,
   "synthetic": true,
-  "origin_method": "For each local release tag, run only Ledger._init, _migrate, _migrate_body, _script and _backfill_v3 against an empty in-memory SQLite DB. Inline SCHEMA constants from mcs_requests and notify_cards at the same tag, not current modules. Export sqlite_master SQL (tables, explicit indexes, triggers), excluding SQLite internal and FTS shadow tables; append the actual historical user_version. No patient data or historical database was read. Identical DDL is shared; every release remains a separate test parameter.",
-  "coverage": "Released v1.0.0 through v1.0.12. v1.0.0-v1.0.2 require the documented manual source-update route; these fixtures prove data migration/recovery only, not automatic apply eligibility. Historical DB shapes are final initialized schemas at each tag, not every intermediate/incomplete migration state.",
-  "historical_number_evidence": "All supported release tags declare schema 7 (v1.0.0-v1.0.10) or 8 (v1.0.11-v1.0.12). Additionally schema 5 is fully evidenced by pre-release commit 6b532e5:adapter/ledger.py and adapter/mcs_requests.py and represented separately, without claiming automatic release update eligibility. Local SCHEMA_VERSION history jumps 5 to 7 at 3e51b36; complete original schema 0-4 and 6 source definitions are not evidenced by this history. Comments/compatibility branches alone do not establish those fixtures. Current SCHEMA_VERSION is imported dynamically by tests.",
+  "origin_method": "For each local release tag, run only Ledger._init, _migrate, _migrate_body, _script and _backfill_v3 against an empty in-memory SQLite DB. Inline SCHEMA constants from mcs_requests and notify_cards at the same tag, not current modules. Export sqlite_master SQL (tables, explicit indexes, triggers), excluding SQLite internal and FTS shadow tables; append the actual historical user_version. No patient data or historical database was read. Identical DDL is shared; every release remains a separate test parameter. Revalidated 2026-10-06 against current local v1.0.0-v1.0.13 tags: ledger and dependency blob hashes match every recorded source_sha256; DDL generated from the same schema-only methods matches every fixture sqlite_master entry after whitespace normalization, excluding SQLite internal and FTS shadow tables. Updated v1.0.3-v1.0.12 commit mappings to the current tag commits; source and fixture hashes are unchanged. This verifies current tag schema equivalence, not the historical updater binaries or the historical 26-path runner.",
+  "coverage": "Released v1.0.0 through v1.0.13. v1.0.0-v1.0.2 require the documented manual source-update route; these fixtures prove data migration/recovery only, not automatic apply eligibility. Historical DB shapes are final initialized schemas at each tag, not every intermediate/incomplete migration state.",
+  "historical_number_evidence": "All supported release tags declare schema 7 (v1.0.0-v1.0.10), 8 (v1.0.11-v1.0.12), or 9 (v1.0.13). Additionally schema 5 is fully evidenced by pre-release commit 6b532e5:adapter/ledger.py and adapter/mcs_requests.py and represented separately, without claiming automatic release update eligibility. Local SCHEMA_VERSION history jumps 5 to 7 at 3e51b36; complete original schema 0-4 and 6 source definitions are not evidenced by this history. Comments/compatibility branches alone do not establish those fixtures. Current SCHEMA_VERSION is imported dynamically by tests.",
   "pre_release_shapes": [{"release": "pre-release-schema-5", "commit": "6b532e532843dce7bddb558bde3290590ebb17b0", "source": "adapter/ledger.py", "source_sha256": "0b1f6d349abd746d8c294a77ac3e905eb87854e33f625897aa219536685089fe", "dependencies": [{"source": "adapter/mcs_requests.py", "source_sha256": "eba6ed2752e8ae93068318d8e330de65e76c9c118d9de1e2b56b30dc4eaed7b0"}], "schema_version": 5, "fixture": "shape-6.sql", "fixture_sha256": "af4ae0860944ed07a489b08906eba22a3fad93a66dd292b16874ce8886ef4b7a", "update_route": "not_a_release_tag"}],
   "releases": [
     {
@@ -56,7 +56,7 @@
     },
     {
       "release": "v1.0.3",
-      "commit": "af53bcf498a9b3836120642ce72338a4431b551c",
+      "commit": "90e0f3d0ad2e980f9370977ee982d362d864c061",
       "source": "mcs/core/ledger.py",
       "source_sha256": "e6fd2900a785421edb2185d016efa40fc779793ba0de2a1e4729170c0fe5c1d2",
       "dependencies": [
@@ -76,7 +76,7 @@
     },
     {
       "release": "v1.0.4",
-      "commit": "2725b868b799645636e6d9ad81c8a30be3b477cc",
+      "commit": "4ab2249af4033e6cb5daecc09af6463c7d817605",
       "source": "mcs/core/ledger.py",
       "source_sha256": "57ffe9ff58ef91c46e3855e38f8d0acf18fe048d3ab855ee602a59e55903152f",
       "dependencies": [
@@ -96,7 +96,7 @@
     },
     {
       "release": "v1.0.5",
-      "commit": "bf86f0e040a6ae431cfda1de8ee84eb6d157b6da",
+      "commit": "141ad259b24e6d72966036c2b0b7e638872cfb02",
       "source": "mcs/core/ledger.py",
       "source_sha256": "57ffe9ff58ef91c46e3855e38f8d0acf18fe048d3ab855ee602a59e55903152f",
       "dependencies": [
@@ -116,7 +116,7 @@
     },
     {
       "release": "v1.0.6",
-      "commit": "f94704269498e45e0d7fd259b00cfaf1d29e30ca",
+      "commit": "77d0baff93effd99767d076c98117b248deb58fc",
       "source": "mcs/core/ledger.py",
       "source_sha256": "1e3dd46deb9571b712512f3b9121e0d3e34061c66f508a4ffb4de38e430b5bf6",
       "dependencies": [
@@ -136,7 +136,7 @@
     },
     {
       "release": "v1.0.7",
-      "commit": "2f6c7b237b5c64e4235affaa41a5a0285d90d705",
+      "commit": "3a519da520d9892a15a092ba7c2fe192142e74ee",
       "source": "mcs/core/ledger.py",
       "source_sha256": "6e27b120846be8a0e0eadbb654d106fca3d8e2ebd97aa3c9f723a6b8ab172812",
       "dependencies": [
@@ -156,7 +156,7 @@
     },
     {
       "release": "v1.0.8",
-      "commit": "fbf16db49120bacbd009b06d83dea1f2f3b96845",
+      "commit": "145bf5e02044fa9b137c168060d53eb0436f5b9a",
       "source": "mcs/core/ledger.py",
       "source_sha256": "83ed1bf998ca29e1a22ff7e3656a01eb57d0f63b586571e8646d21ee63e5f810",
       "dependencies": [
@@ -176,7 +176,7 @@
     },
     {
       "release": "v1.0.9",
-      "commit": "c5a7716dda213263ab3f46388be3336db2730c79",
+      "commit": "fc07c074f5b5a50bb4bc35703976cc4c9bbcb292",
       "source": "mcs/core/ledger.py",
       "source_sha256": "f59aea61a5f5f79a5fb36d19202c7ccf978f82e345caba4b07f0bfbe208ddd2c",
       "dependencies": [
@@ -196,7 +196,7 @@
     },
     {
       "release": "v1.0.10",
-      "commit": "9ea015d865369c30892175e8e2fda746ada37802",
+      "commit": "3d57a4457e2e1732f65bfbb0870bfee8b8ffb623",
       "source": "mcs/core/ledger.py",
       "source_sha256": "f59aea61a5f5f79a5fb36d19202c7ccf978f82e345caba4b07f0bfbe208ddd2c",
       "dependencies": [
@@ -216,7 +216,7 @@
     },
     {
       "release": "v1.0.11",
-      "commit": "b5b2958897c430f8ecbed193f0bc406f6055086b",
+      "commit": "26c22bddb9349fe9dd2feb14e7cdcb242de1138c",
       "source": "mcs/core/ledger.py",
       "source_sha256": "c0f65242861e3a9c4845d006f89cc17f6b7128fabdaa7d2b1602472853cc7970",
       "dependencies": [
@@ -236,7 +236,7 @@
     },
     {
       "release": "v1.0.12",
-      "commit": "fb87584e4d9dc5f9c9b793a999b0eebfe4ffdf31",
+      "commit": "c6379ad1d5b0ae6a892f4bf8a8672dbd45770f3a",
       "source": "mcs/core/ledger.py",
       "source_sha256": "016c73f502bdd38bff614b36d76a7b923ae335038349d4f2eb5adb385ead53ff",
       "dependencies": [
@@ -252,6 +252,26 @@
       "schema_version": 8,
       "fixture": "shape-5.sql",
       "fixture_sha256": "c6b1f02feb9e1be8a3eae3dea811a89951d1dfc80aedc9b0f976b8c2fae2625b",
+      "update_route": "automatic"
+    },
+    {
+      "release": "v1.0.13",
+      "commit": "f4f74b375795e0b6e9fb5709ae8909ad6cd2e22d",
+      "source": "mcs/core/ledger.py",
+      "source_sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
+      "dependencies": [
+        {
+          "source": "mcs/ops/mcs_requests.py",
+          "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
+        },
+        {
+          "source": "mcs/notify/notify_cards.py",
+          "source_sha256": "e41caa907dbf06ab263f422097b11f9d7a880a867ac57a53298b0639493ebd0d"
+        }
+      ],
+      "schema_version": 9,
+      "fixture": "shape-7.sql",
+      "fixture_sha256": "e1521d86f01abc2c347c1cfe6d30df56c9c4e3ff1fb20b2953ea812dcf9b2fa0",
       "update_route": "automatic"
     }
   ]

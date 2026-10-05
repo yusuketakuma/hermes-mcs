@@ -134,7 +134,7 @@ def _world(tmp_path, monkeypatch, updater, path, *, install=False, schema=None):
     config = root / "config.json"
     config.write_text(json.dumps(cfg))
     objects = _Objects(root, origin, install,
-                       path.get("target", "v1.0.13"),
+                       path.get("target", MANIFEST["target"]["version"]),
                        ledger.SCHEMA_VERSION if schema is None else schema)
     monkeypatch.setattr(updater, "HOME", str(root))
     monkeypatch.setattr(updater, "load_config", lambda: cfg)
@@ -223,7 +223,10 @@ def test_current_plan_is_readonly_and_names_manual_or_host_prerequisites(
     blocker = path["external_plan"]
     assert result["route"] == ("blocked" if blocker else "reinstall" if install else "apply")
     assert result["blockers"] == ([blocker] if blocker else [])
-    assert result["schema_bump"] == f"schema_bump:{ORIGINS[path['source']]['schema_version']}->{ledger.SCHEMA_VERSION}"
+    source_schema = ORIGINS[path["source"]]["schema_version"]
+    assert result["schema_bump"] == (
+        f"schema_bump:{source_schema}->{ledger.SCHEMA_VERSION}"
+        if source_schema < ledger.SCHEMA_VERSION else None)
     assert result["reinstall"] == (["install_sh_changed"] if install else [])
     assert before == (_sha(source), _sha(Path(updater.LEDGER)), config.read_bytes())
     assert not Path(updater.STATE_PATH).exists()
@@ -239,7 +242,8 @@ def test_apply_reapply_and_bound_rollback_preserve_released_records(
                          install_args=("--no-llm",) if install else ()) == 0
     applied = updater.load_state()["applied"][-1]
     assert applied["sha"] == objects.after and applied["prev_sha"] == objects.before
-    assert applied["schema_bump"] is True
+    bump = ORIGINS[path["source"]]["schema_version"] < ledger.SCHEMA_VERSION
+    assert applied["schema_bump"] is bump
     assert applied["reinstall_done"] is install
     backup = Path(applied["backup_path"])
     assert _records(backup) == original
@@ -254,15 +258,19 @@ def test_apply_reapply_and_bound_rollback_preserve_released_records(
                           "body_state,content_hash) VALUES(203,101,'synthetic later',"
                           "'synthetic later','full',?)",
                           (hashlib.sha256(b"synthetic later").hexdigest(),))
-    assert updater.rollback("synthetic-path-rollback") == 2
-    report = json.loads(Path(updater.RESTORE_REPORT_PATH).read_text())
-    assert report["stored_since_backup"]["messages"] == 1
-    _seed_consent(updater.LEDGER, str(backup), report=report)
-    assert updater.recover_interrupted() == 0
+    after_insert = _records(Path(updater.LEDGER))
+    assert updater.rollback("synthetic-path-rollback") == (2 if bump else 0)
+    if bump:
+        report = json.loads(Path(updater.RESTORE_REPORT_PATH).read_text())
+        assert report["stored_since_backup"]["messages"] == 1
+        _seed_consent(updater.LEDGER, str(backup), report=report)
+        assert updater.recover_interrupted() == 0
+    else:
+        assert not Path(updater.RESTORE_REPORT_PATH).exists()
     assert objects.head == objects.before
     assert updater.load_state()["executed"]["synthetic-path-rollback"]["result"] == "rolled_back"
     assert config.read_bytes() == config_bytes
-    durable = {table: rows for table, rows in original.items()
+    durable = {table: rows for table, rows in (original if bump else after_insert).items()
                if table != "notify_outbox" and not table.startswith("notification_")}
     _preserved(Path(updater.LEDGER), durable)
     assert _records(backup) == original
