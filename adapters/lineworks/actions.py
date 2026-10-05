@@ -319,7 +319,8 @@ class Actions:
             self.reg.put_modal("lw-form-" + envelopes.actor_hash(rec["actor"]), session)
             await self._prompt(user, session)
             return
-        answer = text.view_answer(result, lambda p: projects.project_allowed(self.settings, p), markdown=False)
+        answer = text.view_answer(result, lambda p: projects.project_allowed(self.settings, p),
+                                  markdown=False, plain=True)
         if answer is None:
             await self._say(user, text.ja(result))
             return

@@ -69,14 +69,18 @@ def append(state_dir: str, worker_id: str, record: dict, *,
     return path
 
 
-def _scan_file(path: str, out: dict) -> None:
+def _scan_file(path: str, out: dict) -> bool:
+    clean = True
     try:
         with open(path, "rb") as handle:
             # line by line: rows read before an I/O error still count
             for raw in handle:
-                _parse_rows(raw.rstrip(b"\n"), out)
+                parsed = _parse_rows(raw.rstrip(b"\n"), out)
+                if raw.strip() and (not parsed or not raw.endswith(b"\n")):
+                    clean = False
     except OSError:
-        return
+        clean = False
+    return clean
 
 
 def _names(state_dir: str) -> list[str]:
@@ -153,27 +157,44 @@ def compact(state_dir: str, *, active: str, file_ok, prunable) -> int:
 
 def scan(state_dir: str) -> dict[str, list[dict]]:
     """attempt_id -> ordered records, across every worker journal."""
+    return scan_checked(state_dir)[0]
+
+
+def scan_checked(state_dir: str) -> tuple[dict[str, list[dict]], bool]:
+    """Return readable records and whether every journal line is intact."""
     out: dict[str, list[dict]] = {}
     try:
         names = _names(state_dir)
     except OSError:
-        return out
+        return out, False
+    clean = True
     for name in names:
-        _scan_file(os.path.join(state_dir, name), out)
-    return out
+        if not _scan_file(os.path.join(state_dir, name), out):
+            clean = False
+    return out, clean
 
 
-def _parse_rows(data: bytes, out: dict) -> None:
+def _parse_rows(data: bytes, out: dict) -> bool:
+    clean = True
     for raw in data.split(b"\n"):
+        if not raw.strip():
+            continue
         try:
             row = json.loads(raw)
-        except ValueError:
+        except (ValueError, RecursionError):
+            clean = False
             continue  # torn tail line — earlier rows still count
         if not isinstance(row, dict):
+            clean = False
             continue
         aid = row.get("attempt_id")
-        if isinstance(aid, str):
+        if isinstance(aid, str) and aid:
             out.setdefault(aid, []).append(row)
+            if row.get("phase") not in PHASES:
+                clean = False
+        else:
+            clean = False
+    return clean
 
 
 class _View(Mapping):

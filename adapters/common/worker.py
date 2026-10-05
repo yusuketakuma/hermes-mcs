@@ -114,6 +114,7 @@ class DeliveryWorker:
         self._log = log
         self._lock_fd = None
         self._stopping = False
+        self._journal_incomplete = False
         self._segment = 0
         # every per-tick journal read (part dedupe, resume, spent/started
         # checks) reads only what was appended since the last one — a
@@ -271,8 +272,13 @@ class DeliveryWorker:
         """
         # a full scan, not the cache: this runs once per start and the
         # maintain_journal() below invalidates the cache anyway
-        records = await asyncio.to_thread(journal.scan,
-                                          self._dirs["state"])
+        records, clean = await asyncio.to_thread(journal.scan_checked,
+                                                 self._dirs["state"])
+        if not clean:
+            # An unreadable row may be the sole started witness of a
+            # dependent part. No new wire call can infer it was unsent.
+            self._journal_incomplete = True
+            self._log("journal_incomplete")
         stats = {"receipt_republished": 0, "not_sent": 0, "unknown": 0}
         for aid, info in journal.unreported(records).items():
             row = info["record"]
@@ -298,13 +304,13 @@ class DeliveryWorker:
             env = self._receipt_env(aid, info["rows"], claim)
             if env is None or not self._ours(env):
                 continue
-            if info["phase"] == "pre_http":
+            if info["phase"] == "pre_http" and clean:
                 env["result"] = "not_sent"
                 env["error_code"] = "worker_restart"
                 stats["not_sent"] += 1
             else:
                 env["result"] = "unknown"
-                env["error_code"] = "worker_crash"
+                env["error_code"] = "worker_crash" if clean else "journal_incomplete"
                 stats["unknown"] += 1
             await asyncio.to_thread(
                 envelopes.publish_command, self._dirs["cmd_int"], env)
@@ -312,6 +318,22 @@ class DeliveryWorker:
                           delivery_id=row.get("delivery_id"),
                           result=env["result"], reconcile=True)
             await self._retire_reconciled(aid, env, claim, info["rows"])
+        # A persisted claim can outlive its whole journal file. Absence
+        # of its started witness cannot establish that HTTP never ran.
+        for delivery_id, claim in list(self._reg.claims().items()):
+            aid = claim.get("attempt_id")
+            if aid in records:
+                continue
+            env = self._receipt_env(aid, [], claim)
+            if env is None or not self._ours(env):
+                continue
+            env.update(result="unknown", error_code="journal_incomplete")
+            await asyncio.to_thread(
+                envelopes.publish_command, self._dirs["cmd_int"], env)
+            self._journal("receipt", attempt_id=aid, delivery_id=delivery_id,
+                          result="unknown", reconcile=True)
+            stats["unknown"] += 1
+            await self._retire_reconciled(aid, env, claim, [])
         # A crash after receipt publication but before the registry flush
         # leaves an old granted claim. Its journal still forbids resending.
         for aid, rows in records.items():
@@ -336,10 +358,13 @@ class DeliveryWorker:
         # denial (signal_notify_off) forever.
         granted = any(r.get("phase") in ("granted", "started", "result")
                       for r in rows)
+        unknown = next((r.get("result") for r in reversed(rows)
+                        if r.get("phase") == "receipt"), env.get("result")) == "unknown"
         if claim is not None and claim.get("attempt_id") == aid:
             await self._drop_claim(
-                claim, dead=granted or claim.get("phase") != "begin_sent")
-        elif claim is None and granted \
+                claim, dead=unknown or granted
+                or claim.get("phase") != "begin_sent")
+        elif claim is None and (granted or unknown) \
                 and not self._reg.is_dead(env["delivery_id"]) \
                 and os.path.isfile(os.path.join(
                     self._dirs["render"], env["delivery_id"] + ".json")):
@@ -703,7 +728,8 @@ class DeliveryWorker:
 
     async def _send_allowed(self) -> bool:
         flags = await asyncio.to_thread(paths.read_flags, self._root)
-        return (not self._stopping and flags.get("interactive") is True
+        return (not self._stopping and not self._journal_incomplete
+                and flags.get("interactive") is True
                 and flags.get("transport", "discord") == self.transport
                 and not flags.get("restore_pending"))
 
