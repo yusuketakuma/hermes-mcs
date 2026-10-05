@@ -1131,6 +1131,8 @@ def _receive(args) -> dict:
     receipts = []
     if args.input is not None:
         source = Path(args.input)
+        if source.is_symlink():
+            raise ContractError("receive_input_unsafe")
         files = sorted(p for p in source.rglob("*.json") if p.is_file() and not p.is_symlink()
                        and not p.name.startswith(".")) if source.is_dir() else [source]
         for path in files:

@@ -62,6 +62,36 @@ def fixed_clock(monkeypatch):
     monkeypatch.setattr(ext.time, "time", lambda: NOW)
 
 
+@pytest.mark.parametrize("linked", [False, True])
+def test_receive_directory_input_rejects_only_a_linked_root(
+        tmp_path, monkeypatch, capsys, linked):
+    from ext_fixtures import generate
+
+    monkeypatch.setattr(ext.time, "time", lambda: 1_790_000_000.5)
+    directory = tmp_path / "input"
+    directory.mkdir()
+    source = directory / "one.json"
+    payload = generate()["accepted/01-basic.json"]
+    source.write_bytes(payload)
+    root = tmp_path / "alias"
+    if linked:
+        root.symlink_to(directory, target_is_directory=True)
+    else:
+        root = directory
+    receipts = tmp_path / "r.ndjson"
+    code = ext.main(["receive", "--receiver-root", str(tmp_path / "receiver"),
+                     "--source-label", "synthetic-directory", "--input", str(root),
+                     "--receipts-out", str(receipts)])
+    result = json.loads(capsys.readouterr().out)
+    if linked:
+        assert code == 1 and result["reason"] == "receive_input_unsafe"
+        assert not receipts.exists()
+    else:
+        assert code == 0 and result["transport"] == {"accepted": 1}
+        assert ext.parse_receipt(receipts.read_bytes())["status"] == "accepted"
+    assert source.read_bytes() == payload
+
+
 @pytest.mark.parametrize("kind", ["fifo", "symlink"])
 def test_receive_rejects_nonregular_explicit_input_without_blocking(tmp_path, kind):
     path = tmp_path / "input.json"

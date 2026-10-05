@@ -4,11 +4,14 @@ import argparse
 import json
 import os
 import re
+import secrets
 import sqlite3
 import sys
 import time
+from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from stat import S_ISREG
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
@@ -22,7 +25,7 @@ import read_model
 from export_schema import project_record
 from mcs_queries import item_unverified
 from drug_map import candidate_note
-from mcs_util import atomic_write, loads_dict
+from mcs_util import loads_dict
 
 HOME = Path(os.path.expanduser("~/.mcs"))
 SNAPSHOT = HOME / "data" / "snapshots" / "ledger-snapshot.db"
@@ -44,15 +47,54 @@ def _check_directory(directory: Path) -> None:
         raise ValueError("export_directory_unsafe")
 
 
+@contextmanager
+def _directory_fd(root: Path, child: str, *, create: bool = False):
+    # Keep the selected root and generated child stable through publication
+    # and cleanup. A pathname recheck cannot close the symlink-swap window.
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NONBLOCK)
+    try:
+        fd = root_fd
+        if child != ".":
+            if create:
+                try:
+                    os.mkdir(child, mode=0o700, dir_fd=root_fd)
+                except FileExistsError:
+                    pass
+            try:
+                fd = os.open(child, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                             | os.O_NONBLOCK, dir_fd=root_fd)
+            except OSError:
+                raise ValueError("export_directory_unsafe") from None
+        try:
+            yield fd
+        finally:
+            if fd != root_fd:
+                os.close(fd)
+    finally:
+        os.close(root_fd)
+
+
 def _write(root: Path, rel: str, text: str) -> None:
     """Atomic rewrite — a crash mid-write must not leave a torn file."""
     dest = root / rel
     if dest.parent != root:
         _check_directory(dest.parent)
-    # Exported summaries can contain PHI; staging must be private and
-    # exclusively created, including in a user-selected shared directory.
-    atomic_write(str(dest), lambda stream: stream.write(text),
-                 mode=0o600, tmp_prefix=f".{dest.name}-")
+    with _directory_fd(root, str(dest.parent.relative_to(root)), create=True) as directory:
+        tmp = f".{dest.name}-{secrets.token_hex(12)}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=directory)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(text)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp, dest.name, src_dir_fd=directory, dst_dir_fd=directory)
+            os.fsync(directory)
+        finally:
+            with suppress(OSError):
+                os.unlink(tmp, dir_fd=directory)
 
 
 def _fm(title: str) -> str:
@@ -284,18 +326,20 @@ def _sweep_exports(out_dir: Path, now: float) -> list:
             (out_dir, r"export-(\d{4}-\d{2}-\d{2})\.jsonl")):
         if not sub.is_dir() or (sub != out_dir and sub.is_symlink()):
             continue
-        for f in sub.iterdir():
-            m = re.fullmatch(pattern, f.name)
-            if not m or f.is_symlink() or not f.is_file():
-                continue
-            try:
-                day = datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=_JST).timestamp()
-            except (ValueError, OverflowError):
-                continue
-            if day >= cutoff:
-                continue
-            f.unlink()
-            expired.append(str(f.relative_to(out_dir)))
+        with _directory_fd(out_dir, str(sub.relative_to(out_dir))) as directory:
+            for name in os.listdir(directory):
+                m = re.fullmatch(pattern, name)
+                if not m or not S_ISREG(os.stat(
+                        name, dir_fd=directory, follow_symlinks=False).st_mode):
+                    continue
+                try:
+                    day = datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=_JST).timestamp()
+                except (ValueError, OverflowError):
+                    continue
+                if day >= cutoff:
+                    continue
+                os.unlink(name, dir_fd=directory)
+                expired.append(str((sub / name).relative_to(out_dir)))
     return expired
 
 
@@ -352,13 +396,13 @@ def run(out_dir: Path, snapshot: Path) -> dict:
         pdir = out_dir / "patients"
         _check_directory(pdir)
         if pdir.is_dir():
-            for stale in pdir.glob("p*.md"):
-                # generated names are always p<int>.md — anything else in a
-                # user-chosen --out dir (plan.md, p-notes.md) is not ours to
-                # delete (FIX-BE2)
-                if not stale.is_symlink() and stale.is_file() and stale.name not in seen \
-                        and re.fullmatch(r"p\d+\.md", stale.name):
-                    stale.unlink()
+            with _directory_fd(out_dir, "patients") as directory:
+                for name in os.listdir(directory):
+                    # Only generated regular pages belong to the exporter.
+                    if name not in seen and re.fullmatch(r"p\d+\.md", name) \
+                            and S_ISREG(os.stat(name, dir_fd=directory,
+                                                    follow_symlinks=False).st_mode):
+                        os.unlink(name, dir_fd=directory)
         expired = _sweep_exports(out_dir, time.time())
         return {"ok": True, "patients": len(seen),
                 "signals": sig_res["total"],

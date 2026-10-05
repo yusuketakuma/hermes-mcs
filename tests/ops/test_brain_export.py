@@ -205,6 +205,84 @@ def test_patient_cleanup_preserves_symbolic_link(env, tmp_path):
     assert foreign.read_text() == "SYNTHETIC unrelated asset"
 
 
+def test_write_refuses_directory_changed_after_check(tmp_path, monkeypatch):
+    root = tmp_path / "exports"
+    directory = root / "patients"
+    directory.mkdir(parents=True)
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    marker = foreign / "p1.md"
+    marker.write_text("SYNTHETIC unrelated asset")
+    check = brain_export._check_directory
+
+    def changed_after_observation(path):
+        check(path)
+        if path == directory:
+            directory.rmdir()
+            directory.symlink_to(foreign, target_is_directory=True)
+
+    monkeypatch.setattr(brain_export, "_check_directory", changed_after_observation)
+    with pytest.raises(ValueError, match="export_directory_unsafe"):
+        brain_export._write(root, "patients/p1.md", "SYNTHETIC export")
+    assert marker.read_text() == "SYNTHETIC unrelated asset"
+    assert sorted(p.name for p in foreign.iterdir()) == ["p1.md"]
+
+
+def test_write_stays_in_opened_directory_during_publication(tmp_path, monkeypatch):
+    root = tmp_path / "exports"
+    directory = root / "patients"
+    directory.mkdir(parents=True)
+    retained = tmp_path / "owned-moved"
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    marker = foreign / "p1.md"
+    marker.write_text("SYNTHETIC unrelated asset")
+    replace = brain_export.os.replace
+
+    def changed_before_replace(src, dst, **kwargs):
+        directory.rename(retained)
+        directory.symlink_to(foreign, target_is_directory=True)
+        return replace(src, dst, **kwargs)
+
+    monkeypatch.setattr(brain_export.os, "replace", changed_before_replace)
+    brain_export._write(root, "patients/p1.md", "SYNTHETIC export")
+    assert marker.read_text() == "SYNTHETIC unrelated asset"
+    assert (retained / "p1.md").read_text() == "SYNTHETIC export"
+    assert (retained / "p1.md").stat().st_mode & 0o777 == 0o600
+    assert not list(retained.glob("*.tmp"))
+
+
+@pytest.mark.parametrize(("subdir", "name"), [
+    ("patients", "p999.md"), ("stats", "2000-01-01.md")])
+def test_cleanup_stays_in_opened_directory_during_unlink(
+        env, tmp_path, monkeypatch, subdir, name):
+    snap, out = env
+    brain_export.run(out, snap)
+    directory = out / subdir
+    (directory / name).write_text("SYNTHETIC owned stale export")
+    retained = tmp_path / "owned-moved"
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    marker = foreign / name
+    marker.write_text("SYNTHETIC unrelated asset")
+    unlink = brain_export.os.unlink
+    changed = False
+
+    def changed_before_unlink(path, **kwargs):
+        nonlocal changed
+        if Path(path).name == name and not changed:
+            changed = True
+            directory.rename(retained)
+            directory.symlink_to(foreign, target_is_directory=True)
+        return unlink(path, **kwargs)
+
+    monkeypatch.setattr(brain_export.os, "unlink", changed_before_unlink)
+    brain_export.run(out, snap)
+    assert changed
+    assert marker.read_text() == "SYNTHETIC unrelated asset"
+    assert not (retained / name).exists()
+
+
 @pytest.mark.parametrize("subdir", ["patients", "stats"])
 def test_export_rechecks_directories_after_processing_starts(
         env, tmp_path, monkeypatch, subdir, capsys):
@@ -316,7 +394,7 @@ def test_export_failed_publication_preserves_previous_file(env, monkeypatch):
     brain_export.run(out, snap)
     previous = (out / "meta.md").read_bytes()
 
-    def fail_replace(*args):
+    def fail_replace(*args, **kwargs):
         raise OSError("synthetic publication failure")
 
     monkeypatch.setattr(brain_export.os, "replace", fail_replace)
