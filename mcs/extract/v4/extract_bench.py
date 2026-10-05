@@ -342,6 +342,12 @@ def _load_cases(path: str) -> list:
     return _load_corpus(path)[0]
 
 
+def _synthetic_cases() -> list:
+    """Read the checked-in, wholly fictional benchmark cases."""
+    return [case for name in ("extract_cases.json", "extract_cases_labs.json")
+            for case in _load_cases(str(Path(DEFAULT_CASES).with_name(name)))]
+
+
 def _duration_percentiles(durations: list[float]) -> dict:
     """Nearest-rank latency percentiles, or null when no cases ran."""
     ordered = sorted(durations)
@@ -406,6 +412,17 @@ def cmd_run(args) -> int:
         for r in bad:
             print("  INVALID EXPECTATION:", r["id"])
         return 1 if bad else 0
+    # A claimed synthetic marker cannot authorize arbitrary text for a model.
+    # Copies/subsets remain usable; every field must match an approved case.
+    try:
+        allowed = _synthetic_cases()
+        if (not cases or len(cases) > len(allowed)
+                or any(case not in allowed for case in cases)
+                or len({case["id"] for case in cases}) != len(cases)):
+            raise ValueError("synthetic_corpus_required")
+    except (OSError, TypeError, ValueError):
+        print("synthetic_corpus_required", file=sys.stderr)
+        return 2
     import extract_llm
     scores = []
     t0 = time.time()
