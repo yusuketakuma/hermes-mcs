@@ -47,8 +47,11 @@ def main() -> int:
         print(f"cases unreadable: {error}", file=sys.stderr)
         return 1
     cases = payload.get("cases") if isinstance(payload, dict) else None
-    if not isinstance(cases, list) or not cases or any(not isinstance(case, dict) for case in cases):
-        print("cases file requires a nonempty list of case objects", file=sys.stderr)
+    if not isinstance(cases, list) or not cases or any(
+            not isinstance(case, dict) or case.get("messages") and (
+                not isinstance(case["messages"], list)
+                or any(not isinstance(msg, dict) for msg in case["messages"])) for case in cases):
+        print("cases file requires case objects and message objects", file=sys.stderr)
         return 1
 
     jev_client = None

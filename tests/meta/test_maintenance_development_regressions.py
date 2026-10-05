@@ -193,10 +193,13 @@ def test_shadow_cli_rejects_nonfinite_or_nonpositive_budget_before_model(
 
 
 @pytest.mark.parametrize("budget", ["0.25", "300"])
-def test_shadow_cli_preserves_valid_operator_fixture_and_budget(monkeypatch, tmp_path, budget):
+@pytest.mark.parametrize("thread", [False, True])
+def test_shadow_cli_preserves_valid_operator_fixture_and_budget(monkeypatch, tmp_path, budget, thread):
     module = _load("semantic_shadow_e2e")
     cases, output = tmp_path / "synthetic.json", tmp_path / "report.json"
     synthetic = [{"id": "synthetic-operator", "body": "合成の投稿"}]
+    if thread:
+        synthetic = [{"id": "synthetic-thread", "messages": [{"body": "合成の投稿"}]}]
     cases.write_text(json.dumps({"cases": synthetic}))
     calls = []
     def run(actual, model, client, **kwargs):
@@ -212,13 +215,15 @@ def test_shadow_cli_preserves_valid_operator_fixture_and_budget(monkeypatch, tmp
     assert json.loads(output.read_text()) == {"cases": 1, "complete": 0}
 
 
-@pytest.mark.parametrize("kind", ["deep", "null_case", "number_case"])
+@pytest.mark.parametrize("kind", ["deep", "null_case", "number_case", "null_message", "string_messages"])
 def test_shadow_cli_malformed_cases_stop_before_model(monkeypatch, tmp_path, capsys, kind):
     module = _load("semantic_shadow_e2e")
     cases, output = tmp_path / "synthetic.json", tmp_path / "report.json"
     depth = sys.getrecursionlimit() + 100
     malformed = {"deep": '{"cases":[' + "[" * depth + "0" + "]" * depth + "]}",
-                 "null_case": '{"cases":[null]}', "number_case": '{"cases":[7]}'}[kind]
+                 "null_case": '{"cases":[null]}', "number_case": '{"cases":[7]}',
+                 "null_message": '{"cases":[{"messages":[null]}]}',
+                 "string_messages": '{"cases":[{"messages":"synthetic"}]}'}[kind]
     cases.write_text(malformed)
     calls = []
     monkeypatch.setitem(sys.modules, "semantic", SimpleNamespace(llm_chat=None))
