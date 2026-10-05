@@ -18,8 +18,10 @@ nearest measurement label in the body at validation time.
 """
 import argparse
 import contextlib
+from datetime import datetime
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import queue
@@ -37,7 +39,7 @@ import _mcs_path  # noqa: F401
 import bounded_http
 import clinical_values
 import local_llm
-from ledger import Ledger, _posted_epoch
+from ledger import Ledger
 from mcs_queries import (EXTRACT_FEEDBACK_KIND, current_extract_pred,
                          current_qc_pred,
                          current_v4_id, json_or_null, qc_source_id)
@@ -1599,10 +1601,14 @@ def _karte_block(ledger, project_id: int, posted_at: str | None) -> str:
     comment = ks.get("comment")
     if not isinstance(comment, str) or not comment.strip():
         return ""
-    upd = _posted_epoch(ks.get("updated_at")) \
-        if isinstance(ks.get("updated_at"), str) else None
-    post = _posted_epoch(posted_at) if isinstance(posted_at, str) else None
-    if upd is None or post is None or upd > post:
+    try:
+        upd = datetime.fromisoformat(ks.get("updated_at"))
+        post = datetime.fromisoformat(posted_at)
+    except (TypeError, ValueError):
+        return ""
+    # Keep fractional seconds and compare explicit instants across offsets.
+    # A date or timezone-less value cannot prove this context was available.
+    if upd.tzinfo is None or post.tzinfo is None or upd > post:
         return ""
     return _KARTE_HEAD + _sanitize_ctx(comment[:_KARTE_MAX]) + _KARTE_TAIL
 
@@ -1722,10 +1728,11 @@ def revive_failed(ledger, now: float | None = None) -> dict:
             continue
         meta.update({"attempts": 4, "next_try": now, "auto_retry": n + 1})
         with ledger.db:
-            ledger.db.execute(
-                "UPDATE artifacts SET meta=? WHERE artifact_id=?",
-                (json.dumps(meta, ensure_ascii=False), row["artifact_id"]))
-        out["revived"] += 1
+            cur = ledger.db.execute(
+                "UPDATE artifacts SET meta=? WHERE artifact_id=? AND meta=?",
+                (json.dumps(meta, ensure_ascii=False), row["artifact_id"], row["meta"]))
+        # Another drainer/revival may have changed or removed the snapshot.
+        out["revived"] += cur.rowcount
     return out
 
 
@@ -2379,6 +2386,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     remains for explicit use."""
     if type(limit) is not int or limit < 1:
         raise ValueError("extract_limit_invalid")
+    try:
+        valid_budget = type(budget_s) in (int, float) and math.isfinite(budget_s)
+    except OverflowError:
+        valid_budget = False
+    if not valid_budget:
+        raise ValueError("extract_budget_invalid")
     deadline = time.monotonic() + budget_s
     lock = _write_lock
     # Any artifact for an older body is stale, including retry state.
@@ -3029,6 +3042,10 @@ def _main() -> int:
         finally:
             led.close()
         return 0
+    if (not math.isfinite(args.budget) or not math.isfinite(args.stop_after)
+            or args.stop_after < 0):
+        print(json.dumps({"ok": False, "error": "bad_budget"}))
+        return 2
     if not (0 <= args.batch <= 8):
         print(json.dumps({"ok": False, "error": "bad_batch"}))
         return 2

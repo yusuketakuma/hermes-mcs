@@ -40,9 +40,9 @@ DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "patient_rollup"
 STALE_DAYS = 21          # message unseen this long while siblings refresh
 # Bump when persisted rollup content changes shape: dirty_projects()
-# rebuilds every row stamped with another version (4: medication candidates).
+# rebuilds every row stamped with another version (5: empty fact-source vitals).
 # Rebuilds only rewrite artifacts; no notification reads patient_rollup.
-PERIOD_CHECK_VERSION = 4
+PERIOD_CHECK_VERSION = 5
 # #20-C thread-level reply_state: strongest reply kind seen in the thread
 # after the request, from another sender. View-only, never a transition.
 _REPLY_STAGE = {k: i for i, k in enumerate(
@@ -144,6 +144,7 @@ def build_rollup(ledger, project_id: int) -> dict:
         blobs = arts.get(m["message_id"], {})
         llm_blob = blobs.get("extract_llm")
         llm = llm_blob   # parsed below when it is the row lm came from
+        has_fact_source = False
         try:
             v1 = json.loads(blobs["extract_v1"]) \
                 if "extract_v1" in blobs else {}
@@ -155,6 +156,8 @@ def build_rollup(ledger, project_id: int) -> dict:
                 or blobs.get("canonical_projection") \
                 or llm_blob
             lm = json.loads(lm_blob) if lm_blob else {}
+            has_fact_source = (lm_blob is not None and isinstance(lm, dict)
+                               and not lm.get("_error"))
             if lm_blob is not None and lm_blob is llm_blob:
                 llm = lm    # one decode per unshadowed extract_llm row
         except (json.JSONDecodeError, TypeError):
@@ -172,7 +175,7 @@ def build_rollup(ledger, project_id: int) -> dict:
             # Same rule as structured_view._vital_line: once an LLM
             # row exists, a missing vitals key may be an intentional
             # exclusion — never resurrect the v1 rule reading over it.
-            vit = lm.get("vitals") if lm else v1.get("vitals")
+            vit = lm.get("vitals") if has_fact_source else v1.get("vitals")
             if isinstance(vit, dict) and vit:
                 latest_vitals = {"at": m["posted_at"], **vit}
         # v4 labs: newest report per analyte wins (msgs walk newest-first)
