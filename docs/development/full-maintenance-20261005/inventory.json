@@ -26,9 +26,9 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "REVIEWED": 570,
+      "REVIEWED": 572,
       "EXCLUDED": 25,
-      "PARTIAL": 35,
+      "PARTIAL": 34,
       "UNSEEN": 269
     },
     "candidate_tracked": 897
@@ -4722,23 +4722,28 @@
     },
     {
       "path": "docs/development/DEVELOPMENT.md",
-      "sha256": "2ad262639f4ff50a9eb2bb3e22251d25db0f9cab50320ec0ad61664d87399eeb",
-      "bytes": 55533,
-      "lines": 769,
+      "sha256": "cfd41360a9b027c82afb472560a1c48d37db4f3905bd610465c21ee26704e67b",
+      "bytes": 56034,
+      "lines": 772,
       "module": "docs",
       "kind": "text_asset",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。",
+        "親が全manual/generated内容と20観点・source/consumerを確認し旧runtime説明を同期。"
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
         [
-          490,
-          526
+          1,
+          772
         ]
       ],
-      "packet": "docs/development/maintenance-notify-evidence.json"
+      "packet": "docs/development/maintenance-notify-evidence.json",
+      "reviewed_sha256": "cfd41360a9b027c82afb472560a1c48d37db4f3905bd610465c21ee26704e67b",
+      "reviewed_lines": 772,
+      "full_content_read": true,
+      "review_packet": "docs/development/full-maintenance-20261005/parent-development-document-evidence.json"
     },
     {
       "path": "docs/development/README_MAINTENANCE.md",
@@ -4856,6 +4861,18 @@
       "origin": "new maintenance record",
       "evidence": [
         "JSON parsed and patch inspected; final path/evidence reconciliation pending."
+      ]
+    },
+    {
+      "path": "docs/development/full-maintenance-20261005/parent-development-document-evidence.json",
+      "module": "run-record",
+      "kind": "run_record",
+      "status": "REVIEWED",
+      "sha256": "77222f1f3e9d5571a8d7eaa81fd8749a534f57323953e65d46eedc390eef84c4",
+      "bytes": 7400,
+      "structured_record_reviewed": true,
+      "evidence": [
+        "親作成/全20観点/全文read証拠/実在local linkとsourceを確認。"
       ]
     },
     {
