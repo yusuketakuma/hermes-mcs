@@ -84,7 +84,7 @@ _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬
 _MED_PERIOD = re.compile(
     r"(?<![\d/])(?:(\d{4})/)?(\d{1,2}/\d{1,2})"
     r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
-RULE_VERSION = 7
+RULE_VERSION = 8
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問|診察|往診)")
@@ -173,6 +173,11 @@ def extract_message(body: str, posted_at: str) -> dict:
     year = None
     posted = None
     try:
+        # Python 3.10 needs an explicit UTC offset. A date-only "...Z"
+        # must stay invalid rather than acquiring a fabricated time.
+        if (isinstance(posted_at, str) and posted_at.endswith("Z")
+                and re.search(r"[T ]\d", posted_at)):
+            posted_at = posted_at[:-1] + "+00:00"
         posted = datetime.fromisoformat(posted_at)
         year = posted.year
     except (ValueError, TypeError):
@@ -354,7 +359,7 @@ _STALE = """CASE WHEN json_valid(a.meta) THEN
         json_extract(a.meta,'$.hash') IS NULL
         OR json_extract(a.meta,'$.hash') != m.content_hash
         OR COALESCE(json_extract(a.meta,'$.rule_version'),0) != ?
-      ELSE 0 END"""
+      ELSE 1 END"""
 _EXTRACTABLE = """m.body_text IS NOT NULL AND m.body_text != ''
         AND (m.body_state IS NULL OR m.body_state='full')"""
 
