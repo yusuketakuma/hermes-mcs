@@ -23,7 +23,12 @@
     "observation_not_press_time": true,
     "completion_not_inferred": true,
     "limit": "全kindで12氏名、名前40/職種20文字、省略人数と…",
-    "delivery": "Slack/Discordはthread_on時各投稿のcompanion body、thread_off時既存本文操作。LINE WORKSはchannel visible body parts。"
+    "delivery": "Slack/Discordはthread_on時各投稿のcompanion body、thread_off時既存本文操作。LINE WORKSはchannel visible body parts。",
+    "update_method": {
+      "slack": "Edit named body parts using prior remote ID; preserve source generation/human acknowledgement.",
+      "discord": "Edit named body parts using prior remote ID; preserve source generation/human acknowledgement.",
+      "lineworks": "Official Bot API has no sent-message edit operation; publish replacement card/body, retire old button/preview tokens; synthetic logical ID differs from the old post."
+    }
   },
   "opt_in_contract": {
     "metadata_shadow_default": false,
@@ -80,8 +85,8 @@
     },
     {
       "path": "docs/guides/USER_GUIDE.md",
-      "sha256": "e79a23cdeeabd500c53839ac06adc1ba9d29b150b77dd0f25663f04b4c00cdc5",
-      "bytes": 39849,
+      "sha256": "a4af268a78cce1010b47ac7ec32a9ed147e7ec33fa30c31d26108db4b7f01d35",
+      "bytes": 40114,
       "kind": "full_text_delta_reviewed"
     },
     {
@@ -149,5 +154,18 @@
     "No real platform messages, MCS data/settings, PHI or credentials used; collection defaults remain off.",
     "Names arrive only under existing metadata_shadow+metadata_actors opt-in and existing bounded4/tick/25sec/7day/24h scope.",
     "Native UI, accessibility, clinical efficacy and deployment are not inferred. Final whole-I, actual pinnedSDK/distribution and fresh-context review remain pending."
-  ]
+  ],
+  "final_document_correction": {
+    "fixed_runtime_I": "fa9385c2790cbd2fdd8151a10aa04058dca797f0",
+    "changes": [
+      "docs/guides/USER_GUIDE.md stamp section two platform-specific update sentences",
+      "changes/20261005-stamp-actors-display.json details[3] limit same-ID claim to Slack/Discord and document LINE WORKS replacement"
+    ],
+    "independent_probe": "/tmp/mcs-formalreview-fa9385c-5l06576f/lineworks-late-actor-probe.json",
+    "official_sources": [
+      "https://developers.worksmobile.com/jp/docs/bot-api/?lang=ja",
+      "https://developers.worksmobile.com/jp/docs/bot-channel-message-send"
+    ],
+    "nature": "Documentation correctness; runtime code/tests/dependencies unchanged."
+  }
 }

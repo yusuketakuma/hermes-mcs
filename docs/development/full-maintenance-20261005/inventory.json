@@ -819,7 +819,9 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "02b6a6156b8aea5bbae590387b55b6a474b701b9fa6bd506566f3f707c5a8f19",
-      "parent_delta_reviewed": true
+      "parent_delta_reviewed": true,
+      "criteria_source_packet": "docs/development/maintenance-core-packet6-evidence.json",
+      "criteria_trace_supplement": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-fa9385c/criterion-trace-supplement.json"
     },
     {
       "path": "SECURITY.md",
@@ -17012,7 +17014,7 @@
     {
       "path": "docs/development/full-maintenance-20261005/findings.json",
       "sha256": "4d8fa5d583f8844e7703ed0c7ff7b6eab8d29fc41720bd5a7fc7a5e9d94d4d4a",
-      "bytes": 131504,
+      "bytes": 132805,
       "lines": 10,
       "module": "docs",
       "kind": "task-run-record",
@@ -17020,10 +17022,11 @@
       "origin": "new maintenance record",
       "evidence": [
         "JSON parsed and patch inspected; final path/evidence reconciliation pending.",
-        "Parent-owned structured receipt/criteria/inventory record inspected as task output; full fixedI final checks/review remain pending."
+        "Parent-owned structured receipt/criteria/inventory record inspected as task output; full fixedI final checks/review remain pending.",
+        "Parent exact platform-specific documentation correction inspected; fresh reviewer accepted draft patch, current applied byte identity will be provided. Base full read reused; no source/test or runtime setting change."
       ],
-      "reviewed_sha256": "27c35eeba6f97d547b140df12faf5cf457d0113820e07035e0f7c737c7919a90",
-      "reviewed_lines": 2366,
+      "reviewed_sha256": "d7dac56784d73dc7672639f50aeb0a105d517752a402be6e6c4eabfdddf7ff9c",
+      "reviewed_lines": 2385,
       "structured_nodes_seen": 3159,
       "strict_JSON_all_fields_parse": true,
       "structured_record_reviewed": true,
@@ -17058,8 +17061,8 @@
         "JSON parsed and patch inspected; final path/evidence reconciliation pending.",
         "Parent-owned structured receipt/criteria/inventory record inspected as task output; full fixedI final checks/review remain pending."
       ],
-      "record_snapshot_commit": "9da172078d95fcaa45108c8f34b92dc9a950ff41",
-      "record_snapshot_sha256": "c052b4f88eda29aeaf526201762758f31d4b3ad53d4874368b7954e1bea9e126",
+      "record_snapshot_commit": "fa9385c2790cbd2fdd8151a10aa04058dca797f0",
+      "record_snapshot_sha256": "93eab873dd6dfd6cb93d9950d7d5979dd81f04fb49a647e73eeccf3c9319cec3",
       "self_hash_policy": "Own inventory current bytes are identified by final fixed-I commit and external full-file manifest; no self-hash fixed point claimed.",
       "structured_nodes_seen": 48609,
       "strict_JSON_all_fields_parse": true,
@@ -17847,13 +17850,14 @@
     {
       "path": "docs/guides/USER_GUIDE.md",
       "sha256": "7dfd910a0a1b08ecd3ca5e9b0e6db013b85f3d595de0abfbc8bb28b2ecd1b285",
-      "bytes": 37497,
+      "bytes": 40114,
       "lines": 540,
       "module": "docs",
       "kind": "text_asset",
       "status": "REVIEWED",
       "evidence": [
-        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。"
+        "本packetのcallee/caller契約だけをreadonly確認。全文監査は親の後続packetで担当。",
+        "Parent exact platform-specific documentation correction inspected; fresh reviewer accepted draft patch, current applied byte identity will be provided. Base full read reused; no source/test or runtime setting change."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "read_ranges": [
@@ -17864,12 +17868,12 @@
       ],
       "packet": "docs/development/maintenance-notify-evidence.json",
       "current_delta_commit": "d8b26fd",
-      "current_delta_sha256": "e79a23cdeeabd500c53839ac06adc1ba9d29b150b77dd0f25663f04b4c00cdc5",
-      "reviewed_sha256": "e79a23cdeeabd500c53839ac06adc1ba9d29b150b77dd0f25663f04b4c00cdc5",
+      "current_delta_sha256": "a4af268a78cce1010b47ac7ec32a9ed147e7ec33fa30c31d26108db4b7f01d35",
+      "reviewed_sha256": "a4af268a78cce1010b47ac7ec32a9ed147e7ec33fa30c31d26108db4b7f01d35",
       "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
       "parent_delta_reviewed": true,
       "full_content_read": true,
-      "reviewed_lines": 572
+      "reviewed_lines": 575
     },
     {
       "path": "docs/releases/archive/CHANGELOG-before-format.md",
@@ -18873,7 +18877,9 @@
       "current_delta_sha256": "400c265b65f22fae8e796ae6dd83f67b1284c2f617397fde8d731b1f0d1c4b19",
       "parent_delta_reviewed": true,
       "generated_binary_verified": true,
-      "visual_review": "Actual synthetic PNG artifact inspected by parent after final canonical generation; no text overlap/cropping."
+      "visual_review": "Actual synthetic PNG artifact inspected by parent after final canonical generation; no text overlap/cropping.",
+      "criteria_source_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "criteria_trace_supplement": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-fa9385c/criterion-trace-supplement.json"
     },
     {
       "path": "docs/screenshots/lineworks-gallery/01-delivery.svg",
@@ -18970,7 +18976,9 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "7da5f985adb7d861f56610c2d29953b85c5d136edc4cece086e45cb1d047b275",
-      "parent_delta_reviewed": true
+      "parent_delta_reviewed": true,
+      "criteria_source_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "criteria_trace_supplement": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-fa9385c/criterion-trace-supplement.json"
     },
     {
       "path": "docs/screenshots/lineworks-gallery/02-task-confirm.png",
@@ -19258,7 +19266,9 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "cb668d0492d7a9d51b0fd780ed2af64d382aa586e426d6bb5e0d64b811e41a79",
-      "parent_delta_reviewed": true
+      "parent_delta_reviewed": true,
+      "criteria_source_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "criteria_trace_supplement": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-fa9385c/criterion-trace-supplement.json"
     },
     {
       "path": "docs/screenshots/lineworks-gallery/assets.json",
@@ -19355,7 +19365,9 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "c906530317c16602454f9b28e5e6e2b87dce8be0277775298264a1b79458e5db",
-      "parent_delta_reviewed": true
+      "parent_delta_reviewed": true,
+      "criteria_source_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "criteria_trace_supplement": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-fa9385c/criterion-trace-supplement.json"
     },
     {
       "path": "docs/screenshots/signals-cli.svg",
@@ -19834,7 +19846,9 @@
       "current_delta_sha256": "08cec0361bb9ad611b018372c96c413bdbc8377646faa43d72aa47e50a8ad3a8",
       "parent_delta_reviewed": true,
       "generated_binary_verified": true,
-      "visual_review": "Actual synthetic PNG artifact inspected by parent after final canonical generation; no text overlap/cropping."
+      "visual_review": "Actual synthetic PNG artifact inspected by parent after final canonical generation; no text overlap/cropping.",
+      "criteria_source_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "criteria_trace_supplement": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-fa9385c/criterion-trace-supplement.json"
     },
     {
       "path": "docs/screenshots/slack-gallery/02-notification.svg",
@@ -19931,7 +19945,9 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "b9bb11a982ccafbd58df5a7dd55e87034564641789782ac5958aff3c051b0560",
-      "parent_delta_reviewed": true
+      "parent_delta_reviewed": true,
+      "criteria_source_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "criteria_trace_supplement": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-fa9385c/criterion-trace-supplement.json"
     },
     {
       "path": "docs/screenshots/slack-gallery/03-actions.png",
@@ -20983,7 +20999,9 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "78abe12fe831955465a7202abc3bf2030f8fdf8d8f2d4b7fbfc5dbaa23b2c765",
-      "parent_delta_reviewed": true
+      "parent_delta_reviewed": true,
+      "criteria_source_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "criteria_trace_supplement": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-fa9385c/criterion-trace-supplement.json"
     },
     {
       "path": "docs/screenshots/slack-gallery/assets.json",
@@ -21080,7 +21098,9 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "09d13b1e9ab5b7f980c81fcac39b63ad44834121288fd1effbe97f7706d30692",
-      "parent_delta_reviewed": true
+      "parent_delta_reviewed": true,
+      "criteria_source_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "criteria_trace_supplement": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-fa9385c/criterion-trace-supplement.json"
     },
     {
       "path": "docs/screenshots/slack-thread.svg",
@@ -27049,7 +27069,9 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "2eca00b354a4410c9c4b030698e6dc734abc23695eeda46cd825d111e4a6d95b",
-      "parent_delta_reviewed": true
+      "parent_delta_reviewed": true,
+      "criteria_source_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "criteria_trace_supplement": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-fa9385c/criterion-trace-supplement.json"
     },
     {
       "path": "scripts/development/generate_slack_gallery.py",
@@ -27146,7 +27168,9 @@
       },
       "current_delta_commit": "d8b26fd",
       "current_delta_sha256": "6b8554f716b88b7c4459d5bd0db5d31a20644e6e4c8a1fc293152e43c919bb83",
-      "parent_delta_reviewed": true
+      "parent_delta_reviewed": true,
+      "criteria_source_packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "criteria_trace_supplement": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-fa9385c/criterion-trace-supplement.json"
     },
     {
       "path": "scripts/development/probe_message_metadata.py",
@@ -38197,12 +38221,14 @@
       "path": "changes/20261005-stamp-actors-display.json",
       "kind": "task-created",
       "module": "changes",
-      "evidence": [],
+      "evidence": [
+        "Parent exact platform-specific documentation correction inspected; fresh reviewer accepted draft patch, current applied byte identity will be provided. Base full read reused; no source/test or runtime setting change."
+      ],
       "status": "REVIEWED",
-      "current_delta_sha256": "25af2ccfdd01aae6e7284dc9f93e8b9c6ac2223bdcc9af3db226e22db13055f3",
+      "current_delta_sha256": "9312214411a830a1dbd72c64a2e56b3e2911f56a58d9248873e2fcf80ab19e14",
       "current_delta_commit": "6eff3df",
-      "reviewed_sha256": "25af2ccfdd01aae6e7284dc9f93e8b9c6ac2223bdcc9af3db226e22db13055f3",
-      "bytes": 2043,
+      "reviewed_sha256": "9312214411a830a1dbd72c64a2e56b3e2911f56a58d9248873e2fcf80ab19e14",
+      "bytes": 2209,
       "reviewed_lines": 18,
       "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
       "structured_record_reviewed": true
@@ -38223,11 +38249,13 @@
       "path": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
       "kind": "run_record",
       "module": "docs",
-      "evidence": [],
+      "evidence": [
+        "Parent exact platform-specific documentation correction inspected; fresh reviewer accepted draft patch, current applied byte identity will be provided. Base full read reused; no source/test or runtime setting change."
+      ],
       "status": "REVIEWED",
-      "reviewed_sha256": "900b09199ac3efddb1acf60027770cabd934f49e1caa41d04fcbec82f209e44a",
-      "bytes": 6463,
-      "reviewed_lines": 153,
+      "reviewed_sha256": "08d3314e447901edce906c47a0e22f28d0f35ef14caac11f6265fcc4fbda9181",
+      "bytes": 7623,
+      "reviewed_lines": 171,
       "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json",
       "structured_record_reviewed": true
     },
@@ -38465,5 +38493,12 @@
     "root_report_hash": "40469da793ad589ae5201e06c632c0e2dea869a8820cc75c1cb789f1ffe56937",
     "external_receipt": "/tmp/mcs-maintenance-drug-json-20261005/final-commit-receipt.json",
     "parent_whole_I_status": "NOT_YET_EXECUTED"
+  },
+  "last_final_doc_correction": {
+    "base": "fa9385c2790cbd2fdd8151a10aa04058dca797f0",
+    "runtime_source_test_unchanged": true,
+    "criterion_override_paths": 11,
+    "criterion_overrides": 220,
+    "independent_doc_patch_sha256": "6da288bf92ec5fbc928919048658c0a6f1181773d1a1547b3099b7d01c26c3b4"
   }
 }

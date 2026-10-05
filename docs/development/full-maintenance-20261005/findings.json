@@ -2294,6 +2294,25 @@
       "validation": "全dump/total_changes不変、valid vitals/done保持、破損根拠からvitals/done無し。最初のscope外probeは親追加所有後に解消。",
       "packet": "docs/development/maintenance-drug-json-evidence.json",
       "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending."
+    },
+    {
+      "id": "FINAL-LW-DOC-01",
+      "status": "CONFIRMED_FIXED",
+      "priority": "P2",
+      "cause": "Stamp fragment generalized same-message update across all channels, while LINE WORKS documented Bot API requires replacement posts.",
+      "fix": "Canonical fragment and stamp guide now name Slack/Discord edit versus LINE WORKS replacement and token retirement.",
+      "validation": "Fresh reviewer independent live-free real-method probe, canonical API tables, docs/source and exact 2-document patch reviewed.",
+      "source": "changes/20261005-stamp-actors-display.json",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json"
+    },
+    {
+      "id": "FINAL-CRITERION-TRACE-01",
+      "status": "CONFIRMED_FIXED",
+      "priority": "P3",
+      "cause": "11 parent stamp delta entries carried old 20-criterion pointers but current delta review_packet lacked original criteria.",
+      "fix": "Explicit criteria_source_packet preserves base criterion packet; review_packet remains current delta packet.",
+      "validation": "7300 directly resolved plus all220 affected pointers actual base-SHA/current-path-SHA resolved.",
+      "evidence": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-fa9385c/criterion-trace-supplement.json"
     }
   ],
   "deferred": [],
