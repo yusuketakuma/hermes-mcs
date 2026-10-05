@@ -1057,7 +1057,7 @@ REACTION_ACTORS_TICK_CAP = 4
 
 
 def stage_metadata_shadow(adapter, ledger, result, deadline, *, publish=False,
-                          actors=False):
+                          actors=False, cfg=None):
     """Bounded opt-in metadata refresh after delivery; never changes message state.
 
     publish=True also writes successful refreshes to capture (22-E);
@@ -1109,14 +1109,18 @@ def stage_metadata_shadow(adapter, ledger, result, deadline, *, publish=False,
                 stats["errors"].append({"message_id": m.message_id, "kind": "schema_error"})
         if actors:
             stats["actors"] = _stage_reaction_actors(adapter, ledger, shadow_deadline,
-                                                     skip=stopped)
+                                                     skip=stopped, cfg=cfg)
     finally:
         adapter.set_deadline(deadline)
         stats["elapsed_s"] = round(max(0, time.monotonic() - started), 3)
 
 
-def _stage_reaction_actors(adapter, ledger, until, *, skip):
-    """Walk up to REACTION_ACTORS_TICK_CAP actor lists; incomplete walks keep the old set."""
+def _stage_reaction_actors(adapter, ledger, until, *, skip, cfg=None):
+    """Walk up to REACTION_ACTORS_TICK_CAP actor lists; incomplete walks keep the old set.
+
+    A complete walk re-renders the live thread card holding the message
+    (with cfg), so new names reach Slack/Discord without waiting for the
+    bounded card sweep to rotate back to that card."""
     targets = ledger.reaction_actor_targets(limit=REACTION_ACTORS_TICK_CAP)
     stats = {"due": len(targets), "fetched": 0, "complete": 0,
              "deferred": len(targets) if skip else 0, "errors": []}
@@ -1130,6 +1134,14 @@ def _stage_reaction_actors(adapter, ledger, until, *, skip):
                                     error=walk.get("error"))
         if walk["complete"]:
             stats["complete"] += 1
+            if cfg is not None:
+                try:
+                    import notify_cards
+                    notify_cards.rerender_message_cards(
+                        ledger, cfg, target["project_id"], target["message_id"])
+                except Exception as e:
+                    stats["errors"].append({"message_id": target["message_id"],
+                                            "kind": f"card_rerender:{type(e).__name__}"})
             continue
         stats["errors"].append({"message_id": target["message_id"], "kind": walk.get("error")})
         if walk.get("error") in ("session_expired", "deadline_exceeded"):
@@ -1150,7 +1162,7 @@ def _run_metadata_shadow(adapter, ledger, result, deadline, cfg, *, manual=False
     # a non-bool switch is off: publishing or actor walks need an explicit true
     stage_metadata_shadow(adapter, ledger, result, deadline,
                           publish=cfg.get("metadata_refresh_publish") is True,
-                          actors=cfg.get("metadata_actors") is True)
+                          actors=cfg.get("metadata_actors") is True, cfg=cfg)
 
 def stage_derive(ledger, result, deadline, cfg=None,
                  llm_budget_cap: float = 90):

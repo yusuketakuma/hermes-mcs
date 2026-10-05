@@ -359,7 +359,7 @@ def test_config_gates(monkeypatch, cfg, publish, actors):
                         lambda *a, **kw: seen.update(kw))
     run_check._run_metadata_shadow(None, SimpleNamespace(),
                                    {"errors": []}, 100, cfg)
-    assert seen == {"publish": publish, "actors": actors}
+    assert seen == {"publish": publish, "actors": actors, "cfg": cfg}
 
 
 def test_publish_stage_stats_and_health(db):
@@ -475,3 +475,20 @@ def test_actor_walk_error_from_adapter_is_not_raised(db):
     assert result["metadata_shadow"]["actors"]["errors"] == [
         {"message_id": 1, "kind": "http_error"}]
     assert reaction_actor_summary(db.db, 1)["state"] == "failed"
+
+
+def test_complete_walk_rerenders_thread_card_only_with_cfg(db, monkeypatch):
+    import notify_cards
+    rerendered = []
+    monkeypatch.setattr(notify_cards, "rerender_message_cards",
+                        lambda ledger, cfg, pid, mid: rerendered.append((pid, mid)))
+    for mid in (1, 2):
+        save(db, message(mid, reactions=reactions(viewed=1)))
+    partial = {"complete": False, "actors": [], "error": "http_error"}
+    _calls, adapter = actor_stage_adapter([ok(5), partial])
+    stage_metadata_shadow(adapter, db, {}, time.monotonic() + 60, actors=True, cfg={})
+    assert rerendered == [(1, 1)]           # the incomplete walk changes nothing
+    db.save_reaction_actors(1, ok(5)["actors"], True, now=time.time() - 86400 - 10)
+    _calls, adapter = actor_stage_adapter([ok(6), ok(6)])
+    stage_metadata_shadow(adapter, db, {}, time.monotonic() + 60, actors=True)
+    assert rerendered == [(1, 1)]           # no cfg: no card side effects
