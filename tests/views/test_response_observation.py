@@ -76,12 +76,12 @@ def test_snapshot_and_render_keep_operation_evidence_separate(store, tmp_path, f
     assert observation["self_reaction"]["basis"] == "ui_operation_only"
     assert observation["reply"] == {"state": "not_observed", "posted_at": None}
     assert all(observation[k] is None for k in ("clinical_completion", "nonresponse", "unread"))
-    expected = "MCS 未取得 1投稿" if state in ("not_fetched", "invalid") else (
-        "MCS スタンプなし" if fields["reactions"] == [] else
-        "MCS ✅1" if not types else
-        {"completed": "MCS ✅1 · 自分 1投稿",
-         "accepted": "MCS 🙆1 · 自分 1投稿",
-         "unknown": "MCS ❔1 · 自分 1投稿"}[types[0]])
+    expected = "スタンプ 未取得 1投稿" if state in ("not_fetched", "invalid") else (
+        "スタンプ なし" if fields["reactions"] == [] else
+        "スタンプ ✅1" if not types else
+        {"completed": "スタンプ ✅1 · 自分 1投稿",
+         "accepted": "スタンプ 🙆1 · 自分 1投稿",
+         "unknown": "スタンプ ❔1 · 自分 1投稿"}[types[0]])
     if state == "invalid":
         expected += " · 再取得失敗"
     assert rendered == [expected]

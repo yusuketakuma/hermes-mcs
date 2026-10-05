@@ -835,7 +835,10 @@ def _thread_plan_ids(db, card, shown) -> list:
     in-thread card has no 📄 button to reach them)."""
     if card["kind"] != "thread":
         return list(shown)
-    covered = _announced_ids(db, card)
+    # Previously delivered named posts must also receive late actor names
+    # and stale/failed state updates, even after their card page moves away.
+    # Legacy unnamed posts keep the frozen compatibility path in _body_groups.
+    covered = _announced_ids(db, card) | _delivered_members(db, card, legacy=False)
     if not covered - set(shown):
         return list(shown)
     wanted = covered | {m for m in shown if positive(m)}

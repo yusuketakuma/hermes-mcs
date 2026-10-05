@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from datetime import datetime
 
 from mcs_queries import JST
@@ -223,11 +224,11 @@ def stamp_line(metadata) -> str:
     the observation time (never the press time)."""
     counts = stamp_counts(metadata)
     if counts is None:
-        return "MCS スタンプ未取得"
+        return "スタンプ 未取得"
     when = datetime.fromtimestamp(metadata["reactions_observed_at"], JST)
     mine = self_stamps(metadata)
-    text = "MCS " + (" ".join(f"{e}{n}" for e, n in counts.items())
-                     or ("他者なし" if mine else "スタンプなし"))
+    text = "スタンプ " + (" ".join(f"{e}{n}" for e, n in counts.items())
+                       or ("他者なし" if mine else "なし"))
     if mine:
         text += f"（自分 {mine}）"
     return (text + f" · 観測 {when:%m-%d %H:%M}"
@@ -247,17 +248,30 @@ def own_post_reaction_text(metadata) -> str:
 ACTOR_NAMES_MAX = 12
 
 
-def actor_line(summary) -> str | None:
-    """Who pressed which stamp (#22-D2: names shown), one line grouped by
-    emoji. None until a walk completed once. A stale or failed walk is
-    labelled with its last complete time — never presented as current."""
-    if not summary or summary.get("complete_at") is None:
-        return None
+def _actor_text(value, cap) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = " ".join(value.split())
+    text = "".join(c for c in text if unicodedata.category(c)[0] != "C").strip()
+    text = text.translate(str.maketrans("<>@`*_~|", "＜＞＠｀＊＿～｜"))
+    return text if len(text) <= cap else text[:cap - 1] + "…"
+
+
+def actor_line(summary) -> str:
+    """投稿ごとのスタンプ氏名・取得状態・観測日時を上限付きの1行で示す。"""
+    summary = summary or {}
+    observed_at = _timestamp(summary.get("complete_at"))
+    state = summary.get("state")
+    if observed_at is None:
+        return "押した人: 未取得" + ("（取得失敗）" if state == "failed" else "")
     groups: dict = {}
     for a in summary["actors"]:
-        label = "自分" if a["self"] else (a["name"] or "氏名不明")
-        if a["profession"] and not a["self"]:
-            label += f"（{a['profession']}）"
+        label = _actor_text(a["name"], 40) or "氏名不明"
+        profession = _actor_text(a["profession"], 20)
+        if profession:
+            label += f"（{profession}）"
+        if a["self"]:
+            label += "（自分）"
         groups.setdefault(STAMP_EMOJI.get(a["reaction_type"], "❔"), []).append(label)
     shown, parts = 0, []
     for e in [*STAMP_EMOJI.values(), "❔"]:
@@ -269,11 +283,11 @@ def actor_line(summary) -> str | None:
                          + (f" 他{len(names) - len(take)}名" if len(names) > len(take) else ""))
         elif names:
             parts.append(f"{e} {len(names)}名")
-    text = "押した人: " + (" / ".join(parts) or "なし")
-    if summary["state"] != "complete":
-        when = datetime.fromtimestamp(summary["complete_at"], JST)
-        text += f"（{when:%m-%d %H:%M} 時点）"
-    return text
+    status = "" if state == "complete" else "（" + {
+        "stale": "古い情報", "failed": "再取得失敗"}.get(state, "取得状態不明") + "）"
+    when = datetime.fromtimestamp(observed_at, JST)
+    return (f"押した人{status}: " + (" / ".join(parts) or "なし")
+            + f" · 観測 {when:%m-%d %H:%M}")
 
 
 def others_reaction_count(metadata) -> int | None:
