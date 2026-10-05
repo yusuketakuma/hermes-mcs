@@ -77,6 +77,36 @@ def test_ops_scan_deepens_existing_history_without_resetting_cursor(tmp_path):
     db.close()
 
 
+@pytest.mark.parametrize("cmd", ["ops.scan", "ops.retry", "ops.pause", "ops.resume"])
+def test_deep_stored_job_payload_is_receipted_without_rewriting_job(tmp_path, cmd):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.ensure_patient(1)
+        kind = "history" if cmd == "ops.scan" else "semantic"
+        job_id = db.job_add(kind, 1, payload={})
+        raw = "[" * 1500 + "0" + "]" * 1500
+        db.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?", (raw, job_id))
+        db.db.commit()
+        fields = {"feature": "semantic"} if cmd in {"ops.pause", "ops.resume"} else {}
+        if cmd == "ops.retry":
+            fields.update(job_id=job_id, expected_payload_hash="a" * 64)
+        command = _command(cmd, **fields)
+        receipt = mcs_requests.apply_command(db, command)
+        if cmd in {"ops.pause", "ops.resume"}:
+            assert receipt["outcome"] == "applied"
+            assert receipt["skipped_jobs"] == 1
+            assert receipt["updated_jobs"] == 0
+        else:
+            assert receipt["outcome"] == "rejected"
+            assert receipt["error"] == ("invalid_history_payload" if cmd == "ops.scan"
+                                        else "invalid_payload")
+        assert _job(db, job_id)["payload"] == raw
+        assert mcs_requests.apply_command(db, command) == receipt
+        assert db.db.execute("SELECT COUNT(*) FROM command_receipts").fetchone()[0] == 1
+    finally:
+        db.close()
+
+
 def test_pause_resume_records_control_and_invalidates_pending_tokens(tmp_path):
     db = Ledger(str(tmp_path / "ledger.db"))
     payload = {"generation": "g1", "source_generation": "s1",

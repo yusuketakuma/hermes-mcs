@@ -272,7 +272,7 @@ def validate_ops(req: dict, common: set[str] | None = None) -> str | None:
 def _history_payload(raw) -> dict | None:
     try:
         payload = json.loads(raw or "{}")
-    except (json.JSONDecodeError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return None
     if not isinstance(payload, dict):
         return None
@@ -287,7 +287,7 @@ def _history_payload(raw) -> dict | None:
         return None
     try:
         canonical(payload).decode("utf-8")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return None
     return payload
 
@@ -355,13 +355,13 @@ def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
         return "job_not_found", {}
     try:
         payload = json.loads(row["payload"] or "{}")
-    except (json.JSONDecodeError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return "invalid_payload", {"job_id": row["job_id"]}
     if not isinstance(payload, dict):
         return "invalid_payload", {"job_id": row["job_id"]}
     try:
         current_hash = payload_hash(payload)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return "invalid_payload", {"job_id": row["job_id"]}
     if current_hash != req["expected_payload_hash"]:
         return "payload_changed", {"job_id": row["job_id"]}
@@ -410,7 +410,7 @@ def _apply_control_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
     for row in rows:
         try:
             payload = json.loads(row["payload"] or "{}")
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             skipped += 1
             continue
         if not isinstance(payload, dict):
@@ -418,7 +418,7 @@ def _apply_control_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
             continue
         try:
             canonical(payload).decode("utf-8")
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, RecursionError):
             skipped += 1
             continue
         parsed.append((row["job_id"], payload))

@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "深すぎる保存済みJSONで操作や依頼候補の確認が停止する問題を修正",
+  "summary": "保存済みjobや抽出結果のJSONが深すぎても、対応runtimeによって操作が例外で止まりません。破損jobのscan・retryは拒否receiptを残し、pause・resumeは破損jobを変更せず件数を報告します。依頼候補は破損した最新抽出を採用せず、同じ種類の古い抽出へも戻りません。",
+  "upgrade": "追加操作は不要です。人の確認・理由・receiptの条件、jobの試行回数・取得cursor・抽出世代は維持します。保存済みの破損データを削除・上書きしません。",
+  "details": [
+    "Python 3.10で再現したRecursionErrorを既存の不正入力拒否経路へまとめる。",
+    "scan・retry・pause・resumeと依頼候補の合成回帰で、変更禁止・再実行・履歴へのfallback禁止を検証する。"
+  ],
+  "refs": ["mcs/ops/mcs_operations.py", "mcs/ops/mcs_requests.py"]
+}
