@@ -1869,7 +1869,26 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
             AND json_valid(meta)
             AND artifact_id != ?
         """, (KIND, r["message_id"], cur.lastrowid))
+        project_id = ledger.db.execute(
+            "SELECT project_id FROM artifacts WHERE artifact_id=?",
+            (cur.lastrowid,)).fetchone()[0]
+    _rerender_cards(ledger, project_id, r["message_id"])
     return True
+
+
+def _rerender_cards(ledger, project_id, message_id) -> None:
+    """Show a newly current extraction on its live thread card now — the
+    bounded card sweep alone can take many ticks to rotate back to it.
+    Best effort: the extraction is already committed and the sweep
+    remains the fallback, so a failure is logged, never raised."""
+    try:
+        import notify_cards
+        notify_cards.rerender_message_cards(
+            ledger, load_config(), project_id, message_id)
+    except Exception as e:
+        print(json.dumps({"event": "card_rerender_failed",
+                          "message_id": message_id,
+                          "error": type(e).__name__}), file=sys.stderr)
 
 
 def _thin_pending_sql() -> str:

@@ -694,6 +694,33 @@ def test_replace_current_keeps_poison_row(tmp_path, monkeypatch):
     db.close()
 
 
+def test_replace_current_rerenders_card_once_written(tmp_path, monkeypatch):
+    """A newly current extraction re-renders its thread card at once; a
+    refused write does nothing and a render failure never undoes it."""
+    import notify_cards
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    pid, chash = db.db.execute(
+        "SELECT project_id,content_hash FROM messages WHERE message_id=1").fetchone()
+    calls = []
+    monkeypatch.setattr(notify_cards, "rerender_message_cards",
+                        lambda ledger, cfg, p, mid: calls.append((p, mid)))
+    assert extract_llm._replace_current(
+        db, {"message_id": 1, "content_hash": "stale"}, "{}") is False
+    assert calls == []
+    row = {"message_id": 1, "content_hash": chash}
+    assert extract_llm._replace_current(db, row, '{"summary":"合成"}') is True
+    assert calls == [(pid, 1)]
+
+    def boom(*_a):
+        raise RuntimeError("render down")
+    monkeypatch.setattr(notify_cards, "rerender_message_cards", boom)
+    assert extract_llm._replace_current(db, row, '{"summary":"合成2"}') is True
+    assert [a["content"] for a in db.artifacts("extract_llm", message_id=1)] \
+        == ['{"summary":"合成2"}']
+    db.close()
+
+
 def test_v1_success_plus_v2_error_backoff_suppresses(tmp_path, monkeypatch):
     """v1 success + v2 error inside backoff: message is NOT re-selected
     (attempts gate it) and v1 stays readable meanwhile."""
