@@ -26,12 +26,12 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "REVIEWED": 568,
+      "REVIEWED": 570,
       "EXCLUDED": 25,
       "PARTIAL": 35,
       "UNSEEN": 269
     },
-    "candidate_tracked": 895
+    "candidate_tracked": 897
   },
   "files": [
     {
@@ -3375,6 +3375,28 @@
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
     },
     {
+      "path": "changes/maintenance-semantic-send-gate-deep-json-20261005.json",
+      "module": "changes",
+      "kind": "source",
+      "evidence": [
+        "Parent current full-content read, unchanged20criteria review plus scoped13criteria delta and actual before6fail/after56pass on3.10/3.13; final I pending."
+      ],
+      "status": "REVIEWED",
+      "sha256": "dedc24d1ef2bee3d1c9d96fa8f2499e9b433c981074b54954e6efd28ea8aed0b",
+      "reviewed_sha256": "dedc24d1ef2bee3d1c9d96fa8f2499e9b433c981074b54954e6efd28ea8aed0b",
+      "lines": 8,
+      "bytes": 936,
+      "reviewed_lines": 8,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "review_packet": "docs/development/full-maintenance-20261005/parent-semantic-send-gate-evidence.json"
+    },
+    {
       "path": "changes/maintenance-semantic-utc-python310-20261005.json",
       "sha256": null,
       "bytes": 833,
@@ -4848,6 +4870,17 @@
         "New task-authored file; packet/source or schema consistency validation tracked separately."
       ],
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076"
+    },
+    {
+      "path": "docs/development/full-maintenance-20261005/parent-semantic-send-gate-evidence.json",
+      "module": "run-record",
+      "kind": "run_record",
+      "status": "REVIEWED",
+      "structured_record_reviewed": true,
+      "sha256": "d3e1c47d39fecc48e4cf3b6f90be25e143fad8de8cec7c810a865ea6ffd0bea7",
+      "evidence": [
+        "Authored/checked source identity, actual before/after exit logs and hashes; implementation proof distinct from pending final I."
+      ]
     },
     {
       "path": "docs/development/full-maintenance-20261005/parent-semantic-utc-evidence.json",
@@ -9996,36 +10029,35 @@
     },
     {
       "path": "mcs/semantic/semantic_send_gate.py",
-      "sha256": "dcb9fbaf6689d6895b836b26f2491c7a3eff48056f4ecd7dc0ffa9ade6c5c56f",
-      "bytes": 16790,
-      "lines": 386,
+      "sha256": "8fcca50e7f9a3080395ed7f5a35c8aaf27ddeb50bba538f8888483fc99523b09",
+      "bytes": 17057,
+      "lines": 388,
       "module": "mcs/semantic",
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending",
+        "Parent current full-content read, unchanged20criteria review plus scoped13criteria delta and actual before6fail/after56pass on3.10/3.13; final I pending."
       ],
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
       "read_ranges": [
         [
           1,
-          200
-        ],
-        [
-          201,
-          386
+          388
         ]
       ],
       "packet": "docs/development/maintenance-notify-evidence.json",
-      "reviewed_sha256": "750e42b91d55269c6d1679153c6195a31481d8b376e0fb86ea6452f37d52d00c",
-      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "reviewed_sha256": "8fcca50e7f9a3080395ed7f5a35c8aaf27ddeb50bba538f8888483fc99523b09",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-semantic-send-gate-evidence.json",
       "responsibility": "source/target/policy/publication世代の送信gate、raw通知補助表示、凍結本文の根拠反復chunkとbody帰属。",
       "callers_or_consumers": [
         "mcs/notify/notify_flush.py",
         "mcs/semantic/semantic_lifecycle.py",
         "tests/notify/test_notify_digest.py",
         "tests/semantic/test_semantic_send_gate.py"
-      ]
+      ],
+      "reviewed_lines": 388,
+      "full_content_read": true
     },
     {
       "path": "mcs/semantic/semantic_store.py",
@@ -20229,29 +20261,32 @@
     },
     {
       "path": "tests/semantic/test_semantic_send_gate.py",
-      "sha256": "3f4fd94c8cd77624b53a783c8c875c03a341ccf0a6622e344e330850cc4f8f7c",
-      "bytes": 8079,
-      "lines": 174,
+      "sha256": "ac58e101720523edbaeb2ac6ac8efe81dfc13f52438660c812e4344aaa351b7b",
+      "bytes": 13466,
+      "lines": 286,
       "module": "tests/semantic",
       "kind": "source",
       "status": "REVIEWED",
       "evidence": [
-        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending"
+        "docs/development/maintenance-semantic-packet3-evidence.json: Full P content plus all W changed lines, all 20 criteria and local checks; final I pending",
+        "Parent current full-content read, unchanged20criteria review plus scoped13criteria delta and actual before6fail/after56pass on3.10/3.13; final I pending."
       ],
       "review_input": "755f4c779ebf280ba856ca7c600f0525fbd82076",
-      "reviewed_sha256": "a070c20e2c37ea27bffe667acb614733fe6d0253385f42ed903d0e12f382cbf8",
-      "review_packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "reviewed_sha256": "ac58e101720523edbaeb2ac6ac8efe81dfc13f52438660c812e4344aaa351b7b",
+      "review_packet": "docs/development/full-maintenance-20261005/parent-semantic-send-gate-evidence.json",
       "read_ranges": [
         [
           1,
-          174
+          286
         ]
       ],
       "responsibility": "source/target/current PASS/凍結policy、41必須factのraw表示、本文内footer保全と通常byte-pinned chunk契約。",
       "callers_or_consumers": [
         "pytest collection",
         "tests/conftest.py"
-      ]
+      ],
+      "reviewed_lines": 286,
+      "full_content_read": true
     },
     {
       "path": "tests/semantic/test_semantic_smoke.py",

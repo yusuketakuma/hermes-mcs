@@ -1495,6 +1495,14 @@
       "evidence": "origins.json fullread、originalcolumns/allrows/FK/FTS/hash tests、test names explicitlyclassify。",
       "packet": "docs/development/maintenance-core-packet5-evidence.json",
       "integration_status": "integrated; final fixedI checks and independent review pending"
+    },
+    {
+      "id": "PARENT-SEM-SEND-001",
+      "status": "FIXED",
+      "cause": "RecursionError on saved summary content/meta, source payload or degraded source progress escaped three existing JSON exception boundaries; interrupted safe exclusion/stale/freeze decisions.",
+      "change": "Catch RecursionError only alongside JSONDecodeError/TypeError in three JSON loads scopes; newest corrupt summary stays ineligible, no fallback to older generation, no data rewrite.",
+      "packet": "docs/development/full-maintenance-20261005/parent-semantic-send-gate-evidence.json",
+      "integration_status": "integrated; final fixedI checks/independent review pending"
     }
   ],
   "deferred": [],
