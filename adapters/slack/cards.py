@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import re
+from html import escape
+from urllib.parse import urlsplit
 
 from adapters.common.spec import validate as validate_v1
 
@@ -135,9 +137,17 @@ def render(spec, names=None):
         blocks.append({"type": "actions", "elements": elements})
     for button in links:
         # a text link, not a button — it costs no row on mobile
-        label = button["label"].replace("|", "｜").replace(">", "＞")
+        url = button["url"]
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or not parsed.netloc or not parsed.hostname \
+                or any(c.isspace() or ord(c) < 32 or c in "<>|" for c in url):
+            raise ValueError("slack_link_url")
+        label = escape(button["label"].replace("|", "｜"), quote=False)
+        link = f"<{escape(url, quote=False)}|{label}>"
+        if len(link) > _CONTEXT_MAX:
+            raise ValueError("slack_link_budget")
         blocks.append({"type": "context", "elements": [
-            {"type": "mrkdwn", "text": f"<{button['url']}|{label}>"}]})
+            {"type": "mrkdwn", "text": link}]})
     if len(blocks) > _BLOCK_MAX:
         raise ValueError("slack_block_budget")
     return _FALLBACK, blocks

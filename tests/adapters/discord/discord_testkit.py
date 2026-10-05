@@ -155,27 +155,46 @@ BOT_USER = SimpleNamespace(id=4242)
 class _HistMsg:
     _next = 0
 
-    def __init__(self, content, author=BOT_USER):
+    def __init__(self, content, thread):
         self.content = content
-        self.author = author           # posts through the fake are ours
+        self.author = BOT_USER
+        self.thread = thread
+        self.index = len(thread.sent)
+        self.edits = 0
         type(self)._next += 1
-        self.id = type(self)._next     # remote message identity —
-                                       # dedupe binds to it, not content
+        self.id = type(self)._next
+
+    async def edit(self, content=None, allowed_mentions=None):
+        self.content = content
+        self.allowed_mentions = allowed_mentions
+        self.thread.sent[self.index] = content
+        self.edits += 1
+        return self
 
 
 class FakeThread:
     def __init__(self, tid):
         self.id = tid
         self.sent = []
+        self.messages = []
 
     async def send(self, content, allowed_mentions=None):
+        message = _HistMsg(content, self)
         self.sent.append(content)
+        self.messages.append(message)
         self.allowed_mentions = allowed_mentions
+        return message
 
     async def history(self, limit=None):
-        items = self.sent if limit is None else self.sent[-limit:]
-        for c in reversed(items):
-            yield _HistMsg(c)
+        items = self.messages if limit is None else self.messages[-limit:]
+        for message in reversed(items):
+            yield message
+
+    async def fetch_message(self, mid):
+        for message in self.messages:
+            if message.id == mid:
+                return message
+        raise FakeHTTP(404)
 
 
 class FakeMessage:

@@ -1,0 +1,18 @@
+{
+  "category": "fixed",
+  "title": "Slack・Discordの通知表示と更新時の重複を修正",
+  "summary": "Slackの本文・個別回答・リンクに含まれる特殊文字を文字どおりに表示し、不意のメンションを防ぎます。長い個別回答は文字数上限内に分割し、同じ添付を更新のたびに再アップロードしないようにします。Discordでは投稿主体を確認できない履歴を配送済みの根拠にしません。",
+  "upgrade": "Hermes経由は更新後に承認済みのgateway再起動、独立Slack・Discordは対象アダプターの再起動で適用します。不完全なSlackスレッド履歴では二重配送を避けて保留するため、配送状態を確認してください。追加の認証情報・権限設定は不要です。",
+  "details": [
+    "Slackは送信・更新・履歴照合で同じエスケープ済み本文を使用します。個別回答はUTF-8の4000バイト内で分割しHTML実体参照を切りません。",
+    "SlackのHTTPSリンクはホスト・区切り文字・改行とBlock Kit上限を検証します。",
+    "取得上限200件の履歴に続きがある場合は再送せずunknownとして保留します。",
+    "同じ添付の既存receipt、投稿主体、名前・サイズと編集できないSlack内ファイルの条件を確認して再利用します。ハッシュ矛盾・外部ファイル・他者の投稿は再利用しません。"
+  ],
+  "refs": [
+    "adapters/slack/actions.py",
+    "adapters/slack/cards.py",
+    "adapters/slack/delivery.py",
+    "adapters/discord/delivery.py"
+  ]
+}

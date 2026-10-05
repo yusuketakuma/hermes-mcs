@@ -196,14 +196,15 @@ class DeliveryWorker(worker.DeliveryWorker):
         foreign content with the same text is unrelated and can never
         impersonate a part. Each remote id matches at most once, so
         identical chunks dedupe one-for-one instead of collapsing."""
+        me_id = getattr(getattr(self._bot, "user", None), "id", None)
+        if me_id is None:
+            return None                 # no identity can prove authorship
         if ctx.get("history") is None:
             ctx["history"] = [m async for m in thread.history(limit=100)]
-        me_id = getattr(getattr(self._bot, "user", None), "id", None)
         for m in ctx["history"]:
-            if me_id is not None:
-                aid = getattr(getattr(m, "author", None), "id", None)
-                if aid != me_id:
-                    continue            # not ours — never binds a part
+            aid = getattr(getattr(m, "author", None), "id", None)
+            if aid != me_id:
+                continue                # not ours — never binds a part
             if m.id in ctx["consumed"] or m.content != text:
                 continue
             ctx["consumed"].add(m.id)
