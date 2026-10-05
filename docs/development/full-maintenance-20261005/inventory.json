@@ -26,10 +26,10 @@
     "tracked": 814,
     "original_untracked": 2,
     "current_status": {
-      "PARTIAL": 56,
+      "PARTIAL": 55,
       "EXCLUDED": 25,
       "UNSEEN": 344,
-      "REVIEWED": 466
+      "REVIEWED": 468
     },
     "candidate_tracked": 886
   },
@@ -4438,6 +4438,16 @@
       ]
     },
     {
+      "path": "docs/development/full-maintenance-20261005/parent-bootstrap-evidence.json",
+      "sha256": null,
+      "module": "docs/development/full-maintenance-20261005",
+      "kind": "task-run-record",
+      "status": "REVIEWED",
+      "evidence": [
+        "Parent-authored all20criterion bootstrap decision receipt; source SHA verified, no self-referentialSHA."
+      ]
+    },
+    {
       "path": "docs/development/full-maintenance-20261005/parent-ci-evidence.json",
       "sha256": "8d76772bd12fd5fb56c825cc43cc5da27260604ed6f14b5caea41c14d18f3e2a",
       "bytes": 10687,
@@ -6412,17 +6422,18 @@
     },
     {
       "path": "mcs/_mcs_path.py",
-      "sha256": "03e0fb2af6c8b037b6462e1136b222fe64911eee0d15a4354ab61a305a1285b2",
-      "bytes": 895,
+      "sha256": "fef8b54e47ddddac29482372ff04f188c9127fafceb77d858bc6d5b04a6328f2",
+      "bytes": 910,
       "lines": 26,
       "module": "mcs/_mcs_path.py",
       "kind": "source",
-      "status": "PARTIAL",
+      "status": "REVIEWED",
       "evidence": [
-        "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet."
+        "Only the listed dependency/caller ranges were evaluated; the whole module remains for its owning packet.",
+        "Parent complete26lines, flat public consumer contract and all20 local criteria reviewed; only docstring heading correction; final fixedI archive proof pending."
       ],
       "review_input": "4167697cf19a11a2b8cac3d076907450a5ff8654",
-      "reviewed_sha256": "03e0fb2af6c8b037b6462e1136b222fe64911eee0d15a4354ab61a305a1285b2",
+      "reviewed_sha256": "fef8b54e47ddddac29482372ff04f188c9127fafceb77d858bc6d5b04a6328f2",
       "read_ranges": [
         [
           1,
@@ -6430,7 +6441,10 @@
         ]
       ],
       "packet": "docs/development/maintenance-semantic-evidence.json",
-      "owner": "semantic"
+      "owner": "semantic",
+      "full_content_read": true,
+      "review_packet": "docs/development/full-maintenance-20261005/parent-bootstrap-evidence.json",
+      "criteria_ref": "docs/development/full-maintenance-20261005/parent-bootstrap-evidence.json#criteria"
     },
     {
       "path": "mcs/core/bounded_http.py",

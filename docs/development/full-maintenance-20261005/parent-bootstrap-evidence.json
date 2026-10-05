@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "packet": "parent-bootstrap-local-review",
+  "source": "mcs/_mcs_path.py",
+  "source_sha256": "fef8b54e47ddddac29482372ff04f188c9127fafceb77d858bc6d5b04a6328f2",
+  "source_lines": 26,
+  "full_read_ranges": [
+    [
+      1,
+      26
+    ]
+  ],
+  "P": "93bf70b",
+  "behavior_change": false,
+  "changed_hunk": "AGENTS docstring heading reference only",
+  "responsibility": "Recursive flat-import registration for trusted local mcs sources",
+  "callers": "Existing entrypoints add mcs root and import _mcs_path; tests conftest and isolated SDK modules do the same",
+  "criteria": {
+    "C01": {
+      "applicability": "APPLICABLE",
+      "evidence": "26line single bootstrap; os/sys stdlib only; recursively discovers each mcs directory containing Python, excludes hidden/private directories. Entry points add mcs root before importing; actual source matches current AGENTS hierarchy."
+    },
+    "C02": {
+      "applicability": "APPLICABLE",
+      "evidence": "Directories sorted deterministically; no extra root insertion, sys.path duplicates excluded; module import executes registration once per Python import lifecycle; no fabricated date/state/business values."
+    },
+    "C03": {
+      "applicability": "APPLICABLE",
+      "evidence": "Only process-local sys.path list prepend is mutated; existing paths preserved and no disk/DB/transaction/upsert/delete. Normal Python import lock owns import execution; no independent scheduler or shared writer."
+    },
+    "C04": {
+      "applicability": "NOT_APPLICABLE",
+      "evidence": "No DB, serialized state, migrations/FK/index/trigger. Flat public imports and existing folder layout are preserved; downstream schema compatibility owned by core/evaluation packets."
+    },
+    "C05": {
+      "applicability": "APPLICABLE",
+      "evidence": "Import directories derived from __file__ under selected trusted mcs source, not user strings or URL; os.walk followlinks default False, no execution from data/config or credential reads. Distribution-source integrity remains required in final I."
+    },
+    "C06": {
+      "applicability": "APPLICABLE",
+      "evidence": "No logs, network, export, storage or user/patient data reads. Lists source directory entry names only within mcs package; no private real-state traversal."
+    },
+    "C07": {
+      "applicability": "APPLICABLE",
+      "evidence": "Existing flat namespace and _mcs_path public entry retained. _import_roots returns list[str], Python3.10-compatible; callers in CLI/core/extract/tests retain their entry bootstrap sequence."
+    },
+    "C08": {
+      "applicability": "NOT_APPLICABLE",
+      "evidence": "No user interface, form/card/accessibility or stale interactive state; import failures are surfaced by callers. Current AGENTS heading reference corrected only in docstring."
+    },
+    "C09": {
+      "applicability": "APPLICABLE",
+      "evidence": "One os.walk at initial import, no body/corpus/database scans; only directories with .py are registered. No network/LLM/cost; no speculative caching or extra abstraction."
+    },
+    "C10": {
+      "applicability": "APPLICABLE",
+      "evidence": "No queue/retry/timeout/cancellation; existing os.walk behavior retained. Deterministic registration and Python import lifecycle avoid custom concurrent state; no new catch/finally/suppression."
+    },
+    "C11": {
+      "applicability": "BOUNDARY",
+      "evidence": "Existing meta/import consumer suites and ordinary isolated test imports exercise local source registration; no new test for heading-only docstring correction. Final isolated distribution startup/import proof remains required, not inferred from passing source-tree tests."
+    },
+    "C12": {
+      "applicability": "APPLICABLE",
+      "evidence": "stdlib os/sys, list[str] compatible with minimum3.10; recursive v1/v4 directories and excludes __pycache__/private roots. Parent generator rerun after docstring change; final lint/gates remain pending."
+    },
+    "X01": {
+      "applicability": "BOUNDARY",
+      "evidence": "Flat runtime entry under archive/package layout required; actual isolated archive startup/import at fixed I remains pending. No real install/update/service operation or editable-install success inferred."
+    },
+    "X02": {
+      "applicability": "APPLICABLE",
+      "evidence": "No external dependency/downloads or arbitrary import plugin providers introduced; repo source and LICENSE retained. Actual file/distribution identity will be pinned by final git archive manifest."
+    },
+    "X03": {
+      "applicability": "NOT_APPLICABLE",
+      "evidence": "No persistent output, backup/restore/deletion or key operations; original runtime state and other worktrees preserved."
+    },
+    "X04": {
+      "applicability": "NOT_APPLICABLE",
+      "evidence": "No adapters, external delivery/signature/auth/scope or event/ack handling; network prohibitions remain governed by caller and tests."
+    },
+    "X05": {
+      "applicability": "APPLICABLE",
+      "evidence": "Uses stdlib OS/path walk and source directory paths; offline local operation, no native SDK/FFI. Only local macOS/3.10+3.13 exercised by packets; other OS operation is not claimed."
+    },
+    "X06": {
+      "applicability": "NOT_APPLICABLE",
+      "evidence": "No AI/MCP/prompt/tool/memory/approval handling; source bootstrap cannot authorize external operations."
+    },
+    "X07": {
+      "applicability": "NOT_APPLICABLE",
+      "evidence": "No clinical/financial classification, timestamps or approval conditions; source change is docstring reference only."
+    },
+    "X08": {
+      "applicability": "NOT_APPLICABLE",
+      "evidence": "No public web server/forms/links/index or publish boundary; documentation consumers reference current project AGENTS heading only."
+    }
+  },
+  "status": "LOCAL_SOURCE_REVIEWED; FINAL_I_DISTRIBUTION_VALIDATION_PENDING"
+}
