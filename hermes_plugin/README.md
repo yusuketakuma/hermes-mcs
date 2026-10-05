@@ -227,9 +227,11 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
 動作の要点:
 
 - 配送は claim → `transport_begin` → runner の永続 grant → `started` fsync →
-  Discord HTTP → `result` fsync → `transport_receipt` の順。`started` より前の
-  クラッシュは `not_sent`、以降は `unknown` として記録し、worker は unknown を
-  自動再送しない（operator の `card_resolve` で解決）。
+  Discord HTTP → `result` fsync → `transport_receipt` の順。scope lockを取得し、
+  journalの完全性を確認できた場合だけ、`started` より前のクラッシュを
+  `not_sent` として扱う。journalが壊れている・読めない・自分のclaim記録が
+  欠けている場合や、`started` 以降のクラッシュは `unknown` として保持する。
+  workerはunknownを自動再送しない（operatorの`card_resolve`で解決）。
   discord.py 2.7 の HTTPClient は1回の送信呼出しの内部で POST も含め
   429・500/502/504/524・接続リセットで最大5回まで再送するため、作成系 POST
   （カード・スレッド作成・本文・添付）は単発に制限する: Hermes の bot が持つ

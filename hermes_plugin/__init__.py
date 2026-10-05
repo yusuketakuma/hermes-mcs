@@ -526,12 +526,18 @@ def _control_reference(view, payload):
     if payload["cmd"] == "ops.signal_dismiss":
         row = view.db.execute(
             "SELECT artifact_id,project_id,content FROM artifacts WHERE kind='signal_v1' "
-            "AND json_valid(meta) AND json_valid(content) AND json_extract(meta,'$.key')=? "
+            "AND json_valid(meta) AND json_extract(meta,'$.key')=? "
             "ORDER BY artifact_id DESC LIMIT 1", (payload["signal_key"],)).fetchone()
         if row is None or row["project_id"] != payload["project_id"]:
             return "signal_not_found"
+        # The newest row is authoritative even when its content is unreadable;
+        # filtering it out would revive an older open observation.
+        try:
+            content = json.loads(row["content"])
+        except (ValueError, TypeError, RecursionError):
+            return "signal_changed"
         if (row["artifact_id"] != payload.get("expected_signal_artifact_id", row["artifact_id"])
-                or json.loads(row["content"]).get("state") != "open"):
+                or not isinstance(content, dict) or content.get("state") != "open"):
             return "signal_changed"
         payload["expected_signal_artifact_id"] = row["artifact_id"]
     elif payload["cmd"] == "ops.extract_feedback":
