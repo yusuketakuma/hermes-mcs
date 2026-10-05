@@ -113,9 +113,9 @@ below). For a record naming its `semantic_summary` artifact in
 - `delivered`: the rendered IDs whose line reached the channel through
   the generation's `semantic_notice` outbox intent (same target message,
   revision, fingerprint and policy; degraded notices excluded). Semantic
-  notices are legacy text sends — cards carry no semantic content, so
-  `notification_renders`/`notification_render_parts` are not part of this
-  chain. The frozen notice text is re-chunked with the send path's own
+  notices use the text send path; this fact-lifecycle chain uses no
+  `notification_renders`/`notification_render_parts` card receipts.
+  The frozen notice text is re-chunked with the send path's own
   chunker (`notify_flush._semantic_chunks`); a fact counts only when every
   chunk its line spans lies inside the accepted-chunk receipt
   (`progress.next`/`sent`). An in-flight (`sending`) chunk is not
@@ -131,9 +131,12 @@ leaves `verified` out instead of refusing the case, so the case stays in
 the held-out denominator and fails `fact_lifecycle_incomplete` visibly.
 The producer opens the snapshot `mode=ro` in one read transaction, writes
 nothing to it, and emits IDs and codes only — no source text. Known
-limit: partial-delivery attribution assumes the current chunk size
-(`notify_flush._MAX_LEN`) matches the one used at send time; the stored
-delivery fingerprint also hashes the send target and is not re-verified.
+limit: partial-delivery attribution re-chunks using the current width
+(`notify_flush._MAX_LEN`) and requires the explicitly supplied send config.
+It recomputes the delivery fingerprint from that target and those chunks;
+an unknown target or a mismatch, including a changed chunk width, leaves
+delivery unprovable. Full `accepted` intents still need receipts covering
+every chunk; the target/fingerprint recheck applies to partial attribution.
 
 The criteria file fixes the gate. `required_metrics` defaults to all WP08
 metrics, but keeping it explicit is recommended:
