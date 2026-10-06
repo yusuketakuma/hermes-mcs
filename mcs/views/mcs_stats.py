@@ -605,11 +605,13 @@ def st_med_change_followup(db, scope):
         tracked = db.execute(
             "SELECT 1 FROM requests WHERE source_message_id=? "
             "AND created_at<=? LIMIT 1", (mid, scope["as_of"])).fetchone()
+        if tracked:
+            continue
         follow = db.execute(
-            "SELECT COUNT(*) FROM messages WHERE project_id=? "
-            "AND posted_at_ts > ? AND posted_at_ts <= ?",
-            (pid, ts, ts + 7 * DAY_S)).fetchone()[0]
-        if not tracked and follow == 0:
+            "SELECT 1 FROM messages WHERE project_id=? "
+            "AND posted_at_ts > ? AND posted_at_ts <= ? LIMIT 1",
+            (pid, ts, ts + 7 * DAY_S)).fetchone()
+        if not follow:
             no_follow.append({"project_id": pid, "message_id": mid})
     return _result("ok", scope, {
         "change_mentions_7d_plus": _ratio(total, total, "messages"),
