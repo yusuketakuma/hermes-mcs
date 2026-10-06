@@ -1,0 +1,15 @@
+{
+  "category": "added",
+  "title": "診断でディスク上の版と稼働プロセスの証拠を区別する",
+  "summary": "doctorにディスク上のGit revision・変更有無・gateway読込み対象の更新時刻を追加しました。サービスの明示probeではgatewayのPIDと起動時刻を示し、読込み済みのsource revisionが確認できない場合はunknownとして表示します。Keychainの非対話読取り拒否も、ロック状態とアクセス許可制限のどちらもあり得る説明へ改めました。",
+  "upgrade": "追加設定は不要です。既定のdoctorはサービス・認証情報・ネットワークへアクセスせず、稼働プロセスの確認には従来の--probe servicesを明示します。再起動要否は有効なソース更新時刻と起動時刻の比較による推定であり、端末上のSHAを読込み済み版として扱いません。Keychainの解除・権限変更は自動実行しません。",
+  "details": [
+    "任意のgit/subprocess診断文やplist・JXA本文をJSON/画面へ含めず、有効なrevision・PID・時刻と固定の状態だけを返す。",
+    "再起動receiptはfreshな監督プロセスの証拠として扱い、現在のPIDと異なる成功receiptはstaleと表示。アプリの健康状態やモデル・通知・人承認の既定値は変更しない。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "tests/ops/test_mcs_setup_doctor.py",
+    "tests/ops/test_mcs_setup.py"
+  ]
+}

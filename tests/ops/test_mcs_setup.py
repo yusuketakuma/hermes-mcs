@@ -254,7 +254,7 @@ def test_check_environment_detects_locked_keychain(monkeypatch):
     monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
 
     errors, _ = mcs_setup.check_environment({"notify_target": "slack"})
-    assert any("keychain is locked" in e.lower() for e in errors)
+    assert any("keychain may be locked or access" in e.lower() for e in errors)
 
     # missing entry -> the re-register message, not the locked one
     def missing(argv, **kw):
@@ -614,7 +614,7 @@ def test_check_environment_locked_keychain_with_env_fallback(monkeypatch):
     errors, warnings = mcs_setup.check_environment(
         {"notify_target": "slack"})
     assert not any("keychain is locked" in e.lower() for e in errors)
-    assert any("keychain is locked" in w.lower() for w in warnings)
+    assert any("keychain may be locked or access" in w.lower() for w in warnings)
     assert any("env fallback" in w.lower() for w in warnings)
 
 
