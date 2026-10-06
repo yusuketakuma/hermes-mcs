@@ -242,7 +242,12 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
               "source": {"url": SOURCE_URL, "spec": SPEC_URL,
                          "terms_checked_on": terms, "approval_recorded": approval is not None,
                          "status_policy_confirmed": bool(changes and absent)},
-              "activation": False, "output_sha256": None}
+              "activation": False, "output_sha256": None,
+              "dictionary_limits": {"entries": drug_map.MAX_ENTRIES,
+                                    "bytes": drug_map.MAX_BYTES,
+                                    "aliases_per_entry": drug_map.MAX_ALIASES},
+              "selection": "explicit_subset" if selected is not None else "whole_master",
+              "payload_bytes": None}
     payload = None
     if terms is None:
         report["held"] = "terms_unconfirmed"
@@ -263,6 +268,7 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
                     "source": source, "entries": entries}
         payload = json.dumps(document, ensure_ascii=False, sort_keys=True,
                              separators=(",", ":"), allow_nan=False).encode("utf-8")
+        report["payload_bytes"] = len(payload)
         if len(payload) > drug_map.MAX_BYTES:
             payload = None
             report["held"] = "dictionary_byte_bound"

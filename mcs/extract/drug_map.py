@@ -16,13 +16,17 @@ from typing import Literal, TypedDict
 
 from clinical_values import MedicationSurface, fold_surface, medication_surface
 from mcs_queries import current_extract_pred, current_fact_pred
+from mcs_requests import parse_command
 
 SCHEMA = "mcs-drug-map/1"
 SOURCE_SCHEMA = "mcs-drug-map/2"
 RESOLVER_VERSION = "mcs-drug-ref/1"
 KIND = "med_ref"
-MAX_BYTES = 4 * 1024 * 1024
-MAX_ENTRIES = 10000
+# 20260930 whole master: 19,272 rows, 12,792 identities, ~5.43 MiB JSON.
+MAX_BYTES = 8 * 1024 * 1024
+MAX_ENTRIES = 20000
+PROGRESS_KIND = "med_ref_progress"
+SCAN_BATCH = 100
 MAX_ALIASES = 100
 _GENERIC = {fold_surface(s) for s in ("薬", "処方薬", "内服薬", "降圧薬")}
 
@@ -39,6 +43,7 @@ class Entry:
     id: str
     kind: Literal["ingredient", "class", "general_name", "product"]
     display: str
+    aliases: tuple[str, ...] = ()
 
 
 class Candidate(TypedDict):
@@ -109,6 +114,27 @@ class DrugMap:
     @property
     def approved(self) -> bool:
         return bool(self.source.approved_by)
+
+    def lookup(self, name: str) -> dict:
+        """Explain an offline candidate lookup; approval never confirms a medication."""
+        if not _text(name):
+            raise ValueError("drug_map_lookup_name")
+        ref = self.resolve(name)
+        codes = {c["code"] for c in ref["cands"]}
+        hits = self.aliases.get(fold(name), ())
+        if not hits:
+            hits = self.aliases.get(split_surface(name)["base"], ())
+        return {**ref, "dictionary": {"id": self.dict_id, "sha256": self.sha256,
+                    "resolver_version": RESOLVER_VERSION, "approved": self.approved,
+                    "source": {"name": self.source.name, "url": self.source.url,
+                               "terms_checked_on": self.source.terms_checked_on}},
+                "surface": split_surface(name),
+                "matched_aliases": sorted({alias for entry in hits if entry.id in codes
+                                           for alias in entry.aliases}),
+                "explanation": {"resolved": "辞書の一致候補。処方・成分の確定ではありません。",
+                    "ambiguous": "複数の一致候補。用量・剤形等を確認してください。",
+                    "generic": "総称のため個別薬剤を確定できません。",
+                    "unresolved": "一致する候補はありません。類似名から推定しません。"}[ref["status"]]}
 
     def resolve(self, name: str, i: int = 0) -> Ref:
         """Return identity candidates; official product/general names are exact-only."""
@@ -232,7 +258,8 @@ def load(path: str | Path, *, expected_sha256: str) -> DrugMap | None:
         ids.add(entry["id"])
         # /1 ingredient/class identities remain unchanged. /2 uses explicit
         # official product/general-name identity, never inferred ingredients.
-        candidate = Entry(entry["id"], entry["kind"], entry["display"])
+        candidate = Entry(entry["id"], entry["kind"], entry["display"],
+                          tuple(sorted(set([entry["display"], *entry["aliases"]]))))
         for alias in {fold(a) for a in [entry["display"], *entry["aliases"]]}:
             if not alias:
                 raise ValueError("drug_map_empty_alias")
@@ -260,14 +287,74 @@ def _source(db: sqlite3.Connection, mid: int):
     """, (mid,)).fetchone()
 
 
+def config_error(value) -> str | None:
+    """Validate config ``drug_map`` ({path, sha256}); None when well-formed."""
+    if not isinstance(value, dict) or set(value) != {"path", "sha256"}:
+        return "must contain only path and sha256"
+    if not isinstance(value["path"], str) or not os.path.isabs(value["path"]):
+        return "path must be absolute"
+    if not isinstance(value["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["sha256"]):
+        return "sha256 must be a pinned lowercase SHA256"
+    return None
+
+
+def configured(cfg) -> tuple["DrugMap | None", str | None]:
+    """The config-pinned dictionary: (map, None); (None, None) when unset
+    or the file is absent; (None, "invalid_config"|"invalid_dictionary")."""
+    setting = (cfg or {}).get("drug_map") if isinstance(cfg, dict) else None
+    if setting is None:
+        return None, None
+    if config_error(setting) is not None:
+        return None, "invalid_config"
+    try:
+        return load(setting["path"], expected_sha256=setting["sha256"]), None
+    except ValueError:
+        return None, "invalid_dictionary"
+
+
+def active_dictionary(db: sqlite3.Connection, cfg) -> tuple["DrugMap | None", str]:
+    """The configured dictionary only while it is the DB's active derive
+    generation — so a chat search never answers from a dictionary whose
+    candidates the posts do not carry. State: active/unconfigured/
+    inactive/invalid."""
+    dictionary, error = configured(cfg)
+    if error:
+        return None, "invalid"
+    if dictionary is None:
+        return None, "unconfigured"
+    progress = _progress(db)
+    if (not progress or progress.get("invalid") or progress.get("dictionary")
+            != [dictionary.dict_id, dictionary.sha256, False, RESOLVER_VERSION]):
+        return None, "inactive"
+    return dictionary, "active"
+
+
 def _source_meta(source) -> Binding:
     return {"source_artifact_id": source[0], "source_kind": source[1],
             "hash": source[3],
             "source_sha256": hashlib.sha256(source[2].encode()).hexdigest()}
 
 
+def _source_meds(source) -> list[tuple[int, str]]:
+    """Index and name of each named medication in a current source; ValueError on bad shape."""
+    try:
+        document = json.loads(source[2])
+    except (TypeError, RecursionError) as error:
+        raise ValueError("source_json") from error
+    if not isinstance(document, dict):
+        raise ValueError("source_shape")
+    meds = document.get("medications" if source[1] == "extract_v1" else "meds", [])
+    if not isinstance(meds, list):
+        raise ValueError("medications_shape")
+    return [(i, med["name"]) for i, med in enumerate(meds)
+            if isinstance(med, dict) and _text(med.get("name"))]
+
+
 def current_refs(db: sqlite3.Connection, mid: int) -> list[Annotation]:
     """Read only exact current-source annotations from the DB, never a dictionary."""
+    progress = _progress(db)
+    if progress is not None and progress.get("dictionary") is None:
+        return []
     source = _source(db, mid)
     if source is None:
         return []
@@ -288,6 +375,8 @@ def current_refs(db: sqlite3.Connection, mid: int) -> list[Annotation]:
             or not _text(meta.get("dict_id"))
             or not isinstance(meta.get("dict_sha256"), str)
             or not re.fullmatch(r"[0-9a-f]{64}", meta["dict_sha256"])
+            or (progress is not None and progress.get("dictionary") !=
+                [meta.get("dict_id"), meta.get("dict_sha256"), False, RESOLVER_VERSION])
             or meta.get("synthetic") is not False
             or not isinstance(meta.get("source"), dict)
             or not _text(meta["source"].get("approved_by"))
@@ -332,63 +421,133 @@ def current_refs(db: sqlite3.Connection, mid: int) -> list[Annotation]:
     return refs
 
 
+def _progress(db: sqlite3.Connection) -> dict | None:
+    row = db.execute("SELECT content FROM artifacts WHERE kind=? "
+                     "ORDER BY artifact_id DESC LIMIT 1", (PROGRESS_KIND,)).fetchone()
+    if row is None:
+        return None
+    try:
+        progress = parse_command(row[0])
+    except (ValueError, TypeError, RecursionError):
+        return {"invalid": True}
+    if not isinstance(progress, dict) or set(progress) != {"dictionary", "cursor"}:
+        return {"invalid": True}
+    cursor, generation = progress["cursor"], progress["dictionary"]
+    if type(cursor) is not int or not 0 <= cursor <= 2**63 - 1:
+        return {"invalid": True}
+    if generation is not None and (
+            not isinstance(generation, list) or len(generation) != 4
+            or not _text(generation[0]) or not isinstance(generation[1], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", generation[1])
+            or type(generation[2]) is not bool or generation[3] != RESOLVER_VERSION):
+        return {"invalid": True}
+    return progress
+
+
+def generation_signature(db: sqlite3.Connection) -> str:
+    """Stable active dictionary currency for rollup caches; cursor is excluded."""
+    progress = _progress(db)
+    generation = ("legacy" if progress is None else "invalid" if progress.get("invalid")
+                  else progress["dictionary"])
+    return hashlib.sha256(json.dumps(generation, sort_keys=True).encode()).hexdigest()
+
+
+def _save_progress(db: sqlite3.Connection, progress: dict) -> None:
+    # One metadata-only artifact uses the existing durable storage mechanism.
+    row = db.execute("SELECT artifact_id FROM artifacts WHERE kind=? "
+                     "ORDER BY artifact_id DESC LIMIT 1", (PROGRESS_KIND,)).fetchone()
+    payload = json.dumps(progress, sort_keys=True)
+    if row:
+        db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                   (payload, row[0]))
+    else:
+        db.execute("INSERT INTO artifacts(kind,content,meta,created_at) VALUES(?,?,'{}',?)",
+                   (PROGRESS_KIND, payload, time.time()))
+
+
 def derive(ledger, dictionary: DrugMap | None, *,
            deadline: float | None = None, synthetic: bool = False) -> DeriveResult:
-    """Replace med_ref generations without opening a Ledger or retaining old bodies.
+    """Resume a bounded source walk; commit each annotation with its cursor.
 
-    Invoke after extract/semantic publication and before rollup. Returned pids
-    must join the rollup rebuild set, including dictionary-only changes and
-    removals. The monotonic deadline is checked between committed messages.
+    Completed cycles start again to catch changes at earlier message IDs.
+    Source bindings hide changed originals immediately; dictionary generation
+    changes hide old references even while their bounded cleanup is unfinished.
     """
     usable = dictionary is not None and (dictionary.approved or synthetic)
+    generation = [dictionary.dict_id, dictionary.sha256, synthetic, RESOLVER_VERSION] if usable else None
+    progress = _progress(ledger.db)
+    if progress is None and not usable and not ledger.db.execute(
+            "SELECT 1 FROM artifacts WHERE kind=? LIMIT 1", (KIND,)).fetchone():
+        return {"status": "unavailable", "done": 0, "pids": []}
+    progress = progress or {}
     done, pids, cut = 0, set(), False
-    # Without a usable dictionary every message resolves to "no rows", so
-    # only messages that still hold med_ref artifacts need work (deletion);
-    # scanning every message per tick would be O(corpus) for nothing.
-    rows = ledger.db.execute(("""
-        SELECT message_id,project_id FROM messages
-        UNION """ if usable else "") + """SELECT message_id,project_id
-        FROM artifacts WHERE kind=?
-        ORDER BY message_id
-    """, (KIND,)).fetchall()
-    for mid, pid in rows:
+    if progress.get("dictionary") != generation:
+        pids.update(r[0] for r in ledger.db.execute(
+            "SELECT DISTINCT project_id FROM artifacts WHERE kind=? "
+            "AND project_id IS NOT NULL", (KIND,)))
+        progress = {}
+    cursor = progress.get("cursor", 0)
+    if type(cursor) is not int or cursor < 0:
+        cursor = 0
+    progress = {"dictionary": generation, "cursor": cursor}
+    with ledger.db:
+        _save_progress(ledger.db, progress)
+    while True:
         if deadline is not None and time.monotonic() >= deadline:
             cut = True
             break
-        source = _source(ledger.db, mid) if usable else None
-        content = meta = None
-        if source is not None and dictionary is not None:
-            try:
-                meds = json.loads(source[2]).get(
-                    "medications" if source[1] == "extract_v1" else "meds", [])
-            except (ValueError, TypeError, RecursionError):
-                source = None
-        if source is not None and dictionary is not None:
-            content = {"refs": [dictionary.resolve(med["name"], i)
-                       for i, med in enumerate(meds if isinstance(meds, list) else [])
-                       if isinstance(med, dict) and _text(med.get("name"))]}
-            meta = {**_source_meta(source), "dict_id": dictionary.dict_id,
-                    "dict_sha256": dictionary.sha256,
-                    "resolver_version": RESOLVER_VERSION,
-                    "source": asdict(dictionary.source), "synthetic": synthetic}
-            pid = source[4]
-        old = ledger.db.execute(
-            "SELECT content,meta FROM artifacts WHERE kind=? AND message_id=?",
-            (KIND, mid)).fetchall()
-        encoded = json.dumps(content, ensure_ascii=False) if content else None
-        encoded_meta = json.dumps(meta, ensure_ascii=False) if meta else None
-        if (not old and content is None) or (
-                len(old) == 1 and tuple(old[0]) == (encoded, encoded_meta)):
-            continue
-        with ledger.db:
-            ledger.db.execute("DELETE FROM artifacts WHERE kind=? AND message_id=?",
-                              (KIND, mid))
-            if content is not None:
-                ledger.artifact_add_tx(KIND, encoded, project_id=pid,
-                                       message_id=mid, meta=meta)
-        done += 1
-        if pid is not None:
-            pids.add(pid)
+        rows = ledger.db.execute(("""
+            SELECT message_id,project_id FROM messages WHERE message_id>?
+            UNION """ if usable else "") + """SELECT message_id,project_id
+            FROM artifacts WHERE kind=? AND message_id>?
+            ORDER BY message_id LIMIT ?
+        """, ((cursor, KIND, cursor, SCAN_BATCH) if usable else
+              (KIND, cursor, SCAN_BATCH))).fetchall()
+        if not rows:
+            progress["cursor"] = 0
+            with ledger.db:
+                _save_progress(ledger.db, progress)
+            break
+        for mid, pid in rows:
+            if deadline is not None and time.monotonic() >= deadline:
+                cut = True
+                break
+            source = _source(ledger.db, mid) if usable else None
+            content = meta = None
+            if source is not None and dictionary is not None:
+                try:
+                    content = {"refs": [dictionary.resolve(name, i)
+                                        for i, name in _source_meds(source)]}
+                    meta = {**_source_meta(source), "dict_id": dictionary.dict_id,
+                        "dict_sha256": dictionary.sha256,
+                        "resolver_version": RESOLVER_VERSION,
+                        "source": asdict(dictionary.source), "synthetic": synthetic}
+                    pid = source[4]
+                except (ValueError, TypeError, AttributeError, RecursionError):
+                    content = meta = None
+            old = ledger.db.execute(
+                "SELECT content,meta FROM artifacts WHERE kind=? AND message_id=?",
+                (KIND, mid)).fetchall()
+            encoded = json.dumps(content, ensure_ascii=False) if content else None
+            encoded_meta = json.dumps(meta, ensure_ascii=False) if meta else None
+            changed = not ((not old and content is None) or
+                           (len(old) == 1 and tuple(old[0]) == (encoded, encoded_meta)))
+            progress["cursor"] = mid
+            with ledger.db:
+                if changed:
+                    ledger.db.execute("DELETE FROM artifacts WHERE kind=? AND message_id=?",
+                                      (KIND, mid))
+                    if content is not None:
+                        ledger.artifact_add_tx(KIND, encoded, project_id=pid,
+                                               message_id=mid, meta=meta)
+                _save_progress(ledger.db, progress)
+            cursor = mid
+            if changed:
+                done += 1
+                if pid is not None:
+                    pids.add(pid)
+        if cut:
+            break
     return {"status": "unavailable" if not usable else "partial" if cut else "ok",
             "done": done, "pids": sorted(pids)}
 

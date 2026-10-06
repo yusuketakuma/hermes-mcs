@@ -366,3 +366,29 @@ def test_blank_general_and_basic_names_do_not_become_false_identities(tmp_path):
     # Then
     assert dictionary.resolve(row[4])["cands"][0]["kind"] == "product"
     assert dictionary.resolve("　")["status"] == "unresolved"
+
+
+def test_whole_synthetic_master_exceeds_old_limits_without_truncation(tmp_path):
+    rows = [_row(str(900000001 + i), name=f"架空製品{i:05d}錠５ｍｇ",
+                 general="", general_text="", kana="") for i in range(19272)]
+    path, pin = _input(tmp_path, rows)
+    result = importer.convert(path, pin)
+    assert result.report["rows"] == result.report["entries"] == 19272
+    assert result.report["selection"] == "whole_master"
+    assert result.payload is not None
+    assert 4 * 1024 * 1024 < len(result.payload) <= drug_map.MAX_BYTES
+    _, dictionary = _write_result(tmp_path, result)
+    assert dictionary.lookup("架空製品19271錠5mg")["cands"][0]["kind"] == "product"
+    assert dictionary.lookup("架空製品19271")["status"] == "unresolved"
+    assert dictionary.approved is False
+    assert result.report["activation"] is False
+
+
+def test_whole_master_entry_cap_holds_instead_of_truncating(tmp_path, monkeypatch):
+    path, pin = _input(tmp_path, [_row("900000001", general="", general_text=""),
+                                  _row("900000002", general="", general_text="")])
+    monkeypatch.setattr(drug_map, "MAX_ENTRIES", 1)
+    result = importer.convert(path, pin)
+    assert result.payload is None
+    assert result.report["entries"] == 2
+    assert result.report["held"] == "dictionary_entry_or_alias_bound"

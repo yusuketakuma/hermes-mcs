@@ -111,13 +111,8 @@ def _dict(v):
 
 
 def _drug_map_config(value):
-    if not isinstance(value, dict) or set(value) != {"path", "sha256"}:
-        return "must contain only path and sha256"
-    if not isinstance(value["path"], str) or not os.path.isabs(value["path"]):
-        return "path must be absolute"
-    if not isinstance(value["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["sha256"]):
-        return "sha256 must be a pinned lowercase SHA256"
-    return None
+    import drug_map
+    return drug_map.config_error(value)
 
 
 def _backup_config(value):

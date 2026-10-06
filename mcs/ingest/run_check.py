@@ -1338,19 +1338,10 @@ def stage_derive(ledger, result, deadline, cfg=None,
 
     try:
         import drug_map
-        from mcs_setup import _drug_map_config
-        setting = (cfg or {}).get("drug_map")
-        dictionary = None
-        invalid = setting is not None and _drug_map_config(setting) is not None
+        dictionary, error = drug_map.configured(cfg)
+        invalid = error is not None
         if invalid:
-            result["errors"].append("drug_map: invalid_config")
-        elif setting is not None:
-            try:
-                dictionary = drug_map.load(
-                    setting["path"], expected_sha256=setting["sha256"])
-            except ValueError:
-                invalid = True
-                result["errors"].append("drug_map: invalid_dictionary")
+            result["errors"].append(f"drug_map: {error}")
         result["drug_map"] = drug_map.derive(
             ledger, dictionary, deadline=deadline - 30)
         if invalid:
