@@ -10,12 +10,16 @@ Inside a batch, mutations that must be durable before the caller's next
 step (posted-button tokens before their receipt, a LINE WORKS retirement
 before HTTP) append one fsync'd row to ``<registry>.delta`` instead of
 rewriting the whole file; the batch flush folds them in and ``reload``
-replays rows newer than the file's ``delta_seq``.
+replays rows newer than the file's ``delta_seq``. Each row names the
+digest of the main file it extends: a main file rewritten by code that
+never folded the delta (an older release after a rollback) makes those
+rows stale, and they are ignored rather than replayed over newer state.
 """
 from __future__ import annotations
 
 import contextlib
 import functools
+import hashlib
 import json
 import math
 import os
@@ -37,7 +41,6 @@ def new_worker_id() -> str:
 
 
 def scope_key(scope: dict) -> str:
-    import hashlib
     # Preserve the deployed lock namespace across upgrades.
     raw = "|".join(str(scope.get(k) or "-") for k in
                    ("profile", "application_id", "channel_id"))
@@ -80,6 +83,10 @@ def _expired(value, *, ttl: float = 0, now: float | None = None) -> bool:
                 or value + ttl <= (time.time() if now is None else now))
     except OverflowError:
         return True
+
+
+def _digest(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()[:32]
 
 
 def _locked(method):
@@ -128,8 +135,11 @@ class Registry:
         """Read after acquiring the send lock, before accepting interactions."""
         try:
             with open(self._path, "rb") as handle:
-                data = json.loads(handle.read().decode("utf-8"))
+                raw = handle.read()
+            self._base = _digest(raw)
+            data = json.loads(raw.decode("utf-8"))
         except FileNotFoundError:
+            self._base = None
             data = None
         except (ValueError, RecursionError):
             raise ValueError("registry_corrupt") from None
@@ -169,8 +179,8 @@ class Registry:
                 raise ValueError("registry_corrupt") from None
             if not isinstance(row, dict) or type(row.get("seq")) is not int:
                 raise ValueError("registry_corrupt")
-            if row["seq"] <= self._seq:
-                continue                    # already folded into the file
+            if row["seq"] <= self._seq or row.get("base") != self._base:
+                continue    # folded, or extends a main file since rewritten
             if row.get("op") == "put" and isinstance(row.get("tokens"), dict) \
                     and all(isinstance(c, dict) for c in row["tokens"].values()):
                 self._data["tokens"].update(row["tokens"])
@@ -187,7 +197,8 @@ class Registry:
             self.save()
             return
         self._seq += 1
-        data = (json.dumps({**row, "seq": self._seq}, ensure_ascii=False,
+        data = (json.dumps({**row, "seq": self._seq, "base": self._base},
+                           ensure_ascii=False,
                            sort_keys=True, separators=(",", ":"))
                 + "\n").encode("utf-8")
         created = not os.path.exists(self._delta_path)
@@ -255,6 +266,7 @@ class Registry:
                          separators=(",", ":")).encode("utf-8")
         paths.atomic_write(self._path, raw, tmp_prefix=".reg-",
                            mode=0o600)
+        self._base = _digest(raw)
         self._dirty = False
         # delta_seq makes a surviving delta a no-op; this only bounds size
         with contextlib.suppress(OSError):

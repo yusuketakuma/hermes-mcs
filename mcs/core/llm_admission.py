@@ -172,48 +172,50 @@ class Broker:
 
     def _initialize_store(self) -> None:
         """Create or migrate the broker's private durable store."""
-        self.db.execute("""
-          CREATE TABLE IF NOT EXISTS admission_meta(
-            singleton INTEGER PRIMARY KEY CHECK (singleton=1),
-            epoch INTEGER NOT NULL,
-            state TEXT NOT NULL,
-            rt_waiting INTEGER NOT NULL DEFAULT 0,
-            rotated_at REAL)""")
-        self.db.execute("""
-          CREATE TABLE IF NOT EXISTS permits(
-            permit_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            epoch INTEGER NOT NULL,
-            client TEXT NOT NULL,
-            cls TEXT NOT NULL,
-            job_gen TEXT,
-            request_id TEXT,
-            state TEXT NOT NULL,
-            token TEXT,
-            created_at REAL NOT NULL,
-            admitted_at REAL,
-            sent_at REAL,
-            terminal_at REAL,
-            outcome TEXT,
-            proof TEXT,
-            owner_pid INTEGER)""")
-        cols = {r[1] for r in self.db.execute(
-            "PRAGMA table_info(permits)")}
-        if "owner_pid" not in cols:
-            # pre-existing rows keep NULL: their owner is unprovable
+        # one write transaction: two processes starting together must not
+        # both see owner_pid missing and race the ALTER (duplicate column)
+        with self._write_tx():
+            self.db.execute("""
+              CREATE TABLE IF NOT EXISTS admission_meta(
+                singleton INTEGER PRIMARY KEY CHECK (singleton=1),
+                epoch INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                rt_waiting INTEGER NOT NULL DEFAULT 0,
+                rotated_at REAL)""")
+            self.db.execute("""
+              CREATE TABLE IF NOT EXISTS permits(
+                permit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                epoch INTEGER NOT NULL,
+                client TEXT NOT NULL,
+                cls TEXT NOT NULL,
+                job_gen TEXT,
+                request_id TEXT,
+                state TEXT NOT NULL,
+                token TEXT,
+                created_at REAL NOT NULL,
+                admitted_at REAL,
+                sent_at REAL,
+                terminal_at REAL,
+                outcome TEXT,
+                proof TEXT,
+                owner_pid INTEGER)""")
+            cols = {r[1] for r in self.db.execute(
+                "PRAGMA table_info(permits)")}
+            if "owner_pid" not in cols:
+                # pre-existing rows keep NULL: their owner is unprovable
+                self.db.execute(
+                    "ALTER TABLE permits ADD COLUMN owner_pid INTEGER")
+            if "admitted_at" not in cols:
+                self.db.execute(
+                    "ALTER TABLE permits ADD COLUMN admitted_at REAL")
+                # backend occupancy began at creation for every permit that
+                # ever left 'waiting' — 'waiting' itself holds no slot
+                self.db.execute(
+                    "UPDATE permits SET admitted_at=created_at "
+                    "WHERE state NOT IN ('waiting')")
             self.db.execute(
-                "ALTER TABLE permits ADD COLUMN owner_pid INTEGER")
-        if "admitted_at" not in cols:
-            self.db.execute(
-                "ALTER TABLE permits ADD COLUMN admitted_at REAL")
-            # backend occupancy began at creation for every permit that
-            # ever left 'waiting' — 'waiting' itself holds no slot
-            self.db.execute(
-                "UPDATE permits SET admitted_at=created_at "
-                "WHERE state NOT IN ('waiting')")
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS permits_epoch_state "
-            "ON permits(epoch,state)")
-        self.db.commit()
+                "CREATE INDEX IF NOT EXISTS permits_epoch_state "
+                "ON permits(epoch,state)")
 
     # ---------- epoch lifecycle ----------
 

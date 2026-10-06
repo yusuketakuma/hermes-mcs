@@ -1,0 +1,8 @@
+{
+  "category": "security",
+  "title": "更新通知のリリースノート取得でリダイレクトを追わないように変更",
+  "summary": "更新の確認時にGitHubからリリースノートを取得する処理だけが、他の外部通信と異なりリダイレクトを追っていました。指定した宛先以外へ接続しない方針に合わせ、リダイレクトされた場合は取得しません。",
+  "upgrade": "追加操作は不要です。リポジトリの移動などでリダイレクトされる場合、更新通知にリリースノートの本文が付かなくなりますが、更新通知自体は従来どおり送られます。",
+  "details": ["fetch_notesのopenerにmcs_util.NoRedirectを追加。"],
+  "refs": ["mcs/ops/mcs_update.py", "tests/ops/test_update_rollback_guards.py"]
+}

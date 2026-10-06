@@ -107,3 +107,50 @@ def test_lineworks_burst_rewrites_registry_once_and_retires_before_send(tmp_path
     assert seen and seen[0] is None
     restored = registry.Registry(w.dirs["state"], scope=w.settings)
     assert any(c.get("card_key") == "card-4" for c in restored._data["tokens"].values())
+
+
+def _older_release_rewrite(reg, **tokens):
+    """An older release (no delta support) rewrites the main file after a
+    rollback: it keeps unknown keys such as delta_seq and never folds or
+    removes the delta."""
+    import json
+    with open(reg._path) as handle:
+        data = json.load(handle)
+    data["tokens"].update(tokens)
+    with open(reg._path, "w") as handle:
+        json.dump(data, handle)
+
+
+def test_delta_left_over_a_rollback_is_not_replayed_after_reupgrade(tmp_path):
+    reg = registry.Registry(str(tmp_path))
+    reg.put_tokens({"old": {"action": "ack", "card_key": "k"}})
+    main = open(reg._path, "rb").read()
+    with reg.batch():
+        reg.retire_card_tokens("k")
+        reg.put_tokens({"gone": {"action": "ack", "card_key": "x"}}, durable=True)
+        stale = open(reg._delta_path, "rb").read()
+    # crash before the flush (the main file never saw the batch), then a
+    # rollback whose older release mints a newer token for the same card
+    with open(reg._path, "wb") as handle:
+        handle.write(main)
+    with open(reg._delta_path, "wb") as handle:
+        handle.write(stale)
+    assert registry.Registry(str(tmp_path)).token("gone") is not None
+    _older_release_rewrite(reg, newer={"action": "ack", "card_key": "k"})
+    upgraded = registry.Registry(str(tmp_path))
+    assert upgraded.token("newer") is not None     # stale retire skipped
+    assert upgraded.token("gone") is None          # stale put skipped
+    # rows appended on top of the rewritten file still replay
+    with upgraded.batch():
+        upgraded.put_tokens({"fresh": {"action": "ack", "card_key": "k"}}, durable=True)
+        crashed = registry.Registry(str(tmp_path))
+        assert crashed.token("fresh") is not None
+        assert crashed.token("newer") is not None and crashed.token("gone") is None
+
+
+def test_unfolded_delta_on_an_unchanged_main_file_replays(tmp_path):
+    reg = registry.Registry(str(tmp_path))
+    reg.put_tokens({"old": {"action": "ack", "card_key": "k"}})
+    with reg.batch():
+        reg.retire_card_tokens("k")
+        assert registry.Registry(str(tmp_path)).token("old") is None

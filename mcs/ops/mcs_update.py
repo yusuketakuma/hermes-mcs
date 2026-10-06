@@ -365,7 +365,7 @@ def fetch_notes(tag: str) -> str | None:
         req = urllib.request.Request(
             url, headers={"Accept": "application/vnd.github+json",
                           "User-Agent": "mcs-update"})
-        with mcs_util.no_proxy_opener().open(req, timeout=15) as resp:
+        with mcs_util.no_proxy_opener(mcs_util.NoRedirect).open(req, timeout=15) as resp:
             raw = resp.read(1024 * 1024 + 1)
             if len(raw) > 1024 * 1024:
                 return None
@@ -994,6 +994,31 @@ def restart_gateway(cfg: dict) -> None:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL, close_fds=True,
             start_new_session=True)
+
+
+def restart_lineworks(cfg: dict) -> None:
+    """Fire-and-forget kickstart of the independent LINE WORKS adapter
+    (ai.mcs.lineworks) after the tree changed: a still-running old
+    adapter rejects spec keys the new renderer writes and holds every
+    new card. A standalone host restarts it as its own child."""
+    ntf = cfg.get("notify")
+    if mcs_runtime.standalone(cfg) or not isinstance(ntf, dict) \
+            or ntf.get("interactive") != "lineworks":
+        return
+    with suppress(OSError):  # not installed = nothing running to refresh
+        subprocess.Popen(
+            ["launchctl", "kickstart", "-k",
+             f"gui/{_uid()}/ai.mcs.lineworks"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, close_fds=True,
+            start_new_session=True)
+
+
+def restart_services(cfg: dict, plugin_changed) -> None:
+    """Every post-apply/rollback restart, after durable bookkeeping."""
+    if cfg.get("runtime_mode") == "standalone" or plugin_changed:
+        restart_gateway(cfg)
+    restart_lineworks(cfg)
 
 
 def _clean_stale_git_locks() -> list[str]:
@@ -1655,8 +1680,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         # a synchronous restart would deadlock when this updater is a
         # gateway descendant (S12)
         applied_entry = state.get("applied") or [{}]
-        if cfg.get("runtime_mode") == "standalone" or applied_entry[-1].get("plugin_changed"):
-            restart_gateway(cfg)
+        restart_services(cfg, applied_entry[-1].get("plugin_changed"))
         return 0
     except Exception as e:
         if delegated:
@@ -1684,8 +1708,8 @@ def _baseline_check(cfg: dict) -> list[str]:
 def _gateway_restart_if_needed(state: dict) -> None:
     applying = state.get("applying") or {}
     applied = (state.get("applied") or [{}])[-1]
-    if load_config().get("runtime_mode") == "standalone" or applying.get("plugin_changed") or applied.get("plugin_changed"):
-        restart_gateway(load_config())
+    restart_services(load_config(), applying.get("plugin_changed")
+                     or applied.get("plugin_changed"))
 
 
 # -------------------------------------------------------------- rollback
@@ -1771,6 +1795,21 @@ def _reconcile_membership(desired: dict) -> list[str]:
     return problems
 
 
+def _rollback_backup_error(entry: dict) -> str | None:
+    """A schema-bump rollback restores its preupdate backup, but
+    maintenance keeps only the newest one — a second rollback step can
+    find it gone. rollback() checks it before journaling or resetting:
+    old code must never be left running against the newer schema. (The
+    apply bail path keeps reset-then-escalate: its backup is fresh and
+    its journal must stay classifiable as a pending restore.)"""
+    if not (entry.get("schema_bump") and entry.get("backup_path")):
+        return None
+    import ledger
+    if ledger.valid_mcs_db(entry["backup_path"]):
+        return None
+    return "backup_invalid: " + entry["backup_path"]
+
+
 def _rollback_tree(entry: dict) -> None:
     """Restore tracked files to prev_sha — shared by rollback() and the
     post-merge failure path. Caller holds both locks and drainers are
@@ -1784,6 +1823,7 @@ def _rollback_tree(entry: dict) -> None:
         raise UpdateError("rollback_verify_failed")
     if entry.get("schema_bump") and entry.get("backup_path"):
         _restore_db(entry["backup_path"])
+    _cancel_unsent_notices()
     problems = _reconcile_membership(
         entry.get("manifest_snapshot")
         if "manifest_snapshot" in entry
@@ -1791,6 +1831,43 @@ def _rollback_tree(entry: dict) -> None:
     _services_reconcile()
     if problems:
         raise UpdateError("membership: " + ",".join(problems))
+
+
+def _cancel_unsent_notices() -> int:
+    """After a tree rollback, a queued never-attempted card-less notice
+    render still carries the newer renderer's spec (e.g. preview_text),
+    which the restored worker rejects forever while dispatch keeps
+    republishing it. Cancel it — the restored dispatch issues a fresh
+    render for the same event, as for a moved route. Best-effort."""
+    if not os.path.isfile(LEDGER):
+        return 0
+    try:
+        con = sqlite3.connect(Path(LEDGER).resolve().as_uri() + "?mode=rw",
+                              uri=True, timeout=30)
+        try:
+            with con:
+                now = time.time()
+                rows = con.execute(
+                    "SELECT delivery_id,intent_event_id "
+                    "FROM notification_renders r WHERE card_id IS NULL "
+                    "AND op='notice' AND state='queued' AND NOT EXISTS ("
+                    "SELECT 1 FROM notification_delivery_attempts a "
+                    "WHERE a.delivery_id=r.delivery_id "
+                    "AND a.state IN ('granted','unknown'))").fetchall()
+                for delivery_id, event_id in rows:
+                    con.execute(
+                        "UPDATE notification_renders SET state='cancelled',"
+                        "updated_at=? WHERE delivery_id=? AND state='queued'",
+                        (now, delivery_id))
+                    con.execute(
+                        "UPDATE notify_outbox SET next_try=?,updated_at=? "
+                        "WHERE event_id=? AND state='pending'",
+                        (now, now, event_id))
+            return len(rows)
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return 0
 
 
 def rollback(command_id: str | None = None) -> int:
@@ -1838,6 +1915,10 @@ def rollback(command_id: str | None = None) -> int:
         try:
             if not _tree_clean():
                 raise UpdateError("tree_dirty_before_rollback")
+            # an unusable backup aborts before the journal: nothing runs
+            err = _rollback_backup_error(entry)
+            if err:
+                raise UpdateError(err)
             # crash-visible journal BEFORE quiesce (H4): recover can
             # converge the tree toward prev even if we die mid-reset
             state["applying"] = _rollback_applying(
@@ -1887,8 +1968,7 @@ def rollback(command_id: str | None = None) -> int:
                     "result": "rolled_back", "at": time.time()}
             save_state(state)
             # gateway restart AFTER the durable save (self-deadlock)
-            if load_config().get("runtime_mode") == "standalone" or entry.get("plugin_changed"):
-                restart_gateway(load_config())
+            restart_services(load_config(), entry.get("plugin_changed"))
             _enqueue_notice(f"[MCS] ロールバックしました: "
                             f"{entry.get('tag')} → {prev[:12]}")
             return 0
@@ -2459,8 +2539,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 _report("resumed", "post-merge completed after crash")
                 _enqueue_notice(
                     "[MCS] 更新の中断を検出し、post-merge を完了しました")
-                if load_config().get("runtime_mode") == "standalone" or applying.get("plugin_changed"):
-                    restart_gateway(load_config())
+                restart_services(load_config(), applying.get("plugin_changed"))
                 return 0
             except UpdateError as e:
                 return escalate("resume failed: " + str(e))

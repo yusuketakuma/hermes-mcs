@@ -104,3 +104,68 @@ def test_terminal_pruning_is_bounded_and_keeps_recent_and_occupying(broker):
         broker.acquire("gbrain.query", "RT")
     assert count("state IN ('terminal','fenced')") == 5
     assert count("state='unknown'") == 1
+
+
+def test_concurrent_init_migrates_a_legacy_store_once(tmp_path, monkeypatch):
+    """Two joiners (an old broker holds the shared owner lock) migrating
+    the same legacy store: the second waits for the first's write
+    transaction instead of failing on a duplicate ALTER."""
+    import fcntl
+    import sqlite3
+    import threading
+    path = str(tmp_path / "adm.db")
+    legacy = sqlite3.connect(path)
+    legacy.execute(
+        "CREATE TABLE permits(permit_id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " epoch INTEGER NOT NULL, client TEXT NOT NULL, cls TEXT NOT NULL,"
+        " job_gen TEXT, request_id TEXT, state TEXT NOT NULL, token TEXT,"
+        " created_at REAL NOT NULL, sent_at REAL, terminal_at REAL,"
+        " outcome TEXT, proof TEXT)")
+    legacy.commit()
+    legacy.close()
+    old = os.open(path + ".owner.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(old, fcntl.LOCK_SH)          # a still-running broker
+    paused, release = threading.Event(), threading.Event()
+    real = adm._connect
+
+    class Paused:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+        def execute(self, sql, *args):
+            cur = self._conn.execute(sql, *args)
+            if sql.startswith("PRAGMA table_info"):
+                paused.set()
+                release.wait(10)
+            return cur
+
+    calls = []
+    monkeypatch.setattr(adm, "_connect", lambda p: (
+        calls.append(p), Paused(real(p)) if len(calls) == 1 else real(p))[1])
+    errors, brokers = [], []
+
+    def init():
+        try:
+            brokers.append(adm.Broker(path))
+        except Exception as e:      # noqa: BLE001 — surfaced below
+            errors.append(e)
+    first = threading.Thread(target=init)
+    first.start()
+    assert paused.wait(10)
+    second = threading.Thread(target=init)
+    second.start()
+    time.sleep(0.5)                 # the joiner reaches the store first
+    release.set()
+    first.join(20)
+    second.join(20)
+    os.close(old)
+    for b in brokers:
+        b.close()
+    assert errors == [] and len(brokers) == 2
+    con = sqlite3.connect(path)
+    cols = {r[1] for r in con.execute("PRAGMA table_info(permits)")}
+    con.close()
+    assert {"owner_pid", "admitted_at"} <= cols
