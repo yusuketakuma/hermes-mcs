@@ -54,10 +54,13 @@ PRのCIは実行コードの変更・削除に変更記録を要求する。
 
 ## リリース準備
 
+本リポジトリでは `release-mcs`（リリースMCS）skillを使用する。医薬品マスターは毎回、[公式download menu](https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/)と同梱版を比較する。更新があれば原本・出典/版/hash/利用条件のmanifestを同じリリース候補へ組み込み、同梱検証とoffline変換検証を行う。新版のlayout・変更区分・日付条件は正式仕様と照合し、未対応版を既存版として処理しない。確認不能は更新なしとせず阻害事項として記録する。同梱と本番辞書の有効化・人手承認を区別する。
+
 リリースを依頼されたエージェントは、未リリースの記録を確認して見出しと要約を作る。
 version・日本時間の日付は明示的に指定する。暗黙にversionを上げない。
 
 ```bash
+python3 scripts/development/check_drug_master_bundle.py
 python3 scripts/development/release_notes.py check
 python3 scripts/development/release_notes.py build \
   --version X.Y.Z --date YYYY-MM-DD \

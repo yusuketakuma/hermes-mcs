@@ -1,5 +1,8 @@
 # 過去版からの安全な更新（1.0.11 #30）
 
+本書の旧版割当・調査時点の「未実装」「未確認」は当時の記録です。末尾の2026-10-06追記に、
+1.0.16開発候補の実装と残る受入条件を区別して記録します。開発実装は公開・配備・有効化の完了ではありません。
+
 2026-10-04版割当: 旧1.0.13〜1.0.15の残件は全て安定稼働版1.0.13へ集約。
 成果物・CLI・受入の正本は[1.0.13開発計画](../development/plans/RELEASE_1.0.13.md)。
 当時の調査・設計例と現在の実装状態を区別し、既存実装は再実装しない。
@@ -121,3 +124,37 @@ ROADMAP §4/§5へ#30を追加、`INSTALLATION.md`の更新節から手順書へ
 
 複数版の段階適用（migrationが累積・加法のため直接移行で足りる）、install.sh副作用の巻戻し、
 独立モードの外部apply、Hermes本体の版管理。
+
+## 2026-10-06追記: 1.0.16の再起動証拠と保守失敗
+
+上記は当時の更新設計・回帰履歴。現在の開発候補では、
+[updater](../../mcs/ops/mcs_update.py)と[独立復旧ツール](../../deployment/recovery/mcs_recover.py)が
+所有済みHermes gatewayのuser/gui領域、plistと実行識別を確認してから再起動を要求する。
+更新・rollback・中断復旧の保存記録を確定した後に独立子プロセスが期限内のPID変更を確認し、
+`gateway_restart.json`へrequested/supervisor_restart_verified/failed/unknownを分けて保存する。
+復元同意待ち、複数の異なるPID、別のplistや所有者不明のサービスは変更しない。
+
+supervisor_restart_verifiedは監督プロセスのPID変更の証拠であり、Slack/Discordの接続・
+受信・操作成功、読込み済みソースSHAの証明ではない。standaloneのhost再起動経路と
+既存の人承認・receipt・restore holdを維持する。公開・配備受入は未実施。
+復旧ツールはcheckout外に別配置されるため、コード変更時は
+[更新ガイド](../guides/UPGRADE_AGENT.md)の既存同期手順も必要になる。
+
+同じ開発候補の保守処理では、添付削除失敗時に既存行へretry pathを保持し、
+保存先外・symlinkを拒否、通知の未送信/不明/保留参照を保持する。
+監視警報は検出と配送を区別し、既知未送信だけを60秒以上で次の監視時に再試行する。
+unknownは同じ警報を自動再送せず、状態保存に失敗した場合も送信/完了成功とは扱わない。
+
+[doctor](../../mcs/ops/mcs_setup.py)はディスクのrevision/変更有無と、
+明示probeで得る稼働PID/起動時刻・再起動receiptを区別する。サービスprobe未実施はnot_checked、
+読込み済みrevisionの証拠がなければunknown。再起動要否の時刻比較は推定で、
+ディスクのSHAを稼働プロセスのSHAへ流用しない。Keychainの非対話読取り拒否は、
+ロックかアクセス許可制限かを断定せず、秘密値・外部診断本文を表示しない。自動解除・権限変更なし。
+
+回帰資産は[gateway識別](../../tests/meta/test_gateway_restart_identity.py)、
+[doctor](../../tests/ops/test_mcs_setup_doctor.py)、
+[添付削除再開](../../tests/core/test_attachment_prune_retry.py)、
+[監視配送](../../tests/ingest/test_health_watch.py)。実サービス再起動や本番配備の成功とは区別する。
+過去の26経路の原runner未保持等の制約は変更しない。現更新経路の版数/targetは
+[update-paths.json](../../tests/fixtures/schema_upgrade/update-paths.json)を照合し、
+1.0.16公開前の最終受入で整合させる。

@@ -155,7 +155,7 @@ LINE WORKSではカードのボタンと本人との1:1トークの `mcs JSON` �
 |---|---|
 | 暗号化offsite・鍵escrow・別配置への復元 | `mcs_backup.py`。保存先・鍵・独立SHA receipt・保持のオーナー承認が必要。定期運用は明示opt-in、新端末の復元は同意待ちで停止。[バックアップ・端末喪失ガイド](docs/guides/BACKUP.md) |
 | 構造化薬歴・観測値とチャット候補の別出典閲覧 | `project_metadata.py`（明示sync）と`mcs_view.py`のsnapshot読取り。表示は`--publication`で明示し、`include_chat`は既定off。同一項目・正本・対応完了を自動判定しません。GETはsession・未読保持・権限の実受入後に承認。[MCS連携データの条件](docs/roadmap/mcs-api-survey.md) |
-| 薬剤の表層名とは独立した成分候補注釈 | 明示した私有辞書の出所・SHA・承認に束縛した候補。別名の服薬行を統合せず、総称や複数候補を成分に確定しません。本番辞書の保管責任・利用条件は未確定。[抽出の範囲と残条件](docs/roadmap/extraction.md) |
+| 薬剤の表層名とは独立した候補注釈・照会 | 私有辞書の出所・SHA・承認に束縛した成分・一般名処方・製品候補を併記し、`mcs drug`で照会・参考検索・更新差分を確認できます。別名の薬剤行を統合せず、総称や複数候補を成分に確定しません。公式master原本は[システム更新に同梱](resources/drug-master/README.md)し、私有辞書の承認・有効化は別途行います。[抽出の範囲と残条件](docs/roadmap/extraction.md) |
 | 導入・更新・ローカル診断の統一入口 | `sh scripts/mcs install`、導入後の`mcs setup`・`mcs update`・`mcs doctor`。診断結果やSDK版の取得は接続・更新後プロセスの受入証明ではありません。[更新時の確認](docs/guides/UPGRADE_AGENT.md) |
 
 <a name="use-cases"></a>

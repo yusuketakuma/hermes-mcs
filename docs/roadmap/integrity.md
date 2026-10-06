@@ -1,5 +1,8 @@
 # 整合性・命名・運用前提の詳細計画（#7〜#10）
 
+本書の旧版割当・調査時点の「未実装」「未確認」は当時の記録です。末尾の2026-10-06追記に、
+1.0.16開発候補の実装と残る受入条件を区別して記録します。開発実装は公開・配備・有効化の完了ではありません。
+
 2026-10-04版割当: 旧1.0.13〜1.0.15の残件は全て安定稼働版1.0.13へ集約。
 成果物・CLI・受入の正本は[1.0.13開発計画](../development/plans/RELEASE_1.0.13.md)。
 当時の調査・設計例と現在の実装状態を区別し、既存実装は再実装しない。
@@ -358,3 +361,39 @@ CREATE TABLE IF NOT EXISTS message_revisions(
 6. **#7 Step 2 real FK**（L、任意）: #1（復元訓練）の後、次の schema bump と相乗り。
 
 依存: #9 → (#7 Step 2、#4 の長時間再歩行) ／ #8-M1 → #4 → C1 本番 ／ #7 Step 0 → Step 1 ／ #1 → #7 Step 2 ／ #10 → C1。
+
+## 2026-10-06追記: 1.0.16の整合・診断・失敗の扱い
+
+初期調査の「版確認コードなし」等は当時の記述。現在の
+[doctor](../../mcs/ops/mcs_setup.py)は選択runtimeと配備recoveryのPython/SQLite、
+SDK metadataを扱い、開発候補にはディスクGit revision/変更有無とgatewayの
+PID/起動時刻・再起動receiptを区別する表示がある。既定doctorはサービス・認証情報・
+networkへアクセスせず、`--probe services`が明示された場合だけ稼働証拠を確認する。
+ディスク更新時刻と起動時刻による要再起動判定は推定であり、読込み済みrevision不明はunknownのまま。
+
+Keychainの非対話拒否は「ロック」と断定せずアクセス許可制限の可能性も説明する。
+秘密値を返さず、解除・ACL変更・認証設定の上書きを診断から自動実行しない。
+[gateway再起動](../../deployment/recovery/mcs_recover.py)も所有サービスの領域・plist・
+実行識別とPID変化を検証するが、それを通知接続や稼働ソースの確定証拠とはしない。
+
+[添付保守](../../mcs/core/maintenance.py)は削除前にsendable状態を外し、
+既存のpruned/withdrawn行へpathを保持して失敗後の再試行を可能にする。
+別名→原本の全削除後にだけpathを消し、ENOENTを削除実績に加えない。
+保存先外・symlink・読取り不能な別名列挙を失敗として保持し、正常な他行の処理は継続する。
+未送信/unknown/heldの参照は消さず、withdrawn再登場も欠落原本をdownloadedとして復活させない。
+旧版が既に失ったpathから孤立ファイルを推測して削除する修復は含まない。
+
+[薬剤候補](../../mcs/extract/drug_map.py)は辞書世代・抽出ID・本文hash等を束縛し、
+進捗の不存在と破損を区別する。辞書変更/無効化時は旧注釈を現在有効とせず、
+cursorは既存artifactへ保存する。世代の有効性はrollup・サマリー・cached/snapshot閲覧と
+brain_exportにも連動し、古い候補注釈を除外して元の薬剤言及を保持する。cursorの移動だけで
+辞書世代を変えない。対象合成回帰216件成功。本文・診療正本・新schema・独立queueは追加しない。
+[監視警報](../../mcs/ingest/health_watch.py)も検出時刻と配送結果を別保存し、
+送信前のdurable記録、並列抑止、unknown保持と保存失敗時の非0終了で誤った成功判定を防ぐ。
+
+これらは開発実装と合成回帰の範囲。#7のowner観測・shadow期間・enforce判断、
+#8の本文保持判断、#10の独立レビュー、実API/SDK/配備の受入を完了扱いにしない。
+[添付回帰](../../tests/core/test_attachment_prune_retry.py)と
+[欠落後再登場](../../tests/core/test_attachment_revival_cleanup.py)、
+[監視回帰](../../tests/ingest/test_health_watch.py)、
+[候補進捗](../../tests/extract/test_drug_map_incremental.py)が現在の合成検証資産。
