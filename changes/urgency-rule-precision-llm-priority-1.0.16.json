@@ -1,0 +1,19 @@
+{
+  "category": "changed",
+  "title": "緊急表示の誤検知を絞り込み、AI判定を機械照合より優先",
+  "summary": "「緊急時に対応します」「緊急連絡先を更新しました」「状態が悪化した場合は救急搬送となります」「すぐに眠れるようになりました」のような投稿に機械照合の緊急表示が付かなくなります。AI抽出が「緊急ではない（routine）」と判定した投稿には機械照合の緊急表示・シグナルの即時化も出さなくなり、AI判定が無い投稿だけが従来どおり機械照合で表示されます。",
+  "upgrade": "ルール抽出の版（RULE_VERSION 9→10）が上がるため、更新後の収集ジョブが全投稿のルール再抽出を複数回に分けて実行します。機械照合の緊急表示が付いていた既存カードは1回だけ更新され得ます（通知は鳴りません）。判定の変更は新規描画から反映され、追加操作は不要です。",
+  "details": [
+    "ルール照合の除外を追加: 「緊急時」「緊急連絡先/連絡網/連絡票/緊急カード」「緊急用」「緊急体制」の複合語、「場合/際/とき/時/折」「なら/たら/れば」等の条件節の直後、「もし/万一/万が一」の仮定、「搬送先/搬送元/搬送方法/搬送手段/搬送経路/搬送用/搬送体制/搬送依頼書」、依頼・動作を伴わない単独の「すぐに」。「緊急性は低いです」「緊急度は高くないと思います」のような低評価の明記も緊急としない。",
+    "message_urgency() は現行 fact artifact（canonical_projection / semantic_facts_v4 を含む読取モデル）の urgency を先に読み、urgency を持たない現行 v4/canonical 行の裏では hash が一致する最新 extract_llm 行の判定を参照する。LLM が routine なら機械照合の緊急表示を出さず、LLM が high なら「緊急度: 高（AI抽出）」、LLM 判定が無く extract_v1 だけが high のとき機械照合として扱う。",
+    "meta.hash が本文と一致しない抽出・error 付きの抽出は判定に使わない。",
+    "テストは完全合成の投稿文と artifact のみを使う。",
+    "統計data_qualityにurgency_rule_outcomesを追加。現行の機械照合の緊急（rule_high）のうち、AI通常判定で🚨が出ない件数（llm_routine_suppressed）、AI高・監査不一致・機械照合のみの件数を件数だけで示す。見逃し率の実測ではない。"
+  ],
+  "refs": [
+    "mcs/extract/v1/extract.py",
+    "mcs/views/mcs_stats.py",
+    "mcs/views/structured_view.py",
+    "tests/extract/test_extraction_review.py"
+  ]
+}

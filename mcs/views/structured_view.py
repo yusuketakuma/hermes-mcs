@@ -206,15 +206,22 @@ URGENCY_LABEL = {"llm": "緊急度: 高（AI抽出）",
 
 
 def message_urgency(db, mid: int) -> str | None:
-    """'llm' when the message's current fact artifact (the same
-    v4 > canonical > extract_llm pick the 📋 body reads —
-    latest_fact_artifact) says urgency high, 'rule' when only the rule
-    extractor (extract_v1) flags it, else None — the one urgency reading
-    for cards, text notices and signal escalation."""
-    if (latest_fact_artifact(db, mid) or {}).get("urgency") == "high":
+    """'llm' when the current fact artifact says urgency high, None when it
+    says routine (the content-level verdict supersedes the lexical rule),
+    'rule' when only extract_v1 flags it and no LLM verdict exists — the one
+    urgency reading for cards, text notices and signal escalation.
+    canonical_projection / semantic_facts_v4 rows carry no urgency, so the
+    newest hash-current extract_llm row supplies the verdict behind them."""
+    verdict = (latest_fact_artifact(db, mid) or {}).get("urgency")
+    if verdict not in ("high", "routine", "unclear"):
+        verdict = (latest_artifact(db, "extract_llm", mid) or {}).get("urgency")
+    if verdict == "high":
         return "llm"
-    if (latest_artifact(db, "extract_v1", mid) or {}).get("urgency") \
-            == "high":
+    if verdict == "routine":
+        return None
+    # "unclear" is an abstention, not a clearance — it falls through to
+    # the lexical net exactly like a missing verdict does.
+    if (latest_artifact(db, "extract_v1", mid) or {}).get("urgency") == "high":
         return "rule"
     return None
 

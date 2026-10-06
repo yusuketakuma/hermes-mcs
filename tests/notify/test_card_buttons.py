@@ -676,8 +676,9 @@ def test_urgency_badge_names_its_source(led):
 
 
 def test_urgency_reads_the_same_artifact_as_the_body(led):
-    """Once v4 is the message's current extraction, the badge follows
-    it — never a superseded extract_llm the body no longer shows."""
+    """A current v4 read-model row carries no urgency of its own — the
+    badge then reads the hash-current extract_llm verdict behind it; an
+    urgency recorded on the v4 row itself still wins."""
     import structured_view
     _seed_thread(led, mids=(100,))
     _llm_extract(led, 100, {"urgency": "high", "summary": "旧"})
@@ -689,7 +690,7 @@ def test_urgency_reads_the_same_artifact_as_the_body(led):
     led.db.commit()
     assert structured_view.latest_fact_artifact(led.db, 100)["summary"] \
         == "新"
-    assert structured_view.message_urgency(led.db, 100) is None
+    assert structured_view.message_urgency(led.db, 100) == "llm"
     led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
                    (json.dumps({"urgency": "high"}), v4.lastrowid))
     led.db.commit()

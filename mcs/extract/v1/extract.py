@@ -46,7 +46,8 @@ _ADHERENCE = ("残薬", "飲み忘れ", "飲み残し", "未使用", "服薬不�
               "アドヒアランス", "一包化", "お薬カレンダー", "自己注射",
               "残あり", "残なし")
 _URGENT = re.compile(
-    r"至急|緊急(?:搬送|受診|対応)?|早急|すぐに|急ぎ|救急(?:搬送|受診)?|搬送")
+    r"至急|緊急(?!時|連絡(?:先|網|票|カード)|用|体制)(?:搬送|受診|対応)?|早急|すぐに|急ぎ|"
+    r"救急(?:搬送|受診)?|搬送(?!先|元|方法|手段|経路|用|体制|依頼書)")
 _URGENT_CLAUSES = re.compile(
     r"[。！？!?;\n]|しかし|ただし|けれど(?:も)?|"
     r"(?<=ない)が|(?<=ません)が|(?<=した)が|(?<=ました)が|(?<=です)が")
@@ -60,11 +61,25 @@ _URGENT_NONCURRENT = re.compile(
 # A request in the same clause stays current even after a time word
 # (「明日、至急ご連絡ください」); only plans/reports are cancelled.
 _URGENT_REQUEST = re.compile(r"ください|下さい|お願い|ほしい|欲しい|願います")
+# A contingency head directly before the urgent word (「悪化した場合は救急搬送」
+# 「続くようなら至急連絡」) describes a plan, not a current need; a clock time
+# (「10時に至急」) is not a contingency.
+_URGENT_CONDITIONAL = re.compile(
+    r"(?:(?<![0-9０-９])(?:場合|際|とき|時|折)(?:に|には|は|も|の)?|"
+    r"(?:なら|ようなら|たら|ましたら|れば|ければ|あれば|ようであれば|ようでしたら))"
+    r"[、,\s　]*$")
+_URGENT_HYPOTHETICAL = re.compile(r"もし|万一|万が一")
+# 「すぐに」 alone is a plain adverb (「すぐに眠れる」); it is urgent only with an
+# action or request in its scope.
+_URGENT_SOON_ACTION = re.compile(
+    r"ください|下さい|お願い|願います|ほしい|欲しい|必要|搬送|受診|往診|連絡|中止|"
+    r"対応|確認|報告|相談|救急|呼(?:ん|び)|来て|向か|駆けつけ")
 _URGENT_INACTIVE = re.compile(
-    r"^(?:性|(?:の|な|に)?(?:対応|連絡|確認|受診|処置|搬送|要請))?"
+    r"^(?:性|度|(?:の|な|に)?(?:対応|連絡|確認|受診|処置|搬送|要請))?"
     r"の?(?:は|も|が|を)?(?:で(?:は)?|じゃ|(?:し|され)(?:て(?:い|おり?)?)?|する)?"
     r"(?:ありません|ません|なかった|ない|なく|なし|"
     r"不要(?!では(?:ありません|ない))|必要(?:は|が)?(?:ありません|ない|なし)|"
+    r"低い|低く|低め|高くない|高くありません|"
     r"済み|完了|(?:た|ました|された|されました)"
     # A past ending closes the phrase; 「ただちに」「たすけて」 are not past tense.
     r"(?=$|[、,]|ので|ため|から|けど|けれど|が|と))")
@@ -83,7 +98,7 @@ _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬
 _MED_PERIOD = re.compile(
     r"(?<![\d/])(?:(\d{4})/)?(\d{1,2}/\d{1,2})"
     r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
-RULE_VERSION = 9
+RULE_VERSION = 10
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問|診察|往診)")
@@ -348,7 +363,11 @@ def extract_message(body: str, posted_at: str) -> dict:
             stop = spans[i + 1][0] if i + 1 < len(spans) else len(clause)
             if ((_URGENT_NONCURRENT.search(before)
                  and not _URGENT_REQUEST.search(clause[end:]))
-                    or _URGENT_INACTIVE.match(clause[end:stop].strip())):
+                    or _URGENT_CONDITIONAL.search(before)
+                    or _URGENT_HYPOTHETICAL.search(before)
+                    or _URGENT_INACTIVE.match(clause[end:stop].strip())
+                    or (clause[start:end] == "すぐに"
+                        and not _URGENT_SOON_ACTION.search(clause[end:stop]))):
                 continue
             out["urgency"] = "high"
             break

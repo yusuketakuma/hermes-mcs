@@ -75,6 +75,9 @@ def _time(value):
 
 def _current(db: sqlite3.Connection, mid: int) -> sqlite3.Row | None:
     # The exact shared predicate/order is also used by the card's urgency badge.
+    # canonical_projection / semantic_facts_v4 rows carry no urgency, so
+    # the urgency-bearing row (extract_llm) must win the ordering — the
+    # same fallback the badge's message_urgency performs.
     return db.execute(f"""
         SELECT m.message_id,m.project_id,m.content_hash,m.posted_at_ts,
                a.artifact_id,a.created_at,a.kind,
@@ -83,7 +86,8 @@ def _current(db: sqlite3.Connection, mid: int) -> sqlite3.Row | None:
         JOIN artifacts a ON a.message_id=m.message_id
         WHERE m.message_id=? AND m.body_state='full' AND COALESCE(p.is_archived,0)=0
           AND a.kind IN ({FACT_KINDS_SQL}) {current_fact_pred("a", "m")}
-        ORDER BY a.artifact_id DESC LIMIT 1""", (mid,)).fetchone()
+        ORDER BY json_extract(a.content,'$.urgency') IS NULL,
+                 a.artifact_id DESC LIMIT 1""", (mid,)).fetchone()
 
 
 def capture_initial(ledger, cfg, event, *, now=None):
