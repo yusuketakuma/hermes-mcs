@@ -29,6 +29,7 @@ import hashlib
 import json
 import os
 import re
+import runpy
 import shutil
 import sqlite3
 import stat
@@ -52,6 +53,21 @@ from mcs_requests import parse_command  # noqa: E402
 from mcs_util import (HOME, REPO, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
                       atomic_write, launchd_bootstrap, load_config)
 from mcs_util import file_sha256 as _file_sha256  # noqa: E402
+
+
+def _load_gateway_restart():
+    """Capture the independent restart helper before apply/rollback changes
+    the tree. A missing/broken helper must not disable the whole updater:
+    restart_gateway then reports that the restart could not be requested."""
+    try:
+        return runpy.run_path(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "deployment", "recovery", "mcs_recover.py"))["request_gateway_restart"]
+    except Exception:  # noqa: BLE001 — any load failure is the same "unavailable"
+        return None
+
+
+_request_gateway_restart = _load_gateway_restart()
 
 DATA = os.path.join(HOME, "data")
 LEDGER = os.path.join(DATA, "ledger.db")
@@ -987,13 +1003,9 @@ def restart_gateway(cfg: dict) -> None:
         except (OSError, ValueError):
             _enqueue_notice("[MCS] 独立プロセスの再起動要求を確認できません。更新状態を確認し、常駐プロセスを再起動してください。")
         return
-    with suppress(OSError):  # runs after durable bookkeeping — never undo it
-        subprocess.Popen(
-            ["launchctl", "kickstart", "-k",
-             f"gui/{_uid()}/ai.hermes.gateway"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL, close_fds=True,
-            start_new_session=True)
+    if _request_gateway_restart is None \
+            or not _request_gateway_restart(DATA, AGENTS_DIR, _uid()):
+        _enqueue_notice("[MCS] gatewayの再起動要求を保存・起動できません。更新記録と稼働プロセスを確認してください。")
 
 
 def restart_lineworks(cfg: dict) -> None:

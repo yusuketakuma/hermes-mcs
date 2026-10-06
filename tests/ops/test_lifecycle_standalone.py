@@ -17,7 +17,7 @@ def test_update_restarts_the_connector_or_gateway(monkeypatch, tmp_path):
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
     monkeypatch.setattr(mcs_update, "_uid", lambda: 501)
     mcs_update.restart_gateway({})
-    assert started[-1][-1] == "gui/501/ai.hermes.gateway"
+    assert started[-1][1:3] == ["-I", "-c"] and started[-1][-1] == "501"
     from mcs_standalone import service
     requests = []
     monkeypatch.setattr(service, "request_restart", lambda root: requests.append(root))
@@ -46,7 +46,7 @@ def test_recovery_tool_follows_the_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(recover, "AGENTS_DIR", str(tmp_path))
     started = _popen_log(monkeypatch, recover)
     recover._restart_gateway()
-    assert started[-1][-1].endswith("/ai.hermes.gateway")
+    assert started[-1][1:3] == ["-I", "-c"] and started[-1][-3] == recover.DATA
     (tmp_path / "config.json").write_text(json.dumps({"runtime_mode": "standalone"}))
     (tmp_path / "ai.mcs.standalone.plist").write_text("")
     monkeypatch.setattr(recover, "_standalone_status", lambda: {"generation": "a" * 32})

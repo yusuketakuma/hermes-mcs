@@ -92,8 +92,13 @@ def test_restart_services_refreshes_the_lineworks_adapter(monkeypatch, cfg, expe
     monkeypatch.setattr(mcs_update.subprocess, "Popen",
                         lambda argv, **k: started.append(argv))
     mcs_update.restart_services(cfg, plugin_changed=True)
-    got = [[a[1], a[2], "/" + a[3].rsplit("/", 1)[1]] for a in started]
+    got = [[a[1], a[2], "/" + a[3].rsplit("/", 1)[1]]
+           if a[0] == "launchctl" else ["kickstart", "-k", "/ai.hermes.gateway"]
+           for a in started]
     assert sorted(got) == sorted(expected)
+    gateway = [a for a in started if a[0] != "launchctl"]
+    assert len(gateway) == 1 and gateway[0][1:3] == ["-I", "-c"]
+    assert gateway[0][3] == mcs_update._request_gateway_restart.__globals__["_GATEWAY_RESTART_PROGRAM"]
 
 
 def test_restart_services_without_plugin_change_still_refreshes_lineworks(monkeypatch):

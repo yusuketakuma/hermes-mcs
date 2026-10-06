@@ -18,6 +18,7 @@ is nothing to do (watchdog-silent convention).
 import fcntl
 import glob
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -435,6 +436,132 @@ def _restart_drainers(bounce=True):
     return problems
 
 
+def _gateway_restart_report(data, status, **facts):
+    """Keep restart requests separate from verified process replacement."""
+    path = Path(data, "gateway_restart.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=data, prefix=".gateway-restart.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"status": status, "at": time.time(), **facts}, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+        fd = os.open(data, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    finally:
+        with suppress(OSError):
+            os.unlink(tmp)
+
+
+def _gateway_restart_run(data, agents, uid):
+    """Resolve the owned gateway, then verify a changed PID in a detached child."""
+    import plistlib
+
+    label = "ai.hermes.gateway"
+    expected = os.path.realpath(os.path.join(agents, label + ".plist"))
+
+    def snapshot(target):
+        result = subprocess.run(["launchctl", "print", target], capture_output=True,
+                                text=True, timeout=10)
+        if result.returncode:
+            return None
+        text = result.stdout or ""
+        path = re.search(r"^\s*path = (.+)$", text, re.M)
+        if path is None or os.path.realpath(path.group(1).strip()) != expected:
+            raise ValueError("gateway_service_not_owned")
+        pid = re.search(r"^\s*pid = (\d+)$", text, re.M)
+        return int(pid.group(1)) if pid else 0
+
+    issued = False
+    try:
+        with open(expected, "rb") as stream:
+            plist = plistlib.load(stream)
+        args = plist.get("ProgramArguments")
+        if plist.get("Label") != label or not isinstance(args, list) \
+                or not all(isinstance(arg, str) for arg in args):
+            raise ValueError("gateway_service_not_owned")
+        native = "gateway" in args
+        jxa = args[:3] == ["/usr/bin/osascript", "-l", "JavaScript"] and any(
+            "hermes" in arg and re.search(r"\bgateway\b", arg) for arg in args[3:])
+        if not (native or jxa):
+            raise ValueError("gateway_service_not_owned")
+        found = []
+        for domain in ("user", "gui"):
+            target = f"{domain}/{int(uid)}/{label}"
+            pid = snapshot(target)
+            if pid is not None:
+                found.append((target, pid))
+        if not found:
+            raise ValueError("gateway_service_unavailable")
+        if len({pid for _, pid in found}) > 1:
+            raise ValueError("gateway_service_ambiguous")
+        target, old_pid = found[0]
+        # A restore hold is not permission to resume the gateway. Unknown
+        # marker contents hold too; only an explicit restored marker permits it.
+        marker = Path(data, "restore_pending.json")
+        if os.path.lexists(marker):
+            with marker.open(encoding="utf-8") as stream:
+                restore = json.load(stream)
+            if not isinstance(restore, dict) or not (restore.get("phase") == "restored"
+                    or ("phase" not in restore and "restored_at" in restore)):
+                raise ValueError("gateway_restart_restore_hold")
+        issued = True
+        result = subprocess.run(["launchctl", "kickstart", "-k", target],
+                                capture_output=True, timeout=30)
+        if result.returncode:
+            raise ValueError("gateway_restart_rejected")
+        until = time.monotonic() + 30
+        while time.monotonic() < until:
+            pid = snapshot(target)
+            if pid and pid != old_pid:
+                _gateway_restart_report(data, "supervisor_restart_verified", service=target,
+                                        previous_pid=old_pid or None, pid=pid)
+                return 0
+            time.sleep(0.2)
+        _gateway_restart_report(data, "unknown", error="gateway_pid_not_replaced",
+                                service=target, previous_pid=old_pid or None)
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError,
+            RecursionError, plistlib.InvalidFileException) as exc:
+        code = str(exc) if isinstance(exc, ValueError) and str(exc).startswith("gateway_") \
+            else "gateway_restart_unverifiable"
+        status = "unknown" if issued and isinstance(exc, (OSError, subprocess.TimeoutExpired)) else "failed"
+        _gateway_restart_report(data, status, error=code)
+    return 1
+
+
+# Freeze the independent implementation before an updater changes checkout.
+# No repo imports are needed after the parent exits or rolls the tree back.
+_GATEWAY_RESTART_PROGRAM = (
+    "import os,sys,json,re,tempfile,time,subprocess\nfrom pathlib import Path\n"
+    "from contextlib import suppress\n" + inspect.getsource(_gateway_restart_report)
+    + "\n" + inspect.getsource(_gateway_restart_run)
+    + "\nsys.exit(_gateway_restart_run(*sys.argv[1:]))\n")
+
+
+def request_gateway_restart(data, agents, uid):
+    """Queue a detached verified restart; callers have already saved bookkeeping."""
+    try:
+        _gateway_restart_report(data, "requested")
+        env = {key: value for key, value in os.environ.items()
+               if key not in ("XPC_SERVICE_NAME", "MCS_JOB_PID")}
+        # -I: no cwd/PYTHON* on sys.path — the child needs only stdlib.
+        subprocess.Popen([sys.executable, "-I", "-c", _GATEWAY_RESTART_PROGRAM,
+                          data, agents, str(uid)], env=env, cwd="/",
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         stdin=subprocess.DEVNULL, close_fds=True,
+                         start_new_session=True)
+        return True
+    except OSError:
+        with suppress(OSError):
+            _gateway_restart_report(data, "failed", error="gateway_restart_spawn_failed")
+        return False
+
+
 def _restart_gateway():
     # runs after durable bookkeeping — never undo it (mirrors
     # mcs_update.restart_gateway)
@@ -463,13 +590,7 @@ def _restart_gateway():
         return
     if _runtime_mode() != "hermes":
         return
-    with suppress(OSError):
-        subprocess.Popen(
-            ["launchctl", "kickstart", "-k",
-             f"gui/{os.getuid()}/ai.hermes.gateway"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL, close_fds=True,
-            start_new_session=True)
+    request_gateway_restart(DATA, AGENTS_DIR, os.getuid())
 
 
 def _clean_stale_git_locks():

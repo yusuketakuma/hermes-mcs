@@ -10,7 +10,7 @@ before v1.0.11) never decides anything:
   "$PY" "$WORK/mcs_upgrade.py" --repo ~/.mcs plan --to v1.0.13
   "$PY" "$WORK/mcs_upgrade.py" --repo ~/.mcs apply --to v1.0.13 [--reinstall]
 
-It copies the tag's exact ``mcs/`` blobs into a private temp dir and runs
+It copies the tag's exact ``mcs/`` blobs and recovery helper into a private temp dir and runs
 that ``mcs/ops/mcs_update.py`` with ``MCS_UPDATE_REPO`` set to the live
 checkout. Stdlib only, imports nothing from the repo. Runbook:
 docs/guides/UPGRADE_AGENT.md.
@@ -50,8 +50,9 @@ def latest_tag(repo: str) -> str:
 
 
 def extract(repo: str, tag: str, dest: str) -> None:
-    """The tag's exact mcs/ blobs (no git-archive attribute rewriting)."""
-    for rec in _git(repo, "ls-tree", "-rz", tag, "--", "mcs").split("\0"):
+    """Exact updater/runtime blobs, including its independent recovery helper."""
+    for rec in _git(repo, "ls-tree", "-rz", tag, "--", "mcs",
+                    "deployment/recovery/mcs_recover.py").split("\0"):
         if not rec:
             continue
         meta, _, path = rec.partition("\t")

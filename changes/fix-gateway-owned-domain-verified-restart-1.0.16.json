@@ -1,0 +1,21 @@
+{
+  "category": "fixed",
+  "title": "更新後のgateway再起動先と確認結果を正しく扱う",
+  "summary": "Hermes gatewayがuser領域で起動している環境でも、導入済みのサービスを確認して再起動します。再起動要求と監督プロセスのPID変更を分けて記録し、失敗・確認不能を再起動成功として扱いません。更新・巻戻し・中断復旧の保存記録を確定してから、独立した子プロセスで確認します。",
+  "upgrade": "設定変更は不要です。復旧watchdogを導入済みの場合は、更新ガイドの既存手順でcheckout外の本体も同期してください。gateway_restart.jsonのsupervisor_restart_verifiedは監督プロセスのPID変更の確認であり、Slack・Discordの接続・受信・操作や読込み済みコードの版を保証しません。復元同意の保留条件とstandaloneの再起動経路は維持します。",
+  "details": [
+    "現ユーザーのuser/gui領域の固定gatewayラベルと導入済みplistのパス・Label・Hermes実行識別を照合。JXAラッパーを文字列として検査し実行・出力しない。",
+    "更新前に独立復旧ツールの再起動コードを確保し、tree変更後も同じコードを使う。XPC_SERVICE_NAMEを除いたdetached childが期限内にPID変更を確認し、0600の別receiptへrequested/supervisor_restart_verified/failed/unknownを保存。",
+    "異なるPIDの複数サービス・他のplist・復元同意待ちは変更しない。実launchctl・gatewayへの操作は合成検証で行わない。",
+    "対象tagの更新ランチャーはmcs配下と同じtagの復旧helper blobを一時領域へ同梱し、更新元checkoutの版へ依存せず起動する。旧tagでhelperが存在しない場合も既存の抽出動作を維持。",
+    "再起動確認の子プロセスはPythonの隔離モード（-I）と作業ディレクトリ/で起動し、現在のディレクトリやPYTHON*環境変数からモジュールを読み込まない。",
+    "更新ツールは復旧ツールを読み込めない場合も更新処理全体を止めず、gatewayの再起動要求を保存・起動できない旨を通知する。"
+  ],
+  "refs": [
+    "deployment/recovery/mcs_recover.py",
+    "mcs/ops/mcs_update.py",
+    "scripts/mcs_upgrade.py",
+    "tests/meta/test_gateway_restart_identity.py",
+    "tests/ops/test_mcs_upgrade.py"
+  ]
+}

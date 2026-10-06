@@ -354,3 +354,26 @@ def test_launcher_copy_notice_never_migrates_the_live_db(updater, tmp_path):
     kind, payload = json.loads(con.execute("SELECT v FROM seen").fetchone()[0])
     con.close()
     assert kind == "update_notice" and "中止" in payload["text"]
+
+
+def test_extracted_current_updater_imports_with_recovery_helper(tmp_path, monkeypatch):
+    launcher = _launcher()
+    files = {str(p.relative_to(ROOT)): p.read_bytes()
+             for p in (ROOT / "mcs").rglob("*.py")}
+    helper = "deployment/recovery/mcs_recover.py"
+    files[helper] = (ROOT / helper).read_bytes()
+
+    def git(repo, *args, binary=False):
+        if args[0] == "ls-tree":
+            assert args[4:] == ("mcs", helper)
+            return "".join(f"100644 blob {name}\t{name}\0" for name in files)
+        assert args[:2] == ("cat-file", "blob") and binary
+        return files[args[2]]
+
+    monkeypatch.setattr(launcher, "_git", git)
+    launcher.extract("unused", "v1.0.16", str(tmp_path))
+    out = subprocess.run(
+        [sys.executable, str(tmp_path / "mcs/ops/mcs_update.py"), "--help"],
+        capture_output=True, text=True, check=True)
+    assert "rollback" in out.stdout
+    assert (tmp_path / helper).read_bytes() == files[helper]
