@@ -5,9 +5,16 @@ snapshot publish, token context carried by each rendered button, in-flight modal
 confirm flows, followup tokens (15-minute Discord ceiling), and the
 per-scope capability cache. Rewritten atomically on every mutation;
 a lost file is rebuilt from the snapshot — never invented.
+
+Inside a batch, mutations that must be durable before the caller's next
+step (posted-button tokens before their receipt, a LINE WORKS retirement
+before HTTP) append one fsync'd row to ``<registry>.delta`` instead of
+rewriting the whole file; the batch flush folds them in and ``reload``
+replays rows newer than the file's ``delta_seq``.
 """
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import math
@@ -110,6 +117,7 @@ class Registry:
         self._path = os.path.join(
             state_dir, f"registry-{scope_key(scope)}.json"
             if scope is not None else "registry.json")
+        self._delta_path = self._path + ".delta"
         self._batch_depth = 0
         self._dirty = False
         self._lock = threading.RLock()     # re-entrant: mutators call save()
@@ -139,6 +147,62 @@ class Registry:
                     raise ValueError("registry_corrupt")
         if data is None and self._scope is not None:
             self._restore_legacy_scope()
+        self._seq = self._data.get("delta_seq", 0)
+        if type(self._seq) is not int:
+            raise ValueError("registry_corrupt")
+        self._replay_delta()
+
+    def _replay_delta(self) -> None:
+        """Apply committed delta rows the main file has not folded yet.
+        An unterminated tail is an append whose fsync never returned, so
+        nothing after it (receipt, HTTP) happened — it is skipped. Any
+        terminated row that fails to parse fails closed like the file."""
+        try:
+            with open(self._delta_path, "rb") as handle:
+                raw = handle.read()
+        except FileNotFoundError:
+            return
+        for line in raw.split(b"\n")[:-1]:
+            try:
+                row = json.loads(line.decode("utf-8"))
+            except (ValueError, RecursionError):
+                raise ValueError("registry_corrupt") from None
+            if not isinstance(row, dict) or type(row.get("seq")) is not int:
+                raise ValueError("registry_corrupt")
+            if row["seq"] <= self._seq:
+                continue                    # already folded into the file
+            if row.get("op") == "put" and isinstance(row.get("tokens"), dict) \
+                    and all(isinstance(c, dict) for c in row["tokens"].values()):
+                self._data["tokens"].update(row["tokens"])
+            elif row.get("op") == "retire" and isinstance(row.get("card_key"), str):
+                self._drop_card_tokens(row["card_key"])
+            else:
+                raise ValueError("registry_corrupt")
+            self._seq = row["seq"]
+
+    def _durable(self, row: dict) -> None:
+        """Make one mutation durable now. In a batch: an fsync'd delta
+        append (the flush folds it); otherwise the ordinary full save."""
+        if not self._batch_depth:
+            self.save()
+            return
+        self._seq += 1
+        data = (json.dumps({**row, "seq": self._seq}, ensure_ascii=False,
+                           sort_keys=True, separators=(",", ":"))
+                + "\n").encode("utf-8")
+        created = not os.path.exists(self._delta_path)
+        fd = os.open(self._delta_path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "r+b") as handle:
+            size = os.fstat(fd).st_size
+            if size and os.pread(fd, 1, size - 1) != b"\n":
+                # drop a torn (never committed) tail so this row stays parsable
+                os.ftruncate(fd, os.pread(fd, size, 0).rfind(b"\n") + 1)
+            handle.write(data)
+            handle.flush()
+            os.fsync(fd)
+        if created:
+            paths.fsync_dir(os.path.dirname(self._delta_path))
+        self._dirty = True
 
     def _restore_legacy_scope(self) -> None:
         """Keep the legacy file intact; import only provably owned state."""
@@ -186,11 +250,15 @@ class Registry:
         if self._batch_depth and not immediate:
             self._dirty = True
             return
+        self._data["delta_seq"] = self._seq
         raw = json.dumps(self._data, ensure_ascii=False, sort_keys=True,
                          separators=(",", ":")).encode("utf-8")
         paths.atomic_write(self._path, raw, tmp_prefix=".reg-",
                            mode=0o600)
         self._dirty = False
+        # delta_seq makes a surviving delta a no-op; this only bounds size
+        with contextlib.suppress(OSError):
+            os.unlink(self._delta_path)
 
     # -- claims ----------------------------------------------------
 
@@ -233,10 +301,12 @@ class Registry:
     # -- token context (spec action_rows capture) ------------------
 
     @_locked
-    def put_tokens(self, token_map: dict) -> None:
+    def put_tokens(self, token_map: dict, *, durable: bool = False) -> None:
         """Store each button's render context by token.
         Stamped 'at' so expired runner tokens don't accumulate — the
-        runner still enforces its own TTL; this only bounds file size."""
+        runner still enforces its own TTL; this only bounds file size.
+        ``durable`` makes the whole map durable before returning (a
+        posted card's pins must survive a crash before its receipt)."""
         changed = False
         now = time.time()
         for token, ctx in token_map.items():
@@ -245,7 +315,10 @@ class Registry:
                                if k != "at"} != ctx:
                 self._data["tokens"][token] = {**ctx, "at": now}
                 changed = True
-        if changed:
+        if durable:
+            self._durable({"op": "put", "tokens": {
+                t: self._data["tokens"][t] for t in token_map}})
+        elif changed:
             self.save()
 
     @_locked
@@ -288,13 +361,17 @@ class Registry:
 
     @_locked
     def retire_card_tokens(self, card_key: str) -> None:
-        """Invalidate every old card pin before a transport replaces an uneditable post."""
+        """Invalidate every old card pin before a transport replaces an
+        uneditable post — durable before returning, so before HTTP."""
+        if self._drop_card_tokens(card_key):
+            self._durable({"op": "retire", "card_key": card_key})
+
+    def _drop_card_tokens(self, card_key: str) -> bool:
         stale = [token for token, context in self._data["tokens"].items()
                  if context.get("card_key") == card_key]
         for token in stale:
             del self._data["tokens"][token]
-        if stale:
-            self.save(immediate=True)
+        return bool(stale)
 
     # -- pending modal / confirm flows -----------------------------
 

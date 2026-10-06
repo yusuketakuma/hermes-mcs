@@ -283,10 +283,7 @@ class DeliveryWorker(_BaseWorker):
                 token: {**context, "message_id": message_id,
                         "team_id": self._settings["team_id"]}
                 for token, context in token_map(claim["spec"]).items()
-            })
-            # The shared worker batches saves, but its receipt can be durable
-            # before that batch exits. Keep Slack's posted-button pins durable.
-            self._reg.save(immediate=True)
+            }, durable=True)  # pins durable before the receipt publishes
         return outcome
 
     # -- durable render parts (T9) ----------------------------------------

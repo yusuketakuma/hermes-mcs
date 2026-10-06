@@ -213,8 +213,7 @@ class DeliveryWorker(BaseWorker):
                         context.update(menu=menu, heading=cards.heading(spec))
                     elif any(item["token"] == token for item in menu):
                         context["via_more"] = True
-            self._reg.put_tokens(tokens)
-            self._reg.save(immediate=True)
+            self._reg.put_tokens(tokens, durable=True)  # durable before the receipt
         return outcome
 
     async def _perform_part(self, claim, part, ctx):
