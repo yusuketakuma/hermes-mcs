@@ -1740,8 +1740,10 @@ def test_rollback_partial_quiesce_restarts_despite_hung_launchctl(
         mcs_update.subprocess, "run",
         lambda argv, *a, **k: (fake if argv[0] == "launchctl"
                                else real_run)(argv, *a, **k))
+    clock = [time.monotonic()]
     monkeypatch.setattr(mcs_update, "time", SimpleNamespace(
-        time=time.time, monotonic=time.monotonic, sleep=lambda s: None))
+        time=time.time, monotonic=lambda: clock[0],
+        sleep=lambda s: clock.__setitem__(0, clock[0] + s)))
     monkeypatch.setattr(mcs_util, "time",
                         SimpleNamespace(time=time.time, sleep=lambda s: None))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
@@ -1765,6 +1767,7 @@ def test_rollback_partial_quiesce_restarts_despite_hung_launchctl(
     assert "drainer_stop_failed: ai.mcs.b" in detail
     assert "bootstrap_failed:ai.mcs.b" in detail
     assert not os.path.exists(mcs_update.MARKER_PATH)
+    assert len(fake.calls) < 100  # finite stop polling and restart retries
 
 
 @pytest.mark.parametrize("exc", _HANG_EXCS)

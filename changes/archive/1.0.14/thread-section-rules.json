@@ -2,7 +2,12 @@
   "category": "changed",
   "title": "要約の見出しと、スレッド投稿の区切り線を変更",
   "summary": "カードとスレッドの「📋 構造化」を「📋 要約」に改めました。スレッドの各投稿では、要約・スタンプ・本文の間に区切り線を入れ、どこからが本文かを見分けやすくしました。",
-  "upgrade": "追加操作は不要です。次の定期収集から新しい表示になります。配信済みのスレッドは、次に内容が更新されたときに書き換わります。",
-  "details": ["notify_render.SECTION_RULE（罫線12文字）を要約の後と本文の前に挿入。テキスト通知と誤り報告の確認文も「要約」に統一。画面例を再生成。"],
-  "refs": ["mcs/notify/notify_render.py", "mcs/notify/notify_flush.py"]
+  "upgrade": "Hermesモードはgateway、standaloneモードは稼働中の通知アダプターと抽出ワーカーを再起動すると新しい表示を読み込みます。LINE WORKS独立アダプターも再起動が必要です。設定変更は不要です。配信済みのスレッドは、再起動後に内容が更新されたときに書き換わります。",
+  "details": [
+    "notify_render.SECTION_RULE（罫線12文字）を要約の後と本文の前に挿入。テキスト通知と誤り報告の確認文も「要約」に統一。画面例を再生成。"
+  ],
+  "refs": [
+    "mcs/notify/notify_render.py",
+    "mcs/notify/notify_flush.py"
+  ]
 }
