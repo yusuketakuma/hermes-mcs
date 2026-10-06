@@ -90,3 +90,18 @@ def test_unusable_dictionary_scans_only_existing_refs(tmp_path):
     assert db.artifacts(drug_map.KIND) == []
     assert not any("FROM messages" in sql for sql in seen)
     db.close()
+
+def test_resident_exits_when_semantic_lost_the_run_lock(monkeypatch):
+    calls = []
+    monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm.sys, "argv",
+                        ["extract_llm", "--all", "--semantic", "--stop-after", "600"])
+    monkeypatch.setattr(extract_llm, "Ledger",
+                        lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **k: calls.append(1) or
+                        {"done": 1, "failed": 0, "left": 1, "selected": 1})
+    monkeypatch.setattr(extract_llm, "_background_semantic",
+                        lambda *a: {"run_lock_lost": "held", "errors": []})
+    # an updater changed the code: respawn on it instead of re-locking
+    assert extract_llm.main() == 0
+    assert calls == [1]

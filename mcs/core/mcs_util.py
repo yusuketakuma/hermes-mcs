@@ -361,19 +361,75 @@ def acquire_run_lock(path: str | None = None) -> int | None:
     return fd
 
 
+_MCS_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def code_stamp() -> int:
+    """Newest mtime of the mcs/ sources — changes when an update merges."""
+    newest = 0
+    for base, _dirs, files in os.walk(_MCS_ROOT):
+        for name in files:
+            if name.endswith(".py"):
+                with suppress(OSError):
+                    newest = max(newest, os.stat(
+                        os.path.join(base, name)).st_mtime_ns)
+    return newest
+
+
+class RunLockLost(BaseException):
+    """The run lock could not be safely retaken after unlocked transport.
+
+    ``held`` tells whether the fd holds the lock again (an updater ran in
+    the window: old code must not keep writing) or not (bounded wait
+    expired: no DB write is allowed at all). BaseException on purpose:
+    the generic ``except Exception`` retry paths must not charge an
+    attempt for it — the drain catches it explicitly."""
+
+    def __init__(self, held: bool):
+        super().__init__("run_lock_held" if held else "run_lock_timeout")
+        self.held = held
+
+
+RUN_LOCK_REACQUIRE_S = 150.0
+RUN_LOCK_POLL_S = 0.2
+
+
+def _updater_state() -> tuple:
+    return (os.path.exists(os.path.join(HOME, "data", UPDATE_MARKER_NAME)),
+            code_stamp())
+
+
 @contextmanager
-def unlocked_transport(ledger, lock_fd):
-    """Release the run lock during transport and reacquire before DB work."""
+def unlocked_transport(ledger, lock_fd, wait_s: float | None = None):
+    """Release the run lock during transport and reacquire before DB work.
+
+    The reacquire is bounded (``wait_s``, default RUN_LOCK_REACQUIRE_S)
+    and refuses a lock won right after an updater — same rule as
+    run_check._wait_run_lock: an update marker that appeared or a code
+    stamp that moved during the window raises RunLockLost(held=True);
+    an expired wait raises RunLockLost(held=False)."""
     if lock_fd is None:
         yield
         return
     if ledger.db.in_transaction:
         raise RuntimeError("transport_inside_db_transaction")
+    before = _updater_state()
     fcntl.flock(lock_fd, fcntl.LOCK_UN)
     try:
         yield
     finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        until = time.monotonic() + (
+            RUN_LOCK_REACQUIRE_S if wait_s is None else wait_s)
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= until:
+                    raise RunLockLost(held=False) from None
+                time.sleep(RUN_LOCK_POLL_S)
+        if _updater_state() != before:
+            raise RunLockLost(held=True)
 
 
 def launchd_bootstrap(label: str, plist: str, run) -> str | None:

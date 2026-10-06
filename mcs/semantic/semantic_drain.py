@@ -1720,6 +1720,16 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                             cfg_path=cfg_path,
                             config_generation=cfg_generation,
                             reserve_fn=reserve_fn)
+                except mcs_util.RunLockLost as e:
+                    # An updater won the lock in a transport window (or the
+                    # bounded reacquire expired). Write nothing: the job
+                    # stays pending with its attempts untouched (its only
+                    # claim is the _job_lock flock released on return),
+                    # later jobs are not started, and the caller ends the
+                    # tick/batch on out["run_lock_lost"].
+                    out["run_lock_lost"] = "held" if e.held else "timeout"
+                    result["errors"].append("semantic: run_lock_lost")
+                    return out
                 except Exception as e:
                     runtime.transition(ledger, token, "retry", retry_in=300,
                                        max_attempts=limit)
@@ -2020,6 +2030,11 @@ def main() -> int:
                               "ts": time.time(), "pid": os.getpid()},
                              ensure_ascii=False, default=str),
                   flush=True)
+            if out.get("run_lock_lost"):
+                # an update/rollback ran under us: this process holds the
+                # old code, so it must not take the lock again
+                totals["stopped"] = "run_lock_lost"
+                break
             if out.get("left") == 0:
                 totals["stopped"] = "queue_empty"
                 break

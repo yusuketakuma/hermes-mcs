@@ -51,7 +51,8 @@ from mcs_adapter import (MCSAdapter, MCSError, SessionExpired)
 from ledger import Ledger, METADATA_SHADOW_BACKOFF_S
 from health_watch import HEALTH_REL, _finite_number
 from mcs_util import (CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB,
-                      HOME, RUN_LOCK, UPDATE_MARKER_NAME, acquire_run_lock,
+                      HOME, RUN_LOCK, UPDATE_MARKER_NAME, RunLockLost,
+                      acquire_run_lock, code_stamp as _code_stamp,
                       disk_floor_mb, load_config)
 import job_ops
 import maintenance
@@ -421,21 +422,6 @@ def _write_health(ledger, result: dict, status: str,
                                "run_id": run_id})
 LOCK_WAIT_S = 150
 LOCK_POLL_S = 0.2
-
-
-_MCS_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def _code_stamp() -> int:
-    """Newest mtime of the mcs/ sources — changes when an update merges."""
-    newest = 0
-    for base, _dirs, files in os.walk(_MCS_ROOT):
-        for name in files:
-            if name.endswith(".py"):
-                with suppress(OSError):
-                    newest = max(newest, os.stat(
-                        os.path.join(base, name)).st_mtime_ns)
-    return newest
 
 
 _CODE_STAMP = _code_stamp()
@@ -1713,6 +1699,11 @@ def _run_semantic(ledger, args, cfg, result, deadline, sem_on,
             lane="realtime")
     except Exception as e:
         result["errors"].append(f"semantic: {type(e).__name__}")
+        return
+    lost = result["semantic"].get("run_lock_lost")
+    if lost:
+        # the drain stopped without touching its job; end the tick
+        raise RunLockLost(held=lost == "held")
 
 
 def _housekeeping(result):
@@ -1958,6 +1949,18 @@ def _main() -> int:
                             ledger, cfg, result, run_id, deadline, required=True)
         assert isinstance(status, str)
         _write_health(ledger, result, status, run_id=run_id, cfg=cfg)
+    except RunLockLost as e:
+        # An updater won the lock during semantic transport. Held: record
+        # the run as partial and stop — no further stage runs old code.
+        # Not held: no DB write at all; the 'running' row is closed as
+        # 'crashed' by the next begin_run (the crashed-run path).
+        result["errors"].append("run_lock_lost")
+        if e.held:
+            ledger.finish_run(run_id, "partial",
+                              "; ".join(result["errors"][:8]))
+            _write_health(ledger, result, "partial", run_id=run_id, cfg=cfg)
+        print(json.dumps(result, ensure_ascii=False))
+        return 1
     except SessionExpired as e:
         detail = _err_str(e)
         recovered = False
