@@ -529,6 +529,10 @@ SESSION_ALERT_MIN_INTERVAL_S = 3600
 # stage allows one attempt, and _attempt_relogin (the single entry point
 # for every caller, run boundary included) bounds the per-run total
 RELOGIN_MAX_PER_RUN = 3
+# a recovery after an outage longer than this re-walks every active
+# patient from the last healthy run — posts read elsewhere meanwhile
+# (phone/browser) are no longer unread and would otherwise stay silent
+OUTAGE_CATCHUP_S = 1200
 
 
 def _alert_throttled(ledger, kind: str, run_id: int, detail: str) -> bool:
@@ -584,10 +588,40 @@ def _attempt_relogin(adapter, ledger, result, where: str,
         state = "failed"
         attempt["detail"] = type(exc).__name__
     attempt["state"] = state
+    if getattr(adapter, "healed_tabs", 0):
+        attempt["healed_tabs"] = adapter.healed_tabs
     if state == "ok":
         _alert_session_recovered(ledger, result.get("run_id"),
                                  f"{where}: {attempt['error']}")
+        _seed_outage_catchup(ledger, result)
     return state
+
+
+def _seed_outage_catchup(ledger, result, now: float | None = None) -> None:
+    """After a session outage longer than OUTAGE_CATCHUP_S, queue the
+    same bounded notifying history_head walk _post_ack_gap uses, for
+    every active patient, from the last healthy run. Only cheap job rows
+    are written here; the fetches run in the normal job drains under the
+    existing per-run limits, and notify_max_age_s still bounds what is
+    announced. Runs once per run (several relogins share it)."""
+    if result.get("outage_catchup") is not None:
+        return
+    now = time.time() if now is None else now
+    last_ok = _prev_health().get("last_ok_at")
+    if not _finite_number(last_ok) or now - last_ok <= OUTAGE_CATCHUP_S:
+        result["outage_catchup"] = 0
+        return
+    seeded = 0
+    for row in ledger.frontier_patients():
+        pid = row["project_id"]
+        since = min(last_ok, ledger.coverage_ts(pid) or ledger.high_watermark(pid)
+                    or last_ok) - BACKFILL_OVERLAP_S
+        ledger.job_add("history_head", pid, payload={
+            "since": max(0, int(since)), "page": 1,
+            "pages": BACKFILL_MAX_PAGES, "trickle": False, "notify": True})
+        ledger.job_set_flag("history_head", pid, 0, "notify")
+        seeded += 1
+    result["outage_catchup"] = seeded
 
 
 def _with_relogin(adapter, ledger, result, where: str, fn, *args,

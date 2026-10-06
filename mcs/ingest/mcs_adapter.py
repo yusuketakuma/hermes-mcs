@@ -66,6 +66,7 @@ def project_url(project_id: int) -> str:
 # route-level 403 (see _request)
 SESSION_PROBE_PATH = "/users/self/count"
 LS_TOKEN_KEY = "ngStorage-lastSessionToken"
+HUNG_PROBE_S = 5            # a renderer silent this long on `1` is hung
 _ALLOWED_DOWNLOAD_HOSTS = {"www.medical-care.net"}
 # MCS /files/* 302s to a self-authenticating signed URL on the operator's CDN;
 # following it is safe only WITHOUT the Bearer header (it must never leave
@@ -974,6 +975,10 @@ class MCSAdapter:
 
     def _ensure_chrome(self, profile_dir: str, chrome_bin: str):
         if self._cdp_up():
+            # the browser process answers /json/version even when an MCS
+            # tab's renderer is hung — such a tab makes every token read
+            # and form fill time out, so heal it before using the browser
+            self._heal_hung_pages()
             return
         import subprocess
         self._remaining_timeout(1)
@@ -993,6 +998,40 @@ class MCSAdapter:
             if self._cdp_up():
                 return
         raise BootstrapError("chrome launch timed out")
+
+    def _mcs_pages(self) -> list:
+        return [t for t in self._cdp_json("/json/list")
+                if t.get("type") == "page" and isinstance(t.get("id"), str)
+                and re.fullmatch(r"[0-9A-Fa-f]{16,64}", t["id"])
+                and urllib.parse.urlparse(t.get("url", "")).hostname
+                == "www.medical-care.net"]
+
+    def _heal_hung_pages(self) -> int:
+        """Close MCS tabs whose renderer no longer answers a trivial
+        evaluate (browser side still up). Only www.medical-care.net tabs
+        of this dedicated profile; a run deadline is not a hang. Returns
+        the number of tabs verified gone — callers reopen a fresh tab."""
+        self.healed_tabs = 0
+        try:
+            hung = []
+            for page in self._mcs_pages():
+                try:
+                    self._cdp_eval(page["webSocketDebuggerUrl"], "1", HUNG_PROBE_S)
+                except MCSError as error:
+                    if error.kind == "network_error":
+                        hung.append(page["id"])
+            if not hung:
+                return 0
+            for target in hung:
+                # /json/close answers plain text, which the JSON worker
+                # rejects — the result is verified by re-listing instead
+                with suppress(MCSError, OSError):
+                    self._cdp_json(f"/json/close/{target}")
+            alive = {t["id"] for t in self._mcs_pages()}
+        except (MCSError, OSError, KeyError, TypeError):
+            return 0
+        self.healed_tabs = sum(target not in alive for target in hung)
+        return self.healed_tabs
 
     def _cdp_eval(self, ws_url: str, expr: str, timeout: int = 15):
         return self._io("cdp_eval", timeout, url=ws_url, expression=expr)["value"]
