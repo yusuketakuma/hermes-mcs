@@ -993,7 +993,8 @@ def _attach(led, tmp_path, mid=100, name="syn.bin",
             blob=b"synthetic-bytes", state="downloaded"):
     """Seed a real on-disk file as a downloaded attachment on a shown
     message — the part manifest then seals path+sha256+bytes."""
-    f = tmp_path / name
+    (tmp_path / "data" / "attachments").mkdir(parents=True, exist_ok=True)
+    f = tmp_path / "data" / "attachments" / name
     f.write_bytes(blob)
     cur = led.db.execute(
         "INSERT INTO attachments(message_id,file_id,name,local_path,"
@@ -1346,7 +1347,8 @@ def test_slack_attachment_caption_and_unavailable_caption(led, tmp_path):
     w = _mkworld(led)
     assert asyncio.run(w.sender.bind())
     blob = b"synthetic-bytes"
-    f = tmp_path / "a.jpg"
+    (tmp_path / "data" / "attachments").mkdir(parents=True, exist_ok=True)
+    f = tmp_path / "data" / "attachments" / "a.jpg"
     f.write_bytes(blob)
     part = {"part_id": "attach:0001", "kind": "attachment_part",
             "attachment_id": 1, "name": "a.jpg", "path": str(f),

@@ -401,7 +401,8 @@ def test_verified_attachment_mapping_and_corruption_never_sends(tmp_path):
     w = world(tmp_path)
     worker = delivery.DeliveryWorker(sender=w.sender, settings=w.settings, root=str(w.data),
                                      reg=w.reg, worker_id="synthetic", log=lambda *a, **kw: None)
-    attachment = tmp_path / "sealed.txt"
+    (w.data / "attachments").mkdir(exist_ok=True)
+    attachment = w.data / "attachments" / "sealed.txt"
     attachment.write_bytes(b"synthetic-sealed")
     part = {"kind": "attachment_part", "part_id": "attachment:1", "path": str(attachment),
             "name": "sealed.txt", "bytes": 16, "sha256": hashlib.sha256(b"synthetic-sealed").hexdigest()}

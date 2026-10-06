@@ -1,0 +1,8 @@
+{
+  "category": "security",
+  "title": "カード配送で送る添付ファイルを添付保存先の中に限定",
+  "summary": "Slack・Discord・LINE WORKSのカード配送は、添付ファイルの実体（シンボリックリンクは解決後）がMCSのデータ保存先の attachments 内にある場合だけ送信します。保存先の外を指す配送指示は送信せず、未送信として扱います。",
+  "upgrade": "設定変更は不要です。通常の添付は従来どおり送信されます。反映にはHermes gatewayまたは独立アダプターの再起動が必要です。",
+  "details": ["read_verified_attachment に root を追加し、各配送workerがデータ保存先を渡す。独立実行の送信経路と同じ制限に揃える。"],
+  "refs": ["adapters/common/paths.py", "adapters/discord/delivery.py", "adapters/slack/delivery.py", "adapters/slack/tasks.py", "adapters/lineworks/delivery.py"]
+}

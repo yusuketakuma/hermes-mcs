@@ -156,7 +156,8 @@ class DeliveryWorker(worker.DeliveryWorker):
             if mid is not None:
                 return {"result": "delivered", "remote_id": str(mid)}
             blob = await asyncio.to_thread(
-                paths.read_verified_attachment, part.get("path"), part)
+                paths.read_verified_attachment, part.get("path"), part,
+                self._root)
             if blob is None:
                 return {"result": "not_sent",
                         "error_code": "attachment_mismatch"}

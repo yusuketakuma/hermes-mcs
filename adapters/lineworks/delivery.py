@@ -250,7 +250,7 @@ class DeliveryWorker(BaseWorker):
                 if part.get("prior_remote_id"):
                     return {"result": "delivered", "remote_id": part["prior_remote_id"]}
                 blob = await asyncio.to_thread(paths.read_verified_attachment,
-                                               part.get("path"), part)
+                                               part.get("path"), part, self._root)
                 if blob is None:
                     return {"result": "not_sent", "error_code": "attachment_mismatch"}
                 rid = await locked(self._sender.attachment, blob, part.get("name") or "file",

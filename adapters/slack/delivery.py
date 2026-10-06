@@ -122,11 +122,12 @@ class SlackCardAdapter:
     """An inert native-client adapter until explicitly bound and called."""
 
     def __init__(self, app, *, team_id, application_id, channel_id,
-                 profile, allowed_user_ids, native_adapter=None):
+                 profile, allowed_user_ids, native_adapter=None, root=None):
         # Hermes keeps one native client per workspace; app.client is only
         # the first workspace's client when several bot tokens are connected.
         self._client = (native_adapter._get_client(channel_id, team_id=team_id)
                         if native_adapter is not None else app.client)
+        self._root = root   # MCS data root: attachments must resolve under it
         self._team_id = team_id
         self._application_id = application_id
         self._channel_id = channel_id
@@ -447,7 +448,7 @@ class DeliveryWorker(_BaseWorker):
             if rid is not None:
                 return {"result": "delivered", "remote_id": rid}
         blob = await asyncio.to_thread(
-            read_verified_attachment, part.get("path"), part)
+            read_verified_attachment, part.get("path"), part, self._root)
         if blob is None:
             return {"result": "not_sent",
                     "error_code": "attachment_mismatch"}

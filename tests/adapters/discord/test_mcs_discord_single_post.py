@@ -174,7 +174,8 @@ def _mk(tmp_path, bot):
 
 def _attachment_spec(tmp_path):
     blob = b"synthetic-attachment"
-    f = tmp_path / "att.bin"
+    (tmp_path / "attachments").mkdir(exist_ok=True)
+    f = tmp_path / "attachments" / "att.bin"
     f.write_bytes(blob)
     import hashlib
     spec = _spec(_chunks(1))

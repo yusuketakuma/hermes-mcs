@@ -41,7 +41,7 @@ class Supervisor:
             app, native_adapter=adapter, team_id=settings["team_id"],
             application_id=settings["application_id"],
             channel_id=settings["channel_id"], profile=settings["profile"],
-            allowed_user_ids=settings["allowed_user_ids"])
+            allowed_user_ids=settings["allowed_user_ids"], root=self._root)
         self._worker = DeliveryWorker(
             sender=self._sender, settings=settings, root=self._root,
             reg=self._reg, worker_id=self._worker_id, log=log)

@@ -705,7 +705,8 @@ def test_second_attachment_failure_leaves_incomplete(tmp_path):
     """The second file's upload vanishing mid-wire is unknown — the
     first file's delivered receipt stands, no part resends."""
     b1, b2 = b"first-file", b"second-file"
-    f1, f2 = tmp_path / "a1.bin", tmp_path / "a2.bin"
+    (tmp_path / "attachments").mkdir(exist_ok=True)
+    f1, f2 = tmp_path / "attachments" / "a1.bin", tmp_path / "attachments" / "a2.bin"
     f1.write_bytes(b1)
     f2.write_bytes(b2)
     atts = [
@@ -736,7 +737,8 @@ def test_second_attachment_failure_leaves_incomplete(tmp_path):
 
 def test_attachment_part_uploads_verified_file(tmp_path):
     blob = b"synthetic-attachment"
-    f = tmp_path / "att.bin"
+    (tmp_path / "attachments").mkdir(exist_ok=True)
+    f = tmp_path / "attachments" / "att.bin"
     f.write_bytes(blob)
     sha = hashlib.sha256(blob).hexdigest()
     att = {"part_id": "attach:0007", "kind": "attachment_part",
@@ -757,7 +759,8 @@ def _attach_update(tmp_path, prior):
     """An update render whose attachment part names the message that
     already carries the same file (``prior_remote_id``)."""
     blob = b"synthetic-attachment"
-    f = tmp_path / "att.bin"
+    (tmp_path / "attachments").mkdir(exist_ok=True)
+    f = tmp_path / "attachments" / "att.bin"
     f.write_bytes(blob)
     att = {"part_id": "attach:0007", "kind": "attachment_part",
            "index": 0, "attachment_id": 7, "name": "att.bin",
@@ -823,7 +826,8 @@ def test_attachment_part_may_name_its_prior_post(tmp_path):
 
 
 def test_attachment_part_hash_mismatch_not_sent(tmp_path):
-    f = tmp_path / "att.bin"
+    (tmp_path / "attachments").mkdir(exist_ok=True)
+    f = tmp_path / "attachments" / "att.bin"
     f.write_bytes(b"mutated bytes")
     att = {"part_id": "attach:0007", "kind": "attachment_part",
            "index": 0, "attachment_id": 7, "name": "att.bin",
@@ -846,7 +850,8 @@ def test_attachment_upload_uses_the_bytes_that_were_verified(tmp_path, monkeypat
     from pathlib import Path
     from hermes_plugin.mcs_discord import cards
     blob = b"sealed-synthetic"
-    path = tmp_path / "attachment.bin"
+    (tmp_path / "attachments").mkdir(exist_ok=True)
+    path = tmp_path / "attachments" / "attachment.bin"
     path.write_bytes(blob)
     w, reg, bot = _mkworker(tmp_path)
     spec = _spec([])
@@ -1951,7 +1956,8 @@ def test_thread_body_is_posted_as_literal_text(tmp_path):
 def test_attachment_caption_rides_with_the_file(tmp_path, monkeypatch):
     from hermes_plugin.mcs_discord import cards
     blob = b"sealed-synthetic"
-    path = tmp_path / "a.bin"
+    (tmp_path / "attachments").mkdir(exist_ok=True)
+    path = tmp_path / "attachments" / "a.bin"
     path.write_bytes(blob)
     w, _reg, _bot = _mkworker(tmp_path)
     seen = []
