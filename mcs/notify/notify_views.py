@@ -16,6 +16,7 @@ import structured_view
 from ledger import karte_summary_block
 from mcs_adapter import project_url
 from mcs_queries import JST, incomplete_reply_roots
+from mcs_util import fold_map, register_search_fold, search_fold
 from notify_render import (
     _current_generation, _hhmm, _inline, _mmdd, _patient_name, _source_fp,
     actor_label, card_reaction_lines,
@@ -104,10 +105,15 @@ def _request_reply_lines(db, project_id, roll) -> list:
         if r.get("reply_conflict") is True:
             line += "（完了後に取消の記録あり）"
         mid = r.get("mid")
+        # only a candidate of the message's current revision counts —
+        # the mcs_view / semantic_loops currency rule
         if type(mid) is int and db.execute(
-                "SELECT 1 FROM artifacts WHERE kind='loop_candidate' "
-                "AND project_id=? AND message_id=? LIMIT 1",
-                (project_id, mid)).fetchone():
+                "SELECT 1 FROM artifacts a JOIN messages m "
+                "ON m.project_id=a.project_id AND m.message_id=a.message_id "
+                "WHERE a.kind='loop_candidate' AND a.project_id=? "
+                "AND a.message_id=? AND json_valid(a.content) "
+                "AND json_extract(a.content,'$.origin.revision')=m.content_hash "
+                "LIMIT 1", (project_id, mid)).fetchone():
             line += "・Loop候補（semantic shadow）あり"
         lines.append(line)
     if reqs:
@@ -344,10 +350,17 @@ def unacked_view(db, transport, now=None, projects=None,
 
 
 def _snippet(text, term, width=40) -> str:
+    """A window of the body around the first hit of ``term``, found by
+    the search's own fold (NFKC + casefold, whitespace-insensitive) and
+    mapped back to the displayed text."""
     flat = " ".join(str(text or "").split())
-    at = flat.lower().find(term.lower())
+    folded, starts, ends = fold_map(flat, casefold=True)
+    needle = search_fold(term)
+    hit = folded.find(needle) if needle else -1
+    at, length = ((starts[hit], ends[hit + len(needle) - 1] - starts[hit])
+                  if hit >= 0 else (0, len(term)))
     start = max(0, at - width // 2)
-    end = start + width + len(term)
+    end = start + width + length
     return (("…" if start else "") + _inline(flat[start:end], end - start + 1)
             + ("…" if end < len(flat) else ""))
 
@@ -355,17 +368,20 @@ def _snippet(text, term, width=40) -> str:
 def patient_search_view(db, project_id, query) -> dict:
     """🔎 stored messages of one project containing every whitespace-
     separated term, newest first. Substring match over whitespace-
-    stripped text — the same rule as the ``mcs_view`` search; the FTS5
-    index's unicode61 tokenizer cannot split Japanese into words."""
-    terms = [t for t in str(query or "").split() if t][:5]
+    stripped text after NFKC + casefold (``mcs_fold``: ﾛｷｿﾆﾝ matches
+    ロキソニン, ＢＳ matches bs) — the same rule as the ``mcs_view``
+    search; the FTS5 index's unicode61 tokenizer cannot split Japanese
+    into words."""
+    terms = [t for t in str(query or "").split() if search_fold(t)][:5]
     name = _inline(_patient_name(db, project_id), 30) or f"project {project_id}"
     sql = ("SELECT message_id,posted_at,profession,body_text FROM messages "
            "WHERE project_id=? AND body_state='full'")
     args: list = [project_id]
+    if terms:
+        register_search_fold(db)
     for t in terms:
-        sql += (" AND instr(lower(replace(replace(body_text,' ',''),'　','')),"
-                "lower(?))>0")
-        args.append(t)
+        sql += " AND instr(mcs_fold(body_text),?)>0"
+        args.append(search_fold(t))
     rows = db.execute(sql + " ORDER BY posted_at_ts DESC, message_id DESC",
                       args).fetchall() if terms else []
     items = [{"project_id": project_id,

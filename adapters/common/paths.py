@@ -11,6 +11,7 @@ import os
 import hashlib
 import tempfile
 from contextlib import suppress
+from pathlib import Path
 
 # short key -> on-disk dir under the MCS data root
 SUBDIRS = {"render": "discord_render", "state": "discord_state",
@@ -129,14 +130,22 @@ def restore_marker_present(root: str) -> bool:
     return True
 
 
-def read_verified_attachment(path: str | None, part: dict) -> bytes | None:
-    """Return the sealed bytes once, bounded by the collector's 64 MiB limit."""
+def read_verified_attachment(path: str | None, part: dict,
+                             root: str | None = None) -> bytes | None:
+    """Return the sealed bytes once, bounded by the collector's 64 MiB
+    limit. With ``root`` (the MCS data root, ``settings["data_root"]``)
+    the file must resolve — symlinks followed — inside
+    ``<root>/attachments``, the dir the standalone senders confine to."""
     size = part.get("bytes")
     if (not path or not part.get("sha256") or type(size) is not int
             or not 0 <= size <= 64 * 1024 * 1024):
         return None
     try:
-        with open(path, "rb") as stream:
+        real = Path(path).resolve(strict=True)
+        if root is not None and not real.is_relative_to(
+                Path(root).expanduser().resolve() / "attachments"):
+            return None
+        with open(real, "rb") as stream:
             if os.fstat(stream.fileno()).st_size != size:
                 return None
             blob = stream.read(size + 1)

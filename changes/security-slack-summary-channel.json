@@ -1,0 +1,8 @@
+{
+  "category": "security",
+  "title": "Slackの /mcs-summary を設定したチャンネルだけで受け付けるように修正",
+  "summary": "Slackの /mcs-summary は、/mcs と同じく設定したMCSチャンネルから実行された場合だけ回答します。許可された利用者でも、別のチャンネルやDMからの実行には何も返しません。",
+  "upgrade": "設定したMCSチャンネルで実行してください。Slack連携の gateway・アダプター再起動後から適用されます。設定項目の追加はありません。",
+  "details": ["team_id・api_app_id・user_id に加えて channel_id を設定値と照合する。"],
+  "refs": ["adapters/slack/actions.py"]
+}

@@ -236,17 +236,16 @@ class Actions:
     async def _summary(self, ack, body):
         """``/mcs-summary <scope> [name:名前]`` — the clicker-only summary
         from the snapshot. Slash payloads are flat (team_id/api_app_id/
-        user_id): checked like ``_scope``, acked first (3s), computed
+        user_id/channel_id): checked like ``_command``, acked first (3s), computed
         off-loop, answered ephemerally through the existing client."""
         await ack()
         if not (self._active
                 and body.get("team_id") == self._settings["team_id"]
                 and body.get("api_app_id") == self._settings["application_id"]
-                and body.get("user_id") in self._settings["allowed_user_ids"]):
+                and body.get("user_id") in self._settings["allowed_user_ids"]
+                and body.get("channel_id") == self._settings["channel_id"]):
             return
-        channel = body.get("channel_id")
-        if not isinstance(channel, str) or not channel:
-            return
+        channel = body["channel_id"]
         user = body["user_id"]
         snapshot = self._settings.get("snapshot")
         if not snapshot:

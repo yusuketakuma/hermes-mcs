@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "患者の記録まとめで古いLoop候補を「あり」と表示する問題を修正",
+  "summary": "🧾 患者の記録まとめの依頼候補欄は、投稿の現在の内容に対して作られたLoop候補がある場合だけ「Loop候補（semantic shadow）あり」と表示します。投稿が更新される前の古い候補では表示しません。",
+  "upgrade": "追加操作は不要です。更新後に表示する記録まとめから適用されます。Loop候補の生成・保存は変わりません。",
+  "details": ["候補のorigin.revisionが投稿の現在のcontent_hashと一致するかを、mcs_viewと同じ規則で確認する。"],
+  "refs": ["mcs/notify/notify_views.py"]
+}
