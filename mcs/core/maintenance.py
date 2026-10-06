@@ -241,7 +241,9 @@ def prune_attachments(db_path: str) -> int:
     F12: notify_flush aliases each file to `<path><ext>` for upload —
     the alias is part of the same asset and is unlinked too. Files
     still referenced by an unsent notification are kept. Returns the
-    number of payloads actually deleted."""
+    number of payloads whose cleanup completed. Missing payloads are
+    retired without counting a deletion; failed cleanup keeps the path
+    on a non-sendable row so the next run can retry."""
     cutoff = time.time() - ATTACHMENT_KEEP_S
     con = sqlite3.connect(db_path, timeout=30)
     con.row_factory = sqlite3.Row
@@ -267,46 +269,87 @@ def prune_attachments(db_path: str) -> int:
         rows = [a for a in con.execute("""
           SELECT attachment_id, message_id, name, local_path
           FROM attachments
-          WHERE state IN ('downloaded','withdrawn')
+          WHERE state IN ('downloaded','withdrawn','pruned')
             AND local_path IS NOT NULL AND downloaded_at < ?""",
           (cutoff,)).fetchall()
           if a["message_id"] not in keep_mids
           and a["attachment_id"] not in keep_ids]
         pruned = 0
+        failed = False
+        root = Path(db_path).resolve().parent / "attachments"
         # short write transactions; files go only after the row stopped
-        # pointing at them, so a reader never follows a dangling path
+        # advertising a sendable payload. Keep the cleanup path until
+        # every unlink succeeds, including across a process crash.
         for i in range(0, len(rows), PRUNE_BATCH):
             batch = []
             for a in rows[i:i + PRUNE_BATCH]:
                 cur = con.execute("""
                   UPDATE attachments SET
-                    state=CASE WHEN state='withdrawn' THEN 'withdrawn' ELSE 'pruned' END,
-                    local_path=NULL
+                    state=CASE WHEN state='withdrawn' THEN 'withdrawn' ELSE 'pruned' END
                   WHERE attachment_id=? AND local_path=?""",
                   (a["attachment_id"], a["local_path"]))
                 if cur.rowcount:
-                    batch.append(a["local_path"])
+                    batch.append(a)
             con.commit()
-            for path in batch:
-                _unlink_attachment(path)
-            pruned += len(batch)
+            for a in batch:
+                try:
+                    removed = _unlink_attachment(a["local_path"], root)
+                except _ForeignPayload:
+                    # Not ours to delete: retire the pointer without
+                    # touching the file, and report it once — a retry
+                    # could never succeed and would fail every run.
+                    failed, removed = True, False
+                except OSError:
+                    failed = True
+                    continue
+                con.execute("UPDATE attachments SET local_path=NULL "
+                            "WHERE attachment_id=? AND local_path=? "
+                            "AND state IN ('pruned','withdrawn')",
+                            (a["attachment_id"], a["local_path"]))
+                con.commit()
+                pruned += int(removed)
+        if failed:
+            raise MaintenanceError("attachment_prune_failed")
         return pruned
     finally:
         con.close()
 
 
-def _unlink_attachment(path: str) -> None:
-    """Remove a payload and its notify_flush._media_path alias (F12)."""
-    with suppress(OSError):
-        os.unlink(path)
-    if os.path.splitext(path)[1]:
-        return
-    for alias in glob.glob(glob.escape(path) + ".*"):
-        ext = alias[len(path):]
-        if (1 < len(ext) <= 9 and ext[1:].isascii() and ext[1:].isalnum()
-                and os.path.isfile(alias)):
-            with suppress(OSError):
-                os.unlink(alias)
+class _ForeignPayload(OSError):
+    """A stored path that is outside, or not a plain file in, the store."""
+
+
+def _unlink_attachment(path: str, root: Path) -> bool:
+    """Remove only owned payloads/aliases; keep the raw file until last."""
+    payload = Path(path)
+    if root.is_symlink():
+        raise OSError("attachment_prune_root_invalid")   # retried: config fault
+    if (not payload.is_absolute() or payload.parent.resolve() != root
+            or payload.is_symlink() or payload.is_dir()):
+        raise _ForeignPayload("attachment_prune_path_invalid")
+    aliases = []
+    if not os.path.splitext(path)[1]:
+        try:
+            with os.scandir(root) as entries:
+                for entry in entries:
+                    if not entry.name.startswith(payload.name + "."):
+                        continue
+                    ext = entry.name[len(payload.name):]
+                    if 1 < len(ext) <= 9 and ext[1:].isascii() and ext[1:].isalnum():
+                        if entry.is_symlink():
+                            raise OSError("attachment_prune_path_invalid")
+                        if entry.is_file(follow_symlinks=False):
+                            aliases.append(entry.path)
+        except FileNotFoundError:
+            pass
+    removed = False
+    for candidate in [*aliases, path]:
+        try:
+            os.unlink(candidate)
+            removed = True
+        except FileNotFoundError:
+            pass
+    return removed
 
 
 def prune_leftovers() -> int:

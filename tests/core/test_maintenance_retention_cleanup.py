@@ -70,8 +70,10 @@ def test_prune_attachments_commits_before_unlinking(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     db.save_messages([_message(1), _message(2)])
     old = time.time() - maintenance.ATTACHMENT_KEEP_S - 60
+    att = tmp_path / "attachments"
+    att.mkdir()
     for aid in (1, 2):
-        path = tmp_path / str(aid)
+        path = att / str(aid)
         path.write_bytes(b"synthetic")
         db.db.execute(
             "INSERT INTO attachments(attachment_id,message_id,name,local_path,"
@@ -92,8 +94,8 @@ def test_prune_attachments_commits_before_unlinking(tmp_path, monkeypatch):
 
     monkeypatch.setattr(maintenance.os, "unlink", unlink)
     assert maintenance.prune_attachments(str(tmp_path / "ledger.db")) == 2
-    assert seen == [("pruned", None), ("pruned", None)]
-    assert not (tmp_path / "1").exists() and not (tmp_path / "2").exists()
+    assert seen == [("pruned", str(att / "1")), ("pruned", str(att / "2"))]
+    assert not (att / "1").exists() and not (att / "2").exists()
 
 
 def test_prune_leftovers_removes_only_day_old_temp_and_invalid(tmp_path, monkeypatch):
