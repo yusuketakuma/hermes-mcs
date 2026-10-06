@@ -312,10 +312,21 @@ def reproject_stale(ledger, scfg: dict,
          PROJECTION_VERSION, limit)).fetchall()
     for row in rows:
         meta = loads_dict(row["meta"])
-        doc, reason = (reproject_doc(ledger, row["message_id"], meta)
-                       if meta is not None else (None, "metadata_unreadable"))
+        content = None
+        try:
+            doc, reason = (reproject_doc(ledger, row["message_id"], meta)
+                           if meta is not None
+                           else (None, "metadata_unreadable"))
+            if doc is not None:
+                content = json.dumps(project_v2_doc_legacy(doc),
+                                     ensure_ascii=False, allow_nan=False)
+        except Exception:
+            # a stored v2 doc of the wrong shape (KeyError/unhashable)
+            # must be marked skipped, or it stays first in the ORDER BY
+            # and blocks every later row forever
+            reason = "projection_failed"
         with ledger.db:
-            if doc is None:
+            if content is None:
                 ledger.db.execute(
                     "UPDATE artifacts SET meta=json_set(meta,"
                     "'$.reproject_skipped',?) WHERE artifact_id=?",
@@ -329,9 +340,7 @@ def reproject_stale(ledger, scfg: dict,
             new_meta["projection_version"] = PROJECTION_VERSION
             new_meta["reprojected_from"] = row["artifact_id"]
             ledger.artifact_add_tx(
-                row["kind"], json.dumps(project_v2_doc_legacy(doc),
-                                        ensure_ascii=False,
-                                        allow_nan=False),
+                row["kind"], content,
                 project_id=row["project_id"],
                 message_id=row["message_id"], model=row["model"] or "",
                 meta=new_meta)

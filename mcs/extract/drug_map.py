@@ -342,9 +342,13 @@ def derive(ledger, dictionary: DrugMap | None, *,
     """
     usable = dictionary is not None and (dictionary.approved or synthetic)
     done, pids, cut = 0, set(), False
-    rows = ledger.db.execute("""
+    # Without a usable dictionary every message resolves to "no rows", so
+    # only messages that still hold med_ref artifacts need work (deletion);
+    # scanning every message per tick would be O(corpus) for nothing.
+    rows = ledger.db.execute(("""
         SELECT message_id,project_id FROM messages
-        UNION SELECT message_id,project_id FROM artifacts WHERE kind=?
+        UNION """ if usable else "") + """SELECT message_id,project_id
+        FROM artifacts WHERE kind=?
         ORDER BY message_id
     """, (KIND,)).fetchall()
     for mid, pid in rows:

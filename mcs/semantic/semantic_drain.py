@@ -1394,13 +1394,21 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int) -> tuple[list, list, dict]:
     return list(arrivals), list(backfill), {"turn": turn_next}
 
 
+_BACKLOG_INVALIDATE_S = 300.0
+_JOB_LOCK_BUCKETS = 1024
+_invalidated_at: float | None = None
+
+
 @contextmanager
 def _job_lock(ledger, job_id):
     """Exclude duplicate inference for a job while ingestion keeps writing."""
     from mcs_util import acquire_run_lock
     db_path = ledger.db.execute("PRAGMA database_list").fetchone()[2]
+    # Bucketed so the directory stays bounded (inodes are never unlinked,
+    # see below). A bucket collision only makes the other job skip this
+    # pass — the same path as a duplicate holder.
     path = os.path.join(os.path.dirname(db_path), "semantic_locks",
-                        str(job_id) + ".lock")
+                        str(job_id % _JOB_LOCK_BUCKETS) + ".lock")
     fd = acquire_run_lock(path)
     try:
         yield fd is not None
@@ -1436,8 +1444,17 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
            # (usage receipts excluded) — "no completion" is not "no
            # progress" for the tick's starvation guard (2026-09-30)
            "progressed": 0}
-    from semantic_store import invalidate_projections
-    invalidate_projections(ledger, scfg)
+    global _invalidated_at
+    # The scan is O(corpus) (thread_bundle per canonical thread) and the
+    # backlog resident calls run_due once per job under the run lock, so
+    # that lane refreshes at most every _BACKLOG_INVALIDATE_S; the tick
+    # (_semantic_enabled + realtime lane) still runs it every pass.
+    now_m = time.monotonic()
+    if lane != "backlog" or _invalidated_at is None \
+            or now_m - _invalidated_at >= _BACKLOG_INVALIDATE_S:
+        from semantic_store import invalidate_projections
+        invalidate_projections(ledger, scfg)
+        _invalidated_at = now_m
     if scfg["mode"] == "off":
         return out
     # Stability guards shared with the extract lane: a nearly-full

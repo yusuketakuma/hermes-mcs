@@ -1210,7 +1210,10 @@ def _llm_call(prompt: str, deadline: float | None = None,
             fmt = _FMT_MODE = _NEXT_FMT[fmt]
             continue
         _integrity_note(response)
-        if response is None or status != 200:
+        # a length stop is truncated JSON: json_object would salvage an
+        # inner complete object (one med dict) that validates to {} and
+        # gets saved as the message's extraction — reject it as failed
+        if local_llm.acceptance_error(response) is not None:
             return None
         text = response.get("text")
         if not isinstance(text, str):
@@ -2893,14 +2896,26 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     _flush_checkpoints()
                     for fut in finished:
                         kind, tups = futs.pop(fut)
+                        try:
+                            res = fut.result()
+                        except Exception as e:
+                            # one worker crash must not discard the
+                            # other finished (paid) inferences: only its
+                            # rows stay pending, claims are released
+                            # below and no attempt is burned
+                            print(json.dumps({"event": "extract_worker_error",
+                                              "error": type(e).__name__}),
+                                  file=sys.stderr, flush=True)
+                            deferred += len(tups)
+                            continue
                         if kind == "single":
                             index, r, ctx, saved, hints, qc, lease = \
                                 tups[0]
-                            d, chunks_out = fut.result()
+                            d, chunks_out = res
                             _handle(r, ctx, d, metas[index], lease,
                                     chunks_out, qc)
                         else:
-                            status, results, meta = fut.result()
+                            status, results, meta = res
                             for tup in _handle_batch(status, results,
                                                      meta, tups):
                                 nfut = _single_future(pool, tup)
@@ -2939,9 +2954,15 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         finally:
             for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
                 _release(ledger, r, lease)
-    left, age_min, age_max = ledger.db.execute(
-        "SELECT COUNT(*), MIN(m.posted_at_ts), MAX(m.posted_at_ts) "
-        f"FROM messages m WHERE {pending_pred()}").fetchone()
+    left = age_min = age_max = None
+    if len(rows) < (limit or 20):
+        # A short selection means the backlog is nearly drained, so the
+        # full pending scan is cheap enough to report. A full selection
+        # (the resident --all --semantic lane runs limit=1 per job)
+        # reports None = unknown instead of an O(backlog) scan per job.
+        left, age_min, age_max = ledger.db.execute(
+            "SELECT COUNT(*), MIN(m.posted_at_ts), MAX(m.posted_at_ts) "
+            f"FROM messages m WHERE {pending_pred()}").fetchone()
     now_ts = time.time()
     return {"done": done, "failed": failed, "left": left,
             "selected": len(rows), "deferred": deferred,
@@ -3182,17 +3203,29 @@ def _main() -> int:
                         break
                 # One newest extraction per lane before semantic/QC;
                 # existing claim leases exclude the other worker's item.
-                r = run_pending(led, limit=1 if args.semantic else 8,
-                                budget_s=min(budget, 900), oldest_first=False,
-                                per_write_lock=True,
-                                workers=max(1, min(args.workers, 8)),
-                                shard=shard, batch_k=args.batch,
-                                admitted_ids=_admitted())
-                sem = None
-                if args.semantic and not held():
-                    sem = _background_semantic(led, stop)
-                    print(json.dumps({"semantic": sem, "ts": time.time()},
-                                     ensure_ascii=False), flush=True)
+                try:
+                    r = run_pending(led, limit=1 if args.semantic else 8,
+                                    budget_s=min(budget, 900),
+                                    oldest_first=False,
+                                    per_write_lock=True,
+                                    workers=max(1, min(args.workers, 8)),
+                                    shard=shard, batch_k=args.batch,
+                                    admitted_ids=_admitted())
+                    sem = None
+                    if args.semantic and not held():
+                        sem = _background_semantic(led, stop)
+                        print(json.dumps({"semantic": sem,
+                                          "ts": time.time()},
+                                         ensure_ascii=False), flush=True)
+                except Exception as e:
+                    # a transient failure ('database is locked') must not
+                    # kill the resident worker — log, back off, retry
+                    print(json.dumps({"event": "extract_loop_error",
+                                      "error": type(e).__name__,
+                                      "ts": time.time()}),
+                          file=sys.stderr, flush=True)
+                    pause(30)
+                    continue
                 total["done"] += r["done"]
                 total["failed"] += r["failed"]
                 total["left"] = r["left"]
