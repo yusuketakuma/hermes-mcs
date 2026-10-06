@@ -1,0 +1,15 @@
+{
+  "category": "added",
+  "title": "公式医薬品マスターをシステム版に同梱して検証",
+  "summary": "システムの版更新と一緒に、厚労省の20260930版医薬品マスター原本ZIPと、出典・版・SHA・件数を記録したmanifestを配布できるようにします。リリースごとに公式サイトの更新を確認し、更新された原本は形式・状態の仕様をレビューして同梱します。同梱した原本の全行検証は無通信で実行できます。",
+  "upgrade": "同梱だけで私有辞書の更新・本番設定への反映・有効化はしません。利用条件・変更区分・期限の意味と出典を運用者の私有pinで確認し、既存の人承認と明示的な設定経路を使います。未知の版・layoutは自動受理せず、レビューしたconverterと合成テストをシステム版と一緒に更新します。患者データや実投稿を同梱する機能ではありません。",
+  "details": [
+    "resources/drug-master/20260930/y_20260930.zipは公式公開ZIPのバイト列を変更しない配布資産。19,272行・1,157,440 bytes、ZIP SHA256 820f173981b1601e718ef110ffba55fbea1c04d07abb6a4297b4281db0eecccf。テストfixtureには使用せず、配布ファイル名のみ変更したこととMHLW出典を明記する。",
+    "manifestは既知版・layout・ZIP/CSV SHA・member・件数・出典/仕様書/利用条件の参照と加工表示を記録し、activation=false/operator_approval_required=trueを保持する。運用者のapproved_by/terms_checked_on/confirmed_byを作成しない。",
+    "scripts/development/check_drug_master_bundle.pyは無通信・読取り専用で、容量・hash・ZIP member・CSV全行の既知形式を既存converterで検証する。運用者のterms/status policyを渡さないreport-onlyのため、terms_unconfirmedで辞書出力を保留したまま19,272行を検証済みとする。臨床精度や候補の有効化を意味しない。",
+    "公開原本は固定公式URL・no-redirect/no-proxy・32MiB上限と期限で取得した。MHLWの公共データ利用規約PDL1.0への参照、出典と加工表示を添える。参照確認日は運用者の利用承認ではなく、個別条件・第三者権利等は別途確認する。",
+    "resources/drug-master/README.mdに各リリースで公式サイト/原本SHAの新しい照合、更新時のedition/layout/status仕様レビュー、原本とmanifestのシステム版への同梱、関連検証と更新時操作の記録を定める。既存checkoutから動く導入/更新経路を使い、新しいインストール先や自動有効化を追加しない。",
+    "bundleの検証テストは完全合成ZIPだけを使い、未知版/layout・不正hash・容量・型・パス/シンボリックリンク・虚偽の承認項目を拒否し、内容・設定・DBを変更しないことを確認する。"
+  ],
+  "refs": ["resources/drug-master/README.md", "resources/drug-master/20260930/manifest.json", "scripts/development/check_drug_master_bundle.py", "tests/meta/test_drug_master_bundle.py"]
+}
