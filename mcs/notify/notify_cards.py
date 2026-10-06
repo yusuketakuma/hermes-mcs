@@ -42,7 +42,7 @@ from contextlib import suppress
 
 import mcs_runtime
 from mcs_adapter import project_url
-from mcs_queries import HOLD_PROGRESS_SET, current_extract_pred, current_v4_id
+from mcs_queries import HOLD_PROGRESS_SET, current_fact_pred
 from mcs_requests import canonical, payload_hash, positive, valid_hash
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
@@ -72,6 +72,12 @@ LIVE_RENDER = ("queued", "sending", "unknown", "held")
 RESEAT_S = 3600           # re-examine a dispatched pending intent hourly
 TOKEN_VIEW_S = 30 * 86400
 TOKEN_WRITE_S = 7 * 86400
+# cmd_results files carrying live view data (source text, task names,
+# staff lists) live this long — every adapter reads a result within its
+# ~14 min followup window. Never persisted in command_receipts.
+LIVE_RESULT_KEYS = frozenset({"body", "form", "list", "parts", "text",
+                              "tasks", "token_ctx"})
+LIVE_RESULT_S = 3600
 MAX_RESEND = 3            # consecutive not_sent attempts before a card
                           # suspends auto-retry (update_failed)
 RESTORE_MARKER = "restore_pending.json"
@@ -285,7 +291,7 @@ _WRITE_ACTIONS = frozenset(
 # recomputed on every click — a replayed command_id never returns the
 # stored receipt for these
 _LIVE_VIEWS = frozenset({"body", "summary", "request", "dismiss", "report",
-                         "mytasks", "unacked", "search", "digest"})
+                         "mytasks", "unacked", "search", "digest", "tasks"})
 
 MAX_COMPONENTS = 40           # the worker's per-card component ceiling
                               # (hermes_plugin spec.MAX_COMPONENTS)
@@ -855,12 +861,23 @@ def _plan_attachments(db, shown) -> list:
             FROM attachments a
             JOIN messages m ON m.message_id=a.message_id
             WHERE a.message_id IN ({ph})
+              -- a file whose text followup will send or already sent it
+              -- is owned by that followup; a part would post it twice.
+              -- suppressed/held followups leave the file to the part.
+              AND NOT EXISTS(SELECT 1 FROM notify_outbox o
+                WHERE o.kind='attachment_followup'
+                  AND o.state IN ('pending','failed','accepted')
+                  AND json_valid(o.payload)
+                  AND json_extract(o.payload,'$.attachment_id')=a.attachment_id)
             ORDER BY a.attachment_id""", ids).fetchall()
     out = []
     for a in rows:
         name = a["name"] or f"file-{a['attachment_id']}"
         if len(name) > 200:
-            name = name[:199] + "…"
+            # keep a short extension so Discord still previews images
+            ext = os.path.splitext(name)[1]
+            ext = ext if len(ext) <= 16 else ""
+            name = name[:199 - len(ext)] + "…" + ext
         entry = {"attachment_id": a["attachment_id"],
                  "name": name}
         if a["state"] == "pending":
@@ -1609,7 +1626,8 @@ def _extract_ref(db, project_id, *, root=None, mid=None) -> dict | None:
     """The extraction a ⚠ report pins: the newest message of the thread
     (or the signal's evidence message) whose current structured result
     is an extract_llm artifact — a message served by the v4 read model
-    has no extract_llm result to re-run, so it offers no report."""
+    or a current canonical projection (the same shadow rule the 📋 body
+    reads) has no displayed extract_llm result, so it offers no report."""
     where = ("(m.message_id=? OR m.parent_id=?)" if root is not None
              else "m.message_id=?")
     args = (root, root) if root is not None else (mid,)
@@ -1618,8 +1636,7 @@ def _extract_ref(db, project_id, *, root=None, mid=None) -> dict | None:
             FROM messages m JOIN artifacts a
               ON a.message_id=m.message_id AND a.kind='extract_llm'
             WHERE {where} AND m.project_id=? AND m.body_state='full'
-              {current_extract_pred('a', 'm')}
-              AND {current_v4_id('m')} IS NULL
+              {current_fact_pred('a', 'm')}
             ORDER BY m.posted_at_ts DESC, a.artifact_id DESC LIMIT 1""",
         (*args, project_id)).fetchone()
     if r is None or not valid_hash(r["content_hash"]):
@@ -2275,7 +2292,7 @@ def apply_notification(ledger, req, cfg, now=None) -> dict:
             # the 📝 form's prefill/staff list is the same kind of live
             # view data — recomputed per click, never persisted
             kept = {k: v for k, v in receipt.items()
-                    if k not in ("body", "form", "list", "parts", "text")}
+                    if k not in LIVE_RESULT_KEYS}
             db.execute(
                 "INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
                 (command_id, digest, receipt.get("project_id"),

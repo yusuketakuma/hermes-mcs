@@ -196,12 +196,30 @@ def fit_parts(parts: dict, limit: int = PARTS_TEXT_BUDGET) -> dict:
     return out
 
 
+# Twin of adapters.discord.cards.escape_md (mcs/ never imports adapters;
+# tests pin the two equal): same-length look-alikes for Discord markup.
+_MD_KEEP = re.compile(r"(<@[!&]?\w+>|https?://\S+)")
+_MD_INLINE = str.maketrans("*_~|`[]<\\", "＊＿～｜｀［］＜＼")
+_MD_LINE = re.compile(r"^([ \t]*)(?:(\d+)\.|([#>+-]))", re.M)
+_MD_LEAD = str.maketrans("#>+-", "＃＞＋－")
+
+
+def _discord_literal(text: str) -> str:
+    text = "".join(part if i % 2 else part.translate(_MD_INLINE)
+                   for i, part in enumerate(_MD_KEEP.split(text)))
+    return _MD_LINE.sub(
+        lambda m: m.group(1) + (f"{m.group(2)}．" if m.group(2)
+                                else m.group(3).translate(_MD_LEAD)), text)
+
+
 def parts_text(parts: dict, dialect: str = "plain") -> str:
     """The display model as one chat's text: ``discord`` (markdown
     heading, ``-#`` subtext footer), ``slack`` (mrkdwn bold heading) or
     ``plain`` (LINE WORKS, CLI, relayed notices — ``【】`` heading).
-    Body text is passed through unformatted in every dialect."""
+    Body text is never formatted; on Discord it is escaped to literal
+    text (same length) so staff text cannot render as markup."""
     head = {"discord": "## {}", "slack": "*{}*"}.get(dialect, "【{}】")
+    lit = _discord_literal if dialect == "discord" else str
     lines = []
     for item in parts["containers"]:
         kind = item["type"]
@@ -210,13 +228,13 @@ def parts_text(parts: dict, dialect: str = "plain") -> str:
         if item.get("rule") and lines:
             lines.append(SECTION_RULE)
         if kind == "heading":
-            lines.append(head.format(item["text"]))
+            lines.append(head.format(lit(item["text"])))
         elif kind == "field":
-            lines.append(f"{item['name']}: {item['value']}")
+            lines.append(f"{lit(str(item['name']))}: {lit(str(item['value']))}")
         else:
-            lines.append(f"引用: {item['text']}" if kind == "quote"
-                         else item["text"])
-    footer = [ln for item in parts.get("footer") or []
+            lines.append(f"引用: {lit(item['text'])}" if kind == "quote"
+                         else lit(item["text"]))
+    footer = [lit(ln) for item in parts.get("footer") or []
               if item["type"] == "text" for ln in item["text"].splitlines()]
     if footer and lines:
         lines.append(SECTION_RULE)
@@ -458,7 +476,7 @@ SIGNAL_TYPE_LABEL = {
     "rx_period_expiry": "処方期限間近",
     "rx_period_lapsed": "処方期限切れ",
 }
-SIGNAL_STATE_LABEL = {"open": "未対応", "resolved": "解消",
+SIGNAL_STATE_LABEL = {"open": "未確認", "resolved": "解消",
                       "dismissed": "却下"}
 URGENCY_TAG = {"llm": "［緊急度高・AI判定］", "rule": "［緊急語あり］"}
 
@@ -1046,6 +1064,8 @@ def _footer(db, card, shown, generation) -> tuple:
 
 
 def _content_fp(content: dict) -> str:
+    # preview_text is derived from shown/containers; keeping it out keeps
+    # fingerprints stored by earlier versions stable (no mass re-render).
     return payload_hash({"c": content["containers"], "f": content["footer"],
                 "s": content["shown"], "p": content["page"],
-                "a": content.get("actor_fp"), "preview": content.get("preview_text")})
+                "a": content.get("actor_fp")})

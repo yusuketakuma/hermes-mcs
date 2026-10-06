@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "誤り報告の対象と、health.json書き込み失敗の通知を修正",
+  "summary": "カードの要約が新しい抽出結果（canonical projection）から表示されているとき、「⚠ 誤り報告」が表示されていない古い抽出結果を対象にしていました。表示中の結果と同じ優先順位で対象を決めます。また、監視用のhealth.jsonを書き込めなかったときの障害通知が送られずに取り下げられていたため、チェック失敗と同じ通知先へ送るようにしました。",
+  "upgrade": "追加操作は不要です。次回の定期実行から適用されます。health.json書き込み失敗の通知は、notify_system_targetが設定されていればその通知先へ送られます。",
+  "details": [
+    "_extract_ref の条件を current_fact_pred に揃え、現在のv4結果またはcanonical projectionがある投稿では報告ボタンを出さない。",
+    "health_write_failed を障害通知の種類に加え、「[MCS] health.json の書き込み失敗」として送信する。"
+  ],
+  "refs": ["mcs/notify/notify_cards.py", "mcs/notify/notify_flush.py"]
+}

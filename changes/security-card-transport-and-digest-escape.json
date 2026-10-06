@@ -1,0 +1,11 @@
+{
+  "category": "security",
+  "title": "配送先切替後の確定操作を拒否し、Discordのサマリー本文を無害化",
+  "summary": "通知先を切り替えた後でも、以前の通知先のカードから起票・アラート却下・誤り報告を確定できました。操作した人の識別子から通知先を判定し、現在の通知先と異なる場合は拒否します。また、Discordで「サマリー（絞込み）」を表示するとき、職員の投稿文がリンク・見出し・ネタバレ表示などの書式として解釈されないようにしました。",
+  "upgrade": "追加操作は不要です。次回の定期実行から適用されます。通知先を切り替える前に開いていた確認画面からの確定は拒否されるため、新しい通知先のカードから操作し直してください。",
+  "details": [
+    "request.create・ops.signal_dismiss・ops.extract_feedback は actor の接頭辞（discord:・slack:・lineworks:）を現在の notify.interactive と照合する。",
+    "parts_text の discord 方言では、本文・見出し・フッターを adapters.discord.cards.escape_md と同じ同字数の置換で表示する。文字数予算は変わらない。"
+  ],
+  "refs": ["mcs/notify/notify_cmds.py", "mcs/notify/notify_render.py"]
+}

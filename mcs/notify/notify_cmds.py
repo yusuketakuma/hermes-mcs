@@ -346,10 +346,16 @@ def dispatch(ledger, req, cfg, root, now=None):
     if req.get("cmd") in HUMAN_CMDS:
         # a confirm can outlive its preview: the kill switch, a pending
         # restore or a transport switch since then must still refuse it
+        # human envelopes are version 1 without 'transport' — the
+        # adapter-stamped actor prefix (discord:/slack:/lineworks:) names
+        # the transport the confirm came from
+        active = notify_cards.active_transport(cfg)
+        actor = req.get("actor")
+        origin = actor.split(":", 1)[0] if isinstance(actor, str) else None
         if (not notify_cards.interactive_enabled(cfg)
                 or notify_cards.restore_pending(root) is not None
-                or ("transport" in req
-                    and req["transport"] != notify_cards.active_transport(cfg))):
+                or origin != active
+                or ("transport" in req and req["transport"] != active)):
             return {"outcome": "rejected", "error": "interactive_off",
                     "command_id": req.get("command_id")}
         error = _human_cmd_check(req)
@@ -473,8 +479,15 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
         safe = "".join(c if c.isalnum() or c in "._-" else "_"
                        for c in str(result_id))[:120] or "unknown"
         try:
-            notify_cards.publish_file(res_dir, safe + ".json",
-                                      canonical(out))
+            published = notify_cards.publish_file(res_dir, safe + ".json",
+                                                  canonical(out))
+            if notify_cards.LIVE_RESULT_KEYS & out.keys():
+                # age it so gc's TOKEN_WRITE_S sweep drops it after
+                # LIVE_RESULT_S — view text never sits on disk for a week
+                aged = time.time() - notify_cards.TOKEN_WRITE_S \
+                    + notify_cards.LIVE_RESULT_S
+                with suppress(OSError):
+                    os.utime(published, (aged, aged))
         except OSError as e:
             result.setdefault("errors", []).append(
                 f"result_publish_failed:{safe}:{type(e).__name__}")

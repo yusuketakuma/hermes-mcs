@@ -57,6 +57,7 @@ _MAX_FILES_BYTES = 23 * 1024 * 1024
 SEND_MIN_BUDGET_S = 30
 _ALERT_KINDS = frozenset({
     "session_expired", "session_recovered", "run_failed", "update_notice",
+    "health_write_failed",
 })
 
 
@@ -309,6 +310,15 @@ def _followup_files(ledger, payload: dict, project_id):
         (aid, project_id, project_id)).fetchone()
     if not a or a["state"] != "downloaded" or not a["local_path"]:
         raise _StaleSend("attachment_not_ready")
+    # a card's part journal already owns this file (planned, sent or
+    # uncertain) — a second send would duplicate it. Held parts never
+    # send; their thread failure re-queues this followup instead.
+    if ledger.db.execute(
+            "SELECT 1 FROM notification_render_parts WHERE attachment_id=?"
+            " AND kind='attachment_part'"
+            " AND state IN ('pending','delivered','unknown') LIMIT 1",
+            (aid,)).fetchone():
+        raise _StaleSend("attachment_in_card_parts")
     files = _collect_files({a["message_id"]: [a]}, [a["message_id"]])
     if not files:
         raise _StaleSend("attachment_unsendable")
@@ -337,6 +347,9 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
                 f"run {payload.get('run_id')}: {payload.get('detail','')}"), []
     if ev["kind"] == "run_failed":
         return ("[MCS] チェック失敗 — アダプタを確認してください\n"
+                f"run {payload.get('run_id')}: {payload.get('detail','')}"), []
+    if ev["kind"] == "health_write_failed":
+        return ("[MCS] health.json の書き込み失敗 — 監視用の状態ファイルが更新されていません\n"
                 f"run {payload.get('run_id')}: {payload.get('detail','')}"), []
     if ev["kind"] == "daily_digest":
         # frozen at enqueue (ids and counts only); turning the digest
