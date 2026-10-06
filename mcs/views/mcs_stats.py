@@ -929,9 +929,13 @@ def st_signal_feedback(db, scope):
     selected = [ep for ep in episodes
                 if (scope["since"] is None or ep["start"] >= scope["since"])
                 and (scope["until"] is None or ep["start"] < scope["until"])]
-    requests = db.execute(
-        "SELECT project_id,source_message_id,created_at FROM requests "
-        "WHERE created_at<=?", (scope["as_of"],)).fetchall()
+    # Bucketed by patient / shown key so each episode only scans its own
+    # candidates instead of every request and manifest (was O(episodes x rows)).
+    requests: dict = {}
+    for pid, source, created in db.execute(
+            "SELECT project_id,source_message_id,created_at FROM requests "
+            "WHERE created_at<=?", (scope["as_of"],)):
+        requests.setdefault(pid, []).append((source, created))
     # Delivered renders prove exactly which digest page/signal keys were shown.
     # An accepted outbox or card anchor alone is not proof of page delivery.
     manifests = db.execute(
@@ -947,23 +951,23 @@ def st_signal_feedback(db, scope):
             "WHERE created_at<=? AND (withdrawn_at IS NULL OR withdrawn_at>?)",
             (scope["as_of"], scope["as_of"])):
         acks.setdefault(mid, []).append(at)
-    shown = []
+    shown: dict = {}
     for mid, shown_s, delivered in manifests:
         try:
             keys = json.loads(shown_s)
         except (ValueError, TypeError, RecursionError):
             continue
         if isinstance(keys, list):
-            shown.append((mid, {k for k in keys if isinstance(k, str)}, delivered))
+            for k in {k for k in keys if isinstance(k, str)}:
+                shown.setdefault(k, []).append((mid, delivered))
     for ep in selected:
-        for pid, source, created in requests:
-            if pid == ep["pid"] and any(
-                    source in segment["mids"]
-                    and segment["start"] <= created <= segment["end"]
-                    for segment in ep["segments"]):
+        for source, created in requests.get(ep["pid"], ()):
+            if any(source in segment["mids"]
+                   and segment["start"] <= created <= segment["end"]
+                   for segment in ep["segments"]):
                 ep["adoption_times"].append(created)
-        for mid, keys, delivered in shown:
-            if ep["key"] in keys and ep["start"] <= delivered <= ep["end"]:
+        for mid, delivered in shown.get(ep["key"], ()):
+            if ep["start"] <= delivered <= ep["end"]:
                 ep["shown_times"].append(delivered)
                 ep["ack_times"].extend(
                     at for at in acks.get(mid, [])
