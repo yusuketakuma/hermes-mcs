@@ -9,5 +9,11 @@
     "旧scopeファイルの取込みで、所属scopeの情報欠測や不正な文字列は所有を証明できない項目として取込みを見送ります。正常に所有を証明できる項目だけを移し、旧ファイルの内容を変更しません。正常scopeのhash計算は1回にまとめました。",
     "公開入口・SDK境界・配送receipt・保存形式・単一送信の条件は維持します。完全合成で破損9ケースの修正前再現、100回の状態読込み・期限整理、100回の二重停止と所有task終了を確認しました。"
   ],
-  "refs": ["adapters/common/registry.py", "adapters/common/worker.py", "tests/adapters/common/test_registry_shape_isolation.py", "tests/adapters/standalone/test_shutdown_stability.py", "docs/development/stability-audit-round3-adapters-1.0.15.json"]
+  "refs": [
+    "adapters/common/registry.py",
+    "adapters/common/worker.py",
+    "tests/adapters/common/test_registry_shape_isolation.py",
+    "tests/adapters/standalone/test_shutdown_stability.py",
+    "docs/development/audits/1.0.15/round3/stability-audit-round3-adapters-1.0.15.json"
+  ]
 }

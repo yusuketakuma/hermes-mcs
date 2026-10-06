@@ -1,40 +1,43 @@
 {
-  "version": "1.0.14",
+  "version": "1.0.15",
   "sections": {
     "features": {
-      "notes": "2026-10-06、1.0.14の17変更記録と実ソースを照合。カードの概要・投稿別要約・状態・操作の4区画、固定主操作とメニュー、要約の項目別省略撤廃（通知先上限・単一投稿省略は維持）と処理待ち/作成失敗、抽出保存/押下者取得直後の再描画を確認。常駐抽出は新着優先、ルール世代9の順次再抽出を確認。通常モデル、自動取得10分、任意機能の既定offと人承認は維持。 実機反映依頼に伴う再照合で、README機能本文へ表示上限と取得後反映を補足。",
+      "notes": "2026-10-06、1.0.15の変更記録と通知プレビュー・履歴検索・抽出・台帳・稼働状態の実装を照合。プレビューは保存済みの患者/発信者/所属/投稿時刻/要約、未完成時は原文と待機/失敗状態を送る。READMEへ端末依存と既存Discord/LINE WORKSファイル通知の制約、全角半角・英字大小の検索、走査/メモリと再試行・停滞記録の改善を反映。性能改善率は未測定のため記載しない。通常モデル、自動取得10分、任意取得・氏名表示の既定offと人承認は維持。 公開前監査の長い添付名境界は通知文だけ拡張子を残して省略する修正と関連152合成テストで確認。",
       "sources": [
         "README.md",
-        "CHANGELOG.md",
         "mcs/notify/notify_render.py",
         "mcs/notify/notify_cards.py",
-        "mcs/views/structured_view.py",
+        "mcs/views/mcs_view.py",
+        "mcs/core/mcs_util.py",
+        "mcs/core/ledger.py",
         "mcs/extract/v4/extract_llm.py",
-        "mcs/extract/v1/extract.py",
         "mcs/ingest/run_check.py"
       ]
     },
     "demos": {
-      "notes": "Slack先頭の7画面とDiscord/LINE WORKS説明図を現行配置・操作名・本人向け回答条件に照合。Slack02のPNGを目視し、4区画・確認する/担当する/タスク作成/操作を選ぶ・MCSで開くが実装に対応することを確認。既存画像を再利用し、変更前画面は推測しない。架空データの説明図で実画面キャプチャではなく、画像内操作は不可。公開tag内の画像とローカル画像の内容一致はAPIで確認済み。ブラウザーが利用できずReleaseの実画面表示は未確認。 再照合では両galleryの生成元対応表と現action/cards実装を確認し、説明図の変更は不要。",
+      "notes": "2026-10-06、Slack先頭7画面とDiscord/LINE WORKS説明図をソース対応表・cards/actions/deliveryと照合。カード本文・操作・本人向け確認と人承認条件を維持するため画像変更不要。プレビューはSlack fallback、Discord新規contentと既存V2互換、LINE WORKS altTextの変更で、説明図の本文配置とは別。架空データ・操作不能な説明図の明示を保持。今回両galleryの生成器checkを実施し、実端末の受信/省略/ロック画面と実SDKの操作成功は未検証として区別する。",
       "sources": [
         "README.md",
         "docs/screenshots/slack-gallery/README.md",
-        "docs/screenshots/slack-gallery/assets.json",
         "docs/screenshots/lineworks-gallery/README.md",
         "adapters/slack/cards.py",
         "adapters/slack/actions.py",
+        "adapters/discord/cards.py",
         "adapters/lineworks/cards.py",
-        "adapters/lineworks/actions.py"
+        "adapters/lineworks/actions.py",
+        "adapters/common/text.py"
       ]
     },
     "quickstart": {
-      "notes": "導入前提、install.shのpreflight/モード選択、setup/doctor/update入口と導入・更新ガイドを照合。1.0.14は追加設定不要、カード表示はgatewayまたは独立adapter/host、抽出優先順と保存直後反映は抽出worker再起動が必要。LINE WORKSの名前辞書は任意。配布物の隔離受入と実接続/稼働サービス反映は別条件として維持。 再照合ではmacOS13以降、読み取り専用preflight、モード選択、共通CLIと既存更新ガイド導線の一致を確認。 同日の実機反映は受入票へ記録。対象版planはnoop/schema9、サービス同期・gatewayと抽出worker2本の新PIDと診断を確認した。実API操作・試験送信・全経路受入は未実施。",
+      "notes": "2026-10-06、macOS前提・preflight・モード選択・CLI導入/診断/更新入口をinstall.shと既存ガイドへ照合し、導入コマンド変更不要と確認。1.0.15は設定追加なし、schema9の加法索引追加。更新ガイドへgateway/使用中host・adapter/抽出workerの反映確認、LINE WORKSの初回手動再起動、recovery_tool_changed時のwatchdog本体同期を追記。servicesのみでは復旧本体を更新しない。既存recovery_python・opt-outを維持し、旧版のschema変更/手動更新/standalone host契約は残す。配備・実接続成功は文書検証から推定しない。",
       "sources": [
         "README.md",
         "install.sh",
         "scripts/mcs",
-        "mcs/ops/mcs_cli.py",
+        "scripts/mcs_upgrade.py",
+        "mcs/ops/mcs_update.py",
         "mcs/ops/mcs_setup.py",
+        "mcs/core/ledger.py",
         "docs/guides/INSTALLATION.md",
         "docs/guides/UPGRADE_AGENT.md",
         "docs/guides/STANDALONE.md",
@@ -42,31 +45,30 @@
       ]
     },
     "safety": {
-      "notes": "2026-10-06の明示指示で返信自動既読のsnapshot契約確認制限を撤廃。未保存/snippet返信の先行取得、unknown intentと再確認、直近7日/最大10スレッドを照合。収集後の返信も既読になり得る制約をREADME・利用ガイド・変更記録へ明記。患者既読は保存commitとsnapshot条件を維持。任意外部抽出/押下者取得の既定off、人承認/reason/receipt、通知停止後の確定拒否、Slack原文メンション抑止を保持。 再照合でREADME・SECURITYのsnapshot条件を患者単位に限定し、返信の明示例外、--mark-read、追加返信の取得と新着競合リスクを揃えた。",
+      "notes": "2026-10-06、SECURITYと患者既読/返信既読・添付送信・確定操作の境界を照合。READMEへ通知プレビューの患者名/本文がロック画面へ出る可能性と端末設定確認、attachments内の実体だけ送る条件を追加。返信の補完再試行上限に達した保存済み抜粋は既読化を妨げず、未保存返信は既読にしない条件を正確化。患者既読の保存commit/snapshot、返信の7日/最大10件と新着競合リスク、任意外部取得/公開・氏名表示の既定off、人承認/reason/receiptは維持。破損・結果不明の配送は未送信と推定せず保留し、復元同意と通知保留を弱めない。 SECURITY・利用者ガイドにも取得失敗済みの保存済み返信と未保存返信の扱いを整合。",
       "sources": [
         "README.md",
         "SECURITY.md",
         "mcs/ingest/run_check.py",
-        "mcs/ingest/mcs_adapter.py",
         "mcs/core/ledger.py",
-        "adapters/slack/standalone.py",
+        "adapters/common/paths.py",
+        "adapters/common/registry.py",
         "adapters/slack/actions.py",
         "adapters/discord/actions.py",
-        "docs/guides/USER_GUIDE.md"
+        "adapters/lineworks/actions.py",
+        "mcs/ops/mcs_update.py"
       ]
     },
     "docs": {
-      "notes": "1.0.14は既存release_notes buildで全17記録をarchiveへ保存し、本文を利用目的で統合、比較3件と合成Slackカード図を添える。過去版と過去archiveは変更しない。READMEの5領域を新しく照合し、CHANGELOG正本から生成要約とRelease exportを同期。導入/操作/安全/更新/開発の相対リンクと主要アンカーは既存readme検査で確認する。 更新ガイドと1.0.14受入票を文書表へ追加。受入票の既存記録を案内するだけで、今回の実機反映完了は先書きしない。",
+      "notes": "2026-10-06、READMEの目的別リンク/主要アンカー・導入/操作/安全/更新/開発導線を再照合。最新受入票リンクを1.0.15へ変更し、1.0.13計画と過去版契約への既存導線は保持。GENERATED:releaseは手編集せず、親のrelease_notes buildでCHANGELOG正本から更新後にreadme_release --checkを行う。検証記録・公開・本番反映は受入票でそれぞれ追跡し、文書更新を配備完了として記録しない。",
       "sources": [
         "README.md",
-        "CHANGELOG.md",
-        "docs/development/RELEASE_NOTES.md",
-        "docs/development/README_MAINTENANCE.md",
-        "docs/guides/USER_GUIDE.md",
-        "scripts/development/release_notes.py",
-        "scripts/development/readme_release.py",
         "docs/guides/UPGRADE_AGENT.md",
-        "docs/development/acceptance/ACCEPTANCE_1.0.14.md"
+        "docs/development/README_MAINTENANCE.md",
+        "docs/development/RELEASE_NOTES.md",
+        "scripts/development/readme_release.py",
+        "scripts/development/release_notes.py",
+        "docs/development/plans/RELEASE_1.0.13.md"
       ]
     }
   }

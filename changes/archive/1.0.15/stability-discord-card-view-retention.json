@@ -8,5 +8,10 @@
     "固定discord.py 2.7.1の無通信・完全合成1000カードで登録条件を再現しました。修正前の保持View1000/dispatch map1000に対し、修正後は両方0です。tracemallocの一試行では保持メモリ2,033,912bytes対32bytesでした。実サービス負荷や一般的な使用量の削減率を示す測定ではありません。",
     "実SDKで標準/V2各1000回のcomponents serializationと登録抑止を検証し、既存の操作・配送・再試行抑止をスタブで回帰確認します。"
   ],
-  "refs": ["adapters/discord/cards.py", "adapters/discord/actions.py", "tests/adapters/discord/test_discord_sdk_real.py", "docs/development/stability-audit-round2-adapters-1.0.15.json"]
+  "refs": [
+    "adapters/discord/cards.py",
+    "adapters/discord/actions.py",
+    "tests/adapters/discord/test_discord_sdk_real.py",
+    "docs/development/audits/1.0.15/round2/stability-audit-round2-adapters-1.0.15.json"
+  ]
 }

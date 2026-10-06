@@ -2,7 +2,7 @@
   "format": 1,
   "synthetic": true,
   "origins": "origins.json",
-  "target": {"version": "v1.0.14", "code": "current workspace updater", "schema": "ledger.SCHEMA_VERSION"},
+  "target": {"version": "v1.0.15", "code": "current workspace updater", "schema": "ledger.SCHEMA_VERSION"},
   "provenance": {
     "record": "docs/dev-records/release-1.0.12-20261004.md:70-75",
     "reported_count": 26,
@@ -26,7 +26,8 @@
     {"release": "v1.0.10", "updater": true, "standalone": true},
     {"release": "v1.0.11", "updater": true, "standalone": true},
     {"release": "v1.0.12", "updater": true, "standalone": true},
-    {"release": "v1.0.13", "updater": true, "standalone": true}
+    {"release": "v1.0.13", "updater": true, "standalone": true},
+    {"release": "v1.0.14", "updater": true, "standalone": true}
   ],
   "historical_paths": [
     {"source": "v1.0.0", "target": "v1.0.11", "runtime": "hermes", "install_changed": true},
@@ -71,10 +72,12 @@
     {"source": "v1.0.11", "runtime": "hermes", "entry": "target_bootstrap", "external_plan": null},
     {"source": "v1.0.12", "runtime": "hermes", "entry": "target_bootstrap", "external_plan": null},
     {"source": "v1.0.13", "runtime": "hermes", "entry": "target_bootstrap", "external_plan": null},
+    {"source": "v1.0.14", "runtime": "hermes", "entry": "target_bootstrap", "external_plan": null},
     {"source": "v1.0.10", "runtime": "standalone", "entry": "host", "external_plan": "standalone_external_apply"},
     {"source": "v1.0.11", "runtime": "standalone", "entry": "host", "external_plan": "standalone_external_apply"},
     {"source": "v1.0.12", "runtime": "standalone", "entry": "host", "external_plan": "standalone_external_apply"},
-    {"source": "v1.0.13", "runtime": "standalone", "entry": "host", "external_plan": "standalone_external_apply"}
+    {"source": "v1.0.13", "runtime": "standalone", "entry": "host", "external_plan": "standalone_external_apply"},
+    {"source": "v1.0.14", "runtime": "standalone", "entry": "host", "external_plan": "standalone_external_apply"}
   ],
   "checks": {
     "plan": "real plan and precheck_tag over synthetic Git objects; source schema/config/journal remain unchanged",

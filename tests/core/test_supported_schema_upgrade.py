@@ -70,6 +70,8 @@ def _historical(root: Path, origin: Origin) -> Path:
             db.executescript((FIXTURES / "notification-seed.sql").read_text())
         if "message_metadata" in tables:
             db.executescript((FIXTURES / "metadata-seed.sql").read_text())
+        if "thread_read_marks" in tables:
+            db.execute("INSERT INTO thread_read_marks VALUES(201,101,202,'confirmed',111)")
         db.commit()
         assert db.execute("PRAGMA user_version").fetchone()[0] == origin["schema_version"]
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []

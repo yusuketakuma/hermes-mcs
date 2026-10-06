@@ -1,8 +1,17 @@
 # MCS 更新実行手順書（AIエージェント用）
 
-このガイドはv1.0.14仕様のinstall/update/setup/doctorと復旧手順に対応する。
-1.0.14の合成検証・公開の状況は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.14.md)で追跡する。
+このガイドはv1.0.15仕様のinstall/update/setup/doctorと復旧手順に対応する。
+1.0.15の合成検証・公開・実機反映の状況は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.15.md)で追跡する。
 過去の1.0.13実機受入計画は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)に残す。
+
+### 1.0.15への更新で確認すること
+
+追加設定は不要です。DB schemaは9を維持し、検索・取得・配送用の索引を加法的に追加します。
+台帳の保存データを削除する移行や、抽出モデルの変更はありません。古い版から更新する場合は、その間のschema変更・導入条件も`plan`で確認します。
+
+- Hermesモードはgatewayと抽出ワーカー2本、独立実行は使用中のhost・通知アダプター・抽出ワーカーへ新しいコードを反映します。LINE WORKSの独立アダプターも再起動してください。この版への更新直後は旧更新コードの再起動処理に頼らず、§6で稼働プロセスの反映を確認します。
+- `recovery_tool_changed`がtrueなら、復旧watchdogの**本体**も同期します。`mcs setup services`だけではcheckout外の本体を更新しません。§2の表に従い、導入済みの機能とopt-outを維持して`install.sh ... --no-services`を再実行します。復旧機能を使う環境では、この同期を`--no-recovery`で省略しません。既存の安全な`recovery_python`を維持し、別のPythonへ自動で切り替えません。
+- 通知文に患者名・投稿内容が含まれます。端末の通知プレビュー設定を確認してください。更新後の稼働確認は、実端末での受信・表示・カード操作の確認とは区別します。
 
 ### 2026-10-04追記: 現在の更新入口と回帰資産
 
@@ -14,7 +23,7 @@ v1.0.0〜1.0.2は手動更新条件を保持し、standaloneの外部applyは阻
 schema巻戻しの個別復旧同意を更新承認で代用できません。
 
 [更新経路manifest](../../tests/fixtures/schema_upgrade/update-paths.json)は過去26経路の根拠と、
-現行14公開版・18構成のplan/apply/rollback/bootstrap/reinstall回帰を区別します。
+現行15公開版・20構成のplan/apply/rollback/bootstrap/reinstall回帰を区別します。
 テストは完全合成でGit履歴に依存しませんが、旧target updater全体の26経路再実行、
 実Git・host協調停止・SDK導入・実機配備を検証したものではありません。
 launcherの選択runtime追随とbackup lifecycleは合成回帰で検証し、
@@ -51,7 +60,7 @@ launcherの選択runtime追随とbackup lifecycleは合成回帰で検証し、
 
 ## 2. 起動役の取得と計画（書込みなし）
 
-【実行】移行先タグ（ユーザー指定。無ければ最新リリース。以下 `$TAG`、例 `v1.0.14`）から
+【実行】移行先タグ（ユーザー指定。無ければ最新リリース。以下 `$TAG`、例 `v1.0.15`）から
 起動役を取り出し、計画を出す。`fetch` はタグを取り込むだけで checkout を変えない。
 
 ```bash
@@ -145,9 +154,10 @@ DB を開いて移行（加法 migration）→ 事後検証。失敗時は自動
 ## 6. 後処理と検証
 
 1. `restarts` に `gateway` があり Hermes モードなら、apply が再起動を依頼済み。`hermes gateway status` で稼働を確認する。
-2. `lineworks_adapter` があれば、[LINEWORKS.md](LINEWORKS.md) の手順で独立アダプターを再起動し `python -m lineworks_adapter check`。
+2. `lineworks_adapter` があれば、[LINEWORKS.md](LINEWORKS.md) の手順で独立アダプターを再起動し `python -m lineworks_adapter check`。1.0.15では自動更新・巻戻し・復旧後の再起動を追加しましたが、この版への初回更新後も明示的な再起動と反映確認を行います。
 3. `notes` にある追加操作（承認済みのもの）を実行する。`apply` 経路で `recovery_tool_changed` が true なら §2 の表のとおり install.sh を再実行する。
-4. 検証:
+4. 使用中のgatewayまたは独立host・通知アダプターと抽出ワーカー2本について、更新後に起動したプロセスであることと稼働状態を確認します。古いworkerが新しい通知形式を保留している場合、保存ファイルを削除して再送させず、更新したworkerで通常の配送を再開します。
+5. 検証:
 
 ```bash
 "$PY" "$REPO/mcs/ops/mcs_update.py" status     # applied の最後が $TAG、applying が null

@@ -9,7 +9,7 @@
     "v1.0.14:adapters/slack/cards.py:_FALLBACK",
     "adapters/slack/cards.py:render",
     "mcs/notify/notify_render.py:_preview_header,_preview_line,notification_preview",
-    "changes/mobile-notification-preview.json"
+    "changes/archive/1.0.15/mobile-notification-preview.json"
   ],
   "generator": "python3 docs/releases/v1.0.15/generate_visual.py",
   "renderer": "macOS qlmanage + sips, existing gallery Screen primitives",
@@ -19,7 +19,7 @@
   },
   "limitations": [
     "完全に架空の説明図。実投稿や匿名化例は使用していない。",
-    "公開URL到達とGitHub Release実画面表示は親エージェントの公開後に別々に検証する。"
+    "認証済みContents APIのPNG内容一致を確認。匿名raw URLは非公開repoのため404。本文の図リンクは閲覧権限が必要で、ブラウザー利用不能のためRelease実画面表示は未確認。"
   ],
   "assets": {
     "mobile-preview-comparison.png": "2aa5ac59fefc95731a8fb3774254cb9838bb17aa76de4b1797e8370df7cf05f0",
