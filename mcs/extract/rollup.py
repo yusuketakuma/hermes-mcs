@@ -218,7 +218,10 @@ def build_rollup(ledger, project_id: int) -> dict:
                 if isinstance(rq.get(src), str) and rq[src]:
                     row[dst] = rq[src]
             requests.append(row)
-            req_thread.append((row, root, ts, sender_id))
+            # Only the first 15 requests reach the read model; discarded
+            # rows need no reply scan, but all replies remain evidence.
+            if len(requests) <= 15:
+                req_thread.append((row, root, ts, sender_id))
         # reply lives only in extract_llm; read it there even when a
         # canonical_projection / semantic_facts_v4 blob shadows lm
         kind = _llm_reply_kind(llm)

@@ -273,6 +273,30 @@ def test_rollup_reply_survives_canonical_projection_shadowing(db):
     assert rows[0]["reply_state"] == "done"
 
 
+def test_rollup_reply_work_is_bounded_by_returned_requests(db, monkeypatch):
+    """Mixed rule/LLM requests keep their cap/order; old rows need no scan."""
+    requests = [{"to": "SYNTH", "action": f"合成依頼{i}"} for i in range(120)]
+    _thread(db, [(1, None, "SYNTH-A", "2026-09-19T00:30:00+09:00",
+                 {"requests": requests}),
+                (2, 1, "SYNTH-B", "2026-09-19T01:00:00+09:00", _reply("done"))])
+    db.artifact_add("extract_v1", json.dumps(
+        {"requests": [{"kind": "rule", "ctx": f"合成ルール{i}"} for i in range(4)]}),
+        project_id=1, message_id=1, meta={"hash": _hash(db, 1)})
+    calls = []
+
+    class Stages(dict):
+        def get(self, key, default=None):
+            calls.append(key)
+            return super().get(key, default)
+
+    monkeypatch.setattr(rollup, "_REPLY_STAGE", Stages(rollup._REPLY_STAGE))
+    rows = rollup.build_rollup(db, 1)["recent_requests"]
+    assert [row["ctx"] for row in rows] == (
+        [f"合成ルール{i}" for i in range(4)] + [f"合成依頼{i}" for i in range(11)])
+    assert all(row["reply_state"] == "done" for row in rows[4:])
+    assert calls == ["done"] * 11
+
+
 def test_rollup_sql_valid_shadowed_reply_at_python_depth_limit_is_safe(db):
     _thread(db, [(1, None, "SYNTH-A", "2026-09-19T00:30:00+09:00", _REQ),
                  (2, 1, "SYNTH-B", "2026-09-19T01:00:00+09:00", _reply("done"))])
