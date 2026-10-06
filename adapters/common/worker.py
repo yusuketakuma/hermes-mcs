@@ -93,6 +93,22 @@ def _card_message_id(records: dict, delivery_id: str) -> str | None:
     return None
 
 
+def _card_message_ids(records: dict) -> dict[str, str | None]:
+    """Latest primary outcome per delivery, in scan order for equal timestamps."""
+    latest = {}
+    for rows in records.values():
+        for row in rows:
+            did = row.get("delivery_id")
+            if (row.get("phase") != "result" or row.get("part_id")
+                    or not isinstance(did, str)):
+                continue
+            if did not in latest or (row.get("ts") or 0) >= (latest[did].get("ts") or 0):
+                latest[did] = row
+    return {did: str(row["message_id"])
+            if row.get("result") == "delivered" and row.get("message_id") else None
+            for did, row in latest.items()}
+
+
 class DeliveryWorker:
     """The durable claim/grant/send/receipt loop; a transport subclass
     supplies ``_perform`` and any companion-message bookkeeping."""
@@ -506,7 +522,8 @@ class DeliveryWorker:
         await self._drive_parts(claim, manifest, ctx, records)
 
     async def _resume_parts(self, spec: dict,
-                            records: dict | None = None) -> None:
+                            records: dict | None = None, *,
+                            card_message_ids: dict | None = None) -> None:
         """Restart-resume a settled spec's dependent parts — only parts
         the journal proves never began; a started-only attempt stays
         honestly unknown and is never resent."""
@@ -517,7 +534,9 @@ class DeliveryWorker:
             return
         if records is None:
             records = await asyncio.to_thread(self._jview.refresh)
-        mid = _card_message_id(records, spec["delivery_id"])
+        mid = (card_message_ids.get(spec["delivery_id"])
+               if card_message_ids is not None
+               else _card_message_id(records, spec["delivery_id"]))
         if not mid:
             # card unproven. A dead, unclaimed delivery_id never gets
             # another card attempt, so no delivered result can appear
@@ -884,10 +903,14 @@ class DeliveryWorker:
         """dead specs whose dependent parts never finished get their
         unjournaled remainder driven once per tick — journal phases
         dedupe everything already proven."""
+        if not resume:
+            return
         records = await asyncio.to_thread(self._jview.refresh)
+        card_message_ids = await asyncio.to_thread(_card_message_ids, records)
         for spec in resume:
             try:
-                await self._resume_parts(spec, records)
+                await self._resume_parts(spec, records,
+                                         card_message_ids=card_message_ids)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
