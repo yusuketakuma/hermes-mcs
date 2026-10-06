@@ -247,8 +247,11 @@ def _signal_unit_text(ledger, sigs: list[dict]):
     urgency = (structured_view.message_urgency(ledger.db, mid)
                if message is not None and mid is not None else None)
     if urgency:
+        suffix = (structured_view.urgency_qc_suffix(ledger.db, mid)
+                  if urgency == "llm" else "")
         head, sep, tail = text.partition("\n")
-        text = f"{head} — {structured_view.URGENCY_LABEL[urgency]}{sep}{tail}"
+        text = (f"{head} — {structured_view.URGENCY_LABEL[urgency]}"
+                f"{suffix}{sep}{tail}")
     return text
 
 

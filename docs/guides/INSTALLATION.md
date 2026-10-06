@@ -493,6 +493,8 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `urgency_escalation.after_min` / `repeat_min` | num(>0) | `30` / `60` | 初回表示から再確認までの分 / 再通知の間隔・分 |
 | `urgency_escalation.max_repeats` / `max_per_day` | int(>=0) | `2` / `10` | 1投稿あたりの再通知回数 / 1日の上限 |
 | `urgency_escalation.source` | choice | `llm` | 判定元。`llm`のみ対応 |
+| `vital_urgency.mode` | choice | `off` | `off`/`flag`/`high`。バイタル数値の決定論的閾値判定。`flag` は閾値超過の測定値を確認用に記録・表示するのみ、`high` は緊急度を高にし閾値根拠を urgency_evidence にする。バイタル欄は測定対象・時制を保持しないため、本人以外の測定・条件節・過去報告・測定不能の文脈は近傍テキストのヒューリスティックで除外する（完全ではない）。有効化・閾値は臨床責任者の承認が前提 |
+| `vital_urgency.thresholds` | object | SpO2≤90 / SBP≤90 / SBP≥180 / BS≤70 | 閾値の上書き（`spo2_lte` / `sbp_lte` / `sbp_gte` / `bs_lte`） |
 | `local_llm.url` | str | `http://127.0.0.1:8080/v1/chat/completions` | ローカルLLMのエンドポイント（loopback http のみ — それ以外は `check` が拒否。別ポートの自前サーバを指せる） |
 | `local_llm.model` | str | `Qwen3.5-9B` | モデル名（OpenAI 互換 API の `model` フィールド） |
 | `semantic.mode` | choice | `off` | `off`以外は本文を外部 Jev API へ送信。`shadow`=記録のみ / `enforce`=判定に使用 |

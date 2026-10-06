@@ -260,6 +260,12 @@ def _eligible(
     row = _current(ledger.db, mid)
     if row is None or row["kind"] == "extract_v1" or row["urgency"] != "high":
         return None, "current_llm_high_absent"
+    # The newest QC audit pinned to THIS artifact may veto escalation:
+    # a Jev 'routine'/'unclear' on the current extraction holds the
+    # re-ask. A missing/stale QC row suppresses nothing (fail-open).
+    qc = structured_view.urgency_qc_disagreement(ledger.db, mid)
+    if qc and qc.get("jev") in ("routine", "unclear"):
+        return None, "qc_overridden"
     if not valid_hash(row["content_hash"]) or not _time(row["posted_at_ts"]):
         return None, "source_identity_unknown"
     if not _time(row["created_at"]) or row["created_at"] > now:

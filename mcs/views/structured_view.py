@@ -32,7 +32,7 @@ import sqlite3
 
 from drug_map import KIND as REF_KIND, candidate_note, current_refs, generation_signature
 from mcs_queries import (FACT_KINDS_SQL, current_extract_pred, current_fact_pred,
-                         med_is_patient_current, item_unverified)
+                         json_or_null, med_is_patient_current, item_unverified)
 from mcs_util import loads_dict
 from semantic_render import _LINE_ATTRS
 
@@ -226,12 +226,55 @@ def message_urgency(db, mid: int) -> str | None:
     return None
 
 
-def _head_lines(llm: dict | None, v1: dict, urgency: str | None = None) -> list[str]:
+def urgency_qc_disagreement(db, mid: int) -> dict | None:
+    """Newest current QC's urgency verdict when it disagrees with the
+    extraction it audited — {"extracted", "jev", "confidence"} or None.
+
+    The verdict must pin to the CURRENT extract_llm row (a verdict on a
+    superseded artifact is invisible here), and a missing QC row simply
+    returns None — absence can never suppress or annotate an alert."""
+    row = db.execute(
+        "SELECT q.content FROM artifacts q"
+        " JOIN messages m ON m.message_id=q.message_id"
+        " WHERE q.kind='extract_qc' AND q.message_id=?"
+        f" {current_extract_pred('q', 'm')}"
+        f" AND json_extract({json_or_null('q.meta')},"
+        "'$.source_artifact_id')="
+        "  (SELECT MAX(a.artifact_id) FROM artifacts a"
+        "   JOIN messages m2 ON m2.message_id=a.message_id"
+        "   WHERE a.kind='extract_llm' AND a.message_id=q.message_id"
+        f"   {current_extract_pred('a', 'm2')})"
+        " ORDER BY q.artifact_id DESC LIMIT 1", (mid,)).fetchone()
+    urg = (_content_dict(row) or {}).get("urgency")
+    if not isinstance(urg, dict) or urg.get("jev") is None \
+            or urg.get("jev") == urg.get("extracted"):
+        return None
+    return urg
+
+
+_QC_URGENCY_SUFFIX = {"routine": "（監査では通常判定）",
+                      "unclear": "（監査では判断保留）"}
+
+
+def urgency_qc_suffix(db, mid: int) -> str:
+    """Display suffix marking a displayed 'llm' high badge whose newest
+    current QC disagreed — empty string when QC agrees or never ran."""
+    qc = urgency_qc_disagreement(db, mid)
+    if qc and qc.get("jev") in _QC_URGENCY_SUFFIX:
+        return _QC_URGENCY_SUFFIX[qc["jev"]]
+    return ""
+
+
+_VFLAG_LABEL = {"spo2": "SpO2", "sbp": "収縮期BP", "bs": "BS"}
+
+
+def _head_lines(llm: dict | None, v1: dict, urgency: str | None = None,
+                urgency_suffix: str = "") -> list[str]:
     selected = llm is not None
     llm = llm or {}
     lines: list[str] = []
     if urgency in URGENCY_LABEL:
-        lines.append(URGENCY_LABEL[urgency])
+        lines.append(URGENCY_LABEL[urgency] + urgency_suffix)
     summary = llm.get("summary")
     if isinstance(summary, str) and summary.strip():
         lines.append(summary.strip())
@@ -489,9 +532,28 @@ def structured_lines(db, mid: int) -> list[str]:
     llm = selected or {}
     if not v1 and not llm:
         return []
-    lines: list[str] = _head_lines(selected, v1, message_urgency(db, mid))
+    urgency = message_urgency(db, mid)
+    # Fact artifacts (canonical projections) carry no urgency fields —
+    # the extract_llm row behind them holds evidence and vital_flags.
+    ext = (latest_artifact(db, "extract_llm", mid) or {}) \
+        if urgency or llm else {}
+    suffix = ""
+    if urgency == "llm":
+        ev = (llm.get("urgency_evidence") or ext.get("urgency_evidence")
+              or [])
+        if ev:
+            suffix = f" — 根拠:「{str(ev[0])[:40]}」"
+        suffix += urgency_qc_suffix(db, mid)
+    lines: list[str] = _head_lines(selected, v1, urgency, suffix)
     if (line := _vital_line(selected, v1)) is not None:
         lines.append(line)
+    flags = [_VFLAG_LABEL.get(f["key"], f["key"]) + f" {f['value']:g}"
+             for f in (llm.get("vital_flags") or ext.get("vital_flags")
+                       or [])
+             if isinstance(f, dict) and f.get("key") in _VFLAG_LABEL
+             and type(f.get("value")) in (int, float)]
+    if flags:
+        lines.append("閾値超過の測定値: " + "、".join(flags))
     if _items(llm, "labs"):
         lab_source = db.execute(
             "SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone()

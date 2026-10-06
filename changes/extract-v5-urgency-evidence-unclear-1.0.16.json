@@ -1,0 +1,30 @@
+{
+  "category": "changed",
+  "title": "AI抽出の緊急度に根拠引用と「判断保留」を追加し、監査不一致を運用に反映",
+  "summary": "AI抽出が緊急度を「高」と判定したとき、判定の根拠となる本文の完全一致引用が記録され、カードの緊急度行に「— 根拠:「…」」として表示されます。根拠を本文に定位できない「高」は「判断保留（unclear）」に降格され、通常判定には倒しません。Jev監査が抽出の緊急度と異なる判定をした場合、バッジ・通知文・日次ダイジェストに「（監査では通常判定）」「（監査では判断保留）」が付き、その不一致がある間は緊急度の再確認通知（E1/E2）は出ません。新しい投稿は全て新しい抽出契約（EXTRACT_VERSION 5）で処理されます。",
+  "upgrade": "抽出世代が4→5に上がるため、更新後の収集ジョブが全投稿のAI再抽出を複数回に分けて実行します（ローカルLLMの実時間を要します）。追加操作は不要です。バイタル数値の閾値判定ポリシー（vital_urgency）は既定で無効です。有効にする場合の閾値・挙動（flag=確認用の記録のみ / high=緊急度を高にする）は臨床責任者の承認が前提です。",
+  "details": [
+    "urgency は high/routine/unclear の3値。high には本文からの完全一致引用（最大2件）が必須。引用を一意に定位できない high は unclear へ降格（通常へのサイレントな下方修正はしない）。routine に根拠は要求しない。",
+    "unclear は「判断保留」— AIが通常と断言していないため機械照合の網（🚨）は従来どおり残る。カードのAI高バッジは付かず、再確認通知の対象にもならない。",
+    "長文のチャンク統合は「接地した high が1つでもあれば high、なければ unclear、全て通常なら routine」。urgency_evidence は統合後も保持される。",
+    "Jev監査の urgency 不一致は現行抽出 artifact にピンされたものだけが表示・抑止に効く（古い artifact への監査・監査未実施では何も変わらない fail-open）。不一致の間は notify_urgent._eligible が qc_overridden で再確認通知を抑止する。",
+    "vital_urgency ポリシー: {mode: 'flag'} は閾値超過の測定値を vital_flags として記録し「閾値超過の測定値: …」行で確認用に表示、{mode: 'high'} は加えて緊急度を高にして閾値根拠を urgency_evidence にする。既定閾値は SpO2≤90 / SBP≤90 / SBP≥180 / BS≤70（configで上書き可）。本人以外の測定・条件節・過去報告・測定不能の文脈では発火しない。バイタル欄に subject/時制が無いため文脈判定はヒューリスティックである旨を docs/guides/INSTALLATION.md に明記。",
+    "LLMプロンプトに緊急度の3値契約・根拠引用必須・条件節/過去形/事務的言及は routine の指示を追加し、合成 few-shot に高緊急の正例と緊急語を含む条件付き陰性例を各1件追加した（プロンプト変更により飛行中のチャンク再開のみ作り直し）。",
+    "評価資産 evaluation/extract_cases.json を46→60件に拡充（高緊急の正例・緊急語の条件節/過去形/家族の事象・判断保留・長文チャンク）。合成ケースのみで、実測の臨床精度を主張しない。",
+    "テストは完全合成の投稿文と artifact のみを使う。"
+  ],
+  "refs": [
+    "mcs/extract/v4/extract_llm.py",
+    "mcs/views/structured_view.py",
+    "mcs/notify/notify_urgent.py",
+    "mcs/notify/notify_render.py",
+    "mcs/notify/notify_flush.py",
+    "mcs/notify/notify_digest.py",
+    "mcs/semantic/semantic_qc.py",
+    "mcs/extract/v4/extract_bench.py",
+    "evaluation/extract_cases.json",
+    "tests/extract/test_extract_llm.py",
+    "tests/extract/test_extraction_review.py",
+    "tests/notify/test_notify_urgent.py"
+  ]
+}

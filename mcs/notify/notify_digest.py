@@ -408,7 +408,8 @@ def build(db, cfg, since: float, until: float, flt=None, *,
             _addressed_unanswered(db, until, ok, room, self_id, signals_on), fold=True)
 
     section(f"緊急度高 {len(urgent)}件", [
-        f"・{room(p)} / message {m}" + ("" if u == "llm" else "（機械照合）")
+        f"・{room(p)} / message {m}" + (
+            structured_view.urgency_qc_suffix(db, m) if u == "llm" else " 🚨")
         for p, m, u in urgent], fold=True)
     todo = []
     for label, pids in (("期限切れタスク", late), ("本日期限タスク", due)):

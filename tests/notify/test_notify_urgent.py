@@ -610,3 +610,39 @@ def test_triage_assigned_or_live_deferral_stops_e2_and_queued_send(
         assert result["queued"] == 0 and result["deferred"]["triage_claimed"] == 1
     else:
         assert result["sent"] == 1 and len(calls) == 1
+
+
+def _qc_urgency(store, mid, aid, jev):
+    """A done QC verdict on urgency, pinned to artifact `aid`."""
+    h = store.db.execute("SELECT content_hash FROM messages WHERE message_id=?",
+                         (mid,)).fetchone()[0]
+    with store.db:
+        store.db.execute(
+            "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at)"
+            " VALUES('extract_qc',1,?,?,'test',?,?)",
+            (mid, json.dumps({"qc": "done", "items": [],
+                              "urgency": {"extracted": "high", "jev": jev,
+                                          "confidence": 0.9}}),
+             json.dumps({"hash": h, "source_artifact_id": aid}), NOW))
+
+
+@pytest.mark.parametrize("jev", ["routine", "unclear"])
+def test_qc_disagreement_vetoes_urgent_escalation(world, jev):
+    """A current QC verdict of routine/unclear on the displayed artifact
+    holds the urgent re-ask — fail-open only when QC is absent or stale."""
+    store, cfg, _, _ = world
+    _base(store, interactive=True)
+    aid = _fact(store)
+    _qc_urgency(store, 100, aid, jev)
+    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 0
+    # a newer extraction supersedes the audited one — its veto expires
+    _fact(store, at=NOW - 300)
+    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
+
+
+def test_qc_agreement_does_not_veto_escalation(world):
+    store, cfg, _, _ = world
+    _base(store, interactive=True)
+    aid = _fact(store)
+    _qc_urgency(store, 100, aid, "high")
+    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1

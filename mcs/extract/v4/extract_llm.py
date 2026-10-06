@@ -63,7 +63,10 @@ _ENDPOINT_PIN, _MODEL_PIN = ENDPOINT, MODEL
 TIMEOUT = 300
 # Output remains schema v2; a new extraction generation reapplies the
 # evidence/subject contract to bodies already processed by generation 2.
-EXTRACT_VERSION = 4
+# v5: urgency gains "unclear" and a verbatim-quoted "urgency_evidence"
+# contract — a high verdict without a locatable quote degrades to
+# "unclear" — so all bodies are re-extracted under the new contract.
+EXTRACT_VERSION = 5
 _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
     for name, path in (("extract_llm", __file__),
@@ -100,7 +103,8 @@ _PROMPT_SPEC = """あなたは在宅医療の多職種チャット記録を構�
 - "labs": 本文に結果が明記された検査値の配列 [{"name": "検査項目名", "value": 数値または短い結果表現, "unit": "単位 または null", "flag": "high|low(基準外と明記された場合のみ) または省略", "evidence": "対象本文の完全一致引用"}] — 推測の基準値判定はしない。記載の無い検査は含めない
 - "summary": この投稿の要点を50字以内で(誰が・何を・次どうするか)
 - "points": この投稿で次に知るべき要点の配列(最大3件、各40字以内 — 依頼・処方変更・異常値・今後の予定を優先)
-- "urgency": "high" または "routine" — 至急・緊急・救急・搬送等の語が無くても、以下の臨床的な重大兆候・イベントがあれば "high": 死亡・看取り・心肺停止・呼吸停止、意識消失/意識がない、転倒後の状態変化、高熱(39°C超)または発熱の持続、SpO2低下、激しい疼痛の増悪、誤嚥・窒息、出血が止まらない等。過去形で済んだ出来事の単なる報告(例:「先月入院していた」)は "routine"
+- "urgency": "high" または "routine" または "unclear" — 至急・緊急・救急・搬送等の語が無くても、以下の臨床的な重大兆候・イベントがあれば "high": 死亡・看取り・心肺停止・呼吸停止、意識消失/意識がない、転倒後の状態変化、高熱(39°C超)または発熱の持続、SpO2低下、激しい疼痛の増悪、誤嚥・窒息、出血が止まらない等。過去形で済んだ出来事の単なる報告(例:「先月入院していた」)は "routine"。「緊急時は〜」「〜の場合は至急」等の条件・想定の記述や、緊急連絡先・搬送先の確認のような事務的な言及だけの場合も "routine"。判断材料が足りない・矛盾する場合は "unclear"
+- "urgency_evidence": urgency が "high" のとき必須 — 判定の根拠となる対象本文の完全一致引用の配列(1〜2件)。根拠を完全一致引用できない場合は "high" にせず "unclear" にすること
 
 日付規則: 「明日」「来週」等の相対表現は投稿日時を基準に解釈する。投稿日時が「不明」な場合や原文に年の根拠が無い場合は確定日付を推測しない — due は null にし、due_text に原文表現を残す。
 
@@ -133,6 +137,20 @@ JSON:{"meds":[{"name":"インスリン","dose":null,"action":"none","status":"cu
 ケアマネより: 明日は私が訪問して状況を確認します。看護師さんは血圧が160を超えるようなら医師へ連絡をお願いします。ご家族はデイサービスの利用を希望されていますか？
 >>>
 JSON:{"requests":[{"to":"不明","from":"ケアマネ","kind":"self_plan","action":"訪問して状況確認","condition":null,"due":null,"due_text":"明日","evidence":"明日は私が訪問して状況を確認します"},{"to":"看護師","from":"ケアマネ","kind":"request","action":"医師へ連絡","condition":"血圧が160を超えるようなら","due":null,"evidence":"血圧が160を超えるようなら医師へ連絡をお願いします"},{"to":"家族","from":"ケアマネ","kind":"question","action":"デイサービス利用希望の確認","condition":null,"due":null,"evidence":"デイサービスの利用を希望されていますか"}],"summary":"ケアマネが明日訪問。血圧160超なら看護師が医師へ連絡。家族にデイ利用希望を確認","points":["明日ケアマネ訪問","血圧160超なら医師へ連絡"],"urgency":"routine"}
+
+例5:
+対象本文:
+<<<
+14時ごろから意識がはっきりせず呼びかけへの反応が弱くなっています。酸素飽和度も下がってきているため、至急ご確認をお願いします。
+>>>
+JSON:{"symptoms":[{"text":"意識反応の低下","negated":false,"status":"new","evidence":"意識がはっきりせず呼びかけへの反応が弱くなっています"}],"requests":[{"to":"医師","from":null,"kind":"request","action":"至急の状況確認","condition":null,"due":null,"evidence":"至急ご確認をお願いします"}],"summary":"意識反応の低下とSpO2低下。至急確認依頼","points":["意識がはっきりせず反応が弱い","酸素飽和度の低下","至急確認の依頼"],"urgency":"high","urgency_evidence":["意識がはっきりせず呼びかけへの反応が弱くなっています","至急ご確認をお願いします"]}
+
+例6:
+対象本文:
+<<<
+緊急連絡先カードの記載内容を更新しました。発熱などの緊急時は夜間窓口へ連絡をお願いします。本日の訪問では特に変わりありません。
+>>>
+JSON:{"requests":[{"to":"家族","from":null,"kind":"request","action":"夜間窓口へ連絡","condition":"発熱などの緊急時は","due":null,"evidence":"発熱などの緊急時は夜間窓口へ連絡をお願いします"}],"summary":"緊急連絡先カードを更新。緊急時の連絡先を案内。本日変わりなし","points":["緊急連絡先カードを更新","緊急時の連絡案内は条件付きの案内で現状の緊急ではない"],"urgency":"routine"}
 
 """
 
@@ -329,7 +347,10 @@ _SCHEMA = {
                 "additionalProperties": False}},
             "summary": {"type": "string", "minLength": 1},
             "points": {"type": "array", "items": {"type": "string"}},
-            "urgency": {"type": "string", "enum": ["high", "routine"]},
+            "urgency": {"type": "string",
+                        "enum": ["high", "routine", "unclear"]},
+            "urgency_evidence": {"type": "array",
+                                 "items": {"type": "string"}},
             # reply-to-earlier-request classification; only meaningful
             # with thread context (llm_extract drops it otherwise)
             "reply": {"type": "object", "properties": {
@@ -478,6 +499,140 @@ _VITAL_WIN_BACK = 14
 _VITAL_WIN_FWD = 8
 
 
+def _nearest_vital_label(body: str, s: int, e: int):
+    """Label class closest to the number — a preceding label beats
+    a following unit (a label after the number belongs to the NEXT
+    reading: 血圧120/80 脈60)."""
+    best = None
+    back = body[max(0, s - _VITAL_WIN_BACK):s]
+    for cls, rx in _VITAL_LABELS.items():
+        m_end = None
+        for m in rx.finditer(back):
+            m_end = m.end()
+        if m_end is not None:
+            dist = len(back) - m_end
+            if best is None or dist < best[0]:
+                best = (dist, cls)
+    for cls, rx in _VITAL_UNITS.items():
+        fm = rx.search(body[e:e + _VITAL_WIN_FWD])
+        if fm is not None:
+            dist = 100 + fm.start()
+            if best is None or dist < best[0]:
+                best = (dist, cls)
+    return best[1] if best else None
+
+
+def _bp_side(body: str, s: int, e: int):
+    """120/80: before the slash is systolic, after is diastolic."""
+    if body[e:e + 1] in ("/", "／"):
+        return "sbp"
+    if body[s - 1:s] in ("/", "／"):
+        return "dbp"
+    return None
+
+
+# Deterministic vital-sign thresholds, active only when the config
+# policy enables them (vital_threshold_policy). Vitals carry no
+# subject or tense context, so a crossing is gated by a context scan
+# of the body window around the reading — family readings, past
+# reports, conditional instructions ("90を切ったら連絡") and
+# unmeasurable markers must not fire.
+_VITAL_THRESHOLDS_DEFAULT = {"spo2_lte": 90.0, "sbp_lte": 90.0,
+                             "sbp_gte": 180.0, "bs_lte": 70.0}
+_VITAL_CTX_WIN = 40
+_VITAL_CTX_EXCLUDE = re.compile(
+    r"父|母|義父|義母|夫|妻|主人|息子|娘|兄|姉|弟|妹|祖父|祖母|家族|親族"
+    r"|なら|たら|れば|の場合|の際|切ったら|超えたら|下回ったら"
+    r"|を切ると|を超えると|を下回ると"
+    r"|だった|でした|ありました|していた|になった|なりました"
+    r"|先月|先週|昨日|以前|過去に"
+    r"|測定不能|測れ|測定でき|未測定|不明")
+
+
+def _vital_threshold_flags(vit: dict, body: str | None,
+                           thresholds: dict) -> list[dict]:
+    """Deterministic threshold crossings on validated vitals.
+
+    Returns [{key, value, rule, evidence}] — the reading's own body
+    span (±20 chars) as the verbatim quote. A crossing whose reading
+    cannot be anchored to its label, or whose context window shows a
+    family/conditional/past/unmeasurable marker, does not flag."""
+    if not body or not vit:
+        return []
+    toks = [(m.start(), m.end(), float(m.group().replace("．", ".")))
+            for m in re.finditer(r"\d+(?:[.．]\d+)?", body)]
+    rules = (("spo2", "lte", thresholds.get("spo2_lte")),
+             ("sbp", "lte", thresholds.get("sbp_lte")),
+             ("sbp", "gte", thresholds.get("sbp_gte")),
+             ("bs", "lte", thresholds.get("bs_lte")))
+    out = []
+    for key, op, limit in rules:
+        if limit is None or key not in vit:
+            continue
+        val = vit[key]
+        if not ((op == "lte" and val <= limit)
+                or (op == "gte" and val >= limit)):
+            continue
+        span = None
+        for s, e, num in toks:
+            if num != val:
+                continue
+            cls = _nearest_vital_label(body, s, e)
+            if cls == "bp":
+                cls = _bp_side(body, s, e) or cls
+            if cls == key:
+                span = (s, e)
+                break
+        if span is None:
+            continue
+        s, e = span
+        if _VITAL_CTX_EXCLUDE.search(
+                body[max(0, s - _VITAL_CTX_WIN):e + _VITAL_CTX_WIN]):
+            continue
+        out.append({"key": key, "value": val,
+                    "rule": f"{key}_{op}_{limit:g}",
+                    "evidence": body[max(0, s - 20):min(len(body), e + 20)]
+                    .strip()})
+    return out
+
+
+def vital_threshold_policy(cfg) -> dict | None:
+    """cfg['vital_urgency'] -> {"mode", "thresholds"} or None.
+
+    Default off. mode "flag" records vital_flags on the artifact for
+    review; mode "high" additionally raises urgency to "high" with the
+    flagged spans as urgency_evidence — a clinical-policy decision that
+    must be enabled explicitly, never by accident."""
+    raw = (cfg or {}).get("vital_urgency") if isinstance(cfg, dict) \
+        else None
+    if not isinstance(raw, dict) or raw.get("mode") not in ("flag", "high"):
+        return None
+    merged = dict(_VITAL_THRESHOLDS_DEFAULT)
+    th = raw.get("thresholds")
+    if isinstance(th, dict):
+        for k in _VITAL_THRESHOLDS_DEFAULT:
+            v = th.get(k)
+            if type(v) in (int, float) and math.isfinite(v):
+                merged[k] = float(v)
+    return {"mode": raw["mode"], "thresholds": merged}
+
+
+def _apply_vital_policy(out: dict, body: str | None,
+                        vital_policy: dict) -> None:
+    """Deterministic vital thresholds on a finished extraction —
+    applied post-merge/post-validate so single, chunked and batch
+    paths agree. "flag" annotates only; "high" (explicit clinical
+    policy) raises urgency with the flagged spans as its evidence."""
+    flags = _vital_threshold_flags(out.get("vitals") or {}, body,
+                                   vital_policy["thresholds"])
+    if not flags:
+        return
+    out["vital_flags"] = flags
+    if vital_policy["mode"] == "high" and out.get("urgency") != "high":
+        out["urgency"] = "high"
+        out["urgency_evidence"] = [f["evidence"] for f in flags][:2]
+
+
 def _vitals_guard(body: str | None, vit: dict,
                   drops: dict | None = None) -> dict:
     """Anchor each vital to the label nearest its value in the body.
@@ -498,36 +653,6 @@ def _vitals_guard(body: str | None, vit: dict,
         if len(issues) < 6:
             issues.append(s)
 
-    def nearest(s, e):
-        """Label class closest to the number — a preceding label beats
-        a following unit (a label after the number belongs to the NEXT
-        reading: 血圧120/80 脈60)."""
-        best = None
-        back = body[max(0, s - _VITAL_WIN_BACK):s]
-        for cls, rx in _VITAL_LABELS.items():
-            m_end = None
-            for m in rx.finditer(back):
-                m_end = m.end()
-            if m_end is not None:
-                dist = len(back) - m_end
-                if best is None or dist < best[0]:
-                    best = (dist, cls)
-        for cls, rx in _VITAL_UNITS.items():
-            fm = rx.search(body[e:e + _VITAL_WIN_FWD])
-            if fm is not None:
-                dist = 100 + fm.start()
-                if best is None or dist < best[0]:
-                    best = (dist, cls)
-        return best[1] if best else None
-
-    def bp_side(s, e):
-        """120/80: before the slash is systolic, after is diastolic."""
-        if body[e:e + 1] in ("/", "／"):
-            return "sbp"
-        if body[s - 1:s] in ("/", "／"):
-            return "dbp"
-        return None
-
     out = {}
     for k, val in vit.items():
         hits = [(s, e) for s, e, num in toks if num == val]
@@ -535,12 +660,12 @@ def _vitals_guard(body: str | None, vit: dict,
             note(f"vitals.{k}={val:g} は本文に数値がありません")
             continue
         kcls = _VITAL_CLASS[k]
-        winners = {nearest(s, e) for s, e in hits}
+        winners = {_nearest_vital_label(body, s, e) for s, e in hits}
         if kcls in winners:
             tgt = k
             if kcls == "bp":
-                tgt = next((bp_side(s, e) for s, e in hits
-                            if bp_side(s, e)), k)
+                tgt = next((_bp_side(body, s, e) for s, e in hits
+                            if _bp_side(body, s, e)), k)
         else:
             winners.discard(None)
             if len(winners) != 1:
@@ -552,8 +677,8 @@ def _vitals_guard(body: str | None, vit: dict,
                 continue
             tgt = winners.pop()
             if tgt == "bp":
-                tgt = next((bp_side(s, e) for s, e in hits
-                            if bp_side(s, e)), None)
+                tgt = next((_bp_side(body, s, e) for s, e in hits
+                            if _bp_side(body, s, e)), None)
                 if tgt is None:
                     note(f"vitals.{k}={val:g} の測定名が本文で"
                          "一意に特定できません")
@@ -1058,10 +1183,32 @@ class _Validator:
             else:
                 self.drop_item("summary")
         if "urgency" in d:
-            if d["urgency"] in ("high", "routine"):
+            if d["urgency"] in ("high", "routine", "unclear"):
                 out["urgency"] = d["urgency"]
             else:
                 self.drop_item("urgency")
+        # urgency_evidence: verbatim quotes grounding the verdict, same
+        # locate-in-body rule as item evidence. A "high" whose quotes do
+        # not locate degrades to "unclear" — never "routine": an
+        # unproven alert stays unresolved (the v1 lexical net still
+        # applies downstream) rather than being silently cleared.
+        if isinstance(d.get("urgency_evidence"), list):
+            spans = []
+            for q in d["urgency_evidence"]:
+                if len(spans) >= 2:
+                    break
+                span = locate_quote_span(self.body, q) \
+                    if isinstance(q, str) and q.strip() \
+                    and self.body is not None else None
+                if span is None:
+                    self.miss(q)
+                else:
+                    spans.append(self.body[span[0]:span[1]])
+            if spans:
+                out["urgency_evidence"] = spans
+        if out.get("urgency") == "high" and not out.get("urgency_evidence") \
+                and self.body is not None:
+            out["urgency"] = "unclear"
         if "points" in d:
             if isinstance(d["points"], list):
                 out["points"] = [p for p in
@@ -1231,8 +1378,11 @@ def _merge(outs: list[dict]) -> dict:
     a later "resolved" must overwrite an earlier "new" or downstream
     resolvers never fire; vitals keep the latest reading per key;
     labs retain distinct explicit sampling dates and confirmation groups;
-    requests dedupe on (to, from, action, due, condition, due_text). urgency is high if any
-    chunk said high. `summary` is dropped — a first-chunk summary is a
+    requests dedupe on (to, from, action, due, condition, due_text).
+    urgency is high if any chunk said high (grounded by then — _validate
+    already degraded an unquoted high to unclear); else unclear beats
+    routine, since residual uncertainty must not masquerade as a
+    confident routine. `summary` is dropped — a first-chunk summary is a
     PARTIAL viewpoint and must not be displayed as the whole message's
     gist (points survive: they are additive facts, each still true).
     Drop counters are summed."""
@@ -1286,6 +1436,10 @@ def _merge(outs: list[dict]) -> dict:
             out.setdefault("vitals", {})[k] = v   # latest reading wins
         if d.get("urgency") == "high":
             out["urgency"] = "high"
+            for q in d.get("urgency_evidence") or []:
+                if len(out.setdefault("urgency_evidence", [])) < 2 \
+                        and q not in out["urgency_evidence"]:
+                    out["urgency_evidence"].append(q)
         if "reply" not in out and d.get("reply"):
             out["reply"] = d["reply"]
         for k in ("_items_dropped", "_evidence_dropped"):
@@ -1293,9 +1447,19 @@ def _merge(outs: list[dict]) -> dict:
                 out[k] = out.get(k, 0) + d[k]
     if med_order:
         out["meds"] = list(med_order.values())
-    if "urgency" not in out \
-            and any(d.get("urgency") == "routine" for d in outs):
-        out["urgency"] = "routine"
+    # Unclear beats routine in the merge: a chunk that could not ground
+    # an urgency call leaves residual uncertainty — folding it to
+    # routine would silence the v1 lexical net downstream for no gain.
+    if "urgency" not in out:
+        if any(d.get("urgency") == "unclear" for d in outs):
+            out["urgency"] = "unclear"
+            for d in outs:
+                for q in d.get("urgency_evidence") or []:
+                    if len(out.setdefault("urgency_evidence", [])) < 2 \
+                            and q not in out["urgency_evidence"]:
+                        out["urgency_evidence"].append(q)
+        elif any(d.get("urgency") == "routine" for d in outs):
+            out["urgency"] = "routine"
     return out
 
 
@@ -1403,7 +1567,8 @@ def llm_extract(body: str, *, context: str | None = None,
                 chunks_in: dict | None = None,
                 chunks_out: dict | None = None,
                 feedback: list | None = None,
-                on_chunk=None
+                on_chunk=None,
+                vital_policy: dict | None = None
                 ) -> dict | None | object:
     """One message -> validated structured dict, None on failure, or
     _DEFERRED when `deadline` (time.monotonic()) ran out mid-chunk.
@@ -1516,6 +1681,8 @@ def llm_extract(body: str, *, context: str | None = None,
     if not outs:
         return None
     out = outs[0] if len(outs) == 1 else _merge(outs)
+    if vital_policy:
+        _apply_vital_policy(out, body, vital_policy)
     if not context:
         # checkpointed chunks (chunks_in) bypass the per-chunk pop above
         out.pop("reply", None)
@@ -2405,7 +2572,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 per_write_lock: bool = False, workers: int = 1,
                 shard: tuple[int, int] | None = None,
                 oldest_first: bool = False,
-                batch_k: int = 0) -> dict:
+                batch_k: int = 0,
+                vital_policy: dict | None = None) -> dict:
     """Extract up to `limit` pending/stale messages within budget_s.
     Returns {'done': n, 'left': n, 'failed': n}.
 
@@ -2591,6 +2759,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                            posted_at=r["posted_at"],
                            chunks_in=saved,
                            chunks_out=chunks_out,
+                           vital_policy=vital_policy,
                            feedback=qc["notes"] if qc else None,
                            on_chunk=(lambda i, v: checkpoints.put((index, i, v)))
                            if parallel else
@@ -2813,6 +2982,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # settle for the degraded output a single would have repaired
             if v is not None and not drops:
                 v.pop("reply", None)   # batch rows are context-free
+                if vital_policy:
+                    _apply_vital_policy(v, r["body_text"], vital_policy)
                 out[index] = v
         return "ok", out, meta
 
@@ -3173,10 +3344,17 @@ def _main() -> int:
     # standalone daemon obeys the same boundary as the tick path, and
     # an admission read error fails CLOSED (empty set).
     def _admitted():
+        # One config read per call serves both the admission gate and the
+        # vital-threshold policy, so a resident loop picks up edits to
+        # either on the same snapshot.
         try:
-            return legacy_admissions(led, load_config())
+            cfg = load_config()
         except Exception:
-            return set()
+            return set(), None
+        try:
+            return legacy_admissions(led, cfg), vital_threshold_policy(cfg)
+        except Exception:
+            return set(), None
     try:
         if args.all:
             # Backlog drainer: per-write locking only — holding the run
@@ -3222,13 +3400,15 @@ def _main() -> int:
                 # One newest extraction per lane before semantic/QC;
                 # existing claim leases exclude the other worker's item.
                 try:
+                    adm, vpol = _admitted()
                     r = run_pending(led, limit=1 if args.semantic else 8,
                                     budget_s=min(budget, 900),
                                     oldest_first=False,
                                     per_write_lock=True,
+                                    vital_policy=vpol,
                                     workers=max(1, min(args.workers, 8)),
                                     shard=shard, batch_k=args.batch,
-                                    admitted_ids=_admitted())
+                                    admitted_ids=adm)
                     sem = None
                     if args.semantic and not held():
                         sem = _background_semantic(led, stop)
@@ -3293,10 +3473,12 @@ def _main() -> int:
                 print(json.dumps({"ok": False, "error": "lock_held"}))
                 return 3
             try:
+                adm, vpol = _admitted()
                 print(json.dumps(
                     run_pending(led, args.limit, args.budget,
                                 batch_k=args.batch,
-                                admitted_ids=_admitted()),
+                                vital_policy=vpol,
+                                admitted_ids=adm),
                     ensure_ascii=False))
             finally:
                 os.close(lock_fd)

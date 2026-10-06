@@ -1332,7 +1332,8 @@ def stage_derive(ledger, result, deadline, cfg=None,
                     realtime if admitted is None else realtime & admitted),
                 # Only realtime arrivals use this slot, newest first.
                 # Existing claim leases exclude in-flight work.
-                oldest_first=False, batch_k=extract_llm._BATCH_K)
+                oldest_first=False, batch_k=extract_llm._BATCH_K,
+                vital_policy=extract_llm.vital_threshold_policy(cfg))
     except Exception as e:
         result["errors"].append(f"extract_llm: {type(e).__name__}")
 

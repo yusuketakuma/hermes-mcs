@@ -108,7 +108,7 @@ def test_counts_ids_and_no_patient_content(led):
     text = _text(led)
     assert "新着 3件・緊急度高 1件・未完了タスク 0件（期限切れ 0・本日期限 0）" in text
     assert "■ 新着（患者別 1人）\n・project 1 3件（看護師 1・医師 1・職種不明 1）" in text
-    assert "■ 緊急度高 1件\n・project 1 / message 100（機械照合）" in text
+    assert "■ 緊急度高 1件\n・project 1 / message 100 🚨" in text
     for secret in ("秘密の本文", "患者A", "患者B", "職員"):
         assert secret not in text
     assert "記録が見つからないことは対応がなかったことを意味せず" in text
@@ -129,7 +129,7 @@ def test_patient_names_only_when_opted_in(led):
     cfg = {**ON, "daily_digest": {**ON["daily_digest"], "include_names": True}}
     notify_digest.maybe_enqueue(led, cfg, now=T)
     text = _text(led)
-    assert "■ 緊急度高 1件\n・project 1 患者A / message 100（機械照合）" in text
+    assert "■ 緊急度高 1件\n・project 1 患者A / message 100 🚨" in text
     for secret in ("秘密の本文", "職員"):
         assert secret not in text
 

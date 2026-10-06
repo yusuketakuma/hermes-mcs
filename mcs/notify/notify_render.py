@@ -88,6 +88,8 @@ def notification_preview(db, card, content, *, limit=600) -> str:
                 main = f"投稿（{state}・原文）: " + (_preview_post(message["body_text"]) or "本文なし")
             urgency = structured_view.message_urgency(db, mid)
             badge = URGENCY_TAG.get(urgency, "")
+            if urgency == "llm":
+                badge += structured_view.urgency_qc_suffix(db, mid)
             return _preview_line(header, badge + _inline(main, 260), limit)
         return f"project {card['project_id']}: 表示対象の投稿本文を確認できません。"
     signals = _latest_signals(db, content["shown"], card["project_id"])
@@ -618,6 +620,8 @@ def _signal_compact(db, pid, contents: list) -> list:
                    else None)
         if urgency:
             line += URGENCY_TAG[urgency]
+            if urgency == "llm":
+                line += structured_view.urgency_qc_suffix(db, mid)
         lines.append(f"・{line}{s.get('note') or ''}（{signal_state(s)}）")
     return _fit_item([{"type": "text", "rule": True,
                        "text": patient_heading(db, pid)},

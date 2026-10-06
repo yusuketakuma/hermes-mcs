@@ -282,7 +282,8 @@ def _score_case(case: dict, out: dict | None) -> dict:
              "items_dropped": out.get("_items_dropped", 0),
              "evidence_dropped": out.get("_evidence_dropped", 0),
              "raw": {k: out.get(k) for k in
-                     ("meds", "symptoms", "events", "requests", "urgency")}}
+                     ("meds", "symptoms", "events", "requests", "urgency",
+                      "urgency_evidence")}}
     score["raw"]["reply"] = got_reply
     if "labs" in exp:
         score["raw"]["labs"] = got_labs

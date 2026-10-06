@@ -372,6 +372,36 @@ def test_message_urgency_llm_verdict_under_v4_read_model(db):
                           'extract_version': extract_llm.EXTRACT_VERSION})
     assert message_urgency(db.db, 1) is None
 
+
+def test_urgency_qc_disagreement_flags_only_the_current_artifact(db):
+    from structured_view import urgency_qc_disagreement, urgency_qc_suffix
+
+    db.save_messages([_message(body='至急ご確認ください')])
+    chash = _v1_urgent(db)
+    db.artifact_add('extract_llm', json.dumps({'urgency': 'high'}),
+                    project_id=1, message_id=1,
+                    meta={'hash': chash,
+                          'extract_version': extract_llm.EXTRACT_VERSION})
+    assert urgency_qc_disagreement(db.db, 1) is None
+    src = db.db.execute("SELECT max(artifact_id) FROM artifacts"
+                        " WHERE kind='extract_llm'").fetchone()[0]
+    db.artifact_add('extract_qc', json.dumps(
+        {'qc': 'done', 'items': [],
+         'urgency': {'extracted': 'high', 'jev': 'routine',
+                     'confidence': 0.9}}),
+        project_id=1, message_id=1,
+        meta={'hash': chash, 'source_artifact_id': src})
+    d = urgency_qc_disagreement(db.db, 1)
+    assert d['jev'] == 'routine' and d['extracted'] == 'high'
+    assert urgency_qc_suffix(db.db, 1) == '（監査では通常判定）'
+    # a QC verdict pinned to a superseded extraction must not annotate
+    db.artifact_add('extract_llm', json.dumps({'urgency': 'high'}),
+                    project_id=1, message_id=1,
+                    meta={'hash': chash,
+                          'extract_version': extract_llm.EXTRACT_VERSION})
+    assert urgency_qc_disagreement(db.db, 1) is None
+
+
 def test_rule_revision_cut_by_deadline_keeps_old_artifact(db, monkeypatch):
     db.save_messages([_message(1, body='至急ご確認ください', day=19),
                       _message(2, body='至急ご確認ください', day=20)])
