@@ -12855,8 +12855,8 @@
       "review_packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
       "responsibility": "1.0.13 userstop時点未完16項目と後日local完了追記、private証拠参照・外部受入条件。",
       "callers": [
-        "docs/development/ACCEPTANCE_1.0.11.md:59",
-        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/development/acceptance/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/plans/RELEASE_1.0.13.md:11",
         "docs/ROADMAP.md:70",
         "docs/dev-records/README.md:15",
         "ci/mine_gates.py:extract_ids/main"
@@ -15087,8 +15087,8 @@
       "review_packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
       "responsibility": "1.0.11metadata/自己反応/診断/原22-Aの合成と実観測受入、schema marker事故/復旧/公開保留。",
       "callers": [
-        "docs/development/ACCEPTANCE_1.0.11.md:59",
-        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/development/acceptance/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/plans/RELEASE_1.0.13.md:11",
         "docs/ROADMAP.md:70",
         "docs/dev-records/README.md:15",
         "ci/mine_gates.py:extract_ids/main"
@@ -15781,8 +15781,8 @@
       "review_packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
       "responsibility": "1.0.13設計/実装/引継ぎ/後続敵対的reviewの全時系列、NAS/人手/相手repo/実機公開条件。",
       "callers": [
-        "docs/development/ACCEPTANCE_1.0.11.md:59",
-        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/development/acceptance/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/plans/RELEASE_1.0.13.md:11",
         "docs/ROADMAP.md:70",
         "docs/dev-records/README.md:15",
         "ci/mine_gates.py:extract_ids/main"
@@ -16535,7 +16535,7 @@
       "historical_scope": "2026-10-01 / 7a5533f構成移動、OpenWiki0.6.1の更新条件記録"
     },
     {
-      "path": "docs/development/ACCEPTANCE_1.0.11.md",
+      "path": "docs/development/acceptance/ACCEPTANCE_1.0.11.md",
       "sha256": "9014c2df8195caf44c84d8822bb4182c289d1f40686d9bcb4eeb0df529db5f36",
       "bytes": 7319,
       "lines": 60,
@@ -16586,7 +16586,7 @@
       }
     },
     {
-      "path": "docs/development/ACCEPTANCE_1.0.12.md",
+      "path": "docs/development/acceptance/ACCEPTANCE_1.0.12.md",
       "sha256": "a24c757709d4c751e8513b5780bc8ff9ce162c37c3fdc73225a4471c4f186381",
       "bytes": 6216,
       "lines": 49,
@@ -16637,7 +16637,7 @@
       }
     },
     {
-      "path": "docs/development/BACKUP_NAS_PROPOSAL_1.0.13.md",
+      "path": "docs/development/plans/BACKUP_NAS_PROPOSAL_1.0.13.md",
       "sha256": "b994b81cfb0db603798a9b63fdeb33559b4e27fb025d3b5575a88ab71f65751b",
       "bytes": 6921,
       "lines": 95,
@@ -16807,7 +16807,7 @@
       }
     },
     {
-      "path": "docs/development/RELEASE_1.0.13.md",
+      "path": "docs/development/plans/RELEASE_1.0.13.md",
       "sha256": "6604b6984d96ff58f13647ca478f7d653c6536b79364522e733a136fbd6bcf82",
       "bytes": 16192,
       "lines": 146,

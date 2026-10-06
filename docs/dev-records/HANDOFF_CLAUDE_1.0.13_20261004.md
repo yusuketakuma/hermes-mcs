@@ -5,7 +5,7 @@
 
 ## 目的と境界
 
-正本は`docs/development/RELEASE_1.0.13.md`。旧1.0.13–1.0.15・追加提案・
+正本は`docs/development/plans/RELEASE_1.0.13.md`。旧1.0.13–1.0.15・追加提案・
 検知済み修正・install/update/setup/doctorの全32成果物を1.0.13で完成させる。
 範囲縮小・別版送りはしない。初期38タスクに指示更新/NAS案/recovery明示設定を
 追加し、現在42項目。ツール上は26完了・16未完。
@@ -24,7 +24,7 @@
 
 ## 承認済みの追加判断
 
-NAS案の正本:`docs/development/BACKUP_NAS_PROPOSAL_1.0.13.md`。
+NAS案の正本:`docs/development/plans/BACKUP_NAS_PROPOSAL_1.0.13.md`。
 
 - 最大30bundle、削除は手動、週1回verify、90日ごとの回復鍵訓練。
 - RPOは24時間。実静的snapshotのパス・生成先行・転送時刻・周期と、
@@ -251,7 +251,7 @@ LSPのflat import/generic既存診断・JSON Biome未導入を成功扱いにし
 ## 引継ぎ後の完了状況（Claude Code、2026-10-05）
 
 未完16項目はローカル実装・合成検証の範囲で完了した。外部条件は
-[開発・受入計画](../development/RELEASE_1.0.13.md)§6、経過は
+[開発・受入計画](../development/plans/RELEASE_1.0.13.md)§6、経過は
 [全体レビュー記録](stability-1.0.13-20261004.md)の末尾2節に記録した。
 
 | 項目 | 到達点 |

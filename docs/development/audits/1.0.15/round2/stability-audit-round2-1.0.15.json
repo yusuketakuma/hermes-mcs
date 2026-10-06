@@ -545,7 +545,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limitations": [
@@ -606,7 +606,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limitations": [
@@ -746,7 +746,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limitations": [
@@ -931,7 +931,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limitations": [
@@ -968,7 +968,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limitations": [
@@ -1151,7 +1151,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limitations": [
@@ -1189,7 +1189,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limitations": [
@@ -7021,7 +7021,7 @@
       "previous_sha256": "3a5c2371b867e26451c67fa262f619df10b269cf57719b3b1762e2dceda459da"
     },
     {
-      "path": "docs/development/ACCEPTANCE_1.0.11.md",
+      "path": "docs/development/acceptance/ACCEPTANCE_1.0.11.md",
       "sha256": "9014c2df8195caf44c84d8822bb4182c289d1f40686d9bcb4eeb0df529db5f36",
       "category": "documentation_or_visual_asset",
       "status": "prior_artifact_review_reused",
@@ -7041,7 +7041,7 @@
       "previous_sha256": "9014c2df8195caf44c84d8822bb4182c289d1f40686d9bcb4eeb0df529db5f36"
     },
     {
-      "path": "docs/development/ACCEPTANCE_1.0.12.md",
+      "path": "docs/development/acceptance/ACCEPTANCE_1.0.12.md",
       "sha256": "a24c757709d4c751e8513b5780bc8ff9ce162c37c3fdc73225a4471c4f186381",
       "category": "documentation_or_visual_asset",
       "status": "prior_artifact_review_reused",
@@ -7061,7 +7061,7 @@
       "previous_sha256": "a24c757709d4c751e8513b5780bc8ff9ce162c37c3fdc73225a4471c4f186381"
     },
     {
-      "path": "docs/development/ACCEPTANCE_1.0.13.md",
+      "path": "docs/development/acceptance/ACCEPTANCE_1.0.13.md",
       "sha256": "7e80005a90bd1c0353fb8c7712cce1f848d7f5b030d9a8c6e78aefaedd5593bf",
       "category": "documentation_or_visual_asset",
       "status": "prior_artifact_review_reused",
@@ -7081,7 +7081,7 @@
       "previous_sha256": "7e80005a90bd1c0353fb8c7712cce1f848d7f5b030d9a8c6e78aefaedd5593bf"
     },
     {
-      "path": "docs/development/ACCEPTANCE_1.0.14.md",
+      "path": "docs/development/acceptance/ACCEPTANCE_1.0.14.md",
       "sha256": "5e77f169928d7431a451036a5559436e89266a26c0df4bba2bac67a2075e379b",
       "category": "documentation_or_visual_asset",
       "status": "prior_artifact_review_reused",
@@ -7101,7 +7101,7 @@
       "previous_sha256": "5e77f169928d7431a451036a5559436e89266a26c0df4bba2bac67a2075e379b"
     },
     {
-      "path": "docs/development/BACKUP_NAS_PROPOSAL_1.0.13.md",
+      "path": "docs/development/plans/BACKUP_NAS_PROPOSAL_1.0.13.md",
       "sha256": "b994b81cfb0db603798a9b63fdeb33559b4e27fb025d3b5575a88ab71f65751b",
       "category": "documentation_or_visual_asset",
       "status": "prior_artifact_review_reused",
@@ -7165,7 +7165,7 @@
       "previous_sha256": "dcfb3af671339b3e26af29aba42cbcd283abc495ac3c331fc2cccf7409d5b256"
     },
     {
-      "path": "docs/development/RELEASE_1.0.13.md",
+      "path": "docs/development/plans/RELEASE_1.0.13.md",
       "sha256": "6604b6984d96ff58f13647ca478f7d653c6536b79364522e733a136fbd6bcf82",
       "category": "documentation_or_visual_asset",
       "status": "prior_artifact_review_reused",
@@ -7873,7 +7873,7 @@
       "previous_sha256": "0611a836a0bf65c9a572105b61c2d4a930d4e66c9289719e1f86c2837c5e002a"
     },
     {
-      "path": "docs/development/mobile-notification-preview-1.0.15.json",
+      "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json",
       "category": "contract_or_change_record",
       "status": "prior_artifact_review_reused",
       "checks": [
@@ -10784,7 +10784,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         },
         {
           "kind": "synthetic_behavior_suite",
@@ -10873,7 +10873,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limitations": [
@@ -10934,7 +10934,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limitations": [
@@ -10995,7 +10995,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limitations": [
@@ -13242,7 +13242,7 @@
         "tests/meta/test_ci_scripts.py",
         "tests/release/ (23 canonical generation/sync cases)",
         "generate_lineworks_gallery.py --check: 2 synthetic SVG/PNG pairs verified",
-        "docs/development/mobile-notification-preview-1.0.15.json"
+        "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
       ],
       "limitations": [
         "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
@@ -22404,7 +22404,7 @@
         "posted_time",
         "summary"
       ],
-      "evidence": "docs/development/mobile-notification-preview-1.0.15.json"
+      "evidence": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
     }
   },
   "limitations": [

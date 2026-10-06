@@ -259,9 +259,9 @@
       "docs/dev-records/standalone-20261001.md",
       "docs/dev-records/standalone-worktree-20261002.md",
       "docs/dev-records/structure-20261001.md",
-      "docs/development/ACCEPTANCE_1.0.11.md",
-      "docs/development/ACCEPTANCE_1.0.12.md",
-      "docs/development/BACKUP_NAS_PROPOSAL_1.0.13.md",
+      "docs/development/acceptance/ACCEPTANCE_1.0.11.md",
+      "docs/development/acceptance/ACCEPTANCE_1.0.12.md",
+      "docs/development/plans/BACKUP_NAS_PROPOSAL_1.0.13.md",
       "docs/guides/BACKUP.md",
       "docs/guides/INSTALLATION.md",
       "docs/guides/LINEWORKS.md",
@@ -10833,8 +10833,8 @@
       ],
       "responsibility": "1.0.13 userstop時点未完16項目と後日local完了追記、private証拠参照・外部受入条件。",
       "callers": [
-        "docs/development/ACCEPTANCE_1.0.11.md:59",
-        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/development/acceptance/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/plans/RELEASE_1.0.13.md:11",
         "docs/ROADMAP.md:70",
         "docs/dev-records/README.md:15",
         "ci/mine_gates.py:extract_ids/main"
@@ -13708,8 +13708,8 @@
       ],
       "responsibility": "1.0.11metadata/自己反応/診断/原22-Aの合成と実観測受入、schema marker事故/復旧/公開保留。",
       "callers": [
-        "docs/development/ACCEPTANCE_1.0.11.md:59",
-        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/development/acceptance/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/plans/RELEASE_1.0.13.md:11",
         "docs/ROADMAP.md:70",
         "docs/dev-records/README.md:15",
         "ci/mine_gates.py:extract_ids/main"
@@ -14571,8 +14571,8 @@
       ],
       "responsibility": "1.0.13設計/実装/引継ぎ/後続敵対的reviewの全時系列、NAS/人手/相手repo/実機公開条件。",
       "callers": [
-        "docs/development/ACCEPTANCE_1.0.11.md:59",
-        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/development/acceptance/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/plans/RELEASE_1.0.13.md:11",
         "docs/ROADMAP.md:70",
         "docs/dev-records/README.md:15",
         "ci/mine_gates.py:extract_ids/main"
@@ -15510,7 +15510,7 @@
       }
     },
     {
-      "path": "docs/development/ACCEPTANCE_1.0.11.md",
+      "path": "docs/development/acceptance/ACCEPTANCE_1.0.11.md",
       "bytes": 7319,
       "lines": 60,
       "sha256": "9014c2df8195caf44c84d8822bb4182c289d1f40686d9bcb4eeb0df529db5f36",
@@ -15564,7 +15564,7 @@
       "read_method": "非切断の分割全文read。read transcript/pointer receiptとP SHAを固定して責務/consumer/20criteriaへ照合。"
     },
     {
-      "path": "docs/development/ACCEPTANCE_1.0.12.md",
+      "path": "docs/development/acceptance/ACCEPTANCE_1.0.12.md",
       "bytes": 6216,
       "lines": 49,
       "sha256": "a24c757709d4c751e8513b5780bc8ff9ce162c37c3fdc73225a4471c4f186381",
@@ -15618,7 +15618,7 @@
       "read_method": "非切断の分割全文read。read transcript/pointer receiptとP SHAを固定して責務/consumer/20criteriaへ照合。"
     },
     {
-      "path": "docs/development/BACKUP_NAS_PROPOSAL_1.0.13.md",
+      "path": "docs/development/plans/BACKUP_NAS_PROPOSAL_1.0.13.md",
       "bytes": 6921,
       "lines": 95,
       "sha256": "b994b81cfb0db603798a9b63fdeb33559b4e27fb025d3b5575a88ab71f65751b",

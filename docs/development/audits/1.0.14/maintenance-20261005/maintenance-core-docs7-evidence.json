@@ -607,8 +607,8 @@
       "module": "release_history",
       "responsibility": "1.0.11metadata/自己反応/診断/原22-Aの合成と実観測受入、schema marker事故/復旧/公開保留。",
       "callers": [
-        "docs/development/ACCEPTANCE_1.0.11.md:59",
-        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/development/acceptance/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/plans/RELEASE_1.0.13.md:11",
         "docs/ROADMAP.md:70",
         "docs/dev-records/README.md:15",
         "ci/mine_gates.py:extract_ids/main"
@@ -792,8 +792,8 @@
       "module": "release_history",
       "responsibility": "1.0.13設計/実装/引継ぎ/後続敵対的reviewの全時系列、NAS/人手/相手repo/実機公開条件。",
       "callers": [
-        "docs/development/ACCEPTANCE_1.0.11.md:59",
-        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/development/acceptance/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/plans/RELEASE_1.0.13.md:11",
         "docs/ROADMAP.md:70",
         "docs/dev-records/README.md:15",
         "ci/mine_gates.py:extract_ids/main"
@@ -967,8 +967,8 @@
       "module": "release_history",
       "responsibility": "1.0.13 userstop時点未完16項目と後日local完了追記、private証拠参照・外部受入条件。",
       "callers": [
-        "docs/development/ACCEPTANCE_1.0.11.md:59",
-        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/development/acceptance/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/plans/RELEASE_1.0.13.md:11",
         "docs/ROADMAP.md:70",
         "docs/dev-records/README.md:15",
         "ci/mine_gates.py:extract_ids/main"
@@ -3669,8 +3669,8 @@
         "HANDOFF_CLAUDE_1.0.13_20261004.md:1-70,73-159,161-269"
       ],
       "callers": [
-        "docs/development/ACCEPTANCE_1.0.11.md:59",
-        "docs/development/RELEASE_1.0.13.md:11",
+        "docs/development/acceptance/ACCEPTANCE_1.0.11.md:59",
+        "docs/development/plans/RELEASE_1.0.13.md:11",
         "docs/ROADMAP.md:70",
         "docs/dev-records/README.md:15",
         "ci/mine_gates.py:extract_ids/main"
@@ -3769,7 +3769,7 @@
       "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"
     },
     {
-      "path": "docs/development/RELEASE_1.0.13.md",
+      "path": "docs/development/plans/RELEASE_1.0.13.md",
       "P_sha256": "6604b6984d96ff58f13647ca478f7d653c6536b79364522e733a136fbd6bcf82",
       "exact_P": true,
       "review": "READONLY scoped consumer; 全文read再利用又は今回提示rangeのみ、source全域再監査の主張なし"

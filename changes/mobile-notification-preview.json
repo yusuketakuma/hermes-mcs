@@ -24,6 +24,6 @@
     "adapters/discord/delivery.py",
     "adapters/lineworks/cards.py",
     "adapters/lineworks/client.py",
-    "docs/development/mobile-notification-preview-1.0.15.json"
+    "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
   ]
 }

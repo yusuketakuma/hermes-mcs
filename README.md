@@ -355,7 +355,7 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 ## ドキュメント
 
-[安定稼働版1.0.13の計画](docs/development/RELEASE_1.0.13.md)は、
+[安定稼働版1.0.13の計画](docs/development/plans/RELEASE_1.0.13.md)は、
 旧1.0.13〜1.0.15・追加提案・バグ修正・4つの統一コマンドを集約しました。
 ローカル実装と合成検証は完了し、実機・実API・人手・相手側の受入条件は同計画の§6で追跡します。
 

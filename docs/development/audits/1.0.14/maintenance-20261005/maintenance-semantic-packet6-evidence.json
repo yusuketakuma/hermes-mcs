@@ -309,7 +309,7 @@
       ]
     },
     {
-      "path": "docs/development/RELEASE_1.0.13.md",
+      "path": "docs/development/plans/RELEASE_1.0.13.md",
       "type": "text",
       "state": "REVIEWED",
       "sha256_P": "6604b6984d96ff58f13647ca478f7d653c6536b79364522e733a136fbd6bcf82",
@@ -2281,7 +2281,7 @@
         "docs/assets/flow-signals.svg",
         "docs/assets/flow-timeline.svg",
         "docs/assets/runtime-topology.svg",
-        "docs/development/RELEASE_1.0.13.md",
+        "docs/development/plans/RELEASE_1.0.13.md",
         "docs/screenshots/discord-card.svg",
         "docs/screenshots/discord-thread.svg",
         "docs/screenshots/signals-cli.svg",

@@ -4,11 +4,11 @@
 実装完了・公開・配備を意味しない。公開基準はv1.0.12、レビュー対象は
 `fb099ee`と既存のMakefile警告修正。
 
-[ROADMAP](../ROADMAP.md)の旧1.0.13〜1.0.15、追加提案、検知済み修正を
+[ROADMAP](../../ROADMAP.md)の旧1.0.13〜1.0.15、追加提案、検知済み修正を
 **全て1.0.13の一つのリリースへ集約する**。内部工程を分けても別版へ繰り延べない。
 詳細設計のID・既存の人承認・実API・品質ゲートは維持する。
 前提未確定の項目は未完了として追跡し、削除・実装済み扱いで範囲を縮めない。
-レビューの証拠と制約は[全体レビュー記録](../dev-records/stability-1.0.13-20261004.md)に置く。
+レビューの証拠と制約は[全体レビュー記録](../../dev-records/stability-1.0.13-20261004.md)に置く。
 
 ## 1. リリース範囲と受入
 
@@ -101,8 +101,8 @@ installerが実行可能launcherをPATH上に配置する。repo直下の`mcs/`�
 - 新GET/actor/publication/enforce、バックアップ保存先、実データ修復、
   秘密・氏名・外部連携の本番有効化はそれぞれ既存のオーナー判断と実機受入が必要。
   原MCS確認のユーザー完了申告は引き継ぎ、新しい挙動の受入と混同しない。
-- final releaseは[RELEASE_NOTES](RELEASE_NOTES.md)と
-  [README_MAINTENANCE](README_MAINTENANCE.md)に従う。1.0.13の番号へ先行書換えして
+- final releaseは[RELEASE_NOTES](../RELEASE_NOTES.md)と
+  [README_MAINTENANCE](../README_MAINTENANCE.md)に従う。1.0.13の番号へ先行書換えして
   公開済み1.0.12のCHANGELOG・README見直し記録・archiveを壊さない。
 - 公開承認・配備承認・実データ操作は区別する。この文書整合だけで外部操作を開始しない。
 

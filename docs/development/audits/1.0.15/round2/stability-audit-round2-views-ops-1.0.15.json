@@ -848,7 +848,7 @@
         "tests/meta/test_ci_scripts.py",
         "tests/release/ (23 canonical generation/sync cases)",
         "generate_lineworks_gallery.py --check: 2 synthetic SVG/PNG pairs verified",
-        "docs/development/mobile-notification-preview-1.0.15.json"
+        "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
       ],
       "limitations": [
         "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."

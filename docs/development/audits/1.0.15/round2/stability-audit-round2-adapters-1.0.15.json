@@ -262,7 +262,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limits": [
@@ -319,7 +319,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limits": [
@@ -449,7 +449,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limits": [
@@ -620,7 +620,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limits": [
@@ -655,7 +655,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limits": [
@@ -824,7 +824,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limits": [
@@ -860,7 +860,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limits": [
@@ -1163,7 +1163,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         },
         {
           "kind": "synthetic_behavior_suite",
@@ -1246,7 +1246,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limits": [
@@ -1303,7 +1303,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limits": [
@@ -1360,7 +1360,7 @@
         },
         {
           "kind": "contract_and_limits",
-          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
         }
       ],
       "limits": [
