@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "保存された配送状態の一部が破損しても正常な配送の復旧を継続",
+  "summary": "保存済みの操作情報や配送予約に型の不正な項目があると、正常な通知の後処理・復旧まで止まる問題を修正しました。破損した配送予約は保持し、未確認の送信を勝手に再送せず、正常な後続項目を処理します。",
+  "upgrade": "Hermesはgateway、独立実行は使用中adapterの更新・再起動で適用します。設定変更や保存形式の変更はありません。保持された破損項目で配送の確定に必要な情報が失われている場合は、既存の配送確認・復旧手順による確認が必要です。保存ファイルを削除して再送を促す変更は行いません。",
+  "details": [
+    "旧tokenのactionが配列・辞書でも、配送済み更新の旧操作情報の整理を妨げないようにしました。破損tokenの権限を新しく認めず、正常な同一カードの旧tokenだけを既存条件で整理します。",
+    "孤立した配送予約の処理を1件単位のprivate helperに分け、通常の予約処理と同様に例外を隔離します。phase欠測・型不正・未知値や必須情報の破損は削除せず、固定エラーコードを記録して後続の正常な予約を処理します。キャンセルは引き続き伝播します。",
+    "旧scopeファイルの取込みで、所属scopeの情報欠測や不正な文字列は所有を証明できない項目として取込みを見送ります。正常に所有を証明できる項目だけを移し、旧ファイルの内容を変更しません。正常scopeのhash計算は1回にまとめました。",
+    "公開入口・SDK境界・配送receipt・保存形式・単一送信の条件は維持します。完全合成で破損9ケースの修正前再現、100回の状態読込み・期限整理、100回の二重停止と所有task終了を確認しました。"
+  ],
+  "refs": ["adapters/common/registry.py", "adapters/common/worker.py", "tests/adapters/common/test_registry_shape_isolation.py", "tests/adapters/standalone/test_shutdown_stability.py", "docs/development/stability-audit-round3-adapters-1.0.15.json"]
+}

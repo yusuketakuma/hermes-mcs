@@ -50,7 +50,7 @@ class Host:
                 result = callback()
                 if inspect.isawaitable(result):
                     await result
-            except Exception as exc:
+            except (Exception, asyncio.CancelledError) as exc:
                 errors.append(exc)
         tasks = list(self.tasks)
         for task in tasks:
@@ -58,6 +58,9 @@ class Host:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self.tasks.clear()
+        for error in errors:
+            if isinstance(error, asyncio.CancelledError):
+                raise error
         if errors:
             raise RuntimeError("standalone_host_unload_failed") from None
 

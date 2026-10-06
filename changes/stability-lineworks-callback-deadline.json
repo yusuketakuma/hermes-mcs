@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "LINE WORKS の低速 Callback による受付停止を防止",
+  "summary": "Callback のヘッダーや本文が少量ずつ届き続けても、接続を長時間占有して後続の受付と終了処理を止めないようにしました。接続の受信待ちを開始から 5 秒で制限します。",
+  "upgrade": "独立 LINE WORKS アダプターを通常の更新手順で再起動すると適用されます。設定変更は不要です。5 秒以内に受信できない Callback は接続を終了するため、送信元の再試行で再受付されます。",
+  "details": ["既存の容量・署名・期限検証と、保存済み Callback の重複受付防止を保持します。", "接続ごとの標準ライブラリの期限タイマーは処理終了時に取り消して終了を待ち、残存させません。", "安全ゲートの例外は独立 LINE WORKS の Callback サーバーによる SHUT_RDWR 定数の import だけに限定します。socket モジュール全体、ソケット生成、他の定数、Hermes 接続アダプターでの使用は許可しません。"],
+  "refs": ["adapters/lineworks/server.py", "ci/gates.py"]
+}

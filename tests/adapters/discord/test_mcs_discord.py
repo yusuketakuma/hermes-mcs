@@ -2705,6 +2705,8 @@ def _delivered(world):
 
 
 def _face(msg):
+    if msg.embed is not None:
+        return msg.embed.description
     return "\n".join(c.content for c in msg.view.items[0].children
                      if hasattr(c, "content"))
 
@@ -2725,9 +2727,10 @@ def test_card_posts_and_edits_never_ping(world):
     asyncio.run(_deliver(world, worker))
     assert msg.edits == 1 and msg.allowed_mentions.roles is False
     assert "-# ✅ 確認: <@1001>" in _face(msg)
-    labels = [x.label for row in msg.view.items[0].children
-              if hasattr(row, "children") for b in row.children
-              for x in getattr(b, "options", [b])]
+    buttons = (msg.view.items if msg.embed is not None else
+               [b for row in msg.view.items[0].children
+                if hasattr(row, "children") for b in row.children])
+    labels = [x.label for b in buttons for x in getattr(b, "options", [b])]
     assert "確認する" in labels and "⏸ 保留" not in labels
 
 

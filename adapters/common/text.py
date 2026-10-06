@@ -45,6 +45,23 @@ BODY_MAX_CHUNKS = 4        # ephemeral replies only — durable thread
                            # delivery passes max_chunks=None
 
 
+def notification_preview(parts: dict, limit: int = 600) -> str:
+    """A sealed content-first preview, or visible text from an older spec."""
+    preview = parts.get("preview_text")
+    if not isinstance(preview, str) or not preview.strip():
+        head, body = [], []
+        for item in parts.get("containers") or []:
+            kind = item.get("type")
+            if kind == "meta":
+                continue
+            value = (f"{item['name']}: {item['value']}" if kind == "field"
+                     else item.get("text") or "")
+            (head if kind == "heading" else body).append(value)
+        preview = "\n".join(body[:2] + head[:1]) or "MCS 通知"
+    preview = " ".join(preview.split())
+    return preview if len(preview) <= limit else preview[:limit - 1] + "…"
+
+
 def split_body(text: str, limit: int = BODY_CHUNK,
                max_chunks: int | None = BODY_MAX_CHUNKS) -> list:
     """Split a full-text answer on line boundaries into <=limit chunks,

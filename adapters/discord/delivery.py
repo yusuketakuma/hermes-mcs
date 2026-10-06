@@ -64,16 +64,17 @@ class DeliveryWorker(worker.DeliveryWorker):
                     return {"result": "delivered", "message_id": mid}
                 raise
             return {"result": "delivered", "message_id": mid}
-        view = cards.build_view(spec)
         if op == "update":
             mid = delivery.get("message_id")
             if not mid:
                 return {"result": "not_sent", "error_code": "no_target"}
             msg = await channel.fetch_message(int(mid))
-            await msg.edit(view=view, allowed_mentions=cards.no_pings())
+            legacy_v2 = getattr(getattr(msg, "flags", None), "is_components_v2", False)
+            await msg.edit(**cards.message_payload(spec, components_v2=legacy_v2),
+                           allowed_mentions=cards.no_pings())
             return {"result": "delivered", "message_id": mid}
         sent = await cards.single_post(           # create / notice
-            self._bot, partial(channel.send, view=view,
+            self._bot, partial(channel.send, **cards.message_payload(spec),
                                allowed_mentions=cards.no_pings()))
         return {"result": "delivered",
                 "message_id": str(sent.id)}

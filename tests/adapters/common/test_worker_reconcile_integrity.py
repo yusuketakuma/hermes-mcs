@@ -15,7 +15,7 @@ from test_lineworks_adapter import CONFIG, overflow_spec, world
 
 
 @pytest.mark.parametrize("phase", ["begin_sent", "granted"])
-@pytest.mark.parametrize("damage", ["torn", "deep", "bad_phase", "missing"])
+@pytest.mark.parametrize("damage", ["torn", "deep", "bad_phase", "phase_array", "phase_object", "missing"])
 def test_restart_missing_send_witness_stays_unknown(tmp_path, monkeypatch, phase, damage):
     monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
     data = tmp_path / "data"
@@ -50,6 +50,8 @@ def test_restart_missing_send_witness_stays_unknown(tmp_path, monkeypatch, phase
                         tail = json.dumps(row).encode()[:-1]
                     elif damage == "deep":
                         tail = b"[" * 20000 + b"]" * 20000 + b"\n"
+                    elif damage in ("phase_array", "phase_object"):
+                        tail = json.dumps({**row, "phase": [] if damage == "phase_array" else {}}).encode() + b"\n"
                     else:
                         tail = json.dumps({**row, "phase": "start-corrupt"}).encode() + b"\n"
                     with witness.open("ab") as handle:

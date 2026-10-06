@@ -87,7 +87,7 @@ class Runtime:
                     and len(value["request_id"]) == 32
                     and type(stamp) in (int, float) and math.isfinite(stamp)
                     and -2 <= now - stamp <= service.STATUS_TTL)
-        except (OSError, ValueError, KeyError, TypeError, RecursionError):
+        except (OSError, ValueError, KeyError, TypeError, RecursionError, OverflowError):
             return False
 
     def tick(self, now=None, *, draining=False):
@@ -118,6 +118,8 @@ class Runtime:
             for job in COMMANDS:
                 names = {path.name for path in (self.data / job).glob("*.json")}
                 if not names:
+                    if self.drained.get(job) is not None:
+                        self.drained[job] = set()
                     continue
                 # A new card click after a successful run must not wait out the backoff
                 # (Discord waits 20 s). Only cmd_int: `cmd` contacts MCS. Failures and
@@ -164,10 +166,13 @@ async def serve(root, cfg, connector=None):
             raise config.ConfigError("standalone_already_running") from None
         stopping = asyncio.Event()
         loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, setattr, runtime, "restarting", True)
-        worker = asyncio.create_task(connector(root, stopping)) if connector else None
+        registered = []
+        worker = None
         try:
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.add_signal_handler(sig, setattr, runtime, "restarting", True)
+                registered.append(sig)
+            worker = asyncio.create_task(connector(root, stopping)) if connector else None
             while True:
                 try:
                     runtime.restarting |= config.load(root) != cfg
@@ -179,20 +184,22 @@ async def serve(root, cfg, connector=None):
                     break
                 await asyncio.sleep(1)
         finally:
-            runtime.restarting = True
-            while runtime.children:
-                # Log/status failures must not strand children or skip connector cleanup.
-                with suppress(OSError):
-                    runtime.tick(draining=True)
-                await asyncio.sleep(1)
-            stopping.set()
-            if worker:
-                try:
-                    await asyncio.wait_for(worker, timeout=30)
-                except asyncio.TimeoutError:
-                    log("connector_stop_timeout")
-            for sig in (signal.SIGTERM, signal.SIGINT):
-                loop.remove_signal_handler(sig)
+            try:
+                runtime.restarting = True
+                while runtime.children:
+                    # Log/status failures must not strand children or skip connector cleanup.
+                    with suppress(OSError):
+                        runtime.tick(draining=True)
+                    await asyncio.sleep(1)
+                stopping.set()
+                if worker:
+                    try:
+                        await asyncio.wait_for(worker, timeout=30)
+                    except asyncio.TimeoutError:
+                        log("connector_stop_timeout")
+            finally:
+                for sig in registered:
+                    loop.remove_signal_handler(sig)
     finally:
         os.close(fd)
     return 0

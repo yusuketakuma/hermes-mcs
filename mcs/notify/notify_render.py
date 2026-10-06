@@ -16,7 +16,7 @@ import time
 
 from ledger import reaction_actor_summary
 from mcs_queries import EXTRACT_FEEDBACK_KIND, JST, feedback_current
-from mcs_requests import payload_hash, positive
+from mcs_requests import payload_hash, positive, valid_hash
 from message_metadata import (get_message_metadata, is_self_sender,
                               mentions_self, self_stamps, stamp_counts,
                               thread_stamp_line, actor_line)
@@ -31,6 +31,76 @@ PAGE_THREAD = 8           # messages per page on a thread card (count cap)
 PAGE_TEXT_BUDGET = 3200
 CARD_TEXT_BUDGET = 4000
 BODY_MAX_CHARS = 6000
+
+
+def _preview_post(text) -> str:
+    """依頼・質問を含む原文の一文を優先し、判断や新しい指示を足さない。"""
+    raw = str(text or "")
+    hit = re.search(r"依頼|確認(?:して|をお願い)|教えて|[？?]|お願いします|ください", raw)
+    if hit:
+        start = max(raw.rfind(mark, 0, hit.start()) for mark in ("\n", "。", "！", "？", "?")) + 1
+        ends = [at for mark in ("\n", "。", "！", "？", "?")
+                if (at := raw.find(mark, hit.start())) >= 0]
+        raw = raw[start:min(ends) + 1 if ends else len(raw)]
+    return _inline(raw, 220)
+
+
+def _preview_header(db, pid, message) -> str:
+    """保存済み投稿だけから短い5項目表示のヘッダーを作り、欠測を明示する。"""
+    patient = _inline(_patient_name(db, pid), 30) or f"project {pid}"
+    sender = (_inline(message["sender_name"], 24) if message else "") or "発信者未取得"
+    organization = (_inline(message["organization"], 24) if message else "") or "所属未取得"
+    posted = message["posted_at"] if message else None
+    return f"{patient} / {sender}（{organization}） / {_mmdd(posted)} {_hhmm(posted)}"
+
+
+def _preview_line(header, summary, limit=600):
+    patient, _separator, source = header.partition(" / ")
+    summary = _inline(summary, limit - len(header) - 2)
+    return f"{patient}: {summary} / {source}"
+
+
+def notification_preview(db, card, content, *, limit=600) -> str:
+    """表示対象の患者・発信者・所属・時刻・内容を通知プレビュー向けに短く示す。"""
+    if card["kind"] == "thread":
+        for mid in reversed(content["shown"]):
+            if not positive(mid):
+                continue
+            message = db.execute(
+                "SELECT sender_name,profession,organization,posted_at,body_text,body_state,content_hash "
+                "FROM messages WHERE message_id=? AND project_id=?",
+                (mid, card["project_id"])).fetchone()
+            if not message:
+                continue
+            header = _preview_header(db, card["project_id"], message)
+            if message["body_state"] == "deleted":
+                return _preview_line(header, "表示対象の投稿は削除済みです。", limit)
+            if message["body_state"] != "full" or not valid_hash(message["content_hash"]):
+                return _preview_line(header, "投稿本文が未取得か確認できない状態です。", limit)
+            block = _structured_block(db, mid)
+            if block:
+                facts = [line.removeprefix("・") for line in block["text"].splitlines()[1:]]
+                main = next((line for line in facts if any(
+                    word in line for word in ("依頼", "予定", "症状", "注意"))), facts[0] if facts else "要約内容を確認できません")
+                main = "投稿の自動要約: " + main
+            else:
+                state = "要約作成失敗" if _extraction_failed(db, mid) else "要約処理待ち"
+                main = f"投稿（{state}・原文）: " + (_preview_post(message["body_text"]) or "本文なし")
+            urgency = structured_view.message_urgency(db, mid)
+            badge = URGENCY_TAG.get(urgency, "")
+            return _preview_line(header, badge + _inline(main, 260), limit)
+        return f"project {card['project_id']}: 表示対象の投稿本文を確認できません。"
+    signals = _latest_signals(db, content["shown"], card["project_id"])
+    items = []
+    for entry in signals.values():
+        signal = entry["content"]
+        _mid, message = _signal_evidence(db, signal)
+        header = _preview_header(db, signal.get("project_id"), message)
+        items.append(_preview_line(header, f"{signal_label(signal)}{_inline(signal.get('note'), 120)}（{signal_state(signal)}）"))
+    if not items:
+        return "確認候補: 現在の表示対象を確認できません。"
+    prefix = f"確認候補 {len(signals)}件: " if card["kind"] == "digest" else "確認候補（記録上）: "
+    return (prefix + " / ".join(items[:3]))[:600]
 
 
 def display_text(parts: dict) -> str:
@@ -730,11 +800,13 @@ def _card_content(db, card) -> dict:
         (mid, actor_line(reaction_actor_summary(db, mid)))
         for mid, _meta in card_reactions(
             db, card, None if kind == "thread" else shown)])
-    return {"containers": containers, "footer": footer,
+    content = {"containers": containers, "footer": footer,
             "shown": shown, "shown_kind": shown_kind,
             "page": page, "pages": pages,
             "source_fp": source_fp, "toggles": toggles,
             "actor_fp": actor_fp}
+    content["preview_text"] = notification_preview(db, card, content)
+    return content
 
 
 def _current_generation(card, source_fp) -> int:
@@ -976,4 +1048,4 @@ def _footer(db, card, shown, generation) -> tuple:
 def _content_fp(content: dict) -> str:
     return payload_hash({"c": content["containers"], "f": content["footer"],
                 "s": content["shown"], "p": content["page"],
-                "a": content.get("actor_fp")})
+                "a": content.get("actor_fp"), "preview": content.get("preview_text")})

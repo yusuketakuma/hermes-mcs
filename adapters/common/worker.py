@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import json
+import math
 import os
 import time
 from typing import Any
@@ -81,16 +82,36 @@ async def _outcome_of(awaitable):
 def _card_message_id(records: dict, delivery_id: str) -> str | None:
     """Latest factual card result for a delivery — dependent parts may
     only attach to a card the journal proves was posted."""
-    res = [r for rows in records.values() for r in rows
-           if r.get("phase") == "result"
-           and r.get("delivery_id") == delivery_id
-           and not r.get("part_id")]
-    res.sort(key=lambda r: r.get("ts") or 0)
-    last = res[-1] if res else None
-    if last and last.get("result") == "delivered" \
-            and last.get("message_id"):
-        return str(last["message_id"])
-    return None
+    invalid = set()
+    message_ids = _card_message_ids(records, invalid)
+    if delivery_id in invalid:
+        raise ValueError("card_result_timestamp_invalid")
+    return message_ids.get(delivery_id)
+
+
+def _card_message_ids(records: dict, invalid: set | None = None) -> dict[str, str | None]:
+    """Latest primary outcome per delivery, in scan order for equal timestamps."""
+    latest, keys = {}, {}
+    invalid = set() if invalid is None else invalid
+    # _View.values() probes every file per attempt. Walk rows once;
+    # equal timestamps still follow the old attempt-first scan order.
+    order = {aid: i for i, aid in enumerate(records)}
+    for row in journal.all_rows(records):
+        did = row.get("delivery_id")
+        if (row.get("phase") != "result" or row.get("part_id")
+                or not isinstance(did, str)):
+            continue
+        ts = row.get("ts", 0)
+        if type(ts) not in (int, float) or (type(ts) is float and not math.isfinite(ts)):
+            invalid.add(did)  # never attach parts to an unorderable outcome
+            continue
+        key = (ts, order.get(row.get("attempt_id"), 0))
+        if did not in latest or key >= keys[did]:
+            latest[did], keys[did] = row, key
+    return {did: str(row["message_id"])
+            if did not in invalid and row.get("result") == "delivered"
+            and row.get("message_id") else None
+            for did, row in latest.items()} | dict.fromkeys(invalid)
 
 
 class DeliveryWorker:
@@ -222,7 +243,7 @@ class DeliveryWorker:
 
         def prunable(aid, rows):
             delivery_id = str(rows[-1].get("delivery_id"))
-            phases = {r.get("phase") for r in rows}
+            phases = {r["phase"] for r in rows if r.get("phase") in journal.PHASES}
             return (bool(phases & {"receipt", "denied"})
                     and not any(r.get("result") == "unknown" for r in rows)
                     and all(isinstance(r.get("ts"), (int, float))
@@ -506,7 +527,8 @@ class DeliveryWorker:
         await self._drive_parts(claim, manifest, ctx, records)
 
     async def _resume_parts(self, spec: dict,
-                            records: dict | None = None) -> None:
+                            records: dict | None = None, *,
+                            card_message_ids: dict | None = None) -> None:
         """Restart-resume a settled spec's dependent parts — only parts
         the journal proves never began; a started-only attempt stays
         honestly unknown and is never resent."""
@@ -517,7 +539,9 @@ class DeliveryWorker:
             return
         if records is None:
             records = await asyncio.to_thread(self._jview.refresh)
-        mid = _card_message_id(records, spec["delivery_id"])
+        mid = (card_message_ids.get(spec["delivery_id"])
+               if card_message_ids is not None
+               else _card_message_id(records, spec["delivery_id"]))
         if not mid:
             # card unproven. A dead, unclaimed delivery_id never gets
             # another card attempt, so no delivered result can appear
@@ -552,7 +576,7 @@ class DeliveryWorker:
             aid = envelopes.part_attempt_id(spec["delivery_id"],
                                             part["part_id"])
             rows = records.get(aid, [])
-            phases = {r.get("phase") for r in rows}
+            phases = {r["phase"] for r in rows if r.get("phase") in journal.PHASES}
             if "receipt" not in phases and "result" in phases:
                 await self._republish_part_receipt(claim, part, rows)
             if phases & {"result", "receipt", "denied"}:
@@ -884,10 +908,17 @@ class DeliveryWorker:
         """dead specs whose dependent parts never finished get their
         unjournaled remainder driven once per tick — journal phases
         dedupe everything already proven."""
+        if not resume:
+            return
         records = await asyncio.to_thread(self._jview.refresh)
+        invalid = set()
+        card_message_ids = await asyncio.to_thread(_card_message_ids, records, invalid)
         for spec in resume:
             try:
-                await self._resume_parts(spec, records)
+                if spec["delivery_id"] in invalid:
+                    raise ValueError("card_result_timestamp_invalid")
+                await self._resume_parts(spec, records,
+                                         card_message_ids=card_message_ids)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -902,33 +933,44 @@ class DeliveryWorker:
         for delivery_id, claim in self._reg.claims().items():
             if delivery_id in live_ids:
                 continue
-            if claim["phase"] in ("started", "result", "settled"):
-                await self._step_claim(claim, allow_parts=False)
-                continue
-            if claim["phase"] == "begin_sent":
-                result, code = "not_sent", "spec_withdrawn"
-            elif claim["phase"] == "granted":
-                started = await asyncio.to_thread(
-                    self._started, claim)
-                result = "unknown" if started else "not_sent"
-                code = "spec_withdrawn" if not started \
-                    else "worker_crash"
-            else:
-                await self._drop_claim(claim)
-                continue
-            env = envelopes.transport_receipt(
-                claim, result, error_code=code)
             try:
-                await asyncio.to_thread(
-                    envelopes.publish_command,
-                    self._dirs["cmd_int"], env)
-                self._journal("receipt",
-                              attempt_id=claim["attempt_id"],
-                              delivery_id=delivery_id,
-                              result=result, error_code=code)
-            except OSError:
-                continue                         # keep claim — retry next
-            await self._drop_claim(claim)
+                await self._settle_orphan_claim(delivery_id, claim)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # Keep damaged/uncertain state for recovery; one orphan
+                # must not prevent later healthy claims from settling.
+                self._log("orphan_claim_error", delivery_id=delivery_id,
+                          error=type(exc).__name__)
+
+    async def _settle_orphan_claim(self, delivery_id: str, claim: dict) -> None:
+        """Settle one withdrawn spec without lending uncertainty a resend."""
+        if claim["phase"] in ("started", "result", "settled"):
+            await self._step_claim(claim, allow_parts=False)
+            return
+        if claim["phase"] == "begin_sent":
+            result, code = "not_sent", "spec_withdrawn"
+        elif claim["phase"] == "granted":
+            started = await asyncio.to_thread(
+                self._started, claim)
+            result = "unknown" if started else "not_sent"
+            code = "spec_withdrawn" if not started \
+                else "worker_crash"
+        else:
+            raise ValueError("orphan_claim_phase_invalid")
+        env = envelopes.transport_receipt(
+            claim, result, error_code=code)
+        try:
+            await asyncio.to_thread(
+                envelopes.publish_command,
+                self._dirs["cmd_int"], env)
+            self._journal("receipt",
+                          attempt_id=claim["attempt_id"],
+                          delivery_id=delivery_id,
+                          result=result, error_code=code)
+        except OSError:
+            return                           # keep claim — retry next
+        await self._drop_claim(claim)
 
     async def tick(self) -> None:
         if self._stopping:

@@ -91,11 +91,14 @@ async def serve(root, port):
         raise ClientError("adapter_already_running")
     server = None
     thread = None
+    server_started = False
     stopping = asyncio.Event()
     loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stopping.set)
+    registered_signals = []
     try:
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, stopping.set)
+            registered_signals.append(sig)
         reg.reload()
         with reg.batch():
             await worker.reconcile()
@@ -104,6 +107,7 @@ async def serve(root, port):
         server = callback_server(inbox, port=port)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
+        server_started = True
         _log("adapter_ready")
         while not stopping.is_set():
             try:
@@ -138,14 +142,23 @@ async def serve(root, port):
                 pass
     finally:
         worker.stop()
-        if server:
-            await asyncio.to_thread(server.shutdown)
-            server.server_close()
-        if thread:
-            thread.join(timeout=5)
-        worker.release_scope_lock()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.remove_signal_handler(sig)
+        try:
+            if server:
+                try:
+                    if server_started:
+                        await asyncio.to_thread(server.shutdown)
+                finally:
+                    server.server_close()
+        finally:
+            try:
+                if thread and server_started:
+                    thread.join(timeout=5)
+            finally:
+                try:
+                    worker.release_scope_lock()
+                finally:
+                    for sig in registered_signals:
+                        loop.remove_signal_handler(sig)
 
 
 def _wait_api_lock(root):

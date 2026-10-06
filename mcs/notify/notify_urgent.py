@@ -354,9 +354,13 @@ def check_delivery(ledger, cfg, event, *, now=None):
             "observed_at": candidate["row"]["created_at"]}
 
 
-def render_text(checked):
-    """本文・氏名・臨床的な完了判定を含めない、独立した再確認候補の表示。"""
+def render_text(checked, db=None):
+    """元投稿の表示と業務完了を区別した、独立した再確認候補を示す。"""
+    source = (notify_render.notification_preview(
+        db, {"kind": "thread", "project_id": checked["project_id"]},
+        {"shown": [checked["message_id"]]}) + "\n") if db is not None else ""
     return (
+        source +
         f"[MCS] 緊急度の再確認候補（AI抽出・{checked['stage']}）\n"
         f"project {checked['project_id']} / message {checked['message_id']}\n"
         "現在のLLM抽出で緊急度が高いと観測されています。\n"

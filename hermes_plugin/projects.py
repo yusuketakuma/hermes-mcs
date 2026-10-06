@@ -37,6 +37,9 @@ def _snapshot_projects(path: str) -> frozenset[int] | None:
         return None
     out = frozenset(r[0] for r in rows)
     _cache[path] = (now, generation, out)
+    # Bound retained project sets when profiles switch snapshot paths.
+    while len(_cache) > 32:
+        _cache.pop(next(iter(_cache), None), None)
     return out
 
 

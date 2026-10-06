@@ -7,12 +7,12 @@ from urllib.parse import urlsplit
 
 from adapters.common.spec import PRIMARY_ACTIONS
 from adapters.common.spec import validate as validate_v1
+from adapters.common.text import notification_preview
 
 _SECTION_MAX = 3000
 _HEADER_MAX = 150
 _CONTEXT_MAX = 2000
 _BLOCK_MAX = 50
-_FALLBACK = "MCS 確認カード"
 SCHEMA = "mcs-card-render/v2"
 LINK_ACTION = "mcs:link"          # URL buttons still post an action — acked
 MENU_ACTION = "mcs:menu"          # the compact 操作 select — value = token
@@ -156,4 +156,4 @@ def render(spec, names=None):
             {"type": "mrkdwn", "text": link}]})
     if len(blocks) > _BLOCK_MAX:
         raise ValueError("slack_block_budget")
-    return _FALLBACK, blocks
+    return escape(notification_preview(spec["parts"]), quote=False), blocks

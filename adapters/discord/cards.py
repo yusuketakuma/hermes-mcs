@@ -15,6 +15,7 @@ import re
 from typing import BinaryIO
 
 from adapters.common.spec import MAX_COMPONENTS, MAX_TEXT, PRIMARY_ACTIONS
+from adapters.common.text import notification_preview
 
 # discord.py releases whose HTTPClient.request retry loop and private
 # aiohttp session (``_HTTPClient__session``) the single-post guard was
@@ -115,6 +116,55 @@ def _zones(spec: dict, esc) -> tuple:
     return zones, footer
 
 
+def _button_items(spec):
+    """The same durable primary/link buttons and secondary menu in both formats."""
+    import discord
+    primary, menu, links = [], [], []
+    for row in spec["parts"].get("action_rows") or []:
+        for button in row:
+            if button.get("ui") == "link":
+                links.append(discord.ui.Button(style=discord.ButtonStyle.link,
+                                               label=button["label"], url=button["url"]))
+            elif button.get("id") in PRIMARY_ACTIONS:
+                primary.append(discord.ui.Button(
+                    style=getattr(discord.ButtonStyle, button.get("style", "secondary")),
+                    label=button["label"], custom_id=f"mcs:a:{button['token']}"))
+            else:
+                menu.append(discord.SelectOption(label=button["label"], value=button["token"]))
+    return primary + links, menu
+
+
+def message_payload(spec, *, components_v2=False):
+    """New cards carry preview content; existing V2 messages retain their valid format."""
+    import discord
+    if components_v2:
+        view = build_view(spec)
+        # MCS dispatches via the bot-wide on_interaction listener, not
+        # native View callbacks. Keep the wire components but prevent
+        # discord.py from retaining one persistent View for every card.
+        view.stop()
+        return {"view": view}
+    zones, footer = _zones(spec, escape_md)
+    face = "\n\n".join(["\n".join(zone) for zone in zones] + ["\n".join(footer)]).strip() or "—"
+    if len(face) > 4096:
+        raise ValueError("discord_embed_budget")
+    view = discord.ui.View(timeout=None)
+    primary, menu = _button_items(spec)
+    for button in primary:
+        button.row = 0
+        view.add_item(button)
+    if menu:
+        view.add_item(discord.ui.Select(
+            custom_id=MENU_ID, placeholder=_MENU_PLACEHOLDER,
+            min_values=1, max_values=1, options=menu[:_MENU_MAX], row=1))
+    payload = {"content": escape_md(notification_preview(spec["parts"])),
+               "embed": discord.Embed(description=face, colour=_ACCENTS.get(spec.get("kind")))}
+    if primary or menu:
+        view.stop()
+        payload["view"] = view
+    return payload
+
+
 def build_view(spec: dict):
     """spec -> discord.ui.LayoutView. Called only after validate().
     Face: text zones split by Separators, a Separator, then one row of
@@ -128,26 +178,9 @@ def build_view(spec: dict):
             visible=True, spacing=discord.SeparatorSpacing.small)
 
     primary, menu = discord.ui.ActionRow(), []
-    links = []
-    for row in spec["parts"].get("action_rows") or []:
-        for b in row:
-            if b.get("ui") == "link":
-                links.append(discord.ui.Button(
-                    style=discord.ButtonStyle.link, label=b["label"],
-                    url=b["url"]))
-            elif b.get("id") in PRIMARY_ACTIONS:
-                # no callback — the native on_interaction listener is
-                # the single dispatch point (plan §5)
-                primary.add_item(discord.ui.Button(
-                    style=getattr(discord.ButtonStyle,
-                                  b.get("style", "secondary")),
-                    label=b["label"],
-                    custom_id=f"mcs:a:{b['token']}"))
-            else:
-                menu.append(discord.SelectOption(label=b["label"],
-                                                 value=b["token"]))
-    for link in links:
-        primary.add_item(link)
+    buttons, menu = _button_items(spec)
+    for button in buttons:
+        primary.add_item(button)
     rows = []
     if primary.children:
         rows.append(primary)

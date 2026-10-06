@@ -302,7 +302,7 @@ def _followup_files(ledger, payload: dict, project_id):
     if not positive(aid):
         raise ValueError("payload_invalid")
     a = ledger.db.execute(
-        "SELECT a.message_id,a.file_id,a.name,a.state,a.local_path,a.bytes,a.sha256"
+        "SELECT a.message_id,a.file_id,a.name,a.state,a.local_path,a.bytes,a.sha256,m.project_id"
         " FROM attachments a JOIN messages m ON m.message_id=a.message_id"
         " WHERE a.attachment_id=? AND m.body_state IS NOT 'deleted'"
         " AND (? IS NULL OR m.project_id=?)",
@@ -312,14 +312,18 @@ def _followup_files(ledger, payload: dict, project_id):
     files = _collect_files({a["message_id"]: [a]}, [a["message_id"]])
     if not files:
         raise _StaleSend("attachment_unsendable")
-    return (f"[MCS] 添付ファイル（後送）\n{a['name'] or 'file'}"), files
+    import notify_render
+    preview = notify_render.notification_preview(
+        ledger.db, {"kind": "thread", "project_id": a["project_id"]},
+        {"shown": [a["message_id"]]})
+    return (f"{preview}\n[MCS] 添付ファイル（後送）\n{a['name'] or 'file'}"), files
 
 
 def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
     """Returns (content, files). files = [(filename, local_path)] to upload."""
     try:
         payload = json.loads(ev["payload"])
-    except (json.JSONDecodeError, TypeError) as e:
+    except (ValueError, TypeError, RecursionError) as e:
         raise ValueError("payload_invalid") from e
     if not isinstance(payload, dict):
         raise ValueError("payload_invalid")
@@ -372,7 +376,7 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         checked = notify_urgent.check_delivery(ledger, _config(), ev, now=time.time())
         if not checked["ok"]:
             raise _StaleSend(checked["reason"])
-        return notify_urgent.render_text(checked), []
+        return notify_urgent.render_text(checked, ledger.db), []
     if ev["kind"] == "attachment_followup":
         return _followup_files(ledger, payload, ev["project_id"])
     return _message_notice(ledger, ev, payload)
@@ -514,7 +518,7 @@ def _semantic_chunks(content: str) -> list[str]:
 def _has_sent_progress(ev) -> bool:
     try:
         progress = json.loads(ev["progress"] or "{}")
-    except (json.JSONDecodeError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return False
     return (isinstance(progress, dict)
             and type(progress.get("next")) is int and progress["next"] > 0)
@@ -531,7 +535,7 @@ def _send_never_began(ev) -> bool:
         return True
     try:
         progress = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return False
     if not isinstance(progress, dict):
         return False
@@ -560,7 +564,7 @@ def _hold_event(ledger, ev, cfg, proven_undelivered=False,
     # its in-flight evidence with a guessed negative acknowledgement.
     try:
         progress = json.loads(ev["progress"] or "{}")
-    except (json.JSONDecodeError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         progress = None
     if not isinstance(progress, dict):
         progress = {"invalid_progress": ev["progress"]}
@@ -572,7 +576,7 @@ def _hold_event(ledger, ev, cfg, proven_undelivered=False,
             and not _has_sent_progress(ev):
         try:
             payload = json.loads(ev["payload"])
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             payload = None
         if isinstance(payload, dict):
             rescuable = (
@@ -787,7 +791,7 @@ def _progress(raw: str, count: int) -> tuple[int, list[str], str | None,
                                             int | None]:
     try:
         d = json.loads(raw or "{}")
-    except json.JSONDecodeError as e:
+    except (ValueError, TypeError, RecursionError) as e:
         raise ValueError("progress_invalid") from e
     if (not isinstance(d, dict) or "invalid_progress" in d
             or type(d.get("next", 0)) is not int):
@@ -890,7 +894,10 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
     # An unknown send outcome is held before formatting: a stale/closed
     # source would otherwise suppress the event and lose the receipt.
     if ev["progress"]:
-        early_progress = json.loads(ev["progress"])
+        try:
+            early_progress = json.loads(ev["progress"])
+        except (ValueError, TypeError, RecursionError):
+            raise ValueError("progress_invalid") from None
         if not isinstance(early_progress, dict):
             raise ValueError("progress_invalid")
         if early_progress.get("sending") is not None:
@@ -959,7 +966,7 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
         if ev["kind"] == "semantic_notice":
             try:
                 payload = json.loads(ev["payload"])
-            except (json.JSONDecodeError, TypeError) as e:
+            except (ValueError, TypeError, RecursionError) as e:
                 raise ValueError("payload_invalid") from e
         if not gate(i, payload):
             return
@@ -1088,9 +1095,14 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             # A send that began with unknown outcome is held instead,
             # so the receipt is counted as send_outcome_unknown.
             try:
-                began = (json.loads(ev["progress"] or "{}") or {}).get("sending")
-            except (ValueError, AttributeError):
-                began = None
+                progress = json.loads(ev["progress"] or "{}")
+                if not isinstance(progress, dict):
+                    raise ValueError("progress_invalid")
+                began = progress.get("sending")
+            except (ValueError, TypeError, RecursionError):
+                _hold_event(ledger, ev, cfg, reason="payload_or_progress_invalid", rescue=False)
+                res["failed"] += 1
+                continue
             if began is not None:
                 _hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
                 res["uncertain"] = res.get("uncertain", 0) + 1

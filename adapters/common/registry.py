@@ -150,6 +150,7 @@ class Registry:
             return
         if not isinstance(legacy, dict):
             return
+        owner_key = scope_key(self._scope)
         for table in ("claims", "pending_modals", "pending_confirms"):
             records = legacy.get(table)
             if not isinstance(records, dict):
@@ -160,7 +161,13 @@ class Registry:
                 spec = record.get("spec")
                 origin = ((spec.get("delivery", {}) if isinstance(spec, dict) else {})
                           if table == "claims" else record.get("origin", {}))
-                if isinstance(origin, dict) and scope_key(origin) == scope_key(self._scope):
+                if not isinstance(origin, dict):
+                    continue
+                try:
+                    origin_key = scope_key(origin)
+                except (KeyError, ValueError):
+                    continue  # malformed origin cannot prove ownership
+                if origin_key == owner_key:
                     self._data[table][key] = record
         # Legacy token/followup rows lack profile provenance. Keep them in the
         # old file rather than lending another profile their interaction tokens.
@@ -255,7 +262,7 @@ class Registry:
         tokens = self._data["tokens"]
         new = [tokens[t] for t in keep if t in tokens]
         if not new or not all(type(r.get("at")) in (int, float)
-                              for r in new):
+                              and isinstance(r.get("action"), str) for r in new):
             return
         ref = new[0]
         if not ref.get("card_key") or not ref.get("channel_id"):
@@ -267,7 +274,8 @@ class Registry:
                  and r.get("card_key") == ref["card_key"]
                  and r.get("channel_id") == ref["channel_id"]
                  and r.get("message_id") == ref.get("message_id")
-                 and r.get("action") in actions
+                 and isinstance(r.get("action"), str)
+                 and r["action"] in actions
                  and type(r.get("at")) in (int, float)
                  and r["at"] < cutoff]
         for t in stale:

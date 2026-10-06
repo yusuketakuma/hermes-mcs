@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "旧独立通知ランタイムの終了処理を確実化",
+  "summary": "互換 import から旧 Slack・Discord ランタイムを利用する場合も、接続や Host の終了処理に失敗して他の接続・待機タスクが残らないようにしました。終了エラーは隠さず、残る後片付けを実行します。",
+  "upgrade": "独立 Slack・Discord の旧互換ランタイムを利用している場合は、通常の更新手順でプロセスを再起動すると適用されます。設定変更は不要です。",
+  "details": ["Slack は Socket Mode、Host、待機タスク、HTTP セッションを順に終了します。", "Discord は Host の終了に失敗しても Bot と gateway・停止待機タスクを終了します。"],
+  "refs": ["adapters/slack/runtime_compat.py", "adapters/discord/runtime_compat.py"]
+}

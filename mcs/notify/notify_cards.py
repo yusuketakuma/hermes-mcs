@@ -46,9 +46,9 @@ from mcs_queries import HOLD_PROGRESS_SET, current_extract_pred, current_v4_id
 from mcs_requests import canonical, payload_hash, positive, valid_hash
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
-    _hhmm, _latest_signals, _mmdd, _patient_name, _signal_evidence, _source_fp,
+    _latest_signals, _mmdd, _patient_name, _preview_header, _preview_line, _signal_evidence, _source_fp,
     display_text, fit_parts, lineworks_card_split, lineworks_member_names,
-    parts_text, patient_heading, plain_notice)
+    notification_preview, parts_text, plain_notice)
 from notify_views import (
     my_tasks_view, patient_search_view, patient_summary_text, unacked_view)
 
@@ -1049,13 +1049,13 @@ def _prior_body_sha(db, card) -> dict:
 
 
 def _attachment_captions(db, card, attachments) -> dict:
-    """attachment_id -> 📎 name — 患者 時刻 送信者 (取得失敗 if unavailable)."""
+    """添付の同一投稿内captionに元投稿の5項目表示を付け、取得失敗を区別する。"""
     if not attachments:
         return {}
     ids = [a["attachment_id"] for a in attachments]
     ph = ",".join("?" * len(ids))
     rows = db.execute(
-        f"""SELECT a.attachment_id, m.posted_at, m.sender_name, m.project_id
+        f"""SELECT a.attachment_id, a.message_id, m.posted_at, m.sender_name, m.project_id
             FROM attachments a JOIN messages m ON m.message_id=a.message_id
             WHERE a.attachment_id IN ({ph})""", ids).fetchall()
     where = {r["attachment_id"]: r for r in rows}
@@ -1065,12 +1065,13 @@ def _attachment_captions(db, card, attachments) -> dict:
         if a.get("unavailable"):
             tail = "取得失敗"
         elif r is not None:
-            tail = (f"{patient_heading(db, r['project_id'])} "
-                    f"{_mmdd(r['posted_at'])} {_hhmm(r['posted_at'])} "
-                    f"{(r['sender_name'] or '').strip() or '?'}")
+            tail = notification_preview(
+                db, {"kind": "thread", "project_id": r["project_id"]},
+                {"shown": [r["message_id"]]}, limit=260)
         else:
             tail = ""
-        text = f"📎 {a['name']}" + (f" — {tail}" if tail else "")
+        text = (f"{tail} / 📎 {a['name']}" if r is not None and not a.get("unavailable")
+                else f"📎 {a['name']}" + (f" — {tail}" if tail else ""))
         out[a["attachment_id"]] = text[:300]
     return out
 
@@ -1082,9 +1083,11 @@ def _build_part_manifest(db, card, spec, content, in_thread_body) -> None:
     names, per body chunk and unchanged attachment, the message that
     already carries it (``prior_remote_id``) so each stays one post."""
     parts = spec["parts"]
-    card_payload = canonical({"containers": parts["containers"],
-                              "footer": parts["footer"],
-                              "action_rows": parts["action_rows"]})
+    visible = {"containers": parts["containers"], "footer": parts["footer"],
+               "action_rows": parts["action_rows"]}
+    if "preview_text" in parts:
+        visible["preview_text"] = parts["preview_text"]
+    card_payload = canonical(visible)
     manifest = [{"part_id": "card", "kind": "card", "index": 0,
                  "sha256": hashlib.sha256(card_payload).hexdigest(),
                  "bytes": len(card_payload)}]
@@ -1415,6 +1418,7 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
         "manifest_id": content["manifest_id"],
         "page": content["page"], "pages": content["pages"],
         "context": context,
+        "preview_text": content["preview_text"],
     }
     if any("<@" in (f.get("text") or "") for f in footer):
         # the footer names members as <@id> mentions — a worker must
@@ -1835,6 +1839,9 @@ def _notice_spec(event_id, parts, cfg, scope, rev, transport) -> dict:
     body = {"containers": parts["containers"], "action_rows": [],
             "footer": [f for f in parts["footer"] if f.get("type") == "text"]
                       + [{"type": "meta", "correlation": correlation}]}
+    main = next((c.get("text", "").split("\n")[-1] for c in parts["containers"]
+                 if c.get("type") == "text"), "日次集計")
+    body["preview_text"] = " ".join(main.split())[:600] or "MCS 日次集計"
     spec = {
         "schema": f"mcs-card-render/v{TRANSPORT_VERSIONS[transport]}",
         "delivery_id": str(uuid.uuid4()),
@@ -1846,7 +1853,7 @@ def _notice_spec(event_id, parts, cfg, scope, rev, transport) -> dict:
                      "correlation": correlation},
         "parts": body}
     payload = canonical({k: body[k] for k in
-                         ("containers", "footer", "action_rows")})
+                         ("containers", "footer", "action_rows", "preview_text")})
     manifest = [{"part_id": "card", "kind": "card", "index": 0,
                  "sha256": hashlib.sha256(payload).hexdigest(),
                  "bytes": len(payload)}]
@@ -2773,17 +2780,16 @@ def task_reminders(ledger, cfg, now=None, limit=REMINDER_LIMIT) -> int:
         db.execute("BEGIN IMMEDIATE")
         rows = db.execute(
             f"""SELECT r.request_id, r.project_id, r.title, r.assignee,
-                      r.due_date {pending}
+                      r.due_date, m.sender_name, m.organization, m.posted_at {pending}
                ORDER BY r.due_date, r.request_id LIMIT ?""",
             (*args, limit)).fetchall()
         for r in rows:
             stage = "due" if r["due_date"] == today else "overdue"
             head = (f"⏰ 期限リマインド（本日 {r['due_date']}）" if stage == "due"
                     else f"⚠ 期限切れ（期限 {r['due_date']}）")
-            name = _patient_name(db, r["project_id"]) \
-                or f"project {r['project_id']}"
-            text = (f"{head} — {_plain(name)}: {_plain(r['title'])}"
-                    f" — 担当 {_plain(r['assignee'] or '未設定')}")
+            header = _preview_header(db, r["project_id"], r)
+            text = (plain_notice(_preview_line(header, f"{_plain(r['title'])} — {head}"), 600)
+                    + f" — 担当 {_plain(r['assignee'] or '未設定')}")
             eid = ledger.outbox_add_tx(
                 "task_reminder", r["project_id"],
                 {"text": text, "request_id": r["request_id"],
@@ -2899,10 +2905,11 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
     and delivered renders whose durable parts are all settled and no
     active restore hold covers the render or its card — in both cases
     only with no unsettled attempt on the card and no pending intent
-    binding. Every DB reader of spec_json (dispatch re-entry, sweep
-    watchdog, recover) republishes queued/held renders only, and a
-    delivered render never returns to either; the worker and reconcile
-    read the spec file, which a pending part plan keeps. Rows, hashes,
+    binding. DB readers of spec_json (dispatch re-entry, sweep watchdog,
+    recover) republish queued/held renders or delivered plans with
+    pending parts; the latter cannot enter this clearing path. The
+    worker and reconcile read the spec file, which a pending part plan
+    keeps. Rows, hashes,
     correlations and part metadata stay for audit. Bounded per call —
     the rest waits for the next tick."""
     db = _db(ledger)
@@ -2958,9 +2965,11 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
         root = data_root(ledger)
         dirs = notify_dirs(root)
         for r in db.execute(
-                "SELECT delivery_id,transport FROM notification_renders "
+                "SELECT delivery_id,transport FROM notification_renders r "
                 "WHERE state IN ('delivered','not_sent','cancelled') "
                 "AND spec_published=1 AND parts_state!='pending' "
+                "AND NOT EXISTS (SELECT 1 FROM notification_render_parts p "
+                "WHERE p.delivery_id=r.delivery_id AND p.state='pending') "
                 "ORDER BY updated_at LIMIT ?", (limit,)).fetchall():
             path = os.path.join(dirs[r["transport"] + "_render"],
                                 r["delivery_id"] + ".json")
@@ -3004,8 +3013,9 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
 
 def recover(ledger, cfg, result) -> dict:
     """Startup/periodic recovery for the file-published plane: republish
-    every queued render whose spec file is missing, repair the flags
-    file, and surface stale claims for the health layer. Never consumes
+    queued/held renders and delivered plans with pending parts whose
+    spec file is missing, repair the flags file, and surface stale
+    claims for the health layer. Never consumes
     .claimed work — a claim is not proof the worker is dead."""
     db = _db(ledger)
     root = data_root(ledger)
@@ -3016,8 +3026,10 @@ def recover(ledger, cfg, result) -> dict:
     with db:
         db.execute("BEGIN IMMEDIATE")
         for r in db.execute(
-                "SELECT delivery_id,spec_json,transport FROM notification_renders "
-                "WHERE state IN ('queued','held')").fetchall():
+                "SELECT delivery_id,spec_json,transport FROM notification_renders r "
+                "WHERE state IN ('queued','held') OR (state='delivered' "
+                "AND EXISTS (SELECT 1 FROM notification_render_parts p "
+                "WHERE p.delivery_id=r.delivery_id AND p.state='pending'))").fetchall():
             path = os.path.join(dirs[r["transport"] + "_render"],
                                 r["delivery_id"] + ".json")
             if os.path.isfile(path):

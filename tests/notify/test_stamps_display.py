@@ -432,7 +432,9 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
                    for container in view.items for child in container.children)
     else:
         shown = lineworks_cards.render(spec)
-        assert "スタンプ 👀3" in shown.get("contentText", shown.get("text", ""))
+        visible = (shown["contents"]["body"]["contents"][0]["text"]
+                   if shown["type"] == "flex" else shown.get("contentText", shown.get("text", "")))
+        assert "スタンプ 👀3" in visible
 
     calls = []
 

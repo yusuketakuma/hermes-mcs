@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 import copy
 from html import escape
 import re
@@ -21,6 +22,7 @@ _CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 # A failed users.info (missing scope, 429, network) is retried after this
 # long — same idea as registry.CAPABILITY_NEG_S; successes never expire.
 NAME_NEG_S = 900
+NAME_CACHE_MAX = 1024
 
 
 def _upload_file_id(data) -> str | None:
@@ -94,7 +96,7 @@ class SlackCardAdapter:
         self._allowed_user_ids = frozenset(allowed_user_ids)
         self._bound = False
         self._bot_id = ""
-        self._names: dict = {}
+        self._names: OrderedDict = OrderedDict()
 
     async def display_name(self, uid):
         """The member's Slack display (or real) name via users.info —
@@ -104,6 +106,7 @@ class SlackCardAdapter:
         hit = self._names.get(uid)
         if hit is not None and (hit[1] is None
                                 or time.monotonic() < hit[1]):
+            self._names.move_to_end(uid)
             return hit[0]
         name = None
         try:
@@ -121,6 +124,9 @@ class SlackCardAdapter:
             pass
         self._names[uid] = (name, None if name
                             else time.monotonic() + NAME_NEG_S)
+        self._names.move_to_end(uid)
+        if len(self._names) > NAME_CACHE_MAX:
+            self._names.popitem(last=False)
         return name
 
     async def bind(self):
@@ -185,10 +191,11 @@ class SlackCardAdapter:
             elif op == "update":
                 response = await sender.chat_update(
                     channel=self._channel_id, ts=message_id,
-                    text=text, blocks=blocks)
+                    text=text, blocks=blocks, parse="none", link_names=False)
             else:
                 response = await sender.chat_postMessage(
                     channel=self._channel_id, text=text, blocks=blocks,
+                    parse="none", link_names=False,
                     unfurl_links=False, unfurl_media=False)
         except asyncio.CancelledError:
             raise

@@ -1263,7 +1263,7 @@ def test_signal_notify_off_stays_claimable_and_revoked_stays_dead(
     from hermes_plugin.mcs_discord import cards as cards_mod
     from hermes_plugin.mcs_delivery import spec as spec_mod
 
-    monkeypatch.setattr(cards_mod, "build_view", lambda spec: object())
+    monkeypatch.setattr(cards_mod, "message_payload", lambda spec, **kw: {"view": object(), "content": "card"})
     w, reg, bot = _mkworker(tmp_path)
     sent_before = len(bot.channels[42].sent)
     revoked = _card_spec(REVOKED_ID, kind="thread")
@@ -1363,7 +1363,7 @@ def test_signal_notify_off_backs_off_before_rebegin(tmp_path, monkeypatch):
     from hermes_plugin.mcs_delivery import worker as worker_mod
     from hermes_plugin.mcs_discord import cards as cards_mod
 
-    monkeypatch.setattr(cards_mod, "build_view", lambda spec: object())
+    monkeypatch.setattr(cards_mod, "message_payload", lambda spec, **kw: {"view": object(), "content": "card"})
     now = _clock(monkeypatch)
     w, reg, _ = _mkworker(tmp_path)
     _publish_spec(tmp_path, _card_spec(DELIVERY_ID))
@@ -1406,7 +1406,7 @@ def test_restart_reconcile_keeps_begin_sent_signal_claimable(
     after ON the same delivery_id is sent exactly once."""
     from hermes_plugin.mcs_discord import cards as cards_mod
 
-    monkeypatch.setattr(cards_mod, "build_view", lambda spec: object())
+    monkeypatch.setattr(cards_mod, "message_payload", lambda spec, **kw: {"view": object(), "content": "card"})
     _clock(monkeypatch)
     w1, reg1, bot = _mkworker(tmp_path)
     sent_before = len(bot.channels[42].sent)

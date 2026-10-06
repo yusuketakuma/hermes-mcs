@@ -46,6 +46,7 @@ import notify_transport
 
 _RESULT_VALUES = ("delivered", "not_sent", "unknown")
 _TERMINAL = ("delivered", "not_sent", "cancelled")
+_JOURNAL_PHASES = ("claimed", "begin", "granted", "denied", "started", "result", "receipt")
 
 
 def _journal_dirs(dirs: dict) -> list:
@@ -72,9 +73,12 @@ def scan_journals(dirs: dict) -> tuple[dict, bool]:
             try:
                 with open(os.path.join(state_dir, name), "rb") as fh:
                     for raw in fh:
+                        terminated = raw.endswith(b"\n")
                         raw = raw.strip()
                         if not raw:
                             continue
+                        if not terminated:
+                            tainted = True
                         try:
                             row = json.loads(raw)
                         except (ValueError, RecursionError):
@@ -83,6 +87,8 @@ def scan_journals(dirs: dict) -> tuple[dict, bool]:
                         if not isinstance(row, dict):
                             tainted = True
                             continue
+                        if row.get("phase") not in _JOURNAL_PHASES:
+                            tainted = True
                         aid = row.get("attempt_id")
                         if isinstance(aid, str) and aid:
                             file_rows.setdefault(aid, []).append(row)
@@ -114,7 +120,7 @@ def _read_spec(dirs: dict, delivery_id) -> dict | None:
             with open(os.path.join(dirs[t + "_render"], safe + ".json"),
                       "rb") as fh:
                 spec = json.loads(fh.read().decode("utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             continue
         if isinstance(spec, dict) and spec.get("delivery_id") == delivery_id:
             return spec
@@ -343,7 +349,7 @@ def _reconcile_attempt(ledger, db, cfg, aid, info, dirs, now) -> dict:
         # durable part attempts settle render_parts rows, never the
         # card-attempt table (T7)
         return _reconcile_part(ledger, db, cfg, aid, info, dirs, now)
-    phases = {r.get("phase") for r in rows}
+    phases = {r["phase"] for r in rows if r.get("phase") in _JOURNAL_PHASES}
     results = [r for r in rows
                if r.get("phase") == "result"
                and r.get("result") in _RESULT_VALUES]
