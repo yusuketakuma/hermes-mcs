@@ -128,4 +128,3 @@ def test_release_notes_fetch_refuses_redirects(monkeypatch):
                         lambda *h: seen.append(h) or Opener())
     assert mcs_update.fetch_notes("v1.0.0") is None
     assert seen == [(mcs_util.NoRedirect,)]
-

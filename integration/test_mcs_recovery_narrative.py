@@ -217,7 +217,10 @@ def _repend_semantic(db):
 
 def _attach(led, tmp_path, mid=1, fid="file-att-1", name="att-01.bin",
             blob=b"synthetic-attachment-bytes"):
-    f = tmp_path / name
+    # the collector stores files in <data root>/attachments — delivery
+    # workers refuse sealed paths outside it
+    f = Path(notify_cards.data_root(led)) / "attachments" / name
+    f.parent.mkdir(parents=True, exist_ok=True)
     f.write_bytes(blob)
     cur = led.db.execute(
         "INSERT INTO attachments(message_id,file_id,name,local_path,"
