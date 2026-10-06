@@ -26,6 +26,11 @@ Merge contract (v1 rules ∪ llm ∪ v4 canonical facts), per field:
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import sqlite3
+
+from drug_map import KIND as REF_KIND, candidate_note, current_refs, generation_signature
 from mcs_queries import (FACT_KINDS_SQL, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
 from mcs_util import loads_dict
@@ -47,11 +52,32 @@ def latest_artifact(db, kind: str, mid: int) -> dict | None:
     return _content_dict(r)
 
 
+def _drug_refs(db, mid: int) -> list:
+    """Annotation failure never suppresses the post's raw medication facts."""
+    if db is None:
+        return []
+    try:
+        return current_refs(db, mid)
+    except (sqlite3.DatabaseError, ValueError, TypeError, RecursionError):
+        return []
+
+
+def _drug_note(ref) -> str:
+    """Only existing unconfirmed-candidate wording; never infer clinical equivalence."""
+    try:
+        note = candidate_note(ref)
+        note.encode("utf-8")
+        return note
+    except (AttributeError, KeyError, TypeError, ValueError, RecursionError):
+        return ""
+
+
 def fact_generations(db, mids: list) -> dict:
     """Current selected fact and rule generations, fetched in bounded batches."""
     ids = list(dict.fromkeys(int(m) for m in mids if isinstance(m, int) or
                             (isinstance(m, str) and m.isdigit())))
     result = {}
+    dictionary_generation = None
     for offset in range(0, len(ids), 400):
         batch = ids[offset:offset + 400]
         marks = ",".join("?" * len(batch))
@@ -63,6 +89,23 @@ def fact_generations(db, mids: list) -> dict:
                 f"(a.kind IN ({FACT_KINDS_SQL}) "
                 f"{current_fact_pred()})) GROUP BY a.message_id,a.kind", batch):
             result.setdefault(r["message_id"], {})[r["kind"]] = r["generation"]
+        ref_mids = db.execute(
+            f"SELECT DISTINCT message_id FROM artifacts WHERE kind=? "
+            f"AND message_id IN ({marks})", (REF_KIND, *batch)).fetchall()
+        for row in ref_mids:
+            mid = row[0]
+            if mid not in result:
+                continue  # an annotation alone is not a ready extraction
+            refs = _drug_refs(db, mid)
+            if not refs:
+                continue  # disabled/corrupt/removed annotations share the same absent state
+            if dictionary_generation is None:
+                dictionary_generation = generation_signature(db)
+            # Hash the usable annotations, not rewrite IDs/cursor movement.
+            # Direct corruption changes this too, even without a new artifact ID.
+            result[mid]["med_ref"] = hashlib.sha256(json.dumps(
+                [dictionary_generation, refs], sort_keys=True
+            ).encode()).hexdigest()
     return result
 
 
@@ -310,9 +353,19 @@ def _symptom_line(llm: dict, v1: dict):
     return line
 
 
-def _med_lines(llm: dict, v1: dict) -> list[str]:
+def _med_entries(llm: dict, v1: dict, refs=()) -> tuple[list, list]:
+    """(confirmed, unverified) medication entries as ``(text, ref)`` —
+    ``ref`` is the current dictionary annotation of exactly that mention
+    (same source list index and surface name), else None. The card's
+    薬剤 lines and the 💊 薬剤を確認 view share this one selection."""
+    annotations = {(r["source_kind"] == "extract_v1", r["i"]): r for r in refs}
+
+    def ref_of(rule, i, item):
+        ref = annotations.get((rule, i))
+        return ref if ref and ref.get("name") == item.get("name") else None
+
     meds = []
-    for m in _items(llm, "meds"):
+    for i, m in enumerate(_items(llm, "meds")):
         if not isinstance(m, dict) or not m.get("name"):
             continue
         # negated / other-person / historical meds must not read as the
@@ -333,27 +386,45 @@ def _med_lines(llm: dict, v1: dict) -> list[str]:
             tail.append("頓服")
         if tail:
             d += f"({'・'.join(tail)})"
-        meds.append(d)
-    unverified_meds = []
+        meds.append((d, ref_of(False, i, m)))
+    unverified = []
     if _empty_field(llm, "meds"):
         # v1 fallback only when the LLM saw NO meds — if it saw meds
         # but all were filtered (negated/family/past), falling back to
         # v1 would re-display the very mentions that were filtered out
-        unverified_meds.extend(
-            str(m["name"]) + (f" {m['dose']}" if m.get("dose") else "")
-            for m in _items(v1, "medications")
+        unverified.extend(
+            (str(m["name"]) + (f" {m['dose']}" if m.get("dose") else ""),
+             ref_of(True, i, m))
+            for i, m in enumerate(_items(v1, "medications"))
             if isinstance(m, dict) and m.get("name"))
-        unverified_meds.extend(
-            f"{RX_LABEL[a['action']]}:{a['ctx']}"
+        unverified.extend(
+            (f"{RX_LABEL[a['action']]}:{a['ctx']}", None)
             for a in _items(v1, "rx_actions")
             if isinstance(a, dict) and _label(RX_LABEL, a.get("action"))
             and isinstance(a.get("ctx"), str) and a["ctx"])
+    return meds, unverified
+
+
+def _med_lines(llm: dict, v1: dict, refs=()) -> list[str]:
+    meds, unverified = _med_entries(llm, v1, refs)
+
+    def shown(entries):
+        return "、".join(text + (f"（{note}）" if (note := _drug_note(ref)) else "")
+                        for text, ref in entries)
+
     lines = []
     if meds:
-        lines.append("薬剤: " + "、".join(meds))
-    if unverified_meds:
-        lines.append("薬剤候補（未確認）: " + "、".join(unverified_meds))
+        lines.append("薬剤: " + shown(meds))
+    if unverified:
+        lines.append("薬剤候補（未確認）: " + shown(unverified))
     return lines
+
+
+def medication_entries(db, mid: int) -> tuple[list, list]:
+    """The post's current (confirmed, unverified) medication entries with
+    their dictionary annotations — the 💊 薬剤を確認 view's input."""
+    v1 = latest_artifact(db, "extract_v1", mid) or {}
+    return _med_entries(latest_fact_artifact(db, mid) or {}, v1, _drug_refs(db, mid))
 
 
 # per-item prefix inside the 依頼: line — a plan of the poster or a
@@ -420,7 +491,7 @@ def structured_lines(db, mid: int) -> list[str]:
         lines.extend(_lab_lines(llm, lab_source["body_text"] if lab_source else None))
     if (line := _symptom_line(llm, v1)) is not None:
         lines.append(line)
-    lines.extend(_med_lines(llm, v1))
+    lines.extend(_med_lines(llm, v1, _drug_refs(db, mid)))
     lines.extend(_request_lines(llm, v1))
     periods = _items(v1, "med_periods")
     if periods:
