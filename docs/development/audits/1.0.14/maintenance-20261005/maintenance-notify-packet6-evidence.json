@@ -636,7 +636,7 @@
             25
           ]
         ],
-        "report": "docs/development/maintenance-notify-packet2-evidence.json",
+        "report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
         "basis": "prior fullread record"
       },
       "P_sha256": "fa8948acb3c7f2c56269b77dd6086c0c79b6a966fbbd79f5445f686c94a55b11",
@@ -8952,7 +8952,7 @@
             13
           ]
         ],
-        "report": "docs/development/maintenance-notify-packet5-evidence.json",
+        "report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
         "basis": "prior fullread record"
       },
       "P_sha256": "2e443a344a3d154c5995445737f5d2c5f0a432740e9e899eb1325bf9cf611f03",
@@ -9019,7 +9019,7 @@
             8
           ]
         ],
-        "report": "docs/development/maintenance-notify-packet5-evidence.json",
+        "report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
         "basis": "prior fullread record"
       },
       "P_sha256": "d4a348a93c1b38b1d1f0bd240c0bf745f8124bb94714681823a49ae6a9ab5916",
@@ -9361,7 +9361,7 @@
             17
           ]
         ],
-        "report": "docs/development/maintenance-notify-packet2-evidence.json",
+        "report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
         "basis": "prior fullread record"
       },
       "P_sha256": "51659e98f82d90132956b58505fac403766d01a67f2694a7a354ce0c872a675e",
@@ -9428,7 +9428,7 @@
             14
           ]
         ],
-        "report": "docs/development/maintenance-notify-packet2-evidence.json",
+        "report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
         "basis": "prior fullread record"
       },
       "P_sha256": "18c0a6e0071bf33774ee0779e762dd9e51f9720188e3917ddf3177c8d3278865",
@@ -9550,7 +9550,7 @@
             8
           ]
         ],
-        "report": "docs/development/maintenance-notify-packet3-evidence.json",
+        "report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
         "basis": "prior fullread record"
       },
       "finding": "N6-01: formal refs schema拒否、URLをdetailsへ移動/sourcepathrefsに限定",
@@ -9625,7 +9625,7 @@
             8
           ]
         ],
-        "report": "docs/development/maintenance-notify-packet3-evidence.json",
+        "report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
         "basis": "prior fullread record"
       },
       "P_sha256": "fc2ad3c8184ec7a1dec9013328417cb1de63aab068c8384e3f2a53de113849ad",
@@ -9692,7 +9692,7 @@
             12
           ]
         ],
-        "report": "docs/development/maintenance-notify-packet3-evidence.json",
+        "report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
         "basis": "prior fullread record"
       },
       "P_sha256": "78ff8f50b55e96fa600d2864e072e18e9ca61b1bf34526d7fb5892755be5befb",
@@ -9814,7 +9814,7 @@
             11
           ]
         ],
-        "report": "docs/development/maintenance-notify-packet4-evidence.json",
+        "report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet4-evidence.json",
         "basis": "作成した全内容を再読"
       },
       "P_sha256": "9dbe4a5957e129e2d0ed20c75fefffe203798a0e50bbc8aaf47b77616e53b580",
@@ -9881,7 +9881,7 @@
             8
           ]
         ],
-        "report": "docs/development/maintenance-notify-packet4-evidence.json",
+        "report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet4-evidence.json",
         "basis": "作成した全内容を再読"
       },
       "P_sha256": "a35e5e25cde1511acfd3ec021d094dffa5ebe1cdd2e06d4c6a3d935aa62f4281",
@@ -17013,7 +17013,7 @@
             272
           ]
         ],
-        "report": "docs/development/maintenance-notify-packet5-evidence.json",
+        "report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
         "basis": "P全文read + P/W SHA/bytes等値"
       },
       "P_sha256": "4a3bb600e13a390e5b8fed40b4c30744cb0ee9150769f0b034d2cd9435a75dcb",
@@ -17336,7 +17336,7 @@
             382
           ]
         ],
-        "report": "docs/development/maintenance-notify-packet4-evidence.json",
+        "report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet4-evidence.json",
         "basis": "P全文＋今回差分全読"
       },
       "P_sha256": "f08a4cb24ecb09c72ba5768bb23d7a3fb078c4e4a82ae3d81368854a31cc4c17",
@@ -20240,7 +20240,7 @@
   ],
   "owner_source_SHA_reuse": [
     {
-      "record": "docs/development/maintenance-notify-packet3-evidence.json",
+      "record": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
       "record_sha256": "babad73b627ca7b93958597a33b0fbccd95415f25bd1cd1d49b4682e8fc605f1",
       "path": "adapters/common/worker.py",
       "owner_W_sha256": "2173cd096d25a83f3e2ad32a98c5818c23b50991edf25a7e7c333b3414b1d23b",
@@ -20248,7 +20248,7 @@
       "exact_source_sha_reuse": true
     },
     {
-      "record": "docs/development/maintenance-notify-packet3-evidence.json",
+      "record": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
       "record_sha256": "babad73b627ca7b93958597a33b0fbccd95415f25bd1cd1d49b4682e8fc605f1",
       "path": "adapters/lineworks/client.py",
       "owner_W_sha256": "8e93538143ebb51b2340e64eb4333bfba4197812eb0aa89dfd77cc4787494042",
@@ -20256,7 +20256,7 @@
       "exact_source_sha_reuse": true
     },
     {
-      "record": "docs/development/maintenance-notify-packet5-evidence.json",
+      "record": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
       "record_sha256": "c0521230ad338dc5a4f395a546003231d43fc2ca758ced1eabfa4089b0445505",
       "path": "mcs/ops/brain_export.py",
       "owner_W_sha256": "b79d17fc401b63cfa1670cbc4e35fa992b77330e29cd19641c9214e052bc0a81",
@@ -20264,7 +20264,7 @@
       "exact_source_sha_reuse": true
     },
     {
-      "record": "docs/development/maintenance-notify-packet5-evidence.json",
+      "record": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
       "record_sha256": "c0521230ad338dc5a4f395a546003231d43fc2ca758ced1eabfa4089b0445505",
       "path": "mcs/ops/export_schema.py",
       "owner_W_sha256": "31ef4203ec6da3198de3d23c2a097ca7659e7009c25d9f91d515df14a17d9053",
@@ -20272,7 +20272,7 @@
       "exact_source_sha_reuse": true
     },
     {
-      "record": "docs/development/maintenance-notify-packet5-evidence.json",
+      "record": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
       "record_sha256": "c0521230ad338dc5a4f395a546003231d43fc2ca758ced1eabfa4089b0445505",
       "path": "mcs/ops/ext_contract.py",
       "owner_W_sha256": "6370fd071f0485678e07a281d650415756439bdd8d5670c5787aa2773453416b",

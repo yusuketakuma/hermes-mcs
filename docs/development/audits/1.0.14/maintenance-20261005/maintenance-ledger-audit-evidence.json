@@ -24,7 +24,7 @@
       "mcs/core/ledger_audit.py",
       "tests/core/test_ledger_audit.py",
       "changes/20261005-ledger-audit-python310.json",
-      "docs/development/maintenance-ledger-audit-evidence.json"
+      "docs/development/audits/1.0.14/maintenance-20261005/maintenance-ledger-audit-evidence.json"
     ],
     "forbidden_actions": "実DB/PHI/PII/秘密/私有config/MCS/API/SDK/LLM/Jev/Keychain/サービス/再起動/agmsg/hooks/恒久ルール/main/外送/公開/push/PR/merge/deploy/子spawn。例外fixtureも完全合成。",
     "completion": "確認済み同根compatibility修復に限定。追加全域監査/成功済み96再実行なし。",
@@ -70,7 +70,7 @@
       ],
       "criteria": "C01–C12/X01–X08 below",
       "whole_read_reuse_proof": {
-        "packet": "docs/development/maintenance-core-evidence.json",
+        "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "reviewed_sha256": "f4867747a344fc1942621ff7fa6b9e2e405a3131a0b1408f2f0f72b3fd27a4a1",
         "read_ranges": [
           [
@@ -118,7 +118,7 @@
       ],
       "criteria": "C01–C12/X01–X08 below",
       "whole_read_reuse_proof": {
-        "packet": "docs/development/maintenance-core-evidence.json",
+        "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "reviewed_sha256": "ff237bca5a243c5c79005ce9017328f860a057cce6bc6e6267665c20366f7624",
         "read_ranges": [
           [
@@ -137,7 +137,7 @@
     }
   ],
   "prior_global_inventory": {
-    "path": "docs/development/full-maintenance-20261005/inventory.json",
+    "path": "docs/development/audits/1.0.14/full-maintenance-20261005/inventory.json",
     "bytes": 1599925,
     "sha256": "93eab873dd6dfd6cb93d9950d7d5979dd81f04fb49a647e73eeccf3c9319cec3"
   },

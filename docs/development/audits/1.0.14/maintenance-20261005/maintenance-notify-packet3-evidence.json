@@ -6819,7 +6819,7 @@
         "mcs/notify/notify_views.py"
       ],
       "status": "READONLY_BOUNDARY; packet1/2の全文証拠を再利用し必要grant/receipt/manifest consumerを照合",
-      "evidence": "docs/development/maintenance-notify-evidence.json; docs/development/maintenance-notify-packet2-evidence.json"
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json; docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json"
     },
     {
       "paths": [

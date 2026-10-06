@@ -3400,7 +3400,7 @@
     {
       "path": "mcs/core/bounded_http.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "abf4a9613b99b9a09ec75557ff0cd7fdb46a9a998d5f2bd010397ae74f2d130b",
       "current_W_sha256": "abf4a9613b99b9a09ec75557ff0cd7fdb46a9a998d5f2bd010397ae74f2d130b",
       "state": "REVIEWED_REUSED",
@@ -3409,7 +3409,7 @@
     {
       "path": "mcs/core/ledger.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
       "current_W_sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
       "state": "REVIEWED_REUSED",
@@ -3418,7 +3418,7 @@
     {
       "path": "mcs/core/ledger_audit.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "f4867747a344fc1942621ff7fa6b9e2e405a3131a0b1408f2f0f72b3fd27a4a1",
       "current_W_sha256": "f4867747a344fc1942621ff7fa6b9e2e405a3131a0b1408f2f0f72b3fd27a4a1",
       "state": "REVIEWED_REUSED",
@@ -3427,7 +3427,7 @@
     {
       "path": "mcs/core/llm_admission.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "35a5cff1767504fa1eef2f837a6075d65e929245811a49536515bbf62a46dac1",
       "current_W_sha256": "35a5cff1767504fa1eef2f837a6075d65e929245811a49536515bbf62a46dac1",
       "state": "REVIEWED_REUSED",
@@ -3436,7 +3436,7 @@
     {
       "path": "mcs/core/local_llm.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "843fc041e37fb41a8cb452932637e75e04c4f323c1c8928eae2965465bae5917",
       "current_W_sha256": "843fc041e37fb41a8cb452932637e75e04c4f323c1c8928eae2965465bae5917",
       "state": "REVIEWED_REUSED",
@@ -3445,7 +3445,7 @@
     {
       "path": "mcs/core/maintenance.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "479be147dcd695ca6ca81d069bd353ffbd00e4d204f5dd6467e4430cf66f6865",
       "current_W_sha256": "479be147dcd695ca6ca81d069bd353ffbd00e4d204f5dd6467e4430cf66f6865",
       "state": "REVIEWED_REUSED",
@@ -3454,7 +3454,7 @@
     {
       "path": "mcs/core/mcs_queries.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "7a6c84fc645b990d77f6838bc978559b73291e38dd5bb0d2884cb088e366fa7c",
       "current_W_sha256": "7a6c84fc645b990d77f6838bc978559b73291e38dd5bb0d2884cb088e366fa7c",
       "state": "REVIEWED_REUSED",
@@ -3463,7 +3463,7 @@
     {
       "path": "mcs/core/mcs_runtime.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "79df8cf48f3fe5da4ee4fa0dd68a41778dcc888252d15f3ff68b349cb3dc4c60",
       "current_W_sha256": "79df8cf48f3fe5da4ee4fa0dd68a41778dcc888252d15f3ff68b349cb3dc4c60",
       "state": "REVIEWED_REUSED",
@@ -3472,7 +3472,7 @@
     {
       "path": "mcs/core/mcs_util.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "7bd01ea343e712d3ea24c59f92fde16cc3efa8013110810a103fec9193c1f420",
       "current_W_sha256": "7bd01ea343e712d3ea24c59f92fde16cc3efa8013110810a103fec9193c1f420",
       "state": "REVIEWED_REUSED",
@@ -3481,7 +3481,7 @@
     {
       "path": "tests/core/test_artifact_json_guards.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "98903fe7a29b73a8c4f10f8f95a80204d363dd849a2065d5e94babd69aa55253",
       "current_W_sha256": "98903fe7a29b73a8c4f10f8f95a80204d363dd849a2065d5e94babd69aa55253",
       "state": "REVIEWED_REUSED",
@@ -3490,7 +3490,7 @@
     {
       "path": "tests/core/test_core_misc.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "9f2299e4903644757f6be3b1c1fee39e7956e15abfe2a813d4afddc99895f3ab",
       "current_W_sha256": "9f2299e4903644757f6be3b1c1fee39e7956e15abfe2a813d4afddc99895f3ab",
       "state": "REVIEWED_REUSED",
@@ -3499,7 +3499,7 @@
     {
       "path": "tests/core/test_job_reasons.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "5e74275e3f1e904af75af603090dda941b05128a8cf2bd1c1a1e19a831b05e21",
       "current_W_sha256": "5e74275e3f1e904af75af603090dda941b05128a8cf2bd1c1a1e19a831b05e21",
       "state": "REVIEWED_REUSED",
@@ -3508,7 +3508,7 @@
     {
       "path": "tests/core/test_ledger_audit.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "ff237bca5a243c5c79005ce9017328f860a057cce6bc6e6267665c20366f7624",
       "current_W_sha256": "ff237bca5a243c5c79005ce9017328f860a057cce6bc6e6267665c20366f7624",
       "state": "REVIEWED_REUSED",
@@ -3517,7 +3517,7 @@
     {
       "path": "tests/core/test_ledger_candidate_validation.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "d47dd5fea867f0bbd20aaa97b9f76f5afaeaa743d1d06273df48883d4486d7b4",
       "current_W_sha256": "d47dd5fea867f0bbd20aaa97b9f76f5afaeaa743d1d06273df48883d4486d7b4",
       "state": "REVIEWED_REUSED",
@@ -3526,7 +3526,7 @@
     {
       "path": "tests/core/test_ledger_guards.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "99d4a80f723de45448441ca32d95758a24951b0660af0f4626747c16c8a701c3",
       "current_W_sha256": "99d4a80f723de45448441ca32d95758a24951b0660af0f4626747c16c8a701c3",
       "state": "REVIEWED_REUSED",
@@ -3535,7 +3535,7 @@
     {
       "path": "tests/core/test_ledger_recovery_contract.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "62ce3c4f925518cf1f09227d2f2183307ee6ce5872c8a883713d6808c655c71a",
       "current_W_sha256": "62ce3c4f925518cf1f09227d2f2183307ee6ce5872c8a883713d6808c655c71a",
       "state": "REVIEWED_REUSED",
@@ -3544,7 +3544,7 @@
     {
       "path": "tests/core/test_ledger_reply_recovery.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "08bf2d8bd7d43abfcd1b40971f00393ee675eaede4162b08822b6e86dec34c4a",
       "current_W_sha256": "08bf2d8bd7d43abfcd1b40971f00393ee675eaede4162b08822b6e86dec34c4a",
       "state": "REVIEWED_REUSED",
@@ -3553,7 +3553,7 @@
     {
       "path": "tests/core/test_llm_admission.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "c93985c9b5fc4f954023e33f3c35999e263f5895ca1baabcb23b153583e5cd93",
       "current_W_sha256": "c93985c9b5fc4f954023e33f3c35999e263f5895ca1baabcb23b153583e5cd93",
       "state": "REVIEWED_REUSED",
@@ -3562,7 +3562,7 @@
     {
       "path": "tests/core/test_local_llm.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "c48f548b9742e1f311ec1f4644dd2d27a20f7091cb089188ebe63c4c18da4c91",
       "current_W_sha256": "c48f548b9742e1f311ec1f4644dd2d27a20f7091cb089188ebe63c4c18da4c91",
       "state": "REVIEWED_REUSED",
@@ -3571,7 +3571,7 @@
     {
       "path": "tests/core/test_local_llm_deadline.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "fe83d5ef6f456b0b03eafdfa6556bb87d897d18c37f2fb6a0cbdc6923533054c",
       "current_W_sha256": "fe83d5ef6f456b0b03eafdfa6556bb87d897d18c37f2fb6a0cbdc6923533054c",
       "state": "REVIEWED_REUSED",
@@ -3580,7 +3580,7 @@
     {
       "path": "tests/core/test_maintenance_root.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "00675df942ed139b879c95d490b16426fd6f748bb8db79e8d827e350394d2a4c",
       "current_W_sha256": "00675df942ed139b879c95d490b16426fd6f748bb8db79e8d827e350394d2a4c",
       "state": "REVIEWED_REUSED",
@@ -3589,7 +3589,7 @@
     {
       "path": "tests/core/test_mcs_util.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "1c34dd400756b57cd45563b0568739e058bf2a8b88492ca62eacf189251431c0",
       "current_W_sha256": "1c34dd400756b57cd45563b0568739e058bf2a8b88492ca62eacf189251431c0",
       "state": "REVIEWED_REUSED",
@@ -3598,7 +3598,7 @@
     {
       "path": "tests/core/test_message_revisions.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "a26cdb3de149f6465ea13dec52f6fddab6cc6732c079883f5229934bfbceb0ec",
       "current_W_sha256": "a26cdb3de149f6465ea13dec52f6fddab6cc6732c079883f5229934bfbceb0ec",
       "state": "REVIEWED_REUSED",
@@ -3607,7 +3607,7 @@
     {
       "path": "tests/core/test_metadata_watch.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "930ed8fb48f1c4d749365d3a81578fa1a0a1c7f375f858ed8b97c705b4514092",
       "current_W_sha256": "930ed8fb48f1c4d749365d3a81578fa1a0a1c7f375f858ed8b97c705b4514092",
       "state": "REVIEWED_REUSED",
@@ -3616,7 +3616,7 @@
     {
       "path": "tests/core/test_supported_schema_upgrade.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "6cb3d5cdbc886109ffa901dd86bf6a5a39dbc3716b887ddf28e6f32372bc21a9",
       "current_W_sha256": "6cb3d5cdbc886109ffa901dd86bf6a5a39dbc3716b887ddf28e6f32372bc21a9",
       "state": "REVIEWED_REUSED",
@@ -3625,7 +3625,7 @@
     {
       "path": "tests/core/test_thread_reply_pairs.py",
       "prior_packet": 1,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "previous_review_sha256": "6d916b5854162839f6d37dbf17af73d80321ea58e95b93db34218b3a6ad50e2f",
       "current_W_sha256": "6d916b5854162839f6d37dbf17af73d80321ea58e95b93db34218b3a6ad50e2f",
       "state": "REVIEWED_REUSED",
@@ -3634,7 +3634,7 @@
     {
       "path": "mcs/ingest/cross_lists.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "3580d54982ca68a320ab27e765a9eaa7dbd515d8edd194378575dca83661c54a",
       "current_W_sha256": "3580d54982ca68a320ab27e765a9eaa7dbd515d8edd194378575dca83661c54a",
       "state": "REVIEWED_REUSED",
@@ -3643,7 +3643,7 @@
     {
       "path": "mcs/ingest/health_watch.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "981b5ab0e68ccf49bcce05e2814b1e2702408520f369ae9f43d2bc44f1050e65",
       "current_W_sha256": "981b5ab0e68ccf49bcce05e2814b1e2702408520f369ae9f43d2bc44f1050e65",
       "state": "REVIEWED_REUSED",
@@ -3652,7 +3652,7 @@
     {
       "path": "mcs/ingest/init_data.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "17a0d32d0eb95202c0725877ad5e4dacf9fdeee06cffd21dd52004189e500dd4",
       "current_W_sha256": "17a0d32d0eb95202c0725877ad5e4dacf9fdeee06cffd21dd52004189e500dd4",
       "state": "REVIEWED_REUSED",
@@ -3661,7 +3661,7 @@
     {
       "path": "mcs/ingest/job_ops.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "d5b64a681b8b43a7f08decf4adddcf075465c94da1cfadcc3d515b98f2fea12f",
       "current_W_sha256": "d5b64a681b8b43a7f08decf4adddcf075465c94da1cfadcc3d515b98f2fea12f",
       "state": "REVIEWED_REUSED",
@@ -3670,7 +3670,7 @@
     {
       "path": "mcs/ingest/mcs_adapter.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "c3be0fa89a12ccc357273913c53d6c779ac391debfc4b7e179979ad694ca444d",
       "current_W_sha256": "c3be0fa89a12ccc357273913c53d6c779ac391debfc4b7e179979ad694ca444d",
       "state": "REVIEWED_REUSED",
@@ -3679,7 +3679,7 @@
     {
       "path": "mcs/ingest/mcs_worker.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "c0d1946942450adc1d794128ca162f84a12761171c13de94d992d44588c28747",
       "current_W_sha256": "c0d1946942450adc1d794128ca162f84a12761171c13de94d992d44588c28747",
       "state": "REVIEWED_REUSED",
@@ -3688,7 +3688,7 @@
     {
       "path": "mcs/ingest/project_metadata.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "257afe64943606ecac5f5706af8ca0564d003156e20133b2cc613cba9bad1cfa",
       "current_W_sha256": "257afe64943606ecac5f5706af8ca0564d003156e20133b2cc613cba9bad1cfa",
       "state": "REVIEWED_REUSED",
@@ -3697,7 +3697,7 @@
     {
       "path": "mcs/ingest/run_check.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "915d6784befb59fcfffae019020dac59c92fa272571dfc325c36585b283ef00d",
       "current_W_sha256": "915d6784befb59fcfffae019020dac59c92fa272571dfc325c36585b283ef00d",
       "state": "REVIEWED_REUSED",
@@ -3706,7 +3706,7 @@
     {
       "path": "tests/ingest/ingest_testkit.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "03d5831494c33b78a32a2f24d95c2efd4f1367f6d0aea7b3f095b2b9da02dde4",
       "current_W_sha256": "03d5831494c33b78a32a2f24d95c2efd4f1367f6d0aea7b3f095b2b9da02dde4",
       "state": "REVIEWED_REUSED",
@@ -3715,7 +3715,7 @@
     {
       "path": "tests/ingest/test_acquisition_contracts.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "510f94d404fe632c0b7775b43b4a602adfde24a26c8ca160e9ef5c38fc9fefb0",
       "current_W_sha256": "510f94d404fe632c0b7775b43b4a602adfde24a26c8ca160e9ef5c38fc9fefb0",
       "state": "REVIEWED_REUSED",
@@ -3724,7 +3724,7 @@
     {
       "path": "tests/ingest/test_adapter_wire.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "26c12487b689d48f78a2719b39083bac487be7401caab84367465201d92caf5b",
       "current_W_sha256": "26c12487b689d48f78a2719b39083bac487be7401caab84367465201d92caf5b",
       "state": "REVIEWED_REUSED",
@@ -3733,7 +3733,7 @@
     {
       "path": "tests/ingest/test_cross_lists.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "962d20c5472c2825b4e5a095c80ac27ace295d025f09e91a6e53bde5f47b1edd",
       "current_W_sha256": "962d20c5472c2825b4e5a095c80ac27ace295d025f09e91a6e53bde5f47b1edd",
       "state": "REVIEWED_REUSED",
@@ -3742,7 +3742,7 @@
     {
       "path": "tests/ingest/test_drug_map_pipeline.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "13e720e558f7aa0e071f55b3365212aea470803d224f4da9f7437507edfdd57e",
       "current_W_sha256": "13e720e558f7aa0e071f55b3365212aea470803d224f4da9f7437507edfdd57e",
       "state": "REVIEWED_REUSED",
@@ -3751,7 +3751,7 @@
     {
       "path": "tests/ingest/test_fixture_synthetic.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "870ab4a897e9dc0b83548a6f9731991af227a25e2993ac53b128d8d99dc94a5a",
       "current_W_sha256": "870ab4a897e9dc0b83548a6f9731991af227a25e2993ac53b128d8d99dc94a5a",
       "state": "REVIEWED_REUSED",
@@ -3760,7 +3760,7 @@
     {
       "path": "tests/ingest/test_group_consultations.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "47b64f165e5e766813dc4e0566919021f85b8cf08ff00a7ac9d1eabf6bdfc6d2",
       "current_W_sha256": "47b64f165e5e766813dc4e0566919021f85b8cf08ff00a7ac9d1eabf6bdfc6d2",
       "state": "REVIEWED_REUSED",
@@ -3769,7 +3769,7 @@
     {
       "path": "tests/ingest/test_health_watch.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "d4f017bdb1705cad86cb41111ac4538deec2409aa8c3c898f089ef0b994ca69e",
       "current_W_sha256": "d4f017bdb1705cad86cb41111ac4538deec2409aa8c3c898f089ef0b994ca69e",
       "state": "REVIEWED_REUSED",
@@ -3778,7 +3778,7 @@
     {
       "path": "tests/ingest/test_job_drain.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "6842a5576dc6adf4534137f04faf6f41ad5fee35694d6ff0731509d33bfa1ac0",
       "current_W_sha256": "6842a5576dc6adf4534137f04faf6f41ad5fee35694d6ff0731509d33bfa1ac0",
       "state": "REVIEWED_REUSED",
@@ -3787,7 +3787,7 @@
     {
       "path": "tests/ingest/test_job_reasons_ingest.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "d6b08c095e5182de1c39c0e2d399abd2cb47c8f364917899170bfdf2c41c2726",
       "current_W_sha256": "d6b08c095e5182de1c39c0e2d399abd2cb47c8f364917899170bfdf2c41c2726",
       "state": "REVIEWED_REUSED",
@@ -3796,7 +3796,7 @@
     {
       "path": "tests/ingest/test_message_metadata.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "2be63c91caccb9c5effc5957421dd102c9e508d42c7e627d67bc3ab39f9d9ebc",
       "current_W_sha256": "2be63c91caccb9c5effc5957421dd102c9e508d42c7e627d67bc3ab39f9d9ebc",
       "state": "REVIEWED_REUSED",
@@ -3805,7 +3805,7 @@
     {
       "path": "tests/ingest/test_metadata_probe_observation.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "47d4cc72d024f5879e6c51c5f38ba9d6e7fa41cebe9e7c6c145f3f585ac3fe23",
       "current_W_sha256": "47d4cc72d024f5879e6c51c5f38ba9d6e7fa41cebe9e7c6c145f3f585ac3fe23",
       "state": "REVIEWED_REUSED",
@@ -3814,7 +3814,7 @@
     {
       "path": "tests/ingest/test_metadata_probe_paging.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "fdfcabb7ceaa1dfe45371979eb117740edeae686d401505fd3185623a5b156f8",
       "current_W_sha256": "fdfcabb7ceaa1dfe45371979eb117740edeae686d401505fd3185623a5b156f8",
       "state": "REVIEWED_REUSED",
@@ -3823,7 +3823,7 @@
     {
       "path": "tests/ingest/test_metadata_probe_usage.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "4317e9024dd14cc90b6f4e5a142a0632f392884a77561cb75bd3fa36cf14d386",
       "current_W_sha256": "4317e9024dd14cc90b6f4e5a142a0632f392884a77561cb75bd3fa36cf14d386",
       "state": "REVIEWED_REUSED",
@@ -3832,7 +3832,7 @@
     {
       "path": "tests/ingest/test_project_metadata.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "a1bc35d7bd41b8d4ad7aa7b1e84a10da900f036bb8fbdd6d63dfe63308dc0e77",
       "current_W_sha256": "a1bc35d7bd41b8d4ad7aa7b1e84a10da900f036bb8fbdd6d63dfe63308dc0e77",
       "state": "REVIEWED_REUSED",
@@ -3841,7 +3841,7 @@
     {
       "path": "tests/ingest/test_reaction_actors.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "345332fa7496fa249dbfecabd941c8d59573c624295c85fce7c8a10bf8920476",
       "current_W_sha256": "345332fa7496fa249dbfecabd941c8d59573c624295c85fce7c8a10bf8920476",
       "state": "REVIEWED_REUSED",
@@ -3850,7 +3850,7 @@
     {
       "path": "tests/ingest/test_run_check_stages.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "5ec818caf83f9dd8d327ef557610c7d067dddbc130accbe3cba7e9b9c19a28aa",
       "current_W_sha256": "5ec818caf83f9dd8d327ef557610c7d067dddbc130accbe3cba7e9b9c19a28aa",
       "state": "REVIEWED_REUSED",
@@ -3859,7 +3859,7 @@
     {
       "path": "tests/ingest/test_run_watchdog.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "ba09be62a9dfec332460658a791c350a383637fcb578afe12c36a4b4859966f9",
       "current_W_sha256": "ba09be62a9dfec332460658a791c350a383637fcb578afe12c36a4b4859966f9",
       "state": "REVIEWED_REUSED",
@@ -3868,7 +3868,7 @@
     {
       "path": "tests/ingest/test_semantic_ingest_revisions.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "e306a9036680ec8416260ac859dfc8a05c85f4dc6ee896025e2f079d08015e02",
       "current_W_sha256": "e306a9036680ec8416260ac859dfc8a05c85f4dc6ee896025e2f079d08015e02",
       "state": "REVIEWED_REUSED",
@@ -3877,7 +3877,7 @@
     {
       "path": "tests/ingest/test_thread_count_retry.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "708d993c47da2d6f466d450ad5e2cb5960f29293a223ee3e6391a8a708d3be82",
       "current_W_sha256": "708d993c47da2d6f466d450ad5e2cb5960f29293a223ee3e6391a8a708d3be82",
       "state": "REVIEWED_REUSED",
@@ -3886,7 +3886,7 @@
     {
       "path": "tests/ingest/test_thread_tombstone_gap.py",
       "prior_packet": 2,
-      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/maintenance-core-packet2-evidence.json",
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "previous_review_sha256": "c1bd116a7aaf3f7fcd0281361a38e07b4266f6d818614f69ff88ad27c3c0e287",
       "current_W_sha256": "c1bd116a7aaf3f7fcd0281361a38e07b4266f6d818614f69ff88ad27c3c0e287",
       "state": "REVIEWED_REUSED",
@@ -3895,7 +3895,7 @@
     {
       "path": "adapters/discord/__init__.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "b7060721cd27ed534ef3edf580f29829bb649331542a97fbbfd3bf6118da218c",
       "current_W_sha256": "b7060721cd27ed534ef3edf580f29829bb649331542a97fbbfd3bf6118da218c",
       "state": "REVIEWED_REUSED",
@@ -3904,7 +3904,7 @@
     {
       "path": "adapters/discord/actions.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "a1f6fe925ffa5e87d1e8ec77ab8b78b32f30dad9a047ad56790be84035aac527",
       "current_W_sha256": "a1f6fe925ffa5e87d1e8ec77ab8b78b32f30dad9a047ad56790be84035aac527",
       "state": "REVIEWED_REUSED",
@@ -3913,7 +3913,7 @@
     {
       "path": "adapters/discord/cards.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "bccbc08e862a31b5c46fe1db6e0b06347f82bbe3ed5020f5ee71f222c2650dac",
       "current_W_sha256": "bccbc08e862a31b5c46fe1db6e0b06347f82bbe3ed5020f5ee71f222c2650dac",
       "state": "REVIEWED_REUSED",
@@ -3922,7 +3922,7 @@
     {
       "path": "adapters/discord/delivery.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "678d279ef9097bf55871e5abe5ca1b237f991023ffb9b57a6fc7e423fd583bf0",
       "current_W_sha256": "678d279ef9097bf55871e5abe5ca1b237f991023ffb9b57a6fc7e423fd583bf0",
       "state": "REVIEWED_REUSED",
@@ -3931,7 +3931,7 @@
     {
       "path": "adapters/discord/runtime_compat.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "ba8ca159e89c3ceb85d558bd253aefeda3d627a47fab244c9b1bd650f671054c",
       "current_W_sha256": "ba8ca159e89c3ceb85d558bd253aefeda3d627a47fab244c9b1bd650f671054c",
       "state": "REVIEWED_REUSED",
@@ -3940,7 +3940,7 @@
     {
       "path": "adapters/discord/standalone.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "d51ee1d292ab6dff21b4d3dc425afc2b7038e2f07cda7c9b72c50c13fe21fb46",
       "current_W_sha256": "d51ee1d292ab6dff21b4d3dc425afc2b7038e2f07cda7c9b72c50c13fe21fb46",
       "state": "REVIEWED_REUSED",
@@ -3949,7 +3949,7 @@
     {
       "path": "adapters/discord/tasks.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "9d8097b152441f26d17469351bcf15f09f3358b82e2bcc076f088f08d712da56",
       "current_W_sha256": "9d8097b152441f26d17469351bcf15f09f3358b82e2bcc076f088f08d712da56",
       "state": "REVIEWED_REUSED",
@@ -3958,7 +3958,7 @@
     {
       "path": "adapters/slack/__init__.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "179cbcb2e57b187d300652bbdf60dce120170eb2ee9d986a7db25a1a8bbe551b",
       "current_W_sha256": "179cbcb2e57b187d300652bbdf60dce120170eb2ee9d986a7db25a1a8bbe551b",
       "state": "REVIEWED_REUSED",
@@ -3967,7 +3967,7 @@
     {
       "path": "adapters/slack/actions.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "ecd490dd85d591c2b9189fe33a3a70453a8fcb3072fa6eef1db544ab060d417b",
       "current_W_sha256": "ecd490dd85d591c2b9189fe33a3a70453a8fcb3072fa6eef1db544ab060d417b",
       "state": "REVIEWED_REUSED",
@@ -3976,7 +3976,7 @@
     {
       "path": "adapters/slack/cards.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "080400362ed3876a8e202bf5ba789bed91858f1dbb41954386bdff8e3027b807",
       "current_W_sha256": "080400362ed3876a8e202bf5ba789bed91858f1dbb41954386bdff8e3027b807",
       "state": "REVIEWED_REUSED",
@@ -3985,7 +3985,7 @@
     {
       "path": "adapters/slack/delivery.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "3129b7fc6753f4b83bbc2965daced330daf68b77c9d9661b621f379027245b8b",
       "current_W_sha256": "3129b7fc6753f4b83bbc2965daced330daf68b77c9d9661b621f379027245b8b",
       "state": "REVIEWED_REUSED",
@@ -3994,7 +3994,7 @@
     {
       "path": "adapters/slack/paths.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "bffc8204582e5bc00f71c5d37a686287d479c6d936fd6b1cb54e61ab6e1e4486",
       "current_W_sha256": "bffc8204582e5bc00f71c5d37a686287d479c6d936fd6b1cb54e61ab6e1e4486",
       "state": "REVIEWED_REUSED",
@@ -4003,7 +4003,7 @@
     {
       "path": "adapters/slack/runtime_compat.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "cfdb6b6c57ffcf5dc1587f83b06e3104581f082ff9a10503ff6ea296d19c749d",
       "current_W_sha256": "cfdb6b6c57ffcf5dc1587f83b06e3104581f082ff9a10503ff6ea296d19c749d",
       "state": "REVIEWED_REUSED",
@@ -4012,7 +4012,7 @@
     {
       "path": "adapters/slack/standalone.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "2d25aef0679b535cd8afeb5cf7588cd813f55b97f639f9c2c8422790fb79b1e5",
       "current_W_sha256": "2d25aef0679b535cd8afeb5cf7588cd813f55b97f639f9c2c8422790fb79b1e5",
       "state": "REVIEWED_REUSED",
@@ -4021,7 +4021,7 @@
     {
       "path": "adapters/slack/tasks.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "05f8eee2d706f9c17a1a2480f8d905d9abb3f1e1615e6f50e289e614600b5b9a",
       "current_W_sha256": "05f8eee2d706f9c17a1a2480f8d905d9abb3f1e1615e6f50e289e614600b5b9a",
       "state": "REVIEWED_REUSED",
@@ -4030,7 +4030,7 @@
     {
       "path": "tests/adapters/discord/discord_delivery_testkit.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "099e034b1e2a13e2ddc23a570866910c70f5dc70a9fc86ee140b996fd610e922",
       "current_W_sha256": "099e034b1e2a13e2ddc23a570866910c70f5dc70a9fc86ee140b996fd610e922",
       "state": "REVIEWED_REUSED",
@@ -4039,7 +4039,7 @@
     {
       "path": "tests/adapters/discord/discord_testkit.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "b0c1b8386daa85dd795e3571edcca38b2a25a30f892cf68c923d1009ade34c6e",
       "current_W_sha256": "b0c1b8386daa85dd795e3571edcca38b2a25a30f892cf68c923d1009ade34c6e",
       "state": "REVIEWED_REUSED",
@@ -4048,7 +4048,7 @@
     {
       "path": "tests/adapters/discord/test_discord_sdk_real.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "e6c807e5b73361deb7f30e2af73c0293331b880d603aa9dcf7c9c9c4e6c87d01",
       "current_W_sha256": "e6c807e5b73361deb7f30e2af73c0293331b880d603aa9dcf7c9c9c4e6c87d01",
       "state": "REVIEWED_REUSED",
@@ -4057,7 +4057,7 @@
     {
       "path": "tests/adapters/discord/test_discord_standalone.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "6c3a8b52e66a4b3b7dec768e444219fd3a4035e165fbb0689a5670831f17d78a",
       "current_W_sha256": "6c3a8b52e66a4b3b7dec768e444219fd3a4035e165fbb0689a5670831f17d78a",
       "state": "REVIEWED_REUSED",
@@ -4066,7 +4066,7 @@
     {
       "path": "tests/adapters/discord/test_mcs_discord.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "77a5610e4e3c976015fb7fdb646c891cb31b1988c7a7c0d6c8cad9bb06321a55",
       "current_W_sha256": "77a5610e4e3c976015fb7fdb646c891cb31b1988c7a7c0d6c8cad9bb06321a55",
       "state": "REVIEWED_REUSED",
@@ -4075,7 +4075,7 @@
     {
       "path": "tests/adapters/discord/test_mcs_discord_delivery.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "6faa874e540aa9e3530161ecf9d74bbeb1e943df954a955f50704045c982d732",
       "current_W_sha256": "6faa874e540aa9e3530161ecf9d74bbeb1e943df954a955f50704045c982d732",
       "state": "REVIEWED_REUSED",
@@ -4084,7 +4084,7 @@
     {
       "path": "tests/adapters/discord/test_mcs_discord_single_post.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "5c38afe8b375e33c2b05c7d685080e88cbad8b0d42a63a06b3cf329f375f21d8",
       "current_W_sha256": "5c38afe8b375e33c2b05c7d685080e88cbad8b0d42a63a06b3cf329f375f21d8",
       "state": "REVIEWED_REUSED",
@@ -4093,7 +4093,7 @@
     {
       "path": "tests/adapters/slack/slack_card_testkit.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "e2f44aa2bbe95e41f749105cd88319760066517e3eb3f6d9d4f2ee4cdf555fe8",
       "current_W_sha256": "e2f44aa2bbe95e41f749105cd88319760066517e3eb3f6d9d4f2ee4cdf555fe8",
       "state": "REVIEWED_REUSED",
@@ -4102,7 +4102,7 @@
     {
       "path": "tests/adapters/slack/slack_testkit.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "56804a8524760b412c149b9cb79d9810c7b5f9df33698690e089db9b48ef7ae5",
       "current_W_sha256": "56804a8524760b412c149b9cb79d9810c7b5f9df33698690e089db9b48ef7ae5",
       "state": "REVIEWED_REUSED",
@@ -4111,7 +4111,7 @@
     {
       "path": "tests/adapters/slack/test_mcs_slack.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "abddd1d1828db0597da8f594e2b37c6647f7426ce4f6040ace7e9136a3216983",
       "current_W_sha256": "abddd1d1828db0597da8f594e2b37c6647f7426ce4f6040ace7e9136a3216983",
       "state": "REVIEWED_REUSED",
@@ -4120,7 +4120,7 @@
     {
       "path": "tests/adapters/slack/test_mcs_slack_actions.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "419375484017cb8906c52e9339897f600ed7a1b2c1cb75c232af932343fb2562",
       "current_W_sha256": "419375484017cb8906c52e9339897f600ed7a1b2c1cb75c232af932343fb2562",
       "state": "REVIEWED_REUSED",
@@ -4129,7 +4129,7 @@
     {
       "path": "tests/adapters/slack/test_mcs_slack_cards.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "4e8452cde46595b14303afbb4b90fb88ee9073eb41f9e256c79948d6584df1d6",
       "current_W_sha256": "4e8452cde46595b14303afbb4b90fb88ee9073eb41f9e256c79948d6584df1d6",
       "state": "REVIEWED_REUSED",
@@ -4138,7 +4138,7 @@
     {
       "path": "tests/adapters/slack/test_slack_human_receipt.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "1018c93df602910a12633809bf294feb7b66e28bf2c417b5d8adde3e440ce652",
       "current_W_sha256": "1018c93df602910a12633809bf294feb7b66e28bf2c417b5d8adde3e440ce652",
       "state": "REVIEWED_REUSED",
@@ -4147,7 +4147,7 @@
     {
       "path": "tests/adapters/slack/test_slack_standalone.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "39b7f4852af6c56ecd3b3bc4af32f54fd123320aacd06ca6508f123c98242b11",
       "current_W_sha256": "39b7f4852af6c56ecd3b3bc4af32f54fd123320aacd06ca6508f123c98242b11",
       "state": "REVIEWED_REUSED",
@@ -4156,7 +4156,7 @@
     {
       "path": "integration/test_standalone_sdk.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "011aa5173469b15b6017167e66c309173d006214b8407dae6b5a40aa13fb1df3",
       "current_W_sha256": "011aa5173469b15b6017167e66c309173d006214b8407dae6b5a40aa13fb1df3",
       "state": "REVIEWED_REUSED",
@@ -4165,7 +4165,7 @@
     {
       "path": "tests/adapters/discord/test_discord_runtime_compat.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "093ac29c1970c5d166c52181631bbfdff3a3be9f4ff936c82d14b407905f9932",
       "current_W_sha256": "093ac29c1970c5d166c52181631bbfdff3a3be9f4ff936c82d14b407905f9932",
       "state": "REVIEWED_REUSED",
@@ -4174,7 +4174,7 @@
     {
       "path": "tests/adapters/slack/test_slack_runtime_compat.py",
       "prior_packet": 3,
-      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/maintenance-core-packet3-evidence.json",
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "previous_review_sha256": "998f294b66b0d10d7eca99554c5ed5887df7a337c4509e15a0b5e8c1a4f454b1",
       "current_W_sha256": "998f294b66b0d10d7eca99554c5ed5887df7a337c4509e15a0b5e8c1a4f454b1",
       "state": "REVIEWED_REUSED",

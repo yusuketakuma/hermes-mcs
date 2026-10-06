@@ -1527,7 +1527,7 @@
       "review_limit": null,
       "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read.",
       "current_input_sha256": "e3d5d9b29d581c1d28c9b86937f9416fd4b40f8f35ac1d90ccfa37740f248ab9",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -1569,7 +1569,7 @@
       "review_limit": null,
       "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read.",
       "current_input_sha256": "7422da351f0baa4dc93c7df3eab8f3cf7ae8b872d2b3f0ce66316c26ab8f764f",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -1604,7 +1604,7 @@
       "review_limit": null,
       "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read.",
       "current_input_sha256": "fabbcb84bd10820e53c6cbac1f458436a6a6a502b3dfaeb9e90a72cb77927d49",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -1635,7 +1635,7 @@
       "review_limit": null,
       "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read.",
       "current_input_sha256": "2750e4c4dc7f571496a9ad9e0fc451c650ad00b609225d64663356d709793b34",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -1674,7 +1674,7 @@
       "review_limit": null,
       "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read.",
       "current_input_sha256": "1cd8b5667d451a105c7debc9ac639ace093a9a082abd66ef0159b8af9fdee41d",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -1705,7 +1705,7 @@
       "review_limit": null,
       "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read.",
       "current_input_sha256": "d733061b8e2bfb75c4665f6ed3d0ea8605557d1598cb5a08b673b0516c91ffb1",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -1736,7 +1736,7 @@
       "review_limit": null,
       "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read.",
       "current_input_sha256": "060e1d7044ebd3c80b625f18a3ea0c1b60c91f70c3d3e0539ba347a5fa7a9bd0",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -1767,7 +1767,7 @@
       "review_limit": null,
       "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read.",
       "current_input_sha256": "ac17ec31dad886c9042baa37c7f2acdc0a366f037ffe860079be42469696c4f0",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -1798,7 +1798,7 @@
       "review_limit": null,
       "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read.",
       "current_input_sha256": "9bb8e4030a888bd3f7fe8e902c6fd90e97f6d1e0f4805a9ee2d8584cd8534628",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -1829,7 +1829,7 @@
       "review_limit": null,
       "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read.",
       "current_input_sha256": "ab5e15537e75228a48c8134c796b8ce482dd2649a9ad279041fb163bc2aa710b",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -1860,7 +1860,7 @@
       "review_limit": null,
       "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read.",
       "current_input_sha256": "53f8d293cd8a7ae1add21ae36994ea76433e28e0894ab2fc353c83bf355e0a20",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -1891,7 +1891,7 @@
       "review_limit": null,
       "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read.",
       "current_input_sha256": "c1bbdbcdacabe3df97fddd78e5490606de55a6691b70a8370dc73a4ec0786017",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -1922,7 +1922,7 @@
       "review_limit": null,
       "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read.",
       "current_input_sha256": "36d8e1865c1f8b72fc7e8b4fc9f3e6b1fc2c0c106c3a7fecce3d44b550a74108",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -1953,7 +1953,7 @@
       "review_limit": null,
       "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read.",
       "current_input_sha256": "9f302eec802cbab4d3eda897d8328c57cdf4f7f0f4e23212a95113ace54a297b",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -1984,7 +1984,7 @@
       "review_limit": null,
       "review_reuse": "packet1 complete W source review reused only after exact SHA-256 equality; not a new packet2 read.",
       "current_input_sha256": "aee3ffbfb2df128c754b0040c5d3a99f44809be92cc567f75671b5006af4e068",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2049,7 +2049,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "All W lines outside the changed patch reused by exact P/W diff equality.",
       "current_input_sha256": "d30c80e40a8dc07e4d9b33dcd2ece0d2781bcb9a33ab9377ea66b3aec9d78fcf",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2130,7 +2130,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "All W lines outside the changed patch reused by exact P/W diff equality.",
       "current_input_sha256": "7b526453db005923ea739ea36c3325d5a69c3566a66263c3898cfe506ee6d078",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2181,7 +2181,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "All W lines outside the changed patch reused by exact P/W diff equality.",
       "current_input_sha256": "192c6bfc43b33b96b72fdbf31706acc3b8e68817acd245c091302e874423e895",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2222,7 +2222,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "All W lines outside the changed patch reused by exact P/W diff equality.",
       "current_input_sha256": "e240c5f7625275a9bcf922594d3eb7ec3a709697c0f1a15b9627f7c51a3598c2",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2259,7 +2259,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "All W lines outside the changed patch reused by exact P/W diff equality.",
       "current_input_sha256": "57fcf812101a5ffcf409a237150896e736fba844437f760be7ccc1e8065e6d20",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2290,7 +2290,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "All W lines outside the changed patch reused by exact P/W diff equality.",
       "current_input_sha256": "adef90e8b350c9ca3672ac9026a7999c62e44cc53ea42ec12a8d32230d4ad7bf",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2331,7 +2331,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "All W lines outside the changed patch reused by exact P/W diff equality.",
       "current_input_sha256": "970e6d932b9a975d96ddc12401264ae8438916067c16ccba7a4e99fdf0b8de14",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2368,7 +2368,7 @@
       "read_method": "Numbered, consecutive, bounded source reads with no ellipsis/truncation; complete P source evaluated. Exact diff comparison reuses unchanged W ranges; final changed ranges and complete patch reread.",
       "review_limit": null,
       "current_input_sha256": "1adf7a84a321177d7481da9e13191c3537ee8abc46ef6983235ea8cf9850bc42",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2402,7 +2402,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "173cfcc02b46e012854ef969a042493f40933eb4489b6d9c65d5a9cb59df0672",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2448,7 +2448,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "7adcce4ecfc88b58914da43b066707dee8b5101dd596bc235c0178a7ef741a8a",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2478,7 +2478,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "4996c182160ace49c0e84e61219075a35d56f26c2a3f5b450c8729105910a65b",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2508,7 +2508,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "5aa19e59730ead7237597d326cf3a38a7334ba9540c746c83c9393badcf3db15",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2558,7 +2558,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "7a2597f224276ced79cef59f86eb82dc3cb1332408baf2ff93e9201794149ac1",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2588,7 +2588,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "742c491a8afd422cab90f36b171884e2f177f44781f424f2cfa7d5771be5f462",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2618,7 +2618,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "278990c48c5ab5b6832092041bee845fdb4590b59bfd30f50beea95b34679015",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2648,7 +2648,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "81f9569aaee14b8c07fe978c880e0e2d26f9e4cb663ce4cdd0ba32076521947e",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2678,7 +2678,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "cfd9873077684d3b2d78bc211cf9b32a24f21d9f57f4863e5ccc52bb1e38a211",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2708,7 +2708,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "7368cb1f9e6bda21596a875e8a91e601516a495e0a0c1e38eb6916d9042795ea",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2738,7 +2738,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "151760860e4fbe2f3dba56b0236cd36a41479252d1e991f43ff6be6c4d542376",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2776,7 +2776,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "9301ff2ebfa67b17cff3cb93a6dcd6910124d88c981f20e8b4d552d4bfaa4b23",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2806,7 +2806,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "e0a60bf20a5496579658c893d625ee2d87e0840c2e2c979acc89a9531fd2915f",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2844,7 +2844,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "80e84470d135c73c0537b951d7c694b9be04e67a19f9cb8660e781326f6de02c",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2874,7 +2874,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "6002d73467ac68778fcd9109a6c8a4ce0ccaf49ab44821165a99d0079f829f6b",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2904,7 +2904,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "de2aff83b223ea943b7e78bc6bb2eb7be76f57208ad2c18da4d6ffd5bf21b4dd",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2934,7 +2934,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "4d3640a77209103f013eeb4e58214b9620bed63944c14abb69afc15614ea50a3",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2964,7 +2964,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "35b6f484958d02b47fb61c0d54a483838a6940bbb7fb655527e8ed112090e096",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -2994,7 +2994,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "e984229783d1f5a57b69898c67175f226099bce0958b6b74bfc69f5707fd9e2f",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -3024,7 +3024,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "583cc6a09f4c466992e3dbf59f36bb671845932dbbd10634b031b6d8c9cee4c2",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -3054,7 +3054,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "706914ea1810f2fd2670a64a4c450405c02622af3688efb16c1940305877489d",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -3084,7 +3084,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "30351cf4ad4a96a16b37ceeaaa3a24bfb9c76d70da589af848652fbf16a5bf45",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -3114,7 +3114,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "ca0bf8e815131308fafbc3a70c39198a73b0be50a4ac1b4df07795ea4938eabc",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     },
     {
@@ -3144,7 +3144,7 @@
       "review_limit": null,
       "unchanged_W_ranges": "Unchanged lines reused by exact P/W diff comparison; changed import lines reviewed in complete patch.",
       "current_input_sha256": "802d168aa3976d0f9b36668ae48e39db12b4ea45f0bbd6dea24a7bd014f0f27e",
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "reuse_condition": "Exact SHA equality to previously completed P1/P2 full review; previous changes/hunks were fully evaluated. No source reread counted again."
     }
   ],
@@ -3755,7 +3755,7 @@
       "patch_sha256": "797b750afc6563241710b3e860ff14b804da24e38da73bbcc3d47f34904c411f",
       "patch_bytes": 21478
     },
-    "evidence_path": "docs/development/maintenance-semantic-packet3-evidence.json"
+    "evidence_path": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json"
   },
   "constraints": [
     "No child spawn; dedicated 1-writer worktree and branch.",

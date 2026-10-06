@@ -69,7 +69,7 @@
     "X07": "no clinical criteria changed; PASS/current-generation publication guard remains",
     "X01": "local source integration only; distribution/finalI actualchecks pending"
   },
-  "unchanged_criteria_reuse": "C01,C04,X02,X05,X08 prior full module evidence docs/development/maintenance-semantic-packet3-evidence.json; no corresponding source boundary change",
+  "unchanged_criteria_reuse": "C01,C04,X02,X05,X08 prior full module evidence docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json; no corresponding source boundary change",
   "verification": [
     {
       "path": "/tmp/mcs-parent-send-gate-before-20261005.log",

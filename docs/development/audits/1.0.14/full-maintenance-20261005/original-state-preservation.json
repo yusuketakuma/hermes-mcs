@@ -14,19 +14,19 @@
   "private_runtime_group": "Metadata-only classification; no content or secrets read",
   "existing_parent_runrecords": [
     {
-      "path": "docs/development/full-maintenance-20261005/PLAN.md",
+      "path": "docs/development/audits/1.0.14/full-maintenance-20261005/PLAN.md",
       "sha256": "7ad5d0d66bce1df9483e9bfb1f8d9d42487a30b6654ab6499907ec6b070c3f0e",
       "bytes": 4488,
       "kind": "task-run-record"
     },
     {
-      "path": "docs/development/full-maintenance-20261005/parent-ci-evidence.json",
+      "path": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-ci-evidence.json",
       "sha256": "8d76772bd12fd5fb56c825cc43cc5da27260604ed6f14b5caea41c14d18f3e2a",
       "bytes": 10687,
       "kind": "task-run-record"
     },
     {
-      "path": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "path": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "sha256": "e84ddc191582fd0f6aa3bc412af4c7554e9a1e29c8443ad6bdcf97cd99c929bc",
       "bytes": 59405,
       "kind": "task-run-record"

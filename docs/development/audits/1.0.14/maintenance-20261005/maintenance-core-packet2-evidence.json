@@ -1825,7 +1825,7 @@
       "evidence": [
         "tests/ingest/test_job_drain.py:test_interrupted_v7_migration_reruns_backfill",
         "tests/ingest/test_reaction_actors.py:test_actor_columns_upgrade_preserves_old_snapshot_observations",
-        "docs/development/maintenance-core-evidence.json"
+        "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
       ]
     },
     "C05": {
@@ -2021,7 +2021,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "mcs/core/ledger.py",
@@ -2063,7 +2063,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "mcs/core/ledger_audit.py",
@@ -2077,7 +2077,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "mcs/core/llm_admission.py",
@@ -2095,7 +2095,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "mcs/core/local_llm.py",
@@ -2113,7 +2113,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "mcs/core/maintenance.py",
@@ -2127,7 +2127,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "mcs/core/mcs_queries.py",
@@ -2145,7 +2145,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "mcs/core/mcs_runtime.py",
@@ -2159,7 +2159,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "mcs/core/mcs_util.py",
@@ -2173,7 +2173,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_artifact_json_guards.py",
@@ -2187,7 +2187,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_core_misc.py",
@@ -2213,7 +2213,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_job_reasons.py",
@@ -2227,7 +2227,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_ledger_audit.py",
@@ -2245,7 +2245,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_ledger_candidate_validation.py",
@@ -2259,7 +2259,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_ledger_guards.py",
@@ -2273,7 +2273,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_ledger_recovery_contract.py",
@@ -2291,7 +2291,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_ledger_reply_recovery.py",
@@ -2305,7 +2305,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_llm_admission.py",
@@ -2323,7 +2323,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_local_llm.py",
@@ -2337,7 +2337,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_local_llm_deadline.py",
@@ -2351,7 +2351,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_maintenance_root.py",
@@ -2365,7 +2365,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_mcs_util.py",
@@ -2379,7 +2379,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_message_revisions.py",
@@ -2393,7 +2393,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_metadata_watch.py",
@@ -2407,7 +2407,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_supported_schema_upgrade.py",
@@ -2421,7 +2421,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     },
     {
       "path": "tests/core/test_thread_reply_pairs.py",
@@ -2435,7 +2435,7 @@
         ]
       ],
       "reuse_reason": "packet1 W SHA256と完全一致",
-      "source_evidence": "docs/development/maintenance-core-evidence.json"
+      "source_evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json"
     }
   ],
   "findings": [

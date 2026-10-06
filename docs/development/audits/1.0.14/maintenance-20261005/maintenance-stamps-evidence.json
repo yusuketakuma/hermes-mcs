@@ -107,7 +107,7 @@
       "W_read_basis": "SHA-matched full P read plus complete diff read and source recheck; no omitted changed ranges",
       "P_read_basis": {
         "method": "親受入の同SHA全文receiptを再利用、現在P bytes照合と今回境界の再読",
-        "receipt": "docs/development/maintenance-notify-packet2-evidence.json",
+        "receipt": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
         "receipt_sha256": "73714b71c7cb52190fdb39594355afc9fd34f075ae034c23ace3adcdac4476ba",
         "original_P": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
         "current_fixed_P_sha_verified": true,
@@ -223,7 +223,7 @@
       "W_read_basis": "SHA-matched full P read plus complete diff read and source recheck; no omitted changed ranges",
       "P_read_basis": {
         "method": "親受入の同SHA全文receiptを再利用、現在P bytes照合と今回境界の再読",
-        "receipt": "docs/development/maintenance-notify-packet2-evidence.json",
+        "receipt": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
         "receipt_sha256": "73714b71c7cb52190fdb39594355afc9fd34f075ae034c23ace3adcdac4476ba",
         "original_P": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
         "current_fixed_P_sha_verified": true,

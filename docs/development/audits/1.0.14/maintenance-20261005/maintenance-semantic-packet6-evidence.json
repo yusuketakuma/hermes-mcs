@@ -14,7 +14,7 @@
       "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
       "db7a4edbac6e002e72a21af0c552803f7acc87a0"
     ],
-    "evidence_commit": "このファイルを追加した専用branch commit。自己参照SHAはgit log -1 --format=%H -- docs/development/maintenance-semantic-packet6-evidence.jsonで解決。",
+    "evidence_commit": "このファイルを追加した専用branch commit。自己参照SHAはgit log -1 --format=%H -- docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.jsonで解決。",
     "parent_owner": "/root",
     "parent_reported_integration": "24261b→931f292、URL fragment→15c8c04、generated DEVELOPMENT→b3140f4。child sourceW判定に読み替えない。"
   },
@@ -33,7 +33,7 @@
       "tests/meta/test_maintenance_development_regressions.py",
       "changes/20261005-development-offline-validation.json"
     ],
-    "new_run_record": "docs/development/maintenance-semantic-packet6-evidence.json",
+    "new_run_record": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
     "source_review_states": {
       "REVIEWED": 51,
       "PARTIAL": 0,

@@ -10,7 +10,7 @@
     "kind": "evidence_only_commit",
     "code_docs_input_ref": "421bfa08651baa95d453db6c8c9c199aaba830c5",
     "changed_paths": [
-      "docs/development/maintenance-core-docs7-evidence.json"
+      "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json"
     ],
     "commit_receipt": "/tmp/mcs-maintenance-core-docs7-20261005/commit-receipt.json",
     "self_reference_note": "report自身のcommit/hashは循環を避け外部commit-receipt/byte-replayへ保存する。"
@@ -53,7 +53,7 @@
       "docs/dev-records/openwiki-update-path-20261001.md"
     ],
     "write_only": [
-      "docs/development/maintenance-core-docs7-evidence.json"
+      "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json"
     ],
     "not_executed": "文書内のlive/Keychain/service/git reset/DELETE/copy/push等commandsは記録を読むだけで、今回の実行承認ではない。"
   },

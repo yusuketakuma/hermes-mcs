@@ -14,7 +14,7 @@
       "before_evidence": "regression-before.log: 8 deadline cases failed",
       "after_evidence": "packet-final.log and semantic-family-final.log pass",
       "compatibility": "No route, model, timeout default, token ceiling, request limit or not-sent retry policy widened.",
-      "packet": "docs/development/maintenance-semantic-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -30,7 +30,7 @@
       "before_evidence": "regression-before.log: five limitations failures; claims-regression-before.log: five silent-drop failures",
       "after_evidence": "packet-final.log: malformed limitations9/claims5 and deadline8 cases pass; semantic-family-final.log: 822 pass",
       "compatibility": "Valid Claim shape, evidence references, audit/repair routes, oversize stub and call signatures remain.",
-      "packet": "docs/development/maintenance-semantic-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -48,7 +48,7 @@
       },
       "regression_after": "six cases included in final 224-pass Junit (both Slack/Discord; before/after fingerprint and untracked attachment)",
       "change_record": "changes/maintenance-notify-standalone-attachment-pins.json",
-      "packet": "docs/development/maintenance-notify-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -68,7 +68,7 @@
       },
       "regression_after": "legacy NULL and scoped LLM both enqueue/check_delivery/send; incompatible project mutation is rejected by g1 and rolled back; all in final PASS",
       "change_record": "changes/maintenance-notify-legacy-urgency-scope.json",
-      "packet": "docs/development/maintenance-notify-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -77,7 +77,7 @@
       "status": "NO_CHANGE",
       "hypothesis": "top-level interactive accepted could escalate a suppressed/uncovered member",
       "evidence": "_base requires intersection of frozen message_ids and delivered ic.coverage; test_partial_interactive_acceptance_is_not_delivery_of_suppressed_member and sealed E2 PASS",
-      "packet": "docs/development/maintenance-notify-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -86,7 +86,7 @@
       "status": "NO_CHANGE",
       "hypothesis": "text initial delivery could create unconfirmable E2",
       "evidence": "_stage stops text after E1, _base text excludes sealed batch; text E2 enqueue/send-time cancellation tests PASS",
-      "packet": "docs/development/maintenance-notify-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -95,7 +95,7 @@
       "status": "NO_CHANGE",
       "hypothesis": "old generation or hidden page acknowledgement could silence urgency",
       "evidence": "_confirmed matches current source_generation/source_fp and shown integer member; page/old-generation regressions PASS",
-      "packet": "docs/development/maintenance-notify-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -104,7 +104,7 @@
       "status": "NO_CHANGE",
       "hypothesis": "digest built outside write lock could enqueue twice",
       "evidence": "latest event id compared after BEGIN IMMEDIATE; test_body_is_built_outside_the_write_lock proves competing insert wins",
-      "packet": "docs/development/maintenance-notify-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -113,7 +113,7 @@
       "status": "NO_CHANGE",
       "hypothesis": "hold could rescue an already/uncertain delivered event and duplicate it",
       "evidence": "_hold_event reloads current receipt; holds disable rescue for unknown outcome, corrupt receipt retains invalid_progress; current-receipt/crash tests PASS",
-      "packet": "docs/development/maintenance-notify-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -122,7 +122,7 @@
       "status": "NO_CHANGE",
       "hypothesis": "_fail_event old ev.progress could suppress/park after a newly accepted chunk on StaleSend/DeferredSend",
       "evidence": "semantic_gate/render_gate convert changes in_progress into FreezeSend (unconditional hold); current urgent fixed short text is below1900, and retry entry ev already has previous progress. No current production path was found; no speculative fix introduced.",
-      "packet": "docs/development/maintenance-notify-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -131,7 +131,7 @@
       "status": "PARENT_SCOPE",
       "topic": "all caller auth/transport/schema and fresh independent fixed-I review",
       "reason": "shared modules are another owner and were read only at relevant boundaries; this packet does not claim their full audit or final integration acceptance.",
-      "packet": "docs/development/maintenance-notify-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending",
       "current_disposition": "ALL_SHARED_SOURCES_REVIEWED; final-I checks/fresh review pending"
     },
@@ -151,7 +151,7 @@
       "before_log": "regression-before.log",
       "owner": "maintenance_core",
       "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。",
-      "packet": "docs/development/maintenance-core-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -171,7 +171,7 @@
       "before_log": "regression-before.log",
       "owner": "maintenance_core",
       "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。",
-      "packet": "docs/development/maintenance-core-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -191,7 +191,7 @@
       "before_log": "migration-before-expanded.log",
       "owner": "maintenance_core",
       "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。",
-      "packet": "docs/development/maintenance-core-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -210,7 +210,7 @@
       "before_log": "reaction-before.log",
       "owner": "maintenance_core",
       "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。",
-      "packet": "docs/development/maintenance-core-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -229,7 +229,7 @@
       "after_evidence": "Final828 tests and explicit both-direction old gate/new receipt cases pass.",
       "compatibility": "No schema, thresholds, model, human approval, endpoint, mode/default or retry allowance change. Old shadow/canonical policy artifacts require normal reevaluation or replay; pending old intents stop at send-time gate.",
       "notification_handoff": "Parent informed and shared with notify owner; source display/page full adapter proof remains notify-owned.",
-      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -246,7 +246,7 @@
       "before_evidence": "revive-regression-before.log: 2 deterministic pending/failed interleavings fail.",
       "after_evidence": "revive-regression-after.log:2pass; final semantic828 pass.",
       "compatibility": "Same cooldown/per-input/pass bounds and retry receipt mechanism; unchanged public return keys; only truthful revival count and preservation of replacement input.",
-      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -256,7 +256,7 @@
       "before": "4 failed",
       "after": "109 passed including watchdog family",
       "contract": "Only scheduled ops.restore_approve bound to exact report/hash/schema may consent.",
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -266,7 +266,7 @@
       "before": "2 failed",
       "after": "170 passed including updater family",
       "contract": "Durable done bookkeeping remains authoritative; otherwise timeout is failure.",
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -289,7 +289,7 @@
       "regression": "test_deadline_derives_from_config_not_hardcode + default_ten_minute_cadence 5例",
       "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
       "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
-      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -311,7 +311,7 @@
       "regression": "test_conflicting_message_project_does_not_relabel_a_completed_page:20例",
       "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
       "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
-      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -334,7 +334,7 @@
       "regression": "test_out_of_range_number_records_failure_without_losing_complete_artifact:2例",
       "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
       "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
-      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -356,7 +356,7 @@
       "regression": "test_ws_header_terminator_cannot_bypass_header_limit:2例",
       "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
       "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
-      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -378,7 +378,7 @@
       "regression": "test_deeply_nested_previous_health_does_not_block_fresh_publication:1例",
       "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
       "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
-      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -401,7 +401,7 @@
       "regression": "test_default_command_drain_follows_mcs_root_and_preserves_other_root:1例",
       "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
       "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
-      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -422,7 +422,7 @@
       "regression": "test_initial_import_nonfinite_delay_rejected_before_writer_lock:2例",
       "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
       "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
-      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -430,7 +430,7 @@
       "status": "disproved",
       "title": "mark_readのoldest_unreadキー省略はschema欠損か",
       "evidence": "既存test_mark_read_confirms_when_oldest_unread_is_goneと_project_detail契約で省略は既読済み状態。is_archivedのboolean検証を維持。未確認を成功にする変更はしていない。",
-      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -438,7 +438,7 @@
       "status": "disproved",
       "title": "login候補URLの別port/originでcredential注入可能か",
       "evidence": "auto_loginのstate→fill→clickそれぞれでlocation.originを固定https originと厳密比較。資格情報取得/注入前にbad_originが止まる。実Keychainへアクセスしていない。",
-      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -446,7 +446,7 @@
       "status": "disproved",
       "title": "download HTTPError response bodyを閉じ忘れるか",
       "evidence": "合成allowed302/rejected302/404の3診断は修正前からpass。例外unwind/worker終了でcleanup。実益のないGC依存追加テストは除去、source変更なし。resource-before.logの3passは最終regressionとして数えない。",
-      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -454,7 +454,7 @@
       "status": "disproved",
       "title": "thread_window失敗時next_pageなしでcursorを誤認するか",
       "evidence": "実fetch_thread_windowはerror時reached=False、pagesは完成pageのみ。job_opsはcompleted rows保存とnext page durable reservation後SessionExpired伝播。acquisition/job_drain異常系で確認。",
-      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -463,7 +463,7 @@
       "title": "親所有schedule/導入/upgrade説明の最終I整合",
       "owner": "/root",
       "evidence": "configured_cron_jobsをstandalone/runtimeが利用。parentがunread */10、deep10,40、health watcher */5と明示設定300→600必要操作を担当。子は10分health契約とroot isolationを実装したが親Iのscript/cron移行結果をここでは検証していない。",
-      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending",
       "current_disposition": "SOURCE_AND_GUIDES_REVIEWED; final-I test pending",
       "current_evidence": "parent-lifecycle-evidence.json + maintenance-notify-packet6-evidence.json; current cron/host/health/source cadence10 min=MCS server load measure."
@@ -474,7 +474,7 @@
       "title": "固定Iのfresh-context独立レビューと全域最終検証",
       "owner": "/root",
       "evidence": "子自身の修復/検証は独立レビューではない。親で全packet統合後、非実装reviewerがI/差分/台帳/consumer境界を確認する必要がある。",
-      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -493,7 +493,7 @@
       "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-before.log",
       "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-after.log",
       "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
-      "packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -513,7 +513,7 @@
       "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-before.log",
       "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-after.log",
       "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
-      "packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -532,7 +532,7 @@
       "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/rebind-witness-before.log",
       "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-all-after.log",
       "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
-      "packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -557,7 +557,7 @@
       "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/full-notify-final.log",
       "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
       "additional_before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-before.log",
-      "packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -576,7 +576,7 @@
       "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-before.log",
       "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-after.log",
       "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
-      "packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -595,7 +595,7 @@
       "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-before.log",
       "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-after.log",
       "commit": "872747183be090367d6890f1c22ca2d64bcdf5ae",
-      "packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -609,7 +609,7 @@
         "mcs/ops/mcs_setup.py",
         "tests/ops/test_runtime_compatibility.py"
       ],
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "integration_status": "local integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -624,7 +624,7 @@
         "test_raw_notice_keeps_all_verified_mandatory_facts[claims1]"
       ],
       "before_failed": 2,
-      "packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -639,7 +639,7 @@
         "test_chunker_rejects_unexpected_text_after_source_footer"
       ],
       "before_failed": 2,
-      "packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -653,7 +653,7 @@
         "test_temporal_relations_require_valid_comparable_instants (7 × event_time/valid_time)"
       ],
       "before_failed": 14,
-      "packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -671,7 +671,7 @@
       ],
       "before_failed": 6,
       "operational_change": "旧corpus再利用不可、同CLIで合成資産から再作成。asset欠落時fail closed。日本語upgrade記録あり。",
-      "packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
     {
@@ -682,7 +682,7 @@
       "contract": "fixed localhost URL, no redirect following and existing 5s request / 15min restart window retained",
       "state": "CONFIRMED_FIXED",
       "path": "deployment/scripts/llamacpp_restart_if_idle.sh",
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "integration_status": "local repair; final fixed-I checks and independent review pending"
     },
     {
@@ -693,7 +693,7 @@
       "contract": "three checked-in fully synthetic assets exact dictionary equality, copied unique subsets accepted; finite positive deadline before credentials/dispatch; human labels remain zero",
       "state": "CONFIRMED_FIXED",
       "path": "mcs/ops/mcs_setup.py",
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "integration_status": "local repair; final fixed-I checks and independent review pending"
     },
     {
@@ -705,7 +705,7 @@
       "after": "214 passed in 7.08s across structured views and notification consumers",
       "contract": "Empty current facts suppress excluded events/vitals; media reference and absent/stale rule fallback retained; symptoms/medication-candidate/request fallback unchanged",
       "integration_status": "local repaired source; final whole-I checks and independent review pending",
-      "packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json"
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-views-evidence.json"
     },
     {
       "id": "NOTIFY-P3-F01",
@@ -722,7 +722,7 @@
       "accepted_before": "validation.runs:all-before-P-accepted",
       "accepted_after": "validation.runs:reproduced-accepted",
       "commit": "8db6805974eb762921555bb27ff3273e60316c49",
-      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
       "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
     },
     {
@@ -739,7 +739,7 @@
       "accepted_before": "validation.runs:all-before-P-accepted",
       "accepted_after": "validation.runs:reproduced-accepted",
       "commit": "8db6805974eb762921555bb27ff3273e60316c49",
-      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
       "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
     },
     {
@@ -756,7 +756,7 @@
       "accepted_before": "validation.runs:all-before-P-accepted",
       "accepted_after": "validation.runs:reproduced-accepted",
       "commit": "8db6805974eb762921555bb27ff3273e60316c49",
-      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
       "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
     },
     {
@@ -773,7 +773,7 @@
       "accepted_before": "validation.runs:all-before-P-accepted",
       "accepted_after": "validation.runs:reproduced-accepted",
       "commit": "8db6805974eb762921555bb27ff3273e60316c49",
-      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
       "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
     },
     {
@@ -790,7 +790,7 @@
       "accepted_before": "validation.runs:all-before-P-accepted",
       "accepted_after": "validation.runs:reproduced-accepted",
       "commit": "8db6805974eb762921555bb27ff3273e60316c49",
-      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
       "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
     },
     {
@@ -807,7 +807,7 @@
       "accepted_before": "validation.runs:all-before-P-accepted",
       "accepted_after": "validation.runs:reproduced-accepted",
       "commit": "8db6805974eb762921555bb27ff3273e60316c49",
-      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
       "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
     },
     {
@@ -825,7 +825,7 @@
       "accepted_before": "validation.runs:all-before-P-accepted",
       "accepted_after": "validation.runs:reproduced-accepted",
       "commit": "8db6805974eb762921555bb27ff3273e60316c49",
-      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
       "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
     },
     {
@@ -842,7 +842,7 @@
       "accepted_before": "validation.runs:all-before-P-accepted",
       "accepted_after": "validation.runs:reproduced-accepted",
       "commit": "8db6805974eb762921555bb27ff3273e60316c49",
-      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
       "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
     },
     {
@@ -859,7 +859,7 @@
       "accepted_before": "validation.runs:all-before-P-accepted",
       "accepted_after": "validation.runs:reproduced-accepted",
       "commit": "7601c88db3a61866c04e76263691a9aaaf8853c0",
-      "packet": "docs/development/maintenance-notify-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
       "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
     },
     {
@@ -883,7 +883,7 @@
       ],
       "root_cause": "Terminal explicit UTC Z unsupported by datetime.fromisoformat on Python3.10.",
       "repair": "Normalize terminal Z only; candidate precision/equality/state untouched.",
-      "evidence": "docs/development/full-maintenance-20261005/parent-semantic-utc-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-semantic-utc-evidence.json",
       "integration_status": "parent local source; final fixed-I checks pending"
     },
     {
@@ -895,7 +895,7 @@
       ],
       "cause": "bot.user/id不在時にauthor検査を飛ばし、foreign同一bodyをdeliveredへbindできた。",
       "change": "identity欠落ではmatchしない。authorは常に同一botであることを要求。",
-      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "source_finding": "F01",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -908,7 +908,7 @@
       ],
       "cause": "raw &<>がSlack manual mention/markupとなりlink_names Falseだけでは保護できない。",
       "change": "send/edit/remote matchの同一html escape、link_names False。lossless decodeと同一id/restart dedupe回帰。",
-      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "source_finding": "F02",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -921,7 +921,7 @@
       ],
       "cause": "ephemeral raw text/manual mentionとUTF-8/escape膨張がnative budgetを越える。",
       "change": "4000 UTF-8 bytes以内で文字単位にescapeしentity境界を維持して本人へ順次全文分割、blocksは先頭だけ。",
-      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "source_finding": "F03",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -934,7 +934,7 @@
       ],
       "cause": "link URL/labelのnative区切り・manual mention・制御文字・空hostとencoded context容量が未検証。",
       "change": "HTTPS host/whitespace/control/delimiter拒否、label/query escape、2000 context容量の最終wireを検証。",
-      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "source_finding": "F04",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -947,7 +947,7 @@
       ],
       "cause": "has_more/next_cursorを無視し一部履歴のmissを旧投稿なしとしてfresh送信許可した。",
       "change": "有界200件readの続きがあればunknown保持しno-resend。追加ページや無制限scanは導入しない。",
-      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "source_finding": "F05",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -960,7 +960,7 @@
       ],
       "cause": "Slackが保証しないremote sha256だけを要求し、runnerのsame-hash delivered prior receiptを捨てるため同一uploadが繰返される。",
       "change": "exact prior id+author+name/size+hosted/is_external False/editable False+remote hash矛盾なしを確認して同一fileをreuse。外国・外部・編集可・receiptなし・hash矛盾は再利用しない。",
-      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "source_finding": "F06",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -973,7 +973,7 @@
       ],
       "cause": "FakeThread.send None、history id毎回生成、kwargs不一致がunknownの正当な保持を誤って発生させ6baseline fail。旧backfillは500を再送期待していた。",
       "change": "stable send receipt/history/fetch/edit APIを模倣し実SDK Messageable send/history/fetch/edit id不変で裏付け。400の確定未送信backfillと500 unknown no-new-render/no-new-postを独立して強化。期待値は既存in-place rewrite契約と照合。",
-      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "source_finding": "F07",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -986,7 +986,7 @@
       ],
       "cause": "旧公開aliasの実SDK REST/WSがproxy/redirect/任意URLとambient OAuthを許し現行standalone guardを共有していなかった。",
       "change": "現在のofficial URL/no-proxy/no-redirect/closed-session/専用loggerを再利用。Slack WS sessionもguardし終了時閉じる。旧API引数・戻り値とcatch-all ackは維持。",
-      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "source_finding": "F08",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -999,7 +999,7 @@
       ],
       "cause": "real SDK webhook followupが500後5回POSTし未知結果を重複させる。",
       "change": "現在のsingle_postをinteraction.clientと同じsessionへ適用し、500後1POSTでunknownを保持。ephemeral/no-pings/handler呼出1回/署名を維持。",
-      "packet": "docs/development/maintenance-core-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "source_finding": "F09",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -1012,7 +1012,7 @@
       ],
       "cause": "revive_failed SELECT snapshot then artifact_id-only UPDATE overwrites a concurrently revived/succeeded meta and counts deleted rows.",
       "change": "WHERE artifact_id=? AND meta=?; increment cur.rowcount, preserving nightly/per-input caps and exact storage shape.",
-      "packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet4-evidence.json",
       "source_finding": "P4-F01",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -1025,7 +1025,7 @@
       ],
       "cause": "_posted_epoch truncates fractional timestamps and implicitly assigns host timezone to naive/date-only strings, permitting future/uncertain karte context.",
       "change": "stdlib aware datetime comparison preserving precision/offset; no context for missing/bad/date-only/unknown timezone. Explicit terminal Z is normalized to +00:00 for supported Python3.10; no timezone is inferred.",
-      "packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet4-evidence.json",
       "source_finding": "P4-F02",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -1038,7 +1038,7 @@
       ],
       "cause": "lm truthiness conflates valid empty current artifact with no fact source, resurrecting excluded v1 vitals.",
       "change": "Track valid source existence separately from dict content; PERIOD_CHECK_VERSION5 dirties old persisted rollups through normal maintenance.",
-      "packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet4-evidence.json",
       "source_finding": "P4-F03",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -1051,7 +1051,7 @@
       ],
       "cause": "Qualitative value prefix match labels a different whole quoted result as quote_supported (陰性ではありません/疑い/etc).",
       "change": "Require complete text value followed by optional affirmative copula and sentence delimiter/end; retain unsupported original as unverified candidate.",
-      "packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet4-evidence.json",
       "source_finding": "P4-F04",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -1064,7 +1064,7 @@
       ],
       "cause": "NaN/infinite budgets disable comparisons; invalid --stop-after enters unbounded resident path. CLI DB/start side effects precede rejection.",
       "change": "Strict finite numeric run_pending budget and early finite/nonnegative CLI stop validation before DB/lock/inference.",
-      "packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet4-evidence.json",
       "source_finding": "P4-F05",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -1077,7 +1077,7 @@
       ],
       "cause": "Arbitrary --cases content/context is sent to model; a synthetic label cannot establish wholly fictional input required by AGENTS.",
       "change": "Model path requires exact approved-case equality to existing2 repo corpora, with finite known-case count/no duplicates. Copies/subsets accepted; --mock-ok custom local validation preserved.",
-      "packet": "docs/development/maintenance-semantic-packet4-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet4-evidence.json",
       "source_finding": "P4-F06",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -1090,7 +1090,7 @@
       ],
       "cause": "最新の破損signal transitionを除外して旧openを人承認できる",
       "change": "最新key rowを先に選び、parse ValueError/TypeError/RecursionError、nonobject/nonopen、expectedartifact差分をsignal_changedで拒否。project scope先行保持。",
-      "packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet4-evidence.json",
       "source_finding": "N4-F01",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -1103,7 +1103,7 @@
       ],
       "cause": "native JSON summaryがDiscord形式固定でSlack/LWに不適切表示",
       "change": "trusted identity.transportからslack/plainを選びDiscorddefaultを維持。allowed scope/names=False不変。",
-      "packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet4-evidence.json",
       "source_finding": "N4-F02",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -1116,7 +1116,7 @@
       ],
       "cause": "READMEのprestarted判定条件がjournal完全性条件を欠く",
       "change": "scope lock＋journal完全性＋自claim存在を満たした時だけnot_sent、それ以外unknown保持をpacket3sourceへ同期。",
-      "packet": "docs/development/maintenance-notify-packet4-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet4-evidence.json",
       "source_finding": "N4-M01",
       "integration_status": "integrated; final fixed-I checks and independent review pending"
     },
@@ -1130,7 +1130,7 @@
         "mcs/views/response_observation_view.py"
       ],
       "cause": "Filtering nonempty/valid rows before latest selection resurrects old clinical state; deep persisted JSON escapes existing unknown/error paths; max_age numeric overflow and terminalZ fail on supported runtime.",
-      "packet": "docs/development/full-maintenance-20261005/parent-views-evidence.json",
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-views-evidence.json",
       "integration_status": "Own local source fixed; fixed-I checks/review pending"
     },
     {
@@ -1142,7 +1142,7 @@
       ],
       "cause": "_apply_signal_dismiss_txのSQL json_valid(content)が同keyの破損最新行を先に捨て、旧openを現在として処理する。",
       "change": "最新row→project scope→expected artifact pin→JSON object/state/evidence検証。破損はsignal_corrupt receipt、staleはsignal_changed。",
-      "packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet4-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1154,7 +1154,7 @@
       ],
       "cause": "_approved_policy/_latest_self_profile/latest_station_staffのjson_valid(content)先行filterが破損最新を捨て、古い承認閾値・自己主体・所属を復活。",
       "change": "最新kind行を先に取得しJSON/object/approvalを検証。不正は既存default policy/unknown identity、明示config優先と閾値既定は保持。",
-      "packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet4-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1167,7 +1167,7 @@
       ],
       "cause": "深い保存JSONでPython3.10はRecursionErrorを返すが、job操作/candidatesのcatchがValueError等だけでcommand receiptや候補表示を中断。3.13ではValueError系で既存catchが通り環境差が隠れる。",
       "change": "json parse/canonical hashの既存不正入力経路にRecursionErrorを加える。scan/retryは拒否receipt、pause/resumeはskipped_jobs、candidateは同kind latest seen維持で古い抽出へ戻らない。",
-      "packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet4-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1179,7 +1179,7 @@
       ],
       "cause": "CLI doctorのfake selected pythonがexit0/stdout空でruntime metadataを返さず必ず安全拒否。3.13の現SQLite3.50.4では期待1で隠れるが、3.10の安全SQLite3.53.1では本来期待0に失敗。",
       "change": "fake executableが既存_runtime_probe仕様の完全合成Python/SQLite/packages JSONを返す。returncodeのSQLite安全判定・secret非表示・合成files不変更assertionは維持。",
-      "packet": "docs/development/maintenance-core-packet4-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet4-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1191,7 +1191,7 @@
       ],
       "cause": "復元済みresumeが失効bindingを再確認しない; same activation alone granted true although writers_resumed false after equal-byte DB/report/marker inode replacement, dir move, missing marker",
       "change": "再試行時static=Falseで同じ証拠/identity照合。通常DB更新positive controlは許可、hold_all/receipt/actor/reasonとBLOCKED防止は維持。",
-      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1203,7 +1203,7 @@
       ],
       "cause": "drillのos.replaceが競合ledgerを上書き/cleanup対象にする; mark-restored then synthetic concurrent ledger was replaced and operation succeeded",
       "change": "fsync+exclusive os.link、published flag、collision時他者ledgerとhold保持。自身partial destination failure cleanupは既存試験のseamだけ変更し同じassert保持。",
-      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1215,7 +1215,7 @@
       ],
       "cause": "finite判定で巨大intがOverflowErrorを漏らす; 10**1000 in trusted timestamp or max_seconds escaped stable refusal",
       "change": "既存numeric bool/type/NaN/Inf拒否意味を局所finite helperで共有、OverflowError=False。status/plan/fresh/metricの同じ判定を整合。有効値/保存形/既定budgetは変更なし。",
-      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1227,7 +1227,7 @@
       ],
       "cause": "malformed v1 metaをrepairがstale候補0と報告; valid structural audit plus invalid artifact JSON produced zero, satisfying skip zero criterion",
       "change": "SQL JSON guardを保持し不明meta/content_hashならNone、既存valid count/dedupは維持。原snapshot bytes不変/完了偽証なし。producer _STALEは所有外handoff。",
-      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1239,7 +1239,7 @@
       ],
       "cause": "深いLoop候補JSONのRecursionErrorが拒否receiptを中断; actual minimum Python parser raised in shared receipt tx for candidate content/meta",
       "change": "decode失敗だけValueError/codeへ整合。current source/project/exact quote/hash/policy/人承認を緩めずrejected receipt1/request0/link0を実DBで確認。",
-      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1251,7 +1251,7 @@
       ],
       "cause": "壊れた承認JSONが正規旧reference baselineを隠す; corrupt latest artifact or receipt yielded RecursionError instead of verifying older real approval",
       "change": "JSON解析不可行は承認根拠にならず無視。正常baselineはexact filehash+artifact id+committed commandreceipt一致のままmatch。",
-      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1263,7 +1263,7 @@
       ],
       "cause": "review queueがminimum Pythonで起動せず型required集合も誤る; NotRequired/Required unavailable on 3.10; deferred annotations also yielded wrong runtime required/optional keys on 3.13",
       "change": "stdlib TypedDict required基底＋total=False継承。Quote契約/SourceCase5required1optional/Proposal3required6optionalを維持。実3.10 outside-repo CLIと全220synthetic export。",
-      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1275,7 +1275,7 @@
       ],
       "cause": "medicine pin deep JSONのCLI traceback; bounded local pin raised RecursionError before source open",
       "change": "existing CLI refusal handlerへRecursionErrorだけ追加。report shape/code/dryrun/local/private/source hash/medicine policyは維持、output/source writes0。",
-      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1287,7 +1287,7 @@
       ],
       "cause": "review source_time明示UTC Zが3.10で拒否; Z valid on 3.13 but actual3.10 fromisoformat rejects; +00/+09 controls pass",
       "change": "末尾Zのみ+00:00に正規化。naive/unknown TZは推定せず拒否保持、元worksheet原文日時/hashを変更しない。",
-      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1301,7 +1301,7 @@
       ],
       "cause": "3.10 fault testのNone authorizer解除が全SQLを拒否; 7 real fault tests failed after intended release, not at denial/rollback contract",
       "change": "fault期間のDENY callbackは維持しcleanupのみSQLITE_OK callableへ。minimum full related46とmodern7control成功、rollback/oldfile/receipt/inbox assertionを削除/弱化/skipしていない。",
-      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1313,7 +1313,7 @@
       ],
       "cause": "drug_map testのNotRequired importが3.10 collectionを阻害; collection error before test execution; parent views consumer imports shared DOCUMENT/_dictionary/_seed",
       "change": "required6基底+total=False source_codes optional1、実3.10 test family49 pass、fixture contents/consumer helpers/clinical candidate logic unchanged。",
-      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1325,7 +1325,7 @@
       ],
       "cause": "queue不正入力の例外境界でtraceback/私有path漏洩; deep manifest uncaught; missing manifest stderr reason included synthetic private-directory path",
       "change": "parse/IO/schema不正を理由codeへ。既知ValueError tokens/caseid/field codesは保持し、raw parser/OS exception textをqueue_input_invalidにする。stdout export0、existing queue_manifest_invalid互換保持。",
-      "packet": "docs/development/maintenance-semantic-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1337,7 +1337,7 @@
       ],
       "cause": "--out下のgenerated child symlink、preflight後の差替え、_write parentcheck後open前swap、FDopen後replace前/unlink前swap、stale p999.md symlink; Pではforeigndirectoryへ書込み/regularasset削除/foreignlink削除、または途中FileNotFoundError。生成dirname確認だけでは狭いTOCTOUを覆わない。",
       "change": "_directory_fdがroot/childを保持、childO_NOFOLLOW; _write/GC/retentionはdir_fdで原inodeへ操作。newchild0700/staging600、regular生成名に限定。明示selectedrootaliasは既存契約を保持。",
-      "packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1349,7 +1349,7 @@
       ],
       "cause": "hostTZ UTC/NY、UTC2026-01-01 15:30でJST2026-01-02 00:30; PのJSTbannerがUTC/NY値を表示、humanfacts/signals/dailyfilenameもホスト日付、retention日付interpretationもホストTZ。",
       "change": "datetime fixedUTC+09 _jst、日付名・保持日解釈もJST。",
-      "packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1361,7 +1361,7 @@
       ],
       "cause": "receive precheck後のexpire hookが receipts_out regularfile/symlink を作成; Pは新規receiptpath契約なのにatomicreplaceで競合内容/linkを上書き。receiverは既に保存済みなので失敗後再送推論不可。",
       "change": "600完成tmp→fsync→exclusive os.link publish、競合receipts_out_exists/no clobber、receiverpayload証拠保持。",
-      "packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1373,7 +1373,7 @@
       ],
       "cause": "receive --input explicit FIFO/symlinkfileまたはsymlink-to-directory root; P FIFO nativeopenは期限2sでhang、file/rootlinkは通常inputとして処理される。",
       "change": "explicit rootis_symlink拒否、各leafos.openNOFOLLOW|NONBLOCK+fstatREG、normaldirectorybulkAPIは維持。",
-      "packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1385,7 +1385,7 @@
       ],
       "cause": "10000nested JSON inmanualauth、lostackの保存ack/payload/journal; PはRecursionErrorが既存安全拒否・hold分類を中断。unknown送達・削除結果を成功/未送信と扱わない。",
       "change": "対象4catchへRecursionError追加、authunreadable/journalunreadableまたはNone/False→hold、savedbytesを変更せず。delete receiptは既にsafeで変更不要。",
-      "packet": "docs/development/maintenance-notify-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
       "integration_status": "integrated; final fixedI gates/independent review pending"
     },
     {
@@ -1402,7 +1402,7 @@
       "fix": "ELSE1、正常currenthashとtransaction/deadline/原message境界を維持。",
       "regression": "invalidmetadata4×bodystate3 + deadline4",
       "commit": "328c7ec6e7e1ca0bea29f2393762b783f583fffc",
-      "packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
       "integration_status": "integrated; final fixedI checks and independent review pending"
     },
     {
@@ -1419,7 +1419,7 @@
       "fix": "時刻成分を持つ末尾Zだけ+00:00へ正規化、naive/date/invalidは既存境界、RULE_VERSION8。",
       "regression": "Z/offset3、naive/date2、invalid6、v7matchinghash再抽出1",
       "commit": "328c7ec6e7e1ca0bea29f2393762b783f583fffc",
-      "packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
       "integration_status": "integrated; final fixedI checks and independent review pending"
     },
     {
@@ -1435,7 +1435,7 @@
       "fix": "既存>=3.11強制Hermeslane分岐でのみimport、pinassertion不変更。",
       "regression": "実3.10 beforecollectionerror+simulatedmissingstdlib newmeta、actualSDK25/17pass",
       "commit": "89d7f32628db3d66d48d96a08ea6fecb30618769",
-      "packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
       "integration_status": "integrated; final fixedI checks and independent review pending"
     },
     {
@@ -1451,7 +1451,7 @@
       "fix": "AST FunctionDef/AsyncFunctionDef名を照合、SyntaxErrorを隠さない。",
       "regression": "three decoys before3fail→pass、currentmanifest50参照は実pytest収集に存在",
       "commit": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
-      "packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
       "integration_status": "integrated; final fixedI checks and independent review pending"
     },
     {
@@ -1468,7 +1468,7 @@
       "fix": "sameASTguardを独立Slack2入口のみへ、環境秘密値読む/code変更したguard/一般adapterは依然拒否。",
       "regression": "legacybefore1fail、standalonecontrolpass、bothsecret/topSDK拒否assertion維持",
       "commit": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
-      "packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
       "integration_status": "integrated; final fixedI checks and independent review pending"
     },
     {
@@ -1482,7 +1482,7 @@
       "cause": "ast.walkはnested/ifFalse定義も存在名へ含める。sourcedoc/main/record規約は既存定義参照の整合ゲートで実行成功の証明ではない。",
       "evidence": "50 currentmanifestrefs全部が実pytestcollectionに存在。3decoyは定義自体が存在しなかった独立欠陥として修復。",
       "limit": "到達性/collection/successを一般に証明しない。今後実行保証が必要ならpytest結果をconsumerが使う。未定義を黙認する新例外はない。",
-      "packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
       "integration_status": "integrated; final fixedI checks and independent review pending"
     },
     {
@@ -1496,7 +1496,7 @@
       "source": "schema_upgrade/update-paths.json",
       "cause": "historical26は旧binary実行証明ではなくroute分類manifest。14historical origins/6distinct staticDDL shapes+current16pathsでforward/consent契約を合成検証。",
       "evidence": "origins.json fullread、originalcolumns/allrows/FK/FTS/hash tests、test names explicitlyclassify。",
-      "packet": "docs/development/maintenance-core-packet5-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
       "integration_status": "integrated; final fixedI checks and independent review pending"
     },
     {
@@ -1504,7 +1504,7 @@
       "status": "FIXED",
       "cause": "RecursionError on saved summary content/meta, source payload or degraded source progress escaped three existing JSON exception boundaries; interrupted safe exclusion/stale/freeze decisions.",
       "change": "Catch RecursionError only alongside JSONDecodeError/TypeError in three JSON loads scopes; newest corrupt summary stays ineligible, no fallback to older generation, no data rewrite.",
-      "packet": "docs/development/full-maintenance-20261005/parent-semantic-send-gate-evidence.json",
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-semantic-send-gate-evidence.json",
       "integration_status": "integrated; final fixedI checks/independent review pending"
     },
     {
@@ -1528,7 +1528,7 @@
       "local_patch": null,
       "parent_followup": "親から同一文言のREADME1文修正実装済みと受領。親I commit/最終検証は別receipt。P/W正文は変更せず固定。",
       "status": "FIXED",
-      "packet": "docs/development/maintenance-core-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet6-evidence.json",
       "integration_status": "parent fix fb488c8 or notify refs fix15c8c04 integrated; final I checks pending"
     },
     {
@@ -1549,7 +1549,7 @@
       "local_patch": null,
       "parent_followup": "既知のrefs URL移動fix所有へ共有、重複編集なし。P失敗を親I成功へ読み替えない。",
       "status": "FIXED",
-      "packet": "docs/development/maintenance-core-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet6-evidence.json",
       "integration_status": "parent fix fb488c8 or notify refs fix15c8c04 integrated; final I checks pending"
     },
     {
@@ -1557,28 +1557,28 @@
       "state": "disproved",
       "reason": "旧5分/夜20分/15分は日付付き版履歴で、現在guide10分・CRON_JOBS */10/deep10,40/healthdefault600と時点分離。旧値を現設定として一括置換不要。",
       "status": "DISPROVED",
-      "packet": "docs/development/maintenance-core-packet6-evidence.json"
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet6-evidence.json"
     },
     {
       "id": "CORE6-RELEASE-GEN8",
       "state": "disproved",
       "reason": "1.0.13のrule6→7記録と現RULE_VERSION8の差は後続未compilefragmentで記録済。releaseprep/build/versionbumpは今回未承認。現在READMEmain説明とrelease記録を区別。",
       "status": "DISPROVED",
-      "packet": "docs/development/maintenance-core-packet6-evidence.json"
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet6-evidence.json"
     },
     {
       "id": "CORE6-UMASK-PROMISE",
       "state": "disproved",
       "reason": "CHANGELOG/READMEはresidenttemplate Umask077と定期generatedplist未対応を明示。_cron_plist/standalone serviceにUmaskなしというPと矛盾しない。",
       "status": "DISPROVED",
-      "packet": "docs/development/maintenance-core-packet6-evidence.json"
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet6-evidence.json"
     },
     {
       "id": "CORE6-SYNTHETIC-IS-LIVE",
       "state": "disproved",
       "reason": "currentguide/security/changelog/briefすべて合成/SDK型/実API/人ラベル/部署受入を分離。本文中のhistoricalPASSを全域v7受入に計上しない。",
       "status": "DISPROVED",
-      "packet": "docs/development/maintenance-core-packet6-evidence.json"
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet6-evidence.json"
     },
     {
       "id": "SEM-P6-F01",
@@ -1609,7 +1609,7 @@
         ]
       },
       "owner": "maintenance_semantic packet6",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
     },
     {
@@ -1641,7 +1641,7 @@
         ]
       },
       "owner": "maintenance_semantic packet6",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
     },
     {
@@ -1673,7 +1673,7 @@
         ]
       },
       "owner": "maintenance_semantic packet6",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
     },
     {
@@ -1704,7 +1704,7 @@
         ]
       },
       "owner": "maintenance_semantic packet6",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
     },
     {
@@ -1737,7 +1737,7 @@
         ]
       },
       "owner": "maintenance_semantic packet6",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
     },
     {
@@ -1769,7 +1769,7 @@
         ]
       },
       "owner": "maintenance_semantic packet6",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
     },
     {
@@ -1801,7 +1801,7 @@
         ]
       },
       "owner": "maintenance_semantic packet6",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
     },
     {
@@ -1812,7 +1812,7 @@
         "docs/assets/runtime-topology.svg"
       ],
       "evidence": "mcs/ops/mcs_setup.py:2390-2422 CRON_JOBS全文範囲、P→W SVG差分。static正本、PNG pairなし。",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
     },
     {
@@ -1824,7 +1824,7 @@
         "docs/screenshots/discord-thread.svg"
       ],
       "evidence": "合成static canonical sourceと通知receipt/unknown契約。PNG pairなし、native/browser renderは未実行。",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
     },
     {
@@ -1838,7 +1838,7 @@
         "tests/release/test_release_notes.py"
       ],
       "decision": "既存手順はgit diffでCHANGELOG/README/残fragment/archiveを照合して手動復旧と明示。validateで中断する異常入力を既存testで確認し、無関係なtransaction追加をしない。任意IO完全atomic性・途中IO実fault injectionは未検証。",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
     },
     {
@@ -1851,7 +1851,7 @@
         "mcs/semantic/semantic_bench.py:148-173"
       ],
       "decision": "本driverはoperatorが--casesを指定する完全合成CLI契約で、実DBを既定で凍結するpacket3入口と異なる。任意合成fixture/保存形を保持。実データ/匿名化は本auditでは禁止。",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
     },
     {
@@ -1860,7 +1860,7 @@
       "title": "readme_release -Iでsibling importが消える",
       "evidence": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-readme_release.py.log",
       "decision": "通常Python CLIはscript dirをsys.pathに含む。-Iはそれを除去する通常CLI外条件、parent判断受入済み。正式CLIをenv-i/PYTHONPATHなし/-S/repo外cwdでboth runtime起動、追加runpy bindingsでarchive内source束縛を確認。不要bootstrapなし。",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
     },
     {
@@ -1871,7 +1871,7 @@
       "sha256_P": "e40278900656f54f28c45a1e704ba917fdd037a65517cdf18f5ed0b128d22575",
       "child_result": "P/Wのcheck exit1を保持しvalidatorを弱めない。今回fragment含むその他はindividual validator成功。",
       "parent_report": "notify3e1824c→親15c8c04で修復済み、親Iでrelease_notes/readme checks正常と連絡。child固定P/Wで再検証した結果ではない。",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
     },
     {
@@ -1881,7 +1881,7 @@
       "child_result": "親正本は未編集。isolated archiveで再生成するとcount1行だけ、README unchanged、その後both-runtime bootstrap success。",
       "patch": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-generated.diff",
       "parent_report": "親I追加他owner testを含め256filesへ再生成しb3140f4へ記録と連絡。",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
     },
     {
@@ -1889,7 +1889,7 @@
       "status": "SAFETY_LIMITATION",
       "title": "実MCS/原本DB/token-cache/LLM/Jev/Keychain/外部API/実送信/配備/native renderer",
       "decision": "明示禁止、全fixtureは完全合成。SDK/実認証/transport/browserアプリ/productionの検証をlocal passから推測しない。最終I全体統合とfresh独立レビューはparent owner。",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
     },
     {
@@ -1897,7 +1897,7 @@
       "status": "FIXED",
       "title": "semantic_send_gate deep corrupt JSON predicate疑義",
       "decision": "packet6完了時にparentが所有者を分けて合成確認へ投入。packet6所有外で未編集・未確認、全域未完了を維持。",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending",
       "parent_resolution": "fb488c8/84b23db; parent-semantic-send-gate-evidence.json deepJSON6before-fail/both-runtime56after-pass"
     },
@@ -1906,7 +1906,7 @@
       "status": "REVIEWED",
       "title": "CHANGELOG全3492行を現在fragmentから再生成できるか",
       "decision": "buildは既存header/historyを保持し新sectionを挿入。RELEASE_NOTES95-103にv1.0.0〜1.0.8を2026-10-01人手再編集し旧原本をarchive保存と記載。checkはformat/source同期を検査し過去本文の事実を再検証しない。rootCHANGELOGはparent readonly、全文reviewを本packetに算入しない。",
-      "packet": "docs/development/maintenance-semantic-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
       "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending",
       "parent_resolution": "core6全3492行manualhistory全文/140観点受入7c90b16/a525f96"
     },
@@ -1940,7 +1940,7 @@
         "verification_owner": "parent",
         "fixed_P_W_original_unchanged": true
       },
-      "packet": "docs/development/maintenance-core-docs7-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json",
       "parent_fix_commit": "d836818",
       "parent_verification": "P本文を1回byte置換した結果とcurrent Iが完全一致。対象currentpath実在、historicalbody保持。"
     },
@@ -1958,7 +1958,7 @@
         "mcs/semantic/semantic_qc.py:23-31"
       ],
       "counterexample": "固定Pはunread*/10/deep10,40、health600、QC60日。記録は当時値、MCS取得10分はサーバー負荷対策で新usercontract、LLMtimeout/circuit300秒とは異なる。",
-      "packet": "docs/development/maintenance-core-docs7-evidence.json"
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json"
     },
     {
       "id": "CORE-DOCS7-INTERIM-HANDOFF-GAPS",
@@ -1969,7 +1969,7 @@
         "stability-1.0.13-20261004.md:349-373"
       ],
       "counterexample": "同file末尾の2026-10-05追記がlocal完了、実機/人手/相手repo条件は未完と明示。interimstatusを現在source未実装へ流用不可。",
-      "packet": "docs/development/maintenance-core-docs7-evidence.json"
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json"
     },
     {
       "id": "CORE-DOCS7-STANDALONE-CALENDAR-CURRENT",
@@ -1981,7 +1981,7 @@
         "mcs_standalone/runtime.py:39-54,118-135"
       ],
       "counterexample": "原本は統合前履歴でcurrentguideへ誘導。現在Runtime configured_cron_jobs経路を確認、旧案の保全が正しい。",
-      "packet": "docs/development/maintenance-core-docs7-evidence.json"
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json"
     },
     {
       "id": "CORE-DOCS7-ALL-HISTORICAL-PASS-FRESH",
@@ -1994,7 +1994,7 @@
         "refactor-revalidation.md:39-40,256-293"
       ],
       "counterexample": "各tree/hash/candidate/skip/runtimeが異なり、main元baseline6780passも全域全文review証明ではない。今回static150/Mine成功のみ新証拠。",
-      "packet": "docs/development/maintenance-core-docs7-evidence.json"
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json"
     },
     {
       "id": "CORE-DOCS7-OLD-DESTRUCTIVE-UPDATE-RECIPE",
@@ -2006,7 +2006,7 @@
         "deployment/recovery/mcs_recover.py:905-975"
       ],
       "counterexample": "冒頭で明示撤回/非current、実sourceは専用restoreconsent/loss/hash・private staging/checkpoint/sidecar拒否。historical commandsは未実行。",
-      "packet": "docs/development/maintenance-core-docs7-evidence.json"
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json"
     },
     {
       "id": "CORE-DOCS7-LOCAL-RELATIVE-LINKS-BROKEN",
@@ -2014,7 +2014,7 @@
       "hypothesis": "対象20記録の実Markdown相対targetリンクが失われている",
       "counterexample": "固定Pで28実Markdown相対target全てtrackedに存在。code記法の旧path/oldGitobjectsはhistoryとして別分類。",
       "receipt": "/tmp/mcs-maintenance-core-docs7-20261005/static-receipt.json",
-      "packet": "docs/development/maintenance-core-docs7-evidence.json"
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json"
     },
     {
       "id": "N6-01",
@@ -2029,7 +2029,7 @@
       "before": "正式release_notes.validate全180→179valid/1reject、refs external URL",
       "repair": "sourcepathrefsだけにし公式URLはdetailsへ保持。runtime/C1/notify契約変更なし。",
       "evidence": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet6-20261005/fragment-schema-P.json",
-      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
     },
     {
@@ -2047,7 +2047,7 @@
       "before": "PHI節が/1限定を明記せずbody一律禁止と記述し、同文書explicitC1 paragraphと実consumerのrootbody_text例外に矛盾。",
       "repair": "default/1禁止と明示C1pairedmessage_bodyのrootbody_textだけ許可を分け、PHIになり得ること/人許可・byte/hash・残るfield禁止・retention/withdrawを明記。",
       "basis": "packet5 617syntheticfamily+sameSHA全文contract; packet6 sections65–155/210–272 actualread。runtime変更なし。",
-      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
     },
     {
@@ -2067,7 +2067,7 @@
       "before": "旧『SHAが返らなければ再upload』説明がsealedprior immutablehosted contractを否定。partialpagination/latesthumanauthority/currentgeneration条件が明示されない。",
       "repair": "現delivery._file_remote_match/_replies、samehash prior seal、人承認receiptcurrentauthority/legacytoken、semanticgeneration gateを補記。runtime追加/既存allowlist緩和なし。",
       "basis": "同SHA priorpacket4全読再利用＋今回README382行再読、ownedruntimeはreadonly関数ranges、coreから受領の既存合成test IDsに照合。",
-      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
     },
     {
@@ -2084,7 +2084,7 @@
         "adapters/lineworks/client.py:_silent_content"
       ],
       "state": "CONFIRMED_FIXED",
-      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
     },
     {
@@ -2099,7 +2099,7 @@
         "docs/guides/SETUP_AGENT.md:Phase6"
       ],
       "state": "CONFIRMED_FIXED",
-      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
     },
     {
@@ -2115,7 +2115,7 @@
         "docs/guides/USER_GUIDE.md:423"
       ],
       "state": "CONFIRMED_FIXED",
-      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
     },
     {
@@ -2131,7 +2131,7 @@
         "docs/guides/BACKUP.md:9"
       ],
       "state": "CONFIRMED_FIXED",
-      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
     },
     {
@@ -2148,7 +2148,7 @@
         "changes/archive/1.0.13/20261004-receipt-contract.json"
       ],
       "state": "CONFIRMED_FIXED",
-      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
     },
     {
@@ -2165,7 +2165,7 @@
         "owner:/root/maintenance_semantic"
       ],
       "state": "CONFIRMED_FIXED",
-      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
     },
     {
@@ -2180,7 +2180,7 @@
       ],
       "runtime_modified": false,
       "state": "CONFIRMED_FIXED",
-      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
     },
     {
@@ -2194,7 +2194,7 @@
       "issue": "現在操作手順と明示したprefaceのdocs/DEVELOPMENT.mdがfixedPでは不存在。history本文の古いpathとは別。",
       "resolution": "core docs7にて合成静的counterexampleを確認。親が別Iでpreface1行をdocs/development/DEVELOPMENT.mdへ修復と報告。sourceW d0dac97では原本を変えず、親I receiptは親owner。",
       "receipt": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-docs7-20261005/docs/development/maintenance-core-docs7-evidence.json",
-      "packet": "docs/development/maintenance-notify-packet6-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending.",
       "current_disposition": "RESOLVED_PARENT_DELTA"
     },
@@ -2204,7 +2204,7 @@
       "cause": "card/post helperのprefixがMCSでユーザー指定のスタンプ表示でない。",
       "fix": "shared card_reaction_lines/stamp_lineのprefixとempty/unfetched表示を統一。",
       "regression": "3platform rendered footer+body actual worker methods / snapshot evidence controls。",
-      "packet": "docs/development/maintenance-stamps-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-stamps-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
     },
     {
@@ -2213,7 +2213,7 @@
       "cause": "actor_lineが未取得でNone、自分は氏名を消して自分だけ、stale/failedが日付のみ、長氏名/制御文字は無上限。",
       "fix": "kind別氏名、実名+自分、未取得/失敗/古い情報とcomplete_at観測時点、12/40/20文字上限とsilent inline化。",
       "regression": "6状態+kind/self/unknown+longnames/MAXactors+partial保持。",
-      "packet": "docs/development/maintenance-stamps-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-stamps-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
     },
     {
@@ -2222,14 +2222,14 @@
       "cause": "actor-only changeがcontent_fpに入らずqueued/delivered bodyが更新されない。named prior postがpage外になると新body planに入らない。",
       "fix": "表示actor hashをpresentation_fpへ追加、既配送named memberをbody planへ再投入しprior_remote_idを維持。",
       "regression": "実dispatch/grant/validated transport/part receipts、queued/delivered/unknowncontrol、page外post、source identity/human ack。",
-      "packet": "docs/development/maintenance-stamps-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-stamps-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
     },
     {
       "id": "DEFAULT-01",
       "status": "DISPROVED_CHANGE_NEEDED",
       "evidence": "名前到達は既存metadata_shadow=True AND metadata_actors=True。どちらも既定off。表示依頼に取得既定変更は含めず親が有効化条件を文書化。",
-      "packet": "docs/development/maintenance-stamps-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-stamps-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending.",
       "current_disposition": "DISPROVED"
     },
@@ -2237,7 +2237,7 @@
       "id": "LEGACY-01",
       "status": "MAINTAINED_COMPATIBILITY_LIMIT",
       "evidence": "旧unnamed legacy bodyは既存frozen経路。named partsのupdateを証明し、旧postのリライトや重複再送を勝手に開始しない。本文表示操作はcurrent viewを読む。",
-      "packet": "docs/development/maintenance-stamps-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-stamps-evidence.json",
       "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending.",
       "current_disposition": "MAINTAINED_COMPATIBILITY_BOUNDARY"
     },
@@ -2245,10 +2245,10 @@
       "id": "DRUGMAP-READONLY",
       "status": "CONFIRMED_FIXED",
       "evidence": "notify ownerからload/current_refs JSON RecursionError未捕捉候補を受領。fixed docPと現在Iは未照合、stamp所有外なので確定扱いせず親/coreへ移管。",
-      "packet": "docs/development/maintenance-stamps-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-stamps-evidence.json",
       "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending.",
       "current_disposition": "RESOLVED_BY_DRUG_JSON_F01_TO_F04",
-      "resolution_packet": "docs/development/maintenance-drug-json-evidence.json",
+      "resolution_packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-drug-json-evidence.json",
       "resolution_source_commit": "37da210"
     },
     {
@@ -2259,7 +2259,7 @@
       "fix": "except tupleへRecursionError追加→ValueError(drug_map_json)→invalid_dictionary/status invalid。",
       "before": "dictionary load1 + pipeline tick1, both runtimes FAIL",
       "validation": "実decoder error; empty synthetic Ledger dump不変; path無し。通常invalid設定の旧med_ref retirementは維持。",
-      "packet": "docs/development/maintenance-drug-json-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-drug-json-evidence.json",
       "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending."
     },
     {
@@ -2270,7 +2270,7 @@
       "fix": "既存安全[] except tupleへRecursionError追加。",
       "before": "read content/meta2 + stats/rollup/export content/meta2, both runtimes FAIL",
       "validation": "valid resolved control→honest unavailable、action/name統計不変、source薬剤保持、候補値/ID非表示、全dump/total_changes不変。",
-      "packet": "docs/development/maintenance-drug-json-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-drug-json-evidence.json",
       "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending."
     },
     {
@@ -2281,7 +2281,7 @@
       "fix": "refsはRecursionErrorで[]、deriveはsource=None→既存med_ref-only retirement/pids/idempotence。",
       "before": "3.10追加2FAIL / 3.13 native2PASS control",
       "validation": "read全DB不変、derive原文/source不変・古いrefsだけ除去、pids=[1]、再実行done0。stdlib sweepは3.10 depth995–999 SQL1/RecursionError、depth10000 SQL0。",
-      "packet": "docs/development/maintenance-drug-json-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-drug-json-evidence.json",
       "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending."
     },
     {
@@ -2292,7 +2292,7 @@
       "fix": "2つの既存except tupleへRecursionError追加。既存empty facts/None replyを利用。",
       "before": "3.10 v1/llm/canonical3 + shadowed reply1 FAIL / 3.13 native4PASS",
       "validation": "全dump/total_changes不変、valid vitals/done保持、破損根拠からvitals/done無し。最初のscope外probeは親追加所有後に解消。",
-      "packet": "docs/development/maintenance-drug-json-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-drug-json-evidence.json",
       "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending."
     },
     {
@@ -2303,7 +2303,7 @@
       "fix": "Canonical fragment and stamp guide now name Slack/Discord edit versus LINE WORKS replacement and token retirement.",
       "validation": "Fresh reviewer independent live-free real-method probe, canonical API tables, docs/source and exact 2-document patch reviewed.",
       "source": "changes/20261005-stamp-actors-display.json",
-      "review_packet": "docs/development/full-maintenance-20261005/parent-stamp-ui-evidence.json"
+      "review_packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-stamp-ui-evidence.json"
     },
     {
       "id": "FINAL-CRITERION-TRACE-01",
@@ -2321,7 +2321,7 @@
       "cause": "PがSQLite_CORRUPT/NOTADBを無条件に参照。Python3.10 native exceptionにsqlite_errorcodeがなくmodule constantsもない。",
       "fix": "code=Noneかつtype(error) is sqlite3.DatabaseErrorのみ一般unreadable。code付きはgetattrでmodern既存code判定。OperationalError/IntegrityError/unknown subclassはunknown、予算優先。",
       "meaning_limit": "legacy exact DatabaseErrorは一般読取不能のfailclosed分類であり、厳密な破損code判定の証明ではない。",
-      "packet": "docs/development/maintenance-ledger-audit-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-ledger-audit-evidence.json",
       "before": {
         "native310": {
           "fail": 1
@@ -2518,14 +2518,14 @@
       "status": "DISPROVED_PRODUCT_FIX_NEEDED",
       "cause": "External full-suite harness --basetemp placed the synthetic Hermes stub outside the canonical temporary HOME/TMP allowed by the existing sandbox.",
       "resolution": "Only external harness removes --basetemp. Product, test fixture, tests/conftest guard and runner remain unchanged. Canonical controls each5pass and corresponding gateway nodes pass in both final full attempts.",
-      "evidence_packet": "docs/development/maintenance-ledger-audit-evidence.json",
+      "evidence_packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-ledger-audit-evidence.json",
       "external_helper_sha256": "5f302c2ab57a9d435f6fc21b549e2fd683d451a393269c31e4c14507ab58bbef"
     }
   ],
   "deferred": [],
   "integration": [
     {
-      "packet": "docs/development/maintenance-semantic-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-evidence.json",
       "P": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "worker_behavior": "acc15e946f3a7a4e8a2f1e282a9d5af227bf6e43",
       "integrated_behavior": "cb118fd",
@@ -2533,7 +2533,7 @@
       "tests": "worker-local evidence retained; unchanged checks reused; final I validation pending"
     },
     {
-      "packet": "docs/development/maintenance-notify-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
       "P": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "worker_behavior": "bd62135162a5ff556c4129e6d25312fe821b7c13",
       "integrated_behavior": "882ae43",
@@ -2541,7 +2541,7 @@
       "tests": "worker-local evidence retained; unchanged checks reused; final I validation pending"
     },
     {
-      "packet": "docs/development/maintenance-core-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "P": "4167697cf19a11a2b8cac3d076907450a5ff8654",
       "worker_behavior": "12a7dabc",
       "integrated_behavior": "c825663",
@@ -2549,7 +2549,7 @@
       "tests": "541 worker-local checks retained; final I validation pending"
     },
     {
-      "packet": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "P": "1ed5b0495cd0e34c9993740928395bf411e3bcf9",
       "worker_behavior": "aedf7ac",
       "integrated_behavior": "9e92cfe",
@@ -2557,26 +2557,26 @@
       "tests": "828 semantic passed, Ruff passed; final I pending"
     },
     {
-      "packet": "docs/development/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-lifecycle-evidence.json",
       "integrated_behavior": "c97df9f",
       "tests": "408 lifecycle, 109 watchdog/consent, 170 updater/reaping; 197 unchanged cadence-family checks and 8 changed follow-up pass; final I pending"
     },
     {
-      "packet": "docs/development/maintenance-core-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "P": "999944434eaad4bdf0000b67f654a421df0ffdbe",
       "worker_behavior": "0da054fee754edb25f272a6660c0518a85dda4de",
       "source_hashes_match": true,
       "tests": "Worker-local evidence retained; final fixed-I validation and independent review pending"
     },
     {
-      "packet": "docs/development/maintenance-notify-packet2-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
       "P": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
       "worker_behavior": "872747183be090367d6890f1c22ca2d64bcdf5ae",
       "source_hashes_match": true,
       "tests": "Worker-local evidence retained; final fixed-I validation and independent review pending"
     },
     {
-      "packet": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "P": "755f4c779ebf280ba856ca7c600f0525fbd82076",
       "worker_behavior": "e58119363a940acb1e119d4ae117bf0301167176",
       "integrated_behavior": "4d97c28",
@@ -2966,7 +2966,7 @@
       "all1000_delivered_exactly_once_and_message_id_bound": true,
       "scope": "Root-owned competing test jobs ended; other host workloads not stopped. Observed alone-run success does not prove parallel load as sole cause or production throughput."
     },
-    "ledger_formal_packet": "docs/development/maintenance-ledger-audit-evidence.json",
+    "ledger_formal_packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-ledger-audit-evidence.json",
     "ledger_evidence_W": "6ee0866aedd52fd63d773840068a5536ebbcf26d",
     "historical_failure_preservation": "Initial fa9385c full 3.13=7376pass/5fail/8skip;3.10=7375pass/6fail/8skip, not overwritten. Five shared failures caused by external basetemp incompatibility; one extra3.10 failure is fixed ledger exception compatibility. No fixture/assertion/guard weakening.",
     "final_result_authority": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-1cf0505/final-acceptance.json",

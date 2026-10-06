@@ -2860,7 +2860,7 @@
       "patch_sha256": "0ec489c8108ecab472388889bf16545c22d5cac9883ad9f0d271aaa97eb1e7d3",
       "patch_bytes": 13665
     },
-    "evidence_path": "docs/development/maintenance-semantic-packet2-evidence.json"
+    "evidence_path": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json"
   },
   "constraints": [
     "Dedicated one-writer branch; no child spawn.",

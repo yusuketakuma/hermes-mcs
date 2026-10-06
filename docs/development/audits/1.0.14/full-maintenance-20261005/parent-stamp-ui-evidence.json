@@ -2,7 +2,7 @@
   "schema": "parent-stamp-ui-delta/v1",
   "input": "5715e7c87311d8ac37cc03e6ed5651506ca63baa",
   "source_report": {
-    "path": "docs/development/maintenance-stamps-evidence.json",
+    "path": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-stamps-evidence.json",
     "sha256": "0611a836a0bf65c9a572105b61c2d4a930d4e66c9289719e1f86c2837c5e002a",
     "worker_P": "22ebd08240976051edb9bfeb7f7afc6c42fa6280",
     "worker_W": "50a661b513bf4f58cd0242e29aef4b31b2abf856"

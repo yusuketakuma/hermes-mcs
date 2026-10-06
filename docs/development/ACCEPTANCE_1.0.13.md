@@ -5,7 +5,7 @@
 
 ## 全体監査とソース同一性
 
-全体監査は `docs/development/full-maintenance-20261005/{PLAN.md,inventory.json,findings.json}`。
+全体監査は `docs/development/audits/1.0.14/full-maintenance-20261005/{PLAN.md,inventory.json,findings.json}`。
 最終受入正本は `/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-1cf0505/final-acceptance.json`（SHA256 `b7781cb0776303f861c7f77f1f2b0007b1bf708d198268e7432020a4d807d230`）。
 状態COMPLETE、runtime I=`1cf0505eb5c9155d19afa3e3ba218f2640096d20`、record H=`3b58ba78827f8871edc71baaa1749a29311d3ba7`。
 統合HEADとHのtree差分ゼロを親が確認した。今回の差分はrelease資産だけで実行ソース・test・依存を変更しない。

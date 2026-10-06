@@ -24,7 +24,7 @@
       "openwiki/INSTRUCTIONS.md"
     ],
     "write_owner": [
-      "docs/development/maintenance-core-packet6-evidence.json"
+      "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet6-evidence.json"
     ],
     "readonly_consumer_sources": true,
     "outside_owner_edits": 0,
@@ -709,7 +709,7 @@
               174
             ]
           ],
-          "packet": "docs/development/maintenance-notify-evidence.json"
+          "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json"
         }
       ]
     },
@@ -2632,7 +2632,7 @@
   ],
   "source_review_reuse": {
     "mcs/core/ledger.py": {
-      "evidence": "docs/development/maintenance-core-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "evidence_sha256": "b28067227e6db44217653e7b9b1fe9515f4420c273fd42a0160dbfe07c77a092",
       "source_sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
       "state": "REVIEWED",
@@ -2683,7 +2683,7 @@
       ]
     },
     "mcs/core/bounded_http.py": {
-      "evidence": "docs/development/maintenance-core-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "evidence_sha256": "b28067227e6db44217653e7b9b1fe9515f4420c273fd42a0160dbfe07c77a092",
       "source_sha256": "abf4a9613b99b9a09ec75557ff0cd7fdb46a9a998d5f2bd010397ae74f2d130b",
       "state": "REVIEWED",
@@ -2701,7 +2701,7 @@
       ]
     },
     "mcs/core/local_llm.py": {
-      "evidence": "docs/development/maintenance-core-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
       "evidence_sha256": "b28067227e6db44217653e7b9b1fe9515f4420c273fd42a0160dbfe07c77a092",
       "source_sha256": "843fc041e37fb41a8cb452932637e75e04c4f323c1c8928eae2965465bae5917",
       "state": "REVIEWED",
@@ -2724,7 +2724,7 @@
       ]
     },
     "mcs/ingest/run_check.py": {
-      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "evidence_sha256": "b22532f3158c9dfe544aa5675c136623ba810c790a256b01eae6e24ba55d67ec",
       "source_sha256": "915d6784befb59fcfffae019020dac59c92fa272571dfc325c36585b283ef00d",
       "state": "REVIEWED",
@@ -2775,7 +2775,7 @@
       ]
     },
     "mcs/ingest/job_ops.py": {
-      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "evidence_sha256": "b22532f3158c9dfe544aa5675c136623ba810c790a256b01eae6e24ba55d67ec",
       "source_sha256": "d5b64a681b8b43a7f08decf4adddcf075465c94da1cfadcc3d515b98f2fea12f",
       "state": "REVIEWED",
@@ -2805,7 +2805,7 @@
       ]
     },
     "mcs/ingest/mcs_adapter.py": {
-      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "evidence_sha256": "b22532f3158c9dfe544aa5675c136623ba810c790a256b01eae6e24ba55d67ec",
       "source_sha256": "c3be0fa89a12ccc357273913c53d6c779ac391debfc4b7e179979ad694ca444d",
       "state": "REVIEWED",
@@ -2849,7 +2849,7 @@
       ]
     },
     "mcs/ingest/health_watch.py": {
-      "evidence": "docs/development/maintenance-core-packet2-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
       "evidence_sha256": "b22532f3158c9dfe544aa5675c136623ba810c790a256b01eae6e24ba55d67ec",
       "source_sha256": "981b5ab0e68ccf49bcce05e2814b1e2702408520f369ae9f43d2bc44f1050e65",
       "state": "REVIEWED",
@@ -2875,7 +2875,7 @@
       ]
     },
     "adapters/slack/actions.py": {
-      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "evidence_sha256": "2e10db192af9b7f55d95876593e65f7a5c7228a6a6bbd7ba70635c909f8129c6",
       "source_sha256": "ecd490dd85d591c2b9189fe33a3a70453a8fcb3072fa6eef1db544ab060d417b",
       "state": "REVIEWED",
@@ -2891,7 +2891,7 @@
       ]
     },
     "adapters/slack/delivery.py": {
-      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "evidence_sha256": "2e10db192af9b7f55d95876593e65f7a5c7228a6a6bbd7ba70635c909f8129c6",
       "source_sha256": "3129b7fc6753f4b83bbc2965daced330daf68b77c9d9661b621f379027245b8b",
       "state": "REVIEWED",
@@ -2907,7 +2907,7 @@
       ]
     },
     "adapters/slack/runtime_compat.py": {
-      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "evidence_sha256": "2e10db192af9b7f55d95876593e65f7a5c7228a6a6bbd7ba70635c909f8129c6",
       "source_sha256": "cfdb6b6c57ffcf5dc1587f83b06e3104581f082ff9a10503ff6ea296d19c749d",
       "state": "REVIEWED",
@@ -2924,7 +2924,7 @@
       ]
     },
     "adapters/discord/standalone.py": {
-      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "evidence_sha256": "2e10db192af9b7f55d95876593e65f7a5c7228a6a6bbd7ba70635c909f8129c6",
       "source_sha256": "d51ee1d292ab6dff21b4d3dc425afc2b7038e2f07cda7c9b72c50c13fe21fb46",
       "state": "REVIEWED",
@@ -2942,7 +2942,7 @@
       ]
     },
     "adapters/discord/runtime_compat.py": {
-      "evidence": "docs/development/maintenance-core-packet3-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
       "evidence_sha256": "2e10db192af9b7f55d95876593e65f7a5c7228a6a6bbd7ba70635c909f8129c6",
       "source_sha256": "ba8ca159e89c3ceb85d558bd253aefeda3d627a47fab244c9b1bd650f671054c",
       "state": "REVIEWED",
@@ -2959,7 +2959,7 @@
       ]
     },
     "mcs/ops/mcs_operations.py": {
-      "evidence": "docs/development/maintenance-core-packet4-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet4-evidence.json",
       "evidence_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a",
       "source_sha256": "49e4776bbb432ef62336d2465db60416724c18c598c2e6bb64e6346afccf2e0b",
       "state": "REVIEWED",
@@ -2986,7 +2986,7 @@
       ]
     },
     "mcs/ops/mcs_requests.py": {
-      "evidence": "docs/development/maintenance-core-packet4-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet4-evidence.json",
       "evidence_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a",
       "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d",
       "state": "REVIEWED",
@@ -3006,7 +3006,7 @@
       ]
     },
     "mcs/ops/mcs_signals.py": {
-      "evidence": "docs/development/maintenance-core-packet4-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet4-evidence.json",
       "evidence_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a",
       "source_sha256": "e28cc9450f05cd45f97d5b22576704d544675b154c12e53379f7d6e4821d2269",
       "state": "REVIEWED",
@@ -3042,7 +3042,7 @@
       ]
     },
     "mcs/ops/c1_contract.py": {
-      "evidence": "docs/development/maintenance-core-packet4-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet4-evidence.json",
       "evidence_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a",
       "source_sha256": "7bf70b5a580d189ab6560e837be544bc0b75ab18b922c21963167d25b07308f3",
       "state": "REVIEWED",
@@ -3061,7 +3061,7 @@
       ]
     },
     "mcs/ops/c1_envelopes.py": {
-      "evidence": "docs/development/maintenance-core-packet4-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet4-evidence.json",
       "evidence_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a",
       "source_sha256": "da302fe72935dc9a1ef79e1deabe98e8eb5f4ee9cf4df5aa17acc18a5b62f7ae",
       "state": "REVIEWED",
@@ -3079,7 +3079,7 @@
       ]
     },
     "mcs/ops/c1_records.py": {
-      "evidence": "docs/development/maintenance-core-packet4-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet4-evidence.json",
       "evidence_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a",
       "source_sha256": "21a4c2608152bd98016b2f227fa37ae410ae8687a154db7db0d31f2c1547d422",
       "state": "REVIEWED",
@@ -3097,7 +3097,7 @@
       ]
     },
     "mcs/ops/c1_receiver.py": {
-      "evidence": "docs/development/maintenance-core-packet4-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet4-evidence.json",
       "evidence_sha256": "7b81a70bbc258445bb12b84962744e98091c52ffa4047d13419015cba586479a",
       "source_sha256": "df7844bacd994e854bcf8cfa71c7f3acff0f20b12801e48bc31d00129a7c0163",
       "state": "REVIEWED",
@@ -3119,7 +3119,7 @@
       ]
     },
     "mcs/extract/v1/extract.py": {
-      "evidence": "docs/development/maintenance-core-packet5-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
       "evidence_sha256": "e84cc7e89161839cfeca3391614a634100907834ca4e820b0c900e5367aeae4c",
       "source_sha256": "804ea91fe97aea21f251e0605dcb6767fd741a6472a7b6ce88c4e9143bdc5d85",
       "state": "REVIEWED",
@@ -3143,7 +3143,7 @@
       ]
     },
     "ci/gates.py": {
-      "evidence": "docs/development/maintenance-core-packet5-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
       "evidence_sha256": "e84cc7e89161839cfeca3391614a634100907834ca4e820b0c900e5367aeae4c",
       "source_sha256": "b255b35e2affe4566ddfe75ebda6322523c97b2e00bb08686cede06ced5dea2c",
       "state": "REVIEWED",
@@ -3166,7 +3166,7 @@
       ]
     },
     "ci/mine_gates.py": {
-      "evidence": "docs/development/maintenance-core-packet5-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
       "evidence_sha256": "e84cc7e89161839cfeca3391614a634100907834ca4e820b0c900e5367aeae4c",
       "source_sha256": "7c98b6fb0d9973bdd3dc4cc3e5028cc9d8aea2f25dbd8cfa71ee126c8595154d",
       "state": "REVIEWED",
@@ -3183,7 +3183,7 @@
       ]
     },
     "integration/sdk_safety.py": {
-      "evidence": "docs/development/maintenance-core-packet5-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
       "evidence_sha256": "e84cc7e89161839cfeca3391614a634100907834ca4e820b0c900e5367aeae4c",
       "source_sha256": "cabdf08366d2af2e1632539e812fc940d2d378f1d86e0c67c8e0217de043428e",
       "state": "REVIEWED",
@@ -3200,7 +3200,7 @@
       ]
     },
     "scripts/run_tests.sh": {
-      "evidence": "docs/development/maintenance-core-packet5-evidence.json",
+      "evidence": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
       "evidence_sha256": "e84cc7e89161839cfeca3391614a634100907834ca4e820b0c900e5367aeae4c",
       "source_sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
       "state": "REVIEWED",
@@ -3320,7 +3320,7 @@
     "source_docs_unchanged": true,
     "root_modes_unchanged": true,
     "changed_path_expected": [
-      "docs/development/maintenance-core-packet6-evidence.json"
+      "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet6-evidence.json"
     ],
     "receipt": "/tmp/mcs-maintenance-core-packet6-20261005/byte-replay.json",
     "patch": "/tmp/mcs-maintenance-core-packet6-20261005/P-to-W.patch",

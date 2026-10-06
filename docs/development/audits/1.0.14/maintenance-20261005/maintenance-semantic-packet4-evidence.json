@@ -6967,7 +6967,7 @@
           1525
         ]
       ],
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "basis": "SHA exact equality to prior FULL source review; not counted as packet4 owned files."
     },
     {
@@ -6989,7 +6989,7 @@
           611
         ]
       ],
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "basis": "SHA exact equality to prior FULL source review; not counted as packet4 owned files."
     },
     {
@@ -7007,7 +7007,7 @@
           411
         ]
       ],
-      "reuse_from": "docs/development/maintenance-semantic-packet2-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
       "basis": "SHA exact equality to prior FULL source review; not counted as packet4 owned files."
     },
     {
@@ -7025,7 +7025,7 @@
           394
         ]
       ],
-      "reuse_from": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "basis": "SHA exact equality to prior FULL source review; not counted as packet4 owned files."
     },
     {
@@ -7043,7 +7043,7 @@
           426
         ]
       ],
-      "reuse_from": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "basis": "SHA exact equality to prior FULL source review; not counted as packet4 owned files."
     },
     {
@@ -7073,7 +7073,7 @@
           1172
         ]
       ],
-      "reuse_from": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "basis": "SHA exact equality to prior FULL source review; not counted as packet4 owned files."
     },
     {
@@ -7091,7 +7091,7 @@
           318
         ]
       ],
-      "reuse_from": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "basis": "SHA exact equality to prior FULL source review; not counted as packet4 owned files."
     },
     {
@@ -7109,7 +7109,7 @@
           345
         ]
       ],
-      "reuse_from": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "basis": "SHA exact equality to prior FULL source review; not counted as packet4 owned files."
     },
     {
@@ -7127,7 +7127,7 @@
           380
         ]
       ],
-      "reuse_from": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "basis": "SHA exact equality to prior FULL source review; not counted as packet4 owned files."
     },
     {
@@ -7141,7 +7141,7 @@
           215
         ]
       ],
-      "reuse_from": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "basis": "SHA exact equality to prior FULL source review; not counted as packet4 owned files."
     },
     {
@@ -7155,7 +7155,7 @@
           169
         ]
       ],
-      "reuse_from": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "basis": "SHA exact equality to prior FULL source review; not counted as packet4 owned files."
     },
     {
@@ -7173,7 +7173,7 @@
           307
         ]
       ],
-      "reuse_from": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "basis": "SHA exact equality to prior FULL source review; not counted as packet4 owned files."
     },
     {
@@ -7191,7 +7191,7 @@
           337
         ]
       ],
-      "reuse_from": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "basis": "SHA exact equality to prior FULL source review; not counted as packet4 owned files."
     },
     {
@@ -7213,7 +7213,7 @@
           506
         ]
       ],
-      "reuse_from": "docs/development/maintenance-semantic-packet3-evidence.json",
+      "reuse_from": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
       "basis": "SHA exact equality to prior FULL source review; not counted as packet4 owned files."
     }
   ],
@@ -8118,7 +8118,7 @@
       "patch_sha256": "75da1b48643df467891985fb8b1d93702e8d8d7bb02e81ac43c2898920f910ed",
       "patch_bytes": 24312
     },
-    "evidence_path": "docs/development/maintenance-semantic-packet4-evidence.json"
+    "evidence_path": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet4-evidence.json"
   },
   "constraints": [
     "No real/anonymized patient/user data or credentials in fixture/log/export.",

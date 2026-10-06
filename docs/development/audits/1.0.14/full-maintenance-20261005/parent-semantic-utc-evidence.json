@@ -8,7 +8,7 @@
   "tests": "tests/semantic/test_semantic_relations.py",
   "test_current_lines": 251,
   "test_current_sha256": "6d34669d7064271c7a689115088c6af89c81fda36690b13ba7bd9c9ea8105d08",
-  "prior_module_review": "docs/development/maintenance-semantic-packet3-evidence.json",
+  "prior_module_review": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
   "finding": "PARENT-SEMANTIC-001",
   "change": "Normalize only terminal Z to +00:00 before datetime parse on supported Python3.10. Preserve timezone/fraction precision, candidate relation direction, date/naive mismatch, equal instants and preservation of all facts.",
   "before": "4 failed/2 equality controls passed/37 deselected with Python3.10 parser shape; final fixedP run incorporates these same six tests.",

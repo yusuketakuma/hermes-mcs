@@ -3301,385 +3301,385 @@
     "matched": [
       {
         "path": "mcs/core/bounded_http.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "abf4a9613b99b9a09ec75557ff0cd7fdb46a9a998d5f2bd010397ae74f2d130b",
         "prior_W_sha256": "abf4a9613b99b9a09ec75557ff0cd7fdb46a9a998d5f2bd010397ae74f2d130b",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/core/ledger.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
         "prior_W_sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/core/ledger_audit.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "f4867747a344fc1942621ff7fa6b9e2e405a3131a0b1408f2f0f72b3fd27a4a1",
         "prior_W_sha256": "f4867747a344fc1942621ff7fa6b9e2e405a3131a0b1408f2f0f72b3fd27a4a1",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/core/llm_admission.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "35a5cff1767504fa1eef2f837a6075d65e929245811a49536515bbf62a46dac1",
         "prior_W_sha256": "35a5cff1767504fa1eef2f837a6075d65e929245811a49536515bbf62a46dac1",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/core/local_llm.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "843fc041e37fb41a8cb452932637e75e04c4f323c1c8928eae2965465bae5917",
         "prior_W_sha256": "843fc041e37fb41a8cb452932637e75e04c4f323c1c8928eae2965465bae5917",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/core/maintenance.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "479be147dcd695ca6ca81d069bd353ffbd00e4d204f5dd6467e4430cf66f6865",
         "prior_W_sha256": "479be147dcd695ca6ca81d069bd353ffbd00e4d204f5dd6467e4430cf66f6865",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/core/mcs_queries.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "7a6c84fc645b990d77f6838bc978559b73291e38dd5bb0d2884cb088e366fa7c",
         "prior_W_sha256": "7a6c84fc645b990d77f6838bc978559b73291e38dd5bb0d2884cb088e366fa7c",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/core/mcs_runtime.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "79df8cf48f3fe5da4ee4fa0dd68a41778dcc888252d15f3ff68b349cb3dc4c60",
         "prior_W_sha256": "79df8cf48f3fe5da4ee4fa0dd68a41778dcc888252d15f3ff68b349cb3dc4c60",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/core/mcs_util.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "7bd01ea343e712d3ea24c59f92fde16cc3efa8013110810a103fec9193c1f420",
         "prior_W_sha256": "7bd01ea343e712d3ea24c59f92fde16cc3efa8013110810a103fec9193c1f420",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_artifact_json_guards.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "98903fe7a29b73a8c4f10f8f95a80204d363dd849a2065d5e94babd69aa55253",
         "prior_W_sha256": "98903fe7a29b73a8c4f10f8f95a80204d363dd849a2065d5e94babd69aa55253",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_core_misc.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "9f2299e4903644757f6be3b1c1fee39e7956e15abfe2a813d4afddc99895f3ab",
         "prior_W_sha256": "9f2299e4903644757f6be3b1c1fee39e7956e15abfe2a813d4afddc99895f3ab",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_job_reasons.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "5e74275e3f1e904af75af603090dda941b05128a8cf2bd1c1a1e19a831b05e21",
         "prior_W_sha256": "5e74275e3f1e904af75af603090dda941b05128a8cf2bd1c1a1e19a831b05e21",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_ledger_audit.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "ff237bca5a243c5c79005ce9017328f860a057cce6bc6e6267665c20366f7624",
         "prior_W_sha256": "ff237bca5a243c5c79005ce9017328f860a057cce6bc6e6267665c20366f7624",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_ledger_candidate_validation.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "d47dd5fea867f0bbd20aaa97b9f76f5afaeaa743d1d06273df48883d4486d7b4",
         "prior_W_sha256": "d47dd5fea867f0bbd20aaa97b9f76f5afaeaa743d1d06273df48883d4486d7b4",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_ledger_guards.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "99d4a80f723de45448441ca32d95758a24951b0660af0f4626747c16c8a701c3",
         "prior_W_sha256": "99d4a80f723de45448441ca32d95758a24951b0660af0f4626747c16c8a701c3",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_ledger_recovery_contract.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "62ce3c4f925518cf1f09227d2f2183307ee6ce5872c8a883713d6808c655c71a",
         "prior_W_sha256": "62ce3c4f925518cf1f09227d2f2183307ee6ce5872c8a883713d6808c655c71a",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_ledger_reply_recovery.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "08bf2d8bd7d43abfcd1b40971f00393ee675eaede4162b08822b6e86dec34c4a",
         "prior_W_sha256": "08bf2d8bd7d43abfcd1b40971f00393ee675eaede4162b08822b6e86dec34c4a",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_llm_admission.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "c93985c9b5fc4f954023e33f3c35999e263f5895ca1baabcb23b153583e5cd93",
         "prior_W_sha256": "c93985c9b5fc4f954023e33f3c35999e263f5895ca1baabcb23b153583e5cd93",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_local_llm.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "c48f548b9742e1f311ec1f4644dd2d27a20f7091cb089188ebe63c4c18da4c91",
         "prior_W_sha256": "c48f548b9742e1f311ec1f4644dd2d27a20f7091cb089188ebe63c4c18da4c91",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_local_llm_deadline.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "fe83d5ef6f456b0b03eafdfa6556bb87d897d18c37f2fb6a0cbdc6923533054c",
         "prior_W_sha256": "fe83d5ef6f456b0b03eafdfa6556bb87d897d18c37f2fb6a0cbdc6923533054c",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_maintenance_root.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "00675df942ed139b879c95d490b16426fd6f748bb8db79e8d827e350394d2a4c",
         "prior_W_sha256": "00675df942ed139b879c95d490b16426fd6f748bb8db79e8d827e350394d2a4c",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_mcs_util.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "1c34dd400756b57cd45563b0568739e058bf2a8b88492ca62eacf189251431c0",
         "prior_W_sha256": "1c34dd400756b57cd45563b0568739e058bf2a8b88492ca62eacf189251431c0",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_message_revisions.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "a26cdb3de149f6465ea13dec52f6fddab6cc6732c079883f5229934bfbceb0ec",
         "prior_W_sha256": "a26cdb3de149f6465ea13dec52f6fddab6cc6732c079883f5229934bfbceb0ec",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_metadata_watch.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "930ed8fb48f1c4d749365d3a81578fa1a0a1c7f375f858ed8b97c705b4514092",
         "prior_W_sha256": "930ed8fb48f1c4d749365d3a81578fa1a0a1c7f375f858ed8b97c705b4514092",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_supported_schema_upgrade.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "6cb3d5cdbc886109ffa901dd86bf6a5a39dbc3716b887ddf28e6f32372bc21a9",
         "prior_W_sha256": "6cb3d5cdbc886109ffa901dd86bf6a5a39dbc3716b887ddf28e6f32372bc21a9",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/core/test_thread_reply_pairs.py",
-        "evidence_report": "docs/development/maintenance-core-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
         "current_sha256": "6d916b5854162839f6d37dbf17af73d80321ea58e95b93db34218b3a6ad50e2f",
         "prior_W_sha256": "6d916b5854162839f6d37dbf17af73d80321ea58e95b93db34218b3a6ad50e2f",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/ingest/cross_lists.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "3580d54982ca68a320ab27e765a9eaa7dbd515d8edd194378575dca83661c54a",
         "prior_W_sha256": "3580d54982ca68a320ab27e765a9eaa7dbd515d8edd194378575dca83661c54a",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/ingest/health_watch.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "981b5ab0e68ccf49bcce05e2814b1e2702408520f369ae9f43d2bc44f1050e65",
         "prior_W_sha256": "981b5ab0e68ccf49bcce05e2814b1e2702408520f369ae9f43d2bc44f1050e65",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/ingest/init_data.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "17a0d32d0eb95202c0725877ad5e4dacf9fdeee06cffd21dd52004189e500dd4",
         "prior_W_sha256": "17a0d32d0eb95202c0725877ad5e4dacf9fdeee06cffd21dd52004189e500dd4",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/ingest/job_ops.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "d5b64a681b8b43a7f08decf4adddcf075465c94da1cfadcc3d515b98f2fea12f",
         "prior_W_sha256": "d5b64a681b8b43a7f08decf4adddcf075465c94da1cfadcc3d515b98f2fea12f",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/ingest/mcs_adapter.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "c3be0fa89a12ccc357273913c53d6c779ac391debfc4b7e179979ad694ca444d",
         "prior_W_sha256": "c3be0fa89a12ccc357273913c53d6c779ac391debfc4b7e179979ad694ca444d",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/ingest/mcs_worker.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "c0d1946942450adc1d794128ca162f84a12761171c13de94d992d44588c28747",
         "prior_W_sha256": "c0d1946942450adc1d794128ca162f84a12761171c13de94d992d44588c28747",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/ingest/project_metadata.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "257afe64943606ecac5f5706af8ca0564d003156e20133b2cc613cba9bad1cfa",
         "prior_W_sha256": "257afe64943606ecac5f5706af8ca0564d003156e20133b2cc613cba9bad1cfa",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "mcs/ingest/run_check.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "915d6784befb59fcfffae019020dac59c92fa272571dfc325c36585b283ef00d",
         "prior_W_sha256": "915d6784befb59fcfffae019020dac59c92fa272571dfc325c36585b283ef00d",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/ingest_testkit.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "03d5831494c33b78a32a2f24d95c2efd4f1367f6d0aea7b3f095b2b9da02dde4",
         "prior_W_sha256": "03d5831494c33b78a32a2f24d95c2efd4f1367f6d0aea7b3f095b2b9da02dde4",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_acquisition_contracts.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "510f94d404fe632c0b7775b43b4a602adfde24a26c8ca160e9ef5c38fc9fefb0",
         "prior_W_sha256": "510f94d404fe632c0b7775b43b4a602adfde24a26c8ca160e9ef5c38fc9fefb0",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_adapter_wire.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "26c12487b689d48f78a2719b39083bac487be7401caab84367465201d92caf5b",
         "prior_W_sha256": "26c12487b689d48f78a2719b39083bac487be7401caab84367465201d92caf5b",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_cross_lists.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "962d20c5472c2825b4e5a095c80ac27ace295d025f09e91a6e53bde5f47b1edd",
         "prior_W_sha256": "962d20c5472c2825b4e5a095c80ac27ace295d025f09e91a6e53bde5f47b1edd",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_drug_map_pipeline.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "13e720e558f7aa0e071f55b3365212aea470803d224f4da9f7437507edfdd57e",
         "prior_W_sha256": "13e720e558f7aa0e071f55b3365212aea470803d224f4da9f7437507edfdd57e",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_fixture_synthetic.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "870ab4a897e9dc0b83548a6f9731991af227a25e2993ac53b128d8d99dc94a5a",
         "prior_W_sha256": "870ab4a897e9dc0b83548a6f9731991af227a25e2993ac53b128d8d99dc94a5a",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_group_consultations.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "47b64f165e5e766813dc4e0566919021f85b8cf08ff00a7ac9d1eabf6bdfc6d2",
         "prior_W_sha256": "47b64f165e5e766813dc4e0566919021f85b8cf08ff00a7ac9d1eabf6bdfc6d2",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_health_watch.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "d4f017bdb1705cad86cb41111ac4538deec2409aa8c3c898f089ef0b994ca69e",
         "prior_W_sha256": "d4f017bdb1705cad86cb41111ac4538deec2409aa8c3c898f089ef0b994ca69e",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_job_drain.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "6842a5576dc6adf4534137f04faf6f41ad5fee35694d6ff0731509d33bfa1ac0",
         "prior_W_sha256": "6842a5576dc6adf4534137f04faf6f41ad5fee35694d6ff0731509d33bfa1ac0",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_job_reasons_ingest.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "d6b08c095e5182de1c39c0e2d399abd2cb47c8f364917899170bfdf2c41c2726",
         "prior_W_sha256": "d6b08c095e5182de1c39c0e2d399abd2cb47c8f364917899170bfdf2c41c2726",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_message_metadata.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "2be63c91caccb9c5effc5957421dd102c9e508d42c7e627d67bc3ab39f9d9ebc",
         "prior_W_sha256": "2be63c91caccb9c5effc5957421dd102c9e508d42c7e627d67bc3ab39f9d9ebc",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_metadata_probe_observation.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "47d4cc72d024f5879e6c51c5f38ba9d6e7fa41cebe9e7c6c145f3f585ac3fe23",
         "prior_W_sha256": "47d4cc72d024f5879e6c51c5f38ba9d6e7fa41cebe9e7c6c145f3f585ac3fe23",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_metadata_probe_paging.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "fdfcabb7ceaa1dfe45371979eb117740edeae686d401505fd3185623a5b156f8",
         "prior_W_sha256": "fdfcabb7ceaa1dfe45371979eb117740edeae686d401505fd3185623a5b156f8",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_metadata_probe_usage.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "4317e9024dd14cc90b6f4e5a142a0632f392884a77561cb75bd3fa36cf14d386",
         "prior_W_sha256": "4317e9024dd14cc90b6f4e5a142a0632f392884a77561cb75bd3fa36cf14d386",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_project_metadata.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "a1bc35d7bd41b8d4ad7aa7b1e84a10da900f036bb8fbdd6d63dfe63308dc0e77",
         "prior_W_sha256": "a1bc35d7bd41b8d4ad7aa7b1e84a10da900f036bb8fbdd6d63dfe63308dc0e77",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_reaction_actors.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "345332fa7496fa249dbfecabd941c8d59573c624295c85fce7c8a10bf8920476",
         "prior_W_sha256": "345332fa7496fa249dbfecabd941c8d59573c624295c85fce7c8a10bf8920476",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_run_check_stages.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "5ec818caf83f9dd8d327ef557610c7d067dddbc130accbe3cba7e9b9c19a28aa",
         "prior_W_sha256": "5ec818caf83f9dd8d327ef557610c7d067dddbc130accbe3cba7e9b9c19a28aa",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_run_watchdog.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "ba09be62a9dfec332460658a791c350a383637fcb578afe12c36a4b4859966f9",
         "prior_W_sha256": "ba09be62a9dfec332460658a791c350a383637fcb578afe12c36a4b4859966f9",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_semantic_ingest_revisions.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "e306a9036680ec8416260ac859dfc8a05c85f4dc6ee896025e2f079d08015e02",
         "prior_W_sha256": "e306a9036680ec8416260ac859dfc8a05c85f4dc6ee896025e2f079d08015e02",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_thread_count_retry.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "708d993c47da2d6f466d450ad5e2cb5960f29293a223ee3e6391a8a708d3be82",
         "prior_W_sha256": "708d993c47da2d6f466d450ad5e2cb5960f29293a223ee3e6391a8a708d3be82",
         "state": "REVIEWED_SHA_REUSED"
       },
       {
         "path": "tests/ingest/test_thread_tombstone_gap.py",
-        "evidence_report": "docs/development/maintenance-core-packet2-evidence.json",
+        "evidence_report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
         "current_sha256": "c1bd116a7aaf3f7fcd0281361a38e07b4266f6d818614f69ff88ad27c3c0e287",
         "prior_W_sha256": "c1bd116a7aaf3f7fcd0281361a38e07b4266f6d818614f69ff88ad27c3c0e287",
         "state": "REVIEWED_SHA_REUSED"

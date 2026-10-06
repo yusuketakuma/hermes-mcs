@@ -93,7 +93,7 @@
       "W_read_basis": "P全文＋全P→source W差分hunkを切断なし読取。未変更byte範囲を再利用し、source/test AST保持をartifactで証明。",
       "read_method": "exact accepted W full-review reuse + focused current consumer reads",
       "read_reuse": {
-        "report": "docs/development/maintenance-semantic-packet4-evidence.json",
+        "report": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet4-evidence.json",
         "sha256": "efc0f30529b27fc1069058b6e6ff709aa7e52e394688f3d3b3b758bc5f7e8864",
         "original_P_sha256": "53aa618195fa714232c991827b052f8d950ab075a3e9a9789b522ef148b41c5a",
         "accepted_W_sha256": "f51ee79205e425d86fe38bb3e319094635ba048f047433d3a5bbcac59ac1b9ec",
@@ -1341,7 +1341,7 @@
       "tests/ingest/test_drug_map_pipeline.py",
       "tests/views/test_drug_candidates.py"
     ],
-    "evidence_only_path": "docs/development/maintenance-drug-json-evidence.json",
+    "evidence_only_path": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-drug-json-evidence.json",
     "full_P_to_final_W_replay": {
       "status": "PASS",
       "P_tracked_files": 902,

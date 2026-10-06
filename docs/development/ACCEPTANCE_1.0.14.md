@@ -33,7 +33,7 @@ IGUQKMKDのSHA256は `4bde434e942340707edb2d45e1c02bb01e08897574878071440f315158
 | テスト・build・配布物 | 隔離runnerで検証中。旧監査のSDK/配布物成功を今回の変更へ転用しない |
 | 文書・画面・運用・release資産 | READMEの5領域と17変更記録を照合。Slack7組/LINE WORKS2組の生成整合成功。Release生成・公開は未実施 |
 
-再利用元は `full-maintenance-20261005/inventory.json` と同監査の最終受入記録。
+再利用元は `audits/1.0.14/full-maintenance-20261005/inventory.json` と同監査の最終受入記録。
 REVIEWED/sourceの現存対象と `v1.0.13` のhash一致を確認し、前版以後の61実装ファイルを
 別途横断した。変更後の全行独立精査や実機受入の完了は主張しない。
 
