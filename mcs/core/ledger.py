@@ -786,6 +786,11 @@ class Ledger:
 
     def _save_attachments(self, m, now: float):
         for a in m.attachments:
+            saved = self.db.execute(
+                "SELECT local_path FROM attachments WHERE message_id=? AND file_id=? "
+                "AND state='withdrawn'", (m.message_id, a.file_id)).fetchone()
+            has_payload = bool(saved and isinstance(saved[0], str)
+                               and os.path.isfile(saved[0]))
             self.db.execute("""
               INSERT INTO attachments
                 (message_id,file_id,name,url,created_at)
@@ -794,12 +799,12 @@ class Ledger:
                 name=COALESCE(NULLIF(excluded.name,''),attachments.name),
                 url=COALESCE(NULLIF(excluded.url,''),attachments.url),
                 -- a file listed again after being withdrawn is current
-                -- server-side: restore it with its download state intact.
+                -- server-side: reuse only a payload that still exists.
                 -- A FRESH url (signed links rotate) revives a row that
                 -- failed on the stale one — back to pending, attempts
                 -- cleared (F11)
                 state=CASE WHEN attachments.state='withdrawn'
-                           THEN CASE WHEN attachments.local_path IS NOT NULL
+                           THEN CASE WHEN ?
                                      THEN 'downloaded' ELSE 'pending' END
                            WHEN attachments.state IN ('pending','failed')
                                 AND NULLIF(excluded.url,'') IS NOT NULL
@@ -821,7 +826,7 @@ class Ledger:
                                 AND NULLIF(excluded.url,'') IS NOT NULL
                                 AND excluded.url <> attachments.url
                            THEN NULL ELSE attachments.error END
-            """, (m.message_id, a.file_id, a.name, a.url, now))
+            """, (m.message_id, a.file_id, a.name, a.url, now, has_payload))
         # reconcile the set only when the response enumerated `files`
         # (complete list, possibly empty) or the post is deleted —
         # a response that simply omitted the key must not withdraw rows
