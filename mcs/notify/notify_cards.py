@@ -1087,7 +1087,14 @@ def _attachment_captions(db, card, attachments) -> dict:
                 {"shown": [r["message_id"]]}, limit=260)
         else:
             tail = ""
-        text = (f"{tail} / 📎 {a['name']}" if r is not None and not a.get("unavailable")
+        name = a["name"]
+        if r is not None and not a.get("unavailable"):
+            room = 300 - len(tail) - len(" / 📎 ")
+            if len(name) > room:
+                ext = os.path.splitext(name)[1]
+                ext = ext if len(ext) <= 16 else ""
+                name = name[:room - 1 - len(ext)] + "…" + ext
+        text = (f"{tail} / 📎 {name}" if r is not None and not a.get("unavailable")
                 else f"📎 {a['name']}" + (f" — {tail}" if tail else ""))
         out[a["attachment_id"]] = text[:300]
     return out

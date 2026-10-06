@@ -89,18 +89,26 @@ def test_long_source_fields_still_put_primary_fact_before_sender_and_time(led, m
     assert len(preview) <= 400
 
 
-def test_long_attachment_caption_keeps_five_fields_within_wire_limit(led, monkeypatch):
+@pytest.mark.parametrize("filename", ["合成添付.txt", "架空資料" + "名" * 190 + ".png",
+                                     "架空資料" + "名" * 240 + ".png"])
+def test_long_attachment_caption_keeps_five_fields_within_wire_limit(led, monkeypatch, filename):
     _seed_thread(led)
     with led.db:
         led.db.execute("UPDATE patients SET patient_name=? WHERE project_id=1", ("患" * 30,))
         led.db.execute("UPDATE messages SET sender_name=?,organization=?,posted_at='2026-10-06T08:30:00+09:00' WHERE message_id=101", ("発" * 24, "所" * 24))
-        led.db.execute("INSERT INTO attachments(message_id,name,state,local_path,sha256,bytes) VALUES(101,'合成添付.txt','downloaded','/synthetic/unused',?,1)", ("ab" * 32,))
+        led.db.execute("INSERT INTO attachments(message_id,name,state,local_path,sha256,bytes) VALUES(101,?,'downloaded','/synthetic/unused',?,1)", (filename, "ab" * 32))
     monkeypatch.setattr(notify_render, "_structured_block", lambda *_args: {
         "type": "text", "text": "📋 要約\n・依頼候補（未確認）: 主要確認事項" + "要" * 500})
     _dispatch(led, _intent(led))
     spec = json.loads(_latest_render(led)["spec_json"])
-    caption = next(item["caption"] for item in spec["parts"]["manifest"] if item["kind"] == "attachment_part")
+    part = next(item for item in spec["parts"]["manifest"] if item["kind"] == "attachment_part")
+    caption = part["caption"]
     assert "患" * 30 in caption and "主要確認事項" in caption[:80]
     assert "発" * 24 in caption and "所" * 24 in caption and "10-06 08:30" in caption
-    assert "合成添付.txt" in caption and len(caption) <= 300
+    assert len(caption) <= 300
+    if len(filename) < 100:
+        assert filename in caption and part["name"] == filename
+    else:
+        assert "架空資料" in caption and caption.endswith("….png")
+        assert part["name"].endswith(".png") and len(part["name"]) <= 200
     contract.validate(spec)
