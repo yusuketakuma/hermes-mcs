@@ -16,8 +16,13 @@
 
 ## 設計上の安全境界
 
-- 収集は GET 中心、既読化は fetch_state=complete + ledger commit 済み +
-  snapshot timestamp 必須の三重ゲート
+- 収集は GET 中心。患者単位の既読化は fetch_state=complete + ledger commit 済み +
+  snapshot timestamp 必須の三重ゲート。返信の自動既読化だけは、明示された運用条件として
+  収集時点に限定するsnapshot条件を使わない。`--mark-read`付き定期収集で、直近7日以内に
+  保存した返信のスレッドを1回最大10件確認し、未保存・抜粋のみの返信を先に補完する。
+  直前に確認した返信の永続保存後に既読化し、未読状態の再確認で成功を記録する。
+  確認後に届いた返信も既読になる場合があり、読取り時に見つかった追加返信は取得ジョブへ
+  登録する。失敗・確認不能は未確認のまま再試行する
 - API はリダイレクト拒否・proxy 無効。Bearer は許可 origin 以外へ送らない
 - ローカルLLM の推論経路は loopback 固定・proxy 無効
 - Hermes モード（`runtime_mode` 未指定/`hermes`）では、Slack/Discord の対話カード

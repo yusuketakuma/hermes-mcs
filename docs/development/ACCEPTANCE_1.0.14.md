@@ -2,7 +2,8 @@
 
 2026-10-06（日本時間）。公開基準は `v1.0.13`、確認開始HEADは
 `d2263af95a9127d73a985ebff93f2b168824b515` と開始時の未コミット差分。
-**準備中・未公開。返信の自動既読化は合成回帰12件で確認。**
+**公開・実機反映済み。返信の自動既読化は合成回帰12件で確認。**
+下記の準備時記録と、末尾の最終公開・実機反映結果を区別する。
 
 ## 返信既読化の条件変更
 
@@ -76,5 +77,33 @@ REVIEWED/sourceの現存対象と `v1.0.13` のhash一致を確認し、前版�
 最終SHAの固定SDK/Hermes CIで別途受け入れる。存在しない `tests/standalone` を
 指定した試行はexit4/no testsであり、対象を訂正して上記検証を行った。
 
-最終commit、必須CI、tag、Release、画像の公開到達・実画面表示はすべて未実施。
-残る必須検証を完了してから1.0.14を公開する。稼働サービスへの反映は別工程。
+ここまでが準備時の記録。最終commit・CI・公開・実機反映の結果は次節を正とする。
+
+## 最終公開と実機への反映（2026-10-06）
+
+- 公開commitは `3d9e324bd8fdf493213a4df506d62ccca8edf24a`。
+  remoteの `v1.0.14^{}` と一致し、安定版Releaseの公開状態・タイトル・本文を
+  CHANGELOG exportと照合した。[Release](https://github.com/yusuketakuma/hermes-mcs/releases/tag/v1.0.14)。
+- 同SHAのCIは6ジョブ成功。全量は7668 passed / 11 skipped / 26 subtests passed、
+  固定版Hermesは17 passed、standalone SDKは25 passed。
+  [CI](https://github.com/yusuketakuma/hermes-mcs/actions/runs/37376299175)、
+  [タグ検証](https://github.com/yusuketakuma/hermes-mcs/actions/runs/37377319173)とも成功。
+- 同SHAの隔離archiveはPython3.10/3.13で46項目成功、新規導入合成テスト76件成功。
+  1015 trackedファイルの内容・権限を照合し、検証後も不変だった。
+- 実機はHermes/Slack構成。対象版bootstrapのplanはroute=noop、阻害なし、schema9。
+  ソース取得・DB移行は不要だった。既存更新ロックと停止markerを使って抽出を停止し、
+  `mcs_setup.py services`で所有サービスを同期してから、抽出ワーカー2本とgatewayを再起動した。
+  いずれも旧PIDから新PIDへ変わり、launchdのrunning状態を確認した。
+  gatewayのログを本文非表示で照合し、再起動後のSlack接続を確認した。
+  残るimportエラーの記録は10月1日〜2日の履歴で、今回の再起動後の記録ではなかった。
+- 実機のcheckはexit0、エラー0・警告1。doctorの設定・Python/SQLite・復旧runtime・
+  サービス・ローカルLLM診断はhealthy。認証や原本データの全経路受入とは区別する。
+  警告はlogin Keychainのロックで、既存の代替認証は設定済み。ロック設定や認証情報は変更しない。
+- READMEの機能・画面・導入・安全・文書導線を再照合し、要約の表示上限、患者snapshotと
+  返信の例外、7日/最大10件、新返信の競合と追加取得、更新導線を補足した。
+  SECURITYの条件も揃えた。生成ブロックとCHANGELOGは不変。
+  文書関連テストは23 passed / 26 subtests passed。
+- 実MCSへの手動収集・既読化、通知の試験送信、実データの修復・再処理は行っていない。
+  通常運用のサービスを再開したことと、操作画面・実配送の受入を区別する。
+  タグ内画像の内容一致はAPIで確認済みだが、ブラウザーが利用できずRelease画像の
+  実画面表示は未確認。文書修正は今回のローカル差分で、公開タグの付替えは行わない。
