@@ -25,6 +25,7 @@ import read_model
 from export_schema import project_record
 from mcs_queries import item_unverified
 from drug_map import candidate_note
+from rollup import current_cached_refs
 import mcs_util
 from mcs_util import loads_dict
 
@@ -355,16 +356,17 @@ def run(out_dir: Path, snapshot: Path) -> dict:
         info = {r["project_id"]: dict(r) for r in view.db.execute(
             "SELECT project_id,patient_name,project_type,disease,station_name"
             " FROM patients")}
-        rolls = {r["project_id"]: r["content"] for r in view.db.execute(
-            "SELECT project_id,content FROM artifacts "
+        rolls = {r["project_id"]: (r["content"], r["meta"]) for r in view.db.execute(
+            "SELECT project_id,content,meta FROM artifacts "
             "WHERE kind='patient_rollup' ORDER BY artifact_id")}
         # Validate/render every latest rollup before replacing or pruning any
         # export. Corrupt input is not evidence that a patient disappeared.
         pages = {}
-        for pid, content in rolls.items():
+        for pid, (content, meta) in rolls.items():
             roll = loads_dict(content)
             if roll is None:
                 raise ValueError("patient_rollup_invalid")
+            roll = current_cached_refs(view.db, pid, roll, meta)
             name = (info.get(pid) or {}).get("patient_name") or f"project-{pid}"
             try:
                 pages[f"p{pid}.md"] = (

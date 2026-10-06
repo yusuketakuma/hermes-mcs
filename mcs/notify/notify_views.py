@@ -13,6 +13,8 @@ import time
 from datetime import datetime
 
 import structured_view
+from drug_map import candidate_note
+from rollup import current_cached_refs
 from ledger import karte_summary_block
 from mcs_adapter import project_url
 from mcs_queries import JST, incomplete_reply_roots
@@ -36,7 +38,7 @@ def patient_summary_text(db, project_id) -> tuple:
     title = f"{name} — 患者の記録まとめ（暫定集約）"
     lines = [SUMMARY_CAVEAT, _coverage_line(db, project_id)]
     row = db.execute(
-        "SELECT content FROM artifacts WHERE kind='patient_rollup' "
+        "SELECT content,meta FROM artifacts WHERE kind='patient_rollup' "
         "AND project_id=? AND json_valid(content) "
         "ORDER BY artifact_id DESC LIMIT 1", (project_id,)).fetchone()
     try:
@@ -48,6 +50,7 @@ def patient_summary_text(db, project_id) -> tuple:
                      "原本を確認してください。")
         roll = {}
     else:
+        roll = current_cached_refs(db, project_id, roll, row["meta"])
         period = roll.get("current_med_period")
         meds = [m for m in roll.get("medications") or []
                 if isinstance(m, dict) and m.get("name")]
@@ -59,6 +62,7 @@ def patient_summary_text(db, project_id) -> tuple:
                                      ("name", "dose", "freq", "route")
                                      if m.get(k))
                      + (f"（最終言及 {m['last']}）" if m.get("last") else "")
+                     + (" — " + note if (note := candidate_note(m.get("ref"))) else "")
                      for m in meds[:15])
         if not meds:
             lines.append("・抽出された服用中の薬はありません（記録が無い≠服用無し）")

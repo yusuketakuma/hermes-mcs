@@ -20,6 +20,7 @@ from datetime import date, datetime, timedelta
 import json
 import os
 import re
+import sqlite3
 import sys
 import time
 
@@ -33,14 +34,15 @@ from mcs_queries import (JST, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
 from mcs_util import HOME, acquire_run_lock
 from mcs_signals import normalize_sender_id
-from drug_map import KIND as REF_KIND, current_refs
+from drug_map import (KIND as REF_KIND, PROGRESS_KIND, candidate_note, current_refs,
+                      generation_signature)
 
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "patient_rollup"
 STALE_DAYS = 21          # message unseen this long while siblings refresh
 # Bump when persisted rollup content changes shape: dirty_projects()
 # rebuilds every row stamped with another version (5: empty fact-source vitals).
-# Rebuilds only rewrite artifacts; no notification reads patient_rollup.
+# Rebuilds rewrite artifacts; automatic card rendering does not read patient_rollup.
 PERIOD_CHECK_VERSION = 5
 # #20-C thread-level reply_state: strongest reply kind seen in the thread
 # after the request, from another sender. View-only, never a transition.
@@ -426,6 +428,76 @@ _REF_SIG_SQL = ("SELECT COUNT(*) || ':' || IFNULL(MAX(artifact_id), '') "
                 "FROM artifacts WHERE kind=? AND project_id={pid}")
 
 
+def current_cached_refs(db, project_id: int, roll: dict, meta) -> dict:
+    """Keep raw rollup rows while omitting dictionary annotations without current proof."""
+    signature = generation_signature(db)
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except (ValueError, TypeError, RecursionError):
+            meta = None
+    stamped = meta.get("med_ref_generation") if isinstance(meta, dict) else None
+    marker = db.execute("SELECT 1 FROM artifacts WHERE kind=? LIMIT 1",
+                        (PROGRESS_KIND,)).fetchone() is not None
+    # True absence is the old-version compatibility path, not a disabled
+    # or damaged active-generation marker. New stamped rows still fence drift.
+    mismatch = stamped is not None and stamped != signature
+    out = dict(roll)
+    sources = {}
+    for key in ("medications", "unverified_medications", "planned_medications"):
+        if not isinstance(roll.get(key), list):
+            continue
+        items = []
+        for item in roll[key]:
+            if not isinstance(item, dict) or "ref" not in item:
+                items.append(item)
+                continue
+            item = dict(item)
+            ref, last = item["ref"], item.get("last")
+            valid = (not mismatch and isinstance(ref, dict)
+                     and ref.get("name") == item.get("name")
+                     and isinstance(ref.get("dict_id"), str) and bool(ref["dict_id"])
+                     and isinstance(ref.get("dict_sha256"), str)
+                     and re.fullmatch(r"[0-9a-f]{64}", ref["dict_sha256"]) is not None
+                     and isinstance(ref.get("cands"), list))
+            if valid:
+                try:
+                    valid = bool(candidate_note(ref))
+                except (AttributeError, KeyError, TypeError, ValueError, RecursionError):
+                    valid = False
+            if valid and marker:
+                valid = False
+                if not isinstance(last, str):
+                    item.pop("ref")
+                    items.append(item)
+                    continue
+                if last not in sources:
+                    sources[last] = []
+                    try:
+                        mids = db.execute(
+                            "SELECT DISTINCT m.message_id FROM messages m JOIN artifacts a "
+                            "ON a.message_id=m.message_id WHERE m.project_id=? "
+                            "AND m.posted_at=? AND a.kind=?",
+                            (project_id, last, REF_KIND))
+                        for row in mids:
+                            sources[last].extend(current_refs(db, row[0]))
+                    except sqlite3.DatabaseError:
+                        pass  # old/incomplete schema cannot prove a dictionary annotation
+                valid = ref.get("name") == item.get("name") and ref in sources[last]
+            if not valid:
+                item.pop("ref")
+            items.append(item)
+        out[key] = items
+    # An active generation changed while the reader checked source bindings.
+    # Strip only annotations; vitals/raw medication rows remain available.
+    if generation_signature(db) != signature:
+        for key in ("medications", "unverified_medications", "planned_medications"):
+            if isinstance(out.get(key), list):
+                out[key] = [{k: v for k, v in item.items() if k != "ref"}
+                            if isinstance(item, dict) else item for item in out[key]]
+    return out
+
+
 def _newest_source_ts(ledger, project_id: int) -> float:
     """Newest source stamp dirty_projects compares to generated_at."""
     return ledger.db.execute(
@@ -442,6 +514,7 @@ def rebuild(ledger, project_id: int) -> int:
     but generated_at equal) keeps the content and id; it only advances
     meta.generated_at when a newer source would otherwise keep it dirty."""
     # sign before building: a rewrite racing the build stays dirty (M5)
+    ref_generation = generation_signature(ledger.db)
     ref_sig = ledger.db.execute(_REF_SIG_SQL.format(pid="?"),
                                 (REF_KIND, project_id)).fetchone()[0]
     d = build_rollup(ledger, project_id)
@@ -466,7 +539,8 @@ def rebuild(ledger, project_id: int) -> int:
                         == PERIOD_CHECK_VERSION
                         and om.get("next_med_period_check")
                         == d.get("_next_med_period_check")
-                        and om.get("med_ref_sig") == ref_sig):
+                        and om.get("med_ref_sig") == ref_sig
+                        and om.get("med_ref_generation") == ref_generation):
                     # a no-op source write (LLM error row, unchanged
                     # re-save) must still clear dirty_projects, else the
                     # patient is rebuilt every tick; the stamp was taken
@@ -492,7 +566,8 @@ def rebuild(ledger, project_id: int) -> int:
                          "period_check_version": PERIOD_CHECK_VERSION,
                          "next_med_period_check":
                          d.get("_next_med_period_check"),
-                         "med_ref_sig": ref_sig}), time.time()))
+                         "med_ref_sig": ref_sig,
+                         "med_ref_generation": ref_generation}), time.time()))
     return cur.lastrowid
 
 
@@ -505,7 +580,7 @@ def dirty_projects(ledger) -> list:
     content is unchanged never advances generated_at (M5)."""
     rows = ledger.db.execute("""
       SELECT p.project_id, r.g AS gen, r.period_version, r.next_check,
-        r.ref_sig, ({sig}) AS cur_ref_sig,
+        r.ref_sig, r.ref_generation, ({sig}) AS cur_ref_sig,
         (SELECT MAX(a.created_at) FROM artifacts a
           WHERE a.project_id=p.project_id
             AND a.kind IN ('extract_v1','extract_llm',
@@ -525,7 +600,10 @@ def dirty_projects(ledger) -> list:
                             END) next_check,
                    MAX(CASE WHEN json_valid(meta)
                             THEN json_extract(meta,'$.med_ref_sig')
-                            END) ref_sig
+                            END) ref_sig,
+                   MAX(CASE WHEN json_valid(meta)
+                            THEN json_extract(meta,'$.med_ref_generation')
+                            END) ref_generation
                  FROM artifacts WHERE kind=?
                  GROUP BY project_id) r ON r.project_id=p.project_id
       WHERE EXISTS (SELECT 1 FROM messages m3
@@ -533,11 +611,13 @@ def dirty_projects(ledger) -> list:
     """.replace("{sig}", _REF_SIG_SQL.format(pid="p.project_id")),
         (REF_KIND, KIND)).fetchall()
     now = time.time()
+    ref_generation = generation_signature(ledger.db)
     return [x["project_id"] for x in rows
             if type(x["gen"]) not in (int, float)
             or not 0 <= x["gen"] < 1e12
             or x["period_version"] != PERIOD_CHECK_VERSION
             or x["ref_sig"] != x["cur_ref_sig"]
+            or x["ref_generation"] != ref_generation
             or (x["next_check"] is not None and (
                 type(x["next_check"]) not in (int, float)
                 or not 0 <= x["next_check"] < 1e12
