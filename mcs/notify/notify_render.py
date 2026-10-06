@@ -478,7 +478,7 @@ SIGNAL_TYPE_LABEL = {
 }
 SIGNAL_STATE_LABEL = {"open": "未確認", "resolved": "解消",
                       "dismissed": "却下"}
-URGENCY_TAG = {"llm": "［緊急度高・AI判定］", "rule": "［緊急語あり］"}
+URGENCY_TAG = {"llm": "［緊急度高・AI判定］", "rule": "🚨"}
 
 
 def signal_label(sig: dict) -> str:
@@ -490,12 +490,8 @@ def signal_state(sig: dict) -> str:
     return SIGNAL_STATE_LABEL.get(sig.get("state") or "open", "状態不明")
 
 
-def _honorific(name: str) -> str:
-    return name if name.endswith(("様", "さん")) else f"{name} 様"
-
-
 def patient_heading(db, pid) -> str:
-    """患者名 様（施設）— plus ``#末尾4桁`` only when another stored
+    """患者名（施設）— plus ``#末尾4桁`` only when another stored
     patient shares the name, so a same-name room is never mistaken."""
     if not positive(pid):
         return ""
@@ -504,7 +500,7 @@ def patient_heading(db, pid) -> str:
     name = ((r["patient_name"] or "").strip() if r else "")
     if not name:
         return f"project {pid}"
-    out = _honorific(name)
+    out = name
     station = (r["station_name"] or "").strip()
     if station:
         out += f"（{station}）"

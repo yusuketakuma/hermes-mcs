@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "カード見出しの「様」を削除し、機械照合の緊急表示を 🚨 に",
+  "summary": "通知カード・スレッド・添付の見出しは「患者名 様（施設）」ではなく「患者名（施設）」で表示されます。機械照合だけが緊急とした投稿の表示は「緊急語を含む（機械照合）」から 🚨 に変わり、日次ダイジェストの「（機械照合）」表記も 🚨 になります。AI抽出の「緊急度: 高（AI抽出）」「［緊急度高・AI判定］」は変わりません。",
+  "upgrade": "収集処理への反映後、新規描画から順に適用されます。追加操作は不要です。保存済みの患者名自体は加工しません（末尾に「様」を含む名前はそのまま表示されます）。画面例のSVGを更新しました。PNGはリリース前に Inkscape のある環境で `generate_slack_gallery.py --png` / `generate_lineworks_gallery.py --png` を実行して再生成します。",
+  "details": [
+    "notify_render.patient_heading() から敬称付与を削除。同名患者の識別番号（#末尾4桁）は従来どおり。",
+    "URGENCY_TAG / URGENCY_LABEL の機械照合ラベルを 🚨 に変更。日次ダイジェストの緊急度行の「（機械照合）」も同じ 🚨 に揃えた。",
+    "docs/screenshots の手書き画面例と slack-gallery / lineworks-gallery の生成器・SVGを更新（PNGは再生成待ち）。"
+  ],
+  "refs": ["mcs/notify/notify_render.py", "mcs/views/structured_view.py", "scripts/development/generate_slack_gallery.py", "scripts/development/generate_lineworks_gallery.py", "docs/screenshots/"]
+}

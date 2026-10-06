@@ -87,7 +87,7 @@ def delivery():
                           ("📝 タスク 1件 · スタンプ 👀2 🙆1 · 自分 1投稿", INK, False)])
     s.template(66, y, ["確認する", "担当する", "タスク作成", "MCSで開く", "その他の操作"])
     s.bot(588, 245)
-    y = s.block(610, 286, [(f"↳ 山田 花子 様 · 10-01 09:40 {SENDER}", INK, True), *summary,
+    y = s.block(610, 286, [(f"↳ 山田 花子 · 10-01 09:40 {SENDER}", INK, True), *summary,
                            (RULE, MUTED, False), (BODY, INK, False)])
     s.bot(588, y + 10)
     s.rect(610, y + 51, 422, 100, "#fff", 9, "#d5e1e5")

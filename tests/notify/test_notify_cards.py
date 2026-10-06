@@ -615,7 +615,7 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
     assert "09-24 08:" in text
     # header -> (summary) -> stamps -> posted body, in that order
     rule = notify_render.SECTION_RULE
-    assert (f"↳ 患者A 様 · 09-24 08:40 職員（薬剤師・薬局Y）\n📋 要約 処理待ち\n"
+    assert (f"↳ 患者A · 09-24 08:40 職員（薬剤師・薬局Y）\n📋 要約 処理待ち\n"
             f"{rule}\nスタンプ 未取得\n{rule}\n本文") in text
     assert f"08:41 職員\n📋 要約 処理待ち\n{rule}\nスタンプ 未取得\n{rule}\n本文" in text
 
@@ -682,8 +682,8 @@ def test_digest_face_groups_signals_per_patient(led):
     c = notify_render._card_content(led.db, card)
     texts = [b.get("text") or "" for b in c["containers"]
              if b["type"] == "text"]
-    assert texts.count("患者A 様") == 1 and texts.count("患者B 様") == 1
-    a_block = texts[texts.index("患者A 様") + 1]
+    assert texts.count("患者A") == 1 and texts.count("患者B") == 1
+    a_block = texts[texts.index("患者A") + 1]
     assert "note sig-a1" in a_block and "note sig-a2" in a_block
     assert c["shown"] == ["sig-a1", "sig-a2", "sig-b1"]
 

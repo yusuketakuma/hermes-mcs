@@ -23,7 +23,7 @@ def test_heading_names_patient_station_and_same_name_suffix(led):
     _patient(led, 2345, name="患者A")              # a same-name room
     _dispatch(led, _intent(led))
     head = _texts(_spec(led))[0]
-    assert head == "💬 患者A 様（あおぞら） #1 · 起点 09-24"
+    assert head == "💬 患者A（あおぞら） #1 · 起点 09-24"
 
 
 def test_context_line_counts_posts_missing_replies_files_and_mention(led):
@@ -106,7 +106,7 @@ def test_signal_thread_posts_are_keyed_per_signal(led):
     assert len(names) == 2 and all(n.startswith("s:") for n in names)
     assert names[0] != names[1]
     body = "".join(_spec(led)["parts"]["thread_body_parts"])
-    assert "/ 状態: 未確認" in body and "↳ 患者A 様 · " in body
+    assert "/ 状態: 未確認" in body and "↳ 患者A · " in body
     assert "[MCS]" not in body and "project 1" not in body
 
 

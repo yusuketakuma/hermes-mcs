@@ -188,12 +188,14 @@ def test_signal_card_and_message_notice_follow_same_current_urgency_source(
         led, _intent(led, payload={"message_ids": [100]}))
     # Then: stale/routine artifacts don't produce a high badge; sources remain distinct.
     if expected is None:
-        assert "緊急度高" not in face and "緊急語あり" not in face
-        assert "緊急度: 高" not in text and "緊急語を含む" not in text
+        assert "緊急度高" not in face and "緊急語あり" not in face \
+            and "🚨" not in face
+        assert "緊急度: 高" not in text and "緊急語を含む" not in text \
+            and "🚨" not in text
     else:
         # the card tag and the text notice each keep the source distinct
         assert notify_render.URGENCY_TAG[expected] in face
-        assert ("AI抽出" if expected == "llm" else "機械照合") in text
+        assert ("AI抽出" if expected == "llm" else "🚨") in text
 
 
 @pytest.mark.parametrize("field", ["content", "meta"])

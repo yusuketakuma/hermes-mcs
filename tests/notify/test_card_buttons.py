@@ -672,7 +672,7 @@ def test_urgency_badge_names_its_source(led):
     texts = [c["text"] for c in _spec(led)["parts"]["containers"]
              if c["type"] == "text"]
     assert any("・緊急度: 高（AI抽出）" in t for t in texts)
-    assert any("・緊急語を含む（機械照合）" in t for t in texts)
+    assert any("・🚨" in t for t in texts)
 
 
 def test_urgency_reads_the_same_artifact_as_the_body(led):

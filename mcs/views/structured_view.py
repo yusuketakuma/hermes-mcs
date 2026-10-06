@@ -199,10 +199,10 @@ def _canonical_finding_lines(llm: dict) -> list[str]:
     return out
 
 
-# Where high urgency came from: explicit exclusions still leave a lexical
-# rule match, not a clinical assessment, so the source is always shown.
+# Where high urgency came from: a lexical rule match is only the 🚨 icon —
+# not a clinical assessment — while the AI verdict keeps its wording.
 URGENCY_LABEL = {"llm": "緊急度: 高（AI抽出）",
-                 "rule": "緊急語を含む（機械照合）"}
+                 "rule": "🚨"}
 
 
 def message_urgency(db, mid: int) -> str | None:

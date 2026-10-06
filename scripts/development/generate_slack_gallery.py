@@ -22,7 +22,7 @@ MUTED = "#66716f"
 GREEN = "#087f5b"
 FONT = "Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif"
 # Fully fictional example shared by every screen (no real or anonymised posts).
-HEADING = "💬 山田 花子 様（あおぞら）· 起点 10-01"
+HEADING = "💬 山田 花子（あおぞら）· 起点 10-01"
 SENDER = "佐藤さん（訪問看護・あおぞら）"
 POSTS = (
     (f"10-01 09:40 {SENDER}",
@@ -151,7 +151,7 @@ class Screen:
 
     def thread_post(self, x, y, width, size=17, sender=SENDER, stamps=True):
         """One post in the companion thread: header, 📋 要約, stamps, body."""
-        y = self.paragraph(x, y, f"↳ 山田 花子 様 · 10-01 09:40 {sender}", width, size, INK, True)
+        y = self.paragraph(x, y, f"↳ 山田 花子 · 10-01 09:40 {sender}", width, size, INK, True)
         y = self.paragraph(x, y - 2, "📋 要約", width, size, GREEN, True)
         for bullet in POSTS[0][1]:
             y = self.paragraph(x, y - 2, "・" + bullet, width, size)
@@ -178,7 +178,7 @@ def overview():
     s.text(689, 313, "MCS", 18, INK, True)
     y = s.thread_post(689, 348, 354, 16)
     s.text(689, y + 24, "MCS", 18, INK, True)
-    y = s.paragraph(689, y + 58, "📎 服薬カレンダー.jpg — 山田 花子 様 10-01 09:40 佐藤さん", 354, 16)
+    y = s.paragraph(689, y + 58, "📎 服薬カレンダー.jpg — 山田 花子 10-01 09:40 佐藤さん", 354, 16)
     s.rect(689, y - 8, 200, 120, "#f3f6f4", 8, "#dce2dd")
     s.text(789, y + 58, "画像", 16, MUTED)
     return s.finish()
