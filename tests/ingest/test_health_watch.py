@@ -494,3 +494,58 @@ def test_corrupt_bytes_do_not_stop_health_watch(tmp_path, raw):
     state.write_bytes(raw)
     report = health_watch.evaluate(str(tmp_path), now=1000, cfg={})
     assert report["status"] == "missing" and report["alert"]
+
+
+def test_new_degraded_reason_alerts_but_flapping_reason_does_not(tmp_path):
+    def tick(at, reasons):
+        _health_file(tmp_path, {"overall": "degraded", "at": at,
+                                "state_reasons": reasons})
+        return _eval(tmp_path, at + 10.0)["alert"]
+    assert tick(990, ["notification_pending"])
+    assert not tick(1290, ["notification_pending"])
+    # a new cause inside the same degraded episode is news
+    assert tick(1590, ["collection_incomplete", "notification_pending"])
+    # a reason that drops and returns within the episode stays silent
+    assert not tick(1890, ["collection_incomplete"])
+    assert not tick(2190, ["collection_incomplete", "notification_pending"])
+
+
+def test_state_without_alerted_reasons_does_not_realert(tmp_path):
+    _health_file(tmp_path, {"overall": "degraded", "at": 990,
+                            "state_reasons": ["stage_errors"]})
+    state = Path(tmp_path) / "data" / "health_watch.json"
+    state.write_text(json.dumps({
+        "last": {"status": "degraded", "health_at": 690,
+                 "evidence_at": 690}, "alerted_at": 700.0}))
+    assert not _eval(tmp_path, 1000.0)["alert"]
+
+
+def test_main_delivers_alert_to_system_target(tmp_path, monkeypatch):
+    import notify_flush
+    sent = []
+    monkeypatch.setattr(notify_flush, "_send",
+                        lambda argv, text, **kw: sent.append((argv, text)))
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"notify_target": "slack:#patients",
+                               "notify_system_target": "slack:#ops"}))
+    _health_file(tmp_path, {"overall": "failed", "at": 990})
+    args = ["--home", str(tmp_path), "--config", str(cfg)]
+    assert health_watch.main(args + ["--now", "1000"]) == 0
+    assert len(sent) == 1
+    argv, text = sent[0]
+    assert argv[argv.index("--to") + 1] == "slack:#ops"
+    assert "mcs health: failed" in text
+    assert health_watch.main(args + ["--now", "1001"]) == 0
+    assert len(sent) == 1                      # deduped: no second send
+
+
+def test_alert_delivery_without_target_or_with_failing_sender_is_silent(
+        tmp_path, monkeypatch):
+    import notify_flush
+
+    def boom(*a, **k):
+        raise OSError("sender down")
+    monkeypatch.setattr(notify_flush, "_send", boom)
+    assert health_watch.deliver_alert({}, "x") is False
+    assert health_watch.deliver_alert(
+        {"notify_target": "slack:#ops"}, "x") is False

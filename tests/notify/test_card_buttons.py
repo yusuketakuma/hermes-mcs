@@ -525,6 +525,8 @@ def test_due_and_overdue_reminders_fire_once(led):
                     due="2026-09-30")
     _add_request(led, title="期限なし")
     _add_request(led, title="完了", due="2026-09-01", status="done")
+    led.db.execute("UPDATE messages SET organization='合成所属' WHERE message_id=101")
+    led.db.commit()
     morning = _at("2026-10-01", 9)
     assert notify_cards.task_reminders(led, CFG_OFF, now=morning) == 0
     assert notify_cards.task_reminders(led, CFG, now=_at("2026-10-01", 23)) == 0
@@ -535,9 +537,11 @@ def test_due_and_overdue_reminders_fire_once(led):
         "ORDER BY event_id").fetchall()
     texts = [notify_flush._format_event(led, e)[0] for e in events]
     assert texts == [
-        "⚠ 期限切れ（期限 2026-09-30） — 患者A: ＜＠1＞ 昨日の件 — 担当 未設定",
-        "⏰ 期限リマインド（本日 2026-10-01） — 患者A: 今日の確認 — 担当 山田"]
+        "患者A: ＜＠1＞ 昨日の件 — ⚠ 期限切れ（期限 2026-09-30） / 職員（合成所属） / 09-24 08:41 — 担当 未設定",
+        "患者A: 今日の確認 — ⏰ 期限リマインド（本日 2026-10-01） / 職員（所属未取得） / 09-24 08:40 — 担当 山田"]
     assert all(e["route"] == "text" for e in events)
+    assert all("<@" not in text for text in texts)
+    assert "昨日の件" in texts[0][:40] and "今日の確認" in texts[1][:40]
     # the next day the due-day task gets its one overdue reminder
     assert notify_cards.task_reminders(
         led, CFG, now=_at("2026-10-02", 9)) == 1
@@ -548,6 +552,23 @@ def test_due_and_overdue_reminders_fire_once(led):
         (due, "due"), (due, "overdue"), (late, "overdue")]
     assert notify_cards.task_reminders(
         led, CFG, now=_at("2026-10-03", 9)) == 0
+
+
+
+def test_long_reminder_title_keeps_source_five_fields_in_outgoing_text(led):
+    _delivered_card(led)
+    assert notify_cards.task_reminders(led, CFG, now=_at("2026-09-20", 9)) == 0
+    _add_request(led, src_mid=101, title="承認済みの主内容" + "要" * 400, due="2026-10-01")
+    with led.db:
+        led.db.execute("UPDATE patients SET patient_name=? WHERE project_id=1", ("患" * 30,))
+        led.db.execute("UPDATE messages SET sender_name=?,organization=?,posted_at='2026-10-06T08:30:00+09:00' WHERE message_id=101", ("発" * 24, "所" * 24))
+    assert notify_cards.task_reminders(led, CFG, now=_at("2026-10-01", 9)) == 1
+    event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='task_reminder' ORDER BY event_id DESC LIMIT 1").fetchone()
+    text = notify_flush._format_event(led, event)[0]
+    assert "患" * 30 in text and "承認済みの主内容" in text[:50]
+    assert "発" * 24 in text and "所" * 24 in text and "10-06 08:30" in text
+    assert "2026-10-01" in text and len(text) <= 600
+    assert notify_cards.task_reminders(led, CFG, now=_at("2026-10-01", 10)) == 0
 
 
 def test_first_activation_baselines_old_overdue_tasks(led):

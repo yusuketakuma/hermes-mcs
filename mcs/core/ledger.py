@@ -169,6 +169,21 @@ def enqueue_ready_attachment_followups_tx(db, event_id, now) -> int:
         for row in rows)
 
 
+_GUARD_RELATIONS = (
+    ("artifacts", "message_id, project_id",
+     "a.message_id IS NOT NULL AND NOT EXISTS "
+     "(SELECT 1 FROM messages m WHERE m.message_id=a.message_id "
+     "AND (a.project_id IS NULL OR m.project_id=a.project_id))"),
+    ("attachments", "message_id",
+     "NOT EXISTS (SELECT 1 FROM messages m "
+     "WHERE m.message_id=a.message_id)"),
+)
+_GUARD_TRIGGERS = frozenset(
+    [f"g1_{table}_msg_{suffix}" for table, _, _ in _GUARD_RELATIONS
+     for suffix in ("ins", "upd")]
+    + [f"relation_audit_messages_{suffix}" for suffix in ("del", "upd")])
+
+
 class Ledger:
     def __init__(self, path: str, *, notify_all_replies: bool = False):
         self.notify_all_replies = notify_all_replies is True
@@ -187,13 +202,14 @@ class Ledger:
             self.db.execute("PRAGMA foreign_keys=ON")
             self.db.execute("PRAGMA busy_timeout=30000")
             self._init()
-            self._install_relation_guards(new_database=not tables)
+            self._install_relation_guards(
+                new_database=not tables, audit=version != SCHEMA_VERSION)
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
             for side in (path + "-wal", path + "-shm"):
                 if os.path.exists(side):
                     os.chmod(side, 0o600)
-        except Exception:
+        except BaseException:
             self.db.close()
             raise
 
@@ -291,6 +307,8 @@ class Ledger:
         self.db.executescript("""
           CREATE INDEX IF NOT EXISTS idx_messages_project_time
             ON messages(project_id, posted_at_ts);
+          CREATE INDEX IF NOT EXISTS idx_messages_notified
+            ON messages(notified_at) WHERE notified_at IS NOT NULL;
           CREATE INDEX IF NOT EXISTS idx_messages_parent
             ON messages(parent_id);
           CREATE INDEX IF NOT EXISTS idx_messages_thread_time
@@ -303,6 +321,14 @@ class Ledger:
             ON artifacts(kind, message_id);
           CREATE INDEX IF NOT EXISTS idx_fetch_jobs_pending_due
             ON fetch_jobs(kind, next_try) WHERE state='pending';
+          CREATE INDEX IF NOT EXISTS idx_attachments_pending
+            ON attachments(attachment_id) WHERE state='pending';
+          CREATE INDEX IF NOT EXISTS idx_outbox_due_states
+            ON notify_outbox(event_id) WHERE state IN ('pending','failed');
+          CREATE INDEX IF NOT EXISTS idx_outbox_kind_created
+            ON notify_outbox(kind, created_at);
+          CREATE INDEX IF NOT EXISTS idx_fetch_jobs_failed_recent
+            ON fetch_jobs(updated_at, kind) WHERE state='failed';
           CREATE UNIQUE INDEX IF NOT EXISTS uq_attachments_msg_file
             ON attachments(message_id, file_id);
         """)
@@ -327,20 +353,52 @@ class Ledger:
         self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         self.db.commit()
 
-    def _install_relation_guards(self, *, new_database: bool = False) -> None:
+    def _relation_guards_current(self) -> bool:
+        """True when no recorded guard decision or evidence would change.
+
+        Read-only (WAL readers never block writers). An ``enforce`` relation
+        is trusted without a recount while its triggers exist and its
+        ``ledger_relation_audit`` mode still matches: the only paths that can
+        orphan an enforced child (a messages DELETE or key UPDATE) clear that
+        row through the ``relation_audit_messages_*`` triggers. ``shadow``
+        relations are recounted because ``existing_count`` is health evidence.
+        """
+        self.db.execute("BEGIN")
+        try:
+            try:
+                guards = {r[0]: (r[1], r[2]) for r in self.db.execute(
+                    "SELECT relation,mode,existing_count FROM ledger_relation_guards")}
+                verified = dict(self.db.execute(
+                    "SELECT relation,mode FROM ledger_relation_audit").fetchall())
+            except sqlite3.OperationalError:
+                return False
+            triggers = {r[0] for r in self.db.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger'")}
+            if not _GUARD_TRIGGERS <= triggers:
+                return False
+            for table, _columns, condition in _GUARD_RELATIONS:
+                mode, existing = guards.get(table, (None, None))
+                if mode is None or verified.get(table) != mode:
+                    return False
+                if mode == "shadow" and self.db.execute(
+                        f"SELECT COUNT(*) FROM {table} a WHERE {condition}"
+                ).fetchone()[0] != existing:
+                    return False
+            return True
+        finally:
+            self.db.commit()
+
+    def _install_relation_guards(self, *, new_database: bool = False,
+                                 audit: bool = False) -> None:
         # Audit and activation share a writer lock: no unguarded write can
         # slip between the zero-count check and trigger installation.
         # Dirty relations stay shadow-only, including after observed shadow
         # violations are repaired; their counters require owner review.
-        relations = (
-            ("artifacts", "message_id, project_id",
-             "a.message_id IS NOT NULL AND NOT EXISTS "
-             "(SELECT 1 FROM messages m WHERE m.message_id=a.message_id "
-             "AND (a.project_id IS NULL OR m.project_id=a.project_id))"),
-            ("attachments", "message_id",
-             "NOT EXISTS (SELECT 1 FROM messages m "
-             "WHERE m.message_id=a.message_id)"),
-        )
+        # The writer lock is taken only when the read-only check finds a
+        # decision/evidence change; the recount then repeats under the lock.
+        if not audit and self._relation_guards_current():
+            return
+        relations = _GUARD_RELATIONS
         self.db.execute("BEGIN IMMEDIATE")
         with self.db:
             self.db.execute("""
@@ -383,6 +441,30 @@ class Ledger:
                           WHERE relation='{table}' AND mode='shadow';
                         END
                     """)
+            self.db.execute("""
+                CREATE TABLE IF NOT EXISTS ledger_relation_audit(
+                  relation TEXT PRIMARY KEY, mode TEXT NOT NULL)
+            """)
+            self.db.execute("DELETE FROM ledger_relation_audit")
+            self.db.execute("""
+                INSERT INTO ledger_relation_audit(relation,mode)
+                SELECT relation,mode FROM ledger_relation_guards
+                WHERE relation IN ('artifacts','attachments')
+            """)
+            # Parent-side changes can orphan children the g1 triggers already
+            # admitted; they invalidate the audit so the next open recounts.
+            # ponytail: INSERT OR REPLACE on messages fires no DELETE trigger
+            # unless recursive_triggers is on; no ledger writer uses REPLACE.
+            for suffix, event, when in (
+                    ("del", "DELETE", "1"),
+                    ("upd", "UPDATE OF message_id, project_id",
+                     "OLD.message_id IS NOT NEW.message_id "
+                     "OR OLD.project_id IS NOT NEW.project_id")):
+                self.db.execute(f"""
+                    CREATE TRIGGER IF NOT EXISTS relation_audit_messages_{suffix}
+                    AFTER {event} ON messages WHEN {when}
+                    BEGIN DELETE FROM ledger_relation_audit; END
+                """)
 
     def _script(self, s: str):
         """Run a ;-separated DDL/DML script inside the caller's transaction
@@ -769,6 +851,11 @@ class Ledger:
         for message in [m, *m.replies]:
             if message.project_id != expected_project:
                 raise ValueError("message_project_mismatch")
+            if message.parent_id and not message.is_unread \
+                    and self._reply_job_unread(message):
+                # acknowledged by thread-read before it was stored: the
+                # job carries the unread evidence the fetch cannot
+                message.is_unread = True
             if self._upsert_message(message):
                 new_ids.append(message.message_id)
             self._save_attachments(message, now)
@@ -839,6 +926,16 @@ class Ledger:
         for ids in changed.values():
             ids.sort()
         return changed
+
+    def _reply_job_unread(self, m) -> bool:
+        """An open reply job flagged {"unread": true} (stage_thread_read
+        acknowledged the reply before it was stored)."""
+        row = self.db.execute(
+            "SELECT payload FROM fetch_jobs WHERE kind='reply' "
+            "AND project_id=? AND message_id=? AND state != 'done'",
+            (m.project_id, m.message_id)).fetchone()
+        return bool(row) and (loads_dict(row["payload"] or "{}")
+                              or {}).get("unread") is True
 
     def _retire_reply_job(self, m, now: float):
         """A terminal body landing in the ledger retires any queued reply
@@ -1837,14 +1934,31 @@ class Ledger:
 
     def job_add(self, kind: str, project_id: int, message_id: int = 0,
                 parent_id: int | None = None, payload: dict | None = None,
-                next_try: float = 0) -> int | None:
+                next_try: float = 0, revive_failed: bool = True) -> int | None:
         # a done/failed job for the same key must be REVIVED by a new
         # request — plain INSERT OR IGNORE would silently drop re-import
         # requests forever. An in-flight job keeps its progress.
+        # revive_failed=False is for periodic re-discovery (not a request).
         cur = self._job_add_tx(kind, project_id, message_id, parent_id,
-                               payload, next_try)
+                               payload, next_try,
+                               revive_failed=revive_failed)
         self.db.commit()
         return cur.lastrowid
+
+    def job_set_flag(self, kind: str, project_id: int, message_id: int,
+                     key: str) -> None:
+        """Set payload[key]=true on a pending job — job_add keeps a
+        pending row's payload, so a flag must be merged in separately."""
+        row = self.job_pending(kind, project_id, message_id)
+        if row is None:
+            return
+        pl = loads_dict(row["payload"] or "{}")
+        if pl is None or pl.get(key) is True:
+            return
+        pl[key] = True
+        self.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
+                        (json.dumps(pl), row["job_id"]))
+        self.db.commit()
 
     def job_due(self, limit: int = 20, kind: str | None = None,
                 after_job_id: int = 0) -> list:
@@ -2436,9 +2550,17 @@ class Ledger:
         """, (since, limit)).fetchall()
 
     def stored_reply_ids(self, parent_id: int) -> set:
-        return {r[0] for r in self.db.execute(
-            "SELECT message_id FROM messages WHERE parent_id=? "
-            "AND body_state IN ('full','deleted')", (parent_id,))}
+        """Replies settled for a thread clear: full/deleted bodies, plus
+        stored incomplete ones whose reply job burnt out — waiting on a
+        failed job would block the thread (and a THREAD_READ_MAX slot)
+        until it ages out of the window."""
+        return {r[0] for r in self.db.execute("""
+          SELECT m.message_id FROM messages m
+          WHERE m.parent_id=? AND (m.body_state IN ('full','deleted')
+            OR EXISTS(SELECT 1 FROM fetch_jobs j WHERE j.kind='reply'
+                      AND j.project_id=m.project_id
+                      AND j.message_id=m.message_id AND j.state='failed'))
+        """, (parent_id,))}
 
     def mark_thread_read(self, project_id: int, parent_id: int,
                          last_reply_id: int, status: str) -> None:
@@ -2495,6 +2617,11 @@ class Ledger:
 
     def artifacts(self, kind: str, project_id: int = None,
                   message_id: int = None) -> list:
+        return list(self.iter_artifacts(kind, project_id, message_id))
+
+    def iter_artifacts(self, kind: str, project_id: int = None,
+                       message_id: int = None, *, descending: bool = False):
+        """Read artifact history incrementally in the requested ID order."""
         q = "SELECT * FROM artifacts WHERE kind=?"
         params: list = [kind]
         if project_id is not None:
@@ -2503,7 +2630,8 @@ class Ledger:
         if message_id is not None:
             q += " AND message_id=?"
             params.append(message_id)
-        return self.db.execute(q + " ORDER BY artifact_id", params).fetchall()
+        order = " DESC" if descending else ""
+        return self.db.execute(q + " ORDER BY artifact_id" + order, params)
 
     def close(self):
         self.db.close()
@@ -2520,11 +2648,15 @@ class LedgerReader(Ledger):
         uri = Path(path).resolve().as_uri() + "?mode=ro"
         self.db = sqlite3.connect(uri, uri=True,
                                   timeout=30)
-        self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA busy_timeout=30000")
-        self._fts = self.db.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' "
-            "AND name='messages_fts'").fetchone() is not None
+        try:
+            self.db.row_factory = sqlite3.Row
+            self.db.execute("PRAGMA busy_timeout=30000")
+            self._fts = self.db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='messages_fts'").fetchone() is not None
+        except BaseException:
+            self.db.close()
+            raise
 
 
 def publish_snapshot(db_path: str, dest_dir: str) -> str | None:

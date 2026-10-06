@@ -6,7 +6,7 @@
 ## 統合と監査の再利用
 
 main祖先にある古いworktreeは重複再適用しない。release-1.0.11のdirty53ファイルは全てmain祖先4978c96と完全一致、roadmap20のOpenWiki blockもmainへ統合済み。dirtyは保持。
-親の統合treeと監査record H3b58ba7の一致、最終COMPLETE receiptと独立レビュー受入を[受入票](../development/ACCEPTANCE_1.0.13.md)へ束縛。
+親の統合treeと監査record H3b58ba7の一致、最終COMPLETE receiptと独立レビュー受入を[受入票](../development/acceptance/ACCEPTANCE_1.0.13.md)へ束縛。
 
 ## 生成とREADME照合
 

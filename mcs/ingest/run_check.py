@@ -51,7 +51,8 @@ from mcs_adapter import (MCSAdapter, MCSError, SessionExpired)
 from ledger import Ledger, METADATA_SHADOW_BACKOFF_S
 from health_watch import HEALTH_REL, _finite_number
 from mcs_util import (CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB,
-                      HOME, RUN_LOCK, UPDATE_MARKER_NAME, acquire_run_lock,
+                      HOME, RUN_LOCK, UPDATE_MARKER_NAME, RunLockLost,
+                      acquire_run_lock, code_stamp as _code_stamp,
                       disk_floor_mb, load_config)
 import job_ops
 import maintenance
@@ -201,6 +202,65 @@ def _backup_health(cfg: dict, now: float) -> dict:
                 "last_restore_at", "source_last_successful_run", "max_rpo_seconds")}}
 
 
+CARD_STALL_S = 1800        # a queued render this old on the live transport
+BACKLOG_STALL_S = 6 * 3600  # untouched due work AND no progress this long
+
+
+def _backlog_stalls(ledger, cfg, now: float) -> list:
+    """Degraded reasons for work that silently stopped moving. Each
+    check is gated on its feature being enabled and needs BOTH an old
+    untouched item and no completion inside the window, so a large but
+    draining backlog (or an idle system) never trips it.
+    - card_delivery_stalled: a queued render on the active interactive
+      transport not picked up for CARD_STALL_S (worker down/denied).
+    - semantic_backlog_stalled: semantic mode on, a due pending job
+      untouched for BACKLOG_STALL_S and no semantic job done since.
+    - extract_backlog_stalled: legacy extraction admitting (fact_source
+      legacy), an eligible message without a v4 result stored
+      BACKLOG_STALL_S ago with no extract_llm artifact at all, and no
+      extract_llm artifact written since. Any attempt (errored, poison,
+      older body) counts as started, so permanent failures surfaced
+      elsewhere never pin this on."""
+    import notify_cards
+    import semantic_policy
+    from mcs_queries import current_v4_id
+    reasons = []
+    db = ledger.db
+    if notify_cards.interactive_enabled(cfg):
+        oldest = db.execute(
+            "SELECT MIN(created_at) FROM notification_renders "
+            "WHERE state='queued' AND transport=?",
+            (notify_cards.active_transport(cfg),)).fetchone()[0]
+        if oldest is not None and now - oldest > CARD_STALL_S:
+            reasons.append("card_delivery_stalled")
+    scfg, errors = semantic_policy.semantic_config(cfg)
+    if errors:
+        return reasons   # reported as stage errors; admission is closed
+    window = now - BACKLOG_STALL_S
+    if scfg["mode"] != "off" and db.execute(
+            "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "
+            "AND state='pending' AND next_try<=? AND updated_at<? LIMIT 1",
+            (now, window)).fetchone() and not db.execute(
+            "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "
+            "AND state='done' AND updated_at>=? LIMIT 1",
+            (window,)).fetchone():
+        reasons.append("semantic_backlog_stalled")
+    if scfg["fact_source"] != "canonical":
+        newest = db.execute(
+            "SELECT created_at FROM artifacts WHERE kind='extract_llm' "
+            "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+        if (newest is None or (newest[0] or 0) < window) and db.execute(
+                "SELECT 1 FROM messages m WHERE m.body_text IS NOT NULL "
+                "AND m.body_text != '' "
+                "AND (m.body_state IS NULL OR m.body_state='full') "
+                "AND m.first_seen < ? AND NOT EXISTS(SELECT 1 FROM artifacts a "
+                "  WHERE a.kind='extract_llm' AND a.message_id=m.message_id) "
+                f"AND {current_v4_id()} IS NULL LIMIT 1",
+                (window,)).fetchone():
+            reasons.append("extract_backlog_stalled")
+    return reasons
+
+
 def _health(ledger, result: dict, status: str,
             run_id: int | None = None, *, cfg: dict | None = None) -> dict:
     """Per-subsystem machine-readable state: collection completeness,
@@ -315,10 +375,16 @@ def _health(ledger, result: dict, status: str,
             "attempts": cards_health["attempts_unsettled"],
             "oldest_age_s": cards_health["oldest_unsettled_age_s"]},
     }
+    try:
+        stalls = (_backlog_stalls(ledger, cfg, now)
+                  if isinstance(cfg, dict) and cfg is not CONFIG_NOT_LOADED
+                  else [])
+    except Exception as e:
+        stalls = [f"stall_check_failed:{type(e).__name__}"]
     overall = ("failed" if status in ("failed", "session_expired")
                else "degraded"
                if (result.get("errors") or coll["collection"] != "ok"
-                   or notify_state == "incomplete")
+                   or notify_state == "incomplete" or stalls)
                else "ok")
     shadow = result.get("metadata_shadow") or {"mode": "off", "reason": "not_run"}
     shadow_health = {key: shadow[key] for key in (
@@ -362,7 +428,7 @@ def _health(ledger, result: dict, status: str,
             ("notification_held", bool(held)),
             ("notification_pending", bool(outbox["c"])),
             ("disk_low", _disk_low(free_mb) or bool(result.get("backup_skipped"))),
-        ) if present]
+        ) if present] + stalls
     return {
         "overall": overall, "run_status": status,
         "last_ok_at": last_ok_at,
@@ -421,21 +487,6 @@ def _write_health(ledger, result: dict, status: str,
                                "run_id": run_id})
 LOCK_WAIT_S = 150
 LOCK_POLL_S = 0.2
-
-
-_MCS_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def _code_stamp() -> int:
-    """Newest mtime of the mcs/ sources — changes when an update merges."""
-    newest = 0
-    for base, _dirs, files in os.walk(_MCS_ROOT):
-        for name in files:
-            if name.endswith(".py"):
-                with suppress(OSError):
-                    newest = max(newest, os.stat(
-                        os.path.join(base, name)).st_mtime_ns)
-    return newest
 
 
 _CODE_STAMP = _code_stamp()
@@ -614,9 +665,12 @@ def _post_ack_gap(adapter, ledger, pid: int, result):
         return
     cutoff = (ledger.coverage_ts(pid) or ledger.high_watermark(pid)) \
         - BACKFILL_OVERLAP_S
+    # notify: the rows it finds arrive already read — the walk must
+    # offer every new row, merged into an already-pending head job too
     ledger.job_add("history_head", pid, payload={
         "since": max(0, cutoff), "page": 1,
-        "pages": BACKFILL_MAX_PAGES, "trickle": False})
+        "pages": BACKFILL_MAX_PAGES, "trickle": False, "notify": True})
+    ledger.job_set_flag("history_head", pid, 0, "notify")
     result["errors"].append(f"mark {pid}: post_ack_gap")
 
 
@@ -796,13 +850,21 @@ def stage_thread_read(adapter, ledger, result, deadline):
             missing = server - ledger.stored_reply_ids(parent)
             if missing:
                 # Store full replies before acknowledging the thread.
+                # never revive a burnt-out job: this runs every tick and
+                # would reset its attempts forever (same as save_thread_replies)
                 for rid in sorted(missing):
-                    ledger.job_add("reply", pid, rid, parent_id=parent)
+                    ledger.job_add("reply", pid, rid, parent_id=parent,
+                                   revive_failed=False)
                 continue
             ledger.mark_thread_read(pid, parent, last, "unknown")
             seen = adapter.read_thread(pid, parent)
             for rid in sorted(seen - server):
-                ledger.job_add("reply", pid, rid, parent_id=parent)
+                # arrived between fetch and read: now read on MCS, so
+                # the job carries the unread evidence for notification
+                ledger.job_add("reply", pid, rid, parent_id=parent,
+                               payload={"unread": True},
+                               revive_failed=False)
+                ledger.job_set_flag("reply", pid, rid, "unread")
             if not adapter.thread_unread(pid, parent):
                 ledger.mark_thread_read(pid, parent, last, "confirmed")
                 done.append(parent)
@@ -1319,6 +1381,8 @@ def stage_derive(ledger, result, deadline, cfg=None,
         import mcs_signals
         result["signals"] = mcs_signals.evaluate(
             ledger, cfg or _config(), deadline=deadline)
+        result["errors"].extend(
+            f"signals: {e}" for e in result["signals"].get("errors") or [])
     except Exception as e:
         result["errors"].append(f"signals: {type(e).__name__}")
 
@@ -1462,7 +1526,12 @@ def _semantic_enabled(ledger, cfg, result) -> bool:
     try:
         import semantic as _sem
         from semantic_store import invalidate_projections
-        scfg = _sem.semantic_config(cfg)[0]
+        scfg, errors = _sem.semantic_config(cfg)
+        # an invalid block also closes legacy extraction admission
+        # (extract_llm.legacy_admissions) — surface it every tick
+        for e in errors:
+            if e not in result["errors"]:
+                result["errors"].append(e)
         invalidate_projections(ledger, scfg)
         return scfg["mode"] != "off"
     except Exception as e:
@@ -1540,7 +1609,8 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
                   notify_max_age_s=notify_max_age_s)
     _with_relogin(adapter, ledger, result, "history_jobs",
                   job_ops.run_history_jobs, adapter, ledger, result,
-                  deadline, trickle=False, semantic=sem_on)
+                  deadline, trickle=False, semantic=sem_on,
+                  notify_max_age_s=notify_max_age_s)
     if getattr(args, "mark_read", False):
         # after every import path of this tick has stored its replies
         _with_relogin(adapter, ledger, result, "thread_read",
@@ -1709,6 +1779,11 @@ def _run_semantic(ledger, args, cfg, result, deadline, sem_on,
             lane="realtime")
     except Exception as e:
         result["errors"].append(f"semantic: {type(e).__name__}")
+        return
+    lost = result["semantic"].get("run_lock_lost")
+    if lost:
+        # the drain stopped without touching its job; end the tick
+        raise RunLockLost(held=lost == "held")
 
 
 def _housekeeping(result):
@@ -1731,6 +1806,10 @@ def _housekeeping(result):
             result["attachments_pruned"] = pruned
     except Exception as e:
         result["errors"].append(f"prune: {type(e).__name__}")
+    try:
+        maintenance.prune_leftovers()
+    except Exception as e:
+        result["errors"].append(f"prune_leftovers: {type(e).__name__}")
 
 
 def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
@@ -1789,8 +1868,8 @@ def _fail_run(ledger, args, result, run_id, status, detail,
         # the relogin attempt — the flush below still delivers it
         if not args.no_notify:  # --no-notify suppresses ALL sends;
             result["notify"] = notify_flush.flush(ledger, deadline=deadline)
-    except Exception:                                    # queued for a
-        pass                                             # later flush
+    except Exception as e:  # queued for a later flush — but visible
+        result["errors"].append(f"alert_enqueue_failed: {type(e).__name__}")
 
 
 def _arm_watchdog(deadline: float, grace_s: int) -> None:
@@ -1942,11 +2021,26 @@ def _main() -> int:
         _run_stage(result, "metadata_shadow", deadline, _run_metadata_shadow,
                    adapter, ledger, result, deadline, cfg,
                    manual=args.metadata_shadow)
-        _run_stage(result, "housekeeping", deadline, _housekeeping, result)
+        # optional, but a slow MCS can spend every tick's budget on unread
+        # — once the daily backup is overdue it runs past the deadline
+        _run_stage(result, "housekeeping", deadline, _housekeeping, result,
+                   required=maintenance.backup_overdue())
         status = _run_stage(result, "finish", deadline, _finish_run,
                             ledger, cfg, result, run_id, deadline, required=True)
         assert isinstance(status, str)
         _write_health(ledger, result, status, run_id=run_id, cfg=cfg)
+    except RunLockLost as e:
+        # An updater won the lock during semantic transport. Held: record
+        # the run as partial and stop — no further stage runs old code.
+        # Not held: no DB write at all; the 'running' row is closed as
+        # 'crashed' by the next begin_run (the crashed-run path).
+        result["errors"].append("run_lock_lost")
+        if e.held:
+            ledger.finish_run(run_id, "partial",
+                              "; ".join(result["errors"][:8]))
+            _write_health(ledger, result, "partial", run_id=run_id, cfg=cfg)
+        print(json.dumps(result, ensure_ascii=False))
+        return 1
     except SessionExpired as e:
         detail = _err_str(e)
         recovered = False

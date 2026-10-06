@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "通知の重複確認と健全性集計で全件走査しないよう索引を追加",
+  "summary": "障害通知の送信間隔確認・添付の追送確認・失敗ジョブの集計が、通知キューや取得ジョブの全件を読んでいたため、索引で必要な行だけを読むようにしました。通知内容や集計結果は変わりません。",
+  "upgrade": "更新後に台帳を開くと索引が自動追加されます。追加設定は不要です。",
+  "details": ["notify_outbox(kind, created_at) と、state='failed' の fetch_jobs(updated_at, kind) 部分索引を追加。"],
+  "refs": ["mcs/core/ledger.py"]
+}

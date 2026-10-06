@@ -1,0 +1,974 @@
+{
+  "status": "PACKET_IMPLEMENTATION_VERIFIED; final I統合・fresh independent review・全域完了は親担当",
+  "date": "2026-10-05",
+  "owner": "/root/maintenance_semantic",
+  "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-stamps-20261005",
+  "branch": "audit/maintenance-stamps-20261005",
+  "B": "22ebd08240976051edb9bfeb7f7afc6c42fa6280",
+  "P": "22ebd08240976051edb9bfeb7f7afc6c42fa6280",
+  "W_behavior_commit": "50a661b513bf4f58cd0242e29aef4b31b2abf856",
+  "W_report_identity": "このJSONを含む次のreport commit。commit SHAと自己を含む全file SHAは外部final replay receiptに保存し自己参照hashを避ける。",
+  "write_scope": "3source+4既存tests+日本語changes+本evidenceのみ。共有core/ingest/adapters/config/docs/gallery生成物はread-only。元checkout/main/本番へ反映していない。",
+  "coverage": {
+    "owned_existing_files": 8,
+    "owned_source": 4,
+    "owned_test_files": 4,
+    "owned_P_lines": 8097,
+    "owned_W_lines": 8400,
+    "owned_REVIEWED": 8,
+    "owned_PARTIAL": 0,
+    "owned_UNSEEN": 0,
+    "source_changed": 3,
+    "tests_changed": 4,
+    "new_test_files": 0,
+    "new_regression_cases": 17,
+    "baseline_family_cases": 178,
+    "accepted_owned_family_cases": 195,
+    "accepted_boundary_cases": 190,
+    "accepted_cases_per_runtime": 385,
+    "whole_repo_complete": false
+  },
+  "owned_inventory": [
+    {
+      "path": "mcs/views/message_metadata.py",
+      "lines": 313,
+      "sha256_P": "b1f0ffe7349af80381c7ff4cfa15a0afbcbb646799d193bbdf42e97075257ddc",
+      "state": "REVIEWED",
+      "sha256_W": "8f3ffcf8ed22cab2725152050c87ef35b7a0fa47a7d50ca83bd67daf6f96de30",
+      "lines_W": 327,
+      "read_ranges_P": [
+        [
+          1,
+          313
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          327
+        ]
+      ],
+      "W_read_basis": "SHA-matched full P read plus complete diff read and source recheck; no omitted changed ranges",
+      "P_read_basis": {
+        "method": "全内容を切断のない分割または全文で読み取り。626–795の切断した試行は破棄し全rangeを再読。",
+        "same_P_bytes_verified": true
+      },
+      "responsibility": "capture観測値と独立した氏名一覧を、取得状態・自己ID・上限付きで表示する。",
+      "callers": "notify_render._message_post、notify_render.card_reaction_lines、mcs_view evidence/snapshot consumer",
+      "criteria_ref": "packet_criteria C01..C12/X01..X08（個別責務と下記caller境界に適用）"
+    },
+    {
+      "path": "mcs/notify/notify_render.py",
+      "lines": 795,
+      "sha256_P": "f42d1837ccada87b926d397976f56fe21bb02888e9c06dfdf406f2b0fb22838e",
+      "state": "REVIEWED",
+      "sha256_W": "b6afa5e00db92d2a1fcceb27815718d6effdcc7ea1deca6b239fb92e5cb11948",
+      "lines_W": 804,
+      "read_ranges_P": [
+        [
+          1,
+          795
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          804
+        ]
+      ],
+      "W_read_basis": "SHA-matched full P read plus complete diff read and source recheck; no omitted changed ranges",
+      "P_read_basis": {
+        "method": "全内容を切断のない分割または全文で読み取り。626–795の切断した試行は破棄し全rangeを再読。",
+        "same_P_bytes_verified": true
+      },
+      "responsibility": "カード/各投稿の読み取り専用表示モデルとsource/presentation fingerprint。",
+      "callers": "notify_cards._issue_render/_build_part_manifest、notify_views.unacked_view、Slack/Discord/LINE WORKSカード変換",
+      "criteria_ref": "packet_criteria C01..C12/X01..X08（個別責務と下記caller境界に適用）"
+    },
+    {
+      "path": "mcs/notify/notify_cards.py",
+      "lines": 2987,
+      "sha256_P": "4da262ffadfdff40160dcf59847923ed7cd74d0b88d3bf609bb07486e692def0",
+      "state": "REVIEWED",
+      "sha256_W": "e41caa907dbf06ab263f422097b11f9d7a880a867ac57a53298b0639493ebd0d",
+      "lines_W": 2990,
+      "read_ranges_P": [
+        [
+          1,
+          2987
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          2990
+        ]
+      ],
+      "W_read_basis": "SHA-matched full P read plus complete diff read and source recheck; no omitted changed ranges",
+      "P_read_basis": {
+        "method": "親受入の同SHA全文receiptを再利用、現在P bytes照合と今回境界の再読",
+        "receipt": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
+        "receipt_sha256": "73714b71c7cb52190fdb39594355afc9fd34f075ae034c23ace3adcdac4476ba",
+        "original_P": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+        "current_fixed_P_sha_verified": true,
+        "parent_inventory_reviewed_sha_agrees": true
+      },
+      "responsibility": "render発行・sealed manifest・世代・grant/receipt・本文post identityのライフサイクル。",
+      "callers": "notify_flush dispatch、notify_cmds dispatch、各adapter workerのtransport/part receipts",
+      "criteria_ref": "packet_criteria C01..C12/X01..X08（個別責務と下記caller境界に適用）"
+    },
+    {
+      "path": "mcs/notify/notify_views.py",
+      "lines": 376,
+      "sha256_P": "d7231b1733636131875d47d4608e82b3099ed96ff9414a06e2dc940f3209dc2d",
+      "state": "REVIEWED",
+      "sha256_W": "d7231b1733636131875d47d4608e82b3099ed96ff9414a06e2dc940f3209dc2d",
+      "lines_W": 376,
+      "read_ranges_P": [
+        [
+          1,
+          376
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          376
+        ]
+      ],
+      "W_read_basis": "SHA-matched full P read plus complete diff read and source recheck; no omitted changed ranges",
+      "P_read_basis": {
+        "method": "全内容を切断のない分割または全文で読み取り。626–795の切断した試行は破棄し全rangeを再読。",
+        "same_P_bytes_verified": true
+      },
+      "responsibility": "scope内の読み取り専用未確認/依頼/要約一覧。変更不要。",
+      "callers": "各adapterのclicker-scoped list UI、shared card_reaction_lines",
+      "criteria_ref": "packet_criteria C01..C12/X01..X08（個別責務と下記caller境界に適用）"
+    },
+    {
+      "path": "tests/notify/test_stamps_display.py",
+      "lines": 344,
+      "sha256_P": "b756e9eb2cea75b23a6102fb01f4720968932543b121f72a0e2125abded29a2f",
+      "state": "REVIEWED",
+      "sha256_W": "36ccfc459a9b355202c74b42063b0be18cdb2aa1ac55f16241f0b9306e52b25a",
+      "lines_W": 621,
+      "read_ranges_P": [
+        [
+          1,
+          344
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          621
+        ]
+      ],
+      "W_read_basis": "SHA-matched full P read plus complete diff read and source recheck; no omitted changed ranges",
+      "P_read_basis": {
+        "method": "全内容を切断のない分割または全文で読み取り。626–795の切断した試行は破棄し全rangeを再読。",
+        "same_P_bytes_verified": true
+      },
+      "responsibility": "完全合成temp ledger/snapshotとstubによる表示・scope・receipt・自己ID・未取得/不正/臨床非完了の動作回帰。",
+      "callers": "scripts/run_tests.sh / pytest guarded collection",
+      "criteria_ref": "packet_criteria C01..C12/X01..X08（個別責務と下記caller境界に適用）"
+    },
+    {
+      "path": "tests/notify/test_metadata_display.py",
+      "lines": 330,
+      "sha256_P": "07f6f3c1c90dc1e3a2e1bcd3cae318008018067c28455518d3a57b17daa325bd",
+      "state": "REVIEWED",
+      "sha256_W": "06152bbdfc38a2d00cb6ef1b4a1fa04b8c8cbc420099aee466def7f236ead4ef",
+      "lines_W": 330,
+      "read_ranges_P": [
+        [
+          1,
+          330
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          330
+        ]
+      ],
+      "W_read_basis": "SHA-matched full P read plus complete diff read and source recheck; no omitted changed ranges",
+      "P_read_basis": {
+        "method": "全内容を切断のない分割または全文で読み取り。626–795の切断した試行は破棄し全rangeを再読。",
+        "same_P_bytes_verified": true
+      },
+      "responsibility": "完全合成temp ledger/snapshotとstubによる表示・scope・receipt・自己ID・未取得/不正/臨床非完了の動作回帰。",
+      "callers": "scripts/run_tests.sh / pytest guarded collection",
+      "criteria_ref": "packet_criteria C01..C12/X01..X08（個別責務と下記caller境界に適用）"
+    },
+    {
+      "path": "tests/notify/test_notify_cards.py",
+      "lines": 2727,
+      "sha256_P": "22ddb5ebb351f50cc68970a999db5b6968f5e0d84404f2a79736ceabdce959e6",
+      "state": "REVIEWED",
+      "sha256_W": "83d59373977422159cdf814915b0d491c544dbaa9f4e08e99379406b8be85ce2",
+      "lines_W": 2727,
+      "read_ranges_P": [
+        [
+          1,
+          2727
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          2727
+        ]
+      ],
+      "W_read_basis": "SHA-matched full P read plus complete diff read and source recheck; no omitted changed ranges",
+      "P_read_basis": {
+        "method": "親受入の同SHA全文receiptを再利用、現在P bytes照合と今回境界の再読",
+        "receipt": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
+        "receipt_sha256": "73714b71c7cb52190fdb39594355afc9fd34f075ae034c23ace3adcdac4476ba",
+        "original_P": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+        "current_fixed_P_sha_verified": true,
+        "parent_inventory_reviewed_sha_agrees": true
+      },
+      "responsibility": "完全合成temp ledger/snapshotとstubによる表示・scope・receipt・自己ID・未取得/不正/臨床非完了の動作回帰。",
+      "callers": "scripts/run_tests.sh / pytest guarded collection",
+      "criteria_ref": "packet_criteria C01..C12/X01..X08（個別責務と下記caller境界に適用）"
+    },
+    {
+      "path": "tests/views/test_response_observation.py",
+      "lines": 225,
+      "sha256_P": "7885f64b9ff1ee619be2c6b4054728b282b93f3f009fdf5314273c732b40ea84",
+      "state": "REVIEWED",
+      "sha256_W": "aad8fc281dc90e9e16b3933c48576ba0921c9d6a22c8feba6ace16273d68a6a2",
+      "lines_W": 225,
+      "read_ranges_P": [
+        [
+          1,
+          225
+        ]
+      ],
+      "read_ranges_W": [
+        [
+          1,
+          225
+        ]
+      ],
+      "W_read_basis": "SHA-matched full P read plus complete diff read and source recheck; no omitted changed ranges",
+      "P_read_basis": {
+        "method": "全内容を切断のない分割または全文で読み取り。626–795の切断した試行は破棄し全rangeを再読。",
+        "same_P_bytes_verified": true
+      },
+      "responsibility": "完全合成temp ledger/snapshotとstubによる表示・scope・receipt・自己ID・未取得/不正/臨床非完了の動作回帰。",
+      "callers": "scripts/run_tests.sh / pytest guarded collection",
+      "criteria_ref": "packet_criteria C01..C12/X01..X08（個別責務と下記caller境界に適用）"
+    }
+  ],
+  "caller_boundary_reads": [
+    {
+      "path": "mcs/ops/mcs_setup.py",
+      "sha256": "6f6eabf5349611fa8a0729d344f34c37576d79359b04a131710c1d17ce56db80",
+      "lines": 3499,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          985,
+          1022
+        ]
+      ],
+      "responsibility_and_boundary": "既定metadata_actors=False/metadata_shadow=Falseと氏名取得opt-in wizard。201 defaultsはsymbol lookupのみ。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "mcs/ingest/run_check.py",
+      "sha256": "915d6784befb59fcfffae019020dac59c92fa272571dfc325c36585b283ef00d",
+      "lines": 1928,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1048,
+          1155
+        ]
+      ],
+      "responsibility_and_boundary": "actors真偽両flag・GET4/tick・shadow+actors25秒共通予算・deadline/session stop。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "mcs/core/ledger.py",
+      "sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
+      "lines": 2657,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1420,
+          1578
+        ],
+        [
+          2522,
+          2596
+        ]
+      ],
+      "responsibility_and_boundary": "7日active post target、TTL24h/error backoff、完全取得/partial不上書き/removed_at、自己IDとactor summary state。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "adapters/slack/cards.py",
+      "sha256": "080400362ed3876a8e202bf5ba789bed91858f1dbb41954386bdff8e3027b807",
+      "lines": 153,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          153
+        ]
+      ],
+      "responsibility_and_boundary": "plain_text footer/card renderとsilent member表示。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "adapters/slack/delivery.py",
+      "sha256": "3129b7fc6753f4b83bbc2965daced330daf68b77c9d9661b621f379027245b8b",
+      "lines": 512,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          222,
+          246
+        ],
+        [
+          263,
+          338
+        ],
+        [
+          355,
+          386
+        ]
+      ],
+      "responsibility_and_boundary": "body part route/thread、escape/link_namesFalse、prior rewrite。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "adapters/discord/cards.py",
+      "sha256": "bccbc08e862a31b5c46fe1db6e0b06347f82bbe3ed5020f5ee71f222c2650dac",
+      "lines": 207,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1,
+          140
+        ],
+        [
+          181,
+          207
+        ]
+      ],
+      "responsibility_and_boundary": "Components V2/no_pings/verified single_post contract。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "adapters/discord/delivery.py",
+      "sha256": "678d279ef9097bf55871e5abe5ca1b237f991023ffb9b57a6fc7e423fd583bf0",
+      "lines": 269,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1,
+          48
+        ],
+        [
+          83,
+          128
+        ]
+      ],
+      "responsibility_and_boundary": "各本文partをsame threadへsingle_post/no_pingsで送る。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "adapters/lineworks/cards.py",
+      "sha256": "e9ad022e8755ed5ce65249cd925c7e0f7a92bdff5d1bb6447d6a9f4bcf26e6e4",
+      "lines": 77,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          77
+        ]
+      ],
+      "responsibility_and_boundary": "display_text、official size budgets、durable overflowとbutton parts。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "adapters/lineworks/delivery.py",
+      "sha256": "b8e813d72487e6d6928977c15921fcccc16a47710e132db4fba9c91991b06090",
+      "lines": 203,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          79,
+          94
+        ],
+        [
+          129,
+          138
+        ],
+        [
+          166,
+          203
+        ]
+      ],
+      "responsibility_and_boundary": "route-currentとbody-channel logical group。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "adapters/lineworks/client.py",
+      "sha256": "8e93538143ebb51b2340e64eb4333bfba4197812eb0aa89dfd77cc4787494042",
+      "lines": 398,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          72,
+          103
+        ]
+      ],
+      "responsibility_and_boundary": "native <m userId> neutralization。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "adapters/common/worker.py",
+      "sha256": "2173cd096d25a83f3e2ad32a98c5818c23b50991edf25a7e7c333b3414b1d23b",
+      "lines": 1014,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1,
+          155
+        ]
+      ],
+      "responsibility_and_boundary": "grant/unknown/receipt ordering責務とconstructor。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "adapters/common/envelopes.py",
+      "sha256": "c2a645b0570bb402db6675722fa04e166ba6f400ae90d2cb6bd05db5c09fa885",
+      "lines": 283,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1,
+          137
+        ],
+        [
+          250,
+          283
+        ]
+      ],
+      "responsibility_and_boundary": "transport/part receipt production envelope shape。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/__init__.py",
+      "sha256": "f0eab407de8f38ce6120e7803f8e230b5692a879ffe30834d532a47badd76a25",
+      "lines": 12,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          12
+        ]
+      ],
+      "responsibility_and_boundary": "common spec等の互換module identity。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "tests/notify/notify_testkit.py",
+      "sha256": "20843cef264834c43c47495541303e9526ac313dcac49e33329a3ff9ffa2aafa",
+      "lines": 246,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1,
+          184
+        ]
+      ],
+      "responsibility_and_boundary": "temp DB/shared real dispatch/render/grant/receipt fixture。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "tests/adapters/discord/discord_testkit.py",
+      "sha256": "b0c1b8386daa85dd795e3571edcca38b2a25a30f892cf68c923d1009ade34c6e",
+      "lines": 274,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1,
+          174
+        ]
+      ],
+      "responsibility_and_boundary": "完全合成SDK classes/AllowedMentions.none。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "tests/adapters/discord/discord_delivery_testkit.py",
+      "sha256": "099e034b1e2a13e2ddc23a570866910c70f5dc70a9fc86ee140b996fd610e922",
+      "lines": 124,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1,
+          110
+        ]
+      ],
+      "responsibility_and_boundary": "verified SDK shape/no wire sessionとsealed part fixture。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "tests/adapters/slack/slack_testkit.py",
+      "sha256": "56804a8524760b412c149b9cb79d9810c7b5f9df33698690e089db9b48ef7ae5",
+      "lines": 159,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          159
+        ]
+      ],
+      "responsibility_and_boundary": "完全合成Slack config/SDK boundaryとworker fixture。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "tests/adapters/lineworks/test_lineworks_silent_text.py",
+      "sha256": "7eee5290dd13e87f5fe99ecd6979b336bb742d0e80a7203ce21e6fe7115c20bb",
+      "lines": 45,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          45
+        ]
+      ],
+      "responsibility_and_boundary": "完全合成Wireによるnative mentions保持せず上限維持。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "891bc4420cbc7af01b0318a7a2d4f33c73e0626399ec39cdb5ff4d580fbbc171",
+      "lines": 174,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          174
+        ]
+      ],
+      "responsibility_and_boundary": "実効task権限・10分default・stdlib/合成/生成doc規約。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "lines": 46,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          46
+        ]
+      ],
+      "responsibility_and_boundary": "一時HOME/env-i/explicit interpreterのrunner。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "conftest.py",
+      "sha256": "a1066a51c68082f7b65e346cef21e6fe8fab7e5e2f354b1c20b0fe95a43fea3a",
+      "lines": 24,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          24
+        ]
+      ],
+      "responsibility_and_boundary": "Hermes実SDKの統合収集は別で今回対象に含めない。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256": "4d9b63c62c42873bd9ee00d7c6d251c866cc44191ed2c7d16c13ab195b0ac452",
+      "lines": 237,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          237
+        ]
+      ],
+      "responsibility_and_boundary": "socket/Keychain/Hermes/launchd/MCS worker/LLM/Jev live endpoint禁止。",
+      "write": "READ_ONLY",
+      "coverage_note": "関係する具体経路のみ再照合。未列挙rangeを全文監査扱いしない。adapter既受入全文は親global inventoryに依存。"
+    },
+    {
+      "path": "mcs/notify/notify_cmds.py",
+      "sha256": "4ae2cd7e4a114106bcd4ac414fbfeb84f357406d26ae985fa35b6027315b2dc9",
+      "lines": 494,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          330,
+          388
+        ]
+      ],
+      "responsibility_and_boundary": "validated dispatcher routes transport_begin/receipt/part_receipt",
+      "write": "READ_ONLY"
+    },
+    {
+      "path": "mcs/notify/notify_transport.py",
+      "sha256": "38428f3b4d0c76c7eb9b5ca088738c52b74f05b5de97adfc53a53fedc520580b",
+      "lines": 948,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          470,
+          509
+        ]
+      ],
+      "responsibility_and_boundary": "part receipt binding/replay/restore guards",
+      "write": "READ_ONLY"
+    }
+  ],
+  "packet_criteria": [
+    {
+      "id": "C01",
+      "applicability": "APPLICABLE",
+      "evidence": "表示をmessage_metadata/notify_renderに集約し、notify_cardsは既存named postの計画維持だけ変更。ledgerやingestの責務を複製しない。actor_lineの唯一のruntime callerをrgで照合し、既存flat importは維持。"
+    },
+    {
+      "id": "C02",
+      "applicability": "APPLICABLE",
+      "evidence": "未取得/初回不完全/complete empty/stale/failedの意味を分離。自己はstation staff IDで判定し氏名も残す。観測日時はcomplete_atのJST、押下日時とは呼ばない。未知氏名/将来stampは無いにせず氏名不明/❔。"
+    },
+    {
+      "id": "C03",
+      "applicability": "APPLICABLE",
+      "evidence": "表示関数はSELECTのみ。内部presentation hashだけ変えsource_fp/generationと人の確認は維持。既存BEGIN IMMEDIATE→render/manifest/parts transactionとgrant/receiptを通し、prior_remote_idを保ち後着更新。unknownholdは再発行しない。"
+    },
+    {
+      "id": "C04",
+      "applicability": "APPLICABLE",
+      "evidence": "schema/migration/保存形式は変更しない。旧metadata table不在、schema7 snapshot、actor_name不在のNULL readとfirst incomplete setはunknown表示。旧unnamed/frozen bodyの互換経路は維持。"
+    },
+    {
+      "id": "C05",
+      "applicability": "APPLICABLE",
+      "evidence": "cardのproject/thread/shownでactorを束縛。card合算へ氏名を混ぜない。selfは名前一致で推測しない。angle/@/markup/controlを表示時に中立化。下流Slack plain_text/body escape/link_names=False、Discord no_pings、LINE WORKS silent native mention契約のまま。"
+    },
+    {
+      "id": "C06",
+      "applicability": "APPLICABLE",
+      "evidence": "氏名表示はユーザーの明示依頼。既存opt-in取得/無期限保存を変更しない。actor ID/秘密/実投稿をfixtureや新ログへ追加せず、今回の全名前は完全合成。internal actor_fpは表示文字列のhashでspecに新しい氏名一覧を重複保存しない。"
+    },
+    {
+      "id": "C07",
+      "applicability": "APPLICABLE",
+      "evidence": "stampラベルとactor_line文字列は意図した表示変更。名前は全kindで12、40/20文字上限、人数の省略表示。spec schema/公開CLI/route/context/page/action/receipt signatureは不変。actor_fpは内部のみ、partsの既存本文に流す。"
+    },
+    {
+      "id": "C08",
+      "applicability": "APPLICABLE",
+      "evidence": "kind/count1行と各投稿の氏名1行。unfetched/old/failedを明示し、古い観測時点を最新成功と見せない。見えていないページに既配送named postがあっても更新。confirmationは巻き戻さず、clinical completionを推定しない。"
+    },
+    {
+      "id": "C09",
+      "applicability": "APPLICABLE",
+      "evidence": "新しいネットGETや取得scope/interval/予算は追加しない。actor hashは既存card threadの各投稿をSQLiteで読み取るためローカル読取は増える。氏名出力、card text、thread chunk、MAX_PARTSの既存上限は保持。巨大threadの性能ベンチは未実施、性能改善率は主張しない。"
+    },
+    {
+      "id": "C10",
+      "applicability": "APPLICABLE",
+      "evidence": "queued更新は古い未送信renderを取消して新spec、deliveredは同投稿ID更新、unknown grantはhold。failed/partial fetchで古いcomplete setを上書きしない。cancel/retry/transport予算や例外ゲートの恒久変更なし。"
+    },
+    {
+      "id": "C11",
+      "applicability": "APPLICABLE",
+      "evidence": "最終17新caseを同SHAのtest fileで固定P archiveへ適用し両runtime16FAIL+1unknownhold control。afterはreal dispatch/render/validated grant/transport_receipt/part_receipt、3platform actual body methods+fakeSDK/wire。既存のtext期待値変更は今回ラベル/氏名/状態の要件のみ、skip/検証弱化なし。"
+    },
+    {
+      "id": "C12",
+      "applicability": "APPLICABLE",
+      "evidence": "新依存なし。unicodedataはstdlib。実3.10.22/3.13.12、既存env-i runner、pinned Ruff0.16.10、full logs。source同SHAの既受入readを根拠付き再利用。生成DEVELOPMENTとI全体CIは親所有の後続確認。"
+    },
+    {
+      "id": "X01",
+      "applicability": "APPLICABLE",
+      "evidence": "fixedP→W全tracked900→902 filesのbinary patchを別archiveへ適用し全bytes/Git mode一致を外部receiptで照合。最終I distribution起動/importは親の別helper担当、今回のworker testsを配布/実SDK証明と呼ばない。"
+    },
+    {
+      "id": "X02",
+      "applicability": "NOT_APPLICABLE_TO_CHANGE",
+      "evidence": "stdlib以外の実装依存・license・lockfile・CI権限・取得元を変更しない。既承認の公開pinned Ruff取得のみ。供給網全体は親の別packet証拠範囲。"
+    },
+    {
+      "id": "X03",
+      "applicability": "APPLICABLE_BOUNDARY_UNCHANGED",
+      "evidence": "actor履歴や旧receiptを削除せず、removed_at/last complete set保持の既存契約を利用。restore hold/unsettled attemptは既存gatesのまま。backup/restore実DB操作はしない。"
+    },
+    {
+      "id": "X04",
+      "applicability": "APPLICABLE",
+      "evidence": "3platformの既存delivery routeを使い、shared表示と各post wireを合成で確認。新認証・宛先・送信入口は追加しない。並び/kind/対象postを保持し、既配送IDを使う。実API/署名Callback/SDK integrationは未実施。"
+    },
+    {
+      "id": "X05",
+      "applicability": "APPLICABLE_BOUNDARY",
+      "evidence": "offline合成SQLite/stubで実行し外部プロセス/Keychain/MCS/LLM禁止guardを維持。Unicode control除去と3.10 stdlib互換を検証。native UI/OSスクリーンリーダー/複数端末実表示は未確認。"
+    },
+    {
+      "id": "X06",
+      "applicability": "NOT_APPLICABLE_TO_CHANGE",
+      "evidence": "AI/MCP/toolを新たに呼ばず、raw投稿を指示や権限として扱わない。今回データは純粋な表示入力。Jev/LLM実行禁止を維持。"
+    },
+    {
+      "id": "X07",
+      "applicability": "APPLICABLE",
+      "evidence": "UI操作証拠と臨床/業務完了/既読を区別。スタンプが確認ボタン・人承認を代替しない。complete/failed actor集合だけでrequests.statusやclinical_completionを変えない実snapshot/controlを維持。"
+    },
+    {
+      "id": "X08",
+      "applicability": "NOT_APPLICABLE_TO_CHANGE",
+      "evidence": "公開Web/form/indexや外部公開を追加しない。MCS/cardリンクの既存gateを保持。README/gallery/公開文書の同期は親所有、tag/publish/deployは禁止。"
+    }
+  ],
+  "findings": [
+    {
+      "id": "STAMP-01",
+      "status": "CONFIRMED_FIXED",
+      "cause": "card/post helperのprefixがMCSでユーザー指定のスタンプ表示でない。",
+      "fix": "shared card_reaction_lines/stamp_lineのprefixとempty/unfetched表示を統一。",
+      "regression": "3platform rendered footer+body actual worker methods / snapshot evidence controls。"
+    },
+    {
+      "id": "STAMP-02",
+      "status": "CONFIRMED_FIXED",
+      "cause": "actor_lineが未取得でNone、自分は氏名を消して自分だけ、stale/failedが日付のみ、長氏名/制御文字は無上限。",
+      "fix": "kind別氏名、実名+自分、未取得/失敗/古い情報とcomplete_at観測時点、12/40/20文字上限とsilent inline化。",
+      "regression": "6状態+kind/self/unknown+longnames/MAXactors+partial保持。"
+    },
+    {
+      "id": "STAMP-03",
+      "status": "CONFIRMED_FIXED",
+      "cause": "actor-only changeがcontent_fpに入らずqueued/delivered bodyが更新されない。named prior postがpage外になると新body planに入らない。",
+      "fix": "表示actor hashをpresentation_fpへ追加、既配送named memberをbody planへ再投入しprior_remote_idを維持。",
+      "regression": "実dispatch/grant/validated transport/part receipts、queued/delivered/unknowncontrol、page外post、source identity/human ack。"
+    },
+    {
+      "id": "DEFAULT-01",
+      "status": "DISPROVED_CHANGE_NEEDED",
+      "evidence": "名前到達は既存metadata_shadow=True AND metadata_actors=True。どちらも既定off。表示依頼に取得既定変更は含めず親が有効化条件を文書化。"
+    },
+    {
+      "id": "LEGACY-01",
+      "status": "MAINTAINED_COMPATIBILITY_LIMIT",
+      "evidence": "旧unnamed legacy bodyは既存frozen経路。named partsのupdateを証明し、旧postのリライトや重複再送を勝手に開始しない。本文表示操作はcurrent viewを読む。"
+    },
+    {
+      "id": "DRUGMAP-READONLY",
+      "status": "DEFERRED_TO_PARENT_OWNER",
+      "evidence": "notify ownerからload/current_refs JSON RecursionError未捕捉候補を受領。fixed docPと現在Iは未照合、stamp所有外なので確定扱いせず親/coreへ移管。"
+    }
+  ],
+  "render_contract": {
+    "footer": "スタンプ 👀3 · 自分 2投稿（複数投稿合算、氏名はここに混ぜない）",
+    "complete": "押した人: 👀 合成 花子（看護師）・合成 自分（医師）（自分） · 観測 09-21 23:13",
+    "unfetched": "押した人: 未取得",
+    "first_failed": "押した人: 未取得（取得失敗）",
+    "stale": "押した人（古い情報）: 👀 合成 花子 · 観測 09-21 23:13",
+    "failed": "押した人（再取得失敗）: 👀 合成 花子 · 観測 09-21 23:13",
+    "unknown_name": "氏名不明",
+    "observation_not_press_time": true,
+    "completion_not_inferred": true,
+    "limit": "全kindで12氏名、名前40/職種20文字、省略人数と…",
+    "delivery": "Slack/Discordはthread_on時各投稿のcompanion body、thread_off時既存本文操作。LINE WORKSはchannel visible body parts。"
+  },
+  "collection_contract_unchanged": {
+    "metadata_shadow_default": false,
+    "metadata_actors_default": false,
+    "required_existing_opt_in": [
+      "metadata_shadow",
+      "metadata_actors"
+    ],
+    "GET_actor_cap_per_tick": 4,
+    "shared_shadow_actor_deadline_seconds": 25,
+    "actor_complete_ttl_seconds": 86400,
+    "scope": "直近7日activityのactive patient thread root/replies; error backoff unchanged",
+    "live_settings_changed": false,
+    "live_restart": false
+  },
+  "checks": [
+    {
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_stamps_display.py -o addopts= -q -k stamp_actor_",
+      "cwd": "/tmp/mcs-stamps-before-fixedP-20261005",
+      "runtime": "313",
+      "exit": 1,
+      "passed": 1,
+      "failed": 16,
+      "skipped": 0,
+      "deselected": 14,
+      "full_log": "/tmp/mcs-stamps-20261005-logs/before-fixedP-313-accepted.log",
+      "log_sha256": "8a1dbb511c0892d85ad5f734c2b4a8ffd97a628026b5df64989e35981d26c61d",
+      "environment": "既存runner env-i、一時HOME/XDG/TMP、TZ=UTC、PYTHONDONTWRITEBYTECODE=1、MCS_TEST_SANDBOX=1。tests/conftest guards不変更。完全合成DB/SDK/transport stubだけ。"
+    },
+    {
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_stamps_display.py tests/notify/test_metadata_display.py tests/notify/test_notify_cards.py tests/views/test_response_observation.py -o addopts= -q",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-stamps-20261005",
+      "runtime": "313",
+      "exit": 0,
+      "passed": 195,
+      "failed": 0,
+      "skipped": 0,
+      "deselected": 0,
+      "full_log": "/tmp/mcs-stamps-20261005-logs/family-313-accepted.log",
+      "log_sha256": "090c7dd6ec4de86bbe8ca0a613f45c732fda48f2d44b516d1131daab43dd1e11",
+      "environment": "既存runner env-i、一時HOME/XDG/TMP、TZ=UTC、PYTHONDONTWRITEBYTECODE=1、MCS_TEST_SANDBOX=1。tests/conftest guards不変更。完全合成DB/SDK/transport stubだけ。"
+    },
+    {
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_slack.py tests/notify/test_notify_lineworks.py tests/adapters/slack/test_mcs_slack.py tests/adapters/discord/test_mcs_discord_delivery.py tests/adapters/lineworks/test_lineworks_silent_text.py -o addopts= -q",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-stamps-20261005",
+      "runtime": "313",
+      "exit": 0,
+      "passed": 190,
+      "failed": 0,
+      "skipped": 0,
+      "deselected": 0,
+      "full_log": "/tmp/mcs-stamps-20261005-logs/boundary-313.log",
+      "log_sha256": "ed3e2dd87cdd35f487d8c2f48a5f49952098f1ccb66fd787a85f7a55210169fb",
+      "environment": "既存runner env-i、一時HOME/XDG/TMP、TZ=UTC、PYTHONDONTWRITEBYTECODE=1、MCS_TEST_SANDBOX=1。tests/conftest guards不変更。完全合成DB/SDK/transport stubだけ。"
+    },
+    {
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-maintenance-python310-20261005/bin/python scripts/run_tests.sh tests/notify/test_stamps_display.py -o addopts= -q -k stamp_actor_",
+      "cwd": "/tmp/mcs-stamps-before-fixedP-20261005",
+      "runtime": "310",
+      "exit": 1,
+      "passed": 1,
+      "failed": 16,
+      "skipped": 0,
+      "deselected": 14,
+      "full_log": "/tmp/mcs-stamps-20261005-logs/before-fixedP-310-accepted.log",
+      "log_sha256": "dcd350fca34bffbe9d9c9ab7e208b41a46b412eceb2686c50ec08047301eab74",
+      "environment": "既存runner env-i、一時HOME/XDG/TMP、TZ=UTC、PYTHONDONTWRITEBYTECODE=1、MCS_TEST_SANDBOX=1。tests/conftest guards不変更。完全合成DB/SDK/transport stubだけ。"
+    },
+    {
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-maintenance-python310-20261005/bin/python scripts/run_tests.sh tests/notify/test_stamps_display.py tests/notify/test_metadata_display.py tests/notify/test_notify_cards.py tests/views/test_response_observation.py -o addopts= -q",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-stamps-20261005",
+      "runtime": "310",
+      "exit": 0,
+      "passed": 195,
+      "failed": 0,
+      "skipped": 0,
+      "deselected": 0,
+      "full_log": "/tmp/mcs-stamps-20261005-logs/family-310-accepted.log",
+      "log_sha256": "582e397c5b440591eae56f7cbdef293fa114183169407d8fe1917ba3341e8fa5",
+      "environment": "既存runner env-i、一時HOME/XDG/TMP、TZ=UTC、PYTHONDONTWRITEBYTECODE=1、MCS_TEST_SANDBOX=1。tests/conftest guards不変更。完全合成DB/SDK/transport stubだけ。"
+    },
+    {
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-maintenance-python310-20261005/bin/python scripts/run_tests.sh tests/notify/test_notify_slack.py tests/notify/test_notify_lineworks.py tests/adapters/slack/test_mcs_slack.py tests/adapters/discord/test_mcs_discord_delivery.py tests/adapters/lineworks/test_lineworks_silent_text.py -o addopts= -q",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-stamps-20261005",
+      "runtime": "310",
+      "exit": 0,
+      "passed": 190,
+      "failed": 0,
+      "skipped": 0,
+      "deselected": 0,
+      "full_log": "/tmp/mcs-stamps-20261005-logs/boundary-310.log",
+      "log_sha256": "273fd6f827786e9e1c6addeaf95108b6f0f68d98a7ee2b5e21ba1ddb1b6cfba6",
+      "environment": "既存runner env-i、一時HOME/XDG/TMP、TZ=UTC、PYTHONDONTWRITEBYTECODE=1、MCS_TEST_SANDBOX=1。tests/conftest guards不変更。完全合成DB/SDK/transport stubだけ。"
+    },
+    {
+      "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check [今回changed 3source+4tests]",
+      "exit": 0,
+      "full_log": "/tmp/mcs-stamps-20261005-logs/ruff-accepted.log",
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "command": "git diff --check",
+      "exit": 0,
+      "full_log": "/tmp/mcs-stamps-20261005-logs/diff-check-accepted.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "runtime_details": {
+    "313": "Python3.13.12/SQLite3.50.4",
+    "310": "Python3.10.22/SQLite3.53.1"
+  },
+  "fixedP_before_manifest": "/tmp/mcs-stamps-20261005-logs/before-fixedP-manifest.json",
+  "intermediate_failure_logs": {
+    "policy": "修正中の失敗は成功扱いしない。最終受入とは別。source/test typoのNameError、meta footer KeyError、tuple projector shape、strict Slack fake responseのchannel不足を修正しfull outputsを保持。",
+    "files": [
+      "/tmp/mcs-stamps-20261005-logs/after-new-313-v2.log",
+      "/tmp/mcs-stamps-20261005-logs/after-new-313.log",
+      "/tmp/mcs-stamps-20261005-logs/before-313.log",
+      "/tmp/mcs-stamps-20261005-logs/before-fixedP-310.log",
+      "/tmp/mcs-stamps-20261005-logs/before-fixedP-313.log",
+      "/tmp/mcs-stamps-20261005-logs/before-late-313.log",
+      "/tmp/mcs-stamps-20261005-logs/before-late-final-313.log",
+      "/tmp/mcs-stamps-20261005-logs/diff-check.log",
+      "/tmp/mcs-stamps-20261005-logs/family-310-final.log",
+      "/tmp/mcs-stamps-20261005-logs/family-313-final.log",
+      "/tmp/mcs-stamps-20261005-logs/family-313-v2.log",
+      "/tmp/mcs-stamps-20261005-logs/family-313-v3.log",
+      "/tmp/mcs-stamps-20261005-logs/family-313.log",
+      "/tmp/mcs-stamps-20261005-logs/ruff-final.log",
+      "/tmp/mcs-stamps-20261005-logs/ruff.log"
+    ]
+  },
+  "replay": {
+    "fixed_P": "22ebd08240976051edb9bfeb7f7afc6c42fa6280",
+    "behavior_commit": "50a661b513bf4f58cd0242e29aef4b31b2abf856",
+    "P_file_count": 900,
+    "W_final_file_count": 902,
+    "scope": "全trackedのpath集合・bytes・Git executable/symlink mode。external manifestで差分外も実集計。",
+    "patch": "/tmp/mcs-stamps-20261005-logs/P-to-W-final.patch",
+    "P_manifest": "/tmp/mcs-stamps-20261005-logs/P-manifest.json",
+    "W_manifest": "/tmp/mcs-stamps-20261005-logs/W-final-manifest.json",
+    "replayed_manifest": "/tmp/mcs-stamps-20261005-logs/replayed-final-manifest.json",
+    "final_receipt": "/tmp/mcs-stamps-20261005-logs/P-to-W-final-receipt.json",
+    "method": "git archive -c tar.umask=0022固定Pを隔離/tmpへ展開、git binary full-index patch適用、全path集合/bytes/Git modeと実filesystem modeを照合。未コミットevidenceをstage後に検証。"
+  },
+  "parent_followups": [
+    "actor_line docstringに対応するgenerated DEVELOPMENT再生成（親ownerへsourcecommit時通知済）。",
+    "親のREADME/user guide/gallery source+SVG/PNG同期と目視・generator check。",
+    "固定Iへの直列統合、I検証、実配布物helper、fresh independent review。"
+  ],
+  "limitations": [
+    "実MCS/DB/患者/認証/LLM/Jev/Keychain/platformにアクセスしていない。",
+    "native3platform UI・実SDK・アクセシビリティ/OS実画面・大規模性能・本番反映は未検証。parent gallery画像は本workerの実画面証拠ではない。",
+    "全体inventory/別moduleの全文/CI/最終I受入を今回8fileレビューと385casesから推定しない。",
+    "元checkout/main/常駐service/GET設定は変更していない。既定offなので実氏名取得には既存opt-in条件と稼働コード反映が必要。"
+  ],
+  "instructions": {
+    "spec": "/Users/yusuke/.codex/attachments/9bb89786-a65f-4f06-8123-c608a4bb4464/pasted-text-1.txt",
+    "AGENTS_sha256": "891bc4420cbc7af01b0318a7a2d4f33c73e0626399ec39cdb5ff4d580fbbc171",
+    "skills": [
+      "agent-defaults（継続適用）",
+      "frontend-design Build/high-risk workflow（今回初回通知・全文読取）"
+    ],
+    "recursive_spawn": false
+  }
+}

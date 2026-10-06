@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -88,8 +89,10 @@ def _diff(want, got, path: str = "") -> list:
         for i, (w, g) in enumerate(zip(want, got, strict=False)):
             out.extend(_diff(w, g, f"{path}[{i}]"))
     elif want != got:
+        # Larger integers can lose their difference when coerced to float.
         if isinstance(want, int | float) and isinstance(got, int | float) \
                 and not isinstance(want, bool) and not isinstance(got, bool) \
+                and abs(want) < 2**53 and abs(got) < 2**53 \
                 and abs(want - got) < 1e-9:
             return out
         out.append(f"{path}: {want!r} -> {got!r}")
@@ -106,20 +109,31 @@ def _receipt_applied(db, approval: dict, artifact_id: int) -> bool:
     command_id = approval.get("command_id")
     if not isinstance(command_id, str):
         return False
+    from mcs_requests import parse_command, payload_hash, validate
     try:
         row = db.execute(
-            "SELECT receipt_json FROM command_receipts WHERE command_id=? AND outcome='applied'",
+            "SELECT receipt_json,payload_hash,project_id FROM command_receipts "
+            "WHERE command_id=? AND outcome='applied'",
             (command_id,)).fetchone()
     except Exception:
         return False
     if row is None:
         return False
     try:
-        receipt = json.loads(row["receipt_json"])
-        return (isinstance(receipt, dict) and receipt.get("outcome") == "applied"
+        receipt = parse_command(row["receipt_json"])
+        command = {"version": 1, "cmd": "ops.refstat_approve", "command_id": command_id,
+                   "actor": approval.get("actor"), "human_confirmed": True,
+                   "project_id": row["project_id"], "name": approval.get("name"),
+                   "file_hash": approval.get("file_hash"), "reason": approval.get("reason")}
+        return (isinstance(receipt, dict) and validate(command) is None
+                and type(receipt.get("project_id")) is int
+                and receipt["project_id"] == row["project_id"]
+                and receipt.get("payload_hash") == row["payload_hash"] == payload_hash(command)
+                and receipt.get("outcome") == "applied" and receipt.get("error") is None
                 and receipt.get("command_id") == command_id
                 and type(receipt.get("refstat_artifact_id")) is int
                 and receipt["refstat_artifact_id"] == artifact_id
+                and receipt.get("actor") == approval.get("actor")
                 and receipt.get("name") == approval.get("name")
                 and receipt.get("file_hash") == approval.get("file_hash"))
     except (ValueError, TypeError, AttributeError, RecursionError):
@@ -164,8 +178,11 @@ def cmd_capture(args) -> int:
             import mcs_stats
             gen = view.meta.get("generated_at")
             if gen is not None:
-                args.as_of = datetime.fromtimestamp(
-                    int(gen), mcs_stats.JST).isoformat()
+                try:
+                    args.as_of = datetime.fromtimestamp(
+                        int(gen), mcs_stats.JST).isoformat()
+                except (ValueError, OverflowError, OSError):
+                    raise ValueError("refstat_time_unrepresentable") from None
         result = view.stats(vars(args))
     finally:
         view.close()
@@ -192,6 +209,8 @@ def _fold_as_of(stats_obj):
         if isinstance(scope, dict) \
                 and isinstance(scope.get("as_of"), int | float) \
                 and not isinstance(scope["as_of"], bool):
+            if isinstance(scope["as_of"], float) and not math.isfinite(scope["as_of"]):
+                raise ValueError("refstat_corrupt")
             scope["as_of"] = int(scope["as_of"])
 
 

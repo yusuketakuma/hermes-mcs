@@ -66,6 +66,7 @@ async def run(settings: dict, tokens: dict, stop: asyncio.Event) -> None:
     app = _app(client)
     host = Host(settings)
     socket = None
+    waiter = None
     try:
         identity = await client.auth_test()
         if identity.get("team_id") != settings["team_id"]:
@@ -88,10 +89,19 @@ async def run(settings: dict, tokens: dict, stop: asyncio.Event) -> None:
         waiter.cancel()
         raise_ended(done, waiter)
     finally:
-        if socket is not None:
-            await socket.close_async()
-        await host.close()
-        await client.session.close()
+        try:
+            if socket is not None:
+                await socket.close_async()
+        finally:
+            try:
+                await host.close()
+            finally:
+                try:
+                    if waiter is not None:
+                        waiter.cancel()
+                        await asyncio.gather(waiter, return_exceptions=True)
+                finally:
+                    await client.session.close()
 
 
 async def send(token: str, channel_id: str, text: str,

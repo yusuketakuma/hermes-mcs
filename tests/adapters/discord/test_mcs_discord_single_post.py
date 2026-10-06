@@ -32,7 +32,8 @@ SUPPRESSED = "discordretrysuppressed"           # worker.err_code of the guard
 @pytest.fixture(autouse=True)
 def synthetic_discord_sdk(monkeypatch):
     monkeypatch.setitem(sys.modules, "discord", _discord)
-    monkeypatch.setattr(cards, "build_view", lambda spec: "view")
+    monkeypatch.setattr(cards, "message_payload",
+                        lambda spec, **_kw: {"view": "view", "content": "合成の通知"})
 
 
 class _Resp:
@@ -173,7 +174,8 @@ def _mk(tmp_path, bot):
 
 def _attachment_spec(tmp_path):
     blob = b"synthetic-attachment"
-    f = tmp_path / "att.bin"
+    (tmp_path / "attachments").mkdir(exist_ok=True)
+    f = tmp_path / "attachments" / "att.bin"
     f.write_bytes(blob)
     import hashlib
     spec = _spec(_chunks(1))

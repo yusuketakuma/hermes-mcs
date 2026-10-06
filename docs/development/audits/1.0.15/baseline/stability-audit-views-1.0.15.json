@@ -1,0 +1,458 @@
+{
+  "schema_version": 1,
+  "release": "1.0.15",
+  "date": "2026-10-06",
+  "scope": "Every mcs/views/*.py (10 files). Existing streaming read model/shared metadata decoder/stats existence optimizations retained. No notify/render/mobile source edits.",
+  "inventory_count": 10,
+  "source_lines": 4715,
+  "unexamined_source_files": [],
+  "method": "Complete source AST/function/caller inventory, focused manual read-only publication/state/source/cursor/adoption boundary inspection, reproduced failures and bounded synthetic regressions. Stop after existing final snapshot finding; no additional speculative audit loop.",
+  "findings": [
+    {
+      "id": "metadata-state-evidence",
+      "status": "fixed",
+      "evidence": "11 malformed latest/historical complete records were falsely empty-current or historical-failed evidence; common scope/complete boolean/HTTP/reason/nonnegative-time validation now yields artifact_invalid unknown."
+    },
+    {
+      "id": "summary-adoption-receipt",
+      "status": "fixed",
+      "evidence": "Missing/rejected/malformed or wrong-ID/hash/actor/reason/error receipt still displayed adopted before correction. Receipt-bound current adoption now rejects 11 cases, while actual committed human adoption/replay remains valid."
+    },
+    {
+      "id": "workload-stored-time",
+      "status": "fixed",
+      "evidence": "SQLite-stored -(2**63) timestamp raised platform OSError on Python 3.13 macOS. Workload now returns unavailable/data_error class; parameter-validation exceptions remain explicit."
+    },
+    {
+      "id": "snapshot-publication-header",
+      "status": "fixed",
+      "evidence": "Empty/blank/blob generation and absent/text/negative/infinite time were labeled published. Shared snapshot meta validates generation nonempty string and time finite nonnegative; View uses same rule; legacy non-UUID IDs and epoch0 preserved."
+    },
+    {
+      "id": "legacy-signal-type-compatibility",
+      "status": "fixed",
+      "evidence": "Full views run exposed my prior ops allowlist omission of existing med_followup label in 4 QC cases. Retained that closed legacy label without allowing arbitrary text; all affected QC tests passed."
+    }
+  ],
+  "validation": {
+    "python": "3.13.12 isolated scripts/run_tests.sh runner",
+    "views_before_snapshot": "534 full views cases passed after metadata/adoption/workload/legacy fixes.",
+    "final_snapshot_refresh": "175 snapshot/read-model/response/status/corrupt-view/C1-record/export cases passed after final shared header change; remaining unchanged full views successes reused.",
+    "metadata_refresh": "113 metadata/group/comparison/staff/physician cases passed.",
+    "adoption_refresh": "50 adoption/comparison/CLI/operations cases passed before final additional receipt error/type strictness; subsequent full views pass covers updated reader.",
+    "current_collection": "542 views cases (534 prior full +8 final header cases).",
+    "diff": "git diff --check clean; dossier hashes/evidence paths revalidated at handoff."
+  },
+  "limitations": [
+    "No actual clinical/UI/native SDK/platform execution or production data/config manipulation.",
+    "Exact SDK and OS deployment lanes remain conditional as listed in operations dossier.",
+    "Parent integrates full current suite, shared generated docs, source bindings and mobile implementation before goal completion."
+  ],
+  "files": [
+    {
+      "path": "mcs/views/cross_lists_view.py",
+      "sha256": "db77e2a25f823067f9a1e05a57637ad6a85d8641d6d390d3cb77f08d3e5b6ffa",
+      "status": "reviewed_no_additional_fix_needed",
+      "checks": [
+        "Complete current source parsed with Python 3.13 AST; every function inventoried and cross-module callers searched",
+        "Explicit publication off, dataset/unread options, malformed capture/identity consistency, complete-empty vs historical failed/stale/unknown states; no clinical response/preservation claims."
+      ],
+      "functions": [
+        "_payload",
+        "get_cross_list"
+      ],
+      "callers": [
+        "mcs/views/mcs_view.py"
+      ],
+      "evidence": [
+        "tests/views/test_cross_lists_view.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/mcs_stats.py",
+      "sha256": "e967d975cbb3ea521027b5230aa66acbdebce25c1b47cbf196225c1aafdb90bf",
+      "status": "fixed_and_verified",
+      "checks": [
+        "Complete current source parsed with Python 3.13 AST; every function inventoried and cross-module callers searched",
+        "Scope/as_of/half-open time/denominator/input contracts, old schemas and per-stat unavailable behavior, extraction generation selection, local lifecycle feedback and privacy-gated reply latency; invalid workload timestamp now held unavailable."
+      ],
+      "functions": [
+        "_ratio",
+        "_parse_when",
+        "_scope",
+        "_where",
+        "_items",
+        "_result",
+        "st_data_quality",
+        "st_overview",
+        "st_patient_activity",
+        "st_professions",
+        "st_workload",
+        "st_doc_burden",
+        "_med_messages",
+        "_med_rows",
+        "st_meds",
+        "_med_candidate_breakdown",
+        "st_med_mentions",
+        "st_med_change_burden",
+        "st_adherence_events",
+        "st_rx_expiry",
+        "st_med_change_followup",
+        "st_transition_reconciliation",
+        "st_open_loop_aging",
+        "st_canonical_facts",
+        "st_card_parts",
+        "_feedback_ratio",
+        "st_signal_feedback",
+        "st_interaction_latency",
+        "run_stats",
+        "share",
+        "timed",
+        "role"
+      ],
+      "callers": [
+        "scripts/development/update_readme.py",
+        "mcs/views/mcs_view.py",
+        "mcs/ops/brain_export.py",
+        "mcs/ops/mcs_refstats.py"
+      ],
+      "evidence": [
+        "tests/views/test_mcs_stats.py",
+        "tests/views/test_interaction_latency.py",
+        "tests/views/test_mcs_stats_signal_feedback.py",
+        "tests/views/test_stats_followup_perf.py",
+        "tests/views/test_stats_timestamp_stability.py",
+        "tests/views/test_bugfix_r3_9_stats_as_of_freeze.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/mcs_view.py",
+      "sha256": "989162e6570aab50a48e45b55358037df5f2cee9c34c2f23fda073215e675643",
+      "status": "fixed_and_verified",
+      "checks": [
+        "Complete current source parsed with Python 3.13 AST; every function inventoried and cross-module callers searched",
+        "Read-only supported static snapshot initialization and error close, typed/limited bound cursors, project/read/receipt/control forwarding and metadata publication options; malformed generation header rejected."
+      ],
+      "functions": [
+        "_reason",
+        "_artifact_json",
+        "_parser",
+        "main",
+        "__init__",
+        "close",
+        "_page",
+        "_message",
+        "_evidence",
+        "_messages",
+        "_status",
+        "_karte_summary_state",
+        "_operations",
+        "_qc",
+        "_requests",
+        "_loop_links",
+        "_attachments",
+        "_semantic",
+        "_comparison",
+        "_staff",
+        "_read_model",
+        "_loops",
+        "_receipt",
+        "notification_receipt",
+        "_scope_notification_receipt",
+        "stats",
+        "signals",
+        "read",
+        "error"
+      ],
+      "callers": [
+        "hermes_plugin/__init__.py",
+        "scripts/development/update_readme.py",
+        "mcs/ops/mcs_refstats.py",
+        "mcs/ops/ext_contract.py",
+        "mcs/ops/brain_export.py"
+      ],
+      "evidence": [
+        "tests/views/test_snapshot_publication_stability.py",
+        "tests/views/test_status_view.py",
+        "tests/views/test_view_corrupt_state.py",
+        "tests/views/test_semantic_view.py",
+        "tests/views/test_notification_receipt_scope.py",
+        "tests/views/test_response_observation_view.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/message_metadata.py",
+      "sha256": "16e053957dd734d9a1426316af858892cbf4257c5e101ebfc58b3a3fcfdf9c4b",
+      "status": "reviewed_no_additional_fix_needed",
+      "checks": [
+        "Complete current source parsed with Python 3.13 AST; every function inventoried and cross-module callers searched",
+        "Shared capture/shadow decoder retained; field/type/error/timestamp validation, no guessed response/completion, source capture freshness and independent shadow status; unknown types/actor labels handled by existing contracts."
+      ],
+      "functions": [
+        "_timestamp",
+        "reaction_label",
+        "_valid_reactions",
+        "_valid_mentions",
+        "_read_metadata",
+        "_decode_metadata",
+        "_observation_age",
+        "get_message_metadata",
+        "response_observation",
+        "get_metadata_shadow_status",
+        "stamp_counts",
+        "self_stamps",
+        "stamp_line",
+        "self_reaction_text",
+        "own_post_reaction_text",
+        "_actor_text",
+        "actor_line",
+        "thread_stamp_line",
+        "others_reaction_count",
+        "mentions_self",
+        "flag_lines",
+        "is_self_sender",
+        "state"
+      ],
+      "callers": [
+        "mcs/views/mcs_view.py",
+        "mcs/views/response_observation_view.py",
+        "mcs/views/metadata_report.py",
+        "mcs/ops/mcs_signals.py",
+        "mcs/notify/notify_render.py",
+        "mcs/notify/notify_digest.py"
+      ],
+      "evidence": [
+        "tests/views/test_response_observation.py",
+        "tests/views/test_bugfix_r1_14_recapture_binding.py",
+        "tests/views/test_bugfix_r2_10_field_invalid_not_failed.py",
+        "tests/views/test_metadata_report_perf.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/metadata_report.py",
+      "sha256": "d5a518b985016725e3b275f0c0660a94bfbb18fa421ed0c6915779ebff0270ea",
+      "status": "reviewed_no_additional_fix_needed",
+      "checks": [
+        "Complete current source parsed with Python 3.13 AST; every function inventoried and cross-module callers searched",
+        "Single streaming metadata scan reuses shared validation, count-only sanitization, project/orphan/legacy-source/missing-schema/watch semantics; original query-count regression retained."
+      ],
+      "functions": [
+        "_by_type",
+        "_lag_bucket",
+        "_watch",
+        "build_report",
+        "render_text",
+        "main"
+      ],
+      "callers": [
+        "hermes_plugin/__init__.py"
+      ],
+      "evidence": [
+        "tests/views/test_metadata_report.py",
+        "tests/views/test_metadata_report_perf.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/project_metadata_view.py",
+      "sha256": "dd4b12534f333211bd20fcd23876df56aa8fc4fcf4600081d4b6fc80ccd6268c",
+      "status": "fixed_and_verified",
+      "checks": [
+        "Complete current source parsed with Python 3.13 AST; every function inventoried and cross-module callers searched",
+        "Dataset/item/namespace/source mapping, independent current/historical/partial/failure freshness, name opt-in and unconfirmed chat comparison; persisted success/failure contradictions rejected for every dataset."
+      ],
+      "functions": [
+        "_text",
+        "_chat_item",
+        "_chat_candidates",
+        "get_project_metadata",
+        "physician_viewed_status"
+      ],
+      "callers": [
+        "mcs/views/mcs_stats.py",
+        "mcs/views/mcs_view.py",
+        "mcs/ingest/project_metadata.py"
+      ],
+      "evidence": [
+        "tests/views/test_metadata_state_stability.py",
+        "tests/views/test_project_metadata_view.py",
+        "tests/views/test_group_consultations_view.py",
+        "tests/views/test_project_metadata_comparison.py",
+        "tests/views/test_physician_viewed.py",
+        "tests/views/test_staff_directory.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/read_model.py",
+      "sha256": "993de05baba15608fd556b872edd34415ee4524d869e7f4c3e317cd7e5125c3c",
+      "status": "fixed_and_verified",
+      "checks": [
+        "Complete current source parsed with Python 3.13 AST; every function inventoried and cross-module callers searched",
+        "Existing 500-row stream and whole-scope counts preserved; hash/version/invalidation/corrupt-vs-pending states, aggregate/detail privacy projection, current-empty no fallback, attachments/provenance; shared publication metadata validation added."
+      ],
+      "functions": [
+        "_table_exists",
+        "_snapshot_meta",
+        "_canonical_shape",
+        "_kind_state",
+        "_message_records",
+        "_kind_map",
+        "_record_state",
+        "_fact_relations",
+        "_attachments",
+        "_coverage",
+        "read_model",
+        "counted_records"
+      ],
+      "callers": [
+        "mcs/views/mcs_view.py",
+        "mcs/views/response_observation_view.py",
+        "mcs/ops/c1_records.py",
+        "mcs/ops/brain_export.py"
+      ],
+      "evidence": [
+        "tests/views/test_read_model.py",
+        "tests/views/test_read_model_memory.py",
+        "tests/views/test_snapshot_publication_stability.py",
+        "tests/ops/test_c1_records.py",
+        "tests/ops/test_brain_export.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/response_observation_view.py",
+      "sha256": "5c6d2b55d631aa9fb3b88c672cc5b767cd214ccbe0ed72fb36ffdea6c0dbd026",
+      "status": "reviewed_no_additional_fix_needed",
+      "checks": [
+        "Complete current source parsed with Python 3.13 AST; every function inventoried and cross-module callers searched",
+        "Disabled means no SQL; explicit freshness/project scope/typed cursor, source revision/check time, self identity/archival/body coverage and no nonresponse/clinical completion inference."
+      ],
+      "functions": [
+        "_result",
+        "_field_unknown",
+        "get_response_observation_list"
+      ],
+      "callers": [
+        "mcs/views/mcs_view.py"
+      ],
+      "evidence": [
+        "tests/views/test_response_observation_view.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/structured_view.py",
+      "sha256": "b825efd2920cf4c50b09c16ff85ac38d50fde2d06962918248900f5e7951765e",
+      "status": "reviewed_no_additional_fix_needed",
+      "checks": [
+        "Complete current source parsed with Python 3.13 AST; every function inventoried and cross-module callers searched",
+        "Newest current generation selection with empty-generation precedence, rule/LLM/canonical item rendering and patient/negation/time/evidence distinctions; source reuse unchanged."
+      ],
+      "functions": [
+        "_content_dict",
+        "latest_artifact",
+        "fact_generations",
+        "latest_fact_artifact",
+        "_items",
+        "_label",
+        "_empty_field",
+        "_canonical_finding_lines",
+        "message_urgency",
+        "_head_lines",
+        "_vital_line",
+        "_lab_lines",
+        "_symptom_line",
+        "_med_lines",
+        "_request_lines",
+        "structured_lines"
+      ],
+      "callers": [
+        "mcs/views/project_metadata_view.py",
+        "mcs/ops/mcs_signals.py",
+        "mcs/notify/notify_urgent.py",
+        "mcs/notify/notify_render.py",
+        "mcs/notify/notify_flush.py",
+        "mcs/notify/notify_views.py",
+        "mcs/notify/notify_digest.py"
+      ],
+      "evidence": [
+        "tests/views/test_structured_view.py",
+        "tests/views/test_structured_review_regressions.py",
+        "tests/views/test_drug_candidates.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/summary_review.py",
+      "sha256": "856402e6f25af74da904e8feb3865932d3994f7f5f00bfbb86101c507fe2b8c2",
+      "status": "fixed_and_verified",
+      "checks": [
+        "Complete current source parsed with Python 3.13 AST; every function inventoried and cross-module callers searched",
+        "Baseline/candidate/source/thread/policy/revision/PASS-assist/pause identity, deterministic comparison and explicit adoption eligibility; orphan/corrupt/mismatched adoption receipt never displayed as adopted."
+      ],
+      "functions": [
+        "_json_object",
+        "_artifact",
+        "_validate_baseline",
+        "_validate_candidate",
+        "_baseline_lines",
+        "_candidate_lines",
+        "_diff",
+        "_current_candidate",
+        "_adoption_rows",
+        "_load_baseline",
+        "_load_candidate",
+        "comparison"
+      ],
+      "callers": [
+        "mcs/views/mcs_view.py",
+        "hermes_plugin/__init__.py",
+        "mcs/ops/mcs_operations.py",
+        "mcs/semantic/semantic_blind.py"
+      ],
+      "evidence": [
+        "tests/views/test_summary_adoption_receipt_stability.py",
+        "tests/views/test_summary_review.py",
+        "tests/views/test_summary_review_cli.py",
+        "tests/ops/test_mcs_operations.py",
+        "tests/ops/test_mcs_operation_cli.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    }
+  ]
+}

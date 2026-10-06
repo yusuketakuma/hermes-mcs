@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "メタデータ照合の投稿ごとの重複検索を削減",
+  "summary": "メタデータ照合レポートで投稿ごとのスキーマ確認と再検索を省き、一度の読取りで照合と監視対象の集計を行います。不正な観測の扱い、患者範囲、出力するエラーコードの制限は変わりません。",
+  "upgrade": "追加操作は不要です。取得・通知の設定と既定値は変わりません。",
+  "details": ["単一投稿の表示とレポートで保存済み観測の検証処理を共有する。", "投稿順に行を読み取り、本文を全件メモリへ保持せず集計する。"],
+  "refs": ["mcs/views/message_metadata.py", "mcs/views/metadata_report.py", "tests/views/test_metadata_report_perf.py"]
+}

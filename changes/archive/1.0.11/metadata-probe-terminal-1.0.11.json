@@ -12,6 +12,6 @@
     "scripts/development/probe_message_metadata.py",
     "tests/ingest/test_metadata_probe_observation.py",
     "tests/ingest/test_metadata_probe_usage.py",
-    "docs/development/ACCEPTANCE_1.0.11.md"
+    "docs/development/acceptance/ACCEPTANCE_1.0.11.md"
   ]
 }

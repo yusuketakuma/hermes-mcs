@@ -83,9 +83,16 @@ def _entity_tokens(statement: str) -> set:
     return {_norm(m.group(0)) for m in _ENTITY_TOKEN.finditer(statement or "")}
 
 
-def _entity_overlap(left: dict, right: dict) -> set:
-    shared = _entity_tokens(left.get("statement")) \
-        & _entity_tokens(right.get("statement"))
+def _entity_overlap(left: dict, right: dict, token_cache=None) -> set:
+    def tokens(fact):
+        statement = fact.get("statement")
+        if token_cache is None:
+            return _entity_tokens(statement)
+        if statement not in token_cache:
+            token_cache[statement] = _entity_tokens(statement)
+        return token_cache[statement]
+
+    shared = tokens(left) & tokens(right)
     return {t for t in shared if not _GENERIC_TOKEN.fullmatch(t)}
 
 
@@ -119,6 +126,10 @@ def classify_pair(left: dict, right: dict) -> dict | None:
     """Classify the relation between two facts, or ``None`` when they
     are unrelated.  ``left`` is the earlier/active fact, ``right`` the
     newer one for directed types."""
+    return _classify_pair(left, right)
+
+
+def _classify_pair(left: dict, right: dict, token_cache=None) -> dict | None:
     if not isinstance(left, dict) or not isinstance(right, dict):
         return None
     lf_id, rf_id = left.get("fact_id"), right.get("fact_id")
@@ -133,7 +144,7 @@ def classify_pair(left: dict, right: dict) -> dict | None:
                 "action")):
         rel_type, reason = "EXACT_DUPLICATE", "same_statement"
     else:
-        shared = _entity_overlap(left, right)
+        shared = _entity_overlap(left, right, token_cache)
         if not shared:
             return None
         same_subject = left.get("subject") == right.get("subject")
@@ -210,11 +221,12 @@ def reconcile_facts(active_facts: list, new_facts: list,
     active = [f for f in (active_facts or []) if isinstance(f, dict)]
     new = [f for f in (new_facts or []) if isinstance(f, dict)]
     relations = {}
+    token_cache = {}
     # New-vs-active is the reconciliation boundary; new-vs-new catches
     # intra-batch contradictions the same way (earlier index is "left").
     pairs = chain(product(active, new), combinations(new, 2))
     for left, right in pairs:
-        rel = classify_pair(left, right)
+        rel = _classify_pair(left, right, token_cache)
         if rel is not None:
             relations[rel["relation_id"]] = rel
     out = sorted(relations.values(), key=lambda r: r["relation_id"])

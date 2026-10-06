@@ -271,7 +271,8 @@ grace をこの仕様から補わない。`status` は私有ローカル記録�
 
 | 状態 | 自動応答 | 実装 |
 |---|---|---|
-| collection=incomplete | mcs_check.sh の stdout 警報行（watchdog）+ 次回 tick で再試行 | ✅ |
+| collection=incomplete | 次回 tick で再試行 + `health_watch.py` が degraded 遷移・新しい理由を system 通知（mcs_check.sh の stdout 行はログのみ） | ✅ |
+| health.json stale/missing/corrupt/failed・disk_low | `health_watch.py` が dedup 済みの警報を stdout とともに `notify_system_target`（無ければ notify_target）へ直接送信 | ✅ |
 | notify pending/failed | outbox リトライ + 閾値超過で hold・system 通知 | ✅ |
 | extract drainer 滞留 | 背景2枠の常駐 drain・6時間ごとの bounded retry 登録 | ✅ |
 | llama-server 停滞/異常 | `llamacpp daily restart` 04:00・最大15分 idle を待ち、busy 継続時も再起動 | ✅ |

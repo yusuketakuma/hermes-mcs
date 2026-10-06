@@ -1,7 +1,7 @@
 # インストールガイド
 
 このガイドはv1.0.13仕様のinstall/update/setup/doctorと復旧手順に対応する。
-実機受入・公開の状況は[開発・受入計画](../development/RELEASE_1.0.13.md)で追跡する。
+実機受入・公開の状況は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)で追跡する。
 
 ### 2026-10-04追記: 現在のローカル入口
 

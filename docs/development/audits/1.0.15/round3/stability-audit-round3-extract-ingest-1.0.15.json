@@ -1,0 +1,2056 @@
+{
+  "schema": "mcs-stability-audit/1",
+  "round": 3,
+  "version": "1.0.15",
+  "date": "2026-10-06",
+  "file_count": 40,
+  "scope": [
+    "mcs/extract/**/*.py",
+    "mcs/semantic/**/*.py",
+    "mcs/ingest/*.py"
+  ],
+  "method": "All 40 prior per-file reviews tracked by exact current SHA. 39 unchanged entries reused; one current-cache boundary verified and fixed. New probes limited to source/coverage/relation integrity and validator normalization; cancellation/memory boundaries re-read using existing proven regressions. No repeated broad hypothesis loops or meaningless file moves.",
+  "verification": {
+    "python": "3.13.12",
+    "commands": [
+      {
+        "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/semantic/test_semantic_cache_shape_recovery.py tests/semantic/test_canonical_drain.py tests/semantic/test_semantic_runtime.py tests/semantic/test_semantic_repair.py",
+        "result": "51 passed in 0.73s on final production source"
+      },
+      {
+        "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/semantic",
+        "result": "955 passed in 12.50s on final production source"
+      },
+      {
+        "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/semantic/test_semantic_cache_shape_recovery.py",
+        "result": "19 passed in 0.23s after final extension-preservation assertion; production source unchanged"
+      },
+      {
+        "command": "uv run --no-project --with ruff ruff check mcs/semantic/semantic_drain.py tests/semantic/test_semantic_cache_shape_recovery.py tests/semantic/test_canonical_drain.py",
+        "result": "All checks passed"
+      },
+      {
+        "command": "git diff --check -- [round3 changed files]",
+        "result": "passed"
+      },
+      {
+        "command": "Previous tests/ingest and extract checks",
+        "result": "Reused at unchanged owned production hashes; ingestion 1220 passed in14.42s; relevant original dossier evidence retained"
+      }
+    ]
+  },
+  "limitations": [
+    "Synthetic only: no real services, original data, credentials, Keychain, gateway, live SDK or deployment exercised",
+    "Physical process kill / storage outage and live provider correctness remain prior stated limits",
+    "No proven persistent process memory leak added; existing bounded-context/cursor/future fixes retained, contract validation holds document-sized temporary collections",
+    "No folder relocation necessary for this change; confirmed duplicated cache checks simplified via existing validator while public imports/entry points/save format and history remain"
+  ],
+  "entries": [
+    {
+      "path": "mcs/extract/clinical_values.py",
+      "sha256": "5db18a7e00ce7146b89ffd0c4c7e6cd3521b0cf1be0d2d20bbadd6ae0fb35c29",
+      "status": "no_change",
+      "checks": [
+        "Surface folding preserves identity-bearing punctuation and never resolves aliases",
+        "Laboratory confirmation requires unique quote/value/unit/date support; unknown units, other subjects and ambiguity remain unverified"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "fold_surface",
+          "MedicationSurface",
+          "medication_surface",
+          "LabCandidate",
+          "lab_candidate"
+        ],
+        "tests": [
+          "tests/extract/test_clinical_values.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Annotations do not establish clinical truth; no real laboratory data"
+      ],
+      "prior_sha256": "5db18a7e00ce7146b89ffd0c4c7e6cd3521b0cf1be0d2d20bbadd6ae0fb35c29",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/extract/drug_map.py",
+      "sha256": "778288c535800f6cc16f1f291f6eff83387f50f8551cea624799352daac96b06",
+      "status": "fixed",
+      "checks": [
+        "Private no-follow regular dictionary file is bounded and SHA-pinned; source/entry identities are validated",
+        "Current references bind exact current source/hash; approved derivation replaces each generation atomically",
+        "Unreadable source/reference JSON is isolated"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "Source",
+          "Entry",
+          "Candidate",
+          "Ref",
+          "Annotation",
+          "Binding",
+          "DeriveResult",
+          "fold",
+          "split_surface",
+          "DrugMap",
+          "_text",
+          "_source_identity",
+          "load",
+          "_source",
+          "_source_meta",
+          "current_refs",
+          "derive",
+          "candidate_note"
+        ],
+        "tests": [
+          "tests/extract/test_drug_map.py",
+          "tests/extract/test_extract_poison_history.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Only fictional dictionaries; no provider or real dictionary accessed"
+      ],
+      "prior_sha256": "778288c535800f6cc16f1f291f6eff83387f50f8551cea624799352daac96b06",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/extract/rollup.py",
+      "sha256": "c9bad82b6f689e85c25bd3afd066f0c8f321cd4c75b0f79f10e469d7e8d64a87",
+      "status": "fixed",
+      "checks": [
+        "Newest-first artifact precedence and patient/hash bindings preserve current-source semantics",
+        "Existing request cap bounds reply work without dropping reply or negation evidence",
+        "Timestamp map preserves duplicate/NULL first-row semantics",
+        "Atomic rebuild retains unchanged IDs and recovers unreadable source or old derived content"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_dicts",
+          "_llm_reply_kind",
+          "build_rollup",
+          "_period_candidates",
+          "_med_states",
+          "_symptom_ts",
+          "msgs_by_ts",
+          "_newest_source_ts",
+          "rebuild",
+          "dirty_projects",
+          "rebuild_many",
+          "main"
+        ],
+        "tests": [
+          "tests/extract/test_rollup_canonical.py",
+          "tests/extract/test_rollup_period.py",
+          "tests/extract/test_rollup_ref_lookup.py",
+          "tests/extract/test_extract_poison_history.py",
+          "tests/extract/test_rollup_cli_cleanup.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger",
+        "round2_verification": "Six fault cases reproduced five cleanup leaks before fix; 71 related cases passed after fix"
+      },
+      "limitations": [
+        "Complete substring negation reconciliation remains intentionally uncapped; no live ledger profile"
+      ],
+      "prior_sha256": "c9bad82b6f689e85c25bd3afd066f0c8f321cd4c75b0f79f10e469d7e8d64a87",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "additional_verified_fixed",
+      "additional_checks": [
+        "Initializer/rebuild/close errors and KeyboardInterrupt release ledger and writer lock with original failure propagation",
+        "Prior patient/source/transaction/reply/timestamp aggregate checks remain unchanged"
+      ],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/extract/v1/extract.py",
+      "sha256": "cbd9eb8be784eff1ac4cf4fcb9e0e48a8422f92200ac2d788819c22bd852f0dd",
+      "status": "fixed",
+      "checks": [
+        "Date/plan/urgent-negation rules reject impossible dates and preserve temporal distinction",
+        "Stale rows replace atomically in 200-row transactions with between-row deadlines",
+        "Read-only stats CLI isolates unreadable JSON and malformed event entries"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_ymd",
+          "_md_date",
+          "_period_dates",
+          "extract_message",
+          "_delete_stale",
+          "run_pending",
+          "_extract_rows",
+          "main"
+        ],
+        "tests": [
+          "tests/extract/test_bugfix_r1_7_v1_rules.py",
+          "tests/extract/test_extraction_review.py",
+          "tests/extract/test_extract_poison_history.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "CLI process-kill and original ledger lifecycle not tested"
+      ],
+      "prior_sha256": "cbd9eb8be784eff1ac4cf4fcb9e0e48a8422f92200ac2d788819c22bd852f0dd",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/extract/v4/extract_bench.py",
+      "sha256": "1c1ce1d5ae4b5505b6ef366d4b72cc245a0aa88490b87dbc2a96fe70a3339fa1",
+      "status": "no_change",
+      "checks": [
+        "One-to-one matches prevent duplicate labels sharing a prediction; failures remain in recall denominator",
+        "Live benchmark admits only exact checked-in synthetic cases before model access",
+        "Frozen corpus hash gates comparisons; mock path only validates labels"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_med_name_hit",
+          "_match_med",
+          "_match_symptom",
+          "_match_request",
+          "_lab_key",
+          "_match_lab",
+          "_reply_kind",
+          "_match_pairs",
+          "_field_pr",
+          "_score_case",
+          "_reply_confusion",
+          "_aggregate",
+          "_load_corpus",
+          "_load_cases",
+          "_synthetic_cases",
+          "_duration_percentiles",
+          "_section_valid",
+          "_iso_date",
+          "cmd_run",
+          "cmd_report",
+          "main"
+        ],
+        "tests": [
+          "tests/extract/test_extract_bench.py",
+          "tests/extract/test_labs_evaluation.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Invalid operator report inputs may fail before output; no real model timing"
+      ],
+      "prior_sha256": "1c1ce1d5ae4b5505b6ef366d4b72cc245a0aa88490b87dbc2a96fe70a3339fa1",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/extract/v4/extract_llm.py",
+      "sha256": "ffe25a5e01d8d1d8ebda1f6bdcf6e1334647652a7055b53cb21e2bc7d114c11c",
+      "status": "fixed",
+      "checks": [
+        "Per-item validator preserves safe siblings, grounded evidence and explicit uncertainty; repair cannot regress assertions",
+        "Whole-source chunk checkpoints bind context/generation and writes require source/lease/v4 CAS",
+        "Preparation exceptions and interruption release all committed claims and preserve saved rules",
+        "Completed Futures release; histories stream with legacy artifacts-only fallback; context retains exact root+latest-three semantics",
+        "Ordered medication merge preserves last occurrence and start/stop/restart doses",
+        "Deadline/resident pacing/admission, bounded retries and unreadable revival/QC/thin-history isolation verified"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_target_head",
+          "_batch_prompt",
+          "_repair_prompt",
+          "_resolved_llm",
+          "_probe_format",
+          "_vitals_guard",
+          "_cap",
+          "_clean_text",
+          "_valid_date",
+          "_flat",
+          "_validate",
+          "_Validator",
+          "_opener_request",
+          "_note_list",
+          "_integrity_note",
+          "_integrity_summary",
+          "_llm_call",
+          "_merge",
+          "_drop_total",
+          "_facts",
+          "_improves",
+          "_is_thin",
+          "_repair_issues",
+          "llm_extract",
+          "_sanitize_ctx",
+          "_hint_block",
+          "_ctx_lines",
+          "_karte_block",
+          "_thread_context",
+          "_llm_up",
+          "_fail_tx",
+          "revive_failed",
+          "_fail",
+          "_error_auto_retry",
+          "_error_attempts",
+          "_clear_error_tx",
+          "_write_lock",
+          "_current",
+          "_replace_current",
+          "_rerender_cards",
+          "_thin_pending_sql",
+          "_thin_retry_content",
+          "_human_flagged_sql",
+          "pending_pred",
+          "_qc_flagged_sql",
+          "_qc_feedback",
+          "_next_retry",
+          "_slots_busy",
+          "_elastic_hold",
+          "_choose_slot",
+          "pinned_slot_busy",
+          "_batch_need_s",
+          "_claim",
+          "_release",
+          "_chunk_context",
+          "_saved_chunks",
+          "_persist_chunks",
+          "_owns_current_source",
+          "_rule_hints",
+          "_prefilter_enabled",
+          "_low_signal",
+          "_mark_prefiltered",
+          "_ensure_v1",
+          "run_pending",
+          "_llm_call_stats",
+          "legacy_admissions",
+          "_background_semantic",
+          "main",
+          "_main"
+        ],
+        "tests": [
+          "tests/extract/test_extract_llm.py",
+          "tests/extract/test_extract_memory_work.py",
+          "tests/extract/test_extract_claim_cleanup.py",
+          "tests/extract/test_extract_poison_history.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "No live LLM, disk-full or SIGKILL; hard-kill recovery remains lease expiry"
+      ],
+      "prior_sha256": "ffe25a5e01d8d1d8ebda1f6bdcf6e1334647652a7055b53cb21e2bc7d114c11c",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison",
+        "Re-read nested checkpoint/release finally and finished-future pop; prior bounded-result weakref and claim interruption regressions apply at unchanged SHA"
+      ]
+    },
+    {
+      "path": "mcs/ingest/cross_lists.py",
+      "sha256": "3580d54982ca68a320ab27e765a9eaa7dbd515d8edd194378575dca83661c54a",
+      "status": "no_change",
+      "checks": [
+        "Dataset/option and identity/project/parent validation prevent scope widening; optional absent unread remains unknown",
+        "Bounded cached-session GET walks require stable continuation timestamp, consistent totals, unique IDs and terminal state; failures expose no partial rows",
+        "Storage capture allowlists identities/body availability/optional metadata without body/name/attachmentURL retention; source writes, notification and read flags untouched",
+        "Explicit CLI writer lock and opt-in GET remain separate from publication"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "CapturedRow",
+          "CapturedList",
+          "CrossListEntry",
+          "CrossListFetch",
+          "_options",
+          "_normalize",
+          "fetch_cross_list",
+          "capture_rows",
+          "validate_capture",
+          "sync_cross_list",
+          "main"
+        ],
+        "class_methods": {
+          "CapturedRow": [],
+          "CapturedList": [],
+          "CrossListEntry": [],
+          "CrossListFetch": []
+        },
+        "tests": [
+          "tests/ingest/test_cross_lists.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "Real API continuation/session/read preservation acceptance remains required; no API or host token cache accessed"
+      ],
+      "prior_sha256": "3580d54982ca68a320ab27e765a9eaa7dbd515d8edd194378575dca83661c54a",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/ingest/health_watch.py",
+      "sha256": "4db1002b61afa7fe60caa192362a1a945e13c66d90b0e80ef2db8620ff1ec445",
+      "status": "fixed",
+      "checks": [
+        "Freshness is derived from file evidence and confirmed unread clock, not producer exit code",
+        "Finite clock validation rejects NaN/infinity/bool/overflow before config/file I/O and CLI mutation",
+        "Explicit unread_at unknown on first jobs-only producer degrades rather than falsely certifying unread collection; legacy files lacking the field retain compatibility",
+        "Reason-code/counter alerts, hourly dedupe, disk-state carry and atomic status/state publication retained"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_finite_number",
+          "_tick_settings",
+          "freshness_deadline",
+          "_is_code",
+          "classify_health",
+          "_dedup_stamp",
+          "evaluate",
+          "main"
+        ],
+        "class_methods": {},
+        "tests": [
+          "tests/ingest/test_health_watch.py",
+          "tests/ingest/test_health_clock_validation.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "No real health/config files or OS clock manipulation; physical clock/failure scenarios use synthetic inputs"
+      ],
+      "prior_sha256": "4db1002b61afa7fe60caa192362a1a945e13c66d90b0e80ef2db8620ff1ec445",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/ingest/init_data.py",
+      "sha256": "72aa5bd7245cca637d40a83d0aaca272a28c662187ed199fe0f1a9bf14a28064",
+      "status": "no_change",
+      "checks": [
+        "CLI validates fetch budgets and locks single writer; progress logs only IDs/counts",
+        "Deeper cutoff already resets history cursor; shallower/same ranges reuse durable progress",
+        "Chunks merge required replies before save/checkpoint; floor requires completed history and no reply/deadline gaps",
+        "Embedded auth failures trigger one per-patient relogin and safe cursor refund; no mark-read, binaries or notices"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "main"
+        ],
+        "class_methods": {},
+        "tests": [
+          "tests/ingest/test_bugfix_r3_0_init_deeper_since.py",
+          "tests/ingest/test_bugfix_r2_1_init_reauth_reached.py",
+          "tests/ingest/test_bugfix_r3_1_history_deadline_stall.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "One-shot CLI startup/unexpected failures rely on process teardown outside ordinary handled paths; no actual Chrome/Keychain/import executed"
+      ],
+      "prior_sha256": "72aa5bd7245cca637d40a83d0aaca272a28c662187ed199fe0f1a9bf14a28064",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/ingest/job_ops.py",
+      "sha256": "b26ca87e6ece3cc2700946d9a5c6b11a0e69ec6df8f3ef54a7d42dbe97005068",
+      "status": "fixed",
+      "checks": [
+        "Commands validate and commit durable job/receipt before consuming files; restore-consent hold preserves queued writes",
+        "Deeper pending import now restarts at page1 and resets window stalls so old cutoff-filtered rows cannot be skipped or falsely floored; same/shallower requests preserve progress",
+        "Reply/thread windows persist partial progress and seed durable gaps; auth errors remain attempt-free run boundaries",
+        "History/reconcile floors require full root/reply coverage; failed windows consume bounded retries/stalls and fair rotation; history_head does not rewrite deep floor",
+        "Discovery active/archive separation and atomic archive reservations preserve prior coverage; periodic discovery retries stay bounded/pending"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "MergeResult",
+          "_valid_cmd",
+          "_valid_history_payload",
+          "drain_commands",
+          "merge_full_replies",
+          "_job_failure_reason",
+          "run_reply_jobs",
+          "run_history_jobs",
+          "seed_reconcile",
+          "run_reconcile_jobs",
+          "seed_discovery",
+          "run_discovery",
+          "seed_trickle"
+        ],
+        "class_methods": {
+          "MergeResult": []
+        },
+        "tests": [
+          "tests/ingest/test_job_drain.py",
+          "tests/ingest/test_history_command_deepen.py",
+          "tests/ingest/test_bugfix_r2_2_reconcile_stall.py",
+          "tests/ingest/test_thread_count_retry.py",
+          "tests/ingest/test_job_reasons_ingest.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "Adapter batch/message contracts and core job identity/transaction invariants are caller prerequisites; no real command requests or network history"
+      ],
+      "prior_sha256": "b26ca87e6ece3cc2700946d9a5c6b11a0e69ec6df8f3ef54a7d42dbe97005068",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/ingest/mcs_adapter.py",
+      "sha256": "4076ff51552ec939c3e5bd75701528bbfa183349b2ba45a4bfd7874cf4f0f243",
+      "status": "fixed",
+      "checks": [
+        "HTTP/download origin+port/no-proxy/no-redirect rules prevent bearer egress; structured errors exclude response bodies",
+        "Absolute reaped-worker deadlines bound DNS/header/trickle/CDP; existing WS fragment memory and advertised/control-frame caps retained",
+        "Required chat identity/body/count fields and independent optional metadata normalization preserve unknown/partial evidence",
+        "Cached/CDP session bootstrap, origin-checked form fill and deadline-bounded login maintain credential/log isolation; no real secrets read",
+        "Unread snapshot minimum timestamp, partial page/thread/history outcomes, pinned-sort natural-end rule and latest identity-only probe preserve fetch completeness",
+        "ACK requires exact snapshot and valid project detail; absent oldest-unread marker is the documented existing wire confirmation contract, not an unknown generic omission; thread ACK contract likewise retained",
+        "Attachment parts are bounded, synced and renamed only by supervising parent; errors remove partials; actor/metadata GETs remain bounded opt-ins"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "project_url",
+          "MCSError",
+          "SessionExpired",
+          "KeychainLocked",
+          "SchemaError",
+          "BootstrapError",
+          "_allowed_port",
+          "_WSConn",
+          "_ws_eval",
+          "_SameHostRedirect",
+          "_assert_allowed_url",
+          "Attachment",
+          "Message",
+          "UnreadPatient",
+          "UnreadSnapshot",
+          "MessageBatch",
+          "ReplyBatch",
+          "_text",
+          "_sender_name",
+          "_profession",
+          "_organization",
+          "_valid_id",
+          "_has_next",
+          "_unread_patient",
+          "_attachments",
+          "_message_metadata",
+          "walk_reaction_actors",
+          "_norm_message",
+          "_norm_threads",
+          "_disk_kind",
+          "MCSAdapter"
+        ],
+        "class_methods": {
+          "MCSError": [
+            "__init__"
+          ],
+          "SessionExpired": [
+            "__init__"
+          ],
+          "KeychainLocked": [],
+          "SchemaError": [
+            "__init__"
+          ],
+          "BootstrapError": [
+            "__init__"
+          ],
+          "_WSConn": [
+            "__init__",
+            "_handshake",
+            "_fill",
+            "_read_exact",
+            "_read_until",
+            "_send_frame",
+            "send_text",
+            "recv_message",
+            "close"
+          ],
+          "_SameHostRedirect": [
+            "redirect_request"
+          ],
+          "Attachment": [],
+          "Message": [],
+          "UnreadPatient": [],
+          "UnreadSnapshot": [],
+          "MessageBatch": [],
+          "ReplyBatch": [],
+          "MCSAdapter": [
+            "__init__",
+            "set_deadline",
+            "_remaining_timeout",
+            "_io",
+            "bootstrap_token",
+            "_read_cache",
+            "_write_cache",
+            "_token_via_cdp",
+            "_probe_session_ok",
+            "check_session",
+            "self_profile",
+            "fetch_message_metadata",
+            "fetch_reaction_actors",
+            "station_staffs",
+            "_cdp_up",
+            "_ensure_chrome",
+            "_cdp_eval",
+            "_cdp_json",
+            "_login_page",
+            "_keychain_password",
+            "_login_password",
+            "_config",
+            "_recover_session",
+            "auto_login",
+            "_request",
+            "_sleep_bounded",
+            "_get",
+            "fetch_cross_list",
+            "fetch_project_members",
+            "fetch_observation_values",
+            "fetch_group_consultations",
+            "fetch_memo_summary",
+            "list_unread",
+            "fetch_unread_messages",
+            "_project_detail",
+            "oldest_unread_id",
+            "_thread_page",
+            "fetch_thread",
+            "fetch_thread_window",
+            "fetch_unread_replies",
+            "list_projects",
+            "list_archived_kartes",
+            "fetch_history",
+            "fetch_latest",
+            "_open_download",
+            "download",
+            "_download_to_part",
+            "thread_unread",
+            "read_thread",
+            "mark_patient_read"
+          ]
+        },
+        "tests": [
+          "tests/ingest/test_adapter_wire.py",
+          "tests/ingest/test_bugfix_r1_2_adapter_login_download.py",
+          "tests/ingest/test_websocket_fragment_memory.py",
+          "tests/ingest/test_acquisition_contracts.py",
+          "tests/ingest/test_thread_read.py",
+          "tests/ingest/test_reaction_actors.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "Prior WS memory fix was preserved, not reworked; no real CDP, MCS, Keychain or downloads",
+        "GET read-side effects and residual arrival race depend on documented real-service contract; post-ACK gap repair remains active"
+      ],
+      "prior_sha256": "4076ff51552ec939c3e5bd75701528bbfa183349b2ba45a4bfd7874cf4f0f243",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison",
+        "Re-read download BaseException partial cleanup with worker reaping before parent atomic replace; previous ingestion timeout/attachment and WebSocket memory evidence applies at unchanged SHA"
+      ]
+    },
+    {
+      "path": "mcs/ingest/mcs_worker.py",
+      "sha256": "c0d1946942450adc1d794128ca162f84a12761171c13de94d992d44588c28747",
+      "status": "no_change",
+      "checks": [
+        "Credentials/body travel only via stdin; subprocess argv and stderr exclude sensitive data and environment is allowlisted",
+        "Absolute deadline kills and reaps worker on timeout/interruption; successful/error envelope shapes and statuses are checked",
+        "API prefix and local CDP origin validation plus no-proxy/no-redirect openers preserve network boundary",
+        "API/CDP response byte caps and parent-owned final attachment rename prevent partial publication; worker errors serialize fixed kind/status only"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "WorkerError",
+          "_worker_command",
+          "bounded_call",
+          "_loopback_url",
+          "_execute",
+          "worker_main"
+        ],
+        "class_methods": {
+          "WorkerError": [
+            "__init__"
+          ]
+        },
+        "tests": [
+          "tests/ingest/test_adapter_wire.py",
+          "tests/ingest/test_run_watchdog.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "Synthetic worker/process seams only; real DNS, OS process termination and provider SDK behavior not exercised"
+      ],
+      "prior_sha256": "c0d1946942450adc1d794128ca162f84a12761171c13de94d992d44588c28747",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/ingest/project_metadata.py",
+      "sha256": "257afe64943606ecac5f5706af8ca0564d003156e20133b2cc613cba9bad1cfa",
+      "status": "no_change",
+      "checks": [
+        "Dataset-specific typed fields, row limits, ID/association and explicit name-retention options allowlist metadata",
+        "Paged GETs require consistent timestamp/totals/unique IDs/terminal state; singleton medication endpoint forbids speculative pagination",
+        "Scope comes only from stored inventory; group consultation association is rechecked around fetch; failures preserve prior complete artifacts with no partial rows",
+        "Explicit storage-only cached-session sync and read-only view CLI maintain writer locks and no scheduler/publication/read flags"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "MetadataFetch",
+          "MetadataTarget",
+          "_string",
+          "_number",
+          "_boolean",
+          "_rows",
+          "_item",
+          "normalize_rows",
+          "fetch_metadata",
+          "metadata_target",
+          "sync_metadata",
+          "main"
+        ],
+        "class_methods": {
+          "MetadataFetch": [],
+          "MetadataTarget": []
+        },
+        "tests": [
+          "tests/ingest/test_project_metadata.py",
+          "tests/ingest/test_group_consultations.py",
+          "tests/ingest/test_metadata_probe_observation.py",
+          "tests/ingest/test_metadata_probe_paging.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "Server-side session/read preservation is not proved by GET/no_extend_session; real API acceptance not executed"
+      ],
+      "prior_sha256": "257afe64943606ecac5f5706af8ca0564d003156e20133b2cc613cba9bad1cfa",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/ingest/run_check.py",
+      "sha256": "c8cd3f38b49241790689a21268755ca82ca8d8c990e9b0182ec97e60b1b7ec70",
+      "status": "no_change",
+      "checks": [
+        "Whole-run deadline, optional-stage deferral, explicit watchdog, generation-change check and single writer lock govern stage order",
+        "Unread commit+notification intent precede ACK; incomplete/snippet/reply gaps and snapshot failures never certify fetched state; fallback ACK checks old/new stored boundaries and post-ACK gaps",
+        "Self probe remembers missing IDs only after complete checkpoint-safe history; backfill uses confirmed coverage and durable head gaps",
+        "Attachments respect disk reserve/deadline/auth recovery; memo/metadata/actor refreshes are bounded, preserve failed prior sets and restore adapter deadline",
+        "Relogin is single-stage replay/idempotent and per-run bounded; restore consent freezes all non-consent work; commands-only has no adapter/ingest/send",
+        "Derived/semantic admission remains fail-closed and committed sends precede new model work; tail result/status/snapshot/health failure are explicit",
+        "Health queries expose codes/counters/unknown backup evidence; jobs-only carries unread proof rather than minting new collection evidence"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_err_str",
+          "_config",
+          "_prev_health",
+          "_unread_at",
+          "_free_mb",
+          "_disk_low",
+          "_collection",
+          "_backup_health",
+          "_health",
+          "_write_health",
+          "_code_stamp",
+          "_code_changed",
+          "_wait_run_lock",
+          "_alert_throttled",
+          "_alert_session_expired",
+          "_alert_session_recovered",
+          "_attempt_relogin",
+          "_with_relogin",
+          "_cap_cleared",
+          "_post_ack_gap",
+          "stage_unread",
+          "stage_thread_read",
+          "stage_backfill",
+          "_head_stall",
+          "stage_self_probe",
+          "_download_session_ok",
+          "stage_attachments",
+          "stage_karte_summary",
+          "stage_metadata_shadow",
+          "_stage_reaction_actors",
+          "_run_metadata_shadow",
+          "stage_derive",
+          "_consent_only",
+          "_commands_only",
+          "_semantic_enabled",
+          "_stage_fetch",
+          "_run_jobs",
+          "_refresh_station_staff",
+          "_notify_max_age_s",
+          "_deliver",
+          "_semantic_skipped",
+          "_run_semantic",
+          "_housekeeping",
+          "_finish_run",
+          "_fail_run",
+          "_arm_watchdog",
+          "_run_stage",
+          "main",
+          "_main"
+        ],
+        "class_methods": {},
+        "tests": [
+          "tests/ingest/test_run_check_stages.py",
+          "tests/ingest/test_bugfix_r1_3_run_check_session.py",
+          "tests/ingest/test_run_watchdog.py",
+          "tests/ingest/test_drug_map_pipeline.py",
+          "tests/ingest/test_thread_read.py",
+          "tests/ingest/test_metadata_probe_usage.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "No production stages, notifications, backups, credentials or configuration accessed; physical watchdog/SIGKILL and real-service race cannot be established synthetically"
+      ],
+      "prior_sha256": "c8cd3f38b49241790689a21268755ca82ca8d8c990e9b0182ec97e60b1b7ec70",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic.py",
+      "sha256": "604be6b74389fcb553319e7f572a48a8a465807eada4bf32c7d4a75bf97ab33b",
+      "status": "fixed",
+      "checks": [
+        "Facade keeps import and patch seams; local model transport stays shared and loopback-only",
+        "Format degradation/long-output retries share remaining deadlines; persisted mark writes are bounded",
+        "Replay seeding respects OFF/pause/scope and is notification-free; status is read-only and writer actions lock/close",
+        "Unparseable deeply nested private marker files fall back without blocking generation preparation"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "llm_conf",
+          "llm_model",
+          "_format_key",
+          "_format_marks",
+          "_remember_plain",
+          "_probe_format",
+          "_long_key",
+          "_long_marks",
+          "_long_mark",
+          "llm_chat",
+          "seed",
+          "_canonical_readiness",
+          "status_report",
+          "main"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_cli_contract.py",
+          "tests/semantic/test_semantic_llm_retry.py",
+          "tests/semantic/test_semantic_budget_retry.py",
+          "tests/semantic/test_semantic_persisted_boundaries.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "No private host configuration/mark files or live backend decode behavior"
+      ],
+      "prior_sha256": "604be6b74389fcb553319e7f572a48a8a465807eada4bf32c7d4a75bf97ab33b",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_assessment.py",
+      "sha256": "5e59a5a18bfd4a1251d4f9c427b9717ff4568f706a39574bb97252bb363efa7f",
+      "status": "fixed",
+      "checks": [
+        "Detail evidence requires exact revision/span and per-fact identity independent of broad proposition",
+        "Newest valid source/policy/fact/dimension cache wins with cursor and legacy protocols",
+        "Guard exceptions propagate; deadline/protocol failures stay incomplete; confidence mismatch stays explicit"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_result",
+          "_finite_confidence",
+          "_policy_fingerprint",
+          "_cached_detail",
+          "_persist_detail",
+          "_member_context",
+          "_event_state",
+          "_append_finding",
+          "evaluate_medication_events"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_assessment.py",
+          "tests/semantic/test_semantic_detail_deadline.py",
+          "tests/semantic/test_semantic_history_memory.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Injected clients only; external confidence calibration untested"
+      ],
+      "prior_sha256": "5e59a5a18bfd4a1251d4f9c427b9717ff4568f706a39574bb97252bb363efa7f",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison",
+        "Re-read descending streaming cursor with immediate newest valid detail return and legacy artifacts-only fallback; previous memory/result equivalence applies at unchanged SHA"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_audit.py",
+      "sha256": "e240c5f7625275a9bcf922594d3eb7ec3a709697c0f1a15b9627f7c51a3598c2",
+      "status": "no_change",
+      "checks": [
+        "Code audit checks source/revision/span/reference/quantity and dropped-fact coverage",
+        "Per-fact support and whole-source coverage are bidirectional; missing evaluation never PASSes",
+        "Runtime guard control flow and one-shot repair/terminal status distinctions preserved"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_probability",
+          "audit_code",
+          "audit_claims",
+          "_coverage_incomplete",
+          "evaluate_source_fact_coverage",
+          "_fact_audit_target",
+          "audit_facts_v2",
+          "audit_status_for"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_facts_audit.py",
+          "tests/semantic/test_semantic_budget_retry.py",
+          "tests/semantic/test_bugfix_r1_11_hints_repair.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Prepared fact/summary contracts are caller preconditions; no clinical model validity claim"
+      ],
+      "prior_sha256": "e240c5f7625275a9bcf922594d3eb7ec3a709697c0f1a15b9627f7c51a3598c2",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_bench.py",
+      "sha256": "cf34d61957d70fd4525576fd1dc1f1aeb1ee5110eab964b764714dc29fd0ff74",
+      "status": "no_change",
+      "checks": [
+        "Corpus binds checked-in synthetic cases and rejects arbitrary text before credentials/model access",
+        "Atomic private outputs, per-case deadlines and incomplete-stage reporting preserve benchmark honesty",
+        "Detect and --jev require explicit operator invocation; calibration only reads recorded history"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_write_json_private",
+          "_synthetic_cases",
+          "cmd_corpus",
+          "_run_case",
+          "_aggregate",
+          "cmd_run",
+          "cmd_report",
+          "cmd_calibrate",
+          "_probe_case",
+          "cmd_detect",
+          "main"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_bench.py",
+          "tests/semantic/test_bugfix_r1_12_bench_jev_evidence.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Explicit live benchmark actions intentionally bypass scheduler budgets; none executed"
+      ],
+      "prior_sha256": "cf34d61957d70fd4525576fd1dc1f1aeb1ee5110eab964b764714dc29fd0ff74",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_blind.py",
+      "sha256": "43ec81ccceeccc02741c07de5954474b297007f986d4e9c475ff96c7bef25eb9",
+      "status": "no_change",
+      "checks": [
+        "Three methods share exact scope/source fingerprint and artifact identities; baseline uses production context selection",
+        "Worksheet/candidate hashes bind reviewed labels and split/duplicate/partial-label checks precede inference",
+        "Read-only snapshot, prevalidation and private exclusive output files; incompatible flags reject"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "prepare",
+          "fixed_bundle_outputs",
+          "snapshot_records",
+          "unblind",
+          "merge_labels",
+          "main"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_blind.py",
+          "tests/semantic/test_bugfix_r2_8_blind_baseline_context.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Human authenticity and text-based unblinding cannot be proved; no live baseline"
+      ],
+      "prior_sha256": "43ec81ccceeccc02741c07de5954474b297007f986d4e9c475ff96c7bef25eb9",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_drain.py",
+      "sha256": "1ea2847ce8846fd06e99f14605604a305bb664dc74d6b2a81341ff861208a661",
+      "status": "fixed",
+      "checks": [
+        "Job admission rechecks OFF/scope/pause/circuit/deadline/retry limits; fairness counts actual service",
+        "Stages resume durably; repair reserves before dispatch; source/config/job guards fence side effects",
+        "Summary/audit/v4/plan/outbox/job status share promotion transaction and origin-event checks",
+        "Unreadable job/plan/scheduler/revival inputs are isolated; usage corruption still blocks spending"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_eval_chunked",
+          "_jev_failure_class",
+          "_jev_fail_flag",
+          "_plan_exists",
+          "_write_result",
+          "_park_needs_review",
+          "_fact_stage",
+          "_publish_v4",
+          "_process_job_inner",
+          "_process_job",
+          "_TimedClient",
+          "_malformed_answer",
+          "_jev_error_brief",
+          "_last_stage_artifact",
+          "_timed_llm",
+          "_sched_state",
+          "_sched_write",
+          "_due_lanes",
+          "_job_lock",
+          "run_due",
+          "revive_failed",
+          "main"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_runtime.py",
+          "tests/semantic/test_semantic_fairness.py",
+          "tests/semantic/test_canonical_drain.py",
+          "tests/semantic/test_semantic_poison_rows.py",
+          "tests/semantic/test_semantic_cache_shape_recovery.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger",
+        "round2_verification": "Four malformed containers and four additional malformed-row cases: additional rows reproduced 4 failures before guard, all 8 recover with one regeneration and retained history; canonical/runtime/repair check 40 passed in 0.63s; all semantic tests 944 passed in 11.87s",
+        "round3_verification": "9 source/coverage/relation cases failed before full cache contract/source fence; contract-valid numeric statement failed projection before consuming normalized validator result; 51 focused cases passed in 0.73s, all-semantic 955 passed in 12.50s, final extension-preservation assertion 19 cache cases passed in 0.23s"
+      },
+      "limitations": [
+        "Storage unavailable aborts safely; live providers/process-kill not tested",
+        "Canonical cache validation allocates temporary normalized per-document collections; no arbitrary fact/history cap introduced. Clinical/source coverage still depends on unchanged audited extraction and evaluated publication gates."
+      ],
+      "prior_sha256": "800a1b5c738f66bfc5c468d6f28ee60e89d1865974106440f67e4faddf362449",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "additional_verified_fixed",
+      "additional_checks": [
+        "Current-generation parseable JSON with invalid source/coverage/facts/evidence containers is rejected for cache reuse and reconstructed through normal extraction",
+        "Required container/status checks preserve invalid history and existing incomplete-generation retry ceiling and fake-ledger compatibility",
+        "Existing evidence/fact row validators reject unhashable IDs, non-list evidence refs and unhashable refs before cached documents reach audit/projection; invalid history is retained and the same normal extraction/audit gates run"
+      ],
+      "round3_status": "additional_verified_fixed",
+      "round3_checks": [
+        "Full canonical document contract replaces duplicated cache shape/row guards; malformed cross references are not reused",
+        "Current member/source ID, revision, text hash, length, fingerprint, quality and attachment completeness fence cache reuse",
+        "Validator-normalized values feed audit/projection without rewriting stored history or dropping document extensions",
+        "Valid cache reuses without extraction; actual extractor-generated incomplete fixture retains C03 one retry and park behavior"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_evaluation.py",
+      "sha256": "fce35a177817d69363f41ca88aab1ea26e07bb8cadb055511128011f14350970",
+      "status": "no_change",
+      "checks": [
+        "Manifest/criteria/record validation rejects split leakage, relative-path escape, malformed labels and telemetry",
+        "Missing lifecycle/denominators remain explicit; held-out G6 evidence requires human receipts",
+        "Offline readers never open attachments/models; reports use private atomic writes",
+        "Incremental/shadow drivers report extraction/audit/repair/render stages separately"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "EvaluationError",
+          "_id",
+          "_dict",
+          "_list",
+          "_finite_number",
+          "wilson_interval",
+          "_success_metric",
+          "_error_metric",
+          "_percentile",
+          "_eval_member",
+          "_item_id",
+          "_items",
+          "_validate_relative_path",
+          "validate_manifest",
+          "validate_criteria",
+          "_record_identity",
+          "_validate_bundle",
+          "_validate_candidate",
+          "_validate_label",
+          "validate_records",
+          "_fact_map",
+          "_loop_map",
+          "_normalized",
+          "_resolved",
+          "_case_counts",
+          "_scope_report",
+          "_gate",
+          "criteria_sha256",
+          "evaluate_records",
+          "_token_report",
+          "evaluate_runs",
+          "load_jsonl",
+          "load_json",
+          "write_report",
+          "main",
+          "_expected_matched",
+          "evaluate_jev_incremental",
+          "run_shadow_e2e"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_evaluation.py",
+          "tests/semantic/test_canonical_request_evaluation.py",
+          "tests/semantic/test_jev_value.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Receipt shape cannot authenticate reviewers; injected drivers assume prepared synthetic cases"
+      ],
+      "prior_sha256": "fce35a177817d69363f41ca88aab1ea26e07bb8cadb055511128011f14350970",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_extraction.py",
+      "sha256": "24876f0a79a8129c603f4677acf01d76db7a0c60e05892044d1468091f908be2",
+      "status": "fixed",
+      "checks": [
+        "Atom/chunk ownership covers every source codepoint with source/revision/generation-bound resumable checkpoints",
+        "Cache validates ranges/quotes/schema and canonical fact contracts; cursor and legacy protocols retained",
+        "Every mandatory category has obligations; missing/ambiguous/dropped/unfinished work remains non-PASS",
+        "Owner-only repair rolls back failed links and recomputes conservative coverage/relations",
+        "Unreadable manifests and cache JSON recover without model/data loss"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_source_fingerprint",
+          "_chunk_generation",
+          "_chunk_specs",
+          "_line_kind",
+          "_atomize",
+          "build_manifest",
+          "_manifest_specs",
+          "_evidence_atom",
+          "_persist_manifest",
+          "_json_object",
+          "_member_prelude",
+          "_chunk_llm",
+          "_preflight_verdict",
+          "_collect_facts",
+          "_category_counts",
+          "_cached_chunks",
+          "_normalise_facts",
+          "_chunk_progress",
+          "_persist_chunk",
+          "extract_facts_resumable",
+          "_enum_or_unknown",
+          "_str_or_unknown",
+          "_member_actor",
+          "_resolve_evidence",
+          "_normalise_facts_v2",
+          "_v1_hint_items",
+          "_v1_category_signals",
+          "_v2_chunk_ok",
+          "jev_preflight",
+          "extract_facts_v2",
+          "_v2_obligations",
+          "_merge_dupe_facts",
+          "_close_obligations",
+          "_jev_obligations",
+          "repair_facts_v2"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_atomization.py",
+          "tests/semantic/test_semantic_facts_v2.py",
+          "tests/semantic/test_semantic_repair.py",
+          "tests/semantic/test_semantic_history_memory.py",
+          "tests/semantic/test_semantic_poison_rows.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "No real model/corpus; legacy checkpoint dictionaries originate here and downstream audit gates semantic integrity"
+      ],
+      "prior_sha256": "24876f0a79a8129c603f4677acf01d76db7a0c60e05892044d1468091f908be2",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison",
+        "Re-read streamed per-generation cached chunks and repair source binding; durable-prefix interruption regression remains applicable at unchanged SHA"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_facts.py",
+      "sha256": "192c6bfc43b33b96b72fdbf31706acc3b8e68817acd245c091302e874423e895",
+      "status": "no_change",
+      "checks": [
+        "Typed enum/ID/range/source/evidence contracts reject bool IDs, duplicates and unknown references",
+        "Every core atom has one owner; fact evidence, obligations and relation endpoints must resolve",
+        "Complete coverage cannot hide open obligations; request fields stay evidence-grounded or unknown"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "ContractError",
+          "_fail",
+          "_sha256",
+          "_id_value",
+          "_enum",
+          "_int_range",
+          "_str_list",
+          "_normalize_name",
+          "source_fingerprint",
+          "atom_id",
+          "chunk_id",
+          "obligation_id",
+          "evidence_id",
+          "fact_id",
+          "relation_id",
+          "subject_identity",
+          "importance_rank",
+          "validate_source_binding",
+          "validate_atom",
+          "validate_chunk",
+          "validate_obligation",
+          "validate_evidence",
+          "request_details",
+          "validate_fact",
+          "validate_relation",
+          "validate_coverage",
+          "validate_facts_doc"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_fact_contract.py",
+          "tests/semantic/test_semantic_facts_v2.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Internal consistency does not independently establish clinical truth/source authenticity"
+      ],
+      "prior_sha256": "192c6bfc43b33b96b72fdbf31706acc3b8e68817acd245c091302e874423e895",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_jev.py",
+      "sha256": "6068b22ef515bfecec9e079f7c9261469c7077fe4cac7ac938a0e62dde684d42",
+      "status": "no_change",
+      "checks": [
+        "Fixed endpoint/model allowlists and shared bounded no-proxy/no-redirect transport",
+        "Exact answer IDs/types/options/distributions/finite probabilities and usage validation",
+        "Pre-POST reservations, attempted-call counters, bounded backoff/deadline and hook restoration",
+        "Synthetic wire smoke requires explicit --live; tests inject transport"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "JevError",
+          "_finite",
+          "noul_question",
+          "choice_question",
+          "_validate_usage",
+          "validate_answers",
+          "verdict_for",
+          "JevClient",
+          "_p",
+          "wire_smoke",
+          "main"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_jev_contract.py",
+          "tests/semantic/test_semantic_circuit_drain.py",
+          "tests/semantic/test_semantic_runtime.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Provider smoke/model schema not contacted; runtime supplies validated retry/timeout settings"
+      ],
+      "prior_sha256": "6068b22ef515bfecec9e079f7c9261469c7077fe4cac7ac938a0e62dde684d42",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_lifecycle.py",
+      "sha256": "9ebacc3ec388ed504f0fe97d214a02257aaa6847c02331aadf0c554e575da5fb",
+      "status": "no_change",
+      "checks": [
+        "Verified requires exact complete current document and PASS audit hash; rendered and delivered are independent observations",
+        "Accepted prefixes/fingerprints and all line-spanned chunks prove delivery; contradictory evidence stays absent",
+        "Read-only snapshot validates artifact scope and refuses overwriting observed stage lists"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_verified",
+          "_rendered",
+          "_accepted_prefix",
+          "_delivered",
+          "fact_lifecycle",
+          "attach_lifecycle"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_lifecycle.py",
+          "tests/semantic/test_bugfix_r3_6_lifecycle_unsent_notice.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "No real channel delivery; trusted outbox authenticity remains required"
+      ],
+      "prior_sha256": "9ebacc3ec388ed504f0fe97d214a02257aaa6847c02331aadf0c554e575da5fb",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_llm.py",
+      "sha256": "7422da351f0baa4dc93c7df3eab8f3cf7ae8b872d2b3f0ce66316c26ab8f764f",
+      "status": "no_change",
+      "checks": [
+        "Full source/context are preserved; oversize prompt becomes explicit non-PASS stub before generation",
+        "Claim enums/references normalize safely and missing evidence remains audit-visible",
+        "Pre/post deadlines and runtime control flow preserved; transport remains injected"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_iso_date",
+          "extract_facts",
+          "_facts_brief",
+          "_verdicts_brief",
+          "_oversize_stub",
+          "summarize"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_llm_retry.py",
+          "tests/semantic/test_semantic_smoke.py",
+          "tests/semantic/test_semantic_facts_v2.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "No prompt efficacy or clinical model judgment testing"
+      ],
+      "prior_sha256": "7422da351f0baa4dc93c7df3eab8f3cf7ae8b872d2b3f0ce66316c26ab8f764f",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_loops.py",
+      "sha256": "91013dcb38b600aae8c660a5324bc229306472f1431e39fb3c092817d8c2bdee",
+      "status": "fixed",
+      "checks": [
+        "Candidate identity binds source/revision/policy and current copies preserve advisory history without changing requests",
+        "Malformed origins/descriptions/IDs/keys are isolated; legacy optional candidate_fp remains eligible when bound",
+        "Relation evidence stays current-thread, chronological, capped40/deadline and confidence-held"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_object",
+          "_candidate_identity",
+          "_current_meta",
+          "_valid_candidate",
+          "update_loops"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_loop_generations.py",
+          "tests/semantic/test_semantic_loop_poison_history.py",
+          "tests/semantic/test_mcs_semantic.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "No live relation model; completion reports never constitute human-confirmed completion"
+      ],
+      "prior_sha256": "91013dcb38b600aae8c660a5324bc229306472f1431e39fb3c092817d8c2bdee",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_metrics.py",
+      "sha256": "8ec5e844dc8b38ad3625967381fd1c0e4769bc749e69d47f00eb9af18fe63780",
+      "status": "no_change",
+      "checks": [
+        "History findings parse safely; current quality requires source/policy/revision/publication-bound terminal pairs",
+        "Scope/missing-member accounting remains explicit; OFF coverage is unavailable rather than backlog",
+        "Sorted thread scope reuses one bundle without host config reads"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_object",
+          "audit_history",
+          "current_quality"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_observe.py",
+          "tests/semantic/test_semantic_smoke.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Audit completion is not clinical correctness; no original ledger"
+      ],
+      "prior_sha256": "8ec5e844dc8b38ad3625967381fd1c0e4769bc749e69d47f00eb9af18fe63780",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_observe.py",
+      "sha256": "ee8e98232dcd85cafab91c60073cd57e50f2ef9a378f74e69fe967d9a959b9d8",
+      "status": "fixed",
+      "checks": [
+        "Read-only SQLite closes reliably and never changes runtime state",
+        "Missing/non-finite observations stay unknown and phase totals require complete telemetry",
+        "Unreadable scheduler/run/extract metadata no longer crashes statistics; usage corruption stays explicit"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "observe",
+          "_observe",
+          "_queue_stats",
+          "_nonnegative",
+          "_complete_total",
+          "_recent_runs",
+          "_extract_recent",
+          "_daily_budget",
+          "main"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_observe.py",
+          "tests/semantic/test_semantic_persisted_boundaries.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "No production latency/history; missing record does not imply no processing"
+      ],
+      "prior_sha256": "ee8e98232dcd85cafab91c60073cd57e50f2ef9a378f74e69fe967d9a959b9d8",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_policy.py",
+      "sha256": "970e6d932b9a975d96ddc12401264ae8438916067c16ccba7a4e99fdf0b8de14",
+      "status": "no_change",
+      "checks": [
+        "Unknown/malformed configuration fails OFF; rollout scope and canonical/calibration gates required",
+        "Numeric/question/budget/time thresholds reject bools, non-finite and out-of-range values",
+        "Fingerprint binds interpretation/fact-source but not retry budget"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "semantic_config",
+          "policy_fingerprint"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_pause.py",
+          "tests/semantic/test_fact_source.py",
+          "tests/semantic/test_semantic_cli_contract.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Caller supplies config dict; host configuration not accessed"
+      ],
+      "prior_sha256": "970e6d932b9a975d96ddc12401264ae8438916067c16ccba7a4e99fdf0b8de14",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_projection.py",
+      "sha256": "adef90e8b350c9ca3672ac9026a7999c62e44cc53ea42ec12a8d32230d4ad7bf",
+      "status": "no_change",
+      "checks": [
+        "Canonical carriers preserve full fact/evidence/ID graph and never upgrade unverified work",
+        "Conflict endpoints and unknown subjects/workflow/actions stay uncertain; care events require completed patient evidence",
+        "Staging request details remain unverified; projection version/doc hash gate reuse"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "projection_current",
+          "_v2_drug_ref",
+          "project_v2_facts",
+          "_v2_llm_subject",
+          "_v2_med_status",
+          "project_v2_doc_legacy",
+          "_carry_canonical"
+        ],
+        "tests": [
+          "tests/semantic/test_canonical_projection.py",
+          "tests/semantic/test_request_following_generation.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Legacy slots are intentionally lossy; complete canonical carriers remain"
+      ],
+      "prior_sha256": "adef90e8b350c9ca3672ac9026a7999c62e44cc53ea42ec12a8d32230d4ad7bf",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_qc.py",
+      "sha256": "c24146198516defac6e9a53a2507634a65380f8b3d3043fb1dda9fcc724508f0",
+      "status": "fixed",
+      "checks": [
+        "Source/version/age eligibility and complete job CAS fence annotate-only results",
+        "Round-robin cap exposes checked/unchecked coverage and preserves original indices",
+        "Unreadable/invalid source fails before model calls, same-generation terminal job is not reseeded and no false QC receipt is minted"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "qc_scope_sql",
+          "_drop_stale_qc",
+          "_qc_seed",
+          "_qc_candidates",
+          "_qc_questions",
+          "_process_qc_job"
+        ],
+        "tests": [
+          "tests/extract/test_extract_qc.py",
+          "tests/semantic/test_semantic_qc_poison_source.py",
+          "tests/semantic/test_semantic_scope_edges.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "No live QC; original extraction is preserved; new extraction generation reopens malformed-source QC"
+      ],
+      "prior_sha256": "c24146198516defac6e9a53a2507634a65380f8b3d3043fb1dda9fcc724508f0",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_quantities.py",
+      "sha256": "9595fa333ca3cbad3a154342b7f891eea8d7b6b6974688415366a4c82788ad88",
+      "status": "no_change",
+      "checks": [
+        "Decimal syntax does not convert units and malformed compound/sign/thousands forms remain unverified",
+        "Only exact referenced evidence contributes; amount/frequency/timebase/scope and ambiguity are checked",
+        "Removing quantity text cannot evade evidence retention checks"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_number",
+          "_unit",
+          "_amount",
+          "_unknown_amount",
+          "_frequency",
+          "extract_quantities",
+          "_claim_quantities",
+          "_evidence_quantities",
+          "_finding",
+          "_compatible",
+          "claim_quantity_findings"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_quantities.py",
+          "tests/semantic/test_semantic_facts_audit.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Syntactic support is not clinical dose equivalence; production normalizers bound direct numeric helper inputs"
+      ],
+      "prior_sha256": "9595fa333ca3cbad3a154342b7f891eea8d7b6b6974688415366a4c82788ad88",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_relations.py",
+      "sha256": "00c95c97b836cd37012c1a24b313777f3690bc288802d2673dbf6ca44344d472",
+      "status": "fixed",
+      "checks": [
+        "All active-vs-new and new-vs-new pairs remain; facts never silently deactivate",
+        "Tokenization is reused only within one call; public pair classification, output order and fingerprint agree",
+        "Timezone/precision mismatch cannot establish order and generic actions do not identify entities"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "relation_set_fingerprint",
+          "_norm",
+          "_entity_tokens",
+          "_entity_overlap",
+          "_iso",
+          "_ordered_before",
+          "classify_pair",
+          "_classify_pair",
+          "_relation",
+          "reconcile_facts"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_relations.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Intentional all-pairs complexity retained; no clinical NLP or live-scale profile"
+      ],
+      "prior_sha256": "00c95c97b836cd37012c1a24b313777f3690bc288802d2673dbf6ca44344d472",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_render.py",
+      "sha256": "469574487f4d0d8a72329d259a5c193b833d86f3865b2d530d70bcb50d214083",
+      "status": "fixed",
+      "checks": [
+        "Mandatory verified facts remain source/ID/evidence bound and paged without omission; oversized/unbound output is incomplete",
+        "Notices preserve stored source URL, target scope/audit status; degraded text has no unverified clinical claims",
+        "Origin eligibility/delivery dedupe preserve receipt semantics and unreadable history cannot hide valid delivery keys"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "fact_binding",
+          "_attr_desc",
+          "_evidence_desc",
+          "_fact_pages",
+          "verify_mandatory_pages",
+          "mandatory_render",
+          "render_notice",
+          "render_degraded",
+          "_outbox_has_delivery",
+          "_arrival_ids",
+          "_notify_src_event",
+          "_emit_degraded"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_notice_contract.py",
+          "tests/semantic/test_semantic_degraded_coverage.py",
+          "tests/semantic/test_semantic_persisted_boundaries.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Malformed arrival receipts remain fail-closed; no real channel rendering/delivery"
+      ],
+      "prior_sha256": "469574487f4d0d8a72329d259a5c193b833d86f3865b2d530d70bcb50d214083",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_runtime.py",
+      "sha256": "cc861d5dc90393723b67da7dd8b5fe0aa6d6d7faf3a735e72166ceb17cd9696a",
+      "status": "fixed",
+      "checks": [
+        "Immutable job identity and exact scoped CAS preserve generation and legacy empty-payload rescue",
+        "Guards recheck deadline/OFF/pause/config/source/job immediately around side effects",
+        "Jev hooks restore per call and requests reserve before POST; typed circuits have bounded cooldown",
+        "Timeout forwarding checks keyword-compatible parameter kind across model/timer wrappers",
+        "Deeply nested circuit content preserves bounded fail-closed cooldown"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "RuntimeGuardError",
+          "RuntimeStale",
+          "RuntimeOff",
+          "RuntimeBudget",
+          "RuntimeBudgetShort",
+          "LLMNotSent",
+          "LLMRejected",
+          "parse_payload",
+          "attempt_limit",
+          "payload_generation",
+          "config_generation",
+          "JobToken",
+          "job_matches",
+          "_where_args",
+          "transition_tx",
+          "transition",
+          "_circuit_now",
+          "_circuit_status",
+          "_circuit_failure_class",
+          "_circuit_state",
+          "_circuit_is_open",
+          "_write_circuit_state",
+          "circuit_open",
+          "record_circuit_result",
+          "job_deadline",
+          "_call_guard",
+          "accepts_timeout",
+          "llm_call",
+          "_GuardedLLM",
+          "_GuardedJev",
+          "_HookedJev",
+          "guarded_llm",
+          "bind_jev",
+          "usage_reserver",
+          "guard"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_runtime.py",
+          "tests/semantic/test_semantic_circuit_drain.py",
+          "tests/semantic/test_semantic_timeout_signature.py",
+          "tests/semantic/test_semantic_persisted_boundaries.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Prompt-only injected functions cannot be preempted; adapters supply transport timeouts. Arbitrary SQL corruption of required scalar job identity lies outside schema/writer contract"
+      ],
+      "prior_sha256": "cc861d5dc90393723b67da7dd8b5fe0aa6d6d7faf3a735e72166ceb17cd9696a",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_send_gate.py",
+      "sha256": "9aaf6727e52ad52d231ee0877e2e7d57984df2a6a8bc0c2eb4e8fe7a3138e885",
+      "status": "fixed",
+      "checks": [
+        "Every send checks current mode/pause/scope/policy/origin/source revision/fingerprint/PASS summary",
+        "Partial delivery freezes on mutation; unstarted stale sends suppress",
+        "Frozen chunks preserve provenance and complete body slices with bounded packing convergence",
+        "Unreadable summaries/origin/progress are unavailable rather than uncaught exceptions"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "DeferredSend",
+          "StaleSend",
+          "FreezeSend",
+          "_stale",
+          "_summary_current",
+          "_source_event",
+          "semantic_gate",
+          "semantic_render_state",
+          "semantic_render_gate",
+          "semantic_chunks",
+          "semantic_chunk_parts",
+          "semantic_summary_block"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_send_gate.py",
+          "tests/semantic/test_semantic_delivery.py",
+          "tests/semantic/test_semantic_persisted_boundaries.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "No send attempted; trusted frozen receipts remain required"
+      ],
+      "prior_sha256": "9aaf6727e52ad52d231ee0877e2e7d57984df2a6a8bc0c2eb4e8fe7a3138e885",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_store.py",
+      "sha256": "7f3059b5cb804e57fd3f356ec555fc982ff350dc60b2cd661f68e2bbbccb15d6",
+      "status": "fixed",
+      "checks": [
+        "Bundles preserve complete thread/attachment/revision and validate target scope before hashing",
+        "Current rows require matching fingerprint/policy and unreadable content fails closed",
+        "Projection invalidation isolates unreadable metadata and preserves healthy-row processing",
+        "JST usage rejects invalid receipts/counts without replenishing budget"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_member",
+          "bundle_fingerprint",
+          "thread_bundle",
+          "jev_state",
+          "_current",
+          "invalidate_projections",
+          "_jst_day_start",
+          "jev_usage_today"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_smoke.py",
+          "tests/semantic/test_semantic_poison_rows.py",
+          "tests/semantic/test_semantic_scope_edges.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "Full evidence intentionally untruncated; no real usage/provider ledger"
+      ],
+      "prior_sha256": "7f3059b5cb804e57fd3f356ec555fc982ff350dc60b2cd661f68e2bbbccb15d6",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_v4.py",
+      "sha256": "b83d442b840b695a122095551bcdfdbd7339fddf0495d505f8045c660a9b82fc",
+      "status": "fixed",
+      "checks": [
+        "PASS-only publication is caller-transaction and source/hash/doc/projection-version bound; diagnostics never supply current facts",
+        "Receipts/current/cohort reads isolate unreadable JSON",
+        "Bounded reprojection requires the same complete audited document and reports skipped evidence",
+        "Cohorts reserve exact sources/ceilings and refuse caller transactions; token/cleanup prerequisites remain held"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "record_stage",
+          "stage_ledger",
+          "current_v4",
+          "stage_request_following",
+          "extract_request_following",
+          "publish",
+          "reproject_doc",
+          "reproject_stale",
+          "_doc_hash",
+          "fact_audit_verdict",
+          "diagnostic",
+          "_time_value",
+          "_valid_cohort",
+          "_begin",
+          "declare_cohort",
+          "_cohort",
+          "cohort_items_done",
+          "active_legacy_admissions",
+          "_source_current",
+          "_item_receipt",
+          "run_cohort",
+          "mark_item_done",
+          "hold_unbounded_job",
+          "retire_payloads"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_v4.py",
+          "tests/semantic/test_semantic_persisted_boundaries.py",
+          "tests/semantic/test_canonical_drain.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "No migration inference/payload retirement; token enforcement/recovery contracts remain mandatory"
+      ],
+      "prior_sha256": "b83d442b840b695a122095551bcdfdbd7339fddf0495d505f8045c660a9b82fc",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    },
+    {
+      "path": "mcs/semantic/semantic_workflow.py",
+      "sha256": "a58028359221c6f49405aaebe88edaf4f28d0493523a907e039d8e27d0250c80",
+      "status": "no_change",
+      "checks": [
+        "Synthetic case IDs/quotes/attachments/page inputs reject duplicates/malformed structures",
+        "Cost values and totals require positive finite numbers; missing locations remain failures",
+        "Outputs explicitly describe declared mechanics rather than human timing/clinical evidence"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "WorkflowError",
+          "_num",
+          "_total_seconds",
+          "_cost_model",
+          "_id",
+          "_validate_case",
+          "_measure_card",
+          "_measure_source",
+          "measure_case",
+          "_p",
+          "compare_workflow"
+        ],
+        "tests": [
+          "tests/semantic/test_semantic_workflow.py"
+        ],
+        "verification": "Source boundary review and isolated synthetic contract/regression tests; see verification ledger"
+      },
+      "limitations": [
+        "No human measurement or real workflow; synthetic page-cost model intentional"
+      ],
+      "prior_sha256": "a58028359221c6f49405aaebe88edaf4f28d0493523a907e039d8e27d0250c80",
+      "prior_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-extract-ingest-1.0.15.json",
+      "round2_status": "reused",
+      "additional_checks": [],
+      "round3_status": "reused",
+      "round3_checks": [
+        "Prior per-file source-boundary review and evidence reused only after exact current SHA256 comparison"
+      ]
+    }
+  ]
+}

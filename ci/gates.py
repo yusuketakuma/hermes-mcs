@@ -157,6 +157,8 @@ def gate_stdlib_only() -> list[str]:
         native = path.is_relative_to(ADAPTERS) or path.is_relative_to(STANDALONE)
         members = (_STANDALONE_DISCORD_MEMBERS if native and _plugin_path(path) in _STANDALONE_SDK
                    else _SDK_MEMBERS)
+        if _plugin_path(path) == "mcs_discord/cards.py":
+            members = members | {"Embed"}
         bad.extend(f"{path.name}:{v}" for v in _module_surface(tree, "discord", members))
     return bad
 
@@ -261,6 +263,12 @@ def gate_plugin_sandbox() -> list[str]:
             elif isinstance(node, ast.ImportFrom):
                 if node.module == "urllib.parse":
                     continue  # Pure URI encoding, no network transport.
+                if (path == ADAPTERS / "lineworks" / "server.py"
+                        and not node.level and node.module == "socket"
+                        and len(node.names) == 1
+                        and node.names[0].name == "SHUT_RDWR"
+                        and node.names[0].asname is None):
+                    continue  # Only closing an already-owned callback connection.
                 mods = [] if node.level else [node.module.split(".")[0]]
             else:
                 continue

@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "LLM受付制御の初期化が同時に起動すると失敗することがある問題を修正",
+  "summary": "LLM受付制御（MCS_LLM_ADMISSION）の保存先を古い形式から更新するとき、複数のプロセスが同時に起動すると同じ列を二重に追加しようとして初期化に失敗することがありました。形式の確認と更新を1つの書込みトランザクションで行い、後から来たプロセスは更新済みの形式をそのまま使います。",
+  "upgrade": "LLM受付制御は既定で無効のため、既定設定では影響はありません。有効にしている場合も追加操作は不要です。",
+  "details": ["_initialize_storeの表作成・列追加・索引作成をBEGIN IMMEDIATEのトランザクション内で行う。"],
+  "refs": ["mcs/core/llm_admission.py", "tests/core/test_llm_admission_reclaim.py"]
+}

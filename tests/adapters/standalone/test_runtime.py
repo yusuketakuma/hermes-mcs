@@ -247,3 +247,33 @@ def test_scheduled_slot_runs_even_if_previous_run_ended_just_before(tmp_path, mo
     assert host.retry_at["mcs_check"] == slot + 20
     host.tick(slot)
     assert "mcs_check" in host.children and len(codes) == 1
+
+
+def test_crash_loop_is_visible_in_log_and_status(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir()
+    children = []
+
+    class Child:
+        def __init__(self, argv, **kw):
+            self.pid, self.code = 2000 + len(children), None
+            children.append(self)
+
+        def poll(self):
+            return self.code
+
+    events = []
+    monkeypatch.setattr(runtime.subprocess, "Popen", Child)
+    monkeypatch.setattr(runtime, "log", lambda event, **f: events.append((event, f)))
+    host = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
+    now = datetime(2026, 10, 2, 5, 11, 30, tzinfo=timezone.utc).timestamp()
+    for i, code in enumerate((1, 1, 0)):
+        t = now + i * 31
+        host.tick(t)
+        host.children["extract-0"]["process"].code = code
+        host.tick(t + 1)
+        status = json.loads((data / service.STATUS_FILE).read_text())["exits"]["extract-0"]
+        assert status["last_exit"] == code and status["ended_at"] == t + 1
+        assert status["failures"] == (i + 1 if code else 0)
+    ended = [f for e, f in events if e == "child_ended" and f["job"] == "extract-0"]
+    assert [f["code"] for f in ended] == [1, 1, 0]

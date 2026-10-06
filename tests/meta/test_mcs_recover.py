@@ -10,6 +10,7 @@ import subprocess
 import time
 from contextlib import suppress
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from ops_testkit import _git, _load
@@ -1023,10 +1024,25 @@ def test_hung_launchctl_is_reported_not_raised(rec, monkeypatch, tmp_path):
 
     monkeypatch.setattr(rec.subprocess, "run", hung)
     monkeypatch.setattr(rec, "RESIDENT_LABELS", ("ai.mcs.extract-drainer",))
-    monkeypatch.setattr(rec.time, "sleep", lambda s: None)
     clock = iter(range(0, 10_000, 20))
-    monkeypatch.setattr(rec.time, "time", lambda: next(clock))
+    monkeypatch.setattr(rec, "time", SimpleNamespace(
+        time=time.time, monotonic=lambda: next(clock), sleep=lambda s: None))
     assert rec._restart_drainers() == ["ai.mcs.extract-drainer"]
+
+
+def test_restart_drainers_wait_ignores_wall_clock_jump(rec, monkeypatch):
+    """A sleep/NTP jump of the wall clock must not expire the 15s pid wait."""
+    wall, mono, pids = [1000.0], [0.0], iter([None, None, 4242, 4242])
+
+    def sleep(s):
+        mono[0] += s
+        wall[0] += 3600                # system clock jumps an hour per poll
+    monkeypatch.setattr(rec, "time", SimpleNamespace(
+        time=lambda: wall[0], monotonic=lambda: mono[0], sleep=sleep))
+    monkeypatch.setattr(rec, "_launchctl", lambda args: None)
+    monkeypatch.setattr(rec, "_agent_pid", lambda label: next(pids))
+    monkeypatch.setattr(rec, "RESIDENT_LABELS", ("ai.mcs.x",))
+    assert rec._restart_drainers() == []
 
 
 class _FakeLaunchd:
@@ -1070,13 +1086,12 @@ class _FakeLaunchd:
 ])
 def test_restart_drainers_retries_transient_bootstrap(
         rec, tmp_path, monkeypatch, outcomes, late, problems, boots):
-    from types import SimpleNamespace
     fake = _FakeLaunchd(outcomes, late_load=late, loads=outcomes != [0])
     sleeps = []
     clock = iter(range(0, 10 ** 6, 5))
     monkeypatch.setattr(rec.subprocess, "run", fake)
     monkeypatch.setattr(rec, "time", SimpleNamespace(
-        time=lambda: next(clock), sleep=sleeps.append))
+        time=time.time, monotonic=lambda: next(clock), sleep=sleeps.append))
     agents = tmp_path / "agents"
     agents.mkdir()
     (agents / "ai.mcs.x.plist").write_text("<plist/>")
@@ -1268,7 +1283,8 @@ def test_restart_drainers_ensure_mode_never_bounces_a_running_drainer(
         (agents / (label + ".plist")).write_text("<plist/>")
     monkeypatch.setattr(rec, "RESIDENT_LABELS", labels)
     clock = iter(range(0, 10 ** 6))
-    monkeypatch.setattr(rec.time, "time", lambda: next(clock))
+    monkeypatch.setattr(rec, "time", SimpleNamespace(
+        time=time.time, monotonic=lambda: next(clock), sleep=lambda s: None))
     assert rec._restart_drainers(bounce=False) == ["ai.mcs.hung"]
     assert not any(verb == "bootout" for verb, _ in fake.calls)
     assert [c for c in fake.calls if c[1] == "ai.mcs.run"] \

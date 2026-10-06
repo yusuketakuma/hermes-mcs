@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "時計のずれで更新が中断される問題を修正",
+  "summary": "更新・自動復旧で抽出ワーカーの停止や起動を待つ間にスリープ復帰や時刻同期でシステム時計が進んでも、待ち時間が即座に切れたと誤判定しなくなりました。これまでは停止失敗・起動失敗として更新が中断されることがありました。",
+  "upgrade": "追加操作は不要です。待機時間（停止・起動確認15秒、再起動全体の上限）は変わりません。記録される時刻は従来どおりシステム時計を使います。",
+  "details": [
+    "mcs_update の quiesce と restart_agents、mcs_recover の常駐ワーカー再起動で、launchd の pid 待ち期限を time.time() から time.monotonic() に変更しました。独立実行モードの待機は既に monotonic です。",
+    "時計が1回のポーリングごとに1時間進む合成テストで、待機が期限切れにならないことを確認します。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_update.py",
+    "deployment/recovery/mcs_recover.py"
+  ]
+}

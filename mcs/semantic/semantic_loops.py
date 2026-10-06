@@ -36,6 +36,15 @@ def _current_meta(meta: dict, fingerprint: str, policy: str) -> bool:
             and meta.get("policy_fingerprint") == policy)
 
 
+def _valid_candidate(candidate: dict, meta: dict) -> bool:
+    """Reject malformed stored candidates before dedupe or relation assessment."""
+    return (isinstance(candidate.get("origin"), dict)
+            and all(isinstance(candidate.get(key), str) and candidate[key].strip()
+                    for key in ("loop_id", "description"))
+            and (meta.get("candidate_fp") is None
+                 or isinstance(meta["candidate_fp"], str)))
+
+
 def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                  scfg, deadline):
     """Return (created, complete); unfinished relation pairs resume on retry.
@@ -50,11 +59,22 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
     fp = bundle["source_fingerprint"]
     root = bundle["root_id"]
     account = bundle["account_scope"]
+    # Candidates are stored on (and keyed by) their origin message, and
+    # every use below drops rows outside the bundle — read only this
+    # thread's rows instead of the patient's whole loop history.
+    member_ids = json.dumps(sorted(members))
+
+    def _candidate_rows():
+        return ledger.db.execute(
+            "SELECT artifact_id,message_id,content,meta FROM artifacts "
+            "WHERE kind=? AND project_id=? "
+            "AND message_id IN (SELECT value FROM json_each(?)) "
+            "ORDER BY artifact_id",
+            (KIND_LOOP, project_id, member_ids)).fetchall()
+
     seen_candidates = {
-        _object(r["meta"]).get("candidate_fp")
-        for r in ledger.db.execute(
-            "SELECT meta FROM artifacts WHERE kind=? AND project_id=?",
-            (KIND_LOOP, project_id))}
+        key for r in _candidate_rows()
+        if isinstance(key := _object(r["meta"]).get("candidate_fp"), str)}
     created = 0
     for mid, facts in facts_by_target.items():
         member = members.get(mid)
@@ -99,14 +119,12 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
     # A new sibling/reply changes the whole-thread fingerprint.  Preserve
     # the historical candidate, but materialize a current-generation copy
     # for a still-valid origin so a new reply can resolve it in the view.
-    candidate_rows = ledger.db.execute(
-        "SELECT artifact_id,message_id,content,meta FROM artifacts "
-        "WHERE kind=? AND project_id=? ORDER BY artifact_id",
-        (KIND_LOOP, project_id)).fetchall()
+    candidate_rows = _candidate_rows()
     current_identities = {
         _candidate_identity(_object(row["content"]))
         for row in candidate_rows
         if _current_meta(_object(row["meta"]), fp, policy)
+        and _valid_candidate(_object(row["content"]), _object(row["meta"]))
     }
     for row in candidate_rows:
         meta = _object(row["meta"])
@@ -118,6 +136,8 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                 or not isinstance(meta.get("policy_fingerprint"), str):
             continue
         candidate = _object(row["content"])
+        if not _valid_candidate(candidate, meta):
+            continue
         origin = candidate.get("origin") or {}
         source = members.get(row["message_id"])
         if (not source or candidate.get("root_id") != root
@@ -156,25 +176,29 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
         return created, True
 
     seen_pairs = set()
+    # only this generation's events can match a pair key (fp is part of it)
     for row in ledger.db.execute(
-            "SELECT content,meta FROM artifacts WHERE kind=? AND project_id=?",
-            (KIND_LOOP_EVENT, project_id)):
+            "SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? "
+            "AND CASE WHEN json_valid(meta) AND json_type(meta)='object' "
+            "THEN json_extract(meta,'$.fingerprint') END=?",
+            (KIND_LOOP_EVENT, project_id, fp)):
         event, meta = _object(row["content"]), _object(row["meta"])
-        seen_pairs.add((event.get("loop_artifact_id"),
-                        event.get("trigger_message_id"),
-                        event.get("trigger_revision"), meta.get("fingerprint"),
-                        meta.get("policy_fingerprint")))
+        identity = (event.get("loop_artifact_id"), event.get("trigger_message_id"),
+                    event.get("trigger_revision"), meta.get("fingerprint"),
+                    meta.get("policy_fingerprint"))
+        if (all(type(value) is int for value in identity[:2])
+                and all(isinstance(value, str) for value in identity[2:])):
+            seen_pairs.add(identity)
 
-    candidates = ledger.db.execute(
-        "SELECT artifact_id,message_id,content,meta FROM artifacts "
-        "WHERE kind=? AND project_id=? ORDER BY artifact_id",
-        (KIND_LOOP, project_id)).fetchall()
+    candidates = _candidate_rows()
     targets = [m for m in members.values() if m["role"] == "target"]
     pairs = 0
     for row in candidates:
         candidate = _object(row["content"])
-        origin = candidate.get("origin") or {}
         candidate_meta = _object(row["meta"])
+        if not _valid_candidate(candidate, candidate_meta):
+            continue
+        origin = candidate["origin"]
         is_current = _current_meta(candidate_meta, fp, policy)
         if not is_current:
             continue

@@ -1,0 +1,1581 @@
+{
+  "schema_version": 1,
+  "release": "1.0.15",
+  "round": 3,
+  "date": "2026-10-06",
+  "scope": "Same 83 operations/build/deployment/CI/integration/ops/views source entries; ci/gates.py and parent ops3 read-only/excluded as before.",
+  "inventory_count": 83,
+  "method": "Reuse exact round2 SHA proof; only assigned persisted datetime/calendar, future state, DB floor types and previous shutdown/publication boundaries. No new unsupported hypothesis loop after these fixes.",
+  "findings": [
+    {
+      "id": "unrepresentable-calendar-time",
+      "status": "fixed",
+      "source": [
+        "mcs/views/mcs_stats.py",
+        "mcs/ops/mcs_refstats.py"
+      ],
+      "evidence": "Finite 1e12/1e300/SQLite INT64 max at runtime date conversion produced escaped ValueError/OSError or old OverflowError classification. Actual conversion checks now return unavailable/fixed capture error; 9999-12-31+14d calendar arithmetic uses same unavailable classification. Publication and C1 wire metadata limits unchanged; future2030 preserved."
+    },
+    {
+      "id": "corrupt-history-floor",
+      "status": "fixed",
+      "source": [
+        "mcs/ops/mcs_operations.py"
+      ],
+      "evidence": "TEXT/BLOB floor escaped TypeError; infinity created new fetch; negative invalid values falsely marked already_floored. Existing receipt transaction now rejects invalid_history_floor without new work; NULL/0/-1/finite future retain behavior."
+    },
+    {
+      "id": "publication-cleanup-refactor",
+      "status": "parent_verified_delta",
+      "source": [
+        "mcs/core/maintenance.py"
+      ],
+      "evidence": "Parent-owned maintenance publication cleanup/shared _publish_backup verified by171 related cases; mcs/ops/mcs_backup.py unchanged and its earlier encrypted-publication evidence reused."
+    }
+  ],
+  "validation": {
+    "python": "3.13.12 isolated scripts/run_tests.sh runner",
+    "calendar_and_callers": "143 statistics/refstats/as_of/interaction/export checks passed after initial calendar fix.",
+    "horizon_refresh": "47 final calendar/statistics/as_of cases passed after specifically requested horizon edge.",
+    "floor_and_callers": "45 floor/operations/CLI/deepening cases passed.",
+    "future_contract": "Normal2030 and finite-publication metadata retained; no arbitrary range cap or global ValueError swallowing.",
+    "parent_delta": "171 backup-related passes reported by parent; other owner source evidence reused.",
+    "diff": "git diff --check passed",
+    "freeze": "No planned runtime or test edits after final calendar edge; dossier-only handoff."
+  },
+  "refactoring": {
+    "completed": "Confirmed duplicate calendar-day conversion shared between rx_expiry and open_loop_aging; function behavior/error bounds retained.",
+    "excluded": "No speculative module split/rename or arbitrary data cap. Report history folder organization belongs to parent after freeze."
+  },
+  "unexamined_source_files": [],
+  "unplanned_source_deltas": [],
+  "limitations": [
+    "Synthetic private SQLite/files/stubs only; no real DB, credentials, production services, MCS/LLM/Jev or external publishing/deployment.",
+    "Earlier SDK/native OS/actual stop behavior execution limitations remain; no false claim of live verification.",
+    "Parent will migrate report history/update references and perform whole-repository required checks after all sources freeze."
+  ],
+  "files": [
+    {
+      "path": ".github/dependabot.yml",
+      "sha256": "2df1fe6f642eb8f3bd065e72bb8703ba5d566aaafb51fa16b760743ddb3549de",
+      "baseline_sha256": "2df1fe6f642eb8f3bd065e72bb8703ba5d566aaafb51fa16b760743ddb3549de",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_sdk_ci_lanes.py",
+        "tests/release/",
+        "shellcheck/static gate entrypoints aligned with CI source"
+      ],
+      "limitations": [
+        "GitHub-hosted jobs, action binaries, remote publishing and dependency upgrades not executed."
+      ]
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "5b73c57cef2d6b2e53f8d6785120573be91c8a209c2a18a9094500f772ff4d32",
+      "baseline_sha256": "5b73c57cef2d6b2e53f8d6785120573be91c8a209c2a18a9094500f772ff4d32",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_sdk_ci_lanes.py",
+        "tests/release/",
+        "shellcheck/static gate entrypoints aligned with CI source"
+      ],
+      "limitations": [
+        "GitHub-hosted jobs, action binaries, remote publishing and dependency upgrades not executed."
+      ]
+    },
+    {
+      "path": ".github/workflows/openwiki-update.yml",
+      "sha256": "0efcad155b445693eccb91344073f18894d905beb6c3951cf710f551e2702fd7",
+      "baseline_sha256": "0efcad155b445693eccb91344073f18894d905beb6c3951cf710f551e2702fd7",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_sdk_ci_lanes.py",
+        "tests/release/",
+        "shellcheck/static gate entrypoints aligned with CI source"
+      ],
+      "limitations": [
+        "GitHub-hosted jobs, action binaries, remote publishing and dependency upgrades not executed."
+      ]
+    },
+    {
+      "path": ".github/workflows/release-notes.yml",
+      "sha256": "036c8f65e7b7862bad2e2b450c0466fd19c79d148f81459487044afc3f8da2d2",
+      "baseline_sha256": "036c8f65e7b7862bad2e2b450c0466fd19c79d148f81459487044afc3f8da2d2",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_sdk_ci_lanes.py",
+        "tests/release/",
+        "shellcheck/static gate entrypoints aligned with CI source"
+      ],
+      "limitations": [
+        "GitHub-hosted jobs, action binaries, remote publishing and dependency upgrades not executed."
+      ]
+    },
+    {
+      "path": "Makefile",
+      "sha256": "f49eac487c1e0d717bc95b2c5d110389f7e75cc047a67ca545bccc75dbaaad53",
+      "baseline_sha256": "f49eac487c1e0d717bc95b2c5d110389f7e75cc047a67ca545bccc75dbaaad53",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_sdk_ci_lanes.py",
+        "tests/release/",
+        "shellcheck/static gate entrypoints aligned with CI source"
+      ],
+      "limitations": [
+        "GitHub-hosted jobs, action binaries, remote publishing and dependency upgrades not executed."
+      ]
+    },
+    {
+      "path": "ci/gates-coverage.json",
+      "sha256": "920381489e8dae74a2d4272d3e8cd50c3b81e484d9bfa345d4af53d2dfc9fb64",
+      "baseline_sha256": "920381489e8dae74a2d4272d3e8cd50c3b81e484d9bfa345d4af53d2dfc9fb64",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "ci/gates.py: 10/10 passed",
+        "ci/mine_gates.py --check passed",
+        "tests/meta/test_ci_scripts.py",
+        "tests/meta/test_callback_socket_constant_gate.py",
+        "tests/meta/test_c1_export_gates.py"
+      ],
+      "limitations": [
+        "Static incident gates establish their documented patterns, not universal runtime correctness. ci/gates.py source edits belong to parent."
+      ]
+    },
+    {
+      "path": "ci/gates.py",
+      "sha256": "a509ff8309dad458b3e63d0716f6bceeb3fe0f2cf7275e40e20d65df122edcb7",
+      "baseline_sha256": "a509ff8309dad458b3e63d0716f6bceeb3fe0f2cf7275e40e20d65df122edcb7",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "ci/gates.py: 10/10 passed",
+        "ci/mine_gates.py --check passed",
+        "tests/meta/test_ci_scripts.py",
+        "tests/meta/test_callback_socket_constant_gate.py",
+        "tests/meta/test_c1_export_gates.py",
+        "Parent current-source report: 3 additional Embed-boundary cases passed; 10/10 gates and mine_gates --check passed."
+      ],
+      "limitations": [
+        "Static incident gates establish their documented patterns, not universal runtime correctness. ci/gates.py source edits belong to parent."
+      ]
+    },
+    {
+      "path": "ci/mine_gates.py",
+      "sha256": "7c98b6fb0d9973bdd3dc4cc3e5028cc9d8aea2f25dbd8cfa71ee126c8595154d",
+      "baseline_sha256": "7c98b6fb0d9973bdd3dc4cc3e5028cc9d8aea2f25dbd8cfa71ee126c8595154d",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "ci/gates.py: 10/10 passed",
+        "ci/mine_gates.py --check passed",
+        "tests/meta/test_ci_scripts.py",
+        "tests/meta/test_callback_socket_constant_gate.py",
+        "tests/meta/test_c1_export_gates.py"
+      ],
+      "limitations": [
+        "Static incident gates establish their documented patterns, not universal runtime correctness. ci/gates.py source edits belong to parent."
+      ]
+    },
+    {
+      "path": "conftest.py",
+      "sha256": "a1066a51c68082f7b65e346cef21e6fe8fab7e5e2f354b1c20b0fe95a43fea3a",
+      "baseline_sha256": "a1066a51c68082f7b65e346cef21e6fe8fab7e5e2f354b1c20b0fe95a43fea3a",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "isolated Python 3.13 runner used for all local test execution",
+        "tests/meta/test_integration_guard_load.py",
+        "integration/test_integration_guards.py",
+        "pinned SDK required-collection negative check intentionally rejected incomplete lane with exit 4"
+      ],
+      "limitations": [
+        "No weakening or bypass of socket/process/real endpoint guards; no actual SDK lane selected to produce a success."
+      ]
+    },
+    {
+      "path": "deployment/README.md",
+      "sha256": "4de6659b4eaaacd6a7fde12cf7f775fc4887a417ff2ddc52d8725570fc92981d",
+      "baseline_sha256": "4de6659b4eaaacd6a7fde12cf7f775fc4887a417ff2ddc52d8725570fc92981d",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "path": "deployment/cco/cco-approval-scope.json",
+      "sha256": "96b69cda31065d3db900a771955ad4b8319f893ae5d8077234136fff13995960",
+      "baseline_sha256": "96b69cda31065d3db900a771955ad4b8319f893ae5d8077234136fff13995960",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "Candidate mounts remain snapshot read-only and proposals write-only in scope; terminal network/environment forwarding disabled; historical approval receipt treated as a reference, not new authorization."
+      ],
+      "limitations": [
+        "Historical target config/hash/container image not probed; candidate not applied or restarted."
+      ]
+    },
+    {
+      "path": "deployment/cco/cco-terminal-isolation.md",
+      "sha256": "dde9b43a6710db094fe46faf3e403bc115f0846c89652d11227ca945ba36faf8",
+      "baseline_sha256": "dde9b43a6710db094fe46faf3e403bc115f0846c89652d11227ca945ba36faf8",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "Candidate mounts remain snapshot read-only and proposals write-only in scope; terminal network/environment forwarding disabled; historical approval receipt treated as a reference, not new authorization."
+      ],
+      "limitations": [
+        "Historical target config/hash/container image not probed; candidate not applied or restarted."
+      ]
+    },
+    {
+      "path": "deployment/cco/cco-terminal.candidate.yaml",
+      "sha256": "5952f6d88a1732fcf7a17c6b41f501b30d5eb168c156691349e59a7eb7cb7fe9",
+      "baseline_sha256": "5952f6d88a1732fcf7a17c6b41f501b30d5eb168c156691349e59a7eb7cb7fe9",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "Candidate mounts remain snapshot read-only and proposals write-only in scope; terminal network/environment forwarding disabled; historical approval receipt treated as a reference, not new authorization."
+      ],
+      "limitations": [
+        "Historical target config/hash/container image not probed; candidate not applied or restarted."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/README.md",
+      "sha256": "b61208603e1cbf91069c33768a6266078b086fc3516253edbee39565737567f4",
+      "baseline_sha256": "b61208603e1cbf91069c33768a6266078b086fc3516253edbee39565737567f4",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.extract-drainer-2.plist",
+      "sha256": "12a1766e1013278f2ddfb043f108cf0ddfbfe97b414133a5728378467bad9148",
+      "baseline_sha256": "12a1766e1013278f2ddfb043f108cf0ddfbfe97b414133a5728378467bad9148",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.extract-drainer.plist",
+      "sha256": "f54ee5c114cbe042a252eb12696151877d39a1ede3d1efe32b97950de3928bdb",
+      "baseline_sha256": "f54ee5c114cbe042a252eb12696151877d39a1ede3d1efe32b97950de3928bdb",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.llamaserver.plist",
+      "sha256": "e575304cb83db130469b166f5a31cd3edb13391389500d8cea7136fbe775069f",
+      "baseline_sha256": "e575304cb83db130469b166f5a31cd3edb13391389500d8cea7136fbe775069f",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.standalone.plist",
+      "sha256": "7fd509490b3725a10288e19906955be01f6c573d3414cab3bef46b9e0871e667",
+      "baseline_sha256": "7fd509490b3725a10288e19906955be01f6c573d3414cab3bef46b9e0871e667",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/local.mcs-cmd.plist",
+      "sha256": "32f3f1229fc83eafddd711a4c259b4754879240045c311b97ff2f129b5e0babc",
+      "baseline_sha256": "32f3f1229fc83eafddd711a4c259b4754879240045c311b97ff2f129b5e0babc",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/local.mcs-int.plist",
+      "sha256": "a3cd62d2ef9b25b05980f05734cfe1e46bdb2b448d151eb5e0be1440abbfd03e",
+      "baseline_sha256": "a3cd62d2ef9b25b05980f05734cfe1e46bdb2b448d151eb5e0be1440abbfd03e",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/org.mcs.recovery.plist",
+      "sha256": "c873f8e40dcf869f3447f00ad63b58524b43c5e383b571d30bac87e000145aa7",
+      "baseline_sha256": "c873f8e40dcf869f3447f00ad63b58524b43c5e383b571d30bac87e000145aa7",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/recovery/mcs_recover.py",
+      "sha256": "2df399e877f2f6b7124063bdc9d08546497e597a4e8885ff15685402a9eef604",
+      "baseline_sha256": "2df399e877f2f6b7124063bdc9d08546497e597a4e8885ff15685402a9eef604",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_operation_cleanup_stability.py (report publication failures repeated 20 times, interruption cleanup)",
+        "tests/meta/test_recovery_snapshot_shape.py (11 malformed membership snapshots fail before filesystem/service scan)",
+        "tests/meta/test_mcs_recover.py (105 cases)",
+        "tests/meta/test_mcs_recover_py39.py (2 compatibility cases)",
+        "tests/ops/test_recovery_corrupt_receipts.py (4 cases)",
+        "integration/test_mcs_recovery_narrative.py (6 cases)"
+      ],
+      "limitations": [
+        "No actual rollback, original DB replacement, deployed independent watchdog update or OS service restart performed."
+      ]
+    },
+    {
+      "path": "deployment/requirements-standalone.txt",
+      "sha256": "051e601804024617cf3553340092ebed8a87a2f05a7415bca80198eab5a16c31",
+      "baseline_sha256": "051e601804024617cf3553340092ebed8a87a2f05a7415bca80198eab5a16c31",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/scripts/llamacpp_restart_if_idle.sh",
+      "sha256": "b0e46aa76c0875e3ae2001d45a4f09fe43231ea78ab684b0975158d516c146f3",
+      "baseline_sha256": "b0e46aa76c0875e3ae2001d45a4f09fe43231ea78ab684b0975158d516c146f3",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_deployment_scripts.py",
+        "tests/meta/test_watchdog_wrappers.py",
+        "template rendering in synthetic install/setup tests"
+      ],
+      "limitations": [
+        "No scheduled script run against MCS, LLM, backup policy, Keychain or platform services."
+      ]
+    },
+    {
+      "path": "deployment/scripts/mcs_check.sh",
+      "sha256": "ca1056d497d3b2b07aa6b9a36c0b3ea0bee7023d5a73bb47dbfac29de1457f29",
+      "baseline_sha256": "ca1056d497d3b2b07aa6b9a36c0b3ea0bee7023d5a73bb47dbfac29de1457f29",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_deployment_scripts.py",
+        "tests/meta/test_watchdog_wrappers.py",
+        "template rendering in synthetic install/setup tests"
+      ],
+      "limitations": [
+        "No scheduled script run against MCS, LLM, backup policy, Keychain or platform services."
+      ]
+    },
+    {
+      "path": "deployment/scripts/mcs_deep.sh",
+      "sha256": "7233672d24c8970a2ee19e7e5cc47bf2c9d7b2409fa7e7483cda4f42f1ab23bb",
+      "baseline_sha256": "7233672d24c8970a2ee19e7e5cc47bf2c9d7b2409fa7e7483cda4f42f1ab23bb",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_deployment_scripts.py",
+        "tests/meta/test_watchdog_wrappers.py",
+        "template rendering in synthetic install/setup tests"
+      ],
+      "limitations": [
+        "No scheduled script run against MCS, LLM, backup policy, Keychain or platform services."
+      ]
+    },
+    {
+      "path": "deployment/scripts/mcs_health.sh",
+      "sha256": "aaaffb2b688aa49e5778089ff0ebfd8344cc8654883c5a10a18adc673f2bd0a8",
+      "baseline_sha256": "aaaffb2b688aa49e5778089ff0ebfd8344cc8654883c5a10a18adc673f2bd0a8",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_deployment_scripts.py",
+        "tests/meta/test_watchdog_wrappers.py",
+        "template rendering in synthetic install/setup tests"
+      ],
+      "limitations": [
+        "No scheduled script run against MCS, LLM, backup policy, Keychain or platform services."
+      ]
+    },
+    {
+      "path": "deployment/scripts/mcs_llm_catchup.sh",
+      "sha256": "d0fd2bd402fdd606516ebbdffcd74a33a7891cac663760aa59abafb7ec9fd297",
+      "baseline_sha256": "d0fd2bd402fdd606516ebbdffcd74a33a7891cac663760aa59abafb7ec9fd297",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_deployment_scripts.py",
+        "tests/meta/test_watchdog_wrappers.py",
+        "template rendering in synthetic install/setup tests"
+      ],
+      "limitations": [
+        "No scheduled script run against MCS, LLM, backup policy, Keychain or platform services."
+      ]
+    },
+    {
+      "path": "deployment/scripts/mcs_offsite.sh",
+      "sha256": "41a14807d6d049be700b8e124a9d9f8d805f23b9a10608ebfff36dda02dc1214",
+      "baseline_sha256": "41a14807d6d049be700b8e124a9d9f8d805f23b9a10608ebfff36dda02dc1214",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_deployment_scripts.py",
+        "tests/meta/test_watchdog_wrappers.py",
+        "template rendering in synthetic install/setup tests"
+      ],
+      "limitations": [
+        "No scheduled script run against MCS, LLM, backup policy, Keychain or platform services."
+      ]
+    },
+    {
+      "path": "deployment/scripts/mcs_update.sh",
+      "sha256": "9335b18474e58fd065d2ab1f71fb049fa333d702108f3ce80d1bb4a2979df0bc",
+      "baseline_sha256": "9335b18474e58fd065d2ab1f71fb049fa333d702108f3ce80d1bb4a2979df0bc",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_deployment_scripts.py",
+        "tests/meta/test_watchdog_wrappers.py",
+        "template rendering in synthetic install/setup tests"
+      ],
+      "limitations": [
+        "No scheduled script run against MCS, LLM, backup policy, Keychain or platform services."
+      ]
+    },
+    {
+      "path": "install.sh",
+      "sha256": "8960af0429bbe4d526e26a8880f6a03769d3904091705c421d705d2a4a956d25",
+      "baseline_sha256": "8960af0429bbe4d526e26a8880f6a03769d3904091705c421d705d2a4a956d25",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "integration/conftest.py",
+      "sha256": "5c51bd43d7ef4e731e8ce78def5df7201e42964ee02c68ca361deabc925b920c",
+      "baseline_sha256": "5c51bd43d7ef4e731e8ce78def5df7201e42964ee02c68ca361deabc925b920c",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "isolated Python 3.13 runner used for all local test execution",
+        "tests/meta/test_integration_guard_load.py",
+        "integration/test_integration_guards.py",
+        "pinned SDK required-collection negative check intentionally rejected incomplete lane with exit 4"
+      ],
+      "limitations": [
+        "No weakening or bypass of socket/process/real endpoint guards; no actual SDK lane selected to produce a success."
+      ]
+    },
+    {
+      "path": "integration/sdk_safety.py",
+      "sha256": "cabdf08366d2af2e1632539e812fc940d2d378f1d86e0c67c8e0217de043428e",
+      "baseline_sha256": "cabdf08366d2af2e1632539e812fc940d2d378f1d86e0c67c8e0217de043428e",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "isolated Python 3.13 runner used for all local test execution",
+        "tests/meta/test_integration_guard_load.py",
+        "integration/test_integration_guards.py",
+        "pinned SDK required-collection negative check intentionally rejected incomplete lane with exit 4"
+      ],
+      "limitations": [
+        "No weakening or bypass of socket/process/real endpoint guards; no actual SDK lane selected to produce a success."
+      ]
+    },
+    {
+      "path": "integration/test_hermes_config.py",
+      "sha256": "bb83a8b8c6c24dc06c5691a3aedafad6f83c121bb05fbeb3ba51d9d1c3889c99",
+      "baseline_sha256": "bb83a8b8c6c24dc06c5691a3aedafad6f83c121bb05fbeb3ba51d9d1c3889c99",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "Complete test source AST checked; pinned-source/version prerequisites and fake HTTP/process boundaries compared with CI and sdk_safety required-collection gate."
+      ],
+      "limitations": [
+        "Exact pinned standalone/Hermes SDK integration lane not executed in current worktree; this is an execution limitation, not omitted source coverage."
+      ]
+    },
+    {
+      "path": "integration/test_hermes_discord.py",
+      "sha256": "d845dd1e19a9113c94ab20577e180a437fb1a42be57cacf933a30f74e1767138",
+      "baseline_sha256": "d845dd1e19a9113c94ab20577e180a437fb1a42be57cacf933a30f74e1767138",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "Complete test source AST checked; pinned-source/version prerequisites and fake HTTP/process boundaries compared with CI and sdk_safety required-collection gate."
+      ],
+      "limitations": [
+        "Exact pinned standalone/Hermes SDK integration lane not executed in current worktree; this is an execution limitation, not omitted source coverage."
+      ]
+    },
+    {
+      "path": "integration/test_hermes_slack.py",
+      "sha256": "e9f8f9cb701eb18c894f37688cada995aea16dcf587486aea20e85f9ce9f2e47",
+      "baseline_sha256": "e9f8f9cb701eb18c894f37688cada995aea16dcf587486aea20e85f9ce9f2e47",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "Complete test source AST checked; pinned-source/version prerequisites and fake HTTP/process boundaries compared with CI and sdk_safety required-collection gate."
+      ],
+      "limitations": [
+        "Exact pinned standalone/Hermes SDK integration lane not executed in current worktree; this is an execution limitation, not omitted source coverage."
+      ]
+    },
+    {
+      "path": "integration/test_integration_guards.py",
+      "sha256": "9bce7320468ad1a32e88195c7988ab0971a77c536541a38ae5db0b53071c4ecf",
+      "baseline_sha256": "9bce7320468ad1a32e88195c7988ab0971a77c536541a38ae5db0b53071c4ecf",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "isolated Python 3.13 runner used for all local test execution",
+        "tests/meta/test_integration_guard_load.py",
+        "integration/test_integration_guards.py",
+        "pinned SDK required-collection negative check intentionally rejected incomplete lane with exit 4"
+      ],
+      "limitations": [
+        "No weakening or bypass of socket/process/real endpoint guards; no actual SDK lane selected to produce a success."
+      ]
+    },
+    {
+      "path": "integration/test_mcs_recovery_narrative.py",
+      "sha256": "94a507574e758b8cdc88898ab60b0bf3fc6d5085d626035a5c9f3e788d77fad1",
+      "baseline_sha256": "94a507574e758b8cdc88898ab60b0bf3fc6d5085d626035a5c9f3e788d77fad1",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "6 full synthetic recovery narratives passed with process/network isolation."
+      ],
+      "limitations": []
+    },
+    {
+      "path": "integration/test_pinned_sdk_versions.py",
+      "sha256": "39e9f42c4c1c7e0e309eb8b44a61a5de9b6ee4a4b528dbbdb3b02d934d0c69b4",
+      "baseline_sha256": "39e9f42c4c1c7e0e309eb8b44a61a5de9b6ee4a4b528dbbdb3b02d934d0c69b4",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "Complete test source AST checked; pinned-source/version prerequisites and fake HTTP/process boundaries compared with CI and sdk_safety required-collection gate."
+      ],
+      "limitations": [
+        "Exact pinned standalone/Hermes SDK integration lane not executed in current worktree; this is an execution limitation, not omitted source coverage."
+      ]
+    },
+    {
+      "path": "integration/test_standalone_discord.py",
+      "sha256": "cbbe6c438b7267a776ded1044ca57a5ff27d995f8535548ef0dfd4e3e784e538",
+      "baseline_sha256": "cbbe6c438b7267a776ded1044ca57a5ff27d995f8535548ef0dfd4e3e784e538",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "Complete test source AST checked; pinned-source/version prerequisites and fake HTTP/process boundaries compared with CI and sdk_safety required-collection gate."
+      ],
+      "limitations": [
+        "Exact pinned standalone/Hermes SDK integration lane not executed in current worktree; this is an execution limitation, not omitted source coverage."
+      ]
+    },
+    {
+      "path": "integration/test_standalone_sdk.py",
+      "sha256": "011aa5173469b15b6017167e66c309173d006214b8407dae6b5a40aa13fb1df3",
+      "baseline_sha256": "011aa5173469b15b6017167e66c309173d006214b8407dae6b5a40aa13fb1df3",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "Complete test source AST checked; pinned-source/version prerequisites and fake HTTP/process boundaries compared with CI and sdk_safety required-collection gate."
+      ],
+      "limitations": [
+        "Exact pinned standalone/Hermes SDK integration lane not executed in current worktree; this is an execution limitation, not omitted source coverage."
+      ]
+    },
+    {
+      "path": "integration/test_standalone_slack_sdk.py",
+      "sha256": "c278da943a07ab0e59c245912075edcc5070e193b9a453be2fda80dd8bfd08f1",
+      "baseline_sha256": "c278da943a07ab0e59c245912075edcc5070e193b9a453be2fda80dd8bfd08f1",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "Complete test source AST checked; pinned-source/version prerequisites and fake HTTP/process boundaries compared with CI and sdk_safety required-collection gate."
+      ],
+      "limitations": [
+        "Exact pinned standalone/Hermes SDK integration lane not executed in current worktree; this is an execution limitation, not omitted source coverage."
+      ]
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "6f15794655843128d500e5832ecbbd14861d796921a795aef5442332ce7d5722",
+      "baseline_sha256": "6f15794655843128d500e5832ecbbd14861d796921a795aef5442332ce7d5722",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_sdk_ci_lanes.py",
+        "tests/release/",
+        "shellcheck/static gate entrypoints aligned with CI source"
+      ],
+      "limitations": [
+        "GitHub-hosted jobs, action binaries, remote publishing and dependency upgrades not executed."
+      ]
+    },
+    {
+      "path": "scripts/check_pinned_sdks.sh",
+      "sha256": "d40727c9b2ecc00b0acafa8b8584814e776a0d8b92e8011201bbf0adfb04dcf8",
+      "baseline_sha256": "d40727c9b2ecc00b0acafa8b8584814e776a0d8b92e8011201bbf0adfb04dcf8",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "isolated Python 3.13 runner used for all local test execution",
+        "tests/meta/test_integration_guard_load.py",
+        "integration/test_integration_guards.py",
+        "pinned SDK required-collection negative check intentionally rejected incomplete lane with exit 4"
+      ],
+      "limitations": [
+        "No weakening or bypass of socket/process/real endpoint guards; no actual SDK lane selected to produce a success."
+      ]
+    },
+    {
+      "path": "scripts/development/generate_lineworks_gallery.py",
+      "sha256": "21b725a1eaf4988b7b57892720831e523967fc336af8a6ffe89da7a7d8286780",
+      "baseline_sha256": "21b725a1eaf4988b7b57892720831e523967fc336af8a6ffe89da7a7d8286780",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)",
+        "generate_lineworks_gallery.py --check: 2 synthetic SVG/PNG pairs verified",
+        "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ]
+    },
+    {
+      "path": "scripts/development/generate_slack_gallery.py",
+      "sha256": "7d3b9b684d51b601efd133b912c8eed8028d5aaefa530c305de8b3b74a3ef359",
+      "baseline_sha256": "7d3b9b684d51b601efd133b912c8eed8028d5aaefa530c305de8b3b74a3ef359",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)",
+        "generate_slack_gallery.py --check: 7 synthetic SVG/PNG pairs verified"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ]
+    },
+    {
+      "path": "scripts/development/probe_message_metadata.py",
+      "sha256": "d548cf16d8336ec148405d8908fe06d88809a3bb6feaab7373e0ebade777e880",
+      "baseline_sha256": "d548cf16d8336ec148405d8908fe06d88809a3bb6feaab7373e0ebade777e880",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ]
+    },
+    {
+      "path": "scripts/development/readme_release.py",
+      "sha256": "6d7ee6f61842a93487f64a0f16e6f83fa88bbbe8c890ad02402fb8121b94ba0c",
+      "baseline_sha256": "6d7ee6f61842a93487f64a0f16e6f83fa88bbbe8c890ad02402fb8121b94ba0c",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ]
+    },
+    {
+      "path": "scripts/development/release_notes.py",
+      "sha256": "181f9551a24a1ff8f46d3cbcc9d40443651e93eee4b9934f38f7ad0987bc6be4",
+      "baseline_sha256": "181f9551a24a1ff8f46d3cbcc9d40443651e93eee4b9934f38f7ad0987bc6be4",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ]
+    },
+    {
+      "path": "scripts/development/semantic_shadow_e2e.py",
+      "sha256": "f5833aa4cc4fe294114534d97ac38b3719085a009a2d5d001e6ccfe1a9846bd8",
+      "baseline_sha256": "f5833aa4cc4fe294114534d97ac38b3719085a009a2d5d001e6ccfe1a9846bd8",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ]
+    },
+    {
+      "path": "scripts/development/sync_release_notes.py",
+      "sha256": "fea761590871e47f7b79685006c466f02afeff4d58222b43fff549e6cb1661fa",
+      "baseline_sha256": "fea761590871e47f7b79685006c466f02afeff4d58222b43fff549e6cb1661fa",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ]
+    },
+    {
+      "path": "scripts/development/update_readme.py",
+      "sha256": "d8fc9726eed1c85d91efce00f4c3c44bb9131dc42cafb89a9abbecb547abd4cc",
+      "baseline_sha256": "d8fc9726eed1c85d91efce00f4c3c44bb9131dc42cafb89a9abbecb547abd4cc",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ]
+    },
+    {
+      "path": "scripts/keychain_to_env.py",
+      "sha256": "d7b4425fba687b623aa53fa797bbd40b32ad7eac84d4c9291cb8f91c73e7d312",
+      "baseline_sha256": "d7b4425fba687b623aa53fa797bbd40b32ad7eac84d4c9291cb8f91c73e7d312",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/meta/test_operation_cleanup_stability.py (30-second timeout argument, launch failure, no secret output/write)"
+      ],
+      "limitations": [
+        "Keychain subprocess and private environment writer were fake; no actual credential read or copied."
+      ]
+    },
+    {
+      "path": "scripts/mcs",
+      "sha256": "42251350ae3c6989391b9b4e9106aedbdf811a15c488161198cfd189189d00b8",
+      "baseline_sha256": "42251350ae3c6989391b9b4e9106aedbdf811a15c488161198cfd189189d00b8",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "path": "scripts/mcs_upgrade.py",
+      "sha256": "5c09ac4152912562a0ccaa93460a117830f92db161318d91cdb49b008ec955a4",
+      "baseline_sha256": "5c09ac4152912562a0ccaa93460a117830f92db161318d91cdb49b008ec955a4",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/ops/test_mcs_upgrade.py (23 synthetic local Git/target launcher cases)"
+      ],
+      "limitations": [
+        "No real origin fetch or actual checkout update; local test repositories only."
+      ]
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "baseline_sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "isolated Python 3.13 runner used for all local test execution",
+        "tests/meta/test_integration_guard_load.py",
+        "integration/test_integration_guards.py",
+        "pinned SDK required-collection negative check intentionally rejected incomplete lane with exit 4"
+      ],
+      "limitations": [
+        "No weakening or bypass of socket/process/real endpoint guards; no actual SDK lane selected to produce a success."
+      ]
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256": "4d9b63c62c42873bd9ee00d7c6d251c866cc44191ed2c7d16c13ab195b0ac452",
+      "baseline_sha256": "4d9b63c62c42873bd9ee00d7c6d251c866cc44191ed2c7d16c13ab195b0ac452",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "isolated Python 3.13 runner used for all local test execution",
+        "tests/meta/test_integration_guard_load.py",
+        "integration/test_integration_guards.py",
+        "pinned SDK required-collection negative check intentionally rejected incomplete lane with exit 4"
+      ],
+      "limitations": [
+        "No weakening or bypass of socket/process/real endpoint guards; no actual SDK lane selected to produce a success."
+      ]
+    },
+    {
+      "path": "mcs/ops/brain_export.py",
+      "sha256": "573c643aa74d3cb629934609725d3065a48162346a8347aede45cc6cd9791ed1",
+      "baseline_sha256": "573c643aa74d3cb629934609725d3065a48162346a8347aede45cc6cd9791ed1",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/ops/test_brain_export.py",
+        "tests/ops/test_ext_contract.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/c1_contract.py",
+      "sha256": "7bf70b5a580d189ab6560e837be544bc0b75ab18b922c21963167d25b07308f3",
+      "baseline_sha256": "7bf70b5a580d189ab6560e837be544bc0b75ab18b922c21963167d25b07308f3",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/ops/test_c1_contract.py",
+        "tests/ops/test_ext_contract_c0.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/c1_envelopes.py",
+      "sha256": "ef3202f79104d0959680749d006b2e7b839fbc70566bf977b5d95547b1f45b05",
+      "baseline_sha256": "ef3202f79104d0959680749d006b2e7b839fbc70566bf977b5d95547b1f45b05",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/ops/test_c1_envelopes.py",
+        "tests/ops/test_c1_cli.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/c1_receiver.py",
+      "sha256": "df7844bacd994e854bcf8cfa71c7f3acff0f20b12801e48bc31d00129a7c0163",
+      "baseline_sha256": "df7844bacd994e854bcf8cfa71c7f3acff0f20b12801e48bc31d00129a7c0163",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/ops/test_c1_receiver.py",
+        "tests/ops/test_c1_cli.py",
+        "tests/ops/test_ext_contract_c0.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/export_schema.py",
+      "sha256": "31ef4203ec6da3198de3d23c2a097ca7659e7009c25d9f91d515df14a17d9053",
+      "baseline_sha256": "31ef4203ec6da3198de3d23c2a097ca7659e7009c25d9f91d515df14a17d9053",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/ops/test_ext_contract.py",
+        "tests/ops/test_ext_contract_c0.py",
+        "tests/ops/test_c1_contract.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/ext_contract.py",
+      "sha256": "3358ff42764f66ba5c0f0e32cde53a422da0e868468063e420e930b7bc1e5f86",
+      "baseline_sha256": "3358ff42764f66ba5c0f0e32cde53a422da0e868468063e420e930b7bc1e5f86",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/ops/test_ext_contract.py",
+        "tests/ops/test_ext_contract_cli.py",
+        "tests/ops/test_ext_contract_c0.py",
+        "tests/ops/test_c1_cli.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/import_drug_master.py",
+      "sha256": "6cba602366975a25fe441048378d168f62e7f618f325549224e86ec5a64f16a6",
+      "baseline_sha256": "6cba602366975a25fe441048378d168f62e7f618f325549224e86ec5a64f16a6",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/ops/test_import_drug_master.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_backup.py",
+      "sha256": "b40e6eaa90e37d1400ef5d82fc7c4282b9b946ca6c0bb5f25f7439b5ccc5f50a",
+      "baseline_sha256": "b40e6eaa90e37d1400ef5d82fc7c4282b9b946ca6c0bb5f25f7439b5ccc5f50a",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/ops/test_mcs_backup.py",
+        "tests/ops/test_backup_preflight.py",
+        "tests/ops/test_backup_integration.py",
+        "tests/ops/test_backup_reply_gap.py",
+        "tests/ops/test_backup_scheduler.py",
+        "tests/ops/test_backup_restore_consent.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_cli.py",
+      "sha256": "0cade0b756b1ce6a5cf8296ce52661e22c42e5c294ee41e90fe46901059ccc16",
+      "baseline_sha256": "0cade0b756b1ce6a5cf8296ce52661e22c42e5c294ee41e90fe46901059ccc16",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/ops/test_mcs_cli.py",
+        "tests/ops/test_lifecycle_standalone.py",
+        "tests/ops/test_ops_publication_stability.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_operations.py",
+      "sha256": "1d303886b1f16a1325181c613e5c9096fce902b1b91d767cdc0884931801d829",
+      "baseline_sha256": "df8e1f8e539386803fb8a82e12f9563d6e3056dd4f8ccf08acc8a974258cd1f9",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "additional_fix_verified",
+      "checks": [
+        "Reproduced only the specifically assigned persisted datetime/DB-type boundary; existing source behavior retained elsewhere.",
+        "TEXT/BLOB/nonfinite/invalid negative history floor is rejected before job creation through existing receipt transaction. NULL/0/-1/finite future and cursor deepening retain original behavior."
+      ],
+      "evidence": [
+        "tests/ops/test_round3_scan_floor_types.py",
+        "tests/ops/test_mcs_operations.py",
+        "tests/ops/test_mcs_operation_cli.py",
+        "tests/ingest/test_history_command_deepen.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_refstats.py",
+      "sha256": "3c7035fd67e4222ff2bb12036066e2b489538519b6014dc51ead688c733188c8",
+      "baseline_sha256": "ebefe4377ec052bc217f93ce121644b7154ce1336242f261ee7f7e02f200c501",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "additional_fix_verified",
+      "checks": [
+        "Reproduced only the specifically assigned persisted datetime/DB-type boundary; existing source behavior retained elsewhere.",
+        "Unrepresentable default as_of pin now yields fixed refstat_time_unrepresentable; reader closes and no pending output appears."
+      ],
+      "evidence": [
+        "tests/views/test_round3_datetime_boundaries.py",
+        "tests/ops/test_mcs_refstats.py",
+        "tests/ops/test_bugfix_r2_12_refstats_asof.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_repair.py",
+      "sha256": "a4cc9a01c5d4e36cd86e0ce6d3d15f38cade678539df5ad89183ab4aa3782088",
+      "baseline_sha256": "a4cc9a01c5d4e36cd86e0ce6d3d15f38cade678539df5ad89183ab4aa3782088",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/ops/test_round2_publication_boundaries.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_requests.py",
+      "sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d",
+      "baseline_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/views/test_round2_receipt_integrity.py",
+        "tests/ops/test_round2_refstat_receipt_integrity.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_setup.py",
+      "sha256": "091edddfd84cf98ba38f58d5130e3703a288ff7ca9089ece22cd85fe2c3f5da3",
+      "baseline_sha256": "091edddfd84cf98ba38f58d5130e3703a288ff7ca9089ece22cd85fe2c3f5da3",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting.",
+        "Targeted source recheck: native retirement confirms loaded/inactive state and preserves service file on unverifiable stop; existing synthetic OS/mock limitations retained."
+      ],
+      "evidence": [
+        "tests/ops/test_mcs_setup.py",
+        "tests/ops/test_mcs_setup_standalone.py",
+        "tests/ops/test_mcs_cli.py",
+        "tests/ops/test_lifecycle_standalone.py",
+        "tests/meta/test_install_sh.py",
+        "tests/meta/test_install_sh_standalone.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_signals.py",
+      "sha256": "adad7d18a0c4dc9abe0dead96a10d6b81e5eded3df5ec32aaab1fff9eb579b11",
+      "baseline_sha256": "adad7d18a0c4dc9abe0dead96a10d6b81e5eded3df5ec32aaab1fff9eb579b11",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/ops/test_mcs_signals.py",
+        "tests/ops/test_mcs_signal_feedback.py",
+        "tests/views/test_mcs_stats_signal_feedback.py",
+        "tests/ops/test_ops_aggregate_stability.py",
+        "tests/ops/test_signal_history_perf.py",
+        "tests/views/test_qc_view.py (12 cases, refreshed)"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/request_loops.py",
+      "sha256": "a8c4b701c8e038ad0824edc70704594f63cc20fceb1f634635a0406695462e68",
+      "baseline_sha256": "a8c4b701c8e038ad0824edc70704594f63cc20fceb1f634635a0406695462e68",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/ops/test_mcs_request_loops.py",
+        "tests/ops/test_mcs_features.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/views/cross_lists_view.py",
+      "sha256": "db77e2a25f823067f9a1e05a57637ad6a85d8641d6d390d3cb77f08d3e5b6ffa",
+      "baseline_sha256": "db77e2a25f823067f9a1e05a57637ad6a85d8641d6d390d3cb77f08d3e5b6ffa",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/views/test_cross_lists_view.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/mcs_stats.py",
+      "sha256": "07cef15786d5ffd200cf5555e7a30e8b0f40a53c0037a8d505bc983876cef265",
+      "baseline_sha256": "e967d975cbb3ea521027b5230aa66acbdebce25c1b47cbf196225c1aafdb90bf",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "additional_fix_verified",
+      "checks": [
+        "Reproduced only the specifically assigned persisted datetime/DB-type boundary; existing source behavior retained elsewhere.",
+        "Shared _as_of_day uses actual datetime conversion, no arbitrary numeric limit; rx expiry/calendar horizon and open-loop aging return unavailable if calendar cannot represent timestamp/arithmetic.",
+        "Finite metadata publication/C1 wire contract, supported future 2030 and existing open-loop partial behavior remain unchanged."
+      ],
+      "evidence": [
+        "tests/views/test_round3_datetime_boundaries.py",
+        "tests/views/test_mcs_stats.py",
+        "tests/views/test_bugfix_r3_9_stats_as_of_freeze.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/mcs_view.py",
+      "sha256": "989162e6570aab50a48e45b55358037df5f2cee9c34c2f23fda073215e675643",
+      "baseline_sha256": "989162e6570aab50a48e45b55358037df5f2cee9c34c2f23fda073215e675643",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/views/test_snapshot_publication_stability.py",
+        "tests/views/test_status_view.py",
+        "tests/views/test_view_corrupt_state.py",
+        "tests/views/test_semantic_view.py",
+        "tests/views/test_notification_receipt_scope.py",
+        "tests/views/test_response_observation_view.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/message_metadata.py",
+      "sha256": "16e053957dd734d9a1426316af858892cbf4257c5e101ebfc58b3a3fcfdf9c4b",
+      "baseline_sha256": "16e053957dd734d9a1426316af858892cbf4257c5e101ebfc58b3a3fcfdf9c4b",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/views/test_response_observation.py",
+        "tests/views/test_bugfix_r1_14_recapture_binding.py",
+        "tests/views/test_bugfix_r2_10_field_invalid_not_failed.py",
+        "tests/views/test_metadata_report_perf.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/metadata_report.py",
+      "sha256": "d5a518b985016725e3b275f0c0660a94bfbb18fa421ed0c6915779ebff0270ea",
+      "baseline_sha256": "d5a518b985016725e3b275f0c0660a94bfbb18fa421ed0c6915779ebff0270ea",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/views/test_metadata_report.py",
+        "tests/views/test_metadata_report_perf.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/project_metadata_view.py",
+      "sha256": "dd4b12534f333211bd20fcd23876df56aa8fc4fcf4600081d4b6fc80ccd6268c",
+      "baseline_sha256": "dd4b12534f333211bd20fcd23876df56aa8fc4fcf4600081d4b6fc80ccd6268c",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/views/test_metadata_state_stability.py",
+        "tests/views/test_project_metadata_view.py",
+        "tests/views/test_group_consultations_view.py",
+        "tests/views/test_project_metadata_comparison.py",
+        "tests/views/test_physician_viewed.py",
+        "tests/views/test_staff_directory.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/read_model.py",
+      "sha256": "993de05baba15608fd556b872edd34415ee4524d869e7f4c3e317cd7e5125c3c",
+      "baseline_sha256": "993de05baba15608fd556b872edd34415ee4524d869e7f4c3e317cd7e5125c3c",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/views/test_read_model.py",
+        "tests/views/test_read_model_memory.py",
+        "tests/views/test_snapshot_publication_stability.py",
+        "tests/ops/test_c1_records.py",
+        "tests/ops/test_brain_export.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/response_observation_view.py",
+      "sha256": "5c6d2b55d631aa9fb3b88c672cc5b767cd214ccbe0ed72fb36ffdea6c0dbd026",
+      "baseline_sha256": "5c6d2b55d631aa9fb3b88c672cc5b767cd214ccbe0ed72fb36ffdea6c0dbd026",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/views/test_response_observation_view.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/structured_view.py",
+      "sha256": "b825efd2920cf4c50b09c16ff85ac38d50fde2d06962918248900f5e7951765e",
+      "baseline_sha256": "b825efd2920cf4c50b09c16ff85ac38d50fde2d06962918248900f5e7951765e",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/views/test_structured_view.py",
+        "tests/views/test_structured_review_regressions.py",
+        "tests/views/test_drug_candidates.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    },
+    {
+      "path": "mcs/views/summary_review.py",
+      "sha256": "be60381b129a2a772760038a62c8965c43c1c256b34c803c2f37f63d6651b225",
+      "baseline_sha256": "be60381b129a2a772760038a62c8965c43c1c256b34c803c2f37f63d6651b225",
+      "baseline_dossier": "docs/development/audits/1.0.15/round2/stability-audit-round2-views-ops-1.0.15.json",
+      "status": "reused_hash_matched_evidence",
+      "checks": [
+        "Current SHA equals round2 source; reuse earlier source and synthetic evidence without broad rescanning/retesting."
+      ],
+      "evidence": [
+        "tests/views/test_round2_receipt_integrity.py",
+        "tests/views/test_summary_adoption_receipt_stability.py",
+        "tests/views/test_summary_review.py",
+        "tests/views/test_summary_review_cli.py"
+      ],
+      "limitations": [
+        "Temporary synthetic SQLite/files and stubs only; no original patient DB, platform UI/native SDK/service/network or external writes.",
+        "Synthetic evidence establishes the exercised contracts; no claim of universal clinical correctness or full native environment coverage."
+      ]
+    }
+  ]
+}

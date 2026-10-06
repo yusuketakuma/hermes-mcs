@@ -705,7 +705,8 @@ def test_second_attachment_failure_leaves_incomplete(tmp_path):
     """The second file's upload vanishing mid-wire is unknown — the
     first file's delivered receipt stands, no part resends."""
     b1, b2 = b"first-file", b"second-file"
-    f1, f2 = tmp_path / "a1.bin", tmp_path / "a2.bin"
+    (tmp_path / "attachments").mkdir(exist_ok=True)
+    f1, f2 = tmp_path / "attachments" / "a1.bin", tmp_path / "attachments" / "a2.bin"
     f1.write_bytes(b1)
     f2.write_bytes(b2)
     atts = [
@@ -736,7 +737,8 @@ def test_second_attachment_failure_leaves_incomplete(tmp_path):
 
 def test_attachment_part_uploads_verified_file(tmp_path):
     blob = b"synthetic-attachment"
-    f = tmp_path / "att.bin"
+    (tmp_path / "attachments").mkdir(exist_ok=True)
+    f = tmp_path / "attachments" / "att.bin"
     f.write_bytes(blob)
     sha = hashlib.sha256(blob).hexdigest()
     att = {"part_id": "attach:0007", "kind": "attachment_part",
@@ -757,7 +759,8 @@ def _attach_update(tmp_path, prior):
     """An update render whose attachment part names the message that
     already carries the same file (``prior_remote_id``)."""
     blob = b"synthetic-attachment"
-    f = tmp_path / "att.bin"
+    (tmp_path / "attachments").mkdir(exist_ok=True)
+    f = tmp_path / "attachments" / "att.bin"
     f.write_bytes(blob)
     att = {"part_id": "attach:0007", "kind": "attachment_part",
            "index": 0, "attachment_id": 7, "name": "att.bin",
@@ -823,7 +826,8 @@ def test_attachment_part_may_name_its_prior_post(tmp_path):
 
 
 def test_attachment_part_hash_mismatch_not_sent(tmp_path):
-    f = tmp_path / "att.bin"
+    (tmp_path / "attachments").mkdir(exist_ok=True)
+    f = tmp_path / "attachments" / "att.bin"
     f.write_bytes(b"mutated bytes")
     att = {"part_id": "attach:0007", "kind": "attachment_part",
            "index": 0, "attachment_id": 7, "name": "att.bin",
@@ -846,7 +850,8 @@ def test_attachment_upload_uses_the_bytes_that_were_verified(tmp_path, monkeypat
     from pathlib import Path
     from hermes_plugin.mcs_discord import cards
     blob = b"sealed-synthetic"
-    path = tmp_path / "attachment.bin"
+    (tmp_path / "attachments").mkdir(exist_ok=True)
+    path = tmp_path / "attachments" / "attachment.bin"
     path.write_bytes(blob)
     w, reg, bot = _mkworker(tmp_path)
     spec = _spec([])
@@ -1263,7 +1268,7 @@ def test_signal_notify_off_stays_claimable_and_revoked_stays_dead(
     from hermes_plugin.mcs_discord import cards as cards_mod
     from hermes_plugin.mcs_delivery import spec as spec_mod
 
-    monkeypatch.setattr(cards_mod, "build_view", lambda spec: object())
+    monkeypatch.setattr(cards_mod, "message_payload", lambda spec, **kw: {"view": object(), "content": "card"})
     w, reg, bot = _mkworker(tmp_path)
     sent_before = len(bot.channels[42].sent)
     revoked = _card_spec(REVOKED_ID, kind="thread")
@@ -1363,7 +1368,7 @@ def test_signal_notify_off_backs_off_before_rebegin(tmp_path, monkeypatch):
     from hermes_plugin.mcs_delivery import worker as worker_mod
     from hermes_plugin.mcs_discord import cards as cards_mod
 
-    monkeypatch.setattr(cards_mod, "build_view", lambda spec: object())
+    monkeypatch.setattr(cards_mod, "message_payload", lambda spec, **kw: {"view": object(), "content": "card"})
     now = _clock(monkeypatch)
     w, reg, _ = _mkworker(tmp_path)
     _publish_spec(tmp_path, _card_spec(DELIVERY_ID))
@@ -1406,7 +1411,7 @@ def test_restart_reconcile_keeps_begin_sent_signal_claimable(
     after ON the same delivery_id is sent exactly once."""
     from hermes_plugin.mcs_discord import cards as cards_mod
 
-    monkeypatch.setattr(cards_mod, "build_view", lambda spec: object())
+    monkeypatch.setattr(cards_mod, "message_payload", lambda spec, **kw: {"view": object(), "content": "card"})
     _clock(monkeypatch)
     w1, reg1, bot = _mkworker(tmp_path)
     sent_before = len(bot.channels[42].sent)
@@ -1951,7 +1956,8 @@ def test_thread_body_is_posted_as_literal_text(tmp_path):
 def test_attachment_caption_rides_with_the_file(tmp_path, monkeypatch):
     from hermes_plugin.mcs_discord import cards
     blob = b"sealed-synthetic"
-    path = tmp_path / "a.bin"
+    (tmp_path / "attachments").mkdir(exist_ok=True)
+    path = tmp_path / "attachments" / "a.bin"
     path.write_bytes(blob)
     w, _reg, _bot = _mkworker(tmp_path)
     seen = []
@@ -1986,3 +1992,34 @@ def test_unavailable_attachment_posts_its_caption_once(tmp_path):
         _part_ctx(thread)))
     assert again == {"result": "delivered", "remote_id": "6001"}
     assert len(thread.sent) == 1
+
+
+@pytest.mark.parametrize("op", ["update", "revoke"])
+def test_ambiguous_prefetch_before_card_write_is_not_sent(tmp_path, op):
+    """Regression: a 5xx/timeout on the GET before the edit/delete was
+    'unknown' — manual reconcile and held bodies though nothing was sent."""
+    w, reg, bot = _mkworker(tmp_path)
+    ch = bot.channels[42]
+
+    async def flaky_fetch(_mid):
+        raise FakeHTTP(503)
+
+    ch.fetch_message = flaky_fetch
+    spec = _spec([], op=op)
+    spec["delivery"]["message_id"] = "9001"
+    out = asyncio.run(w._perform(_claim(spec)))
+    assert out == {"result": "not_sent", "error_code": "prefetch_failed"}
+
+
+def test_ambiguous_channel_fetch_before_thread_create_is_not_sent(tmp_path):
+    w, reg, bot = _mkworker(tmp_path)
+    channel = bot.channels.pop(42)
+
+    async def timeout(_cid):
+        raise TimeoutError("synthetic")
+
+    bot.fetch_channel = timeout
+    asyncio.run(w._deliver_parts(_claim(_spec(_chunks(1))), "9001"))
+    row = _sent_parts(_state(tmp_path))["thread"]
+    assert row["result"] == "not_sent" and row["error_code"] == "prefetch_failed"
+    assert channel.threads == []

@@ -24,6 +24,7 @@ caller passes the resolved config dict (and the text cap for chunks) so
 tests keep notify_flush._config as the single patch point.
 """
 import json
+from mcs_util import loads_dict
 
 
 class DeferredSend(Exception):
@@ -64,11 +65,7 @@ def _summary_current(ledger, project_id: int, message_id: int,
         (project_id, message_id)).fetchone()
     if row is None:
         return None
-    try:
-        content = json.loads(row["content"] or "null")
-        meta = json.loads(row["meta"] or "{}")
-    except (json.JSONDecodeError, TypeError, RecursionError):
-        return None
+    content, meta = loads_dict(row["content"]), loads_dict(row["meta"])
     if not isinstance(content, dict) or not isinstance(meta, dict):
         return None
     if (meta.get("audit_status") != "PASS"
@@ -101,10 +98,7 @@ def _source_event(ledger, project_id: int, event_id: int):
         (event_id, project_id)).fetchone()
     if row is None:
         return None, None
-    try:
-        source = json.loads(row["payload"] or "{}")
-    except (json.JSONDecodeError, TypeError, RecursionError):
-        return row, None
+    source = loads_dict(row["payload"])
     return row, source if isinstance(source, dict) else None
 
 
@@ -166,10 +160,7 @@ def semantic_gate(ledger, ev, payload: dict, cfg: dict,
                 or len(set(target_ids)) != len(target_ids)
                 or not set(target_ids).issubset(source_ids)):
             raise ValueError("payload_invalid")
-        try:
-            progress = json.loads(source_row["progress"] or "{}")
-        except (json.JSONDecodeError, TypeError, RecursionError):
-            progress = None
+        progress = loads_dict(source_row["progress"] or "{}")
         if (source_row["state"] == "accepted"
                 or source_row["attempts"] > 0
                 or not isinstance(progress, dict)

@@ -59,7 +59,7 @@ def _llm_reply_kind(blob):
     try:
         lm = blob if isinstance(blob, dict) \
             else json.loads(blob) if blob else None
-    except (json.JSONDecodeError, TypeError, RecursionError):
+    except (ValueError, TypeError, RecursionError):
         return None
     if not isinstance(lm, dict) or lm.get("_error"):
         return None
@@ -135,8 +135,10 @@ def build_rollup(ledger, project_id: int) -> dict:
     next_planned = None
     senders = {}
     summary = None
+    posted_by_ts = {}
     for m in msgs:
         ts = m["posted_at_ts"] or 0
+        posted_by_ts.setdefault(ts, m["posted_at"] or f"msg:{m['message_id']}")
         sender_id = normalize_sender_id(m["sender_id"])
         senders[m["sender_name"] or "?"] = \
             senders.get(m["sender_name"] or "?", 0) + 1
@@ -159,7 +161,7 @@ def build_rollup(ledger, project_id: int) -> dict:
                                and not lm.get("_error"))
             if lm_blob is not None and lm_blob is llm_blob:
                 llm = lm    # one decode per unshadowed extract_llm row
-        except (json.JSONDecodeError, TypeError, RecursionError):
+        except (ValueError, TypeError, RecursionError):
             v1 = lm = {}
         if not isinstance(v1, dict):
             v1 = {}
@@ -248,7 +250,7 @@ def build_rollup(ledger, project_id: int) -> dict:
         overridden = any(nts >= pts and (nt in t or t in nt)
                          for nt, nts in sym_neg.items())
         if not overridden:
-            symptoms[t] = msgs_by_ts(msgs, pts)
+            symptoms[t] = posted_by_ts.get(pts, str(pts))
     if latest_vitals:
         out["latest_vitals"] = latest_vitals
     if latest_labs:
@@ -456,7 +458,7 @@ def rebuild(ledger, project_id: int) -> int:
             try:
                 oc, om = json.loads(old[0]["content"]), json.loads(
                     old[0]["meta"])
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, RecursionError):
                 oc = om = None
             if isinstance(oc, dict) and isinstance(om, dict):
                 oc.pop("generated_at", None)
@@ -570,18 +572,20 @@ def main() -> int:
     if lock_fd is None:
         print(json.dumps({"ok": False, "error": "lock_held"}))
         return 3
+    led = None
     try:
         led = Ledger(DB)
-    except Exception:
-        os.close(lock_fd)
-        raise
-    ids = args.project or [r["project_id"] for r in
-                           led.db.execute("SELECT project_id FROM patients")]
-    n = rebuild_many(led, ids)
-    print(json.dumps({"rollups": n}, ensure_ascii=False))
-    led.close()
-    os.close(lock_fd)
-    return 0
+        ids = args.project or [r["project_id"] for r in
+                               led.db.execute("SELECT project_id FROM patients")]
+        n = rebuild_many(led, ids)
+        print(json.dumps({"rollups": n}, ensure_ascii=False))
+        return 0
+    finally:
+        try:
+            if led is not None:
+                led.close()
+        finally:
+            os.close(lock_fd)
 
 
 if __name__ == "__main__":

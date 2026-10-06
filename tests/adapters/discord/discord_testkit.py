@@ -35,8 +35,15 @@ def _fake_discord():
         def add_item(self, item):
             self.items.append(item)
 
+        def stop(self):
+            self.stopped = True
+
     class View(LayoutView):
         pass
+
+    class Embed:
+        def __init__(self, description=None, colour=None):
+            self.description, self.colour = description, colour
 
     class TextDisplay:
         def __init__(self, content):
@@ -142,6 +149,7 @@ def _fake_discord():
                              Separator=Separator,
                              Label=Label)
     mod.SelectOption = SelectOption
+    mod.Embed = Embed
     mod.SeparatorSpacing = SimpleNamespace(small=1, large=2)
     mod.AllowedMentions = AllowedMentions
     mod.ButtonStyle = SimpleNamespace(primary=1, secondary=2, success=3,
@@ -212,10 +220,11 @@ class FakeMessage:
         self.deleted = False
         self.threads = []
 
-    async def edit(self, view=None, allowed_mentions=None):
+    async def edit(self, view=None, allowed_mentions=None, content=None, embed=None):
         if self.deleted:
             raise FakeHTTP(404)
         self.view = view
+        self.content, self.embed = content, embed
         self.allowed_mentions = allowed_mentions
         self.edits += 1
 
@@ -240,10 +249,11 @@ class FakeChannel:
         self.messages = {}
         self._next = 9000
 
-    async def send(self, view=None, allowed_mentions=None):
+    async def send(self, view=None, allowed_mentions=None, content=None, embed=None):
         self._next += 1
         m = FakeMessage(self._next, channel=self)
         m.view = view
+        m.content, m.embed = content, embed
         m.allowed_mentions = allowed_mentions
         self.sent.append(m)
         self.messages[m.id] = m

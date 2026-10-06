@@ -67,7 +67,7 @@ class TalkScreen(Screen):
 
     def template(self, x, y, labels):
         for label in labels:
-            self.rect(x, y, 422, 33, "#fff", 0, "#d5e1e5")
+            self.rect(x + 10, y + 2, 402, 29, "#f3f5f7", 5, "#d5e1e5")
             self.parts.append(f'<text x="{x + 211}" y="{y + 23}" font-size="16" '
                               f'fill="{BLUE}" text-anchor="middle">{escape(label)}</text>')
             y += 33

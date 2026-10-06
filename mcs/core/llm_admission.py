@@ -26,7 +26,12 @@ Design contract:
 - **Fail closed** — transport timeout, socket drop, expired lease and
   ``/slots`` idle samples are NEVER proof of backend retirement.
   Unknown completions hold admission closed until reconciled with
-  backend evidence.
+  backend evidence. The one exception is a hard-killed owner: a permit
+  whose lease (``LEASE_S``, well past any client deadline) expired AND
+  whose recording process no longer exists (its socket closed with it)
+  is fenced as ``owner_dead`` during acquisition, so a SIGKILL'd
+  request cannot hold its class while other handles keep the store
+  open. A live owner's permit is never reclaimed.
 - **Admission token** — each admitted→sent permit mints a single-use
   ``epoch:permit:nonce`` token. The backend access control (in
   production: the backend reachable only through the broker; in the
@@ -52,6 +57,8 @@ import os
 import sqlite3
 import time
 from contextlib import contextmanager
+from functools import wraps
+from threading import RLock
 
 CLASSES = ("RT", "BACKLOG")
 
@@ -78,14 +85,48 @@ DEFAULT_ROUTES = {
 OCCUPYING = ("reserved", "admitted", "sent", "unknown",
              "cancel_pending")
 TERMINAL = ("terminal", "fenced")
+# Occupancy lease: 3x the longest client timeout (semantic LLM_TIMEOUT
+# 600s). Only combined with a dead owner process is expiry acted on.
+LEASE_S = 1800.0
+# Terminal rows older than this are pruned, a bounded batch per acquire.
+RETENTION_S = 7 * 86400.0
+PRUNE_BATCH = 100
+RECLAIM_BATCH = 20
+
+
+def _pid_alive(pid) -> bool:
+    """False only when no process with ``pid`` exists (ESRCH)."""
+    if not isinstance(pid, int) or pid <= 0:
+        return True     # unrecorded owner: never provably dead
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True     # EPERM: exists under another user
+    return True
 
 
 def _connect(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(path, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=delete")
-    conn.execute("PRAGMA busy_timeout=30000")
+    conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=delete")
+        conn.execute("PRAGMA busy_timeout=30000")
+    except BaseException:
+        conn.close()
+        raise
     return conn
+
+
+def _serialized(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        # Cached handles serve transport threads; only broker state work
+        # is serialized, never an inference call or its waiting period.
+        with self._mutex:
+            return method(self, *args, **kwargs)
+    return call
 
 
 class Broker:
@@ -94,6 +135,7 @@ class Broker:
 
     def __init__(self, path: str, routes: dict | None = None,
                  bg_window_s: float = 120.0, slots: int = 2):
+        self._mutex = RLock()
         self.path = path
         self.routes = dict(routes or DEFAULT_ROUTES)
         self.bg_window_s = bg_window_s
@@ -130,43 +172,50 @@ class Broker:
 
     def _initialize_store(self) -> None:
         """Create or migrate the broker's private durable store."""
-        self.db.execute("""
-          CREATE TABLE IF NOT EXISTS admission_meta(
-            singleton INTEGER PRIMARY KEY CHECK (singleton=1),
-            epoch INTEGER NOT NULL,
-            state TEXT NOT NULL,
-            rt_waiting INTEGER NOT NULL DEFAULT 0,
-            rotated_at REAL)""")
-        self.db.execute("""
-          CREATE TABLE IF NOT EXISTS permits(
-            permit_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            epoch INTEGER NOT NULL,
-            client TEXT NOT NULL,
-            cls TEXT NOT NULL,
-            job_gen TEXT,
-            request_id TEXT,
-            state TEXT NOT NULL,
-            token TEXT,
-            created_at REAL NOT NULL,
-            admitted_at REAL,
-            sent_at REAL,
-            terminal_at REAL,
-            outcome TEXT,
-            proof TEXT)""")
-        cols = {r[1] for r in self.db.execute(
-            "PRAGMA table_info(permits)")}
-        if "admitted_at" not in cols:
+        # one write transaction: two processes starting together must not
+        # both see owner_pid missing and race the ALTER (duplicate column)
+        with self._write_tx():
+            self.db.execute("""
+              CREATE TABLE IF NOT EXISTS admission_meta(
+                singleton INTEGER PRIMARY KEY CHECK (singleton=1),
+                epoch INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                rt_waiting INTEGER NOT NULL DEFAULT 0,
+                rotated_at REAL)""")
+            self.db.execute("""
+              CREATE TABLE IF NOT EXISTS permits(
+                permit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                epoch INTEGER NOT NULL,
+                client TEXT NOT NULL,
+                cls TEXT NOT NULL,
+                job_gen TEXT,
+                request_id TEXT,
+                state TEXT NOT NULL,
+                token TEXT,
+                created_at REAL NOT NULL,
+                admitted_at REAL,
+                sent_at REAL,
+                terminal_at REAL,
+                outcome TEXT,
+                proof TEXT,
+                owner_pid INTEGER)""")
+            cols = {r[1] for r in self.db.execute(
+                "PRAGMA table_info(permits)")}
+            if "owner_pid" not in cols:
+                # pre-existing rows keep NULL: their owner is unprovable
+                self.db.execute(
+                    "ALTER TABLE permits ADD COLUMN owner_pid INTEGER")
+            if "admitted_at" not in cols:
+                self.db.execute(
+                    "ALTER TABLE permits ADD COLUMN admitted_at REAL")
+                # backend occupancy began at creation for every permit that
+                # ever left 'waiting' — 'waiting' itself holds no slot
+                self.db.execute(
+                    "UPDATE permits SET admitted_at=created_at "
+                    "WHERE state NOT IN ('waiting')")
             self.db.execute(
-                "ALTER TABLE permits ADD COLUMN admitted_at REAL")
-            # backend occupancy began at creation for every permit that
-            # ever left 'waiting' — 'waiting' itself holds no slot
-            self.db.execute(
-                "UPDATE permits SET admitted_at=created_at "
-                "WHERE state NOT IN ('waiting')")
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS permits_epoch_state "
-            "ON permits(epoch,state)")
-        self.db.commit()
+                "CREATE INDEX IF NOT EXISTS permits_epoch_state "
+                "ON permits(epoch,state)")
 
     # ---------- epoch lifecycle ----------
 
@@ -186,11 +235,10 @@ class Broker:
         self.db.execute("BEGIN IMMEDIATE")
         try:
             yield
+            self.db.commit()
         except BaseException:
             self.db.rollback()
             raise
-        else:
-            self.db.commit()
 
     def _recover(self) -> None:
         """Rotate the epoch when the previous process exited with any
@@ -222,6 +270,7 @@ class Broker:
                     " state='closed', rt_waiting=0, rotated_at=?"
                     " WHERE singleton=1", (new_epoch, time.time()))
 
+    @_serialized
     def open_epoch(self, verify_empty) -> bool:
         """Reopen the current epoch after the backend is verified
         empty. ``verify_empty`` is a callable returning True only when
@@ -235,9 +284,11 @@ class Broker:
                 " WHERE singleton=1")
         return True
 
+    @_serialized
     def epoch(self) -> int:
         return self._meta()["epoch"]
 
+    @_serialized
     def is_open(self) -> bool:
         return self._meta()["state"] == "open"
 
@@ -249,6 +300,7 @@ class Broker:
             f"AND state IN ({','.join('?' * len(OCCUPYING))})",
             (epoch, cls, *OCCUPYING)).fetchone()[0]
 
+    @_serialized
     def overlap(self) -> bool:
         """Invariant check: any moment with both classes occupying."""
         row = self._meta()
@@ -256,6 +308,7 @@ class Broker:
         bg = self._occupancy(self.db, row["epoch"], "BACKLOG")
         return rt > 0 and bg > 0
 
+    @_serialized
     def acquire(self, client: str, cls: str, job_gen: str | None = None,
                 request_id: str | None = None) -> dict:
         """Reserve a permit. Returns a verdict dict — denial is data,
@@ -269,6 +322,7 @@ class Broker:
             return {"admitted": False, "reason": "class_not_bound",
                     "bound_class": bound}
         with self._write_tx():
+            self._reclaim_and_prune()
             meta = self._meta()
             if meta["state"] != "open":
                 return {"admitted": False, "reason": "epoch_closed",
@@ -298,10 +352,10 @@ class Broker:
                         "rt_waiting+1 WHERE singleton=1")
                     cur = self.db.execute(
                         "INSERT INTO permits(epoch,client,cls,job_gen,"
-                        "request_id,state,created_at)"
-                        " VALUES(?,?,?,?,?,'waiting',?)",
+                        "request_id,state,created_at,owner_pid)"
+                        " VALUES(?,?,?,?,?,'waiting',?,?)",
                         (epoch, client, cls, job_gen, request_id,
-                         time.time()))
+                         time.time(), os.getpid()))
                     return {"admitted": False, "reason": "waiting",
                             "permit_id": cur.lastrowid,
                             "epoch": epoch}
@@ -314,23 +368,60 @@ class Broker:
                                    request_id)
             return self._admit(epoch, client, cls, job_gen, request_id)
 
+    def _reclaim_and_prune(self) -> None:
+        """Inside the acquire write tx: fence lease-expired permits of
+        dead owners, then delete a bounded batch of old terminal rows."""
+        now = time.time()
+        epoch = self._meta()["epoch"]
+        stale = self.db.execute(
+            "SELECT permit_id,cls,state,owner_pid FROM permits"
+            " WHERE epoch=? AND state IN"
+            " ('reserved','admitted','sent','unknown','cancel_pending',"
+            "'waiting') AND owner_pid IS NOT NULL"
+            " AND COALESCE(sent_at,admitted_at,created_at)<?"
+            " ORDER BY permit_id LIMIT ?",
+            (epoch, now - LEASE_S, RECLAIM_BATCH)).fetchall()
+        # ponytail: pid reuse can make a dead owner look alive (the
+        # permit stays until the epoch fence); it never frees a live one.
+        for p in stale:
+            if _pid_alive(p["owner_pid"]):
+                continue
+            self.db.execute(
+                "UPDATE permits SET state='fenced', outcome='owner_dead',"
+                " terminal_at=? WHERE permit_id=?", (now, p["permit_id"]))
+            if p["cls"] == "RT" and p["state"] == "waiting":
+                self.db.execute(
+                    "UPDATE admission_meta SET rt_waiting="
+                    "MAX(rt_waiting-1,0) WHERE singleton=1")
+        # oldest rows by rowid only — the scan is bounded even when
+        # nothing is due
+        self.db.execute(
+            "DELETE FROM permits WHERE permit_id IN (SELECT permit_id"
+            " FROM permits ORDER BY permit_id LIMIT ?) AND state IN"
+            f" ({','.join('?' * len(TERMINAL))})"
+            " AND COALESCE(terminal_at,created_at)<?",
+            (PRUNE_BATCH, *TERMINAL, now - RETENTION_S))
+
     def _admit(self, epoch, client, cls, job_gen, request_id) -> dict:
         """Insert an 'admitted' permit — created_at == admitted_at since
         the permit never waited."""
         now = time.time()
         cur = self.db.execute(
             "INSERT INTO permits(epoch,client,cls,job_gen,"
-            "request_id,state,created_at,admitted_at)"
-            " VALUES(?,?,?,?,?,'admitted',?,?)",
-            (epoch, client, cls, job_gen, request_id, now, now))
+            "request_id,state,created_at,admitted_at,owner_pid)"
+            " VALUES(?,?,?,?,?,'admitted',?,?,?)",
+            (epoch, client, cls, job_gen, request_id, now, now,
+             os.getpid()))
         return {"admitted": True, "permit_id": cur.lastrowid,
                 "epoch": epoch}
 
+    @_serialized
     def _permit(self, permit_id: int) -> sqlite3.Row | None:
         return self.db.execute(
             "SELECT * FROM permits WHERE permit_id=?",
             (permit_id,)).fetchone()
 
+    @_serialized
     def poll(self, permit_id: int) -> dict:
         """Promote a waiting RT permit once backlog fully drained.
         Returns the permit's live view; a stale-epoch permit is fenced
@@ -359,6 +450,7 @@ class Broker:
             return {"state": p["state"], "epoch": p["epoch"],
                     "cls": p["cls"]}
 
+    @_serialized
     def sent(self, permit_id: int, request_id: str | None = None) -> dict:
         """Transition admitted→sent and mint the backend token. Only a
         current-epoch admitted (or just-promoted waiting) permit may
@@ -389,6 +481,7 @@ class Broker:
             return {"sent": True, "token": token,
                     "epoch": meta["epoch"]}
 
+    @_serialized
     def token_valid(self, token: str, cls: str,
                     request_id: str | None = None) -> dict:
         """Backend-side access control: the token must be a live 'sent'
@@ -422,6 +515,7 @@ class Broker:
         return {"ok": True, "permit_id": permit_id, "cls": p["cls"],
                 "epoch": epoch}
 
+    @_serialized
     def terminal(self, permit_id: int, outcome: str,
                  proof: str | None = None) -> dict:
         """Confirmed backend terminal retirement — the ONLY way a
@@ -460,6 +554,7 @@ class Broker:
             return p, {"ok": True, "state": p["state"]}
         return p, None
 
+    @_serialized
     def cancel(self, permit_id: int) -> dict:
         """A cancel verb is NOT an acknowledgement — the permit moves
         to cancel_pending and keeps occupying its class until a
@@ -486,6 +581,7 @@ class Broker:
                 " ('admitted','sent','unknown')", (permit_id,))
             return {"ok": True, "state": "cancel_pending"}
 
+    @_serialized
     def mark_unknown(self, permit_id: int,
                      reason: str | None = None) -> dict:
         """Completion unproven (timeout, socket drop, vanished
@@ -509,6 +605,7 @@ class Broker:
 
     # ---------- observability ----------
 
+    @_serialized
     def status(self) -> dict:
         meta = self._meta()
         occ = {}
@@ -527,6 +624,7 @@ class Broker:
                     max(0.0, time.time() - oldest_bg)
                     if oldest_bg is not None else None)}
 
+    @_serialized
     def close(self) -> None:
         if self._closed:
             return

@@ -264,3 +264,62 @@ def test_real_sdk_send_history_fetch_and_edit_preserve_remote_message_id(monkeyp
         finally:
             await bot.close()
     asyncio.run(scenario())
+
+
+def test_mobile_classic_serialization_has_content_full_embed_and_same_tokens():
+    import asyncio
+    async def scenario():
+        from discord.http import handle_message_parameters
+        spec = _spec()
+        preview = "合成患者 / 合成発信者（合成所属） / 10-06 08:30: 合成の確認依頼"
+        spec["parts"]["preview_text"] = preview
+        args = cards.message_payload(spec)
+        params = handle_message_parameters(**args, allowed_mentions=cards.no_pings())
+        payload = params.payload
+        assert payload["content"] == preview
+        assert not payload.get("flags", 0) & (32768 | 4096)
+        assert "患者A" in payload["embeds"][0]["description"]
+        assert "mcs notify" in payload["embeds"][0]["description"]
+        assert payload["components"][0]["components"][0]["custom_id"] == "mcs:a:" + "ab" * 16
+        assert payload["allowed_mentions"]["parse"] == []
+        v2 = handle_message_parameters(**cards.message_payload(spec, components_v2=True))
+        assert v2.payload["flags"] & 32768
+        assert not v2.payload.get("content") and not v2.payload.get("embeds")
+    asyncio.run(scenario())
+
+
+def test_render_only_card_views_do_not_accumulate_in_native_store():
+    import asyncio
+    from types import SimpleNamespace
+    from discord.ui.view import ViewStore
+
+    async def scenario():
+        for legacy in (False, True):
+            store = ViewStore(SimpleNamespace())
+            for mid in range(1000):
+                payload = cards.message_payload(_spec(), components_v2=legacy)
+                view = payload["view"]
+                assert view.is_finished()
+                # This is the exact send/edit registration condition of
+                # pinned discord.py2.7.1. No HTTP client or connection.
+                if not view.is_finished() and view.is_dispatchable():
+                    store.add_view(view, mid)
+                assert "mcs:a:" + "ab" * 16 in str(view.to_components())
+            assert not store._views and not store._synced_message_views
+    asyncio.run(scenario())
+
+
+def test_native_parser_still_dispatches_global_listener_without_card_view_registration(monkeypatch):
+    from types import SimpleNamespace
+    from discord.state import ConnectionState
+    from discord.ui.view import ViewStore
+    import discord.state
+
+    events = []
+    interaction = SimpleNamespace(message=SimpleNamespace(id=1), data={"custom_id": "mcs:a:" + "ab" * 16})
+    monkeypatch.setattr(discord.state, "Interaction", lambda **_kw: interaction)
+    state = SimpleNamespace(_view_store=ViewStore(SimpleNamespace()),
+                            dispatch=lambda *args: events.append(args))
+    ConnectionState.parse_interaction_create(state, {
+        "type": 3, "data": {"custom_id": interaction.data["custom_id"], "component_type": 2}})
+    assert events == [("interaction", interaction)]

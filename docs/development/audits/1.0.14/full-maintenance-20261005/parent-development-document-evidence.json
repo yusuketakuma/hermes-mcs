@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "packet": "parent-development-document",
+  "source": "docs/development/DEVELOPMENT.md",
+  "sha256": "cfd41360a9b027c82afb472560a1c48d37db4f3905bd610465c21ee26704e67b",
+  "lines": 772,
+  "full_read_ranges": [
+    [
+      1,
+      772
+    ]
+  ],
+  "full_read_proof": "1..120,121..260,261..460,461..570,571..end uninterrupted outputs; initial1..260 clipped output explicitly replaced by1..120+121..260",
+  "status": "REVIEWED_LOCAL_DOCUMENT",
+  "manual_and_generated": "4generated blocks owned by update_readme.py, all manual content read; generator check passed after manual changes. No generated content hand edit.",
+  "source_refs": [
+    "mcs/ops/mcs_setup.py:2420",
+    "mcs/ingest/health_watch.py:38",
+    "mcs/views/mcs_view.py:77",
+    "mcs/core/ledger.py:34",
+    "mcs/ingest/run_check.py:1523",
+    "mcs/views/mcs_stats.py:397",
+    "mcs/notify/notify_views.py:271",
+    "mcs/extract/v4/extract_bench.py:513",
+    "scripts/run_tests.sh"
+  ],
+  "consumer_refs": [
+    "README.md",
+    "docs/guides/USER_GUIDE.md",
+    "docs/guides/INSTALLATION.md",
+    "docs/development/plans/RELEASE_1.0.13.md",
+    "scripts/development/update_readme.py",
+    "tests/meta/test_readme_generation.py"
+  ],
+  "criteria": {
+    "C01": {
+      "state": "REVIEWED",
+      "basis": "モジュール/flat import/各入口とREADME・guide・specの責務を全章で照合。current CLIと2026-10-04時点の受入計画を区別。"
+    },
+    "C02": {
+      "state": "REVIEWED",
+      "basis": "取得状態/unknown・完全/未完了・snapshot生成と取得成功を区別。cron10分/深掘り10,40、health watcher5分/鮮度600秒をmcs_setup/health_watchと照合。"
+    },
+    "C03": {
+      "state": "REVIEWED",
+      "basis": "commit後既読化、message/artifact原子的置換、cursor世代、同一command ID/hash、requests+receipt同時commitの説明を既存core/view/notify受入記録と照合。文書変更で保存経路を変更しない。"
+    },
+    "C04": {
+      "state": "REVIEWED",
+      "basis": "Viewが公開schema5..9を受理し現行Ledger9へのforward migration後snapshot公開という現実装へ旧v7説明を修正。履歴migrationや適用データは保持。"
+    },
+    "C05": {
+      "state": "REVIEWED",
+      "basis": "no-redirect/no-proxy・許可origin・Bearer転送禁止、人承認reason/receipt/source revision、型検証、ローカルactor申告と本人認証の区別を保持。"
+    },
+    "C06": {
+      "state": "REVIEWED",
+      "basis": "明示閲覧には本文/氏名を含むため共有ログ/外部LLM/公開repo転送禁止、定期ログはID/件数/状態、添付署名URL/hostpath非出力、鍵と秘密値をargvへ置かない説明を維持。"
+    },
+    "C07": {
+      "state": "REVIEWED",
+      "basis": "生成23CLI/18統計/12検知器/88modulesの正本sourceとgenerator照合。limit/cursor/epoch半開/包含の各異なる契約を混同しない。schema reader/public CLI既存interface不変更。"
+    },
+    "C08": {
+      "state": "REVIEWED",
+      "basis": "カード確認/却下/最新shown sourcegeneration/抽出誤り報告と候補を確定判断と区別。旧移設構成図は時点付き付録でcurrent Slack/Discord/LW画面を代替しない。"
+    },
+    "C09": {
+      "state": "REVIEWED",
+      "basis": "probe bounded/latestid/probe_mid、履歴chunk・頁上限、per-write lock、単発/背景スロット・budget・no-live benchmark前提をsource証拠へ照合。自己プロフィールはjobs-onlyまたは未記録tickへ説明を同期。"
+    },
+    "C10": {
+      "state": "REVIEWED",
+      "basis": "unknown送信part保留・断定再送禁止、runexit/session再login上限、backoff/次tick/rollbackとwrapperdrift/再同期を明記。診断と実機受入を区別。"
+    },
+    "C11": {
+      "state": "REVIEWED",
+      "basis": "共通runnerのenv-i一時HOME/DB/スタブ/guard、integration optionalHermesと実固定SDKlaneの別検証、mock-okが期待値validationのみで品質保証ではない条件を照合。"
+    },
+    "C12": {
+      "state": "REVIEWED",
+      "basis": "stdlibcore/最低runtime/再生成の正本とCI同範囲lint/runnerを保持。update_readme --checkがmanual修正後も成功; final I actual統合検証は別記録待ち。"
+    },
+    "X01": {
+      "state": "REVIEWED",
+      "basis": "実装収録済みと実機/API/人手/相手側受入を区別。checkout変更だけでwrapperに反映せずservices再同期/診断必要; deploy/restart未実施。"
+    },
+    "X02": {
+      "state": "REVIEWED",
+      "basis": "既存source/docs/固定モデル/辞書承認SHAに基づき説明、新dependency/取得元/CI権限/ライセンス変更なし。外部URLの実到達性は今回推定しない。"
+    },
+    "X03": {
+      "state": "REVIEWED",
+      "basis": "snapshotは原DBのread-onlyコピー、日次backupとoffsite/restore consent/添付削除保持はspec/guide参照。記録消失を処理成功/対応なしへ変換せず今回実資産変更なし。"
+    },
+    "X04": {
+      "state": "REVIEWED",
+      "basis": "timestamp付MCS既読化/固定origin/外部Jev送信の情報行先/通知三系統を各正本へ接続。Hermes modeとstandaloneをREADMEの同期文言で明示。実送信は行わない。"
+    },
+    "X05": {
+      "state": "REVIEWED",
+      "basis": "ローカルsnapshot/SQLiteFTS・macOSlaunchd/systemdの適用差/守るpathとflockを文書と実装へ照合。Linux実機稼働や複数tab実画面の保証なし。"
+    },
+    "X06": {
+      "state": "REVIEWED",
+      "basis": "本文を指示ではなくDATA扱い、日次budget/回路/限定project/一時停止・RT/BACKLOG排他、人承認tool経路を維持。記憶基盤へ本文を送る範囲を追加しない。"
+    },
+    "X07": {
+      "state": "REVIEWED",
+      "basis": "候補/原文確認と確定臨床対応を区別、分母0null/判定不能/unavailable、薬辞書候補は未確定で表記保持/服用や治療同等性推定禁止。医療閾値・制度規則不変更。"
+    },
+    "X08": {
+      "state": "REVIEWED",
+      "basis": "README/USER_GUIDE/INSTALLATION/spec/受入計画の相対link存在確認、生成block正本はgenerator。公開Web/Release/tag/push未実施; 外部受入は文書で完了と扱わない。"
+    }
+  },
+  "local_links_checked": [
+    "RELEASE_1.0.13.md",
+    "../../mcs/ops/mcs_cli.py",
+    "../../README.md",
+    "../guides/USER_GUIDE.md",
+    "../guides/INSTALLATION.md",
+    "../guides/INSTALLATION.md",
+    "../../SECURITY.md"
+  ],
+  "findings": [
+    "旧cron5分/深掘り7,37・watcher取得間隔の混同を現実装へ同期、10分理由はMCSサーバー負荷対策と明記。",
+    "旧schema7移行説明を現在Ledger9/reader5..9へ同期。",
+    "自己プロフィール毎tick取得という旧説明を既存取得条件へ同期。",
+    "成分正規化未実装の説明を、表記保持と任意の未確定辞書候補併記へ精密化。",
+    "旧未公開CLI説明をローカル実装/合成検証と実機等の外部受入の区別へ同期。"
+  ],
+  "limits": [
+    "文書/関連sourceを照合した記録であり実MCS・鍵・DB・サービス・モデル・外部URLへアクセスしていない。",
+    "固定I全量/配布物/固定SDK/独立reviewの完了を主張しない。"
+  ]
+}

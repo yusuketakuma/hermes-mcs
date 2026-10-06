@@ -58,6 +58,28 @@ def test_rollup_collects_canonical_facts_newest_first(db):
     assert by_id["f_new"]["evidence"] == "嘔気"
 
 
+def test_symptom_dates_reuse_first_timestamp_row_without_rescanning(db, monkeypatch):
+    for mid in (1, 2, 3, 4):
+        _add(db, mid, "extract_v1", {"symptoms": [f"合成症状{mid}"]},
+             f"2026-09-{mid:02d}T00:00:00+09:00")
+    db.db.execute("UPDATE messages SET posted_at_ts=42 WHERE message_id IN (2,3)")
+    db.db.execute("UPDATE messages SET posted_at_ts=NULL,posted_at='' "
+                  "WHERE message_id IN (1,4)")
+    msgs = db.db.execute("SELECT message_id,posted_at_ts,posted_at FROM messages "
+                         "ORDER BY posted_at_ts DESC,message_id DESC").fetchall()
+    expected = [{"symptom": f"合成症状{m['message_id']}",
+                 "last": rollup.msgs_by_ts(msgs, m["posted_at_ts"] or 0)}
+                for m in msgs]
+
+    def no_rescan(*args):
+        raise AssertionError("symptom date must reuse timestamp lookup")
+
+    monkeypatch.setattr(rollup, "msgs_by_ts", no_rescan)
+    assert rollup.build_rollup(db, 1)["recent_symptoms"] == expected
+    assert [row["last"] for row in expected] == [
+        "2026-09-03T00:00:00+09:00", "2026-09-03T00:00:00+09:00", "msg:4", "msg:4"]
+
+
 def test_rollup_canonical_shadows_and_stale_falls_back(db):
     """current_fact_pred: a hash-current projection owns the fact
     source; once the revision changes it drops out and the legacy row

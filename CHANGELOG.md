@@ -1678,7 +1678,7 @@ Slack・LINE WORKSにも共通のコマンド操作を追加しました。ス�
 - 総ページ数が2ページ目から返る場合も、未読一覧の終端ページとの一致を要求する。初回の空一覧と総ページ数0は保持する。
 - 空datasetの任意paginateを検証し、has_nextや件数・ページの矛盾をunknownへ集計する。paginate欠落の互換性と非空先頭ページによる登録あり判定を保持する。
 - 投稿診断と利用数診断の終了コード0の意味を受入票で分け、全22-A完了とは扱わない。
-- 根拠: scripts/development/probe_message_metadata.py、tests/ingest/test_metadata_probe_observation.py、tests/ingest/test_metadata_probe_usage.py、docs/development/ACCEPTANCE_1.0.11.md
+- 根拠: scripts/development/probe_message_metadata.py、tests/ingest/test_metadata_probe_observation.py、tests/ingest/test_metadata_probe_usage.py、docs/development/acceptance/ACCEPTANCE_1.0.11.md
 
 #### 利用件数の調査不能を完了や登録0件と区別
 

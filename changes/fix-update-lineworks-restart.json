@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "自動更新後にLINE WORKSの通知カードが止まる問題を修正",
+  "summary": "Hermesモードで通知形式にLINE WORKSを使っている場合、更新の適用後に再起動されるのはgatewayだけで、独立したLINE WORKSアダプターは古いコードのまま動き続けていました。古いアダプターは新しいカード形式を受け付けないため、新しいカードがすべて保留されていました。更新の適用・ロールバック・中断からの復旧の後に、LINE WORKSアダプター（ai.mcs.lineworks）も再起動します。",
+  "upgrade": "この修正を含む版への更新の適用後から有効です（この版自体への更新後は、従来どおり手動で`launchctl kickstart -k \"gui/$(id -u)/ai.mcs.lineworks\"`を実行してください）。notify.interactiveがlineworksでない場合や、独立実行（アダプターは常駐プロセスと一緒に再起動されます）では動作は変わりません。",
+  "details": [
+    "再起動は更新記録を保存した後に launchctl kickstart -k で起動し、完了を待ちません。サービスを導入していない場合は何もしません。"
+  ],
+  "refs": ["mcs/ops/mcs_update.py", "tests/ops/test_update_rollback_guards.py"]
+}

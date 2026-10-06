@@ -280,7 +280,7 @@ def current_refs(db: sqlite3.Connection, mid: int) -> list[Annotation]:
         return []
     try:
         content, meta = json.loads(row[0]), json.loads(row[1])
-    except (json.JSONDecodeError, TypeError, RecursionError):
+    except (ValueError, TypeError, RecursionError):
         return []
     if (not isinstance(content, dict) or not isinstance(meta, dict)
             or any(meta.get(k) != v for k, v in binding.items())
@@ -296,7 +296,7 @@ def current_refs(db: sqlite3.Connection, mid: int) -> list[Annotation]:
     try:
         meds = json.loads(source[2]).get(
             "medications" if source[1] == "extract_v1" else "meds", [])
-    except RecursionError:
+    except (ValueError, TypeError, RecursionError):
         return []
     if not isinstance(meds, list):
         return []
@@ -342,9 +342,13 @@ def derive(ledger, dictionary: DrugMap | None, *,
     """
     usable = dictionary is not None and (dictionary.approved or synthetic)
     done, pids, cut = 0, set(), False
-    rows = ledger.db.execute("""
+    # Without a usable dictionary every message resolves to "no rows", so
+    # only messages that still hold med_ref artifacts need work (deletion);
+    # scanning every message per tick would be O(corpus) for nothing.
+    rows = ledger.db.execute(("""
         SELECT message_id,project_id FROM messages
-        UNION SELECT message_id,project_id FROM artifacts WHERE kind=?
+        UNION """ if usable else "") + """SELECT message_id,project_id
+        FROM artifacts WHERE kind=?
         ORDER BY message_id
     """, (KIND,)).fetchall()
     for mid, pid in rows:
@@ -357,7 +361,7 @@ def derive(ledger, dictionary: DrugMap | None, *,
             try:
                 meds = json.loads(source[2]).get(
                     "medications" if source[1] == "extract_v1" else "meds", [])
-            except RecursionError:
+            except (ValueError, TypeError, RecursionError):
                 source = None
         if source is not None and dictionary is not None:
             content = {"refs": [dictionary.resolve(med["name"], i)

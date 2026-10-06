@@ -1,0 +1,1315 @@
+{
+  "schema_version": 1,
+  "release": "1.0.15",
+  "date": "2026-10-06",
+  "scope": "All tracked deployment/** scripts/** ci/** .github/** integration/** plus install.sh Makefile pyproject.toml root conftest.py and tests/conftest.py; no live configuration/data/services.",
+  "review_method": "Complete source AST/format/shell checks on owned files, manual trust-boundary/resource/caller inspection, existing synthetic regression suites and reproduced failure-specific tests. SDK/OS execution limitations are explicit and do not represent pending source inventory.",
+  "inventory_count": 57,
+  "unexamined_source_files": [],
+  "findings": [
+    {
+      "id": "recovery-temporary-cleanup",
+      "status": "fixed",
+      "evidence": "Two report writers retained 20 temporary files after 20 synthetic failed publications each and one after interruption; now zero with prior published report preserved."
+    },
+    {
+      "id": "keychain-helper-deadline",
+      "status": "fixed",
+      "evidence": "Synthetic timeout/missing executable previously escaped; now return 1 without secret output/write and pass timeout=30."
+    },
+    {
+      "id": "recovery-membership-shape",
+      "status": "fixed",
+      "evidence": "Malformed saved service snapshots previously crashed or reached service scanning; now 11 malformed-shape cases return service_snapshot_invalid before external actions."
+    }
+  ],
+  "validation": {
+    "python": "3.13.12 via MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python and scripts/run_tests.sh isolation",
+    "broad_run": "408 selected tests: 407 passed; sole failure was expected shared DEVELOPMENT.md generated drift against in-progress source edits. Shared docs integration belongs to parent.",
+    "focused_run": "27 cleanup/membership/corrupt-consent/narrative checks passed after final recovery edits.",
+    "source_checks": "57 tracked files: 26 Python AST, 11 shell syntax+shellcheck, 7 plist, 2 JSON, 1 TOML; remaining YAML/build/dependency/doc references inspected.",
+    "static_gates": "10/10 current-source gates and incident coverage passed (parent after restricted Discord cards Embed allowance); 3 delta boundary cases passed.",
+    "gallery_checks": "7 Slack and 2 LINE WORKS synthetic asset pairs passed",
+    "sdk_negative": "Explicit standalone required-collection guard rejected incomplete test collection with exit 4; expected failure, not SDK success.",
+    "release_asset_integration": "Parent current readme-release/release_notes/Slack and LINE WORKS gallery checks passed."
+  },
+  "limitations": [
+    "No actual production install/update/rollback, native services, credentials, original DB, external publishing or network operation.",
+    "Exact-version standalone/Hermes SDK lanes, native OS services and real LLM/MCS routes require separate authorized environments.",
+    "Parent must regenerate shared DEVELOPMENT.md and rerun its single drift test/full integrated checks after concurrent source edits settle."
+  ],
+  "files": [
+    {
+      "path": ".github/dependabot.yml",
+      "sha256": "2df1fe6f642eb8f3bd065e72bb8703ba5d566aaafb51fa16b760743ddb3549de",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Full source inspected as configuration; permissions, fixed refs, environment/mount boundaries and actual caller/test contracts reviewed."
+      ],
+      "evidence": [
+        "tests/meta/test_sdk_ci_lanes.py",
+        "tests/release/",
+        "shellcheck/static gate entrypoints aligned with CI source"
+      ],
+      "limitations": [
+        "GitHub-hosted jobs, action binaries, remote publishing and dependency upgrades not executed."
+      ]
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "5b73c57cef2d6b2e53f8d6785120573be91c8a209c2a18a9094500f772ff4d32",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Full source inspected as configuration; permissions, fixed refs, environment/mount boundaries and actual caller/test contracts reviewed."
+      ],
+      "evidence": [
+        "tests/meta/test_sdk_ci_lanes.py",
+        "tests/release/",
+        "shellcheck/static gate entrypoints aligned with CI source"
+      ],
+      "limitations": [
+        "GitHub-hosted jobs, action binaries, remote publishing and dependency upgrades not executed."
+      ]
+    },
+    {
+      "path": ".github/workflows/openwiki-update.yml",
+      "sha256": "0efcad155b445693eccb91344073f18894d905beb6c3951cf710f551e2702fd7",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Full source inspected as configuration; permissions, fixed refs, environment/mount boundaries and actual caller/test contracts reviewed."
+      ],
+      "evidence": [
+        "tests/meta/test_sdk_ci_lanes.py",
+        "tests/release/",
+        "shellcheck/static gate entrypoints aligned with CI source"
+      ],
+      "limitations": [
+        "GitHub-hosted jobs, action binaries, remote publishing and dependency upgrades not executed."
+      ]
+    },
+    {
+      "path": ".github/workflows/release-notes.yml",
+      "sha256": "036c8f65e7b7862bad2e2b450c0466fd19c79d148f81459487044afc3f8da2d2",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Full source inspected as configuration; permissions, fixed refs, environment/mount boundaries and actual caller/test contracts reviewed."
+      ],
+      "evidence": [
+        "tests/meta/test_sdk_ci_lanes.py",
+        "tests/release/",
+        "shellcheck/static gate entrypoints aligned with CI source"
+      ],
+      "limitations": [
+        "GitHub-hosted jobs, action binaries, remote publishing and dependency upgrades not executed."
+      ]
+    },
+    {
+      "path": "Makefile",
+      "sha256": "f49eac487c1e0d717bc95b2c5d110389f7e75cc047a67ca545bccc75dbaaad53",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Full tracked content inventoried as documentation/dependency/build reference; no executable production action run."
+      ],
+      "evidence": [
+        "tests/meta/test_sdk_ci_lanes.py",
+        "tests/release/",
+        "shellcheck/static gate entrypoints aligned with CI source"
+      ],
+      "limitations": [
+        "GitHub-hosted jobs, action binaries, remote publishing and dependency upgrades not executed."
+      ]
+    },
+    {
+      "path": "ci/gates-coverage.json",
+      "sha256": "920381489e8dae74a2d4272d3e8cd50c3b81e484d9bfa345d4af53d2dfc9fb64",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "stdlib JSON parse passed; reviewed manifest/reference role."
+      ],
+      "evidence": [
+        "ci/gates.py: 10/10 passed",
+        "ci/mine_gates.py --check passed",
+        "tests/meta/test_ci_scripts.py",
+        "tests/meta/test_callback_socket_constant_gate.py",
+        "tests/meta/test_c1_export_gates.py"
+      ],
+      "limitations": [
+        "Static incident gates establish their documented patterns, not universal runtime correctness. ci/gates.py source edits belong to parent."
+      ]
+    },
+    {
+      "path": "ci/gates.py",
+      "sha256": "a509ff8309dad458b3e63d0716f6bceeb3fe0f2cf7275e40e20d65df122edcb7",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried.",
+        "Parent integration delta reviewed by owner: lazy Embed is permitted only in Discord cards.py; top-level and actions.py access remain rejected."
+      ],
+      "evidence": [
+        "ci/gates.py: 10/10 passed",
+        "ci/mine_gates.py --check passed",
+        "tests/meta/test_ci_scripts.py",
+        "tests/meta/test_callback_socket_constant_gate.py",
+        "tests/meta/test_c1_export_gates.py",
+        "Parent current-source report: 3 additional Embed-boundary cases passed; 10/10 gates and mine_gates --check passed."
+      ],
+      "limitations": [
+        "Static incident gates establish their documented patterns, not universal runtime correctness. ci/gates.py source edits belong to parent."
+      ],
+      "functions": [
+        "_plugin_path",
+        "_lazy_sdk_import",
+        "_module_surface",
+        "_py_files",
+        "gate_stdlib_only",
+        "gate_no_direct_platform_api",
+        "gate_plugin_sandbox",
+        "gate_snapshot_readonly",
+        "gate_writer_lock",
+        "gate_notify_fail_closed",
+        "gate_install_pin",
+        "gate_records_isolation",
+        "_is_ext_module",
+        "gate_ext_contract_offline",
+        "gate_tick_no_ext",
+        "main",
+        "reaches_lock",
+        "protected"
+      ]
+    },
+    {
+      "path": "ci/mine_gates.py",
+      "sha256": "7c98b6fb0d9973bdd3dc4cc3e5028cc9d8aea2f25dbd8cfa71ee126c8595154d",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "ci/gates.py: 10/10 passed",
+        "ci/mine_gates.py --check passed",
+        "tests/meta/test_ci_scripts.py",
+        "tests/meta/test_callback_socket_constant_gate.py",
+        "tests/meta/test_c1_export_gates.py"
+      ],
+      "limitations": [
+        "Static incident gates establish their documented patterns, not universal runtime correctness. ci/gates.py source edits belong to parent."
+      ],
+      "functions": [
+        "extract_ids",
+        "gate_registry",
+        "test_names",
+        "heatmap",
+        "main"
+      ]
+    },
+    {
+      "path": "conftest.py",
+      "sha256": "a1066a51c68082f7b65e346cef21e6fe8fab7e5e2f354b1c20b0fe95a43fea3a",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "isolated Python 3.13 runner used for all local test execution",
+        "tests/meta/test_integration_guard_load.py",
+        "integration/test_integration_guards.py",
+        "pinned SDK required-collection negative check intentionally rejected incomplete lane with exit 4"
+      ],
+      "limitations": [
+        "No weakening or bypass of socket/process/real endpoint guards; no actual SDK lane selected to produce a success."
+      ],
+      "functions": []
+    },
+    {
+      "path": "deployment/README.md",
+      "sha256": "4de6659b4eaaacd6a7fde12cf7f775fc4887a417ff2ddc52d8725570fc92981d",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Full tracked content inventoried as documentation/dependency/build reference; no executable production action run."
+      ],
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "path": "deployment/cco/cco-approval-scope.json",
+      "sha256": "96b69cda31065d3db900a771955ad4b8319f893ae5d8077234136fff13995960",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "stdlib JSON parse passed; reviewed manifest/reference role."
+      ],
+      "evidence": [
+        "Candidate mounts remain snapshot read-only and proposals write-only in scope; terminal network/environment forwarding disabled; historical approval receipt treated as a reference, not new authorization."
+      ],
+      "limitations": [
+        "Historical target config/hash/container image not probed; candidate not applied or restarted."
+      ]
+    },
+    {
+      "path": "deployment/cco/cco-terminal-isolation.md",
+      "sha256": "dde9b43a6710db094fe46faf3e403bc115f0846c89652d11227ca945ba36faf8",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Full tracked content inventoried as documentation/dependency/build reference; no executable production action run."
+      ],
+      "evidence": [
+        "Candidate mounts remain snapshot read-only and proposals write-only in scope; terminal network/environment forwarding disabled; historical approval receipt treated as a reference, not new authorization."
+      ],
+      "limitations": [
+        "Historical target config/hash/container image not probed; candidate not applied or restarted."
+      ]
+    },
+    {
+      "path": "deployment/cco/cco-terminal.candidate.yaml",
+      "sha256": "5952f6d88a1732fcf7a17c6b41f501b30d5eb168c156691349e59a7eb7cb7fe9",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Full source inspected as configuration; permissions, fixed refs, environment/mount boundaries and actual caller/test contracts reviewed."
+      ],
+      "evidence": [
+        "Candidate mounts remain snapshot read-only and proposals write-only in scope; terminal network/environment forwarding disabled; historical approval receipt treated as a reference, not new authorization."
+      ],
+      "limitations": [
+        "Historical target config/hash/container image not probed; candidate not applied or restarted."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/README.md",
+      "sha256": "b61208603e1cbf91069c33768a6266078b086fc3516253edbee39565737567f4",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Full tracked content inventoried as documentation/dependency/build reference; no executable production action run."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.extract-drainer-2.plist",
+      "sha256": "12a1766e1013278f2ddfb043f108cf0ddfbfe97b414133a5728378467bad9148",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "stdlib plistlib parse passed; interpreter/root placeholders and LaunchAgent contract compared with synthetic templates tests."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.extract-drainer.plist",
+      "sha256": "f54ee5c114cbe042a252eb12696151877d39a1ede3d1efe32b97950de3928bdb",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "stdlib plistlib parse passed; interpreter/root placeholders and LaunchAgent contract compared with synthetic templates tests."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.llamaserver.plist",
+      "sha256": "e575304cb83db130469b166f5a31cd3edb13391389500d8cea7136fbe775069f",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "stdlib plistlib parse passed; interpreter/root placeholders and LaunchAgent contract compared with synthetic templates tests."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/ai.mcs.standalone.plist",
+      "sha256": "7fd509490b3725a10288e19906955be01f6c573d3414cab3bef46b9e0871e667",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "stdlib plistlib parse passed; interpreter/root placeholders and LaunchAgent contract compared with synthetic templates tests."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/local.mcs-cmd.plist",
+      "sha256": "32f3f1229fc83eafddd711a4c259b4754879240045c311b97ff2f129b5e0babc",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "stdlib plistlib parse passed; interpreter/root placeholders and LaunchAgent contract compared with synthetic templates tests."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/local.mcs-int.plist",
+      "sha256": "a3cd62d2ef9b25b05980f05734cfe1e46bdb2b448d151eb5e0be1440abbfd03e",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "stdlib plistlib parse passed; interpreter/root placeholders and LaunchAgent contract compared with synthetic templates tests."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/launchagents/org.mcs.recovery.plist",
+      "sha256": "c873f8e40dcf869f3447f00ad63b58524b43c5e383b571d30bac87e000145aa7",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "stdlib plistlib parse passed; interpreter/root placeholders and LaunchAgent contract compared with synthetic templates tests."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/recovery/mcs_recover.py",
+      "sha256": "2df399e877f2f6b7124063bdc9d08546497e597a4e8885ff15685402a9eef604",
+      "status": "fixed_and_verified",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "tests/meta/test_operation_cleanup_stability.py (report publication failures repeated 20 times, interruption cleanup)",
+        "tests/meta/test_recovery_snapshot_shape.py (11 malformed membership snapshots fail before filesystem/service scan)",
+        "tests/meta/test_mcs_recover.py (105 cases)",
+        "tests/meta/test_mcs_recover_py39.py (2 compatibility cases)",
+        "tests/ops/test_recovery_corrupt_receipts.py (4 cases)",
+        "integration/test_mcs_recovery_narrative.py (6 cases)"
+      ],
+      "limitations": [
+        "No actual rollback, original DB replacement, deployed independent watchdog update or OS service restart performed."
+      ],
+      "functions": [
+        "_installed_repo",
+        "_git",
+        "_git_out",
+        "_head",
+        "_clean",
+        "_valid_state",
+        "_load_state",
+        "_save_state",
+        "_report",
+        "_alert_key",
+        "_alert_due",
+        "_last_report",
+        "_drainers_key",
+        "_awaiting_consent",
+        "_report_alert",
+        "_try_lock",
+        "_setup_python",
+        "_runtime_config",
+        "_runtime_mode",
+        "_standalone_target_supported",
+        "_standalone_status",
+        "_standalone_drainer_problems",
+        "_launchctl",
+        "_agent_pid",
+        "_bootstrap_agent",
+        "_restart_drainers",
+        "_restart_gateway",
+        "_clean_stale_git_locks",
+        "_owned_cron",
+        "_reconcile_membership",
+        "_notify",
+        "_db_version",
+        "_mark_restored",
+        "_table_count",
+        "_restore_content_digest",
+        "_file_sha256",
+        "_loss_report",
+        "_consent_for",
+        "_replace_database",
+        "_record_hold",
+        "_restore_db",
+        "recover",
+        "_finish",
+        "_remove_marker",
+        "main",
+        "held",
+        "drainers",
+        "escalate",
+        "git_failed"
+      ]
+    },
+    {
+      "path": "deployment/requirements-standalone.txt",
+      "sha256": "051e601804024617cf3553340092ebed8a87a2f05a7415bca80198eab5a16c31",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Full tracked content inventoried as documentation/dependency/build reference; no executable production action run."
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "deployment/scripts/llamacpp_restart_if_idle.sh",
+      "sha256": "b0e46aa76c0875e3ae2001d45a4f09fe43231ea78ab684b0975158d516c146f3",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "bash -n passed",
+        "shellcheck passed (all 11 owned shell entrypoints)"
+      ],
+      "evidence": [
+        "tests/meta/test_deployment_scripts.py",
+        "tests/meta/test_watchdog_wrappers.py",
+        "template rendering in synthetic install/setup tests"
+      ],
+      "limitations": [
+        "No scheduled script run against MCS, LLM, backup policy, Keychain or platform services."
+      ]
+    },
+    {
+      "path": "deployment/scripts/mcs_check.sh",
+      "sha256": "ca1056d497d3b2b07aa6b9a36c0b3ea0bee7023d5a73bb47dbfac29de1457f29",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "bash -n passed",
+        "shellcheck passed (all 11 owned shell entrypoints)"
+      ],
+      "evidence": [
+        "tests/meta/test_deployment_scripts.py",
+        "tests/meta/test_watchdog_wrappers.py",
+        "template rendering in synthetic install/setup tests"
+      ],
+      "limitations": [
+        "No scheduled script run against MCS, LLM, backup policy, Keychain or platform services."
+      ]
+    },
+    {
+      "path": "deployment/scripts/mcs_deep.sh",
+      "sha256": "7233672d24c8970a2ee19e7e5cc47bf2c9d7b2409fa7e7483cda4f42f1ab23bb",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "bash -n passed",
+        "shellcheck passed (all 11 owned shell entrypoints)"
+      ],
+      "evidence": [
+        "tests/meta/test_deployment_scripts.py",
+        "tests/meta/test_watchdog_wrappers.py",
+        "template rendering in synthetic install/setup tests"
+      ],
+      "limitations": [
+        "No scheduled script run against MCS, LLM, backup policy, Keychain or platform services."
+      ]
+    },
+    {
+      "path": "deployment/scripts/mcs_health.sh",
+      "sha256": "aaaffb2b688aa49e5778089ff0ebfd8344cc8654883c5a10a18adc673f2bd0a8",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "bash -n passed",
+        "shellcheck passed (all 11 owned shell entrypoints)"
+      ],
+      "evidence": [
+        "tests/meta/test_deployment_scripts.py",
+        "tests/meta/test_watchdog_wrappers.py",
+        "template rendering in synthetic install/setup tests"
+      ],
+      "limitations": [
+        "No scheduled script run against MCS, LLM, backup policy, Keychain or platform services."
+      ]
+    },
+    {
+      "path": "deployment/scripts/mcs_llm_catchup.sh",
+      "sha256": "d0fd2bd402fdd606516ebbdffcd74a33a7891cac663760aa59abafb7ec9fd297",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "bash -n passed",
+        "shellcheck passed (all 11 owned shell entrypoints)"
+      ],
+      "evidence": [
+        "tests/meta/test_deployment_scripts.py",
+        "tests/meta/test_watchdog_wrappers.py",
+        "template rendering in synthetic install/setup tests"
+      ],
+      "limitations": [
+        "No scheduled script run against MCS, LLM, backup policy, Keychain or platform services."
+      ]
+    },
+    {
+      "path": "deployment/scripts/mcs_offsite.sh",
+      "sha256": "41a14807d6d049be700b8e124a9d9f8d805f23b9a10608ebfff36dda02dc1214",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "bash -n passed",
+        "shellcheck passed (all 11 owned shell entrypoints)"
+      ],
+      "evidence": [
+        "tests/meta/test_deployment_scripts.py",
+        "tests/meta/test_watchdog_wrappers.py",
+        "template rendering in synthetic install/setup tests"
+      ],
+      "limitations": [
+        "No scheduled script run against MCS, LLM, backup policy, Keychain or platform services."
+      ]
+    },
+    {
+      "path": "deployment/scripts/mcs_update.sh",
+      "sha256": "9335b18474e58fd065d2ab1f71fb049fa333d702108f3ce80d1bb4a2979df0bc",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "bash -n passed",
+        "shellcheck passed (all 11 owned shell entrypoints)"
+      ],
+      "evidence": [
+        "tests/meta/test_deployment_scripts.py",
+        "tests/meta/test_watchdog_wrappers.py",
+        "template rendering in synthetic install/setup tests"
+      ],
+      "limitations": [
+        "No scheduled script run against MCS, LLM, backup policy, Keychain or platform services."
+      ]
+    },
+    {
+      "path": "install.sh",
+      "sha256": "8960af0429bbe4d526e26a8880f6a03769d3904091705c421d705d2a4a956d25",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "bash -n passed",
+        "shellcheck passed (all 11 owned shell entrypoints)"
+      ],
+      "evidence": [
+        "tests/meta/test_install_sh.py (71 synthetic installer cases)",
+        "tests/meta/test_install_sh_standalone.py (5 cases)",
+        "tests/meta/test_launchagent_templates.py",
+        "tests/meta/test_watchdog_wrappers.py"
+      ],
+      "limitations": [
+        "Native brew/pip/download/launchd/systemd operations were stubbed or not invoked; no installed host configuration or services inspected."
+      ]
+    },
+    {
+      "path": "integration/conftest.py",
+      "sha256": "5c51bd43d7ef4e731e8ce78def5df7201e42964ee02c68ca361deabc925b920c",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "isolated Python 3.13 runner used for all local test execution",
+        "tests/meta/test_integration_guard_load.py",
+        "integration/test_integration_guards.py",
+        "pinned SDK required-collection negative check intentionally rejected incomplete lane with exit 4"
+      ],
+      "limitations": [
+        "No weakening or bypass of socket/process/real endpoint guards; no actual SDK lane selected to produce a success."
+      ],
+      "functions": []
+    },
+    {
+      "path": "integration/sdk_safety.py",
+      "sha256": "cabdf08366d2af2e1632539e812fc940d2d378f1d86e0c67c8e0217de043428e",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "isolated Python 3.13 runner used for all local test execution",
+        "tests/meta/test_integration_guard_load.py",
+        "integration/test_integration_guards.py",
+        "pinned SDK required-collection negative check intentionally rejected incomplete lane with exit 4"
+      ],
+      "limitations": [
+        "No weakening or bypass of socket/process/real endpoint guards; no actual SDK lane selected to produce a success."
+      ],
+      "functions": [
+        "pytest_addoption",
+        "pytest_collection_finish"
+      ]
+    },
+    {
+      "path": "integration/test_hermes_config.py",
+      "sha256": "bb83a8b8c6c24dc06c5691a3aedafad6f83c121bb05fbeb3ba51d9d1c3889c99",
+      "status": "reviewed_conditional_execution",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "Complete test source AST checked; pinned-source/version prerequisites and fake HTTP/process boundaries compared with CI and sdk_safety required-collection gate."
+      ],
+      "limitations": [
+        "Exact pinned standalone/Hermes SDK integration lane not executed in current worktree; this is an execution limitation, not omitted source coverage."
+      ],
+      "functions": [
+        "test_setup_stdin_credentials_follow_the_selected_home"
+      ]
+    },
+    {
+      "path": "integration/test_hermes_discord.py",
+      "sha256": "d845dd1e19a9113c94ab20577e180a437fb1a42be57cacf933a30f74e1767138",
+      "status": "reviewed_conditional_execution",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "Complete test source AST checked; pinned-source/version prerequisites and fake HTTP/process boundaries compared with CI and sdk_safety required-collection gate."
+      ],
+      "limitations": [
+        "Exact pinned standalone/Hermes SDK integration lane not executed in current worktree; this is an execution limitation, not omitted source coverage."
+      ],
+      "functions": [
+        "test_native_discord_confirmation_uses_snapshot_and_durable_inbox",
+        "no_network",
+        "invoke",
+        "capture"
+      ]
+    },
+    {
+      "path": "integration/test_hermes_slack.py",
+      "sha256": "e9f8f9cb701eb18c894f37688cada995aea16dcf587486aea20e85f9ce9f2e47",
+      "status": "reviewed_conditional_execution",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "Complete test source AST checked; pinned-source/version prerequisites and fake HTTP/process boundaries compared with CI and sdk_safety required-collection gate."
+      ],
+      "limitations": [
+        "Exact pinned standalone/Hermes SDK integration lane not executed in current worktree; this is an execution limitation, not omitted source coverage."
+      ],
+      "functions": [
+        "test_real_hermes_discovery_keeps_slack_inert_until_opt_in",
+        "test_connected_secondary_sdk_client_posts_card_without_retrying",
+        "test_real_sdk_drives_thread_parts_and_upload",
+        "configure",
+        "observed_factory",
+        "native_app",
+        "one_synthetic_card",
+        "fake_http",
+        "send",
+        "fake_http",
+        "_sha",
+        "drive",
+        "__init__",
+        "auth_test",
+        "chat_postMessage",
+        "action",
+        "attach_command",
+        "attach",
+        "attach",
+        "ack"
+      ]
+    },
+    {
+      "path": "integration/test_integration_guards.py",
+      "sha256": "9bce7320468ad1a32e88195c7988ab0971a77c536541a38ae5db0b53071c4ecf",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "isolated Python 3.13 runner used for all local test execution",
+        "tests/meta/test_integration_guard_load.py",
+        "integration/test_integration_guards.py",
+        "pinned SDK required-collection negative check intentionally rejected incomplete lane with exit 4"
+      ],
+      "limitations": [
+        "No weakening or bypass of socket/process/real endpoint guards; no actual SDK lane selected to produce a success."
+      ],
+      "functions": [
+        "test_network_and_launchctl_are_blocked"
+      ]
+    },
+    {
+      "path": "integration/test_mcs_recovery_narrative.py",
+      "sha256": "94a507574e758b8cdc88898ab60b0bf3fc6d5085d626035a5c9f3e788d77fad1",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "6 full synthetic recovery narratives passed with process/network isolation."
+      ],
+      "limitations": [],
+      "functions": [
+        "_td_thread_init2",
+        "_td_thread_send",
+        "isolated_narrative_state",
+        "_threads",
+        "_narrative_llm",
+        "_drain",
+        "_repend_semantic",
+        "_attach",
+        "_parts",
+        "_patch_updater",
+        "_stub_updater_boundaries",
+        "_run_narrative",
+        "_auth",
+        "test_mcs_recovery_narrative",
+        "test_failure_fact_dropped_means_not_all_facts",
+        "test_failure_attachment_absent_no_file_part",
+        "test_failure_lost_journal_holds_not_completes",
+        "test_failure_missing_consent_receipt_stays_held",
+        "test_failure_eval_label_drop_means_diagnostic_not_pass",
+        "__init__",
+        "llm",
+        "evaluate",
+        "__init__",
+        "evaluate",
+        "__init__",
+        "check",
+        "open_admission",
+        "close_admission",
+        "overlap",
+        "live_permits",
+        "fake_transport",
+        "_ddeliver",
+        "_crash",
+        "_resume",
+        "exploding"
+      ]
+    },
+    {
+      "path": "integration/test_pinned_sdk_versions.py",
+      "sha256": "39e9f42c4c1c7e0e309eb8b44a61a5de9b6ee4a4b528dbbdb3b02d934d0c69b4",
+      "status": "reviewed_conditional_execution",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "Complete test source AST checked; pinned-source/version prerequisites and fake HTTP/process boundaries compared with CI and sdk_safety required-collection gate."
+      ],
+      "limitations": [
+        "Exact pinned standalone/Hermes SDK integration lane not executed in current worktree; this is an execution limitation, not omitted source coverage."
+      ],
+      "functions": [
+        "lane",
+        "_pin",
+        "test_actual_distribution_versions_match_lane",
+        "test_hermes_import_source_matches_ci_pin"
+      ]
+    },
+    {
+      "path": "integration/test_standalone_discord.py",
+      "sha256": "cbbe6c438b7267a776ded1044ca57a5ff27d995f8535548ef0dfd4e3e784e538",
+      "status": "reviewed_conditional_execution",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "Complete test source AST checked; pinned-source/version prerequisites and fake HTTP/process boundaries compared with CI and sdk_safety required-collection gate."
+      ],
+      "limitations": [
+        "Exact pinned standalone/Hermes SDK integration lane not executed in current worktree; this is an execution limitation, not omitted source coverage."
+      ],
+      "functions": [
+        "configuration",
+        "message",
+        "test_real_sdk_text_attempt_has_fixed_boundary_and_no_unsafe_retry",
+        "test_real_sdk_sealed_attachment_and_full_text_are_transmitted_once",
+        "test_real_sdk_native_buttons_dispatch_after_rebuild_and_slash_schema_preserves_text",
+        "__init__",
+        "text",
+        "__aenter__",
+        "__aexit__",
+        "__init__",
+        "request",
+        "close",
+        "factory",
+        "no_backoff",
+        "exercise",
+        "listener"
+      ]
+    },
+    {
+      "path": "integration/test_standalone_sdk.py",
+      "sha256": "011aa5173469b15b6017167e66c309173d006214b8407dae6b5a40aa13fb1df3",
+      "status": "reviewed_conditional_execution",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "Complete test source AST checked; pinned-source/version prerequisites and fake HTTP/process boundaries compared with CI and sdk_safety required-collection gate."
+      ],
+      "limitations": [
+        "Exact pinned standalone/Hermes SDK integration lane not executed in current worktree; this is an execution limitation, not omitted source coverage."
+      ],
+      "functions": [
+        "message",
+        "discord_routes",
+        "discord_wire",
+        "test_discord_send_posts_once_without_mentions",
+        "test_discord_send_outcomes",
+        "test_discord_run_registers_only_mcs_and_releases_the_worker",
+        "slack_wire",
+        "test_slack_send_text_then_files_once",
+        "test_slack_send_reject_is_not_sent_and_network_loss_is_unknown",
+        "test_slack_app_registers_the_card_handlers_without_oauth",
+        "test_slack_run_binds_workspace_registers_handlers_and_stops",
+        "test_discord_attachment_reject_and_oversize",
+        "test_discord_forum_target_creates_a_post",
+        "test_slack_text_is_escaped_and_upload_failure_keeps_the_text",
+        "test_slack_app_acks_unhandled_events",
+        "test_discord_unsupported_channel_and_forum_files",
+        "test_slack_catch_all_acks_an_unhandled_event",
+        "__init__",
+        "iter_chunked",
+        "text",
+        "json",
+        "__aenter__",
+        "__aexit__",
+        "__init__",
+        "request",
+        "close",
+        "connect",
+        "scenario",
+        "connect",
+        "close",
+        "scenario"
+      ]
+    },
+    {
+      "path": "integration/test_standalone_slack_sdk.py",
+      "sha256": "c278da943a07ab0e59c245912075edcc5070e193b9a453be2fda80dd8bfd08f1",
+      "status": "reviewed_conditional_execution",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "Complete test source AST checked; pinned-source/version prerequisites and fake HTTP/process boundaries compared with CI and sdk_safety required-collection gate."
+      ],
+      "limitations": [
+        "Exact pinned standalone/Hermes SDK integration lane not executed in current worktree; this is an execution limitation, not omitted source coverage."
+      ],
+      "functions": [
+        "no_network",
+        "test_real_sdk_upload_no_retries_and_closed_session_never_falls_back",
+        "test_real_socket_mode_card_modal_preview_and_actor_confirm",
+        "test_native_sessions_keep_guards_after_recreation_and_ws_redirect_is_rejected",
+        "test_real_supervisor_and_socket_start_only_after_scope_lock",
+        "test_socket_mode_rejects_ambient_oauth_and_redacts_sdk_debug",
+        "__init__",
+        "request",
+        "close",
+        "__init__",
+        "__aenter__",
+        "__aexit__",
+        "__init__",
+        "send_str",
+        "close",
+        "ping",
+        "__aiter__",
+        "__anext__",
+        "scenario",
+        "scenario",
+        "scenario",
+        "scenario",
+        "scenario",
+        "chunks",
+        "dispatch",
+        "client_factory",
+        "socket_factory",
+        "native_answer",
+        "connect"
+      ]
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "6f15794655843128d500e5832ecbbd14861d796921a795aef5442332ce7d5722",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "stdlib tomllib parse passed; Python target, lint/test scope compared with Makefile and CI."
+      ],
+      "evidence": [
+        "tests/meta/test_sdk_ci_lanes.py",
+        "tests/release/",
+        "shellcheck/static gate entrypoints aligned with CI source"
+      ],
+      "limitations": [
+        "GitHub-hosted jobs, action binaries, remote publishing and dependency upgrades not executed."
+      ]
+    },
+    {
+      "path": "scripts/check_pinned_sdks.sh",
+      "sha256": "d40727c9b2ecc00b0acafa8b8584814e776a0d8b92e8011201bbf0adfb04dcf8",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "bash -n passed",
+        "shellcheck passed (all 11 owned shell entrypoints)"
+      ],
+      "evidence": [
+        "isolated Python 3.13 runner used for all local test execution",
+        "tests/meta/test_integration_guard_load.py",
+        "integration/test_integration_guards.py",
+        "pinned SDK required-collection negative check intentionally rejected incomplete lane with exit 4"
+      ],
+      "limitations": [
+        "No weakening or bypass of socket/process/real endpoint guards; no actual SDK lane selected to produce a success."
+      ]
+    },
+    {
+      "path": "scripts/development/generate_lineworks_gallery.py",
+      "sha256": "21b725a1eaf4988b7b57892720831e523967fc336af8a6ffe89da7a7d8286780",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried.",
+        "LINE WORKS Flex secondary-button geometry updated as one rectangle edit; same labels/actions preserved. Both SVG/PNG illustrations regenerated together; agent visual inspection found no overlap/missing content; generator --check passed."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)",
+        "generate_lineworks_gallery.py --check: 2 synthetic SVG/PNG pairs verified",
+        "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ],
+      "functions": [
+        "delivery",
+        "task_confirm",
+        "export_png",
+        "main",
+        "__init__",
+        "panel",
+        "bot",
+        "bubble",
+        "block",
+        "template"
+      ]
+    },
+    {
+      "path": "scripts/development/generate_slack_gallery.py",
+      "sha256": "7d3b9b684d51b601efd133b912c8eed8028d5aaefa530c305de8b3b74a3ef359",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)",
+        "generate_slack_gallery.py --check: 7 synthetic SVG/PNG pairs verified"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ],
+      "functions": [
+        "overview",
+        "notification",
+        "menu",
+        "task_form",
+        "task_preview",
+        "task_list",
+        "patient_summary",
+        "verify_png",
+        "asset_hashes",
+        "main",
+        "__init__",
+        "rect",
+        "line",
+        "text",
+        "paragraph",
+        "app",
+        "button",
+        "rule",
+        "actions",
+        "card",
+        "thread_post",
+        "finish"
+      ]
+    },
+    {
+      "path": "scripts/development/probe_message_metadata.py",
+      "sha256": "d548cf16d8336ec148405d8908fe06d88809a3bb6feaab7373e0ebade777e880",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ],
+      "functions": [
+        "shape",
+        "_target_unread_state",
+        "probe",
+        "probe_routes",
+        "probe_actor_pages",
+        "usage_counts",
+        "main",
+        "state",
+        "walk"
+      ]
+    },
+    {
+      "path": "scripts/development/readme_release.py",
+      "sha256": "6d7ee6f61842a93487f64a0f16e6f83fa88bbbe8c890ad02402fb8121b94ba0c",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ],
+      "functions": [
+        "latest",
+        "render_block",
+        "render",
+        "local_file",
+        "check_review",
+        "check_links",
+        "check",
+        "main"
+      ]
+    },
+    {
+      "path": "scripts/development/release_notes.py",
+      "sha256": "181f9551a24a1ff8f46d3cbcc9d40443651e93eee4b9934f38f7ad0987bc6be4",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ],
+      "functions": [
+        "version",
+        "validate",
+        "load_fragments",
+        "section",
+        "release_title",
+        "check_body",
+        "check_changelog",
+        "render",
+        "require_fragment",
+        "main"
+      ]
+    },
+    {
+      "path": "scripts/development/semantic_shadow_e2e.py",
+      "sha256": "f5833aa4cc4fe294114534d97ac38b3719085a009a2d5d001e6ccfe1a9846bd8",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ],
+      "functions": [
+        "main"
+      ]
+    },
+    {
+      "path": "scripts/development/sync_release_notes.py",
+      "sha256": "fea761590871e47f7b79685006c466f02afeff4d58222b43fff549e6cb1661fa",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ],
+      "functions": [
+        "release_record",
+        "api",
+        "synchronize",
+        "main"
+      ]
+    },
+    {
+      "path": "scripts/development/update_readme.py",
+      "sha256": "d8fc9726eed1c85d91efce00f4c3c44bb9131dc42cafb89a9abbecb547abd4cc",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "tests/meta/test_maintenance_development_regressions.py (68 synthetic development cases)",
+        "tests/meta/test_ci_scripts.py",
+        "tests/release/ (23 canonical generation/sync cases)"
+      ],
+      "limitations": [
+        "Live diagnostic MCS routes, real local LLM/Jev, native illustration rendering and GitHub writes not invoked."
+      ],
+      "functions": [
+        "_first_docline",
+        "_first_sentence",
+        "_mod_docline",
+        "_clean",
+        "gen_modules",
+        "gen_signals",
+        "gen_stats",
+        "gen_cli",
+        "gen_release",
+        "render",
+        "main"
+      ]
+    },
+    {
+      "path": "scripts/keychain_to_env.py",
+      "sha256": "d7b4425fba687b623aa53fa797bbd40b32ad7eac84d4c9291cb8f91c73e7d312",
+      "status": "fixed_and_verified",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "tests/meta/test_operation_cleanup_stability.py (30-second timeout argument, launch failure, no secret output/write)"
+      ],
+      "limitations": [
+        "Keychain subprocess and private environment writer were fake; no actual credential read or copied."
+      ],
+      "functions": [
+        "main"
+      ]
+    },
+    {
+      "path": "scripts/mcs",
+      "sha256": "42251350ae3c6989391b9b4e9106aedbdf811a15c488161198cfd189189d00b8",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "bash -n passed",
+        "shellcheck passed (all 11 owned shell entrypoints)"
+      ],
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "path": "scripts/mcs_upgrade.py",
+      "sha256": "5c09ac4152912562a0ccaa93460a117830f92db161318d91cdb49b008ec955a4",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "tests/ops/test_mcs_upgrade.py (23 synthetic local Git/target launcher cases)"
+      ],
+      "limitations": [
+        "No real origin fetch or actual checkout update; local test repositories only."
+      ],
+      "functions": [
+        "_git",
+        "latest_tag",
+        "extract",
+        "main"
+      ]
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "bash -n passed",
+        "shellcheck passed (all 11 owned shell entrypoints)"
+      ],
+      "evidence": [
+        "isolated Python 3.13 runner used for all local test execution",
+        "tests/meta/test_integration_guard_load.py",
+        "integration/test_integration_guards.py",
+        "pinned SDK required-collection negative check intentionally rejected incomplete lane with exit 4"
+      ],
+      "limitations": [
+        "No weakening or bypass of socket/process/real endpoint guards; no actual SDK lane selected to produce a success."
+      ]
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256": "4d9b63c62c42873bd9ee00d7c6d251c866cc44191ed2c7d16c13ab195b0ac452",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete source parsed with Python 3.13 AST; executable entrypoints, imports and resource/process calls inventoried."
+      ],
+      "evidence": [
+        "isolated Python 3.13 runner used for all local test execution",
+        "tests/meta/test_integration_guard_load.py",
+        "integration/test_integration_guards.py",
+        "pinned SDK required-collection negative check intentionally rejected incomplete lane with exit 4"
+      ],
+      "limitations": [
+        "No weakening or bypass of socket/process/real endpoint guards; no actual SDK lane selected to produce a success."
+      ],
+      "functions": [
+        "_reset_environment",
+        "_blocked",
+        "_command_parts",
+        "_blocked_process",
+        "_guarded_run",
+        "_guarded_popen",
+        "_install",
+        "_live_authority",
+        "_guarded_http_request",
+        "_guarded_mcs_call",
+        "_restore",
+        "pytest_unconfigure"
+      ]
+    }
+  ]
+}

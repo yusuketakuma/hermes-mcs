@@ -24,17 +24,17 @@
 <text x="86" y="287" font-size="16" fill="#66716f" font-weight="bold">MCS Bot</text>
 <rect x="66" y="304" width="422" height="44.0" rx="9" fill="#fff" stroke="#d5e1e5"/>
 <text x="82" y="334" font-size="15" fill="#202124" font-weight="bold">💬 山田 花子 様（あおぞら）· 起点 10-01</text>
-<rect x="66" y="348.0" width="422" height="33" rx="0" fill="#fff" stroke="#d5e1e5"/>
+<rect x="76" y="350.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
 <text x="277" y="371.0" font-size="16" fill="#176cc2" text-anchor="middle">患者の記録まとめ</text>
-<rect x="66" y="381.0" width="422" height="33" rx="0" fill="#fff" stroke="#d5e1e5"/>
+<rect x="76" y="383.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
 <text x="277" y="404.0" font-size="16" fill="#176cc2" text-anchor="middle">誤りを報告</text>
-<rect x="66" y="414.0" width="422" height="33" rx="0" fill="#fff" stroke="#d5e1e5"/>
+<rect x="76" y="416.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
 <text x="277" y="437.0" font-size="16" fill="#176cc2" text-anchor="middle">自分のタスク</text>
-<rect x="66" y="447.0" width="422" height="33" rx="0" fill="#fff" stroke="#d5e1e5"/>
+<rect x="76" y="449.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
 <text x="277" y="470.0" font-size="16" fill="#176cc2" text-anchor="middle">未確認一覧</text>
-<rect x="66" y="480.0" width="422" height="33" rx="0" fill="#fff" stroke="#d5e1e5"/>
+<rect x="76" y="482.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
 <text x="277" y="503.0" font-size="16" fill="#176cc2" text-anchor="middle">この患者を検索</text>
-<rect x="66" y="513.0" width="422" height="33" rx="0" fill="#fff" stroke="#d5e1e5"/>
+<rect x="76" y="515.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
 <text x="277" y="536.0" font-size="16" fill="#176cc2" text-anchor="middle">全体の新着集計</text>
 <text x="44" y="600" font-size="16" fill="#087f5b" font-weight="bold">「タスク作成」を押したとき</text>
 <rect x="44" y="614" width="30" height="30" rx="8" fill="#087f5b"/>
@@ -55,9 +55,9 @@
 <text x="626" y="394.8" font-size="18" fill="#202124">担当: 田中さん</text>
 <text x="626" y="423.6" font-size="18" fill="#202124">期限: 2026-10-02</text>
 <text x="626" y="452.40000000000003" font-size="18" fill="#202124">理由: 次回訪問で確認するため</text>
-<rect x="610" y="565" width="422" height="33" rx="0" fill="#fff" stroke="#d5e1e5"/>
+<rect x="620" y="567" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
 <text x="821" y="588" font-size="16" fill="#176cc2" text-anchor="middle">確定する</text>
-<rect x="610" y="598" width="422" height="33" rx="0" fill="#fff" stroke="#d5e1e5"/>
+<rect x="620" y="600" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
 <text x="821" y="621" font-size="16" fill="#176cc2" text-anchor="middle">取消</text>
 <text x="588" y="685" font-size="17" fill="#087f5b" font-weight="bold">本人が「確定する」を選んだ後</text>
 <rect x="610" y="710" width="422" height="64" rx="9" fill="#fff" stroke="#d5e1e5"/>

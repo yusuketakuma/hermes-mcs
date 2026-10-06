@@ -542,6 +542,25 @@ def apply_part_receipt(ledger, req, cfg, now=None) -> dict:
                         "AND state='pending' AND kind IN "
                         "('body_part','attachment_part')",
                         (now, render["delivery_id"], part["idx"]))
+                if req["result"] == "not_sent":
+                    # a failed thread never carries these files and the
+                    # next render is card-only — hand each held file to
+                    # the text followup (deduped per attachment)
+                    from ledger import _enqueue_attachment_followup_tx
+                    for row in db.execute(
+                            "SELECT p.attachment_id,m.project_id,m.message_id "
+                            "FROM notification_render_parts p "
+                            "JOIN attachments a ON a.attachment_id=p.attachment_id "
+                            "JOIN messages m ON m.message_id=a.message_id "
+                            "WHERE p.delivery_id=? AND p.kind='attachment_part' "
+                            "AND p.state='held' AND NOT EXISTS("
+                            "SELECT 1 FROM notification_render_parts d "
+                            "WHERE d.attachment_id=p.attachment_id "
+                            "AND d.kind='attachment_part' AND d.state='delivered')",
+                            (render["delivery_id"],)).fetchall():
+                        _enqueue_attachment_followup_tx(
+                            db, row["attachment_id"], row["project_id"],
+                            row["message_id"], now)
             receipt = {"applied": True,
                        "delivery_id": render["delivery_id"],
                        "part_id": part["part_id"],

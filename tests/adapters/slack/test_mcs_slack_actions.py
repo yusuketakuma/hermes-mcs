@@ -829,6 +829,11 @@ def test_summary_slash_command_answers_ephemerally(tmp_path, monkeypatch):
         assert calls[-1][1]["allowed"] == [123]
         await actions._summary(ack, {**body, "user_id": "U_OTHER"})
         assert len(app.client.messages) == 1 and len(calls) == 1
+        # an allowed user in another channel is rejected like /mcs
+        await actions._summary(ack, {**body, "channel_id": "C_OTHER"})
+        await actions._summary(ack, {k: v for k, v in body.items()
+                                     if k != "channel_id"})
+        assert len(app.client.messages) == 1 and len(calls) == 1
     asyncio.run(scenario())
 
 

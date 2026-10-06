@@ -18,8 +18,10 @@ import json
 import math
 import os
 import re
+import sqlite3
 import tempfile
 import time
+import unicodedata
 import urllib.request
 from contextlib import contextmanager, suppress
 
@@ -264,15 +266,60 @@ def html_to_text(h: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", "", h)).strip()
 
 
+def _combines(ch: str) -> bool:
+    norm = unicodedata.normalize("NFKC", ch)
+    return bool(norm) and all(unicodedata.combining(c) for c in norm)
+
+
+def fold_map(text: str, casefold: bool = False) -> tuple[str, list, list]:
+    """``text`` NFKC-normalized (optionally casefolded) with whitespace
+    removed, plus each output char's source span as parallel
+    ``starts``/``ends`` code-point lists. A base char and its following
+    combining marks (halfwidth ﾞﾟ included) normalize together, so
+    ﾊﾞ folds to バ; NFKC may expand one source into several chars, all
+    mapped to that source."""
+    out, starts, ends = [], [], []
+    i, n = 0, len(text)
+    while i < n:
+        j = i + 1
+        while j < n and _combines(text[j]):
+            j += 1
+        norm = unicodedata.normalize("NFKC", text[i:j])
+        for c in norm.casefold() if casefold else norm:
+            if not c.isspace():
+                out.append(c)
+                starts.append(i)
+                ends.append(j)
+        i = j
+    return "".join(out), starts, ends
+
+
+def fold_find(text: str, term: str, casefold: bool = False) -> tuple[int, int] | None:
+    """The UNIQUE original span of ``term`` in ``text`` compared after
+    ``fold_map``, or None when absent, ambiguous, or starting/ending
+    inside one source's expansion (never a partial char)."""
+    flat, starts, ends = fold_map(text, casefold)
+    needle = fold_map(term, casefold)[0]
+    s = flat.find(needle) if needle else -1
+    if s < 0 or flat.find(needle, s + 1) >= 0:
+        return None
+    e = s + len(needle)
+    if (s and starts[s - 1] == starts[s]) \
+            or (e < len(starts) and starts[e] == starts[e - 1]):
+        return None
+    return (starts[s], ends[e - 1])
+
+
 def locate_quote_span(body: str, quote: str) -> tuple[int, int] | None:
     """Find quote's UNIQUE codepoint span in body. Ambiguous or absent
     quotes get no span — never a guessed one (INV-07, AT-029).
 
-    Exact match first; if absent, retry with all whitespace removed and
-    map the span back to original codepoints. Models routinely emit
-    quotes with inserted/altered whitespace — the located span is still
-    unique and the caller stores body[s:e] verbatim, so span equality
-    holds."""
+    Exact match first; if absent, retry after NFKC normalization with
+    all whitespace removed — the rule extract_llm's grounded() checks —
+    and map the span back to original codepoints. Models routinely emit
+    quotes with inserted/altered whitespace or width variants — the
+    located span is still unique and the caller stores body[s:e]
+    verbatim, so span equality holds."""
     if not body or not quote or not quote.strip():
         return None
     first = body.find(quote)
@@ -280,18 +327,23 @@ def locate_quote_span(body: str, quote: str) -> tuple[int, int] | None:
         return (first, first + len(quote))
     if first >= 0:
         return None
-    nbody = []
-    nidx = []
-    for i, ch in enumerate(body):
-        if not ch.isspace():
-            nbody.append(ch)
-            nidx.append(i)
-    nbody = "".join(nbody)
-    nquote = "".join(quote.split())
-    s = nbody.find(nquote)
-    if s < 0 or nbody.find(nquote, s + 1) >= 0:
+    return fold_find(body, quote)
+
+
+def search_fold(text):
+    """Search key: NFKC + casefold + whitespace removed (None stays None)."""
+    if not isinstance(text, str):
         return None
-    return (nidx[s], nidx[s + len(nquote) - 1] + 1)
+    return "".join(unicodedata.normalize("NFKC", text).casefold().split())
+
+
+def register_search_fold(db) -> None:
+    """Make ``mcs_fold(text)`` (``search_fold``) callable in SQL on this
+    connection — read-only connections included; registered once."""
+    try:
+        db.execute("SELECT mcs_fold('')").fetchone()
+    except sqlite3.OperationalError:
+        db.create_function("mcs_fold", 1, search_fold, deterministic=True)
 
 
 def text_chunks(text: str, size: int = 3000) -> list:
@@ -355,22 +407,81 @@ def acquire_run_lock(path: str | None = None) -> int | None:
     except BlockingIOError:
         os.close(fd)
         return None
+    except BaseException:
+        os.close(fd)
+        raise
     return fd
 
 
+_MCS_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def code_stamp() -> int:
+    """Newest mtime of the mcs/ sources — changes when an update merges."""
+    newest = 0
+    for base, _dirs, files in os.walk(_MCS_ROOT):
+        for name in files:
+            if name.endswith(".py"):
+                with suppress(OSError):
+                    newest = max(newest, os.stat(
+                        os.path.join(base, name)).st_mtime_ns)
+    return newest
+
+
+class RunLockLost(BaseException):
+    """The run lock could not be safely retaken after unlocked transport.
+
+    ``held`` tells whether the fd holds the lock again (an updater ran in
+    the window: old code must not keep writing) or not (bounded wait
+    expired: no DB write is allowed at all). BaseException on purpose:
+    the generic ``except Exception`` retry paths must not charge an
+    attempt for it — the drain catches it explicitly."""
+
+    def __init__(self, held: bool):
+        super().__init__("run_lock_held" if held else "run_lock_timeout")
+        self.held = held
+
+
+RUN_LOCK_REACQUIRE_S = 150.0
+RUN_LOCK_POLL_S = 0.2
+
+
+def _updater_state() -> tuple:
+    return (os.path.exists(os.path.join(HOME, "data", UPDATE_MARKER_NAME)),
+            code_stamp())
+
+
 @contextmanager
-def unlocked_transport(ledger, lock_fd):
-    """Release the run lock during transport and reacquire before DB work."""
+def unlocked_transport(ledger, lock_fd, wait_s: float | None = None):
+    """Release the run lock during transport and reacquire before DB work.
+
+    The reacquire is bounded (``wait_s``, default RUN_LOCK_REACQUIRE_S)
+    and refuses a lock won right after an updater — same rule as
+    run_check._wait_run_lock: an update marker that appeared or a code
+    stamp that moved during the window raises RunLockLost(held=True);
+    an expired wait raises RunLockLost(held=False)."""
     if lock_fd is None:
         yield
         return
     if ledger.db.in_transaction:
         raise RuntimeError("transport_inside_db_transaction")
+    before = _updater_state()
     fcntl.flock(lock_fd, fcntl.LOCK_UN)
     try:
         yield
     finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        until = time.monotonic() + (
+            RUN_LOCK_REACQUIRE_S if wait_s is None else wait_s)
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= until:
+                    raise RunLockLost(held=False) from None
+                time.sleep(RUN_LOCK_POLL_S)
+        if _updater_state() != before:
+            raise RunLockLost(held=True)
 
 
 def launchd_bootstrap(label: str, plist: str, run) -> str | None:

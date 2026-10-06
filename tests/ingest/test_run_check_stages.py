@@ -2550,7 +2550,8 @@ def test_fallback_ack_seeds_head_walk_on_post_ack_gap(tmp_path, probe):
     job = db.job_pending("history_head", 1)
     assert json.loads(job["payload"]) == {
         "since": db.coverage_ts(1) - run_check.BACKFILL_OVERLAP_S, "page": 1,
-        "pages": run_check.BACKFILL_MAX_PAGES, "trickle": False}
+        "pages": run_check.BACKFILL_MAX_PAGES, "trickle": False,
+        "notify": True}
     db.close()
 
 
@@ -2937,3 +2938,56 @@ def test_card_route_holds_record_reason_for_health(tmp_path, monkeypatch):
             "internal_failure": 1, "payload_invalid": 1, "dispatch_failed": 1}
     finally:
         db.close()
+
+
+def test_semantic_run_lock_lost_is_raised_to_end_the_tick(tmp_path, monkeypatch):
+    import semantic
+    from mcs_util import RunLockLost
+    _sem_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(semantic, "run_due", lambda *a, **k: {
+        "done": 0, "deferred": 0, "failed": 0, "run_lock_lost": "timeout"})
+    db = _ledger(tmp_path)
+    with pytest.raises(RunLockLost) as e:
+        run_check._run_semantic(db, _sem_args(), {}, {"errors": []},
+                                time.monotonic() + 400, True)
+    assert e.value.held is False
+    db.close()
+
+
+@pytest.mark.parametrize("held, status", [(True, "partial"),
+                                          (False, "running")])
+def test_run_lock_lost_ends_tick_without_later_stages(
+        tmp_path, monkeypatch, capsys, held, status):
+    """Held: the run is recorded partial. Not held: no DB write at all —
+    the next begin_run closes the row as crashed."""
+    import sqlite3
+    from unittest.mock import Mock
+    from mcs_util import RunLockLost
+
+    data = _point_run_check_at(tmp_path, monkeypatch)
+    monkeypatch.setattr(run_check, "_config", lambda: {})
+    monkeypatch.setattr(run_check, "_semantic_enabled", lambda *args: True)
+    monkeypatch.setattr(run_check, "_code_changed", lambda *args: False)
+    monkeypatch.setattr(run_check, "MCSAdapter",
+                        lambda **kwargs: SimpleNamespace(set_deadline=lambda deadline: None))
+    for name in ("_stage_fetch", "_run_jobs", "stage_derive", "_deliver",
+                 "_with_relogin"):
+        monkeypatch.setattr(run_check, name, lambda *a, **k: None)
+
+    def lost(*a, **k):
+        raise RunLockLost(held=held)
+
+    monkeypatch.setattr(run_check, "_run_semantic", lost)
+    later = Mock()
+    for name in ("_run_metadata_shadow", "_housekeeping", "_finish_run"):
+        monkeypatch.setattr(run_check, name, later)
+    monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
+    assert run_check._main() == 1
+    later.assert_not_called()
+    assert "run_lock_lost" in json.loads(capsys.readouterr().out)["errors"]
+    assert (data / "health.json").exists() is held
+    with sqlite3.connect(data / "ledger.db") as db:
+        assert db.execute("SELECT status FROM runs").fetchone()[0] == status
+    fd = run_check.acquire_run_lock(str(data / "run.lock"))
+    assert fd is not None          # the run lock was released on exit
+    os.close(fd)

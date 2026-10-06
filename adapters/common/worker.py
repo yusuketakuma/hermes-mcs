@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import json
+import math
 import os
 import time
 from typing import Any
@@ -42,6 +43,7 @@ JOURNAL_SEGMENT_BYTES = 8 << 20  # rotate the live journal segment past this
 EXPIRE_EVERY_S = 300.0         # registry TTL sweep cadence (TTLs are
                                # >= 10 min; modal/confirm/followup reads
                                # check expiry on access anyway)
+STARTUP_RETRY_MAX_S = 300.0    # cap on the supervisor start-up retry backoff
 RESTORE_MARGIN_S = 86400.0     # journal rows this much older than the oldest
                                # restorable backup are no longer restore evidence
 
@@ -78,35 +80,58 @@ async def _outcome_of(awaitable):
         return {"result": "unknown", "error_code": err_code(exc)}
 
 
+async def retry_startup(step, stopping, log) -> bool:
+    """Run a supervisor's start-up ``step`` (reconcile, workspace bind)
+    until it returns True, with capped backoff. A transient network or
+    disk blip at gateway start must not stop delivery until the next
+    gateway restart. False only once ``stopping()`` turns true."""
+    wait = POLL_S
+    while not stopping():
+        try:
+            if await step():
+                return True
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log("startup_retry", error=type(exc).__name__)
+        await asyncio.sleep(wait)
+        wait = min(wait * 2, STARTUP_RETRY_MAX_S)
+    return False
+
+
 def _card_message_id(records: dict, delivery_id: str) -> str | None:
     """Latest factual card result for a delivery — dependent parts may
     only attach to a card the journal proves was posted."""
-    res = [r for rows in records.values() for r in rows
-           if r.get("phase") == "result"
-           and r.get("delivery_id") == delivery_id
-           and not r.get("part_id")]
-    res.sort(key=lambda r: r.get("ts") or 0)
-    last = res[-1] if res else None
-    if last and last.get("result") == "delivered" \
-            and last.get("message_id"):
-        return str(last["message_id"])
-    return None
+    invalid = set()
+    message_ids = _card_message_ids(records, invalid)
+    if delivery_id in invalid:
+        raise ValueError("card_result_timestamp_invalid")
+    return message_ids.get(delivery_id)
 
 
-def _card_message_ids(records: dict) -> dict[str, str | None]:
+def _card_message_ids(records: dict, invalid: set | None = None) -> dict[str, str | None]:
     """Latest primary outcome per delivery, in scan order for equal timestamps."""
-    latest = {}
-    for rows in records.values():
-        for row in rows:
-            did = row.get("delivery_id")
-            if (row.get("phase") != "result" or row.get("part_id")
-                    or not isinstance(did, str)):
-                continue
-            if did not in latest or (row.get("ts") or 0) >= (latest[did].get("ts") or 0):
-                latest[did] = row
+    latest, keys = {}, {}
+    invalid = set() if invalid is None else invalid
+    # _View.values() probes every file per attempt. Walk rows once;
+    # equal timestamps still follow the old attempt-first scan order.
+    order = {aid: i for i, aid in enumerate(records)}
+    for row in journal.all_rows(records):
+        did = row.get("delivery_id")
+        if (row.get("phase") != "result" or row.get("part_id")
+                or not isinstance(did, str)):
+            continue
+        ts = row.get("ts", 0)
+        if type(ts) not in (int, float) or (type(ts) is float and not math.isfinite(ts)):
+            invalid.add(did)  # never attach parts to an unorderable outcome
+            continue
+        key = (ts, order.get(row.get("attempt_id"), 0))
+        if did not in latest or key >= keys[did]:
+            latest[did], keys[did] = row, key
     return {did: str(row["message_id"])
-            if row.get("result") == "delivered" and row.get("message_id") else None
-            for did, row in latest.items()}
+            if did not in invalid and row.get("result") == "delivered"
+            and row.get("message_id") else None
+            for did, row in latest.items()} | dict.fromkeys(invalid)
 
 
 class DeliveryWorker:
@@ -238,7 +263,7 @@ class DeliveryWorker:
 
         def prunable(aid, rows):
             delivery_id = str(rows[-1].get("delivery_id"))
-            phases = {r.get("phase") for r in rows}
+            phases = {r["phase"] for r in rows if r.get("phase") in journal.PHASES}
             return (bool(phases & {"receipt", "denied"})
                     and not any(r.get("result") == "unknown" for r in rows)
                     and all(isinstance(r.get("ts"), (int, float))
@@ -571,7 +596,7 @@ class DeliveryWorker:
             aid = envelopes.part_attempt_id(spec["delivery_id"],
                                             part["part_id"])
             rows = records.get(aid, [])
-            phases = {r.get("phase") for r in rows}
+            phases = {r["phase"] for r in rows if r.get("phase") in journal.PHASES}
             if "receipt" not in phases and "result" in phases:
                 await self._republish_part_receipt(claim, part, rows)
             if phases & {"result", "receipt", "denied"}:
@@ -906,9 +931,12 @@ class DeliveryWorker:
         if not resume:
             return
         records = await asyncio.to_thread(self._jview.refresh)
-        card_message_ids = await asyncio.to_thread(_card_message_ids, records)
+        invalid = set()
+        card_message_ids = await asyncio.to_thread(_card_message_ids, records, invalid)
         for spec in resume:
             try:
+                if spec["delivery_id"] in invalid:
+                    raise ValueError("card_result_timestamp_invalid")
                 await self._resume_parts(spec, records,
                                          card_message_ids=card_message_ids)
             except asyncio.CancelledError:
@@ -925,33 +953,44 @@ class DeliveryWorker:
         for delivery_id, claim in self._reg.claims().items():
             if delivery_id in live_ids:
                 continue
-            if claim["phase"] in ("started", "result", "settled"):
-                await self._step_claim(claim, allow_parts=False)
-                continue
-            if claim["phase"] == "begin_sent":
-                result, code = "not_sent", "spec_withdrawn"
-            elif claim["phase"] == "granted":
-                started = await asyncio.to_thread(
-                    self._started, claim)
-                result = "unknown" if started else "not_sent"
-                code = "spec_withdrawn" if not started \
-                    else "worker_crash"
-            else:
-                await self._drop_claim(claim)
-                continue
-            env = envelopes.transport_receipt(
-                claim, result, error_code=code)
             try:
-                await asyncio.to_thread(
-                    envelopes.publish_command,
-                    self._dirs["cmd_int"], env)
-                self._journal("receipt",
-                              attempt_id=claim["attempt_id"],
-                              delivery_id=delivery_id,
-                              result=result, error_code=code)
-            except OSError:
-                continue                         # keep claim — retry next
-            await self._drop_claim(claim)
+                await self._settle_orphan_claim(delivery_id, claim)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # Keep damaged/uncertain state for recovery; one orphan
+                # must not prevent later healthy claims from settling.
+                self._log("orphan_claim_error", delivery_id=delivery_id,
+                          error=type(exc).__name__)
+
+    async def _settle_orphan_claim(self, delivery_id: str, claim: dict) -> None:
+        """Settle one withdrawn spec without lending uncertainty a resend."""
+        if claim["phase"] in ("started", "result", "settled"):
+            await self._step_claim(claim, allow_parts=False)
+            return
+        if claim["phase"] == "begin_sent":
+            result, code = "not_sent", "spec_withdrawn"
+        elif claim["phase"] == "granted":
+            started = await asyncio.to_thread(
+                self._started, claim)
+            result = "unknown" if started else "not_sent"
+            code = "spec_withdrawn" if not started \
+                else "worker_crash"
+        else:
+            raise ValueError("orphan_claim_phase_invalid")
+        env = envelopes.transport_receipt(
+            claim, result, error_code=code)
+        try:
+            await asyncio.to_thread(
+                envelopes.publish_command,
+                self._dirs["cmd_int"], env)
+            self._journal("receipt",
+                          attempt_id=claim["attempt_id"],
+                          delivery_id=delivery_id,
+                          result=result, error_code=code)
+        except OSError:
+            return                           # keep claim — retry next
+        await self._drop_claim(claim)
 
     async def tick(self) -> None:
         if self._stopping:
@@ -1038,3 +1077,24 @@ class DeliveryWorker:
 
     def stop(self) -> None:
         self._stopping = True
+
+
+class WorkspaceDeliveryWorker(DeliveryWorker):
+    """Slack / LINE WORKS: one workspace (``team_id``) pins the whole
+    delivery scope, compared exactly; a grant must echo this transport
+    and workspace. Discord keeps the guild-aware defaults above."""
+
+    SCOPE_KEYS = ("transport", "profile", "application_id",
+                  "team_id", "channel_id")
+
+    def scope(self) -> dict:
+        return {key: self._settings[key] for key in self.SCOPE_KEYS}
+
+    def _ours(self, delivery: dict) -> bool:
+        return all(delivery.get(key) == value
+                   for key, value in self.scope().items())
+
+    def _verify_grant(self, claim: dict, result: dict) -> bool:
+        return (super()._verify_grant(claim, result)
+                and result.get("transport") == self.transport
+                and result.get("team_id") == self._settings["team_id"])

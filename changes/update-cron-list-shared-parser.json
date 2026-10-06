@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "更新時の不要な定期実行の削除漏れを修正",
+  "summary": "更新時に不要になった Hermes の定期実行を整理する処理が、セットアップと同じ一覧解析を使うようになりました。色付き表示や表示形式の変化で一覧を読めないときは、黙って整理を省略せず cron_list_unverifiable として報告します。現行 Hermes の「No scheduled jobs in profile '...'.」表示も、定期実行なしとして正しく扱います。",
+  "upgrade": "追加操作は不要です。Hermes モードのみが対象で、独立実行モードには影響しません。",
+  "details": [
+    "mcs_update の hermes cron list 独自解析（ANSI 非対応の厳格な正規表現）を廃止し、mcs_setup._cron_list を再利用します。解析不能（None）は cron_list_unverifiable になります。",
+    "mcs_setup._cron_list は Hermes 2026-09-28 以降のプロファイル名付き空一覧メッセージを受理します。従来は解析不能と判定し、セットアップ・確認でも誤って未確認扱いになっていました。",
+    "一覧形式は Hermes の hermes_cli/cron.py（ID とバッジの見出し行、Name・Schedule 必須、Script 任意）と照合しました。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_update.py",
+    "mcs/ops/mcs_setup.py"
+  ]
+}

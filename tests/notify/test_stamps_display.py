@@ -255,7 +255,8 @@ def test_patient_summary_request_reply_states(led):
                    "created_at) VALUES('patient_rollup',1,NULL,?,'t','{}',?)",
                    (json.dumps({"recent_requests": reqs}), NOW))
     led.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
-                   "created_at) VALUES('loop_candidate',1,101,'{}','t','{}',?)", (NOW,))
+                   "created_at) VALUES('loop_candidate',1,101,?,'t','{}',?)",
+                   (json.dumps({"origin": {"revision": f"{101:064x}"}}), NOW))
     _, text = notify_views.patient_summary_text(led.db, 1)
     sec = text.split("■ 依頼候補の返信状況（記録上）", 1)[1]
     assert "・09-30 残薬確認 — 返信: 完了（完了後に取消の記録あり）" in sec
@@ -432,7 +433,9 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
                    for container in view.items for child in container.children)
     else:
         shown = lineworks_cards.render(spec)
-        assert "スタンプ 👀3" in shown.get("contentText", shown.get("text", ""))
+        visible = (shown["contents"]["body"]["contents"][0]["text"]
+                   if shown["type"] == "flex" else shown.get("contentText", shown.get("text", "")))
+        assert "スタンプ 👀3" in visible
 
     calls = []
 

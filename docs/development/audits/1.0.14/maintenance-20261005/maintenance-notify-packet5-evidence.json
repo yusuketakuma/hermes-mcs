@@ -1,0 +1,4233 @@
+{
+  "schema_version": 1,
+  "task": "全域保守監査v7 / maintenance notify packet5",
+  "language": "ja",
+  "status": "PACKET_REVIEWED_READY_FOR_PARENT_ACCEPTANCE",
+  "P": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+  "B": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+  "W": "2eac0eee5ea3a8d63b32d5e1e0fec2c175e61a69",
+  "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005",
+  "branch": "audit/maintenance-notify-packet5-20261005",
+  "source_commits": [
+    {
+      "sha": "0d52036f1ab8eea03130169962a99df2af087719",
+      "responsibility": "最初の境界/日時/深いJSON修復と19case・日本語2fragment"
+    },
+    {
+      "sha": "1b544ac3c084f443139a3d2a7b30d73efc06703f",
+      "responsibility": "親追加候補: nativekernel anchored directoryFDでopen/replace/unlinkrace保護、symlinkdirectorysource拒否、6case補足"
+    },
+    {
+      "sha": "2eac0eee5ea3a8d63b32d5e1e0fec2c175e61a69",
+      "responsibility": "Pにも存在するos.openへbefore-race fixturehookを一致させ、missinghelper不正再現を排除"
+    }
+  ],
+  "evidence_commit_policy": "source W は固定。evidenceを別commitで保存しfullSHAを親へ通知。自己参照のため本JSONに自身commitSHAを埋め込まない。",
+  "instructions": {
+    "spec": "/Users/yusuke/.codex/attachments/9bb89786-a65f-4f06-8123-c608a4bb4464/pasted-text-1.txt",
+    "spec_full_read": [
+      [
+        1,
+        66
+      ]
+    ],
+    "skill": "/Users/yusuke/.agents/skills/agent-defaults/SKILL.md（既読・適用）",
+    "AGENTS": "/Users/yusuke/.mcs/AGENTS.md +今回ユーザー指示を継承",
+    "prohibitions": "live services/PHI/PII/secrets/実DB/Keychain/LLM/Jev/外送/子spawn/agmsg/push/PR/merge/deploy/main変更なし",
+    "ownership": "3 ops source・5 directtests・49syntheticfixture・uniqueJapanesefragments・本evidence。directcontractdocはreadonly全文監査。commonC1/core/views/他ops/CI/generatedDEVELOPMENTは編集しない。",
+    "spec_hash_metadata": {
+      "sha256": "5207aa2fe1d3b7a0e67eb64b4b8577ae21e305f222903c5d67beeb8bf01226bf",
+      "bytes": 9076,
+      "lines": 67
+    },
+    "skill_canonical_path": "/Users/yusuke/.agents/skills/agent-defaults/SKILL.md",
+    "skill_hash_metadata": {
+      "sha256": "562eaf42717a70ce98299f521fd9a355953ef1e2e89e903cdd7f2c052e2f166e",
+      "bytes": 3827,
+      "lines": 52
+    }
+  },
+  "counts": {
+    "existing_reviewed": 58,
+    "existing_partial": 0,
+    "existing_unread": 0,
+    "owned_existing": 57,
+    "readonly_direct_contract_documents": 1,
+    "P_text_lines": 4555,
+    "W_text_lines": 4975,
+    "source_modules": 3,
+    "test_modules": 5,
+    "fixture_files": 49,
+    "fixture_existing_json_including_index": 48,
+    "fixture_cases": 48,
+    "fixture_generated_only_oversize_cases": 1,
+    "new_fragment_files": 2,
+    "criteria_per_group": 20,
+    "criteria_groups": 10,
+    "explicit_criterion_decisions": 200,
+    "boundary_partial_files": 8,
+    "new_regression_cases": 25,
+    "P_failed": 21,
+    "P_safe_controls_passed": 4,
+    "W_family_passed": 617,
+    "W_family_skipped": 0
+  },
+  "full_read_policy": "全文は元Pの非切断chunks・全rawJSONを読取。P=W fileはSHA一致により同じ全内容読取を再利用。変更2source+3testsは最終W全内容も非切断chunksで再読。criteria20個をmoduleごと具体判定、fixtureassetは全件個別expectation+共有20criterionで評価。grep-only/sample/省略本文をREVIEWED根拠にしない。",
+  "inventory": [
+    {
+      "path": "mcs/ops/brain_export.py",
+      "P_lines": 373,
+      "P_bytes": 16981,
+      "P_sha256": "866db123ba557c6f5f921c86e14c294154b7a154f776139290a5627899e0fc31",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          190
+        ],
+        [
+          191,
+          373
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 436,
+      "W_bytes": 19490,
+      "W_sha256": "b79d17fc401b63cfa1670cbc4e35fa992b77330e29cd19641c9214e052bc0a81",
+      "P_sha256_actual": "866db123ba557c6f5f921c86e14c294154b7a154f776139290a5627899e0fc31",
+      "mode": "0o644",
+      "same_P_W": false,
+      "criteria_ref": "mcs/ops/brain_export.py",
+      "responsibility": "公開snapshotからローカルMarkdownとclosed typed JSONLを出力し生成頁/日別export保持を管理",
+      "caller": "main direct CLI→run; tests/ops/test_brain_export.py、test_ext_contract.py、test_ext_contract_cli.py、test_receipt_contract.py、test_c1_records.py、integration/test_mcs_recovery_narrative.py（caller検索のみ、integration全文レビューではない）",
+      "W_read_ranges": [
+        [
+          1,
+          180
+        ],
+        [
+          181,
+          330
+        ],
+        [
+          331,
+          436
+        ]
+      ],
+      "W_full_read_basis": "W全文非切断chunks",
+      "P_actual_hash_matches_inventory": true
+    },
+    {
+      "path": "mcs/ops/export_schema.py",
+      "P_lines": 214,
+      "P_bytes": 9692,
+      "P_sha256": "31ef4203ec6da3198de3d23c2a097ca7659e7009c25d9f91d515df14a17d9053",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          214
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 214,
+      "W_bytes": 9692,
+      "W_sha256": "31ef4203ec6da3198de3d23c2a097ca7659e7009c25d9f91d515df14a17d9053",
+      "P_sha256_actual": "31ef4203ec6da3198de3d23c2a097ca7659e7009c25d9f91d515df14a17d9053",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "mcs/ops/export_schema.py",
+      "responsibility": "aggregate machine recordsの共有closed nested allowlist・projection・validator",
+      "caller": "brain_export.project_record、ext_contract.validate_record、c1_records、c1_contract（core owned/read-only）; tests/ops/test_receipt_contract.py",
+      "W_read_ranges": [
+        [
+          1,
+          214
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true
+    },
+    {
+      "path": "mcs/ops/ext_contract.py",
+      "P_lines": 1407,
+      "P_bytes": 70333,
+      "P_sha256": "672245d3b4059473a56d21178aec3d050541a5db7950ae66d9b819a2dcf68455",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          180
+        ],
+        [
+          181,
+          360
+        ],
+        [
+          361,
+          540
+        ],
+        [
+          541,
+          720
+        ],
+        [
+          721,
+          900
+        ],
+        [
+          901,
+          1080
+        ],
+        [
+          1081,
+          1260
+        ],
+        [
+          1261,
+          1407
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1440,
+      "W_bytes": 71644,
+      "W_sha256": "6370fd071f0485678e07a281d650415756439bdd8d5670c5787aa2773453416b",
+      "P_sha256_actual": "672245d3b4059473a56d21178aec3d050541a5db7950ae66d9b819a2dcf68455",
+      "mode": "0o644",
+      "same_P_W": false,
+      "criteria_ref": "mcs/ops/ext_contract.py",
+      "responsibility": "明示人許可とgeneration/scopeを拘束するlocal/handoff export、durablejournal/receipt/withdraw、manualreference受信CLI",
+      "caller": "main direct CLI; tests/ops/test_ext_contract{,_cli,_c0}.py、test_receipt_contract.py、test_c1_{contract,envelopes,cli,receiver,withdraw_receive,delivery,authorization}.py、integration/test_mcs_recovery_narrative.py（最後3callerは検索のみ）",
+      "W_read_ranges": [
+        [
+          1,
+          180
+        ],
+        [
+          181,
+          360
+        ],
+        [
+          361,
+          540
+        ],
+        [
+          541,
+          720
+        ],
+        [
+          721,
+          900
+        ],
+        [
+          901,
+          1080
+        ],
+        [
+          1081,
+          1260
+        ],
+        [
+          1261,
+          1440
+        ]
+      ],
+      "W_full_read_basis": "W全文非切断chunks",
+      "P_actual_hash_matches_inventory": true
+    },
+    {
+      "path": "tests/ops/test_brain_export.py",
+      "P_lines": 548,
+      "P_bytes": 22844,
+      "P_sha256": "4cd5989596a004cd6ad160660cf8927719958898ef074ca6e0e0bcd65bd5725c",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          190
+        ],
+        [
+          191,
+          380
+        ],
+        [
+          381,
+          548
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 728,
+      "W_bytes": 30515,
+      "W_sha256": "295e3338539c7fad970e15a3dcfb53974eaf60b65710fcfa5ee00f2e0c9dd25a",
+      "P_sha256_actual": "4cd5989596a004cd6ad160660cf8927719958898ef074ca6e0e0bcd65bd5725c",
+      "mode": "0o644",
+      "same_P_W": false,
+      "criteria_ref": "tests/ops/test_brain_export.py",
+      "responsibility": "完全合成snapshotでbrain_exportのlocal output/read-only/privacy/timezone/race/retention/clinical候補表示を検証",
+      "caller": "scripts/run_tests.sh→pytest; ext/CLI/receiptconsumer syntheticfamily",
+      "W_read_ranges": [
+        [
+          1,
+          185
+        ],
+        [
+          186,
+          370
+        ],
+        [
+          371,
+          555
+        ],
+        [
+          556,
+          728
+        ]
+      ],
+      "W_full_read_basis": "W全文非切断chunks",
+      "P_actual_hash_matches_inventory": true
+    },
+    {
+      "path": "tests/ops/test_ext_contract.py",
+      "P_lines": 476,
+      "P_bytes": 20693,
+      "P_sha256": "1212ad2455cc4d9bfe4c1a24493567db0b7e05734e2b24fd882ae482b02325f4",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          170
+        ],
+        [
+          171,
+          340
+        ],
+        [
+          341,
+          476
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 522,
+      "W_bytes": 22743,
+      "W_sha256": "351c6f4ae185b22d7e8ebca20c8436df11902bc74e25e6426df13abd409549eb",
+      "P_sha256_actual": "1212ad2455cc4d9bfe4c1a24493567db0b7e05734e2b24fd882ae482b02325f4",
+      "mode": "0o644",
+      "same_P_W": false,
+      "criteria_ref": "tests/ops/test_ext_contract.py",
+      "responsibility": "LocalSink/GovernedExporterのauthorization/state/idempotence/withdraw/unknownrace/parseguard合成回帰",
+      "caller": "scripts/run_tests.sh→pytest; CLI/receipt/C1testsが_auth/_records/NOWをconsume",
+      "W_read_ranges": [
+        [
+          1,
+          175
+        ],
+        [
+          176,
+          350
+        ],
+        [
+          351,
+          522
+        ]
+      ],
+      "W_full_read_basis": "W全文非切断chunks",
+      "P_actual_hash_matches_inventory": true
+    },
+    {
+      "path": "tests/ops/test_ext_contract_c0.py",
+      "P_lines": 151,
+      "P_bytes": 6814,
+      "P_sha256": "347c0b1eaac67fcc6da4cb51d6e9574fdbfa7b1205b45457163a83b7eaeb1c42",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          151
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 151,
+      "W_bytes": 6814,
+      "W_sha256": "347c0b1eaac67fcc6da4cb51d6e9574fdbfa7b1205b45457163a83b7eaeb1c42",
+      "P_sha256_actual": "347c0b1eaac67fcc6da4cb51d6e9574fdbfa7b1205b45457163a83b7eaeb1c42",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "tests/ops/test_ext_contract_c0.py",
+      "responsibility": "C0golden全assetと独立canonical oracleでproducer/receiver/receipt/withdrawを照合",
+      "caller": "scripts/run_tests.sh→pytest; ext_fixtures.generateとfixtureindex/MANIFESTをconsume",
+      "W_read_ranges": [
+        [
+          1,
+          151
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true
+    },
+    {
+      "path": "tests/ops/test_ext_contract_cli.py",
+      "P_lines": 391,
+      "P_bytes": 17663,
+      "P_sha256": "a87f5cf5dacdd0b57a18979e97644e5d520b5f131fc82bb4876a7cc1a0eea05c",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          200
+        ],
+        [
+          201,
+          391
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 489,
+      "W_bytes": 22051,
+      "W_sha256": "0f216654505127b7c0388a7dfcc87d45874c99803c17c2f265c88d099e6e2a22",
+      "P_sha256_actual": "a87f5cf5dacdd0b57a18979e97644e5d520b5f131fc82bb4876a7cc1a0eea05c",
+      "mode": "0o644",
+      "same_P_W": false,
+      "criteria_ref": "tests/ops/test_ext_contract_cli.py",
+      "responsibility": "actualmanualCLI・guardedlocalprocess・参照receiver/receipt race・legacyhash・redacted healthを検証",
+      "caller": "scripts/run_tests.sh→pytest; ext.main/directscript; sharedC1ReferenceReceiverはread-only",
+      "W_read_ranges": [
+        [
+          1,
+          170
+        ],
+        [
+          171,
+          340
+        ],
+        [
+          341,
+          489
+        ]
+      ],
+      "W_full_read_basis": "W全文非切断chunks",
+      "P_actual_hash_matches_inventory": true
+    },
+    {
+      "path": "tests/ops/ext_fixtures.py",
+      "P_lines": 320,
+      "P_bytes": 15645,
+      "P_sha256": "b82c719defd6e8f39e655eff4ca08a2ce6e24173db8eb71c1a2a430f57421cd1",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          165
+        ],
+        [
+          166,
+          320
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 320,
+      "W_bytes": 15645,
+      "W_sha256": "b82c719defd6e8f39e655eff4ca08a2ce6e24173db8eb71c1a2a430f57421cd1",
+      "P_sha256_actual": "b82c719defd6e8f39e655eff4ca08a2ce6e24173db8eb71c1a2a430f57421cd1",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "tests/ops/ext_fixtures.py",
+      "responsibility": "C0の全48JSON/index/MANIFESTをinventedseedから再生成するtest-onlyhelper",
+      "caller": "test_ext_contract_c0.py、test_ext_contract_cli.py、readonlyC1receiver/envelopeconsumer fixtures",
+      "W_read_ranges": [
+        [
+          1,
+          165
+        ],
+        [
+          166,
+          320
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/MANIFEST.sha256",
+      "P_lines": 48,
+      "P_bytes": 4669,
+      "P_sha256": "0366f232e9d8aa1e84ab89ecee7612628589839db989726df902b192f71755e8",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          48
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 48,
+      "W_bytes": 4669,
+      "W_sha256": "0366f232e9d8aa1e84ab89ecee7612628589839db989726df902b192f71755e8",
+      "P_sha256_actual": "0366f232e9d8aa1e84ab89ecee7612628589839db989726df902b192f71755e8",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "index含む全48既存JSONのrawsha256固定、generate再現とfixture_set_idの基礎",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          48
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/accepted/01-basic.json",
+      "P_lines": 1,
+      "P_bytes": 2566,
+      "P_sha256": "45a5dbb27ce80c701474f10462abacd10e10dabcbb2b6ef2457eb5d784876fa4",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2566,
+      "W_sha256": "45a5dbb27ce80c701474f10462abacd10e10dabcbb2b6ef2457eb5d784876fa4",
+      "P_sha256_actual": "45a5dbb27ce80c701474f10462abacd10e10dabcbb2b6ef2457eb5d784876fa4",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "path": "accepted/01-basic.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/accepted/02-signals-truncated.json",
+      "P_lines": 1,
+      "P_bytes": 2676,
+      "P_sha256": "0483fa7b2bdd3177faa1300602d1d17669cbf13d0788bf7d107b80937f0aa30f",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2676,
+      "W_sha256": "0483fa7b2bdd3177faa1300602d1d17669cbf13d0788bf7d107b80937f0aa30f",
+      "P_sha256_actual": "0483fa7b2bdd3177faa1300602d1d17669cbf13d0788bf7d107b80937f0aa30f",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "path": "accepted/02-signals-truncated.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/accepted/03-heartbeat.json",
+      "P_lines": 1,
+      "P_bytes": 1166,
+      "P_sha256": "1d08f6ee3ddf822e5f8b2282c454bfbee6d6def653742a1af00dd774c0adeb08",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 1166,
+      "W_sha256": "1d08f6ee3ddf822e5f8b2282c454bfbee6d6def653742a1af00dd774c0adeb08",
+      "P_sha256_actual": "1d08f6ee3ddf822e5f8b2282c454bfbee6d6def653742a1af00dd774c0adeb08",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "path": "accepted/03-heartbeat.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/accepted/04-no-facts.json",
+      "P_lines": 1,
+      "P_bytes": 1503,
+      "P_sha256": "cb26a9a215197442d3382baa6f6e677d28f2c73a47e18789bdf1acd54aa53792",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 1503,
+      "W_sha256": "cb26a9a215197442d3382baa6f6e677d28f2c73a47e18789bdf1acd54aa53792",
+      "P_sha256_actual": "cb26a9a215197442d3382baa6f6e677d28f2c73a47e18789bdf1acd54aa53792",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "path": "accepted/04-no-facts.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/accepted/05-split-1of3.json",
+      "P_lines": 1,
+      "P_bytes": 2708,
+      "P_sha256": "9656e9527c2dc73e7d920529d0ab844ba5ad6fd21e5357f2136d0adb3cee172a",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2708,
+      "W_sha256": "9656e9527c2dc73e7d920529d0ab844ba5ad6fd21e5357f2136d0adb3cee172a",
+      "P_sha256_actual": "9656e9527c2dc73e7d920529d0ab844ba5ad6fd21e5357f2136d0adb3cee172a",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "path": "accepted/05-split-1of3.json",
+        "profile": "c1",
+        "set": "05-split"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/accepted/05-split-2of3.json",
+      "P_lines": 1,
+      "P_bytes": 2708,
+      "P_sha256": "e2571f64615bcfa2ee90f5cbf2deb95b2c9d73a0f945d38f8728ce770b6a1ed9",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2708,
+      "W_sha256": "e2571f64615bcfa2ee90f5cbf2deb95b2c9d73a0f945d38f8728ce770b6a1ed9",
+      "P_sha256_actual": "e2571f64615bcfa2ee90f5cbf2deb95b2c9d73a0f945d38f8728ce770b6a1ed9",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "path": "accepted/05-split-2of3.json",
+        "profile": "c1",
+        "set": "05-split"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/accepted/05-split-3of3.json",
+      "P_lines": 1,
+      "P_bytes": 2708,
+      "P_sha256": "8366be7d2e7ce3481918b62b52f9dd2c236b3de7e46c56bab65d81dc2dc7be1a",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2708,
+      "W_sha256": "8366be7d2e7ce3481918b62b52f9dd2c236b3de7e46c56bab65d81dc2dc7be1a",
+      "P_sha256_actual": "8366be7d2e7ce3481918b62b52f9dd2c236b3de7e46c56bab65d81dc2dc7be1a",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "path": "accepted/05-split-3of3.json",
+        "profile": "c1",
+        "set": "05-split"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/accepted/06-int-valued-float.json",
+      "P_lines": 1,
+      "P_bytes": 1497,
+      "P_sha256": "fbecbe26739b9e90f0b6031cbcce9ec36d4f441195e41f558adbef05a78a5e71",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 1497,
+      "W_sha256": "fbecbe26739b9e90f0b6031cbcce9ec36d4f441195e41f558adbef05a78a5e71",
+      "P_sha256_actual": "fbecbe26739b9e90f0b6031cbcce9ec36d4f441195e41f558adbef05a78a5e71",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "path": "accepted/06-int-valued-float.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/accepted/07-message-body.json",
+      "P_lines": 1,
+      "P_bytes": 3119,
+      "P_sha256": "b46f02cd45a4c8ed19fb88db2d882147fb5c2aebf7a575cd2929e27ad40a1533",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 3119,
+      "W_sha256": "b46f02cd45a4c8ed19fb88db2d882147fb5c2aebf7a575cd2929e27ad40a1533",
+      "P_sha256_actual": "b46f02cd45a4c8ed19fb88db2d882147fb5c2aebf7a575cd2929e27ad40a1533",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "path": "accepted/07-message-body.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/accepted/08-body-truncated.json",
+      "P_lines": 1,
+      "P_bytes": 9984,
+      "P_sha256": "45054c31b5a46ff6485a64a6e31151b5402206eaf99382052bebb59700bda61d",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "long_line_read": "RAW text 1-based contiguous char chunks <=3000, full content printed",
+      "W_lines": 1,
+      "W_bytes": 9984,
+      "W_sha256": "45054c31b5a46ff6485a64a6e31151b5402206eaf99382052bebb59700bda61d",
+      "P_sha256_actual": "45054c31b5a46ff6485a64a6e31151b5402206eaf99382052bebb59700bda61d",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "path": "accepted/08-body-truncated.json",
+        "profile": "c1"
+      },
+      "raw_character_read_ranges": [
+        [
+          1,
+          3000
+        ],
+        [
+          3001,
+          4524
+        ]
+      ]
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/accepted/09-no-body-states.json",
+      "P_lines": 1,
+      "P_bytes": 2186,
+      "P_sha256": "ae51c02b10b411199bb04ed37fa698e79a65b0e0fda080de998fea128af0753b",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2186,
+      "W_sha256": "ae51c02b10b411199bb04ed37fa698e79a65b0e0fda080de998fea128af0753b",
+      "P_sha256_actual": "ae51c02b10b411199bb04ed37fa698e79a65b0e0fda080de998fea128af0753b",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "path": "accepted/09-no-body-states.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/accepted/10-patient-coverage.json",
+      "P_lines": 1,
+      "P_bytes": 1525,
+      "P_sha256": "abd48b7012672326e1f83cb2a3a2d71a9b4885e3be56aec912f8abb4961b4341",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 1525,
+      "W_sha256": "abd48b7012672326e1f83cb2a3a2d71a9b4885e3be56aec912f8abb4961b4341",
+      "P_sha256_actual": "abd48b7012672326e1f83cb2a3a2d71a9b4885e3be56aec912f8abb4961b4341",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "path": "accepted/10-patient-coverage.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/accepted/11-history-floor.json",
+      "P_lines": 1,
+      "P_bytes": 1711,
+      "P_sha256": "0d2d0977fc5a49536639a6864c0b1b7197de0b97f843409dc4f1b9833af982b1",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 1711,
+      "W_sha256": "0d2d0977fc5a49536639a6864c0b1b7197de0b97f843409dc4f1b9833af982b1",
+      "P_sha256_actual": "0d2d0977fc5a49536639a6864c0b1b7197de0b97f843409dc4f1b9833af982b1",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "path": "accepted/11-history-floor.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/accepted/12-fixed-point-float.json",
+      "P_lines": 1,
+      "P_bytes": 1868,
+      "P_sha256": "ff20061e5acfab2fb227acf9960fb673e1ee5428a268960c7830e75306904c48",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 1868,
+      "W_sha256": "ff20061e5acfab2fb227acf9960fb673e1ee5428a268960c7830e75306904c48",
+      "P_sha256_actual": "ff20061e5acfab2fb227acf9960fb673e1ee5428a268960c7830e75306904c48",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "path": "accepted/12-fixed-point-float.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/index.json",
+      "P_lines": 308,
+      "P_bytes": 6558,
+      "P_sha256": "9b27f6a8019e87e100b3d136617dc58da04e5a801d4b6bd5e6f75e2686c820f3",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          308
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 308,
+      "W_bytes": 6558,
+      "W_sha256": "9b27f6a8019e87e100b3d136617dc58da04e5a801d4b6bd5e6f75e2686c820f3",
+      "P_sha256_actual": "9b27f6a8019e87e100b3d136617dc58da04e5a801d4b6bd5e6f75e2686c820f3",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "全48case（generated_only oversize 1case含む）のprofile/expectedcode/journalを列挙するC0index",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          308
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/receipts/bad-unknown-field.json",
+      "P_lines": 1,
+      "P_bytes": 307,
+      "P_sha256": "74c840f5f6e69771067752030cae37473d47c71085edbae54aa72bf74a464baa",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 307,
+      "W_sha256": "74c840f5f6e69771067752030cae37473d47c71085edbae54aa72bf74a464baa",
+      "P_sha256_actual": "74c840f5f6e69771067752030cae37473d47c71085edbae54aa72bf74a464baa",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "receipt_fields_invalid",
+        "expect": "reject",
+        "journal": null,
+        "path": "receipts/bad-unknown-field.json",
+        "profile": "receipt"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/receipts/delete-deleted.json",
+      "P_lines": 1,
+      "P_bytes": 130,
+      "P_sha256": "1f794b97c6cc5cca287370d3c1247a6fd57bf8d2aa5295dc498331288bf5ee94",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 130,
+      "W_sha256": "1f794b97c6cc5cca287370d3c1247a6fd57bf8d2aa5295dc498331288bf5ee94",
+      "P_sha256_actual": "1f794b97c6cc5cca287370d3c1247a6fd57bf8d2aa5295dc498331288bf5ee94",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "journal": "withdrawn",
+        "path": "receipts/delete-deleted.json",
+        "profile": "receipt"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/receipts/delete-failed.json",
+      "P_lines": 1,
+      "P_bytes": 131,
+      "P_sha256": "82a59f9169b11783aa9b60c36968dae9743f5407939ae4cf534a4b275a32c06b",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 131,
+      "W_sha256": "82a59f9169b11783aa9b60c36968dae9743f5407939ae4cf534a4b275a32c06b",
+      "P_sha256_actual": "82a59f9169b11783aa9b60c36968dae9743f5407939ae4cf534a4b275a32c06b",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "journal": "delete_held",
+        "path": "receipts/delete-failed.json",
+        "profile": "receipt"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/receipts/receive-accepted.json",
+      "P_lines": 1,
+      "P_bytes": 288,
+      "P_sha256": "ecec36eb2285c7a50f63e521d5684ecd3a834d2f58c750373daab7bcb9d039fc",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 288,
+      "W_sha256": "ecec36eb2285c7a50f63e521d5684ecd3a834d2f58c750373daab7bcb9d039fc",
+      "P_sha256_actual": "ecec36eb2285c7a50f63e521d5684ecd3a834d2f58c750373daab7bcb9d039fc",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "journal": "acked",
+        "path": "receipts/receive-accepted.json",
+        "profile": "receipt"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/receipts/receive-mismatch-sha.json",
+      "P_lines": 1,
+      "P_bytes": 288,
+      "P_sha256": "1275243938a286e498ea343756c656c0552e9ae484adb2f8b52363c7bc9a7f5c",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 288,
+      "W_sha256": "1275243938a286e498ea343756c656c0552e9ae484adb2f8b52363c7bc9a7f5c",
+      "P_sha256_actual": "1275243938a286e498ea343756c656c0552e9ae484adb2f8b52363c7bc9a7f5c",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "journal": "held",
+        "path": "receipts/receive-mismatch-sha.json",
+        "profile": "receipt"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/receipts/receive-rejected.json",
+      "P_lines": 1,
+      "P_bytes": 261,
+      "P_sha256": "295806f27bb54f1c67747dd41e4ac0bd6613e6706831281789eae18bbc1c5ef1",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 261,
+      "W_sha256": "295806f27bb54f1c67747dd41e4ac0bd6613e6706831281789eae18bbc1c5ef1",
+      "P_sha256_actual": "295806f27bb54f1c67747dd41e4ac0bd6613e6706831281789eae18bbc1c5ef1",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "journal": "rejected",
+        "path": "receipts/receive-rejected.json",
+        "profile": "receipt"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/01-forbidden-statement.json",
+      "P_lines": 1,
+      "P_bytes": 2590,
+      "P_sha256": "c15728b23765fa3eb186f063de321e8204dc71b4e071d86ca8f1f9e0d345a09e",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2590,
+      "W_sha256": "c15728b23765fa3eb186f063de321e8204dc71b4e071d86ca8f1f9e0d345a09e",
+      "P_sha256_actual": "c15728b23765fa3eb186f063de321e8204dc71b4e071d86ca8f1f9e0d345a09e",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "forbidden_field:statement",
+        "expect": "reject",
+        "path": "rejected/01-forbidden-statement.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/02-forbidden-sender.json",
+      "P_lines": 1,
+      "P_bytes": 2587,
+      "P_sha256": "4a87c386e8a55365082d269684f4d05635c050af1e790854f34347e601a1fd39",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2587,
+      "W_sha256": "4a87c386e8a55365082d269684f4d05635c050af1e790854f34347e601a1fd39",
+      "P_sha256_actual": "4a87c386e8a55365082d269684f4d05635c050af1e790854f34347e601a1fd39",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "forbidden_field:sender",
+        "expect": "reject",
+        "path": "rejected/02-forbidden-sender.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/03-fact-not-exportable.json",
+      "P_lines": 1,
+      "P_bytes": 2592,
+      "P_sha256": "7da9db8f2e323b99a007750edaf25e7d8f9bcdd1523aeb7b28336963e2d14050",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2592,
+      "W_sha256": "7da9db8f2e323b99a007750edaf25e7d8f9bcdd1523aeb7b28336963e2d14050",
+      "P_sha256_actual": "7da9db8f2e323b99a007750edaf25e7d8f9bcdd1523aeb7b28336963e2d14050",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "record_field_not_exportable",
+        "expect": "reject",
+        "path": "rejected/03-fact-not-exportable.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/04-message-not-exportable.json",
+      "P_lines": 1,
+      "P_bytes": 2585,
+      "P_sha256": "37e2b335eaba159be31547c6f792c5c9220323e28784b734f13e795477bcdd93",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2585,
+      "W_sha256": "37e2b335eaba159be31547c6f792c5c9220323e28784b734f13e795477bcdd93",
+      "P_sha256_actual": "37e2b335eaba159be31547c6f792c5c9220323e28784b734f13e795477bcdd93",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "record_field_not_exportable",
+        "expect": "reject",
+        "path": "rejected/04-message-not-exportable.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/05-integrity-sha.json",
+      "P_lines": 1,
+      "P_bytes": 2566,
+      "P_sha256": "b1b13cd4f9bb025b3bfaaa2bde0b3a86f950285a2c514c0495e7f8ac1812731e",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2566,
+      "W_sha256": "b1b13cd4f9bb025b3bfaaa2bde0b3a86f950285a2c514c0495e7f8ac1812731e",
+      "P_sha256_actual": "b1b13cd4f9bb025b3bfaaa2bde0b3a86f950285a2c514c0495e7f8ac1812731e",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "envelope_integrity_invalid",
+        "expect": "reject",
+        "path": "rejected/05-integrity-sha.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/06-integrity-count.json",
+      "P_lines": 1,
+      "P_bytes": 2566,
+      "P_sha256": "e71aaeff3b1c653f5a0c4cf8469959b32e4d3abc504a2f4cfabacba89f5df3e5",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2566,
+      "W_sha256": "e71aaeff3b1c653f5a0c4cf8469959b32e4d3abc504a2f4cfabacba89f5df3e5",
+      "P_sha256_actual": "e71aaeff3b1c653f5a0c4cf8469959b32e4d3abc504a2f4cfabacba89f5df3e5",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "envelope_integrity_invalid",
+        "expect": "reject",
+        "path": "rejected/06-integrity-count.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/07-integrity-id.json",
+      "P_lines": 1,
+      "P_bytes": 2566,
+      "P_sha256": "d4db3a57ac8418a18c93c1353a6085494fa4b6488aae390b04a581e5e134f696",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2566,
+      "W_sha256": "d4db3a57ac8418a18c93c1353a6085494fa4b6488aae390b04a581e5e134f696",
+      "P_sha256_actual": "d4db3a57ac8418a18c93c1353a6085494fa4b6488aae390b04a581e5e134f696",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "envelope_integrity_invalid",
+        "expect": "reject",
+        "path": "rejected/07-integrity-id.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/08-generation-mixed.json",
+      "P_lines": 1,
+      "P_bytes": 2566,
+      "P_sha256": "445f3d474e08d85bc52ae2dfb6c391ff045bbcd413777c03d61f4ed8f171bde4",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2566,
+      "W_sha256": "445f3d474e08d85bc52ae2dfb6c391ff045bbcd413777c03d61f4ed8f171bde4",
+      "P_sha256_actual": "445f3d474e08d85bc52ae2dfb6c391ff045bbcd413777c03d61f4ed8f171bde4",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "snapshot_generation_mixed",
+        "expect": "reject",
+        "path": "rejected/08-generation-mixed.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/09-scope-not-aggregate.json",
+      "P_lines": 1,
+      "P_bytes": 2563,
+      "P_sha256": "8dd62aea9087be49f9072ed5cd02ea2d531c92fe0d58d4b36c05ca02fdc3de6f",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2563,
+      "W_sha256": "8dd62aea9087be49f9072ed5cd02ea2d531c92fe0d58d4b36c05ca02fdc3de6f",
+      "P_sha256_actual": "8dd62aea9087be49f9072ed5cd02ea2d531c92fe0d58d4b36c05ca02fdc3de6f",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "sink_scope_not_aggregate",
+        "expect": "reject",
+        "path": "rejected/09-scope-not-aggregate.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/10-envelope-fields.json",
+      "P_lines": 1,
+      "P_bytes": 2585,
+      "P_sha256": "d349441e7a704634ffb849b87764c62f99f8ae72e8f3e953b32d3ae0f3ec7d6b",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2585,
+      "W_sha256": "d349441e7a704634ffb849b87764c62f99f8ae72e8f3e953b32d3ae0f3ec7d6b",
+      "P_sha256_actual": "d349441e7a704634ffb849b87764c62f99f8ae72e8f3e953b32d3ae0f3ec7d6b",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "envelope_fields_invalid",
+        "expect": "reject",
+        "path": "rejected/10-envelope-fields.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/11-envelope-id-format.json",
+      "P_lines": 1,
+      "P_bytes": 2557,
+      "P_sha256": "3be11f0b681c2759e1c5cca7e2de3487de75bf20d7715086343eab760140306e",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2557,
+      "W_sha256": "3be11f0b681c2759e1c5cca7e2de3487de75bf20d7715086343eab760140306e",
+      "P_sha256_actual": "3be11f0b681c2759e1c5cca7e2de3487de75bf20d7715086343eab760140306e",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "envelope_id_invalid",
+        "expect": "reject",
+        "path": "rejected/11-envelope-id-format.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/12-type-stat.json",
+      "P_lines": 1,
+      "P_bytes": 2676,
+      "P_sha256": "75ce003e48f6d1af547617344076623cc81fd218332e31b101a1b4907f3db428",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2676,
+      "W_sha256": "75ce003e48f6d1af547617344076623cc81fd218332e31b101a1b4907f3db428",
+      "P_sha256_actual": "75ce003e48f6d1af547617344076623cc81fd218332e31b101a1b4907f3db428",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "record_type_not_accepted:stat",
+        "expect": "reject",
+        "path": "rejected/12-type-stat.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/13-coverage-missing.json",
+      "P_lines": 1,
+      "P_bytes": 1985,
+      "P_sha256": "112bd5c640bc5c93c7748dbdad3e2499974051f84464d22b904fa6afe89ed31c",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 1985,
+      "W_sha256": "112bd5c640bc5c93c7748dbdad3e2499974051f84464d22b904fa6afe89ed31c",
+      "P_sha256_actual": "112bd5c640bc5c93c7748dbdad3e2499974051f84464d22b904fa6afe89ed31c",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "envelope_coverage_missing",
+        "expect": "reject",
+        "path": "rejected/13-coverage-missing.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/14-meta-missing.json",
+      "P_lines": 1,
+      "P_bytes": 2409,
+      "P_sha256": "893155d9bfde451918d7de4aeabcf1be5520b28bd6e0ee4aa93ce3c4301879c4",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2409,
+      "W_sha256": "893155d9bfde451918d7de4aeabcf1be5520b28bd6e0ee4aa93ce3c4301879c4",
+      "P_sha256_actual": "893155d9bfde451918d7de4aeabcf1be5520b28bd6e0ee4aa93ce3c4301879c4",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "envelope_meta_missing",
+        "expect": "reject",
+        "path": "rejected/14-meta-missing.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/16-body-sender-name.json",
+      "P_lines": 1,
+      "P_bytes": 1837,
+      "P_sha256": "4aa6bbe8e6fe72f38a496cd7bf3fe26441aa09431a297f59463f047bb9b25607",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 1837,
+      "W_sha256": "4aa6bbe8e6fe72f38a496cd7bf3fe26441aa09431a297f59463f047bb9b25607",
+      "P_sha256_actual": "4aa6bbe8e6fe72f38a496cd7bf3fe26441aa09431a297f59463f047bb9b25607",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "forbidden_field:sender_name",
+        "expect": "reject",
+        "path": "rejected/16-body-sender-name.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/17-body-hash-mismatch.json",
+      "P_lines": 1,
+      "P_bytes": 1811,
+      "P_sha256": "b289f54fec6ab3505fc69ae0ace5e6f43c8bf08112cca7e46255f28bd5bb91ec",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 1811,
+      "W_sha256": "b289f54fec6ab3505fc69ae0ace5e6f43c8bf08112cca7e46255f28bd5bb91ec",
+      "P_sha256_actual": "b289f54fec6ab3505fc69ae0ace5e6f43c8bf08112cca7e46255f28bd5bb91ec",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "body_hash_invalid",
+        "expect": "reject",
+        "path": "rejected/17-body-hash-mismatch.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/18-body-over-8kib.json",
+      "P_lines": 1,
+      "P_bytes": 9986,
+      "P_sha256": "f7f6a3a8d96f47cd62f36b9b810262ca80fddfe7433d01a95c1159140c61fbaf",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "long_line_read": "RAW text 1-based contiguous char chunks <=3000, full content printed",
+      "W_lines": 1,
+      "W_bytes": 9986,
+      "W_sha256": "f7f6a3a8d96f47cd62f36b9b810262ca80fddfe7433d01a95c1159140c61fbaf",
+      "P_sha256_actual": "f7f6a3a8d96f47cd62f36b9b810262ca80fddfe7433d01a95c1159140c61fbaf",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "body_too_large",
+        "expect": "reject",
+        "path": "rejected/18-body-over-8kib.json",
+        "profile": "c1"
+      },
+      "raw_character_read_ranges": [
+        [
+          1,
+          3000
+        ],
+        [
+          3001,
+          6000
+        ],
+        [
+          6001,
+          9000
+        ],
+        [
+          9001,
+          9986
+        ]
+      ]
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/19-fetch-state-enum.json",
+      "P_lines": 1,
+      "P_bytes": 1345,
+      "P_sha256": "86740288894b45d5dd694cfdb24e06781ae46c6c7a1d9dcd5767f323faa8d8c0",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 1345,
+      "W_sha256": "86740288894b45d5dd694cfdb24e06781ae46c6c7a1d9dcd5767f323faa8d8c0",
+      "P_sha256_actual": "86740288894b45d5dd694cfdb24e06781ae46c6c7a1d9dcd5767f323faa8d8c0",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "patient_coverage_state_invalid",
+        "expect": "reject",
+        "path": "rejected/19-fetch-state-enum.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/20-body-format-html.json",
+      "P_lines": 1,
+      "P_bytes": 1811,
+      "P_sha256": "ba05d1409a8810a5e0e7c05d62c07638c356f15d2d0708f961f38433726455c8",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 1811,
+      "W_sha256": "ba05d1409a8810a5e0e7c05d62c07638c356f15d2d0708f961f38433726455c8",
+      "P_sha256_actual": "ba05d1409a8810a5e0e7c05d62c07638c356f15d2d0708f961f38433726455c8",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "body_format_invalid",
+        "expect": "reject",
+        "path": "rejected/20-body-format-html.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/21-history-floor-negative.json",
+      "P_lines": 1,
+      "P_bytes": 1347,
+      "P_sha256": "297f93c7bbcb6495c94c25d7745d8ed96e1608f787f16f9aa8bf2aeb1c50ab34",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 1347,
+      "W_sha256": "297f93c7bbcb6495c94c25d7745d8ed96e1608f787f16f9aa8bf2aeb1c50ab34",
+      "P_sha256_actual": "297f93c7bbcb6495c94c25d7745d8ed96e1608f787f16f9aa8bf2aeb1c50ab34",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "patient_coverage_floor_invalid",
+        "expect": "reject",
+        "path": "rejected/21-history-floor-negative.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/22-body-state-null.json",
+      "P_lines": 1,
+      "P_bytes": 2564,
+      "P_sha256": "459e90d8da578f789803b4fd2bdceb8728d516f9623f6f14a5b1d51b56ef139a",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2564,
+      "W_sha256": "459e90d8da578f789803b4fd2bdceb8728d516f9623f6f14a5b1d51b56ef139a",
+      "P_sha256_actual": "459e90d8da578f789803b4fd2bdceb8728d516f9623f6f14a5b1d51b56ef139a",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "message_body_state_invalid",
+        "expect": "reject",
+        "path": "rejected/22-body-state-null.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/23-body-orphan.json",
+      "P_lines": 1,
+      "P_bytes": 1474,
+      "P_sha256": "e7dab0609c48b76b7d38819c716b91245b1547e33415e4edd04dd301c4040e60",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 1474,
+      "W_sha256": "e7dab0609c48b76b7d38819c716b91245b1547e33415e4edd04dd301c4040e60",
+      "P_sha256_actual": "e7dab0609c48b76b7d38819c716b91245b1547e33415e4edd04dd301c4040e60",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "body_message_required",
+        "expect": "reject",
+        "path": "rejected/23-body-orphan.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/rejected/24-part-invalid.json",
+      "P_lines": 1,
+      "P_bytes": 2668,
+      "P_sha256": "ccdc75ca4eac5ff15f337b7d02e418dd0765d3a3c53a001672ea0b2d6c7c871b",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 2668,
+      "W_sha256": "ccdc75ca4eac5ff15f337b7d02e418dd0765d3a3c53a001672ea0b2d6c7c871b",
+      "P_sha256_actual": "ccdc75ca4eac5ff15f337b7d02e418dd0765d3a3c53a001672ea0b2d6c7c871b",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "part_invalid",
+        "expect": "reject",
+        "path": "rejected/24-part-invalid.json",
+        "profile": "c1"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/withdraw/01-basic.json",
+      "P_lines": 1,
+      "P_bytes": 130,
+      "P_sha256": "a87b793e2dddea2e8e09fd79c4e57db8b6c19862da4ac069365d6138e9ad84d6",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 130,
+      "W_sha256": "a87b793e2dddea2e8e09fd79c4e57db8b6c19862da4ac069365d6138e9ad84d6",
+      "P_sha256_actual": "a87b793e2dddea2e8e09fd79c4e57db8b6c19862da4ac069365d6138e9ad84d6",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": null,
+        "expect": "accept",
+        "path": "withdraw/01-basic.json",
+        "profile": "withdraw"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/withdraw/02-reason-enum.json",
+      "P_lines": 1,
+      "P_bytes": 121,
+      "P_sha256": "508cc6c0e29a2e54df40d015a8e1d6d83de5b3b7e39de17de788177863e748ac",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 121,
+      "W_sha256": "508cc6c0e29a2e54df40d015a8e1d6d83de5b3b7e39de17de788177863e748ac",
+      "P_sha256_actual": "508cc6c0e29a2e54df40d015a8e1d6d83de5b3b7e39de17de788177863e748ac",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "withdraw_reason_invalid",
+        "expect": "reject",
+        "path": "withdraw/02-reason-enum.json",
+        "profile": "withdraw"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/withdraw/03-free-text.json",
+      "P_lines": 1,
+      "P_bytes": 149,
+      "P_sha256": "3f564b156a2a29f8506047961506c4a99ee0d0139e29f384c8d58ce1dc65cd47",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "W_lines": 1,
+      "W_bytes": 149,
+      "W_sha256": "3f564b156a2a29f8506047961506c4a99ee0d0139e29f384c8d58ce1dc65cd47",
+      "P_sha256_actual": "3f564b156a2a29f8506047961506c4a99ee0d0139e29f384c8d58ce1dc65cd47",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "withdraw_fields_invalid",
+        "expect": "reject",
+        "path": "withdraw/03-free-text.json",
+        "profile": "withdraw"
+      }
+    },
+    {
+      "path": "tests/ops/fixtures/ext_contract_c0/withdraw/04-over-4kib.json",
+      "P_lines": 1,
+      "P_bytes": 4315,
+      "P_sha256": "19f4f97815c556647772dded3e8cbd893042489e2b160b91ada1264393317c17",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "ownership": "WRITER",
+      "long_line_read": "RAW text 1-based contiguous char chunks <=3000, full content printed",
+      "W_lines": 1,
+      "W_bytes": 4315,
+      "W_sha256": "19f4f97815c556647772dded3e8cbd893042489e2b160b91ada1264393317c17",
+      "P_sha256_actual": "19f4f97815c556647772dded3e8cbd893042489e2b160b91ada1264393317c17",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "fixture:ext_contract_c0",
+      "responsibility": "完全合成C0 raw asset（role/expectationはfixture_case参照）",
+      "caller": "tests/ops/test_ext_contract_c0.py→generate/index/MANIFEST/独立oracle→producer・LocalSink・receiptjournal・withdraw consumer",
+      "W_read_ranges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true,
+      "fixture_case": {
+        "code": "withdraw_too_large",
+        "expect": "reject",
+        "path": "withdraw/04-over-4kib.json",
+        "profile": "withdraw"
+      },
+      "raw_character_read_ranges": [
+        [
+          1,
+          3000
+        ],
+        [
+          3001,
+          4315
+        ]
+      ]
+    },
+    {
+      "path": "docs/specs/external-export-contract.md",
+      "P_lines": 272,
+      "P_bytes": 16209,
+      "P_sha256": "4a3bb600e13a390e5b8fed40b4c30744cb0ee9150769f0b034d2cd9435a75dcb",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          145
+        ],
+        [
+          146,
+          272
+        ]
+      ],
+      "ownership": "READONLY_DOC",
+      "W_lines": 272,
+      "W_bytes": 16209,
+      "W_sha256": "4a3bb600e13a390e5b8fed40b4c30744cb0ee9150769f0b034d2cd9435a75dcb",
+      "P_sha256_actual": "4a3bb600e13a390e5b8fed40b4c30744cb0ee9150769f0b034d2cd9435a75dcb",
+      "mode": "0o644",
+      "same_P_W": true,
+      "criteria_ref": "doc:external-export-contract",
+      "responsibility": "provider-neutral draft /1・C0・明示C1・合成referenceの契約説明",
+      "caller": "test_ext_contract_c0.test_fixture_set_id_is_recorded_in_the_contract_spec; parentinventory/docpacket",
+      "W_read_ranges": [
+        [
+          1,
+          145
+        ],
+        [
+          146,
+          272
+        ]
+      ],
+      "W_full_read_basis": "P全文read + P/W SHA/bytes等値",
+      "P_actual_hash_matches_inventory": true
+    }
+  ],
+  "new_files": [
+    {
+      "path": "changes/maintenance-export-boundaries-20261005.json",
+      "bytes": 1769,
+      "sha256": "2e443a344a3d154c5995445737f5d2c5f0a432740e9e899eb1325bf9cf611f03",
+      "lines": 13,
+      "mode": "0o644",
+      "read_ranges": [
+        [
+          1,
+          13
+        ]
+      ],
+      "state": "REVIEWED",
+      "responsibility": "日本語1.0.13不具合修正・利用者影響・更新条件のfragment",
+      "caller": "親release_notes.py build/README同期（今回生成・配備なし）",
+      "criteria_covered": [
+        "C01",
+        "C04",
+        "C06",
+        "C07",
+        "C08",
+        "C12",
+        "X01",
+        "X07"
+      ]
+    },
+    {
+      "path": "changes/maintenance-export-jst-20261005.json",
+      "bytes": 879,
+      "sha256": "d4a348a93c1b38b1d1f0bd240c0bf745f8124bb94714681823a49ae6a9ab5916",
+      "lines": 8,
+      "mode": "0o644",
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "state": "REVIEWED",
+      "responsibility": "日本語1.0.13不具合修正・利用者影響・更新条件のfragment",
+      "caller": "親release_notes.py build/README同期（今回生成・配備なし）",
+      "criteria_covered": [
+        "C01",
+        "C04",
+        "C06",
+        "C07",
+        "C08",
+        "C12",
+        "X01",
+        "X07"
+      ]
+    }
+  ],
+  "module_criteria": {
+    "mcs/ops/brain_export.py": {
+      "C01": {
+        "status": "改善済み",
+        "evidence": "固定階層・flat import・stdlibのみ。共有 atomic_write の経路上の差替えを owned _directory_fd/_write に閉じた。行数分割や新依存なし。"
+      },
+      "C02": {
+        "status": "改善済み",
+        "evidence": "_jst(107) を banner/meta/health/facts/signals/today/retention に使用。UTC/NY/Tokyo の境界日時を新規3caseで確認。rollup全ページは書込み前に検証、欠測は ?/null。"
+      },
+      "C03": {
+        "status": "改善済み",
+        "evidence": "View は公開snapshot read-only transaction。各ファイル0600排他的staging→fsync→dir_fd replace。GC/retentionは保持FD内の生成名regularのみ。全ディレクトリ一括transactionは約束しない。"
+      },
+      "C04": {
+        "status": "維持",
+        "evidence": "mcs-read-model/1 projection、export.jsonl/daily/p<int>.md layout、generation banner維持。ホスト非JST時の日付名変更のみfragmentに明記。"
+      },
+      "C05": {
+        "status": "改善済み",
+        "evidence": "生成child symlinkを preflight と O_NOFOLLOW directory open で拒否、FDを保存→公開/削除まで保持。relは固定callerと整数pidで作りCLIは任意relを渡さない。明示選択 root alias の既存契約は維持。"
+      },
+      "C06": {
+        "status": "改善済み",
+        "evidence": "出力markdownは患者名等を含むlocal人向け面でありPHI-freeとは呼ばない。新規child0700、全完成/staging0600。machine面は project_record 閉じたprojectionで自由本文/氏名/noteを除外。"
+      },
+      "C07": {
+        "status": "維持",
+        "evidence": "main --out/--snapshot は成功0/拒否1のJSON。machine JSONLは完整object、human stats表示4000文字上限をmachineへ転用しない。signals limit200は total/truncated 明示。"
+      },
+      "C08": {
+        "status": "維持",
+        "evidence": "_fm はJSON quote、_cell は |/改行をescape。固定snapshot bannerとHONESTY、unverified候補別表。古いgenerationを新しいものと誤認しない。Markdown exportはnativeチャットUIではない。"
+      },
+      "C09": {
+        "status": "制約あり",
+        "evidence": "統計run・read_modelは既存全snapshot対象、JSONL/pagesは全件をメモリで組む契約。今回 arbitrary cap/streaming を導入せず、C1 wireの別上限と区別。性能改善の数値は主張しない。"
+      },
+      "C10": {
+        "status": "改善済み",
+        "evidence": "preflight後swap、directory open直前swap、replace直前swap、unlink直前swapを実os helperへhookし外国assetのbytes保持を確認。例外で旧完成ファイルとtmpcleanupを確認。独立namespace変更全体のlockは約束しない。"
+      },
+      "C11": {
+        "status": "改善済み",
+        "evidence": "test_brain_export 新規13case（最終P:12fail/1pass、Tokyo安全対照）。全family 617pass、出版失敗/原本不変/自由本文非漏洩/旧file保全の既存回帰も保持。"
+      },
+      "C12": {
+        "status": "維持",
+        "evidence": "stdlib Python3.13.12/macOS arm64、flat bootstrap。pinned Ruff 0.16.10 対象8Python。generated DEVELOPMENT は親owner、直接生成/編集なし。"
+      },
+      "X01": {
+        "status": "適用・維持",
+        "evidence": "local CLI 出力のみ。1.0.13 fragmentは次回出力適用、日時変更条件・childdirectory制約を明記。常駐再起動/配備を実施せず。"
+      },
+      "X02": {
+        "status": "適用・維持",
+        "evidence": "外部依存/URL/connectorを追加しない。stdlib秘密値 token_hex はprivate一時名の衝突回避のみ、認証secretを取得しない。"
+      },
+      "X03": {
+        "status": "部分適用",
+        "evidence": "元snapshotは読取り専用、62日生成output retentionは厳密名+regularに限定。originalledger削除/backup/restore/鍵は本moduleの責務外。"
+      },
+      "X04": {
+        "status": "部分適用",
+        "evidence": "local export generation・content_omitted・provenanceは追跡。外部provider到達/署名/remoteID/receiptはこの入口にないためE2成功を主張しない。"
+      },
+      "X05": {
+        "status": "制約あり",
+        "evidence": "O_DIRECTORY/O_NOFOLLOW/dir_fd/fsync は今回macOS POSIXで実helper検証。existingfcntl export consumerもPOSIX。別OS/Windowsの実機挙動は未検証。disk failureは合成replace例外、実機容量変更なし。"
+      },
+      "X06": {
+        "status": "部分適用",
+        "evidence": "local生成面で候補根拠を保持、自由本文をmachine toolへ自動送信しない。LLM/MCP/Jev/記憶サービスは呼ばず、tool approvalの責務は本module外。"
+      },
+      "X07": {
+        "status": "改善済み",
+        "evidence": "JST表示を実時刻+09へ一致。候補/未確認/記録なし≠対応なし文言・evidence IDs維持。医療判断・人承認処理をexportが実行しない。"
+      },
+      "X08": {
+        "status": "部分適用",
+        "evidence": "ローカルMarkdown/YAML表を読みやすくescape、リンクはread-only human情報。publicWeb/form/cookie/index は提供しない。"
+      }
+    },
+    "mcs/ops/export_schema.py": {
+      "C01": {
+        "status": "維持",
+        "evidence": "単一共有closed allowlist。brain_export、ext_contract、c1_records、c1_contractが同じprojection/validatorをconsume。重複追加/編集なし。"
+      },
+      "C02": {
+        "status": "維持",
+        "evidence": "finite_number はbool/NaN/inf/巨大intを拒否、_integer非負厳密int、Noneは未知として残す。_dateはYYYY-MM-DD字形のみ（暦日の計算用途ではない）。状態enum/requiredidentity/provenanceを明示。"
+      },
+      "C03": {
+        "status": "非適用",
+        "evidence": "pure projection/validationでDB/lock/write/delete/retryを持たない。generation/contenthashなどの保存契約はcallerへ返す。"
+      },
+      "C04": {
+        "status": "維持",
+        "evidence": "mcs-read-model/1と既存typed enums維持。未知nested字段はprojectionで落としてcontent_omitted、delivery validate_recordでは落とす必要があるrecord自体を拒否。"
+      },
+      "C05": {
+        "status": "維持",
+        "evidence": "_SCHEMAS/_STATSの閉じたrecursive schemaでdynamickeyや未知自由本文をforwardしない。tenant scope authorizationはext/C1callerにあり、当validatorをtenant認可と誤称しない。"
+      },
+      "C06": {
+        "status": "維持",
+        "evidence": "FORBIDDEN_KEYS/TYPE_FORBIDDENはraw/body/sender/patient/note/attachmentnameを区別。machineではvalidated IDs/numeric/enum/evidenceIDsだけ。未知measurementをzeroへ変換しない。"
+      },
+      "C07": {
+        "status": "適用・維持",
+        "evidence": "recordtypes/stat presets/kinds/coverage/attachments/messages/signalsのAPIを守る。content_omitted明示、requiredidentity欠落拒否。ページ分割/wirebytebudgetはC1envelopesへ委譲。"
+      },
+      "C08": {
+        "status": "部分適用",
+        "evidence": "machine state current/stale/pending/unknown・pruned/withdrawnを保持しconsumerへ伝える。humanボタン/旧UI/focus/keyboardは提供しない。"
+      },
+      "C09": {
+        "status": "制約あり",
+        "evidence": "schema深さは固定有限、入力list件数に線形。JSON parser/wire capはcaller（C1等）、このpure helperで独自上限は加えない。"
+      },
+      "C10": {
+        "status": "部分適用",
+        "evidence": "型/未知kind/identity失敗はValueError、callerが安全拒否へ分類。I/O retry/unknown deliveryは責務外。"
+      },
+      "C11": {
+        "status": "維持",
+        "evidence": "tests/ops/test_receipt_contract.py enumとsemantic/read_model一致、unknown fields/closed projection; family617passでC1/legacyconsumer両経路。対応自testfileは元からないため重複file追加なし。"
+      },
+      "C12": {
+        "status": "維持",
+        "evidence": "stdlib math/reのみ、lazySDK/host設定なし。source P=W hash一致、Ruff成功。"
+      },
+      "X01": {
+        "status": "部分適用",
+        "evidence": "package内flatimport APIで従来caller継続。daemon/installer/rollback操作なし。"
+      },
+      "X02": {
+        "status": "非適用",
+        "evidence": "networkURL/外部package/script実行/CIcredentialsを持たない。"
+      },
+      "X03": {
+        "status": "非適用",
+        "evidence": "storage/backup/鍵/retentionを持たない。deleted/prunedは状態値としてのみ扱う。"
+      },
+      "X04": {
+        "status": "部分適用",
+        "evidence": "record identity/provenanceとstatesをtyped出力する。signature/auth/provider receiptの検証機能ではない。"
+      },
+      "X05": {
+        "status": "非適用",
+        "evidence": "purestdlib変換のためnative UI/device/host lifecycleなし。今回Python/macOS以外実機結果はない。"
+      },
+      "X06": {
+        "status": "部分適用",
+        "evidence": "factkind/workflow/validation/evidenceIDの型を保持、生成AIを起動せずunknown内容もprompt/toolへforwardしない。"
+      },
+      "X07": {
+        "status": "適用・維持",
+        "evidence": "検証status/relation enum・typedclinicalkindを維持。factsの医療妥当性自動保証や完了推論は行わない。"
+      },
+      "X08": {
+        "status": "非適用",
+        "evidence": "Webserver/form/外部リンク操作/SEOなし。"
+      }
+    },
+    "mcs/ops/ext_contract.py": {
+      "C01": {
+        "status": "改善済み",
+        "evidence": "既存 /1 legacy・C1委譲・Local/Handoff・GovernedExporter・manualCLIを維持。深さexceptionとowned input/receipt helperだけ最小修復、共通C1編集なし。"
+      },
+      "C02": {
+        "status": "改善済み",
+        "evidence": "authorization strictfinite時刻/scope/patients/fields、人確認とreason。deep auth/ack/payload/journalを既存safe refusal/holdへ分類。samegen/currentpayload/hashが必須、health unknownをsuccessとしない。"
+      },
+      "C03": {
+        "status": "改善済み",
+        "evidence": "flockの下でjournal sent/delete_requestedをeffect前に確定。held sentは再送なし、delete_heldは再deleteなし、withdrawn terminal。receiptoutは完成600tmpをos.linkで新規排他公開し競合を保持。"
+      },
+      "C04": {
+        "status": "維持",
+        "evidence": "既存 /1 canonical numeric form/envelopeid/intent hash/legacyCLI exitsを固定期待値で維持。C1 /2 canonical/7fieldprofile/parts/withdrawは共有ownedmoduleへ委譲、schema改変なし。"
+      },
+      "C05": {
+        "status": "改善済み",
+        "evidence": "buildとeffect直前にauthを再読取・destination/intent/fields/patientsを再照合。aggregateだけ許可。explicit input root symlink拒否、leaf O_NOFOLLOW|O_NONBLOCK+fstatREG、IDは24hex制約。localmanualreceiptは署名検証を意味しない。"
+      },
+      "C06": {
+        "status": "改善済み",
+        "evidence": "journal/auditは固定redactedfields、privatefiles。/1 rawbody禁止、明示C1 message_body限定。healthはbytes/entrylimitとredaction、payload/body/actor/reason/path/idを出力しない。実PHIは一切使用せず。"
+      },
+      "C07": {
+        "status": "維持",
+        "evidence": "deliver/handoff/reconcile/withdraw/health/receiveの手動CLI。receive input+receiptsoutをpaired required、新規path必須。正常directory bulkinput保持、1MiB leaf cap、receipt64KiB/depth/fields制約。"
+      },
+      "C08": {
+        "status": "維持",
+        "evidence": "held/rejected/delete_held/unknown/complete=falseをJSON status/exitへ区別。handoffはselfack禁止。restore後のoldUI/interactivebuttonは本moduleにない。"
+      },
+      "C09": {
+        "status": "制約あり",
+        "evidence": "healthは1000default/10000maxentries、64KiB JSON読取で有界。locallegacyrecords/JSONL全読取とdirectory source列挙・receiptbundleは既存batch契約、全体サイズ新上限なし。C1 wire1MiB/body8192/partlimitを全体無制限と混同しない。"
+      },
+      "C10": {
+        "status": "改善済み",
+        "evidence": "ack loss/receiver fault/partialcollection/unknown resultはheld維持。deepjournal保持byte一致。receiptout race file/link/absent、FIFO timeout、本体保存後receipt publication拒否を実referencefixtureで再現。再試行はreceipt観測後に状態遷移のみ。"
+      },
+      "C11": {
+        "status": "改善済み",
+        "evidence": "新規ext5case P4fail/1deletioncontrol、CLI7case P5fail/2positivecontrol。実helper-beforefail→afterpass、全family617・C0golden独立oracle成功。fixturedepth10000はpytest環境実閾値超過で再現。"
+      },
+      "C12": {
+        "status": "維持",
+        "evidence": "stdlib argparse/fcntl/json/tempfile/osのみ、新SDK依存なし。flat bootstrap/direct script旧入口consumer、pinned Ruff成功、runner隔離・socket禁止。"
+      },
+      "X01": {
+        "status": "適用・維持",
+        "evidence": "localmanualCLIで実配備/restartなし。fragmentに1.0.13入力regular/rootlink禁止/newreceipt path明記。legacy_invocation/出口は維持。"
+      },
+      "X02": {
+        "status": "部分適用",
+        "evidence": "connector/providerURL/packagekey追加なし。EID/hashは整合・idempotence用で暗号署名/相手認証ではない。正式provider契約/secret導入は未許可。"
+      },
+      "X03": {
+        "status": "適用・維持",
+        "evidence": "withdraw_generationはdurablejournalから対象選択。lateack/reconcileはwithdrawnを復活しない。delete receipt失敗はdelete_held、payload/tombstone期限はsharedC1契約。backup/restore/secret鍵は本packet外。"
+      },
+      "X04": {
+        "status": "適用・制約あり",
+        "evidence": "E1 local staged bytes+hash+count+types+intent+savedpayload receipt proofと実reference保存を検証。E2 provider実配送/署名/remoteacceptedは未実行、Handoffのみではackedにしない。source_labelは手動namespace、署名認可とは区別。"
+      },
+      "X05": {
+        "status": "制約あり",
+        "evidence": "POSIX flock/link/NOFOLLOW/NONBLOCKをmacOS上で実合成fixture確認。FIFOはlocal subprocess deadline2s、socket禁止。offline localconsumerのみ、platform service/device/別OS未実行。"
+      },
+      "X06": {
+        "status": "部分適用",
+        "evidence": "auth confirm_human+actor+reasonが既存明示人許可、改変/期限/失効は再照合。LLM/MCP/Jev/自動外部送信なし。プラグインtool側認可は前packetまたは各owner。"
+      },
+      "X07": {
+        "status": "適用・維持",
+        "evidence": "snapshotgeneration/maxage、patients scope、fact validation/workflow/historyfloor/body statesを契約consumerで維持。許可は臨床正確性保証ではなく、記録欠落を処置なしへ変換しない。"
+      },
+      "X08": {
+        "status": "部分適用",
+        "evidence": "provider-neutral draft/manual CLIのみ。公開Callback/Webformや新URL/外部通信なし。契約doc内のbody説明曖昧さは次文書packetへ。"
+      }
+    },
+    "tests/ops/test_brain_export.py": {
+      "C01": {
+        "status": "維持",
+        "evidence": "単一synthetic snapshot builderと実brain_export入口を使用。sharedreadonlyreadmodelをstub単独でgreenにしない。"
+      },
+      "C02": {
+        "status": "改善済み",
+        "evidence": "13追加parametercase:3subdir/leaflink/preflight-after-start/nativeopen/replace/unlink/JST3TZ。null/malformedrollup、欠測の既存caseも維持。"
+      },
+      "C03": {
+        "status": "改善済み",
+        "evidence": "native出版失敗はpreviousfile bytes保存、directory inode差替え後のunlinkはownedfileだけ消え外国marker保持。idempotent二回同snapshot bytes一致。"
+      },
+      "C04": {
+        "status": "維持",
+        "evidence": "既存layout/sourcegeneration/JSONL/retention/未確認候補の期待値保持。dailyexpecteddateだけJSTに明確化。"
+      },
+      "C05": {
+        "status": "改善済み",
+        "evidence": "normal temporary directory→symlink foreign の実os.open/replace/unlinkを使う。最終nativeopenhookはPにも存在するhelperだけ、欠落symbolfailureを除去。"
+      },
+      "C06": {
+        "status": "維持",
+        "evidence": "完全合成SECRET_BODY/PATIENT_NAME、privatefile600、rawbody/name/sender/note machine出力非漏洩をassert。"
+      },
+      "C07": {
+        "status": "維持",
+        "evidence": "mainCLI0/1JSON、meta/stat/signal/message/attachment record完全parse、signalprunedcoverage、dailyfile確認。"
+      },
+      "C08": {
+        "status": "維持",
+        "evidence": "frontmatter hostile改行/YAMLseparator、tablepipe、候補別表、HONESTY文言をassert。"
+      },
+      "C09": {
+        "status": "部分適用",
+        "evidence": "完整machine stat objectとsignal limit metadataの契約を確認。大規模実データ/実機性能測定はしない。"
+      },
+      "C10": {
+        "status": "改善済み",
+        "evidence": "任意時点mock成功ではなく実os helper境界でdirectory差替えし、外国bytes/ownedinode/private staging/no residualtmpを観測。"
+      },
+      "C11": {
+        "status": "改善済み",
+        "evidence": "最終P12fail/1Tokyo対照pass、afterall13pass。TZはfinally復旧、freeze時刻・元time.strftime時刻を合わせ境界を決定化。skip/閾値緩和なし。"
+      },
+      "C12": {
+        "status": "維持",
+        "evidence": "runner隔離tempHOME/socketguard、stdlibtemporarySQLiteのみ。pinned Ruff、archive replay family成功。"
+      },
+      "X01": {
+        "status": "部分適用",
+        "evidence": "CLI startup/shutdown代わりにactualmain、旧exportlayoutを確認。daemonやinstallerを起動しない。"
+      },
+      "X02": {
+        "status": "非適用",
+        "evidence": "外部依存/URL/credentialやCIprovider接続なし。"
+      },
+      "X03": {
+        "status": "適用・維持",
+        "evidence": "retentionは原本snapshotmessagesを不変、生成名foreignassets/nonregulartargetの保持を確認。backuprestore自体はowner外。"
+      },
+      "X04": {
+        "status": "部分適用",
+        "evidence": "snapshotgenerationrotation/contenthash/exportprovenanceを確認。remoteprovider receipt/deliveryのtestとは呼ばない。"
+      },
+      "X05": {
+        "status": "適用・制約あり",
+        "evidence": "nativePOSIX directoryFD/privatefiles/racesをmacOSで実確認。Windows/実機disk容量・offlineproviderは未実行。"
+      },
+      "X06": {
+        "status": "非適用",
+        "evidence": "LLM/MCP/Jev/実人操作を起動しない。typedextractstateのみfixture。"
+      },
+      "X07": {
+        "status": "改善済み",
+        "evidence": "JST深夜境界、未確認request候補、記録なし≠対応なしを正しいsurfaceに検証。"
+      },
+      "X08": {
+        "status": "部分適用",
+        "evidence": "localexportfrontmatter/tableescapingを確認。publicweb/browser/アクセシビリティ実機確認の範囲ではない。"
+      }
+    },
+    "tests/ops/test_ext_contract.py": {
+      "C01": {
+        "status": "維持",
+        "evidence": "LocalSink+GovernedExporter actualroute、最小_auth/_records inventedfixture。coreC1/schema実consumerをfamilyで併せて確認。"
+      },
+      "C02": {
+        "status": "改善済み",
+        "evidence": "deepauthとack/payload/journal/deletionの10000depth入力5case。期限/失効/型/NaN/混合generationの既存拒否を確認。"
+      },
+      "C03": {
+        "status": "維持",
+        "evidence": "4thread simultaneousflock fixtureでsentjournal-beforeeffect+single receive、withdrawnterminal/lateack/no blinddeleteを確認。"
+      },
+      "C04": {
+        "status": "維持",
+        "evidence": "legacy/1 numeric/hash意図変更拒否、既存outbox/journalstatusを保持。"
+      },
+      "C05": {
+        "status": "維持",
+        "evidence": "patients/nested scope/destination/currentauthorization再照合、idpathescape、payloadtamperを拒否。deepjson safeclassification回帰を追加。"
+      },
+      "C06": {
+        "status": "維持",
+        "evidence": "synthetic only、生本文/氏名/senderpayloadsmuggling拒否。audit outcomesと原本unknownjournal保存を確認。"
+      },
+      "C07": {
+        "status": "維持",
+        "evidence": "publicAPI build/deliver/reconcile/withdraw/auditとreal synthetic snapshot→brainexportJSONL→envelope consumerまで確認。"
+      },
+      "C08": {
+        "status": "部分適用",
+        "evidence": "held/delete_held/refused/acked/already_acked terminalを区別。UIbuttons/browserは責務外。"
+      },
+      "C09": {
+        "status": "部分適用",
+        "evidence": "4threadローカルrace有界5s、深い入力20001chars。実負荷/性能閾値を変更せず。"
+      },
+      "C10": {
+        "status": "改善済み",
+        "evidence": "receive/delete effect成功後response lostの合成例外は再effectせず、receipt latearrival時だけack。深いcorruptjournal/payloadbytesを保持。"
+      },
+      "C11": {
+        "status": "改善済み",
+        "evidence": "追加5case P4fail/1deletioncontrolpass、finalreplayallpass。tupleparse閾値10000は環境で実failure確認、期待値緩和/skipなし。"
+      },
+      "C12": {
+        "status": "維持",
+        "evidence": "temporarySQLite/LocalSink/thread only、runner隔離・socket/processguard。pinnedRuff0.16.10成功。"
+      },
+      "X01": {
+        "status": "部分適用",
+        "evidence": "exporter再生成でjournal状態を引継ぐ。realdaemon/install/rollbackは起動しない。"
+      },
+      "X02": {
+        "status": "非適用",
+        "evidence": "liveSDK/dependencies/network/secret取得なし。"
+      },
+      "X03": {
+        "status": "適用・維持",
+        "evidence": "withdrawn envelope late arrival/reconcileでもreviveしない。generation撤回はCLI/C1family境界も実行。"
+      },
+      "X04": {
+        "status": "適用・制約あり",
+        "evidence": "localmatchingack payloadhash+intent、unknownpartialresponse後のholdを確認。provider署名/実相手到達は未検証。"
+      },
+      "X05": {
+        "status": "部分適用",
+        "evidence": "DarwinPOSIX fcntl/concurrentcallsの実fixture。ほかOS/アプリ連携は未実行。"
+      },
+      "X06": {
+        "status": "適用・維持",
+        "evidence": "confirm_human authを改変/失効/narrowしeffectしない、LLM/toolauthorityは広げない。"
+      },
+      "X07": {
+        "status": "適用・維持",
+        "evidence": "generation/snapshotage/患者範囲/evidence維持。syntheticfactで臨床判断を行わない。"
+      },
+      "X08": {
+        "status": "非適用",
+        "evidence": "CLI/APIローカルfixtureのみ、WebUI/form/外部URL接続なし。"
+      }
+    },
+    "tests/ops/test_ext_contract_c0.py": {
+      "C01": {
+        "status": "維持",
+        "evidence": "committedgolden/生成helper/独立_oracleを分離して同一generatorだけのselfassertを避ける。source/doc/tree責務一致。"
+      },
+      "C02": {
+        "status": "維持",
+        "evidence": "14accepted/24reject（1巨大生成のみ）/6receipt/4withdraw、state/hash/count/type/scope/depth/limits対照を全件parameter。"
+      },
+      "C03": {
+        "status": "維持",
+        "evidence": "receiptstatus→durablesenderjournalとsplitcomplete bindings、delete_held/withdrawnを確認。storage主経路は別family。"
+      },
+      "C04": {
+        "status": "維持",
+        "evidence": "fixture_set_id固定、wirecontract mcs-ext-export/2、receipt/withdraw1、legacy1 consumer併走。"
+      },
+      "C05": {
+        "status": "維持",
+        "evidence": "producerとreceiver両側同じnegativecode、禁止body/sender/extra/ID/hash/scope/未認可typeを確認。"
+      },
+      "C06": {
+        "status": "維持",
+        "evidence": "generate全asset inventeddata、MANIFESTがindex含む全48JSONのbytes固定。実投稿匿名化なし。"
+      },
+      "C07": {
+        "status": "維持",
+        "evidence": "1MiB oversizeはgenerated-onlyで巨大assetをrepoへ保存せず必須bytecap動作は実実行。body8192/withdraw4KiBも既存rawfileで確認。"
+      },
+      "C08": {
+        "status": "部分適用",
+        "evidence": "machine states/partial集合完整/receiptterminal表示をconsumerで確認。nativeチャットUIは責務外。"
+      },
+      "C09": {
+        "status": "維持",
+        "evidence": "oversize必要fixtureを実生成してcapreject、固定rawfileを省略せず、family617pass。performance数値を主張しない。"
+      },
+      "C10": {
+        "status": "維持",
+        "evidence": "mismatchsha receiptはparseacceptでもjournalheld、deletefailedはdelete_held。未知結果をsuccessへ変えない。"
+      },
+      "C11": {
+        "status": "維持",
+        "evidence": "全49fixturetreetext fullread、48JSON raw+manifest+独立numericcanonicaloracle; existing test count/differentcode保持。"
+      },
+      "C12": {
+        "status": "維持",
+        "evidence": "stdlib json/hashlib/pathlib/pytest test、tempSinkのみ。CIrunner・pinned Ruff通過、generateddocs driftは親所有。"
+      },
+      "X01": {
+        "status": "部分適用",
+        "evidence": "fixedwireconsumer compatibilityとgoldenreproducibilityを確認。realpackageinstallなし。"
+      },
+      "X02": {
+        "status": "部分適用",
+        "evidence": "MANIFESTsha/fixture_set_idで合成asset由来とbyte再現固定、外部supplychaindownloadなし。"
+      },
+      "X03": {
+        "status": "部分適用",
+        "evidence": "withdraw1正負・delete receiptsのterminaljournal確認。actualbackuprestore/鍵はtest対象外。"
+      },
+      "X04": {
+        "status": "適用・制約あり",
+        "evidence": "split1/2/3完整set binding、integritycount/hash/id、sourcegeneration、partialreceipt保留を確認。署名/realproviderE2は未実行。"
+      },
+      "X05": {
+        "status": "非適用",
+        "evidence": "purefixture+tempconsumer、nativeOS/device/provider SDKの実接続なし。"
+      },
+      "X06": {
+        "status": "部分適用",
+        "evidence": "C1explicitbodyは_auth handoffconsumerで人許可fixture経路、AI/Jev/MCP起動なし。"
+      },
+      "X07": {
+        "status": "適用・維持",
+        "evidence": "verified/workflow/historyfloor/bodystate/patientcoverageはcontract変換時に保持。missingbody→false確定を禁止。"
+      },
+      "X08": {
+        "status": "非適用",
+        "evidence": "rawJSONfixtureとcontractdoc参照だけでpublicweb/form/リンク操作なし。"
+      }
+    },
+    "tests/ops/test_ext_contract_cli.py": {
+      "C01": {
+        "status": "改善済み",
+        "evidence": "actualext.main+ローカルsyntheticreference、directscriptも既存guard内。共通receiverをmock作り直さずownedfrontend補正を確認。"
+      },
+      "C02": {
+        "status": "改善済み",
+        "evidence": "receiptout file/symlink/absent、directoryrootlink/normal、explicitFIFO/link全7case。exit/status/refusalreason正確。"
+      },
+      "C03": {
+        "status": "改善済み",
+        "evidence": "receipt publication前にexpire実処理hook→同名競合file/link。foreign内容保持、receiverpayload証拠も保持、staging残留なし。"
+      },
+      "C04": {
+        "status": "維持",
+        "evidence": "legacy named/non-nameddeliver numeric goldenhash/envelopeid/intent、旧unresolvedexit1、handoffunknownexit2/reconcileを維持。"
+      },
+      "C05": {
+        "status": "改善済み",
+        "evidence": "explicitinput O_NOFOLLOW+REGとsymlinkrootdirectory拒否、authdetail/revoked/expired/unconfirmed/recordscope拒否。正常directoryAPIを削らない。"
+      },
+      "C06": {
+        "status": "維持",
+        "evidence": "health全filesystemmode/mtime/hashreadonly対比、SYNTHsecret/ID/root/actor/reasonがreportへ出ない。rawbodyno wire endtoend。"
+      },
+      "C07": {
+        "status": "維持",
+        "evidence": "pairedreceiveargs、新規receiptpath/JSONNDJSONdirectoryimport/reconcileall/byID、healthbudget0/entrylimit、directscriptoldinvocation確認。"
+      },
+      "C08": {
+        "status": "維持",
+        "evidence": "accepted/rejected/held/delete_held/unknown/completefalse/exitで手動operator表示を区別。handoff localselfack選択を拒否。"
+      },
+      "C09": {
+        "status": "改善済み",
+        "evidence": "FIFO nativeCLI subprocess2s期限で真のopenblockingを検出。healthoversize/entrylimit bounded unchangedを実assert。pytesttimeout引上げなし。"
+      },
+      "C10": {
+        "status": "改善済み",
+        "evidence": "receiver保存→receiptpublication拒否でも再受信proofを消さず、unknownreconcileblindresendしない。partialacceptanceとcollectioncompleteは異なる契約をC1familyで確認。"
+      },
+      "C11": {
+        "status": "改善済み",
+        "evidence": "追加7case P5fail/2safecontrols、最終replayallpass。invalidearlyfixtures/overlayraceは採用せずfullfailurelogs保持。"
+      },
+      "C12": {
+        "status": "維持",
+        "evidence": "scripts/run_tests.sh、subprocessは本projectallowlistによるsynthetic only。networksocket禁止、pinnedRuff成功、productionPunchangedbeforeoverlay確認。"
+      },
+      "X01": {
+        "status": "適用・維持",
+        "evidence": "directscriptlegacy/handoff/health入口、restart後journal再生成consumer。nativegateway/adapter起動なし。"
+      },
+      "X02": {
+        "status": "非適用",
+        "evidence": "externalSDK/URL/secret/CIcredential/downloadなし。"
+      },
+      "X03": {
+        "status": "適用・維持",
+        "evidence": "localdelete即receipt vs handoffdelete_held→manualreceipt→withdrawn、再送拒否。healthstorageを変更しない。"
+      },
+      "X04": {
+        "status": "適用・制約あり",
+        "evidence": "JSON/NDJSON/directorymanualreceipt sha/types/payloadbind、mismatch未知、rejectedterminal、manualreference保存。署名provider E2到達未検証。"
+      },
+      "X05": {
+        "status": "適用・制約あり",
+        "evidence": "Darwin nativeFIFO/link/privatefilesfixture実動作のみ、liveconnector/platform/deviceはなし。"
+      },
+      "X06": {
+        "status": "適用・維持",
+        "evidence": "authconfirm_human/actor/reasonscope尊重、handoffselfack拒否。MCP/LLM起動なし。"
+      },
+      "X07": {
+        "status": "適用・維持",
+        "evidence": "syntheticpublishedsnapshot→brainJSONL→humanpermission→held→manualreceipt roundtrip、記録は候補/typedfactsとして維持。"
+      },
+      "X08": {
+        "status": "非適用",
+        "evidence": "manualCLIのみ。publiccallback/Webform/proxy/TLSは実装されず新規導入なし。"
+      }
+    },
+    "tests/ops/ext_fixtures.py": {
+      "C01": {
+        "status": "維持",
+        "evidence": "_rec/_seal/_resign/_wireで完全合成C0一元生成、独立oracleはtest側。frozenfixedNOW/BODYTEXTとsimpleIDsでrealdata由来なし。"
+      },
+      "C02": {
+        "status": "維持",
+        "evidence": "accept14/reject24/receipt6/withdraw4index、bodyfull/snippet/null/deleted/unknown、fetchstate/floor、float canonicalを生成。"
+      },
+      "C03": {
+        "status": "部分適用",
+        "evidence": "pureasset生成で保存はしない。receipts journal期待acked/rejected/held/deleteheld/withdrawnをindexへ記録。"
+      },
+      "C04": {
+        "status": "維持",
+        "evidence": "fixturecontract2/receipt1/withdraw1、fixture_set_id/committedbytes/MANIFEST固定。"
+      },
+      "C05": {
+        "status": "維持",
+        "evidence": "禁止statement/sender/bodyname、sha/count/id/scope/type/extra/gen/bytefloorなど単一negativeを明示。signing名_resignはhash再計算で暗号署名ではない。"
+      },
+      "C06": {
+        "status": "維持",
+        "evidence": "SYNTHETIC/isynthetic例だけ、日本語bodyもinventedtext。秘密値/実医療投稿の匿名化fixtureなし。"
+      },
+      "C07": {
+        "status": "維持",
+        "evidence": "1MiB oversizeはgenerated-only、body8192bytes/withdraw4096bytesのちょうど境界と超過rawassetを生成。"
+      },
+      "C08": {
+        "status": "部分適用",
+        "evidence": "contractstructuredstatesのみ。表/UIbutton/media表示用fixtureではない。"
+      },
+      "C09": {
+        "status": "維持",
+        "evidence": "大容量negativeはtest時のみ生成、repo全48JSON省略なし。budget/cap再定義しない。"
+      },
+      "C10": {
+        "status": "部分適用",
+        "evidence": "late/failed/mismatchreceipt・withdraw意図を生成するが自身はtransport/retryしない。"
+      },
+      "C11": {
+        "status": "維持",
+        "evidence": "regenerate==committed全bytes、independentoracle checks、counts/generationIDs/hashに意味ある期待値。"
+      },
+      "C12": {
+        "status": "維持",
+        "evidence": "stdlibcopy/hash/json + sharedC1purehelper、test-onlymodule、Ruff成功。"
+      },
+      "X01": {
+        "status": "非適用",
+        "evidence": "installer/daemon/runtimeは生成helper外。"
+      },
+      "X02": {
+        "status": "部分適用",
+        "evidence": "MANIFESTが非秘密assetのbytepin、externalprovider/source取得なし。"
+      },
+      "X03": {
+        "status": "部分適用",
+        "evidence": "withdraw/deletegoldenのみ生成、実backup/keyoperationなし。"
+      },
+      "X04": {
+        "status": "部分適用",
+        "evidence": "partset/receiptsha/eID/hashで識別を合成、sourceauth/署名/remote E2は主張しない。"
+      },
+      "X05": {
+        "status": "非適用",
+        "evidence": "purebyte生成、nativeSDK/device経路なし。"
+      },
+      "X06": {
+        "status": "非適用",
+        "evidence": "AI/Jev/LLM/MCPや記憶保存のfixtureなし。"
+      },
+      "X07": {
+        "status": "適用・維持",
+        "evidence": "clinicalfieldsは合成enum/workflow/evidenceIDs、historyfloorとbodyvalidityをcontract確認に使用。"
+      },
+      "X08": {
+        "status": "非適用",
+        "evidence": "JSONassetsでpublicweb/routes/form/外部リンク操作なし。"
+      }
+    },
+    "fixture:ext_contract_c0": {
+      "C01": {
+        "status": "維持",
+        "evidence": "committedgolden/生成helper/独立_oracleを分離して同一generatorだけのselfassertを避ける。source/doc/tree責務一致。"
+      },
+      "C02": {
+        "status": "維持",
+        "evidence": "14accepted/24reject（1巨大生成のみ）/6receipt/4withdraw、state/hash/count/type/scope/depth/limits対照を全件parameter。"
+      },
+      "C03": {
+        "status": "維持",
+        "evidence": "receiptstatus→durablesenderjournalとsplitcomplete bindings、delete_held/withdrawnを確認。storage主経路は別family。"
+      },
+      "C04": {
+        "status": "維持",
+        "evidence": "fixture_set_id固定、wirecontract mcs-ext-export/2、receipt/withdraw1、legacy1 consumer併走。"
+      },
+      "C05": {
+        "status": "維持",
+        "evidence": "producerとreceiver両側同じnegativecode、禁止body/sender/extra/ID/hash/scope/未認可typeを確認。"
+      },
+      "C06": {
+        "status": "維持",
+        "evidence": "generate全asset inventeddata、MANIFESTがindex含む全48JSONのbytes固定。実投稿匿名化なし。"
+      },
+      "C07": {
+        "status": "維持",
+        "evidence": "1MiB oversizeはgenerated-onlyで巨大assetをrepoへ保存せず必須bytecap動作は実実行。body8192/withdraw4KiBも既存rawfileで確認。"
+      },
+      "C08": {
+        "status": "部分適用",
+        "evidence": "machine states/partial集合完整/receiptterminal表示をconsumerで確認。nativeチャットUIは責務外。"
+      },
+      "C09": {
+        "status": "維持",
+        "evidence": "oversize必要fixtureを実生成してcapreject、固定rawfileを省略せず、family617pass。performance数値を主張しない。"
+      },
+      "C10": {
+        "status": "維持",
+        "evidence": "mismatchsha receiptはparseacceptでもjournalheld、deletefailedはdelete_held。未知結果をsuccessへ変えない。"
+      },
+      "C11": {
+        "status": "維持",
+        "evidence": "全49既存fileの全文を切断なく読取。48JSON（index含む）とMANIFEST全48entry一致。長い3JSONはrawchars連続rangeで全文を確認、繰返し本文も省略しない。individual expectationはindexのpath/code/journal/profileを各inventoryへ保存。"
+      },
+      "C12": {
+        "status": "維持",
+        "evidence": "stdlib json/hashlib/pathlib/pytest test、tempSinkのみ。CIrunner・pinned Ruff通過、generateddocs driftは親所有。"
+      },
+      "X01": {
+        "status": "部分適用",
+        "evidence": "fixedwireconsumer compatibilityとgoldenreproducibilityを確認。realpackageinstallなし。"
+      },
+      "X02": {
+        "status": "部分適用",
+        "evidence": "MANIFESTsha/fixture_set_idで合成asset由来とbyte再現固定、外部supplychaindownloadなし。"
+      },
+      "X03": {
+        "status": "部分適用",
+        "evidence": "withdraw1正負・delete receiptsのterminaljournal確認。actualbackuprestore/鍵はtest対象外。"
+      },
+      "X04": {
+        "status": "適用・制約あり",
+        "evidence": "split1/2/3完整set binding、integritycount/hash/id、sourcegeneration、partialreceipt保留を確認。署名/realproviderE2は未実行。"
+      },
+      "X05": {
+        "status": "非適用",
+        "evidence": "purefixture+tempconsumer、nativeOS/device/provider SDKの実接続なし。"
+      },
+      "X06": {
+        "status": "部分適用",
+        "evidence": "C1explicitbodyは_auth handoffconsumerで人許可fixture経路、AI/Jev/MCP起動なし。"
+      },
+      "X07": {
+        "status": "適用・維持",
+        "evidence": "verified/workflow/historyfloor/bodystate/patientcoverageはcontract変換時に保持。missingbody→false確定を禁止。"
+      },
+      "X08": {
+        "status": "非適用",
+        "evidence": "rawJSONfixtureとcontractdoc参照だけでpublicweb/form/リンク操作なし。"
+      }
+    },
+    "doc:external-export-contract": {
+      "C01": {
+        "status": "適用・未解決文書候補",
+        "evidence": "/1、C0、C1、localreferenceの契約層を全文照合。PHI禁止節のbody_text禁止が/1限定を明記せずC1許可節と曖昧、次文書packetへ返却。"
+      },
+      "C02": {
+        "status": "適用・維持",
+        "evidence": "generation/maxsnapshotage/historyfloor/body/fetch/partial/unknown statesをsourceと照合。記録欠如と処置欠如を分ける。"
+      },
+      "C03": {
+        "status": "適用・維持",
+        "evidence": "idempotence/held/withdraw/delete/tombstone/receiptnewpath契約はactualsyntheticfamilyで維持。"
+      },
+      "C04": {
+        "status": "適用・維持",
+        "evidence": "legacy1既存bytes/ID固定とC1version2変更を文書が区別。日時sourcefixは新fragmentで補足。"
+      },
+      "C05": {
+        "status": "適用・制約あり",
+        "evidence": "manual humanauth/destination/patients/fields/source_labelを定義。署名・TLS・相手認証は正式connector契約であり本localreferenceへ実装済みと読まない。"
+      },
+      "C06": {
+        "status": "適用・文書候補",
+        "evidence": "default/1PHI禁止と明示C1pairedmessage_bodyの正当な許可を分離する必要あり。実データ保存や送信の許可に転用しない。"
+      },
+      "C07": {
+        "status": "適用・維持",
+        "evidence": "wire1MiB/body8192/receipt64KiB/withdraw4KiB、parts/samehash/records/fieldallowlist、receivepairedarguments/fullcollectionを実契約へ照合。"
+      },
+      "C08": {
+        "status": "部分適用",
+        "evidence": "CLIheld/unknown/diagnosticscompleteのmanualoperator表示契約。nativeSlack/Discord/LWUIは別owner/既監査packet。"
+      },
+      "C09": {
+        "status": "適用・制約あり",
+        "evidence": "healthentrybudget/bytecap・receivercapacityとcollection incompleteを明示。実性能数値/全処理メモリ上限保証は文書から推論しない。"
+      },
+      "C10": {
+        "status": "適用・維持",
+        "evidence": "unknownreceipt/reconcile/partialaccept/deletefailedの安全保留、storagefaultsはterminalrejectではない契約を確認。"
+      },
+      "C11": {
+        "status": "適用・維持",
+        "evidence": "C0fixture_set_id/raw48JSON+manifest、producer/receiver/独立canonicaloracleの受入がtestsと一致。"
+      },
+      "C12": {
+        "status": "部分適用",
+        "evidence": "sourceCLIとtestsの正式pathを照合。生成DEVELOPMENT/CI/sdkpinningsは親責務、readonly。"
+      },
+      "X01": {
+        "status": "部分適用",
+        "evidence": "draftprovider-neutral外部計画。実導入/credential/常駐起動/restart/rollbackを本作業で実施しない。"
+      },
+      "X02": {
+        "status": "部分適用",
+        "evidence": "正式providerURL/package/signer/TLS agreementは後続契約。hashを署名認証の代わりにしない。"
+      },
+      "X03": {
+        "status": "適用・維持",
+        "evidence": "withdraw/auth撤回/generation撤回/retention/tombstone/cancelledhistoryと遅延復活防止を明示。backup/realconsumer erase proofはowner別、未実行。"
+      },
+      "X04": {
+        "status": "適用・制約あり",
+        "evidence": "E1synthetic staging+bound receipt proofは確認、E2liveproviderauthenticateddeliveryは未承認・未実行、文書draftのみ。"
+      },
+      "X05": {
+        "status": "部分適用",
+        "evidence": "manuallocalreferenceはPOSIXローカル合成で確認。別OSSDK/device/C1liveconsumerは未確認。"
+      },
+      "X06": {
+        "status": "部分適用",
+        "evidence": "confirm_human/actor/reason/maxageを人工許可として要求、AI/tool自動外送へ拡張しない。LLM/MCP/Jev起動なし。"
+      },
+      "X07": {
+        "status": "適用・維持",
+        "evidence": "fact/evidence/workflow/historyfloor/currentbody/provenanceの条件を保持。 clinical correctness/対応実施の保証とは区別。"
+      },
+      "X08": {
+        "status": "部分適用",
+        "evidence": "provider contractでpublicTLS/URL制約を要求するdraft、localfrontendはWeb/publiccallbackを提供しない。"
+      }
+    }
+  },
+  "read_only_boundaries": [
+    {
+      "path": "mcs/core/mcs_util.py",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          85,
+          185
+        ]
+      ],
+      "responsibility": "path-based shared atomic_write vs narrow owned-directoryrace比較、loads_dict",
+      "owner": "core/read-only",
+      "observed_W_hash_metadata": {
+        "sha256": "7bd01ea343e712d3ea24c59f92fde16cc3efa8013110810a103fec9193c1f420",
+        "bytes": 15042,
+        "lines": 399
+      }
+    },
+    {
+      "path": "mcs/core/ledger.py",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          2468,
+          2493
+        ]
+      ],
+      "responsibility": "LedgerReader URI mode=ro/noDDL",
+      "owner": "core/read-only",
+      "observed_W_hash_metadata": {
+        "sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
+        "bytes": 136617,
+        "lines": 2657
+      }
+    },
+    {
+      "path": "mcs/views/mcs_view.py",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          15,
+          39
+        ],
+        [
+          45,
+          100
+        ]
+      ],
+      "responsibility": "View公開snapshot/BEGIN/version/deletejournal/snapshot_meta入口",
+      "owner": "parent/read-only",
+      "observed_W_hash_metadata": {
+        "sha256": "ec5d000c746779260b4d043db09b88d0d07d2b16c7bbc07efa26829fb5f3fae4",
+        "bytes": 58702,
+        "lines": 1070
+      }
+    },
+    {
+      "path": "mcs/views/read_model.py",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          52,
+          80
+        ],
+        [
+          145,
+          280
+        ],
+        [
+          328,
+          385
+        ]
+      ],
+      "responsibility": "generation/hash/projectfilter/batch500/detailonly/publishedcurrentfacts/coverage",
+      "owner": "parent/read-only",
+      "observed_W_hash_metadata": {
+        "sha256": "588e4bb58510ee920508223cac4c66e06eb760190135bf404f37548ffe14ad91",
+        "bytes": 15401,
+        "lines": 361
+      }
+    },
+    {
+      "path": "mcs/ops/c1_contract.py",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          64,
+          135
+        ]
+      ],
+      "responsibility": "explicit C1 sevenfields/allpatients/maxage3600/retention30/canonicaltypes",
+      "owner": "core/read-only",
+      "observed_W_hash_metadata": {
+        "sha256": "7bf70b5a580d189ab6560e837be544bc0b75ab18b922c21963167d25b07308f3",
+        "bytes": 11152,
+        "lines": 237
+      }
+    },
+    {
+      "path": "mcs/ops/c1_receiver.py",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          284,
+          355
+        ]
+      ],
+      "responsibility": "privatedir/source namespace/NOFOLLOWflock/16MiBstateguards。receive/withdraw/expiry/diagnosticsの全method全文は本packet未読、ownedfrontendfamilyから実経路実行。",
+      "owner": "core/read-only",
+      "observed_W_hash_metadata": {
+        "sha256": "df7844bacd994e854bcf8cfa71c7f3acff0f20b12801e48bc31d00129a7c0163",
+        "bytes": 37086,
+        "lines": 802
+      }
+    },
+    {
+      "path": "tests/ops/test_c1_withdraw_receive.py",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1,
+          230
+        ]
+      ],
+      "responsibility": "3part/bulkreceive/expiry/bindreceipt/withdraw-before-arrival/partialcollection/pairedargs",
+      "owner": "core/read-only",
+      "observed_W_hash_metadata": {
+        "sha256": "77b394a61a9784bb94f3a3d0c062e9d853aab4264c768040b4da04929df9f25c",
+        "bytes": 16069,
+        "lines": 313
+      }
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1,
+          46
+        ]
+      ],
+      "responsibility": "sed1–180（実ファイル終端まで全表示）でenv -i/tempHOME/sandbox/pytestを再照合。globalinventory全項目レビューの昇格は主張しない。",
+      "owner": "parent/read-only",
+      "observed_W_hash_metadata": {
+        "sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+        "bytes": 1358,
+        "lines": 46
+      },
+      "requested_read_range": [
+        1,
+        180
+      ]
+    }
+  ],
+  "actual_route": [
+    "brain main --snapshot/--out → View published snapshot URI read-only/BEGIN/schema+snapshot_meta → current read_model generation/hash/patient scope +prevalidated rollups → fixed childdirectory/kernelFD + typedproject_record → perfileprivateatomic localMarkdown/JSONL → ext consumer",
+    "ext direct/manualCLI → humanauthorization(actor/reason/confirm_human)/aggregate/expiry/maxsnapshotage/patients/fields → build stable /1 or explicitC1 canonicalparts → effect前auth再照合 → flock+durablejournal(sent) → LocalSink保存またはHandoff privateoutbox → boundreceipt観測/import → hash/count/types/intent/savedpayload照合 → ack/reject/hold",
+    "unknownsend/deleteは再effectしない → reconcile receiptのみ → withdraw_generation durablejournal全対象 → delete_requested/delete_held → receipt deleted true でwithdrawn terminal。C1receiver tombstone/expiry/partialcollectionは共有ownerconsumerへ委譲し合成familyで実経路。",
+    "receive explicit inventedlocalinput → pairednewreceiptpath初期確認 → sharedReferenceReceiver expire → rootlink拒否+kernelleafregular boundedread → C1receive/withdraw/拒否code分類 → completeprivateexclusive receiptsfile → diagnosticstransporttallyとcollectioncompleteを分ける"
+  ],
+  "privacy_human_delivery": {
+    "human_surface": "ローカルMarkdownは患者名/まとめ等を扱うprivatehuman面。rawbodyを含まないことだけでPHI-freeとしない。fixtureは完全合成のみ。",
+    "default_machine": "/1:closedaggregateprovenance/IDs/enums/countsのみ、rawbody/sender/patientname/note自由本文は禁止。",
+    "explicit_C1": "C1は明示humanaggregate認可の7fields/allpatients/maxsnapshotage<=3600/retention<=30。pairedmessage_bodyはsharedC1consumerがplain_text/bodyhash/8192byte/state/historyfloor条件を検証。これは既存契約維持で外送許可拡張ではない。",
+    "E1": "実localhelper・保存payload/receipt/journal/immutablehash/attempts/privatefile・unknown保留を合成で確認。",
+    "E2": "実provider到達/署名相手認証/remoteaccepted receiptは未承認・未実行。Handoff stagedを実配送成功と呼ばず、localfakeackはE1の限定証拠。",
+    "signer": "/1/C1 SHAはcanonicalintegrity/idempotencyであり暗号署名ではない。source_labelは手動namespace。TLS/authenticator/signers/契約は正式provider接続時の別範囲。"
+  },
+  "findings": [
+    {
+      "id": "N5-01",
+      "status": "CONFIRMED_FIXED",
+      "trigger": "--out下のgenerated child symlink、preflight後の差替え、_write parentcheck後open前swap、FDopen後replace前/unlink前swap、stale p999.md symlink",
+      "effect": "Pではforeigndirectoryへ書込み/regularasset削除/foreignlink削除、または途中FileNotFoundError。生成dirname確認だけでは狭いTOCTOUを覆わない。",
+      "repair": "_directory_fdがroot/childを保持、childO_NOFOLLOW; _write/GC/retentionはdir_fdで原inodeへ操作。newchild0700/staging600、regular生成名に限定。明示selectedrootaliasは既存契約を保持。",
+      "criterion": [
+        "C03",
+        "C05",
+        "C06",
+        "C10",
+        "X03",
+        "X05"
+      ],
+      "test_group": "brain新規10race/boundarycases（TZ3を除く）全Pfail、finalreplaypass",
+      "code": [
+        "mcs/ops/brain_export.py:45",
+        "mcs/ops/brain_export.py:51",
+        "mcs/ops/brain_export.py:79",
+        "mcs/ops/brain_export.py:316",
+        "mcs/ops/brain_export.py:394"
+      ],
+      "parent_followups": "①symlinkdirectoryinputはN5-04、②parentcheck→atomicwrite narrowwindowは実os.open hookでP fail・ownedFD修復。after-FD replacement/unlink3caseもP fail、最終対照で裏付け。"
+    },
+    {
+      "id": "N5-02",
+      "status": "CONFIRMED_FIXED",
+      "trigger": "hostTZ UTC/NY、UTC2026-01-01 15:30でJST2026-01-02 00:30",
+      "effect": "PのJSTbannerがUTC/NY値を表示、humanfacts/signals/dailyfilenameもホスト日付、retention日付interpretationもホストTZ。",
+      "repair": "datetime fixedUTC+09 _jst、日付名・保持日解釈もJST。",
+      "criterion": [
+        "C02",
+        "C04",
+        "X07"
+      ],
+      "test_group": "UTC/NY P fail、Tokyo P safecontrolpass、final3pass",
+      "code": [
+        "mcs/ops/brain_export.py:107",
+        "mcs/ops/brain_export.py:111",
+        "mcs/ops/brain_export.py:316",
+        "mcs/ops/brain_export.py:371"
+      ]
+    },
+    {
+      "id": "N5-03",
+      "status": "CONFIRMED_FIXED",
+      "trigger": "receive precheck後のexpire hookが receipts_out regularfile/symlink を作成",
+      "effect": "Pは新規receiptpath契約なのにatomicreplaceで競合内容/linkを上書き。receiverは既に保存済みなので失敗後再送推論不可。",
+      "repair": "600完成tmp→fsync→exclusive os.link publish、競合receipts_out_exists/no clobber、receiverpayload証拠保持。",
+      "criterion": [
+        "C03",
+        "C06",
+        "C10",
+        "X04"
+      ],
+      "test_group": "P file/link fail、absentnormal controlpass、W全3pass",
+      "code": [
+        "mcs/ops/ext_contract.py:1085",
+        "mcs/ops/ext_contract.py:1185"
+      ]
+    },
+    {
+      "id": "N5-04",
+      "status": "CONFIRMED_FIXED",
+      "trigger": "receive --input explicit FIFO/symlinkfileまたはsymlink-to-directory root",
+      "effect": "P FIFO nativeopenは期限2sでhang、file/rootlinkは通常inputとして処理される。",
+      "repair": "explicit rootis_symlink拒否、各leafos.openNOFOLLOW|NONBLOCK+fstatREG、normaldirectorybulkAPIは維持。",
+      "criterion": [
+        "C05",
+        "C07",
+        "C09",
+        "C10",
+        "X05"
+      ],
+      "test_group": "P FIFO/filelink/rootdirlink fail、normaldirectorycontrolpass、W4pass",
+      "code": [
+        "mcs/ops/ext_contract.py:1131",
+        "mcs/ops/ext_contract.py:1140"
+      ]
+    },
+    {
+      "id": "N5-05",
+      "status": "CONFIRMED_FIXED",
+      "trigger": "10000nested JSON inmanualauth、lostackの保存ack/payload/journal",
+      "effect": "PはRecursionErrorが既存安全拒否・hold分類を中断。unknown送達・削除結果を成功/未送信と扱わない。",
+      "repair": "対象4catchへRecursionError追加、authunreadable/journalunreadableまたはNone/False→hold、savedbytesを変更せず。delete receiptは既にsafeで変更不要。",
+      "criterion": [
+        "C02",
+        "C05",
+        "C10",
+        "X04"
+      ],
+      "test_group": "Pauth/ack/payload/journal4fail、deletioncontrolpass、W5pass",
+      "code": [
+        "mcs/ops/ext_contract.py:85",
+        "mcs/ops/ext_contract.py:484",
+        "mcs/ops/ext_contract.py:494",
+        "mcs/ops/ext_contract.py:584"
+      ]
+    }
+  ],
+  "disproved": [
+    {
+      "id": "N5-D01",
+      "claim": "日本時間hostでも既存JST表示が壊れる",
+      "result": "DISPROVED_CONTROL",
+      "evidence": "最終fixedP Tokyo casepass。UTC/NYだけfail、exactUTCmidnight fixtureで条件を区別。"
+    },
+    {
+      "id": "N5-D02",
+      "claim": "delete receipt parserのdeepJSONも新修復を要する",
+      "result": "DISPROVED_CONTROL",
+      "evidence": "Pdeepdeletioncasepass、既存parse_receiptがRecursionErrorを保留へ扱う。不要な重複guardなし。"
+    },
+    {
+      "id": "N5-D03",
+      "claim": "newreceipt排他化が正常保存を阻害",
+      "result": "DISPROVED_CONTROL",
+      "evidence": "P/W absentnormalreceipt casepass、accepted receiptparse/private600とreceiverpayload証拠保持を確認。"
+    },
+    {
+      "id": "N5-D04",
+      "claim": "symlink拒否によりnormaldirectory bulk inputも禁止する必要",
+      "result": "DISPROVED_CONTROL",
+      "evidence": "normaldirectory P/W controlpass。既存API維持、fragment『入力JSONは通常file・通常directory可』に明確化。"
+    }
+  ],
+  "deferred": [
+    {
+      "id": "N5-DOC01",
+      "status": "FOLLOWUP_DOC_OWNER",
+      "path": "docs/specs/external-export-contract.md",
+      "evidence": "全文272行。PHI節body_text禁止に /1/default 限定を明記せず、explicit C1 pairedmessage_body許可節と曖昧。runtime許可/拒否は全familyで維持。",
+      "next_owner": "parent指定の次文書packet、今はreadonlyなので同時編集なし。"
+    },
+    {
+      "id": "N5-SVC01",
+      "status": "OUT_OF_AUTHORIZED_SCOPE",
+      "evidence": "liveprovider/authenticator/crypto signer/真のE2到達/SDKconsumer/realPHI/keys/送信は本packet禁止・未実行。stdliblocalconsumerの617passをその成功証拠に転用しない。"
+    },
+    {
+      "id": "N5-OS01",
+      "status": "UNVERIFIED_PLATFORM",
+      "evidence": "nativePOSIX FD/flock/linkはmacOS26.5arm64のみ合成実検証。Linux/Windows実機結果なし。"
+    },
+    {
+      "id": "N5-OWNER01",
+      "status": "READONLY_DEPENDENCY_LIMIT",
+      "evidence": "sharedC1/View/ledger/utilは指定readrangesのみPARTIAL、全repoレビューのREVIEWED根拠は各owner。readonlyfamily実行成功とソース全文確認を分ける。"
+    }
+  ],
+  "limits": [
+    "全repository/auditreleaseの完了・親統合受入は主張しない。assigned58textだけREVIEWED、packet外は各owner継続中。",
+    "perfileatomicが保証範囲。exportroot全ファイル一括transaction/別writernamespace全体lock/任意same-userwriterへの全面防御は約束しない。",
+    "rootは明示user-selectedpathで既存alias許容、生成childはリンク不可。開いたownedinodeがrenameされた後はそのinodeへ安全に操作するため、パスを差替えた別writerによる可視namespace変更はユーザーの確認が必要。",
+    "generatednames p<int>.md と strictdatedfiles はexporter予約名。任意foreignfileと同名のregularfileを保存履歴ownerとして識別するmanifest契約を新設していない。",
+    "receiveは静的rootlinkとkernelleaflink/nonregular拒否を確認。trustedmanualinputtreeが任意concurrentwriterで中間directoryを差替えられる全windowを完全防御したとは主張しない。",
+    "health/C1wire/body/receipt/withdraw既存上限は維持。legacybatchJSONL/normaldirectorylist/receiptbundleの全体memorycapを新規追加しない。",
+    "生成DEVELOPMENT/README/CHANGELOG/共有台帳は親owner。source docstring先頭は変更しておらずsource変更後の親生成へ委譲。gateway/adapter実再起動なし。"
+  ],
+  "verification": {
+    "python": "3.13.12 / macOS-26.5-arm64-arm-64bit-Mach-O",
+    "commands": [
+      {
+        "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ops/test_brain_export.py tests/ops/test_ext_contract.py tests/ops/test_ext_contract_cli.py -o addopts='' -q -k 'linked_generated_directory or cleanup_preserves_symbolic_link or uses_jst_independently or rechecks_directories or deep_authorization or deep_json_preserves or receipt_created_during or nonregular_explicit_input or directory_changed_before_open or stays_in_opened_directory or directory_input_rejects' --junitxml=/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-before-anchored.xml > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-before-anchored.log 2>&1",
+        "cwd": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-before-anchored",
+        "environment": {
+          "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+          "runner_env_i": true,
+          "HOME": "runner mktemp mcs-test-home.XXXXXX（各runのprivate temporary directory、終了cleanup）",
+          "TMPDIR": "temporary HOME/tmp",
+          "XDG_CONFIG_HOME": "temporary HOME/config",
+          "XDG_CACHE_HOME": "temporary HOME/cache",
+          "XDG_DATA_HOME": "temporary HOME/data",
+          "LANG": "C.UTF-8",
+          "LC_ALL": "C.UTF-8",
+          "TZ": "UTC",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MCS_TEST_SANDBOX": "1",
+          "PATH": "runnerが実行PATHのみ継承、credential環境はenv -iで継承しない"
+        },
+        "exit": 1,
+        "tests": 25,
+        "failed": 21,
+        "errors": 0,
+        "skipped": 0,
+        "cases": [
+          {
+            "id": "tests.ops.test_brain_export.test_export_refuses_linked_generated_directory_before_writes[patients]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_brain_export.test_export_refuses_linked_generated_directory_before_writes[stats]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_brain_export.test_export_refuses_linked_generated_directory_before_writes[signals]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_brain_export.test_patient_cleanup_preserves_symbolic_link",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_brain_export.test_write_refuses_directory_changed_before_open",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_brain_export.test_write_stays_in_opened_directory_during_publication",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_brain_export.test_cleanup_stays_in_opened_directory_during_unlink[patients-p999.md]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_brain_export.test_cleanup_stays_in_opened_directory_during_unlink[stats-2000-01-01.md]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_brain_export.test_export_rechecks_directories_after_processing_starts[patients]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_brain_export.test_export_rechecks_directories_after_processing_starts[stats]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_brain_export.test_export_uses_jst_independently_of_host_timezone[UTC]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_brain_export.test_export_uses_jst_independently_of_host_timezone[America/New_York]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_brain_export.test_export_uses_jst_independently_of_host_timezone[Asia/Tokyo]",
+            "result": "pass"
+          },
+          {
+            "id": "tests.ops.test_ext_contract.test_deep_authorization_is_a_contract_refusal",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_ext_contract.test_deep_json_preserves_unknown_delivery_or_deletion[ack]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_ext_contract.test_deep_json_preserves_unknown_delivery_or_deletion[payload]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_ext_contract.test_deep_json_preserves_unknown_delivery_or_deletion[journal]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_ext_contract.test_deep_json_preserves_unknown_delivery_or_deletion[deletion]",
+            "result": "pass"
+          },
+          {
+            "id": "tests.ops.test_ext_contract_cli.test_receive_never_replaces_a_receipt_created_during_processing[file]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_ext_contract_cli.test_receive_never_replaces_a_receipt_created_during_processing[symlink]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_ext_contract_cli.test_receive_never_replaces_a_receipt_created_during_processing[absent]",
+            "result": "pass"
+          },
+          {
+            "id": "tests.ops.test_ext_contract_cli.test_receive_directory_input_rejects_only_a_linked_root[False]",
+            "result": "pass"
+          },
+          {
+            "id": "tests.ops.test_ext_contract_cli.test_receive_directory_input_rejects_only_a_linked_root[True]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_ext_contract_cli.test_receive_rejects_nonregular_explicit_input_without_blocking[fifo]",
+            "result": "fail"
+          },
+          {
+            "id": "tests.ops.test_ext_contract_cli.test_receive_rejects_nonregular_explicit_input_without_blocking[symlink]",
+            "result": "fail"
+          }
+        ],
+        "timestamp": "2026-10-05T01:45:30.827799+00:00",
+        "seconds": 3.915,
+        "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-before-anchored.log",
+        "junit_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-before-anchored.xml",
+        "accepted_for_current_W": true,
+        "reused": false
+      },
+      {
+        "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ops/test_brain_export.py tests/ops/test_ext_contract.py tests/ops/test_ext_contract_c0.py tests/ops/test_ext_contract_cli.py tests/ops/test_receipt_contract.py tests/ops/test_c1_contract.py tests/ops/test_c1_records.py tests/ops/test_c1_envelopes.py tests/ops/test_c1_cli.py tests/ops/test_c1_receiver.py tests/ops/test_c1_withdraw_receive.py -o addopts='' -q --junitxml=/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-replay-anchored.xml > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-replay-anchored.log 2>&1",
+        "cwd": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-replay-anchored",
+        "environment": {
+          "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+          "runner_env_i": true,
+          "HOME": "runner mktemp mcs-test-home.XXXXXX（各runのprivate temporary directory、終了cleanup）",
+          "TMPDIR": "temporary HOME/tmp",
+          "XDG_CONFIG_HOME": "temporary HOME/config",
+          "XDG_CACHE_HOME": "temporary HOME/cache",
+          "XDG_DATA_HOME": "temporary HOME/data",
+          "LANG": "C.UTF-8",
+          "LC_ALL": "C.UTF-8",
+          "TZ": "UTC",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MCS_TEST_SANDBOX": "1",
+          "PATH": "runnerが実行PATHのみ継承、credential環境はenv -iで継承しない"
+        },
+        "exit": 0,
+        "tests": 617,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "cases": [],
+        "timestamp": "2026-10-05T01:45:31.669420+00:00",
+        "seconds": 10.24,
+        "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-replay-anchored.log",
+        "junit_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-replay-anchored.xml",
+        "accepted_for_current_W": true,
+        "reused": false
+      },
+      {
+        "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check mcs/ops/brain_export.py mcs/ops/export_schema.py mcs/ops/ext_contract.py tests/ops/test_brain_export.py tests/ops/test_ext_contract.py tests/ops/test_ext_contract_c0.py tests/ops/test_ext_contract_cli.py tests/ops/ext_fixtures.py > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/ruff-W-final.log 2>&1",
+        "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005",
+        "environment": {
+          "uv": "/Users/yusuke/.local/bin/uv",
+          "pin": "ruff==0.16.10",
+          "core_dependency_added": false
+        },
+        "exit": 0,
+        "result": "All checks passed!",
+        "paths": 8,
+        "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/ruff-W-final.log"
+      },
+      {
+        "command": "git diff --check f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd 2eac0eee5ea3a8d63b32d5e1e0fec2c175e61a69",
+        "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005",
+        "exit": 0,
+        "result": "空出力（whitespace問題なし）"
+      },
+      {
+        "command": "git diff --binary --full-index f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd 2eac0eee5ea3a8d63b32d5e1e0fec2c175e61a69",
+        "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005",
+        "exit": 0,
+        "result": "全7path・全文8997tokens切断なしで読取",
+        "full_patch_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-W-anchored.patch"
+      },
+      {
+        "command": "python3 /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/executed-replay.py",
+        "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005",
+        "environment": {
+          "Python": "stdlib system python3",
+          "git_archive": "fixed P/W",
+          "live_calls": "なし"
+        },
+        "exit": 0,
+        "result": "実行時は同内容の一時python -c body、保存scriptは実行内容の正本コピー。各新規isolated directoryへのarchive+git apply --check+apply+874entries comparison。再実行時は出力directoryを新規pathへ変更する。",
+        "full_result_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/patch-reproduction-anchored.json"
+      },
+      {
+        "command": "stdlib lstat/readlink/hashlib comparison + production baseline hash comparison",
+        "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005",
+        "exit": 0,
+        "result": "tests後の全874exportedfiles bytes/mode一致。extraは.pytest_cache4件のみ、sourcebytes変更なし。",
+        "full_result_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/post-test-export-comparison.json"
+      }
+    ],
+    "family_targets": [
+      "tests/ops/test_brain_export.py",
+      "tests/ops/test_ext_contract.py",
+      "tests/ops/test_ext_contract_c0.py",
+      "tests/ops/test_ext_contract_cli.py",
+      "tests/ops/test_receipt_contract.py",
+      "tests/ops/test_c1_contract.py",
+      "tests/ops/test_c1_records.py",
+      "tests/ops/test_c1_envelopes.py",
+      "tests/ops/test_c1_cli.py",
+      "tests/ops/test_c1_receiver.py",
+      "tests/ops/test_c1_withdraw_receive.py"
+    ],
+    "readonly_execution_only_targets": [
+      "tests/ops/test_receipt_contract.py",
+      "tests/ops/test_c1_contract.py",
+      "tests/ops/test_c1_records.py",
+      "tests/ops/test_c1_envelopes.py",
+      "tests/ops/test_c1_cli.py",
+      "tests/ops/test_c1_receiver.py",
+      "tests/ops/test_c1_withdraw_receive.py"
+    ],
+    "before_production_sources_P_unchanged": true,
+    "before_only_overlay": [
+      "tests/ops/test_brain_export.py",
+      "tests/ops/test_ext_contract.py",
+      "tests/ops/test_ext_contract_cli.py"
+    ],
+    "all_new_cases": [
+      {
+        "id": "tests.ops.test_brain_export.test_export_refuses_linked_generated_directory_before_writes[patients]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_brain_export.test_export_refuses_linked_generated_directory_before_writes[stats]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_brain_export.test_export_refuses_linked_generated_directory_before_writes[signals]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_brain_export.test_patient_cleanup_preserves_symbolic_link",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_brain_export.test_write_refuses_directory_changed_before_open",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_brain_export.test_write_stays_in_opened_directory_during_publication",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_brain_export.test_cleanup_stays_in_opened_directory_during_unlink[patients-p999.md]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_brain_export.test_cleanup_stays_in_opened_directory_during_unlink[stats-2000-01-01.md]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_brain_export.test_export_rechecks_directories_after_processing_starts[patients]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_brain_export.test_export_rechecks_directories_after_processing_starts[stats]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_brain_export.test_export_uses_jst_independently_of_host_timezone[UTC]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_brain_export.test_export_uses_jst_independently_of_host_timezone[America/New_York]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_brain_export.test_export_uses_jst_independently_of_host_timezone[Asia/Tokyo]",
+        "result": "pass"
+      },
+      {
+        "id": "tests.ops.test_ext_contract.test_deep_authorization_is_a_contract_refusal",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_ext_contract.test_deep_json_preserves_unknown_delivery_or_deletion[ack]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_ext_contract.test_deep_json_preserves_unknown_delivery_or_deletion[payload]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_ext_contract.test_deep_json_preserves_unknown_delivery_or_deletion[journal]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_ext_contract.test_deep_json_preserves_unknown_delivery_or_deletion[deletion]",
+        "result": "pass"
+      },
+      {
+        "id": "tests.ops.test_ext_contract_cli.test_receive_never_replaces_a_receipt_created_during_processing[file]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_ext_contract_cli.test_receive_never_replaces_a_receipt_created_during_processing[symlink]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_ext_contract_cli.test_receive_never_replaces_a_receipt_created_during_processing[absent]",
+        "result": "pass"
+      },
+      {
+        "id": "tests.ops.test_ext_contract_cli.test_receive_directory_input_rejects_only_a_linked_root[False]",
+        "result": "pass"
+      },
+      {
+        "id": "tests.ops.test_ext_contract_cli.test_receive_directory_input_rejects_only_a_linked_root[True]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_ext_contract_cli.test_receive_rejects_nonregular_explicit_input_without_blocking[fifo]",
+        "result": "fail"
+      },
+      {
+        "id": "tests.ops.test_ext_contract_cli.test_receive_rejects_nonregular_explicit_input_without_blocking[symlink]",
+        "result": "fail"
+      }
+    ],
+    "patch": {
+      "P": "f2fb6260ae179ae1e1d047713ea5ec20fd30b9dd",
+      "W": "2eac0eee5ea3a8d63b32d5e1e0fec2c175e61a69",
+      "patch_bytes": 35986,
+      "patch_sha256": "ae344cb71d8fea850e5420a6dbcdb86f765e2be2af7a0823b3a3c17817a57347",
+      "changed_paths": [
+        "changes/maintenance-export-boundaries-20261005.json",
+        "changes/maintenance-export-jst-20261005.json",
+        "mcs/ops/brain_export.py",
+        "mcs/ops/ext_contract.py",
+        "tests/ops/test_brain_export.py",
+        "tests/ops/test_ext_contract.py",
+        "tests/ops/test_ext_contract_cli.py"
+      ],
+      "exported_files": 874,
+      "byte_mode_equal": true,
+      "P_replay": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-replay-anchored",
+      "W_export": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/W-export-anchored",
+      "initial_all_exported_bytes_mode_equal": true,
+      "after_tests_all_exported_bytes_mode_equal": true,
+      "after_test_extra_runtime_files": [
+        ".pytest_cache/.gitignore",
+        ".pytest_cache/CACHEDIR.TAG",
+        ".pytest_cache/README.md",
+        ".pytest_cache/v/cache/nodeids"
+      ],
+      "comparison_full_entries_file": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/patch-reproduction-anchored.json"
+    },
+    "artifact_manifest": [
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-W-anchored.patch",
+        "bytes": 35986,
+        "sha256": "ae344cb71d8fea850e5420a6dbcdb86f765e2be2af7a0823b3a3c17817a57347"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-W.patch",
+        "bytes": 26639,
+        "sha256": "34aaf11ad0555443c9d6ffefa616c52fda5e3974fee00555e6185b5a2c24a27d"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-before-anchored.log",
+        "bytes": 59210,
+        "sha256": "7656b79833de912ea1718ecd6d1bf700a3a2de8bdf483c709cdb4488997851ae"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-before-anchored.xml",
+        "bytes": 62411,
+        "sha256": "91acadc64595b8ab3977da51f7abae74df84cb1b9c65bfa8cb885c9a0fc11ee3"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-before-final.log",
+        "bytes": 44658,
+        "sha256": "b448925ea35b4db95261f3e3193c46677cb36f4414e179450bc5bc35496d8c8f"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-before-final.xml",
+        "bytes": 46642,
+        "sha256": "f1cdaa77f80fc07c8f6789a5ee39304ade46074f4bab6d7a2db1279295d7cbb9"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-before-overlay-incomplete.log",
+        "bytes": 25625,
+        "sha256": "8083d6a5bcdf6dbb9c840aaf775d3acb836b3526b4d977964c23f9ccdb96e4b8"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-before-overlay-incomplete.xml",
+        "bytes": 27413,
+        "sha256": "4dedf45272e2cef3f15fe737aa91619dceb68ae6d3335eecb081149d73a5192a"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-replay-anchored.log",
+        "bytes": 741,
+        "sha256": "d8402067bf8b037dd2f0cc9b21f67e1744b4bb97d424801ca2d54c51e83d5a6d"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-replay-anchored.xml",
+        "bytes": 128002,
+        "sha256": "073bfa50df689cbe3699e5d2570fc326dd49ea5c8340bfa9654bea1ed12c3010"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-replay-family.log",
+        "bytes": 740,
+        "sha256": "6fb9df8438a8537f2e78e98dfc41aace36742cfff1cbe777492d04db3ed53be4"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-replay-family.xml",
+        "bytes": 127186,
+        "sha256": "c931c1d068ed968c6aa031125598ef0f1b50af5b577c3e05f170f9da489aa563"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/after-anchor-native-hook.log",
+        "bytes": 113,
+        "sha256": "4dd449e37fcb616fbe36fe7b7dada2f5e15673200843205c5b72442a7f64b61e"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/after-anchor-native-hook.xml",
+        "bytes": 789,
+        "sha256": "105499f62a9650428ac62d2303313048c0393b6a9951501e7d0c1182a25339f5"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/after-anchor-races.log",
+        "bytes": 113,
+        "sha256": "16def67e286032056234d82a9de83345de4f4bda48ca68d8a2728e16611da1c8"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/after-anchor-races.xml",
+        "bytes": 789,
+        "sha256": "3cf2dfab912077b26e4b4256fe095a731c25c4a822117824fb98c83ef58aaf36"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/after-boundaries.log",
+        "bytes": 115,
+        "sha256": "40a52b73e313efed0ab5c960207f044028d58de0297a1c888313c69392279f13"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/after-boundaries.xml",
+        "bytes": 2594,
+        "sha256": "4d73770d30a24cbd4f3b0718428dd8a5236f1aa741b71a45ebabc8af9c9ca405"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/after-parent-candidates.log",
+        "bytes": 179,
+        "sha256": "f0331b2e6909d4575954dd3b63ebfa1c835a238e509376cf9a5f8cc2cbb2ff0b"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/after-parent-candidates.xml",
+        "bytes": 11723,
+        "sha256": "b12f44f91d394a67c81c664e03df518207a6d0c8a8dd9aa26f59f19d8ceeee64"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/before-boundaries-corrected.log",
+        "bytes": 33615,
+        "sha256": "7890e27b480958a13ec22ffcba94215a5691ac1226158b280246d13d3c837dfa"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/before-boundaries-corrected.xml",
+        "bytes": 34813,
+        "sha256": "8610239b5f096b5f1044131e85baad0826523321706787c84c086d4d226ef325"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/before-boundaries.log",
+        "bytes": 22431,
+        "sha256": "7cf40e4a7d79fad0de52dce9ba8bbbec13549f7b67e2d5f8566c735dcea15797"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/before-boundaries.xml",
+        "bytes": 24283,
+        "sha256": "9271868160fc22798864a2b33f3e0bc8ed36da7421243f18270cffbb2e95793c"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/before-input.log",
+        "bytes": 5824,
+        "sha256": "9b0726ee18b564c79a6c0d14ba47740074fa473586b40403cbc92fe0ad13c016"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/before-input.xml",
+        "bytes": 6880,
+        "sha256": "1c728e95d16a64219cfc2a7e920ded18f231830e521c558337e42d6cf75af24b"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/before-parent-candidates.log",
+        "bytes": 3269,
+        "sha256": "436bc278aa10e477c9b7a7248fc9a5de89803b973d5e1a5564f50013f902085a"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/before-parent-candidates.xml",
+        "bytes": 3423,
+        "sha256": "f5346ec673d42fa917be368c51163bd44b6457931ed02a3720a6c44e00b69de9"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/before-recheck.log",
+        "bytes": 5721,
+        "sha256": "e42d7c77719c4f7920acda2bba9e6fa89f471f19435e25ec2980dff3fe131fae"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/before-recheck.xml",
+        "bytes": 5387,
+        "sha256": "e7665a458720677aa701559c701fbfca40887dc83b365de4583199e183a43a6b"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/before-test-overlay-anchored.json",
+        "bytes": 440,
+        "sha256": "cabe2d535447ef32686b6d52d4f3ca78f2a1b8eee1a8d94e17cd68290c695d71"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/before-test-overlay.json",
+        "bytes": 440,
+        "sha256": "a72a3d99279fff5441bcfdaa5b5d385dd457049c12ac83f53fdb30db325c2bdf"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/family-anchored.log",
+        "bytes": 740,
+        "sha256": "a6d9aba6f9d8e1fc0e0e6ebff7c1011565e606090c5087117e0c2c594e58c247"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/family-anchored.xml",
+        "bytes": 127584,
+        "sha256": "9e4f8ea0e778fe4027e1d02d45218c8785ad74458f070ee4d79324f23030c32b"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/family-final-anchored.log",
+        "bytes": 740,
+        "sha256": "b72059eda08a366e975ab8b08d7dd1f803ebe580d1e568d6b767a252fe5a3447"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/family-final-anchored.xml",
+        "bytes": 128001,
+        "sha256": "874d2a87df49911d3163ad40bfa1d6742c5869822e16eda7b60e1be44779eb8d"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/family-final.log",
+        "bytes": 740,
+        "sha256": "72f24e2c4b5fbbd1969693c7ecd4b5407133ec2879741b181f92e4cfcf446acf"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/family-final.xml",
+        "bytes": 127186,
+        "sha256": "e77d1eeeb152bb3b6a20f8450283b18060fabbd3a603215ef6ddd45934e1f109"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/family.log",
+        "bytes": 740,
+        "sha256": "789d89f6bbc1492a896adf44c469da30c4a27a1fe6fa90784177a2b36e745871"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/family.xml",
+        "bytes": 126911,
+        "sha256": "5b4c5aaef36c2438519a904f993c7e2fa61b1432c6d03c0c97ae0599ce031d9b"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/patch-reproduction-anchored.json",
+        "bytes": 184911,
+        "sha256": "138cc294848f67943804dac616d56a9391196b23180d0378d063471d6598236f"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/patch-reproduction.json",
+        "bytes": 184893,
+        "sha256": "e308979907193e36211fa0c0cba7a463b06a417b483f7ba8c7b68d346362d8d4"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/post-test-export-comparison.json",
+        "bytes": 289,
+        "sha256": "f535104cdd5c3285ed17811ba9ef238ea1c7bc20272c5427f7f3ead4b8043d67"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/ruff-W-final.log",
+        "bytes": 19,
+        "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/ruff-anchored.log",
+        "bytes": 19,
+        "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/ruff-final-anchored.log",
+        "bytes": 19,
+        "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/ruff-final.log",
+        "bytes": 19,
+        "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/ruff-native-hook.log",
+        "bytes": 19,
+        "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/ruff-parent-candidates.log",
+        "bytes": 892,
+        "sha256": "11c203f5d9576403a95b79c0474c77bdb3833fa1e905a80aecf9b302f5f11bb5"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/ruff.log",
+        "bytes": 19,
+        "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+      },
+      {
+        "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/executed-replay.py",
+        "bytes": 2591,
+        "sha256": "cef192d11fe5445193b20c735e6d508b84ef43c0738e3e59ff8cc9a8fac92978"
+      }
+    ],
+    "not_reused_diagnostics": [
+      {
+        "paths": [
+          "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/before-boundaries.log",
+          "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/before-boundaries.xml"
+        ],
+        "reason": "初期fixtureにimport名/depth/clock不備が含まれた診断段階。修正したsyntheticfixtureでbefore-boundaries-correctedと最終P-before-anchoredを実行、受入beforeproofへ流用しない。"
+      },
+      {
+        "paths": [
+          "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-before-overlay-incomplete.log",
+          "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/P-before-overlay-incomplete.xml"
+        ],
+        "reason": "archive exec進行中のtestoverlayが完了する前に開始された不完全collection。artifactは保全して除外、最終P-before-anchoredはarchive完成後依存を順に実行して25case確認。"
+      },
+      {
+        "paths": [
+          "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/family-final-anchored.log",
+          "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/after-anchor-native-hook.log"
+        ],
+        "reason": "source2 family617passとfixture3局所4passの補助記録。現W全体受入はfinal P-replay-anchored617pass。その他中間logsは履歴のみ、最終W証拠として数を合算しない。"
+      },
+      {
+        "paths": [
+          "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/ruff-parent-candidates.log"
+        ],
+        "reason": "中間stat module import と既存looplocal shadowによるF402をS_ISREG明示importへ修正。最終ruff-W-final成功、lintを弱めず。"
+      },
+      {
+        "paths": [
+          "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet5-20261005/post-test-export-comparison.json"
+        ],
+        "reason": "最初のpost-test whole-tree assertionはpytest_cache追加をexport済みsource差分と混同して失敗。lstatでregular/link別に比較しexportset874件は変更0、追加は既知pytestcache4件のみと確認。exportfile欠落/変更を許容していない。"
+      }
+    ],
+    "evidence_validation": {
+      "exit": 0,
+      "assigned_inventory_hashes_and_fullranges": 58,
+      "criteria_groups": 10,
+      "criteria_decisions": 200,
+      "artifact_manifest_hashes_verified": 50,
+      "source_commit_ids_verified": 3,
+      "fragment_json_verified": 2
+    }
+  },
+  "handoff": {
+    "source_delta_paths": [
+      "changes/maintenance-export-boundaries-20261005.json",
+      "changes/maintenance-export-jst-20261005.json",
+      "mcs/ops/brain_export.py",
+      "mcs/ops/ext_contract.py",
+      "tests/ops/test_brain_export.py",
+      "tests/ops/test_ext_contract.py",
+      "tests/ops/test_ext_contract_cli.py"
+    ],
+    "source_delta_paths_count": 7,
+    "packet_report_path": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
+    "working_tree_source_checkpoint_clean": true,
+    "requested_parent_actions": "別evidencecommitを統合しfullinventoryを更新、doccandidateを次packetへ追跡。全repoの受入・release・generatedDEVELOPMENTは親ゲートで継続。"
+  },
+  "created_UTC": "2026-10-05 02:07:56 UTC"
+}

@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "処理が止まっているのに状態が正常と表示される問題を修正",
+  "summary": "設定の誤りや配送・解析の停滞を、health.jsonの状態とエラーに表示するようにしました。semantic設定の誤りでLLM抽出が止まっている場合、検知器のエラー、障害通知の登録失敗、カード配送や解析の長時間停滞が、正常（ok）ではなく要確認（degraded）として見えます。",
+  "upgrade": "追加操作は不要です。新しい停滞判定は、対話カードが有効なときに現在の配送先で30分以上送られないカードがある場合（card_delivery_stalled）、semantic有効時に6時間以上手つかずの解析待ちがあり、その間に1件も完了していない場合（semantic_backlog_stalled）、従来抽出の利用時に6時間以上未着手の投稿があり、その間に抽出結果が1件も作られていない場合（extract_backlog_stalled）だけ表示されます。backlog抽出workerを動かしていない環境では、新着が6時間ない時間帯にextract_backlog_stalledが出ることがあります。",
+  "details": [
+    "semantic設定の検証エラーを毎回のエラーに出し、抽出受付が閉じたときは標準エラーへadmission_closedを1回記録する。",
+    "signals検知器のエラーを「signals: 」付きでエラーに加える。",
+    "失敗時の障害通知の登録に失敗した場合、alert_enqueue_failedをエラーに加える。",
+    "Hermesのカードworkerが有効化されているのに設定不足で起動しない場合、ログにworker_disabledを1行出す。",
+    "隔離されたdata/cmd_int/*.json.invalidも1日後に削除する。"
+  ],
+  "refs": ["mcs/ingest/run_check.py", "mcs/extract/v4/extract_llm.py", "hermes_plugin/card_workers.py", "mcs/core/maintenance.py"]
+}

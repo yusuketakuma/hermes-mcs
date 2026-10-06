@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "不正な保存結果による意味抽出の停止を防止",
+  "summary": "保存JSONに読み取れない数値などが含まれる場合も、その行を安全に扱い、正常な結果の照合や失敗ジョブの再試行を続けます。読めない公開結果は失効させ、読めない利用記録は利用枠を増やさず停止するため、安全条件を維持します。",
+  "upgrade": "追加操作は不要です。更新後の保存結果の参照から適用されます。抽出モデル・範囲・人承認条件は変わりません。読めないジョブ本文は不正JSONと同様に失敗扱いとなり、モデル呼出しを行いません。",
+  "details": ["既存の安全なJSON読込みを使い、SQLiteで有効なJSONでもPythonで解釈できない場合を隔離する。", "分割キャッシュ・manifest・現行結果・通知計画・スケジュール・復活対象の照合を継続する。", "読めない投影metadataを失効させ、読めない利用記録は予算判定をfail-closedに保つ。"],
+  "refs": ["mcs/semantic/semantic_store.py", "mcs/semantic/semantic_extraction.py", "mcs/semantic/semantic_drain.py"]
+}

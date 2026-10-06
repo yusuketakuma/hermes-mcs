@@ -1,8 +1,8 @@
 # MCS 更新実行手順書（AIエージェント用）
 
 このガイドはv1.0.14仕様のinstall/update/setup/doctorと復旧手順に対応する。
-1.0.14の合成検証・公開の状況は[リリース受入票](../development/ACCEPTANCE_1.0.14.md)で追跡する。
-過去の1.0.13実機受入計画は[開発・受入計画](../development/RELEASE_1.0.13.md)に残す。
+1.0.14の合成検証・公開の状況は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.14.md)で追跡する。
+過去の1.0.13実機受入計画は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)に残す。
 
 ### 2026-10-04追記: 現在の更新入口と回帰資産
 

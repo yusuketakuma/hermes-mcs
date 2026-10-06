@@ -13,7 +13,6 @@ from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import sqlite3
@@ -147,13 +146,13 @@ def _binding(path, fd, source_sha256, *, static=True) -> Binding:
             or report["restore_pending"] is not True
             or report["attachment_payloads_included"] is not False
             or type(report["verified_at"]) not in (int, float)
-            or not math.isfinite(report["verified_at"])
+            or not mcs_backup._finite_number(report["verified_at"])
             or report["verified_at"] <= 0
             or not isinstance(marker, dict) or set(marker) != {
                 "v", "phase", "backup_path", "by", "at", "report_id"}
             or type(marker.get("v")) is not int or marker["v"] != 1
             or type(marker["at"]) not in (int, float)
-            or not math.isfinite(marker["at"]) or marker["at"] <= 0
+            or not mcs_backup._finite_number(marker["at"]) or marker["at"] <= 0
             or marker.get("by") != "mcs_backup_restore"
             or marker.get("phase") != "awaiting_consent"
             or marker.get("backup_path") is not None

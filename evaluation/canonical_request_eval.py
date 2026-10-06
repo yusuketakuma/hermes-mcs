@@ -210,10 +210,26 @@ def shadow_compare(db):
             projection = candidate["projection"]
             loop_facts = candidate.get("loop_facts") or []
             fresh = candidate["source"]["revision"] == row["content_hash"]
-        except (json.JSONDecodeError, TypeError, KeyError, AttributeError):
+        except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
             fresh = False
         if not fresh or row["body_state"] == "deleted" or not isinstance(projection, dict) \
                 or not isinstance(loop_facts, list):
+            counts["stale_or_invalid"] += 1
+            continue
+        # Validate pairing operands before counting a candidate as comparable.
+        # Missing evidence stays unpaired; malformed evidence stays unknown.
+        # ponytail: one stored quote per fact; use full evidence refs if pairing needs them.
+        quotes = {}
+        for fact in loop_facts:
+            if isinstance(fact, dict) and fact.get("_v2_kind") == "request_pending" \
+                    and isinstance(fact.get("_evidence"), dict):
+                statement, quote = fact.get("statement"), fact["_evidence"].get("quote")
+                if (statement is not None and not isinstance(statement, str)
+                        or quote is not None and not isinstance(quote, str)):
+                    quotes = None
+                    break
+                quotes.setdefault(statement, []).append(quote)
+        if quotes is None:
             counts["stale_or_invalid"] += 1
             continue
         legacy = db.execute(
@@ -233,13 +249,6 @@ def shadow_compare(db):
         predicted, extra = _shadow_requests(projection.get("requests", []))
         counts["dropped_legacy_rows"] += dropped
         counts["dropped_candidate_rows"] += extra
-        # ponytail: first evidence quote per fact only (what loop_facts keeps).
-        quotes = {}
-        for fact in loop_facts:
-            if isinstance(fact, dict) and fact.get("_v2_kind") == "request_pending" \
-                    and isinstance(fact.get("_evidence"), dict):
-                quotes.setdefault(fact.get("statement"), []).append(
-                    fact["_evidence"].get("quote"))
         for gold in expected:
             match = next((p for p in predicted if _overlaps(
                 [gold.get("evidence")], quotes.get(p["action"], []))), None)
@@ -391,7 +400,7 @@ def main(argv=None):
             finally:
                 db.close()
             return 0
-        except (OSError, sqlite3.Error, ValueError) as error:
+        except (OSError, sqlite3.Error, ValueError, RecursionError) as error:
             print(json.dumps({"error": type(error).__name__}))
             return 1
     try:
@@ -405,7 +414,7 @@ def main(argv=None):
             "llm_capacity_measurement": False}
         print(json.dumps(report, ensure_ascii=False, allow_nan=False))
         return 0
-    except (OSError, ValueError, TypeError, KeyError, facts.ContractError,
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, facts.ContractError,
             evaluation.EvaluationError) as error:
         print(json.dumps({"error": type(error).__name__}))
         return 1

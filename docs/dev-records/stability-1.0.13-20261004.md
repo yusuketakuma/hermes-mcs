@@ -100,8 +100,8 @@ ci/mine_gatesが採掘するincident記録、合成gallery、生成wikiは保持
 完了済み統合作業の一時引継ぎで、現行README/docs/openwiki/tests/ciのbacklinkと
 incident IDはない。統合結果・受入・未検証事項は
 [merge記録](merge-1.0.11-20261003.md)、
-[1.0.11受入](../development/ACCEPTANCE_1.0.11.md)、
-[1.0.12受入](../development/ACCEPTANCE_1.0.12.md)と現計画へ引き継ぐ。
+[1.0.11受入](../development/acceptance/ACCEPTANCE_1.0.11.md)、
+[1.0.12受入](../development/acceptance/ACCEPTANCE_1.0.12.md)と現計画へ引き継ぐ。
 Gitの`fb099ee:docs/dev-records/handoff-1.0.11-claude-20261003.md`で復旧可能。
 当時のLINE WORKS部品上限・サマリーlock内処理等の未検証は、全通知先/長文/予算の回帰対象とする。
 ユーザーの「古い過去の文書は削除して良い」による、復旧可能な不要ソース文書の整理。
@@ -113,7 +113,7 @@ Gitの`fb099ee:docs/dev-records/handoff-1.0.11-claude-20261003.md`で復旧可�
 runtime実装を変更していないため、同HEADの全体テスト成功を再利用する。
 checksの実行結果は最終報告に記載し、未実行の実API/SDK/モデル/配備を成功扱いにしない。
 
-次工程は[開発・受入計画](../development/RELEASE_1.0.13.md)の順に実装する。
+次工程は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)の順に実装する。
 今回、runtime・患者データ・私有設定・常駐サービス・公開状態を変更しない。
 
 ## 実装工程の統合記録
@@ -170,7 +170,7 @@ bookmarkedへ根拠のないunread filterを送らず、暗黙login・定期取�
 
 ### #1 NAS方針と専用復元同意
 
-ユーザーはNAS案を選択した。[方針案](../development/BACKUP_NAS_PROPOSAL_1.0.13.md)
+ユーザーはNAS案を選択した。[方針案](../development/plans/BACKUP_NAS_PROPOSAL_1.0.13.md)
 はレビュー用で、実行用policy・実媒体・鍵作成・実患者データ操作の承認ではない。
 保存パス・identity・容量・鍵/receiptの別保管・保持/RPOの採用は未確定。
 日次snapshotとoffsiteの時刻差だけでもRPO24時間を超え得る点を明示した。
@@ -349,7 +349,7 @@ static 8/8が成功。旧の固定bytes/hash/ID/intentは維持し、実source/�
 ## Claude Code引継ぎ後の実装・検証（2026-10-04）
 
 引継ぎ文書の未完16項目をローカル実装・合成検証の範囲で閉じた。実機・実API・人手・
-相手repo・オーナー判断の条件は[開発・受入計画](../development/RELEASE_1.0.13.md)§6に残す。
+相手repo・オーナー判断の条件は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)§6に残す。
 
 - #9 recovery明示設定unitを親として確認。update-path合成fixtureがrecovery実行ファイルを
   更新対象tree内に置いていた不備を、repo外へ置く形に修正（規則自体は維持）。182件成功。

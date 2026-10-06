@@ -2,6 +2,9 @@
 # MCS unread check — hermes cron job (replaces local.mcs-check.plist).
 # Full run output appends to the MCS run log; stdout carries an alert line
 # only on hard failure (empty stdout = silent, watchdog convention).
+# cron/launchd stdout only reaches a log — a human hears about these
+# states through health_watch.py (stale/failed/collection_incomplete),
+# which delivers its deduped alerts to notify_system_target.
 # Exit 2 = session expired: the MCS notifier already alerts via
 # notify_system_target (deduped) — silent here to avoid 15-min spam.
 set -u

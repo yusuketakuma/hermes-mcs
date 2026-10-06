@@ -129,6 +129,14 @@ def _result(status: str, scope: dict, data: dict, reason=None) -> dict:
     return out
 
 
+def _as_of_day(scope):
+    """Return the local calendar day only when the stored timestamp is representable."""
+    try:
+        return datetime.fromtimestamp(scope["as_of"], JST).date()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
 # ---------------- T0 ----------------
 
 def st_data_quality(db, scope):
@@ -297,7 +305,11 @@ def st_workload(db, scope):
     bands = {}
     room_seen = {}
     for ts, pid in rows:
-        dt = datetime.fromtimestamp(ts, JST)
+        try:
+            dt = datetime.fromtimestamp(ts, JST)
+        except (ValueError, OverflowError, OSError) as error:
+            return _result("unavailable", scope, {},
+                           reason=f"data_error:{type(error).__name__}")
         weekend = dt.weekday() >= 5
         day = 8 <= dt.hour < 18
         band = ("weekend" if weekend else
@@ -541,8 +553,13 @@ def st_rx_expiry(db, scope):
     room. Period expressions are parsed surface forms (e.g. '4/8-4/21')
     — NOT verified prescription periods, and not linked to specific
     drug names."""
-    today = datetime.fromtimestamp(scope["as_of"], JST).date()
-    horizon = today + timedelta(days=14)
+    today = _as_of_day(scope)
+    if today is None:
+        return _result("unavailable", scope, {}, reason="data_error:timestamp_unrepresentable")
+    try:
+        horizon = today + timedelta(days=14)
+    except OverflowError:
+        return _result("unavailable", scope, {}, reason="data_error:timestamp_unrepresentable")
     per_room = {}
     items = []
     seen = set()
@@ -668,7 +685,9 @@ def st_open_loop_aging(db, scope):
     ).fetchall()
     buckets = {"not_yet_due": 0, "0-7d": 0, "8-30d": 0, "31-90d": 0,
                "over_90d": 0, "no_due": 0}
-    as_of_day = datetime.fromtimestamp(scope["as_of"], JST).date()
+    as_of_day = _as_of_day(scope)
+    if as_of_day is None:
+        return _result("unavailable", scope, {}, reason="data_error:timestamp_unrepresentable")
     items = []
     for rid, pid, status, due in rows:
         age_d = None
@@ -910,9 +929,13 @@ def st_signal_feedback(db, scope):
     selected = [ep for ep in episodes
                 if (scope["since"] is None or ep["start"] >= scope["since"])
                 and (scope["until"] is None or ep["start"] < scope["until"])]
-    requests = db.execute(
-        "SELECT project_id,source_message_id,created_at FROM requests "
-        "WHERE created_at<=?", (scope["as_of"],)).fetchall()
+    # Bucketed by patient / shown key so each episode only scans its own
+    # candidates instead of every request and manifest (was O(episodes x rows)).
+    requests: dict = {}
+    for pid, source, created in db.execute(
+            "SELECT project_id,source_message_id,created_at FROM requests "
+            "WHERE created_at<=?", (scope["as_of"],)):
+        requests.setdefault(pid, []).append((source, created))
     # Delivered renders prove exactly which digest page/signal keys were shown.
     # An accepted outbox or card anchor alone is not proof of page delivery.
     manifests = db.execute(
@@ -928,23 +951,23 @@ def st_signal_feedback(db, scope):
             "WHERE created_at<=? AND (withdrawn_at IS NULL OR withdrawn_at>?)",
             (scope["as_of"], scope["as_of"])):
         acks.setdefault(mid, []).append(at)
-    shown = []
+    shown: dict = {}
     for mid, shown_s, delivered in manifests:
         try:
             keys = json.loads(shown_s)
         except (ValueError, TypeError, RecursionError):
             continue
         if isinstance(keys, list):
-            shown.append((mid, {k for k in keys if isinstance(k, str)}, delivered))
+            for k in {k for k in keys if isinstance(k, str)}:
+                shown.setdefault(k, []).append((mid, delivered))
     for ep in selected:
-        for pid, source, created in requests:
-            if pid == ep["pid"] and any(
-                    source in segment["mids"]
-                    and segment["start"] <= created <= segment["end"]
-                    for segment in ep["segments"]):
+        for source, created in requests.get(ep["pid"], ()):
+            if any(source in segment["mids"]
+                   and segment["start"] <= created <= segment["end"]
+                   for segment in ep["segments"]):
                 ep["adoption_times"].append(created)
-        for mid, keys, delivered in shown:
-            if ep["key"] in keys and ep["start"] <= delivered <= ep["end"]:
+        for mid, delivered in shown.get(ep["key"], ()):
+            if ep["start"] <= delivered <= ep["end"]:
                 ep["shown_times"].append(delivered)
                 ep["ack_times"].extend(
                     at for at in acks.get(mid, [])

@@ -279,3 +279,24 @@ def test_unpublished_confirm_failure_replies_and_allows_retry(tmp_path, monkeypa
     assert w.client.calls[-1][1]["text"] == "受け付けました。"
     assert command_files(w) == [payload]
     assert w.reg.followup(payload["command_id"]) is not None
+
+
+def test_rate_limited_followup_is_restored_for_the_next_sweep(tmp_path):
+    """Regression: a 429 (nothing sent) lost the operation-result DM because
+    the followup was dropped before send and only restored on sender_busy."""
+    from adapters.lineworks.client import ClientError
+    w = world(tmp_path, action="summary")
+    asyncio.run(w.actions.handle(event(postback="mcs:a:" + TOKEN)))
+    first = command_files(w)[0]
+    _result(w, first["request_id"], {
+        "request_id": first["request_id"], "outcome": "applied",
+        "action": "summary", "body": "合成の要約"})
+    w.client.error = ClientError("rate_limited", 429)
+    with pytest.raises(ClientError, match="rate_limited"):
+        asyncio.run(w.actions.sweep_followups())
+    assert w.reg.followup(first["command_id"]) is not None
+    w.client.error = None
+    (Path(w.dirs["state"]) / "rate-limit.json").unlink()
+    asyncio.run(w.actions.sweep_followups())
+    assert w.reg.followup(first["command_id"]) is None
+    assert "合成の要約" in w.client.calls[-1][1]["text"]

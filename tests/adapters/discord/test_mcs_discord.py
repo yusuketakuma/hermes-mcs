@@ -1300,6 +1300,45 @@ def test_supervisor_registers_and_stops(world):
     asyncio.run(run())
 
 
+def test_supervisor_retries_a_transient_reconcile_failure(world, monkeypatch):
+    """Regression: an OSError (or registry_corrupt) during the start-up
+    reconcile made _run exit silently — delivery stopped until restart."""
+    world.seed()
+    world.dispatch()
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(_seconds):
+        await real_sleep(0)
+
+    monkeypatch.setattr(worker_mod.asyncio, "sleep", fast_sleep)
+    reconcile = delivery.DeliveryWorker.reconcile
+    fails = [1]
+
+    async def flaky(self):
+        if fails[0]:
+            fails[0] -= 1
+            raise OSError("synthetic disk blip")
+        return await reconcile(self)
+
+    monkeypatch.setattr(delivery.DeliveryWorker, "reconcile", flaky)
+    ctx = SimpleNamespace(spawn_task=lambda coro, name=None: asyncio.ensure_future(coro),
+                          on_unload=lambda cb: None)
+
+    async def run():
+        bot = SignalBot()
+        sup = tasks.Supervisor(
+            ctx=ctx, bot=bot,
+            settings={**SETTINGS, "data_root": str(world.data)},
+            log=lambda e, **f: world.logs.append((e, f)))
+        assert sup.start() is True
+        await asyncio.wait_for(bot.wired.wait(), 5)
+        sup.unload()
+        await asyncio.wait_for(sup._task, 5)
+
+    asyncio.run(run())
+    assert ("startup_retry", {"error": "OSError"}) in world.logs
+
+
 # ---------- D3: authorization depth (RC01) ---------------------------------
 
 def test_action_denies_wrong_channel_and_project(world):
@@ -2705,6 +2744,8 @@ def _delivered(world):
 
 
 def _face(msg):
+    if msg.embed is not None:
+        return msg.embed.description
     return "\n".join(c.content for c in msg.view.items[0].children
                      if hasattr(c, "content"))
 
@@ -2725,9 +2766,10 @@ def test_card_posts_and_edits_never_ping(world):
     asyncio.run(_deliver(world, worker))
     assert msg.edits == 1 and msg.allowed_mentions.roles is False
     assert "-# ✅ 確認: <@1001>" in _face(msg)
-    labels = [x.label for row in msg.view.items[0].children
-              if hasattr(row, "children") for b in row.children
-              for x in getattr(b, "options", [b])]
+    buttons = (msg.view.items if msg.embed is not None else
+               [b for row in msg.view.items[0].children
+                if hasattr(row, "children") for b in row.children])
+    labels = [x.label for b in buttons for x in getattr(b, "options", [b])]
     assert "確認する" in labels and "⏸ 保留" not in labels
 
 

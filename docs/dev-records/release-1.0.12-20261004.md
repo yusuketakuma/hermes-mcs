@@ -4,7 +4,7 @@
 最終SHAのci・Japanese release notesもsuccessを再確認した。
 以下の「未公開」「送信していない」は準備時点の履歴であり、現在状態ではない。
 原MCS確認はユーザー完了申告済み。配備・新コマンド実接続は公開とは別工程。
-現在の次版計画は[1.0.13](../development/RELEASE_1.0.13.md)、
+現在の次版計画は[1.0.13](../development/plans/RELEASE_1.0.13.md)、
 [今回のレビュー](stability-1.0.13-20261004.md)を参照する。
 
 
@@ -17,7 +17,7 @@
 - 変更記録2件のdetails欠落と禁止された山括弧を修正し、release_notes.py checkを成功させた。
 - 既存生成器のbuildでCHANGELOGとREADME最新変更を1.0.12へ同期し、入力記録をchanges/archive/1.0.12へ格納した。
 - READMEの機能・画面例・導入・安全・導線をソースに照合し、readme-review.jsonを具体的な新版の記録へ更新した。Slackの /mcs未実装という古い画面例説明を訂正した。画面の生成元/画像は変更不要で、両ギャラリーのcheckを成功させた。
-- [新版の受入票](../development/ACCEPTANCE_1.0.12.md)は原1.0.11の未確認事項を引き継ぎ、公開完了とはしていない。
+- [新版の受入票](../development/acceptance/ACCEPTANCE_1.0.12.md)は原1.0.11の未確認事項を引き継ぎ、公開完了とはしていない。
 - Releaseのタイトルと本文は同じ1.0.12のCHANGELOGからexportした。一時成果物: /tmp/mcs-release-1.0.12-title-20261004.txt と /tmp/mcs-release-1.0.12-20261004.md。GitHubへ送信していない。
 
 ## 確認領域と制約
@@ -56,7 +56,7 @@ skill-creatorの形式検証が成功し、相対参照とClaude Codeの正本sy
 
 ## 未完了条件
 
-[1.0.12受入票](../development/ACCEPTANCE_1.0.12.md)の新規導入・全更新元の未確認条件、MCS原要求のユーザー実機確認と新コマンドの実接続確認を残す。
+[1.0.12受入票](../development/acceptance/ACCEPTANCE_1.0.12.md)の新規導入・全更新元の未確認条件、MCS原要求のユーザー実機確認と新コマンドの実接続確認を残す。
 最終commitとそのexact SHAの必須CIは未実施。これらを解消してからタグ/公開へ進む。公開の承認と配備の承認は別であり、ここではどちらも実施していない。
 
 ## 2026-10-04 公開指示後の追加確認

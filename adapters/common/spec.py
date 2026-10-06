@@ -68,7 +68,7 @@ PARTS_KEYS = frozenset({
     "page", "pages", "thread_name", "thread_body_parts", "manifest",
     # "silent": footer text carries <@id> member mentions — Discord sends
     # them with allowed_mentions=none; Slack replaces them with names
-    "mentions"})
+    "mentions", "preview_text"})
 PART_ENTRY_KEYS = frozenset({
     "part_id", "kind", "index", "sha256", "bytes", "name",
     "attachment_id", "path", "unavailable", "prior_remote_id", "caption"})
@@ -251,6 +251,8 @@ def validate(spec) -> dict:
         _err("bad_mentions")
     if parts.get("context") is not None and not isinstance(parts["context"], dict):
         _err("bad_context")
+    if "preview_text" in parts and not _text(parts["preview_text"], 600):
+        _err("bad_preview_text")
     containers = parts.get("containers")
     if not isinstance(containers, list):
         _err("bad_containers")
@@ -353,9 +355,11 @@ def _check_part_payloads(parts: dict, manifest: list, chunks) -> None:
         _err("bad_card_part")
     if "footer" not in parts or "action_rows" not in parts:
         _err("bad_card_payload")
-    card_sha = hashlib.sha256(canonical(
-        {"containers": parts["containers"], "footer": parts["footer"],
-         "action_rows": parts["action_rows"]})).hexdigest()
+    card_payload = {"containers": parts["containers"], "footer": parts["footer"],
+                    "action_rows": parts["action_rows"]}
+    if "preview_text" in parts:
+        card_payload["preview_text"] = parts["preview_text"]
+    card_sha = hashlib.sha256(canonical(card_payload)).hexdigest()
     if card.get("sha256") != card_sha:
         _err("card_part_sha256")
     body_parts = [p for p in manifest if p["kind"] == "body_part"]

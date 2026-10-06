@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "不正な世代情報を公開済みスナップショットとして扱わない",
+  "summary": "世代IDが空・不正型の場合や生成時刻が不正・負・無限大の場合は、公開済みスナップショットとして扱いません。共通の読取りモデルと画面用ビューで同じ条件を使い、不正な世代へのcursorや取得状態の束縛を防ぎます。",
+  "upgrade": "追加操作は不要です。不正な世代情報があるファイルはビューで拒否されるため、通常のスナップショット公開経路で生成し直してください。有効な旧形式の世代IDと時刻0は従来どおり扱います。",
+  "details": ["世代IDの非空文字列と、生成時刻の非負・有限の数値を共通の_snapshot_metaで検証する。", "Viewの初期化も同じ検証を使い、拒否時のreader終了を維持する。"],
+  "refs": ["mcs/views/read_model.py", "mcs/views/mcs_view.py", "tests/views/test_snapshot_publication_stability.py"]
+}

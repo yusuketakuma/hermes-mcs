@@ -35,15 +35,15 @@
 <text x="82" y="556.0" font-size="15" fill="#66716f">────────────</text>
 <text x="82" y="580.0" font-size="15" fill="#202124">👤 担当: 田中 · ✅ 確認: 田中</text>
 <text x="82" y="604.0" font-size="15" fill="#202124">📝 タスク 1件 · スタンプ 👀2 🙆1 · 自分 1投稿</text>
-<rect x="66" y="618.0" width="422" height="33" rx="0" fill="#fff" stroke="#d5e1e5"/>
+<rect x="76" y="620.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
 <text x="277" y="641.0" font-size="16" fill="#176cc2" text-anchor="middle">確認する</text>
-<rect x="66" y="651.0" width="422" height="33" rx="0" fill="#fff" stroke="#d5e1e5"/>
+<rect x="76" y="653.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
 <text x="277" y="674.0" font-size="16" fill="#176cc2" text-anchor="middle">担当する</text>
-<rect x="66" y="684.0" width="422" height="33" rx="0" fill="#fff" stroke="#d5e1e5"/>
+<rect x="76" y="686.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
 <text x="277" y="707.0" font-size="16" fill="#176cc2" text-anchor="middle">タスク作成</text>
-<rect x="66" y="717.0" width="422" height="33" rx="0" fill="#fff" stroke="#d5e1e5"/>
+<rect x="76" y="719.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
 <text x="277" y="740.0" font-size="16" fill="#176cc2" text-anchor="middle">MCSで開く</text>
-<rect x="66" y="750.0" width="422" height="33" rx="0" fill="#fff" stroke="#d5e1e5"/>
+<rect x="76" y="752.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
 <text x="277" y="773.0" font-size="16" fill="#176cc2" text-anchor="middle">その他の操作</text>
 <rect x="588" y="245" width="30" height="30" rx="8" fill="#087f5b"/>
 <text x="595" y="267" font-size="18" fill="#fff" font-weight="bold">M</text>

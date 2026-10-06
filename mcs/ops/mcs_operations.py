@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextlib import contextmanager, suppress
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -309,7 +310,12 @@ def _apply_scan_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
     floor_row = db.execute(
         "SELECT history_floor FROM patients WHERE project_id=?",
         (project_id,)).fetchone()
-    floor = (floor_row["history_floor"] if floor_row else 0) or 0
+    floor = floor_row["history_floor"] if floor_row else 0
+    if floor is None:
+        floor = 0
+    if (type(floor) not in (int, float) or not math.isfinite(floor)
+            or floor < 0 and floor != -1):
+        return "invalid_history_floor", {}
     if floor and floor <= since:
         return "already_floored", {}
 
@@ -671,12 +677,17 @@ def _refstat_promotion(pending: str, approved: str, expected_hash: str):
         with os.fdopen(fd, "wb") as dest:
             source_fd = os.open(claimed, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             with os.fdopen(source_fd, "rb") as source:
-                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                source_info = os.fstat(source.fileno())
+                if not stat.S_ISREG(source_info.st_mode):
                     raise _RefstatRejected("refstat_not_pending")
                 digest = hashlib.sha256()
-                for chunk in iter(lambda: source.read(65536), b""):
+                remaining = source_info.st_size
+                while chunk := source.read(min(65536, remaining + 1)):
+                    if len(chunk) > remaining:
+                        raise _RefstatRejected("refstat_hash_mismatch")
                     dest.write(chunk)
                     digest.update(chunk)
+                    remaining -= len(chunk)
             dest.flush()
             os.fsync(dest.fileno())
         if digest.hexdigest() != expected_hash:

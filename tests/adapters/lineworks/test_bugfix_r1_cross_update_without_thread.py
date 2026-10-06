@@ -11,5 +11,5 @@ def test_card_only_update_of_overflowing_card_renders_truncated_head():
     del parts["manifest"][1:]  # not in thread body: the runner plans the card only
     del parts["thread_body_parts"][:]
     assert cards.validate(spec) is spec
-    text = cards.render(spec)["contentText"]
+    text = cards.render(spec)["contents"]["body"]["contents"][0]["text"]
     assert text == head and len(text) <= 1000 and text.endswith("↓ 続き")

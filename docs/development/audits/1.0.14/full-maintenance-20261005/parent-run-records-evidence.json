@@ -1,0 +1,246 @@
+{
+  "schema": "parent-run-record-acceptance/v1",
+  "input": "6eff3df2cf386db19d64e8df5d8df9be3456ccfb",
+  "scope": "Nine historical synthetic run records; classification only, no commands rerun and no final-I PASS inferred.",
+  "worker_receipt": {
+    "path": "/tmp/mcs-maintenance-runrecords-20261005/receipt.json",
+    "sha256": "ae978fc9cea57462cd5eca35afd9d122537fe0f526ac1e7756d39d8a0ea28e46",
+    "bytes": 1829433
+  },
+  "review": "Parent read classification/identity/schema/limits and verified all nine source byte hashes plus all145 durable synthetic artifact hashes. Worker full recursive parse, unique prose full reads, all criterion/counter/reference validation accepted. Historical fields retained.",
+  "counts": {
+    "records": 9,
+    "bytes": 787691,
+    "lines": 18984,
+    "all_unique_strings": 2950,
+    "unique_author_strings": 1517,
+    "author_chars": 134486,
+    "machine_unique_strings": 1433,
+    "author_full_read_ranges": [
+      [
+        1,
+        60
+      ],
+      [
+        61,
+        180
+      ],
+      [
+        181,
+        360
+      ],
+      [
+        361,
+        540
+      ],
+      [
+        541,
+        720
+      ],
+      [
+        721,
+        920
+      ],
+      [
+        921,
+        1120
+      ],
+      [
+        1121,
+        1320
+      ],
+      [
+        1321,
+        1517
+      ]
+    ],
+    "artifacts": {
+      "full_byte_hashed": 145
+    },
+    "declared_sha_artifacts": 138,
+    "declared_bytes_artifacts": 67,
+    "junit_artifacts": 28,
+    "sha_mismatches": 0,
+    "bytes_mismatches": 0,
+    "junit_count_mismatches": 0,
+    "all_inventory_entries": 272,
+    "unique_literal_paths": 545,
+    "current_global_reviewed_identity_matches": 271,
+    "current_global_reviewed_identity_followups": 1
+  },
+  "records": [
+    {
+      "path": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-ci-evidence.json",
+      "sha256": "8d76772bd12fd5fb56c825cc43cc5da27260604ed6f14b5caea41c14d18f3e2a",
+      "bytes": 10687,
+      "lines": 344,
+      "original_status": "PARTIAL",
+      "recording_commit": "4d32a0c6946e95fab87a135ecfcb1ae20c160e77",
+      "resolved_P": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "resolved_W": null,
+      "inventory_count": 22,
+      "criteria_unique_count": 20
+    },
+    {
+      "path": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "sha256": "e84ddc191582fd0f6aa3bc412af4c7554e9a1e29c8443ad6bdcf97cd99c929bc",
+      "bytes": 59405,
+      "lines": 1454,
+      "original_status": "REVIEWED_LOCAL_SOURCE",
+      "recording_commit": "098870dd37f669605577e4d9565a1201d26c389f",
+      "resolved_P": "d68591e229644e65c4111a8b83d06aacdaa7d677",
+      "resolved_W": null,
+      "inventory_count": 62,
+      "criteria_unique_count": 20
+    },
+    {
+      "path": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "sha256": "b28067227e6db44217653e7b9b1fe9515f4420c273fd42a0160dbfe07c77a092",
+      "bytes": 65098,
+      "lines": 1576,
+      "original_status": "PARTIAL",
+      "recording_commit": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "resolved_P": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "resolved_W": "12a7dabc5762c7dc74aea8cff0bab5f1fcf34e9f",
+      "inventory_count": 26,
+      "criteria_unique_count": 20
+    },
+    {
+      "path": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "sha256": "b22532f3158c9dfe544aa5675c136623ba810c790a256b01eae6e24ba55d67ec",
+      "bytes": 129113,
+      "lines": 3435,
+      "original_status": "PARTIAL",
+      "recording_commit": "1c96c5fb572d558d6667165b3b0a93e969fd7ee4",
+      "resolved_P": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "resolved_W": "0da054fee754edb25f272a6660c0518a85dda4de",
+      "inventory_count": 29,
+      "criteria_unique_count": 20
+    },
+    {
+      "path": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
+      "sha256": "27495aa7d8e2a2381d14f92290a85ccce653752af6b0b25163a3a927b082d56f",
+      "bytes": 53972,
+      "lines": 1448,
+      "original_status": "READY_FOR_PARENT_INTEGRATION_AND_INDEPENDENT_REVIEW",
+      "recording_commit": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "resolved_P": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "resolved_W": "bd62135162a5ff556c4129e6d25312fe821b7c13",
+      "inventory_count": 13,
+      "criteria_unique_count": 20
+    },
+    {
+      "path": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
+      "sha256": "73714b71c7cb52190fdb39594355afc9fd34f075ae034c23ace3adcdac4476ba",
+      "bytes": 119606,
+      "lines": 2634,
+      "original_status": "LOCAL_READY_FOR_PARENT_INTEGRATION; 全域STATUSはPARTIAL",
+      "recording_commit": "d7a356868fd7a75c2b5ef85ead42d8507e875d11",
+      "resolved_P": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "resolved_W": "872747183be090367d6890f1c22ca2d64bcdf5ae",
+      "inventory_count": 22,
+      "criteria_unique_count": 20
+    },
+    {
+      "path": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-evidence.json",
+      "sha256": "acfe08be227f6a9ab8ce2efcebb303d81f8cd57a034838ea4c7b69400acb828b",
+      "bytes": 61803,
+      "lines": 1440,
+      "original_status": "READY_FOR_PARENT_INTEGRATION_AND_INDEPENDENT_REVIEW",
+      "recording_commit": "1ed5b0495cd0e34c9993740928395bf411e3bcf9",
+      "resolved_P": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "resolved_W": "acc15e946f3a7a4e8a2f1e282a9d5af227bf6e43",
+      "inventory_count": 27,
+      "criteria_unique_count": 20
+    },
+    {
+      "path": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
+      "sha256": "c13aef9fdfcb63bfa758e5168e9278382e44b003efff8301c323287858fc3d19",
+      "bytes": 119817,
+      "lines": 2879,
+      "original_status": "PACKET COMPLETE BY EXPLICIT OWNERSHIP; GLOBAL AUDIT NOT COMPLETE",
+      "recording_commit": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "resolved_P": "1ed5b0495cd0e34c9993740928395bf411e3bcf9",
+      "resolved_W": "aedf7ac659c62e17cc9cdebb5dab9f4f1fa39328",
+      "inventory_count": 32,
+      "criteria_unique_count": 20
+    },
+    {
+      "path": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
+      "sha256": "24d178acee619d74bb321cb602fe3010b4b36d4bfc429cbca2317b7bac5657c7",
+      "bytes": 168190,
+      "lines": 3774,
+      "original_status": "PACKET_REVIEW_AND_FIXES_COMPLETE; NOT_GLOBAL_ACCEPTANCE",
+      "recording_commit": "bd7596b36d86c2084057be5d6f5845d3be6c4dc8",
+      "resolved_P": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "resolved_W": "e58119363a940acb1e119d4ae117bf0301167176",
+      "inventory_count": 39,
+      "criteria_unique_count": 20
+    }
+  ],
+  "anomalies": [],
+  "limitations": [
+    {
+      "kind": "historical_record_identity_gap",
+      "record": 1,
+      "detail": "Original has baseline input and no explicit W; 2 read file hashes are post-repair. Recording commit22/22 immutable hash match resolves provenance for classification, original kept."
+    },
+    {
+      "kind": "historical_record_identity_gap",
+      "record": 2,
+      "detail": "Original has short P and descriptive I, no explicit W; recording commit62/62 immutable hash match; original progress status unchanged."
+    },
+    {
+      "kind": "command_fidelity_limit",
+      "records": [
+        4,
+        5,
+        8
+      ],
+      "detail": "Some earlier selectors/ellipsis wrappers reconstructed or tool-only diff receipts. Full stored logs/canonical later snapshots checked; exact command fidelity is not invented."
+    },
+    {
+      "kind": "before_execution_limit",
+      "records": [
+        7,
+        9
+      ],
+      "detail": "Semantic1 four extra falsy limitations and semantic3 five later input-validation cases were added after initial P failure run. Keep existing declared scope (18 direct before failures vs22 new;24 first before vs29 final added), no new all-cases P proof claimed."
+    },
+    {
+      "kind": "synthetic_scope_limit",
+      "records": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "detail": "Worker W tests and historical source review are not current integrated-I, real backend, live SDK, clinical quality or independent review acceptance."
+    }
+  ],
+  "current_metadata_followup": [
+    {
+      "path": "docs/specs/lifecycle-spec.md",
+      "fixed_I_actual_sha256": "f9502134495a68cba77f768e89645f6a4019bd8c5b0988f15927e3d32c488949",
+      "fixed_I_lines": 324,
+      "global_recorded_reviewed_sha256": "dd49947018da5af7ef7ff1f5e2fd229e40c70dcd15ac8a7c5425bd99291560e7",
+      "global_recorded_ranges": [
+        [
+          1,
+          323
+        ]
+      ],
+      "historical_recording_commit": "098870dd37f669605577e4d9565a1201d26c389f",
+      "classification": "historical source SHA is valid; current global reviewed identity needs later docs delta receipt",
+      "owner": "parent/global metadata + current docs owner",
+      "action": "Use later owning docs packet exact SHA/diff/full read receipt; preserve parent-lifecycle original; no source change requested.",
+      "reported_to_parent": true
+    }
+  ],
+  "acceptance": "RUN_RECORD_CLASSIFICATION_REVIEWED; final-I execution and fresh independent review pending"
+}

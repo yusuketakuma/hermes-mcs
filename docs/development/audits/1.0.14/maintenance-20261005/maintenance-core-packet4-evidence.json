@@ -1,0 +1,4290 @@
+{
+  "packet": "maintenance-core-packet4-20261005",
+  "status": "PARTIAL",
+  "packet_status": "REVIEWED_AND_REPAIRED",
+  "worker_status": "READY_FOR_PARENT_ACCEPTANCE_AND_I_VERIFICATION",
+  "B": "bb533f588026b3640310f4b89c6973a892fe52fa",
+  "P": "bb533f588026b3640310f4b89c6973a892fe52fa",
+  "W": "1b94f04d8253a29195d709f1f66d1f3c11f28343",
+  "W_definition": "修復source/test/3fragments確定commit。evidence自身は後続receipt commitとして分離し自己hash循環を避ける。",
+  "I": {
+    "latest_parent_reported_commit": "8109b60",
+    "source_fixes_integrated_by_parent": true,
+    "worker_did_not_verify_I": true,
+    "final_I_tests_and_fresh_independent_review": "親owner。W合格を全域I合格/COMPLETEとして扱わない。"
+  },
+  "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+  "branch": "audit/maintenance-core-packet4-20261005",
+  "start_status": "cleanから固定B/Pでgit switch -c。旧branch保持、reset/rebase/stashなし。",
+  "model_configuration": {
+    "requested_model": "GPT-6.1-sol",
+    "requested_effort": "ultra",
+    "effective_model_independently_exposed": false,
+    "permanent_instruction_or_model_configuration_edited": false
+  },
+  "scope": {
+    "exact_owned_paths": [
+      "mcs/ops/mcs_operations.py",
+      "mcs/ops/mcs_requests.py",
+      "mcs/ops/mcs_signals.py",
+      "mcs/ops/c1_contract.py",
+      "mcs/ops/c1_envelopes.py",
+      "mcs/ops/c1_receiver.py",
+      "mcs/ops/c1_records.py",
+      "tests/ops/test_c1_authorization.py",
+      "tests/ops/test_c1_cli.py",
+      "tests/ops/test_c1_contract.py",
+      "tests/ops/test_c1_delivery.py",
+      "tests/ops/test_c1_envelopes.py",
+      "tests/ops/test_c1_receiver.py",
+      "tests/ops/test_c1_records.py",
+      "tests/ops/test_c1_withdraw_receive.py",
+      "tests/ops/test_receipt_contract.py",
+      "tests/ops/test_mcs_operation_cli.py",
+      "tests/ops/test_mcs_operations.py",
+      "tests/ops/test_mcs_request_reason.py",
+      "tests/ops/test_mcs_signal_feedback.py",
+      "tests/ops/test_mcs_signals.py",
+      "tests/ops/test_mcs_cli.py"
+    ],
+    "outside_owner": "mcs_cli/setup/lifecycle/views、semantic backup/restore/repair/import/refstats/request_loops、notify/plugin/commonはreadonly。shared ledger/schemaはcore sole ownerだが今回不変更。",
+    "generated_docs": "DEVELOPMENT生成器は親owner。docstring/追加moduleなし、直接編集なし。",
+    "next_packet": "schema_upgrade fixtures/CI/script/extract stale候補は次B/P正式割当後。今回未編集。"
+  },
+  "counts": {
+    "P_owned_files": 22,
+    "P_source": 7,
+    "P_tests": 15,
+    "P_lines": 10502,
+    "W_owned_files": 22,
+    "W_source": 7,
+    "W_tests": 15,
+    "W_lines": 10658,
+    "REVIEWED": 22,
+    "PARTIAL_owned": 0,
+    "UNSEEN_owned": 0,
+    "EXCLUDED_owned": 0,
+    "new_regression_cases": 33,
+    "baseline_tests": 707,
+    "final_family_tests": 740,
+    "final_skipped": 0,
+    "confirmed_fixed_source_findings": 3,
+    "confirmed_fixed_fixture_findings": 1,
+    "confirmed_unfixed_owned": 0,
+    "prior_review_exact_sha_reused": 87,
+    "prior_reconfirmation_required": 0
+  },
+  "inventory": [
+    {
+      "path": "mcs/ops/mcs_operations.py",
+      "kind": "source",
+      "module": "ops_requests",
+      "state": "REVIEWED",
+      "P_sha256": "c564dc2db5f0bc0e5b396ef6fad425aca67d0556b93591945d035f99eaa4f149",
+      "P_bytes": 38431,
+      "P_lines": 911,
+      "W_sha256": "49e4776bbb432ef62336d2465db60416724c18c598c2e6bb64e6346afccf2e0b",
+      "W_bytes": 38706,
+      "W_lines": 915,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          300
+        ],
+        [
+          301,
+          620
+        ],
+        [
+          621,
+          911
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            274
+          ],
+          "P_range": [
+            1,
+            274
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            275,
+            275
+          ],
+          "P_range": [
+            275,
+            275
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            276,
+            289
+          ],
+          "P_range": [
+            276,
+            289
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            290,
+            290
+          ],
+          "P_range": [
+            290,
+            290
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            291,
+            357
+          ],
+          "P_range": [
+            291,
+            357
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            358,
+            358
+          ],
+          "P_range": [
+            358,
+            358
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            359,
+            363
+          ],
+          "P_range": [
+            359,
+            363
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            364,
+            364
+          ],
+          "P_range": [
+            364,
+            364
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            365,
+            412
+          ],
+          "P_range": [
+            365,
+            412
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            413,
+            413
+          ],
+          "P_range": [
+            413,
+            413
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            414,
+            420
+          ],
+          "P_range": [
+            414,
+            420
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            421,
+            421
+          ],
+          "P_range": [
+            421,
+            421
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            422,
+            523
+          ],
+          "P_range": [
+            422,
+            523
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            524,
+            538
+          ],
+          "P_range": [
+            525,
+            539
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            539,
+            544
+          ],
+          "P_range": [
+            540,
+            540
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            545,
+            545
+          ],
+          "P_range": [
+            541,
+            541
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            546,
+            546
+          ],
+          "P_range": [
+            542,
+            542
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            547,
+            915
+          ],
+          "P_range": [
+            543,
+            911
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "全文P＋全W差分で全行を確認",
+      "responsibility": "人承認operationのvalidationとtransaction内更新、file promotion、update/restore scheduling。",
+      "callers": [
+        "mcs_requests.validate",
+        "mcs_requests.apply_command",
+        "hermes_plugin.__init__._semantic_job",
+        "mcs/views/mcs_view.py:216,303 paused"
+      ],
+      "flow": "mcs_cli/hermes_plugin/common envelope→bounded command/actor/human/project/reason検証→apply_command BEGIN IMMEDIATEとreplay hash→operation/request state mutation→receipt一括commit→job_ops/notify drainとsnapshot consumer。update/restore post-commit実行は親owner。",
+      "criteria": {
+        "C01": "criteria.C01.ops_requests",
+        "C02": "criteria.C02.ops_requests",
+        "C03": "criteria.C03.ops_requests",
+        "C04": "criteria.C04.ops_requests",
+        "C05": "criteria.C05.ops_requests",
+        "C06": "criteria.C06.ops_requests",
+        "C07": "criteria.C07.ops_requests",
+        "C08": "criteria.C08.ops_requests",
+        "C09": "criteria.C09.ops_requests",
+        "C10": "criteria.C10.ops_requests",
+        "C11": "criteria.C11.ops_requests",
+        "C12": "criteria.C12.ops_requests",
+        "X01": "criteria.X01.ops_requests",
+        "X02": "criteria.X02.ops_requests",
+        "X03": "criteria.X03.ops_requests",
+        "X04": "criteria.X04.ops_requests",
+        "X05": "criteria.X05.ops_requests",
+        "X06": "criteria.X06.ops_requests",
+        "X07": "criteria.X07.ops_requests",
+        "X08": "criteria.X08.ops_requests"
+      }
+    },
+    {
+      "path": "mcs/ops/mcs_requests.py",
+      "kind": "source",
+      "module": "ops_requests",
+      "state": "REVIEWED",
+      "P_sha256": "49170be641eb7d838981d37e1d08161468ff98d730cd228645ca6f5b20b47b21",
+      "P_bytes": 20859,
+      "P_lines": 461,
+      "W_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d",
+      "W_bytes": 20875,
+      "W_lines": 461,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          461
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            435
+          ],
+          "P_range": [
+            1,
+            435
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            436,
+            436
+          ],
+          "P_range": [
+            436,
+            436
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            437,
+            461
+          ],
+          "P_range": [
+            437,
+            461
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "全文P＋全W差分で全行を確認",
+      "responsibility": "bounded command解析・人承認/request revision・receipt-first適用・atomic inbox公開・現在抽出候補。",
+      "callers": [
+        "mcs/ops/mcs_cli.py via mcs_view",
+        "mcs/ingest/job_ops.py:151",
+        "mcs/notify/notify_cmds.py:351",
+        "hermes_plugin/__init__.py:897",
+        "mcs/views/mcs_view.py"
+      ],
+      "flow": "mcs_cli/hermes_plugin/common envelope→bounded command/actor/human/project/reason検証→apply_command BEGIN IMMEDIATEとreplay hash→operation/request state mutation→receipt一括commit→job_ops/notify drainとsnapshot consumer。update/restore post-commit実行は親owner。",
+      "criteria": {
+        "C01": "criteria.C01.ops_requests",
+        "C02": "criteria.C02.ops_requests",
+        "C03": "criteria.C03.ops_requests",
+        "C04": "criteria.C04.ops_requests",
+        "C05": "criteria.C05.ops_requests",
+        "C06": "criteria.C06.ops_requests",
+        "C07": "criteria.C07.ops_requests",
+        "C08": "criteria.C08.ops_requests",
+        "C09": "criteria.C09.ops_requests",
+        "C10": "criteria.C10.ops_requests",
+        "C11": "criteria.C11.ops_requests",
+        "C12": "criteria.C12.ops_requests",
+        "X01": "criteria.X01.ops_requests",
+        "X02": "criteria.X02.ops_requests",
+        "X03": "criteria.X03.ops_requests",
+        "X04": "criteria.X04.ops_requests",
+        "X05": "criteria.X05.ops_requests",
+        "X06": "criteria.X06.ops_requests",
+        "X07": "criteria.X07.ops_requests",
+        "X08": "criteria.X08.ops_requests"
+      }
+    },
+    {
+      "path": "mcs/ops/mcs_signals.py",
+      "kind": "source",
+      "module": "signals",
+      "state": "REVIEWED",
+      "P_sha256": "62a2f961c98d14d49b8ca6746b3b2d9d5c482bea085fe6f8c99d3f29c7b3b4d4",
+      "P_bytes": 80707,
+      "P_lines": 1691,
+      "W_sha256": "e28cc9450f05cd45f97d5b22576704d544675b154c12e53379f7d6e4821d2269",
+      "W_bytes": 80796,
+      "W_lines": 1694,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          240
+        ],
+        [
+          995,
+          1075
+        ],
+        [
+          241,
+          690
+        ],
+        [
+          691,
+          1170
+        ],
+        [
+          1171,
+          1691
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            91
+          ],
+          "P_range": [
+            1,
+            91
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            92,
+            93
+          ],
+          "P_range": [
+            92,
+            93
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            94,
+            96
+          ],
+          "P_range": [
+            94,
+            96
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            97,
+            100
+          ],
+          "P_range": [
+            97,
+            97
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            101,
+            147
+          ],
+          "P_range": [
+            98,
+            144
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            148,
+            148
+          ],
+          "P_range": [
+            145,
+            145
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            149,
+            151
+          ],
+          "P_range": [
+            146,
+            148
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            152,
+            152
+          ],
+          "P_range": [
+            149,
+            149
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            153,
+            191
+          ],
+          "P_range": [
+            150,
+            188
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            192,
+            192
+          ],
+          "P_range": [
+            189,
+            189
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            193,
+            195
+          ],
+          "P_range": [
+            190,
+            192
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            196,
+            196
+          ],
+          "P_range": [
+            193,
+            193
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            197,
+            1694
+          ],
+          "P_range": [
+            194,
+            1691
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "全文P＋全W差分で全行を確認",
+      "responsibility": "既存医療/依頼signalの候補・状態・通知キュー、承認policyと自己/所属identity、readonly一覧。",
+      "callers": [
+        "mcs/ingest/run_check.py:1255,1523,1543",
+        "mcs/views/mcs_view.py:834",
+        "mcs/ops/c1_records.py",
+        "mcs/ops/ext_contract.py:1308",
+        "mcs_operations._apply_signal_dismiss_tx"
+      ],
+      "flow": "保存済み収集/抽出/依頼と承認済みpolicy・自己identity→current publication/source hash/candidate根拠→latest signal state/resolution→artifact appendとoutbox→notify/views/C1 consumer。latest破損はold記録を復活させない。",
+      "criteria": {
+        "C01": "criteria.C01.signals",
+        "C02": "criteria.C02.signals",
+        "C03": "criteria.C03.signals",
+        "C04": "criteria.C04.signals",
+        "C05": "criteria.C05.signals",
+        "C06": "criteria.C06.signals",
+        "C07": "criteria.C07.signals",
+        "C08": "criteria.C08.signals",
+        "C09": "criteria.C09.signals",
+        "C10": "criteria.C10.signals",
+        "C11": "criteria.C11.signals",
+        "C12": "criteria.C12.signals",
+        "X01": "criteria.X01.signals",
+        "X02": "criteria.X02.signals",
+        "X03": "criteria.X03.signals",
+        "X04": "criteria.X04.signals",
+        "X05": "criteria.X05.signals",
+        "X06": "criteria.X06.signals",
+        "X07": "criteria.X07.signals",
+        "X08": "criteria.X08.signals"
+      }
+    },
+    {
+      "path": "mcs/ops/c1_contract.py",
+      "kind": "source",
+      "module": "c1",
+      "state": "REVIEWED",
+      "P_sha256": "7bf70b5a580d189ab6560e837be544bc0b75ab18b922c21963167d25b07308f3",
+      "P_bytes": 11152,
+      "P_lines": 237,
+      "W_sha256": "7bf70b5a580d189ab6560e837be544bc0b75ab18b922c21963167d25b07308f3",
+      "W_bytes": 11152,
+      "W_lines": 237,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          237
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            237
+          ],
+          "P_range": [
+            1,
+            237
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "SHA一致でP全文読取を再利用",
+      "responsibility": "C1 profile/recordのstrict schemaとrestricted canonical encoding、既存wire互換。",
+      "callers": [
+        "c1_envelopes",
+        "c1_records",
+        "c1_receiver",
+        "ext_contract._validate_authorization"
+      ],
+      "flow": "ext_contract CLIのauth/load/recheck→公開snapshot readmodel/明示sender policy→allowlist record/body対→bounded envelope parts→governed journal→local synthetic reference receiverのflock/atomic save→ACK/complete別判定、view/withdraw/expiry。実外部deliveryは未実施。",
+      "criteria": {
+        "C01": "criteria.C01.c1",
+        "C02": "criteria.C02.c1",
+        "C03": "criteria.C03.c1",
+        "C04": "criteria.C04.c1",
+        "C05": "criteria.C05.c1",
+        "C06": "criteria.C06.c1",
+        "C07": "criteria.C07.c1",
+        "C08": "criteria.C08.c1",
+        "C09": "criteria.C09.c1",
+        "C10": "criteria.C10.c1",
+        "C11": "criteria.C11.c1",
+        "C12": "criteria.C12.c1",
+        "X01": "criteria.X01.c1",
+        "X02": "criteria.X02.c1",
+        "X03": "criteria.X03.c1",
+        "X04": "criteria.X04.c1",
+        "X05": "criteria.X05.c1",
+        "X06": "criteria.X06.c1",
+        "X07": "criteria.X07.c1",
+        "X08": "criteria.X08.c1"
+      }
+    },
+    {
+      "path": "mcs/ops/c1_envelopes.py",
+      "kind": "source",
+      "module": "c1",
+      "state": "REVIEWED",
+      "P_sha256": "da302fe72935dc9a1ef79e1deabe98e8eb5f4ee9cf4df5aa17acc18a5b62f7ae",
+      "P_bytes": 19847,
+      "P_lines": 433,
+      "W_sha256": "da302fe72935dc9a1ef79e1deabe98e8eb5f4ee9cf4df5aa17acc18a5b62f7ae",
+      "W_bytes": 19847,
+      "W_lines": 433,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          433
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            433
+          ],
+          "P_range": [
+            1,
+            433
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "SHA一致でP全文読取を再利用",
+      "responsibility": "同generation対のallowlist記録を容量内partsへpack、wire/collection/withdraw directive検証。",
+      "callers": [
+        "mcs/ops/ext_contract.py:1161",
+        "GovernedExporter",
+        "ReferenceReceiver.receive_wire/withdraw_wire"
+      ],
+      "flow": "ext_contract CLIのauth/load/recheck→公開snapshot readmodel/明示sender policy→allowlist record/body対→bounded envelope parts→governed journal→local synthetic reference receiverのflock/atomic save→ACK/complete別判定、view/withdraw/expiry。実外部deliveryは未実施。",
+      "criteria": {
+        "C01": "criteria.C01.c1",
+        "C02": "criteria.C02.c1",
+        "C03": "criteria.C03.c1",
+        "C04": "criteria.C04.c1",
+        "C05": "criteria.C05.c1",
+        "C06": "criteria.C06.c1",
+        "C07": "criteria.C07.c1",
+        "C08": "criteria.C08.c1",
+        "C09": "criteria.C09.c1",
+        "C10": "criteria.C10.c1",
+        "C11": "criteria.C11.c1",
+        "C12": "criteria.C12.c1",
+        "X01": "criteria.X01.c1",
+        "X02": "criteria.X02.c1",
+        "X03": "criteria.X03.c1",
+        "X04": "criteria.X04.c1",
+        "X05": "criteria.X05.c1",
+        "X06": "criteria.X06.c1",
+        "X07": "criteria.X07.c1",
+        "X08": "criteria.X08.c1"
+      }
+    },
+    {
+      "path": "mcs/ops/c1_receiver.py",
+      "kind": "source",
+      "module": "c1",
+      "state": "REVIEWED",
+      "P_sha256": "df7844bacd994e854bcf8cfa71c7f3acff0f20b12801e48bc31d00129a7c0163",
+      "P_bytes": 37086,
+      "P_lines": 802,
+      "W_sha256": "df7844bacd994e854bcf8cfa71c7f3acff0f20b12801e48bc31d00129a7c0163",
+      "W_bytes": 37086,
+      "W_lines": 802,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          400
+        ],
+        [
+          401,
+          802
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            802
+          ],
+          "P_range": [
+            1,
+            802
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "SHA一致でP全文読取を再利用",
+      "responsibility": "外部実serviceではない合成reference受信、namespace私有state・flock・atomic commit・view・withdraw/expiry。",
+      "callers": [
+        "mcs/ops/ext_contract.py:_receive",
+        "tests/ops/test_c1_receiver.py",
+        "tests/ops/test_c1_withdraw_receive.py"
+      ],
+      "flow": "ext_contract CLIのauth/load/recheck→公開snapshot readmodel/明示sender policy→allowlist record/body対→bounded envelope parts→governed journal→local synthetic reference receiverのflock/atomic save→ACK/complete別判定、view/withdraw/expiry。実外部deliveryは未実施。",
+      "criteria": {
+        "C01": "criteria.C01.c1",
+        "C02": "criteria.C02.c1",
+        "C03": "criteria.C03.c1",
+        "C04": "criteria.C04.c1",
+        "C05": "criteria.C05.c1",
+        "C06": "criteria.C06.c1",
+        "C07": "criteria.C07.c1",
+        "C08": "criteria.C08.c1",
+        "C09": "criteria.C09.c1",
+        "C10": "criteria.C10.c1",
+        "C11": "criteria.C11.c1",
+        "C12": "criteria.C12.c1",
+        "X01": "criteria.X01.c1",
+        "X02": "criteria.X02.c1",
+        "X03": "criteria.X03.c1",
+        "X04": "criteria.X04.c1",
+        "X05": "criteria.X05.c1",
+        "X06": "criteria.X06.c1",
+        "X07": "criteria.X07.c1",
+        "X08": "criteria.X08.c1"
+      }
+    },
+    {
+      "path": "mcs/ops/c1_records.py",
+      "kind": "source",
+      "module": "c1",
+      "state": "REVIEWED",
+      "P_sha256": "21a4c2608152bd98016b2f227fa37ae410ae8687a154db7db0d31f2c1547d422",
+      "P_bytes": 12033,
+      "P_lines": 252,
+      "W_sha256": "21a4c2608152bd98016b2f227fa37ae410ae8687a154db7db0d31f2c1547d422",
+      "W_bytes": 12033,
+      "W_lines": 252,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          252
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            252
+          ],
+          "P_range": [
+            1,
+            252
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "SHA一致でP全文読取を再利用",
+      "responsibility": "公開snapshotからC1 records/body/sender classificationを組み立て、window/facts選択。",
+      "callers": [
+        "mcs/ops/ext_contract.py:1291",
+        "tests/ops/test_c1_records.py",
+        "tests/ops/test_c1_withdraw_receive.py"
+      ],
+      "flow": "ext_contract CLIのauth/load/recheck→公開snapshot readmodel/明示sender policy→allowlist record/body対→bounded envelope parts→governed journal→local synthetic reference receiverのflock/atomic save→ACK/complete別判定、view/withdraw/expiry。実外部deliveryは未実施。",
+      "criteria": {
+        "C01": "criteria.C01.c1",
+        "C02": "criteria.C02.c1",
+        "C03": "criteria.C03.c1",
+        "C04": "criteria.C04.c1",
+        "C05": "criteria.C05.c1",
+        "C06": "criteria.C06.c1",
+        "C07": "criteria.C07.c1",
+        "C08": "criteria.C08.c1",
+        "C09": "criteria.C09.c1",
+        "C10": "criteria.C10.c1",
+        "C11": "criteria.C11.c1",
+        "C12": "criteria.C12.c1",
+        "X01": "criteria.X01.c1",
+        "X02": "criteria.X02.c1",
+        "X03": "criteria.X03.c1",
+        "X04": "criteria.X04.c1",
+        "X05": "criteria.X05.c1",
+        "X06": "criteria.X06.c1",
+        "X07": "criteria.X07.c1",
+        "X08": "criteria.X08.c1"
+      }
+    },
+    {
+      "path": "tests/ops/test_c1_authorization.py",
+      "kind": "test",
+      "module": "c1",
+      "state": "REVIEWED",
+      "P_sha256": "d0870c0db34accc1eb8f3b3e704c913e3c9637b78e9f717c5e1849fd4a08d298",
+      "P_bytes": 3232,
+      "P_lines": 80,
+      "W_sha256": "d0870c0db34accc1eb8f3b3e704c913e3c9637b78e9f717c5e1849fd4a08d298",
+      "W_bytes": 3232,
+      "W_lines": 80,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          80
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            80
+          ],
+          "P_range": [
+            1,
+            80
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "SHA一致でP全文読取を再利用",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_authorization.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "flow": "ext_contract CLIのauth/load/recheck→公開snapshot readmodel/明示sender policy→allowlist record/body対→bounded envelope parts→governed journal→local synthetic reference receiverのflock/atomic save→ACK/complete別判定、view/withdraw/expiry。実外部deliveryは未実施。",
+      "criteria": {
+        "C01": "criteria.C01.c1",
+        "C02": "criteria.C02.c1",
+        "C03": "criteria.C03.c1",
+        "C04": "criteria.C04.c1",
+        "C05": "criteria.C05.c1",
+        "C06": "criteria.C06.c1",
+        "C07": "criteria.C07.c1",
+        "C08": "criteria.C08.c1",
+        "C09": "criteria.C09.c1",
+        "C10": "criteria.C10.c1",
+        "C11": "criteria.C11.c1",
+        "C12": "criteria.C12.c1",
+        "X01": "criteria.X01.c1",
+        "X02": "criteria.X02.c1",
+        "X03": "criteria.X03.c1",
+        "X04": "criteria.X04.c1",
+        "X05": "criteria.X05.c1",
+        "X06": "criteria.X06.c1",
+        "X07": "criteria.X07.c1",
+        "X08": "criteria.X08.c1"
+      }
+    },
+    {
+      "path": "tests/ops/test_c1_cli.py",
+      "kind": "test",
+      "module": "c1",
+      "state": "REVIEWED",
+      "P_sha256": "4de983caf8223f631f58f3afba120e332d562c8472dc27057a7172d7bf1011dd",
+      "P_bytes": 8289,
+      "P_lines": 182,
+      "W_sha256": "4de983caf8223f631f58f3afba120e332d562c8472dc27057a7172d7bf1011dd",
+      "W_bytes": 8289,
+      "W_lines": 182,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          182
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            182
+          ],
+          "P_range": [
+            1,
+            182
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "SHA一致でP全文読取を再利用",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_cli.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "flow": "ext_contract CLIのauth/load/recheck→公開snapshot readmodel/明示sender policy→allowlist record/body対→bounded envelope parts→governed journal→local synthetic reference receiverのflock/atomic save→ACK/complete別判定、view/withdraw/expiry。実外部deliveryは未実施。",
+      "criteria": {
+        "C01": "criteria.C01.c1",
+        "C02": "criteria.C02.c1",
+        "C03": "criteria.C03.c1",
+        "C04": "criteria.C04.c1",
+        "C05": "criteria.C05.c1",
+        "C06": "criteria.C06.c1",
+        "C07": "criteria.C07.c1",
+        "C08": "criteria.C08.c1",
+        "C09": "criteria.C09.c1",
+        "C10": "criteria.C10.c1",
+        "C11": "criteria.C11.c1",
+        "C12": "criteria.C12.c1",
+        "X01": "criteria.X01.c1",
+        "X02": "criteria.X02.c1",
+        "X03": "criteria.X03.c1",
+        "X04": "criteria.X04.c1",
+        "X05": "criteria.X05.c1",
+        "X06": "criteria.X06.c1",
+        "X07": "criteria.X07.c1",
+        "X08": "criteria.X08.c1"
+      }
+    },
+    {
+      "path": "tests/ops/test_c1_contract.py",
+      "kind": "test",
+      "module": "c1",
+      "state": "REVIEWED",
+      "P_sha256": "ed49cfd1681a61495ed65a4fecd6e750604adf1ad067f20fa524ca1908389dc6",
+      "P_bytes": 12387,
+      "P_lines": 296,
+      "W_sha256": "ed49cfd1681a61495ed65a4fecd6e750604adf1ad067f20fa524ca1908389dc6",
+      "W_bytes": 12387,
+      "W_lines": 296,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          296
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            296
+          ],
+          "P_range": [
+            1,
+            296
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "SHA一致でP全文読取を再利用",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_contract.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "flow": "ext_contract CLIのauth/load/recheck→公開snapshot readmodel/明示sender policy→allowlist record/body対→bounded envelope parts→governed journal→local synthetic reference receiverのflock/atomic save→ACK/complete別判定、view/withdraw/expiry。実外部deliveryは未実施。",
+      "criteria": {
+        "C01": "criteria.C01.c1",
+        "C02": "criteria.C02.c1",
+        "C03": "criteria.C03.c1",
+        "C04": "criteria.C04.c1",
+        "C05": "criteria.C05.c1",
+        "C06": "criteria.C06.c1",
+        "C07": "criteria.C07.c1",
+        "C08": "criteria.C08.c1",
+        "C09": "criteria.C09.c1",
+        "C10": "criteria.C10.c1",
+        "C11": "criteria.C11.c1",
+        "C12": "criteria.C12.c1",
+        "X01": "criteria.X01.c1",
+        "X02": "criteria.X02.c1",
+        "X03": "criteria.X03.c1",
+        "X04": "criteria.X04.c1",
+        "X05": "criteria.X05.c1",
+        "X06": "criteria.X06.c1",
+        "X07": "criteria.X07.c1",
+        "X08": "criteria.X08.c1"
+      }
+    },
+    {
+      "path": "tests/ops/test_c1_delivery.py",
+      "kind": "test",
+      "module": "c1",
+      "state": "REVIEWED",
+      "P_sha256": "85a52d6277cb1a39887db60f3694a96fc87c75675c56b6df66fc98a9942c6d0f",
+      "P_bytes": 8313,
+      "P_lines": 177,
+      "W_sha256": "85a52d6277cb1a39887db60f3694a96fc87c75675c56b6df66fc98a9942c6d0f",
+      "W_bytes": 8313,
+      "W_lines": 177,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          177
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            177
+          ],
+          "P_range": [
+            1,
+            177
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "SHA一致でP全文読取を再利用",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_delivery.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "flow": "ext_contract CLIのauth/load/recheck→公開snapshot readmodel/明示sender policy→allowlist record/body対→bounded envelope parts→governed journal→local synthetic reference receiverのflock/atomic save→ACK/complete別判定、view/withdraw/expiry。実外部deliveryは未実施。",
+      "criteria": {
+        "C01": "criteria.C01.c1",
+        "C02": "criteria.C02.c1",
+        "C03": "criteria.C03.c1",
+        "C04": "criteria.C04.c1",
+        "C05": "criteria.C05.c1",
+        "C06": "criteria.C06.c1",
+        "C07": "criteria.C07.c1",
+        "C08": "criteria.C08.c1",
+        "C09": "criteria.C09.c1",
+        "C10": "criteria.C10.c1",
+        "C11": "criteria.C11.c1",
+        "C12": "criteria.C12.c1",
+        "X01": "criteria.X01.c1",
+        "X02": "criteria.X02.c1",
+        "X03": "criteria.X03.c1",
+        "X04": "criteria.X04.c1",
+        "X05": "criteria.X05.c1",
+        "X06": "criteria.X06.c1",
+        "X07": "criteria.X07.c1",
+        "X08": "criteria.X08.c1"
+      }
+    },
+    {
+      "path": "tests/ops/test_c1_envelopes.py",
+      "kind": "test",
+      "module": "c1",
+      "state": "REVIEWED",
+      "P_sha256": "4136f5761228a0e04a12abce53a4b6e1f8e43e273fe3fbdd5b23af8be8dde595",
+      "P_bytes": 20891,
+      "P_lines": 464,
+      "W_sha256": "4136f5761228a0e04a12abce53a4b6e1f8e43e273fe3fbdd5b23af8be8dde595",
+      "W_bytes": 20891,
+      "W_lines": 464,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          464
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            464
+          ],
+          "P_range": [
+            1,
+            464
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "SHA一致でP全文読取を再利用",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_envelopes.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "flow": "ext_contract CLIのauth/load/recheck→公開snapshot readmodel/明示sender policy→allowlist record/body対→bounded envelope parts→governed journal→local synthetic reference receiverのflock/atomic save→ACK/complete別判定、view/withdraw/expiry。実外部deliveryは未実施。",
+      "criteria": {
+        "C01": "criteria.C01.c1",
+        "C02": "criteria.C02.c1",
+        "C03": "criteria.C03.c1",
+        "C04": "criteria.C04.c1",
+        "C05": "criteria.C05.c1",
+        "C06": "criteria.C06.c1",
+        "C07": "criteria.C07.c1",
+        "C08": "criteria.C08.c1",
+        "C09": "criteria.C09.c1",
+        "C10": "criteria.C10.c1",
+        "C11": "criteria.C11.c1",
+        "C12": "criteria.C12.c1",
+        "X01": "criteria.X01.c1",
+        "X02": "criteria.X02.c1",
+        "X03": "criteria.X03.c1",
+        "X04": "criteria.X04.c1",
+        "X05": "criteria.X05.c1",
+        "X06": "criteria.X06.c1",
+        "X07": "criteria.X07.c1",
+        "X08": "criteria.X08.c1"
+      }
+    },
+    {
+      "path": "tests/ops/test_c1_receiver.py",
+      "kind": "test",
+      "module": "c1",
+      "state": "REVIEWED",
+      "P_sha256": "74c277e2bfff89c41763b452aa115e12214240b49791274951eabf449705b736",
+      "P_bytes": 23470,
+      "P_lines": 525,
+      "W_sha256": "74c277e2bfff89c41763b452aa115e12214240b49791274951eabf449705b736",
+      "W_bytes": 23470,
+      "W_lines": 525,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          300
+        ],
+        [
+          301,
+          525
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            525
+          ],
+          "P_range": [
+            1,
+            525
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "SHA一致でP全文読取を再利用",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_receiver.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "flow": "ext_contract CLIのauth/load/recheck→公開snapshot readmodel/明示sender policy→allowlist record/body対→bounded envelope parts→governed journal→local synthetic reference receiverのflock/atomic save→ACK/complete別判定、view/withdraw/expiry。実外部deliveryは未実施。",
+      "criteria": {
+        "C01": "criteria.C01.c1",
+        "C02": "criteria.C02.c1",
+        "C03": "criteria.C03.c1",
+        "C04": "criteria.C04.c1",
+        "C05": "criteria.C05.c1",
+        "C06": "criteria.C06.c1",
+        "C07": "criteria.C07.c1",
+        "C08": "criteria.C08.c1",
+        "C09": "criteria.C09.c1",
+        "C10": "criteria.C10.c1",
+        "C11": "criteria.C11.c1",
+        "C12": "criteria.C12.c1",
+        "X01": "criteria.X01.c1",
+        "X02": "criteria.X02.c1",
+        "X03": "criteria.X03.c1",
+        "X04": "criteria.X04.c1",
+        "X05": "criteria.X05.c1",
+        "X06": "criteria.X06.c1",
+        "X07": "criteria.X07.c1",
+        "X08": "criteria.X08.c1"
+      }
+    },
+    {
+      "path": "tests/ops/test_c1_records.py",
+      "kind": "test",
+      "module": "c1",
+      "state": "REVIEWED",
+      "P_sha256": "5d0e4aec2a0a8abcb45048b35d0cc18183128aecb9a05091644eda1dcd9c2f67",
+      "P_bytes": 17584,
+      "P_lines": 343,
+      "W_sha256": "5d0e4aec2a0a8abcb45048b35d0cc18183128aecb9a05091644eda1dcd9c2f67",
+      "W_bytes": 17584,
+      "W_lines": 343,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          343
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            343
+          ],
+          "P_range": [
+            1,
+            343
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "SHA一致でP全文読取を再利用",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_records.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "flow": "ext_contract CLIのauth/load/recheck→公開snapshot readmodel/明示sender policy→allowlist record/body対→bounded envelope parts→governed journal→local synthetic reference receiverのflock/atomic save→ACK/complete別判定、view/withdraw/expiry。実外部deliveryは未実施。",
+      "criteria": {
+        "C01": "criteria.C01.c1",
+        "C02": "criteria.C02.c1",
+        "C03": "criteria.C03.c1",
+        "C04": "criteria.C04.c1",
+        "C05": "criteria.C05.c1",
+        "C06": "criteria.C06.c1",
+        "C07": "criteria.C07.c1",
+        "C08": "criteria.C08.c1",
+        "C09": "criteria.C09.c1",
+        "C10": "criteria.C10.c1",
+        "C11": "criteria.C11.c1",
+        "C12": "criteria.C12.c1",
+        "X01": "criteria.X01.c1",
+        "X02": "criteria.X02.c1",
+        "X03": "criteria.X03.c1",
+        "X04": "criteria.X04.c1",
+        "X05": "criteria.X05.c1",
+        "X06": "criteria.X06.c1",
+        "X07": "criteria.X07.c1",
+        "X08": "criteria.X08.c1"
+      }
+    },
+    {
+      "path": "tests/ops/test_c1_withdraw_receive.py",
+      "kind": "test",
+      "module": "c1",
+      "state": "REVIEWED",
+      "P_sha256": "77b394a61a9784bb94f3a3d0c062e9d853aab4264c768040b4da04929df9f25c",
+      "P_bytes": 16069,
+      "P_lines": 313,
+      "W_sha256": "77b394a61a9784bb94f3a3d0c062e9d853aab4264c768040b4da04929df9f25c",
+      "W_bytes": 16069,
+      "W_lines": 313,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          313
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            313
+          ],
+          "P_range": [
+            1,
+            313
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "SHA一致でP全文読取を再利用",
+      "responsibility": "完全合成fixtureでC1 contract/authorization/envelope/receiver/withdraw/CLI境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_c1_withdraw_receive.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "flow": "ext_contract CLIのauth/load/recheck→公開snapshot readmodel/明示sender policy→allowlist record/body対→bounded envelope parts→governed journal→local synthetic reference receiverのflock/atomic save→ACK/complete別判定、view/withdraw/expiry。実外部deliveryは未実施。",
+      "criteria": {
+        "C01": "criteria.C01.c1",
+        "C02": "criteria.C02.c1",
+        "C03": "criteria.C03.c1",
+        "C04": "criteria.C04.c1",
+        "C05": "criteria.C05.c1",
+        "C06": "criteria.C06.c1",
+        "C07": "criteria.C07.c1",
+        "C08": "criteria.C08.c1",
+        "C09": "criteria.C09.c1",
+        "C10": "criteria.C10.c1",
+        "C11": "criteria.C11.c1",
+        "C12": "criteria.C12.c1",
+        "X01": "criteria.X01.c1",
+        "X02": "criteria.X02.c1",
+        "X03": "criteria.X03.c1",
+        "X04": "criteria.X04.c1",
+        "X05": "criteria.X05.c1",
+        "X06": "criteria.X06.c1",
+        "X07": "criteria.X07.c1",
+        "X08": "criteria.X08.c1"
+      }
+    },
+    {
+      "path": "tests/ops/test_receipt_contract.py",
+      "kind": "test",
+      "module": "ops_requests",
+      "state": "REVIEWED",
+      "P_sha256": "d90505781616746d2177a66e84a52ffa0c0c104745808ecb9263b772308ae244",
+      "P_bytes": 13276,
+      "P_lines": 273,
+      "W_sha256": "d90505781616746d2177a66e84a52ffa0c0c104745808ecb9263b772308ae244",
+      "W_bytes": 13276,
+      "W_lines": 273,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          273
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            273
+          ],
+          "P_range": [
+            1,
+            273
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "SHA一致でP全文読取を再利用",
+      "responsibility": "完全合成fixtureでCLI/request/operation/reason/receipt境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_receipt_contract.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "flow": "mcs_cli/hermes_plugin/common envelope→bounded command/actor/human/project/reason検証→apply_command BEGIN IMMEDIATEとreplay hash→operation/request state mutation→receipt一括commit→job_ops/notify drainとsnapshot consumer。update/restore post-commit実行は親owner。",
+      "criteria": {
+        "C01": "criteria.C01.ops_requests",
+        "C02": "criteria.C02.ops_requests",
+        "C03": "criteria.C03.ops_requests",
+        "C04": "criteria.C04.ops_requests",
+        "C05": "criteria.C05.ops_requests",
+        "C06": "criteria.C06.ops_requests",
+        "C07": "criteria.C07.ops_requests",
+        "C08": "criteria.C08.ops_requests",
+        "C09": "criteria.C09.ops_requests",
+        "C10": "criteria.C10.ops_requests",
+        "C11": "criteria.C11.ops_requests",
+        "C12": "criteria.C12.ops_requests",
+        "X01": "criteria.X01.ops_requests",
+        "X02": "criteria.X02.ops_requests",
+        "X03": "criteria.X03.ops_requests",
+        "X04": "criteria.X04.ops_requests",
+        "X05": "criteria.X05.ops_requests",
+        "X06": "criteria.X06.ops_requests",
+        "X07": "criteria.X07.ops_requests",
+        "X08": "criteria.X08.ops_requests"
+      }
+    },
+    {
+      "path": "tests/ops/test_mcs_operation_cli.py",
+      "kind": "test",
+      "module": "ops_requests",
+      "state": "REVIEWED",
+      "P_sha256": "56c569ea75ec4a637e72086256c5ce481a3f5a75ec18259f75b270c0f0ba55d5",
+      "P_bytes": 2087,
+      "P_lines": 44,
+      "W_sha256": "56c569ea75ec4a637e72086256c5ce481a3f5a75ec18259f75b270c0f0ba55d5",
+      "W_bytes": 2087,
+      "W_lines": 44,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          44
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            44
+          ],
+          "P_range": [
+            1,
+            44
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "SHA一致でP全文読取を再利用",
+      "responsibility": "完全合成fixtureでCLI/request/operation/reason/receipt境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_mcs_operation_cli.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "flow": "mcs_cli/hermes_plugin/common envelope→bounded command/actor/human/project/reason検証→apply_command BEGIN IMMEDIATEとreplay hash→operation/request state mutation→receipt一括commit→job_ops/notify drainとsnapshot consumer。update/restore post-commit実行は親owner。",
+      "criteria": {
+        "C01": "criteria.C01.ops_requests",
+        "C02": "criteria.C02.ops_requests",
+        "C03": "criteria.C03.ops_requests",
+        "C04": "criteria.C04.ops_requests",
+        "C05": "criteria.C05.ops_requests",
+        "C06": "criteria.C06.ops_requests",
+        "C07": "criteria.C07.ops_requests",
+        "C08": "criteria.C08.ops_requests",
+        "C09": "criteria.C09.ops_requests",
+        "C10": "criteria.C10.ops_requests",
+        "C11": "criteria.C11.ops_requests",
+        "C12": "criteria.C12.ops_requests",
+        "X01": "criteria.X01.ops_requests",
+        "X02": "criteria.X02.ops_requests",
+        "X03": "criteria.X03.ops_requests",
+        "X04": "criteria.X04.ops_requests",
+        "X05": "criteria.X05.ops_requests",
+        "X06": "criteria.X06.ops_requests",
+        "X07": "criteria.X07.ops_requests",
+        "X08": "criteria.X08.ops_requests"
+      }
+    },
+    {
+      "path": "tests/ops/test_mcs_operations.py",
+      "kind": "test",
+      "module": "ops_requests",
+      "state": "REVIEWED",
+      "P_sha256": "8f20950159db8bad4fd5c18eaf5c55e1c01dfe6225af3dbe2ce63f2b60b4ddab",
+      "P_bytes": 18427,
+      "P_lines": 452,
+      "W_sha256": "c8d6028f3ff8c0bf1b34e2462edc7c819da4e0604088558fe3d463ba02cc2303",
+      "W_bytes": 22187,
+      "W_lines": 531,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          300
+        ],
+        [
+          301,
+          452
+        ],
+        [
+          301,
+          452
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            5
+          ],
+          "P_range": [
+            1,
+            5
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            6,
+            7
+          ],
+          "P_range": null,
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            8,
+            77
+          ],
+          "P_range": [
+            6,
+            75
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            78,
+            107
+          ],
+          "P_range": null,
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            108,
+            334
+          ],
+          "P_range": [
+            76,
+            302
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            335,
+            381
+          ],
+          "P_range": null,
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            382,
+            531
+          ],
+          "P_range": [
+            303,
+            452
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "全文P＋全W差分で全行を確認",
+      "responsibility": "完全合成fixtureでCLI/request/operation/reason/receipt境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_mcs_operations.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "flow": "mcs_cli/hermes_plugin/common envelope→bounded command/actor/human/project/reason検証→apply_command BEGIN IMMEDIATEとreplay hash→operation/request state mutation→receipt一括commit→job_ops/notify drainとsnapshot consumer。update/restore post-commit実行は親owner。",
+      "criteria": {
+        "C01": "criteria.C01.ops_requests",
+        "C02": "criteria.C02.ops_requests",
+        "C03": "criteria.C03.ops_requests",
+        "C04": "criteria.C04.ops_requests",
+        "C05": "criteria.C05.ops_requests",
+        "C06": "criteria.C06.ops_requests",
+        "C07": "criteria.C07.ops_requests",
+        "C08": "criteria.C08.ops_requests",
+        "C09": "criteria.C09.ops_requests",
+        "C10": "criteria.C10.ops_requests",
+        "C11": "criteria.C11.ops_requests",
+        "C12": "criteria.C12.ops_requests",
+        "X01": "criteria.X01.ops_requests",
+        "X02": "criteria.X02.ops_requests",
+        "X03": "criteria.X03.ops_requests",
+        "X04": "criteria.X04.ops_requests",
+        "X05": "criteria.X05.ops_requests",
+        "X06": "criteria.X06.ops_requests",
+        "X07": "criteria.X07.ops_requests",
+        "X08": "criteria.X08.ops_requests"
+      }
+    },
+    {
+      "path": "tests/ops/test_mcs_request_reason.py",
+      "kind": "test",
+      "module": "ops_requests",
+      "state": "REVIEWED",
+      "P_sha256": "32b1f19fb71454c2d88fac1ee553796bde03efa28b7048f7d565545d07e9e9b9",
+      "P_bytes": 2056,
+      "P_lines": 54,
+      "W_sha256": "78417c57ddaee0e818a4cceda2cec99fdc6cdde0c2999c62ebf9f629b0d5c01e",
+      "W_bytes": 3287,
+      "W_lines": 77,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          54
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            3
+          ],
+          "P_range": [
+            1,
+            3
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            4,
+            4
+          ],
+          "P_range": null,
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            5,
+            55
+          ],
+          "P_range": [
+            4,
+            54
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            56,
+            77
+          ],
+          "P_range": null,
+          "review": "最終P→W全diffを全文読取"
+        }
+      ],
+      "W_review": "全文P＋全W差分で全行を確認",
+      "responsibility": "完全合成fixtureでCLI/request/operation/reason/receipt境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_mcs_request_reason.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "flow": "mcs_cli/hermes_plugin/common envelope→bounded command/actor/human/project/reason検証→apply_command BEGIN IMMEDIATEとreplay hash→operation/request state mutation→receipt一括commit→job_ops/notify drainとsnapshot consumer。update/restore post-commit実行は親owner。",
+      "criteria": {
+        "C01": "criteria.C01.ops_requests",
+        "C02": "criteria.C02.ops_requests",
+        "C03": "criteria.C03.ops_requests",
+        "C04": "criteria.C04.ops_requests",
+        "C05": "criteria.C05.ops_requests",
+        "C06": "criteria.C06.ops_requests",
+        "C07": "criteria.C07.ops_requests",
+        "C08": "criteria.C08.ops_requests",
+        "C09": "criteria.C09.ops_requests",
+        "C10": "criteria.C10.ops_requests",
+        "C11": "criteria.C11.ops_requests",
+        "C12": "criteria.C12.ops_requests",
+        "X01": "criteria.X01.ops_requests",
+        "X02": "criteria.X02.ops_requests",
+        "X03": "criteria.X03.ops_requests",
+        "X04": "criteria.X04.ops_requests",
+        "X05": "criteria.X05.ops_requests",
+        "X06": "criteria.X06.ops_requests",
+        "X07": "criteria.X07.ops_requests",
+        "X08": "criteria.X08.ops_requests"
+      }
+    },
+    {
+      "path": "tests/ops/test_mcs_signal_feedback.py",
+      "kind": "test",
+      "module": "signals",
+      "state": "REVIEWED",
+      "P_sha256": "b4e32ae57c38900f0bd83f53c14ae6ac9aec59200a4d1a94b3342e4e48c1c910",
+      "P_bytes": 12775,
+      "P_lines": 238,
+      "W_sha256": "b4e32ae57c38900f0bd83f53c14ae6ac9aec59200a4d1a94b3342e4e48c1c910",
+      "W_bytes": 12775,
+      "W_lines": 238,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          238
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            238
+          ],
+          "P_range": [
+            1,
+            238
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "SHA一致でP全文読取を再利用",
+      "responsibility": "完全合成fixtureでsignal候補・latest/通知/approval/identity境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_mcs_signal_feedback.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "flow": "保存済み収集/抽出/依頼と承認済みpolicy・自己identity→current publication/source hash/candidate根拠→latest signal state/resolution→artifact appendとoutbox→notify/views/C1 consumer。latest破損はold記録を復活させない。",
+      "criteria": {
+        "C01": "criteria.C01.signals",
+        "C02": "criteria.C02.signals",
+        "C03": "criteria.C03.signals",
+        "C04": "criteria.C04.signals",
+        "C05": "criteria.C05.signals",
+        "C06": "criteria.C06.signals",
+        "C07": "criteria.C07.signals",
+        "C08": "criteria.C08.signals",
+        "C09": "criteria.C09.signals",
+        "C10": "criteria.C10.signals",
+        "C11": "criteria.C11.signals",
+        "C12": "criteria.C12.signals",
+        "X01": "criteria.X01.signals",
+        "X02": "criteria.X02.signals",
+        "X03": "criteria.X03.signals",
+        "X04": "criteria.X04.signals",
+        "X05": "criteria.X05.signals",
+        "X06": "criteria.X06.signals",
+        "X07": "criteria.X07.signals",
+        "X08": "criteria.X08.signals"
+      }
+    },
+    {
+      "path": "tests/ops/test_mcs_signals.py",
+      "kind": "test",
+      "module": "signals",
+      "state": "REVIEWED",
+      "P_sha256": "6fdc46655e5b0de705ad6f588b2b10268e6b6979cdd2dfc6fd606352b7362c22",
+      "P_bytes": 90685,
+      "P_lines": 2069,
+      "W_sha256": "3776c9d939c051b6dd6f33d24c940f337bac7a397c339d0134cc3b7ebb8cb47f",
+      "W_bytes": 93070,
+      "W_lines": 2113,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          460
+        ],
+        [
+          461,
+          860
+        ],
+        [
+          861,
+          1260
+        ],
+        [
+          1261,
+          1680
+        ],
+        [
+          1681,
+          2069
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            12
+          ],
+          "P_range": [
+            1,
+            12
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            13,
+            56
+          ],
+          "P_range": null,
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            57,
+            2113
+          ],
+          "P_range": [
+            13,
+            2069
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "全文P＋全W差分で全行を確認",
+      "responsibility": "完全合成fixtureでsignal候補・latest/通知/approval/identity境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_mcs_signals.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "flow": "保存済み収集/抽出/依頼と承認済みpolicy・自己identity→current publication/source hash/candidate根拠→latest signal state/resolution→artifact appendとoutbox→notify/views/C1 consumer。latest破損はold記録を復活させない。",
+      "criteria": {
+        "C01": "criteria.C01.signals",
+        "C02": "criteria.C02.signals",
+        "C03": "criteria.C03.signals",
+        "C04": "criteria.C04.signals",
+        "C05": "criteria.C05.signals",
+        "C06": "criteria.C06.signals",
+        "C07": "criteria.C07.signals",
+        "C08": "criteria.C08.signals",
+        "C09": "criteria.C09.signals",
+        "C10": "criteria.C10.signals",
+        "C11": "criteria.C11.signals",
+        "C12": "criteria.C12.signals",
+        "X01": "criteria.X01.signals",
+        "X02": "criteria.X02.signals",
+        "X03": "criteria.X03.signals",
+        "X04": "criteria.X04.signals",
+        "X05": "criteria.X05.signals",
+        "X06": "criteria.X06.signals",
+        "X07": "criteria.X07.signals",
+        "X08": "criteria.X08.signals"
+      }
+    },
+    {
+      "path": "tests/ops/test_mcs_cli.py",
+      "kind": "test",
+      "module": "ops_requests",
+      "state": "REVIEWED",
+      "P_sha256": "d486f5aff21efce3e9e874b803ecd81487c32ccf5d79077c792ad01a21df0896",
+      "P_bytes": 8960,
+      "P_lines": 205,
+      "W_sha256": "b8652511171e21b4264e5ed3622c57795e9659cc6dc45bf2ed6e285903c0c357",
+      "W_bytes": 9186,
+      "W_lines": 208,
+      "read_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "read_ranges": [
+        [
+          1,
+          205
+        ]
+      ],
+      "read_method": "固定P全文の分割read、cutされたtest_mcs_operations 301-452は再読。変更行は最終P→W全diffの全文読取。",
+      "W_line_coverage": [
+        {
+          "W_range": [
+            1,
+            193
+          ],
+          "P_range": [
+            1,
+            193
+          ],
+          "review": "P全文読取の同一行を再利用"
+        },
+        {
+          "W_range": [
+            194,
+            197
+          ],
+          "P_range": [
+            194,
+            194
+          ],
+          "review": "最終P→W全diffを全文読取"
+        },
+        {
+          "W_range": [
+            198,
+            208
+          ],
+          "P_range": [
+            195,
+            205
+          ],
+          "review": "P全文読取の同一行を再利用"
+        }
+      ],
+      "W_review": "全文P＋全W差分で全行を確認",
+      "responsibility": "完全合成fixtureでCLI/request/operation/reason/receipt境界を検証する。",
+      "callers": [
+        "scripts/run_tests.sh tests/ops/test_mcs_cli.py",
+        "pytest collection under isolated HOME/socket blocker"
+      ],
+      "flow": "mcs_cli/hermes_plugin/common envelope→bounded command/actor/human/project/reason検証→apply_command BEGIN IMMEDIATEとreplay hash→operation/request state mutation→receipt一括commit→job_ops/notify drainとsnapshot consumer。update/restore post-commit実行は親owner。",
+      "criteria": {
+        "C01": "criteria.C01.ops_requests",
+        "C02": "criteria.C02.ops_requests",
+        "C03": "criteria.C03.ops_requests",
+        "C04": "criteria.C04.ops_requests",
+        "C05": "criteria.C05.ops_requests",
+        "C06": "criteria.C06.ops_requests",
+        "C07": "criteria.C07.ops_requests",
+        "C08": "criteria.C08.ops_requests",
+        "C09": "criteria.C09.ops_requests",
+        "C10": "criteria.C10.ops_requests",
+        "C11": "criteria.C11.ops_requests",
+        "C12": "criteria.C12.ops_requests",
+        "X01": "criteria.X01.ops_requests",
+        "X02": "criteria.X02.ops_requests",
+        "X03": "criteria.X03.ops_requests",
+        "X04": "criteria.X04.ops_requests",
+        "X05": "criteria.X05.ops_requests",
+        "X06": "criteria.X06.ops_requests",
+        "X07": "criteria.X07.ops_requests",
+        "X08": "criteria.X08.ops_requests"
+      }
+    }
+  ],
+  "criteria": {
+    "C01": {
+      "name": "設計・責務・依存・循環・重複・dead code・文書乖離",
+      "ops_requests": {
+        "applicability": "APPLICABLE",
+        "basis": "CLI/plugin/native modal→command検証→apply_commandのBEGIN IMMEDIATE→operation/request→receipt。lazy importが循環を回避し、update/restore実行は既存ownerへ渡す。",
+        "evidence": "mcs_requests.validate/apply_command; mcs_operations.apply_tx",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "signals": {
+        "applicability": "APPLICABLE",
+        "basis": "収集済みmessage/抽出/依頼からcandidate→latest state→resolution→notify_outbox、current_openはreadonly consumer。shared通知実行は所有外。",
+        "evidence": "evaluate; _latest_signal_states; current_open",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "c1": {
+        "applicability": "APPLICABLE",
+        "basis": "純粋schema/canonical→snapshot records→bounded parts→private reference receiver。auth/transport journalはext_contractが所有し、受信referenceはsynthetic限定と明記。",
+        "evidence": "c1_contract/c1_records/c1_envelopes/c1_receiver; read_only_consumers",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "C02": {
+      "name": "状態遷移・不変条件・欠損・日時/単位/丸め/境界",
+      "ops_requests": {
+        "applicability": "APPLICABLE",
+        "basis": "revision/source hash/project pin、retry generation/attempt ceiling、scan cursorを保持。最新signalの破損fallbackと深いjob JSONをF01/F03で修復。",
+        "evidence": "F01,F03; test_mcs_operations; test_receipt_contract",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "signals": {
+        "applicability": "APPLICABLE",
+        "basis": "latest signal tombstone、自己/所属unknown、explicit config優先と日付/UTC/日数を全文照合。F02で壊れたlatest policy/profile/staffをold記録で代替しない。",
+        "evidence": "F02; signal tests; _thresholds/_self_sets",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "c1": {
+        "applicability": "APPLICABLE",
+        "basis": "同generation body+message対、part共通scope/hash/count、first complete set、newer incomplete/equal timestamp ambiguousはunknown。古いarrival/欠測で現在値を復活しない。",
+        "evidence": "envelope/receiver tests; validate_collection; ReceiverView",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "C03": {
+      "name": "制約・transaction・upsert・排他・冪等性・削除",
+      "ops_requests": {
+        "applicability": "APPLICABLE",
+        "basis": "command_id+payload_hashで冪等receipt。BEGIN IMMEDIATEとExitStackによりSQL commit失敗時のrefstat promotionも巻戻す。新規回帰は再実行receipt同一・job/artifact不変を確認。",
+        "evidence": "mcs_requests.apply_command; _refstat_promotion; operations/receipt tests",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "signals": {
+        "applicability": "APPLICABLE",
+        "basis": "evaluateはledger transaction内append stateと通知queue整合を維持。readonly current_open/profile/staffはtotal_changes不変。dismiss/reopen/suppressionは既存状態遷移。",
+        "evidence": "evaluate; test_mcs_signal_feedback; F02",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "c1": {
+        "applicability": "APPLICABLE",
+        "basis": "namespaceごとのflock+一括atomic state、重複receive/withdrawはreceipt不変、withdraw-before-arrival tombstoneとcommit前/後faultが半状態を残さない。",
+        "evidence": "receiver atomic/concurrent/idempotent/withdraw tests",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "C04": {
+      "name": "migration・旧schema・値/FK/index/trigger・途中失敗",
+      "ops_requests": {
+        "applicability": "APPLICABLE_LIMITED",
+        "basis": "schema v5未満はrequest_schema_not_ready。DDL/migration自体を追加・変更しない。schema/ledger packet1のSHA一致を再利用し、全migration fixturesは次packetへ。",
+        "evidence": "mcs_requests.apply_command; prior_reviews_reused",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "signals": {
+        "applicability": "APPLICABLE_LIMITED",
+        "basis": "artifact内容の既存保存形式を維持、migrationなし。最新状態はartifact_id順で旧データを解釈し、破損rawを削除・更新しない。",
+        "evidence": "_latest_signal_states; F02; prior_reviews_reused",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "c1": {
+        "applicability": "APPLICABLE_LIMITED",
+        "basis": "receiver state version1はstrict validate、破損selected/memberは再構成せずfail closed。migration実装なし、legacy /1 wire goldenを維持。",
+        "evidence": "state validation; test_c1_delivery/receiver",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "C05": {
+      "name": "認証/認可・tenant・injection/XSS/CSRF/SSRF・暗号",
+      "ops_requests": {
+        "applicability": "APPLICABLE",
+        "basis": "version/UUID/actor/human_confirmed/project/reason/未知fieldを検証。signalのforeign latestはpinより前にproject_mismatchで拒否し他projectのidを返さない。SQLはparameter化。",
+        "evidence": "validate; validate_ops; F01 foreign latest regression",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "signals": {
+        "applicability": "APPLICABLE",
+        "basis": "policy artifact単独insertでは閾値を動かさずcommand_id/receipt actorを照合。自己identityはsender idを厳密正規化し職種単独を所属証明としない。",
+        "evidence": "_approved_policy; normalize_sender_id; self/station tests",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "c1": {
+        "applicability": "APPLICABLE",
+        "basis": "allowlist/paired body、strict numeric/string/time、authはext_contract毎送信検証のactor/destination/expiry/人確認。C1 aloneを認可証明としない。",
+        "evidence": "test_c1_authorization; ext_contract readonly ranges; contract tests",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "C06": {
+      "name": "PII/PHI・ログ/URL/cache/storage/export/telemetry",
+      "ops_requests": {
+        "applicability": "APPLICABLE",
+        "basis": "source情報とbefore/afterは私有ledger/receiptへ保存する契約。新fixtureは完全合成で秘密・PHIなし。refstat promotionはprivate regular/no-followを検証。",
+        "evidence": "enqueue; _refstat_promotion; test_receipt_contract",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "signals": {
+        "applicability": "APPLICABLE",
+        "basis": "通知本文/証拠message idsは既存local outbox経路。新fixtureの組織/人物は完全合成。破損unknown時に旧self identityや閾値を復活させない。",
+        "evidence": "F02; signal_notice_text; _notify",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "c1": {
+        "applicability": "APPLICABLE",
+        "basis": "PHIを扱うexport境界としてbody明示allowlist、8KiB text cap、forbidden sender/raw fields、retention/private700/600/no-followを確認。診断はcountのみ。実PHIアクセスなし。",
+        "evidence": "c1_contract.validate_record; receiver privacy tests; C1 authorization tests",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "C07": {
+      "name": "API/CLI/イベント契約・入力上限・互換性・pagination",
+      "ops_requests": {
+        "applicability": "APPLICABLE",
+        "basis": "16KiB command、JSON depth/unknown field拒否、公開signatureを前後AST比較。追加API/schema/保存形式なし、ops旧commandも同じ入口を保つ。",
+        "evidence": "parse_command; read_command; API_contract_comparison",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "signals": {
+        "applicability": "APPLICABLE",
+        "basis": "current_openのlimit/filter、record_*同一payloadの重複抑制、明示configの空配列優先、通知digest member契約を保持。公開signature同一。",
+        "evidence": "API_contract_comparison; F02; digest tests",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "c1": {
+        "applicability": "APPLICABLE",
+        "basis": "restricted UTF8 canonicalのnumeric goldens、/1既存bytes維持、/2 max1MiB wire・4KiB withdrawal、同part body不可分、count/index/set厳密。公開API同一。",
+        "evidence": "test_c1_contract/envelopes/delivery; API comparison",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "C08": {
+      "name": "UI・stale state・二重操作・入力消失・復旧・accessibility",
+      "ops_requests": {
+        "applicability": "APPLICABLE_LIMITED",
+        "basis": "UIは所有外。render-pinned expected_signal_artifact_id、revision/source hashのstale拒否とreceipt replayを実consumerから確認。inputを勝手に代替しない。",
+        "evidence": "common/envelopes.signal_dismiss; F01; request operation tests",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "signals": {
+        "applicability": "APPLICABLE_LIMITED",
+        "basis": "画面実装は親views所有。current_openは破損最新を採用せずreadonly、dismiss前後のstale stateはF01とplugin ownerへ整合連携。",
+        "evidence": "current_open; read_only_consumers; F01,F02",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "c1": {
+        "applicability": "APPLICABLE_LIMITED",
+        "basis": "receiver viewはmissing/newer partial/ambiguousをunknownとし、last_knownをcurrentへ代入しない。Web/native accessibility UIは所有外。",
+        "evidence": "test_c1_receiver; absence interval tests",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "C09": {
+      "name": "N+1・計算量・無制限処理・memory・起動/import・費用",
+      "ops_requests": {
+        "applicability": "APPLICABLE",
+        "basis": "command上限とbounded validators、retry追加attempt制限。pause/resumeは対象pending jobsを一度列挙する既存設計、深いJSONはskipして処理継続。新しい無制限処理なし。",
+        "evidence": "_apply_control_tx; retry_error; F03",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "signals": {
+        "applicability": "APPLICABLE",
+        "basis": "既存aggregate SQL、message/project grouping、limit付きcurrent_open、bounded digest rescueを照合。行数だけの機械分割や無根拠な性能変更なし。",
+        "evidence": "evaluate/current_open/rescue_digest_members; signal tests",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "c1": {
+        "applicability": "APPLICABLE",
+        "basis": "wire/state/envelopes容量は明示拒否しevictionしない。part completenessはcardinality/set比較で巨大countのrange生成なし、bounded fixed point pack。",
+        "evidence": "validate_collection; capacity/huge-count tests",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "C10": {
+      "name": "race/retry/queue/timeout・キャンセル・例外・観測性",
+      "ops_requests": {
+        "applicability": "APPLICABLE",
+        "basis": "queueはstorage例外時input保持、receipt後consumerが終端処理。update ref解決はwrite transaction外。F03で3.10 RecursionErrorを既存拒否/skipへ統合。",
+        "evidence": "job_ops.drain_commands; apply_command; F03",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "signals": {
+        "applicability": "APPLICABLE",
+        "basis": "retry/re-notifyはinterval/通知stateを確認、group部分配送とdigest rescueは既存notify契約へ。latest JSON例外はunknown/defaultへ閉じる。",
+        "evidence": "F02; _notify_suppressed/_digest_add; test_mcs_signals",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "c1": {
+        "applicability": "APPLICABLE",
+        "basis": "失敗ACKを成功completeと混同せず、sender unknownはhold。receiver concurrent/crash/reopenとretention期限ちょうどの境界を合成検証。",
+        "evidence": "receiver tests; delivery tests; ext_contract._deliver readonly",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "C11": {
+      "name": "テスト偽陽性・mock依存・回帰/異常系/競合・flaky/skip",
+      "ops_requests": {
+        "applicability": "APPLICABLE",
+        "basis": "P707passに新規33caseを加え、固定Pの最終回帰は21fail12安全control。Wは3.10全740pass0skip。doctor空stdoutスタブの偽陽性をF04で修理、assertion不変更。",
+        "evidence": "tests.final_canonical_before310; final_valid_family310; F04",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "signals": {
+        "applicability": "APPLICABLE",
+        "basis": "signal/feedback family、positive policy承認、explicit config、read-only件数、outbox0を合成検証。F02初期fixture transaction不整合ログは非canonicalとして保持。",
+        "evidence": "F02; tests/artifacts",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "c1": {
+        "applicability": "APPLICABLE",
+        "basis": "private-file実装をtemp rootで動かし、socket遮断下でsymlink/FIFO/oversize/fault/concurrency/receipt roundtripを検証。min runtimeを含む全family0skip。",
+        "evidence": "test_c1_receiver/withdraw_receive; final_valid_family310",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "C12": {
+      "name": "build・runtime/lockfile・依存リスク・script・設定/CI差",
+      "ops_requests": {
+        "applicability": "APPLICABLE",
+        "basis": "stdlibのみ。3.13.12/3.10.22差を実測し、3.10でのみ起きるRecursionErrorを修復。runnerのenv-i/HOME隔離/socket遮断とpinned Ruffを使用。",
+        "evidence": "F03; runtime; checks",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "signals": {
+        "applicability": "APPLICABLE",
+        "basis": "stdlib、dynamic import契約、3.10/3.13 family、pinnedRuff。新依存/lockfile/設定なし。",
+        "evidence": "checks; runtime",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "c1": {
+        "applicability": "APPLICABLE",
+        "basis": "stdlib/typed contracts、Python3.10 runtime union/importはfullfamilyで確認。新SDK・lockfileなし、pinnedRuff0。",
+        "evidence": "runtime; checks",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "X01": {
+      "name": "配布物・起動終了・旧新version・切戻し",
+      "ops_requests": {
+        "applicability": "APPLICABLE_LIMITED",
+        "basis": "update_apply/rollback/restore_approveはpin+人承認+receipt→既存lifecycle ownerへ委譲。実install/recovery適用は親所有。今回配布API/manifest/import構造不変更。",
+        "evidence": "prepare_update_pins; _apply_update_op_tx; _apply_restore_op_tx",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "signals": {
+        "applicability": "APPLICABLE_LIMITED",
+        "basis": "新旧signal artifact consumerの互換性を保ち、医療閾値既定は不変更。daemon起動終了/installerは親所有。",
+        "evidence": "F02 Japanese changes; API comparison",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "c1": {
+        "applicability": "APPLICABLE_LIMITED",
+        "basis": "legacy /1 compatibilityとpublic signaturesを保持、manifest/module構造は変更なし。実配布host・serviceへの適用は親が別検証。",
+        "evidence": "test_c1_delivery; API comparison; deferred",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "X02": {
+      "name": "供給網・取得元・CI権限・ライセンス",
+      "ops_requests": {
+        "applicability": "NOT_APPLICABLE",
+        "basis": "新規依存/取得元/CI権限/ライセンス変更なし。外部toolは親指定Ruff固定版のローカルcacheを使用し、外部送信なし。",
+        "evidence": "checks.pinned_ruff",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "signals": {
+        "applicability": "NOT_APPLICABLE",
+        "basis": "依存取得・CI権限・ライセンスを所有しない。追加依存なし。",
+        "evidence": "owned inventory/patch",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "c1": {
+        "applicability": "NOT_APPLICABLE",
+        "basis": "依存取得/供給網/CI権限変更なし。C1local referenceを外部providerとして新規追加しない。",
+        "evidence": "patch_reconstruction changed_paths",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "X03": {
+      "name": "backup/restore/削除・派生物/鍵・削除データ復活",
+      "ops_requests": {
+        "applicability": "APPLICABLE_LIMITED",
+        "basis": "history cursor、job試行回数、破損rawを消さない。restore consent envelopeのみ確認し、backup/restore本処理はsemantic/親owner。",
+        "evidence": "F03; _apply_restore_op_tx; deferred",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "signals": {
+        "applicability": "APPLICABLE",
+        "basis": "最新破損signalは旧openを復活させないtombstone契約。F02もlatest policy/自己プロフィール/所属一覧を先に選び、安全なdefaults/unknownを返す。",
+        "evidence": "F02; _latest_signal_states; corrupt_latest regressions",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "c1": {
+        "applicability": "APPLICABLE",
+        "basis": "retentionでpayload消去しindex/receipt/tombstoneを残し、expired/withdrawn late deliveryは拒否。staging cleanupがreceiver indexを消さず、旧bodyをcurrentへ戻さない。",
+        "evidence": "receiver retention/withdraw/body disappearance tests",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "X04": {
+      "name": "外部連携・署名・主体/宛先・再送/順序・部分取込",
+      "ops_requests": {
+        "applicability": "APPLICABLE_LIMITED",
+        "basis": "通知・pluginの人操作が同じreceipt入口を呼び、配送成功と操作receiptを混同しない。signing/network送信はこのpacketにない。",
+        "evidence": "notify_cmds._human_cmd_check/apply; read_only_consumers",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "signals": {
+        "applicability": "APPLICABLE_LIMITED",
+        "basis": "outbox作成・digest/rescue・通知intervalはshared notify consumerへ渡す。宛先/API署名/外部receipt本体はnotify owner、実アクセスなし。",
+        "evidence": "_notify; read_only_consumers",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "c1": {
+        "applicability": "APPLICABLE",
+        "basis": "認可auth_id/destination/intent hash、part共通evidence/records hashを照合しACK acceptedとcollection completeを分離。withdraw auth mismatch、unknown resend hold、順序/重複を検証。",
+        "evidence": "C1 delivery/envelopes/receiver/withdraw tests; ext_contract readonly",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "X05": {
+      "name": "offline・複数tab・容量/eviction・OS差・native/FFI",
+      "ops_requests": {
+        "applicability": "APPLICABLE_LIMITED",
+        "basis": "inboxはregular/no-follow/atomic公開で入力消失を避ける。複数操作はrevision/payload hashとDB lockで整合。新native/FFIなし、OS実機適用は未実施。",
+        "evidence": "enqueue; operation/receipt tests",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "signals": {
+        "applicability": "APPLICABLE_LIMITED",
+        "basis": "DB内のreadonly consumerはoffline可、limit/defaults/unknownを維持。platform native SDK・FFIは使わない。",
+        "evidence": "current_open; API comparison",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "c1": {
+        "applicability": "APPLICABLE",
+        "basis": "private local files/namespace/OSflock、concurrent instances、容量拒否とno evictionを合成macOSで確認。Linux実環境/partner native通信は未実施。",
+        "evidence": "receiver resource/private/concurrency tests; deferred",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "X06": {
+      "name": "AI/MCP・prompt injection・tool権限・承認・記憶越境",
+      "ops_requests": {
+        "applicability": "APPLICABLE",
+        "basis": "抽出候補はcurrent hash/error/QC/世代の条件を守り、commandを自動実行しない。F03で破損最新をskipし同種類古い抽出へ戻らない。",
+        "evidence": "candidates; extraction feedback validation; F03",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "signals": {
+        "applicability": "APPLICABLE",
+        "basis": "LLM抽出をcurrent hash/QC/publication条件で読むが、外部tool/LLMを実行しない。記録なし≠対応なしを通知reason/unknownに保持。",
+        "evidence": "detectors/resolution/current_open; signal tests",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "c1": {
+        "applicability": "APPLICABLE_LIMITED",
+        "basis": "C1はread-modelの許可fieldsをexportしtool/LLMを実行しない。fact evidenceをallowlist保持し、自由文bodyをtool承認として解釈しない。",
+        "evidence": "c1_contract.validate_record; c1_records.assemble_records",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "X07": {
+      "name": "医療/算定/金銭の適用日/対象/根拠・監査・人の承認",
+      "ops_requests": {
+        "applicability": "APPLICABLE",
+        "basis": "理由/actor/human_confirmed/receiptとsource証拠を保持。signal破損を旧openで置換せず、policy変更は承認receiptに照合。医療閾値・制度規則は変更なし。",
+        "evidence": "F01,F02,F03; test_mcs_request_reason",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "signals": {
+        "applicability": "APPLICABLE",
+        "basis": "既存の医療/依頼期限判定は一次根拠なしに変更しない。F02は最新承認の採用境界のみ修復し、threshold defaultsとhuman approval条件を維持。",
+        "evidence": "F02; Japanese changes; policy approval tests",
+        "finding_state": "CONFIRMED_FIXED"
+      },
+      "c1": {
+        "applicability": "APPLICABLE",
+        "basis": "記録なしはunknown/not_repostedとし対応完了・無応答と結論しない。外部exportはauth human_confirmed/reason/retention条件付きで、臨床制度ルール変更なし。",
+        "evidence": "receiver absence tests; authorization tests; ext_contract auth",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    },
+    "X08": {
+      "name": "公開Webの導線・フォーム・link/index・公開境界",
+      "ops_requests": {
+        "applicability": "NOT_APPLICABLE",
+        "basis": "公開Web・フォーム・index・公開link入口なし。CLIと私有ファイル/ledgerのローカル処理だけ。",
+        "evidence": "owned inventory",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "signals": {
+        "applicability": "NOT_APPLICABLE",
+        "basis": "公開Webを所有しない。画面consumerはreadonly参照、公開導線変更なし。",
+        "evidence": "owned inventory",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      },
+      "c1": {
+        "applicability": "NOT_APPLICABLE",
+        "basis": "公開Webのlink/index/formなし。私有local CLIと合成reference receiverのみ。",
+        "evidence": "owned inventory",
+        "finding_state": "NO_CONFIRMED_NEW_DEFECT"
+      }
+    }
+  },
+  "flows": {
+    "ops_requests": "mcs_cli/hermes_plugin/common envelope→bounded command/actor/human/project/reason検証→apply_command BEGIN IMMEDIATEとreplay hash→operation/request state mutation→receipt一括commit→job_ops/notify drainとsnapshot consumer。update/restore post-commit実行は親owner。",
+    "signals": "保存済み収集/抽出/依頼と承認済みpolicy・自己identity→current publication/source hash/candidate根拠→latest signal state/resolution→artifact appendとoutbox→notify/views/C1 consumer。latest破損はold記録を復活させない。",
+    "c1": "ext_contract CLIのauth/load/recheck→公開snapshot readmodel/明示sender policy→allowlist record/body対→bounded envelope parts→governed journal→local synthetic reference receiverのflock/atomic save→ACK/complete別判定、view/withdraw/expiry。実外部deliveryは未実施。"
+  },
+  "read_only_consumers": [
+    {
+      "path": "mcs/ops/ext_contract.py",
+      "W_sha256": "672245d3b4059473a56d21178aec3d050541a5db7950ae66d9b819a2dcf68455",
+      "read_ranges": [
+        [
+          84,
+          180
+        ],
+        [
+          611,
+          738
+        ],
+        [
+          1268,
+          1360
+        ]
+      ],
+      "state": "PARTIAL_READONLY",
+      "edited": false,
+      "note": "担当入口/consumerの必要範囲のみ。ファイル全域REVIEWEDとしない。"
+    },
+    {
+      "path": "adapters/common/envelopes.py",
+      "W_sha256": "c2a645b0570bb402db6675722fa04e166ba6f400ae90d2cb6bd05db5c09fa885",
+      "read_ranges": [
+        [
+          232,
+          258
+        ]
+      ],
+      "state": "PARTIAL_READONLY",
+      "edited": false,
+      "note": "担当入口/consumerの必要範囲のみ。ファイル全域REVIEWEDとしない。"
+    },
+    {
+      "path": "hermes_plugin/__init__.py",
+      "W_sha256": "520af78445d02b3f8736b2aad1ab81cd17b94d6b412180e0ed0c79fce2e41594",
+      "read_ranges": [
+        [
+          524,
+          557
+        ]
+      ],
+      "state": "PARTIAL_READONLY",
+      "edited": false,
+      "note": "担当入口/consumerの必要範囲のみ。ファイル全域REVIEWEDとしない。"
+    },
+    {
+      "path": "mcs/ingest/job_ops.py",
+      "W_sha256": "d5b64a681b8b43a7f08decf4adddcf075465c94da1cfadcc3d515b98f2fea12f",
+      "read_ranges": [
+        [
+          120,
+          157
+        ]
+      ],
+      "state": "PARTIAL_READONLY",
+      "edited": false,
+      "note": "担当入口/consumerの必要範囲のみ。ファイル全域REVIEWEDとしない。"
+    },
+    {
+      "path": "mcs/ingest/run_check.py",
+      "W_sha256": "915d6784befb59fcfffae019020dac59c92fa272571dfc325c36585b283ef00d",
+      "read_ranges": [
+        [
+          1246,
+          1261
+        ],
+        [
+          1518,
+          1550
+        ]
+      ],
+      "state": "PARTIAL_READONLY",
+      "edited": false,
+      "note": "担当入口/consumerの必要範囲のみ。ファイル全域REVIEWEDとしない。"
+    },
+    {
+      "path": "mcs/notify/notify_cmds.py",
+      "W_sha256": "4ae2cd7e4a114106bcd4ac414fbfeb84f357406d26ae985fa35b6027315b2dc9",
+      "read_ranges": [
+        [
+          342,
+          382
+        ]
+      ],
+      "state": "PARTIAL_READONLY",
+      "edited": false,
+      "note": "担当入口/consumerの必要範囲のみ。ファイル全域REVIEWEDとしない。"
+    },
+    {
+      "path": "mcs/ops/mcs_setup.py",
+      "W_sha256": "6c8602a8b1abfcdc79da35b5cf9eb7605a1438304a42438ef762cb7b0e369b9f",
+      "read_ranges": [
+        [
+          2000,
+          2128
+        ],
+        [
+          2307,
+          2385
+        ]
+      ],
+      "state": "PARTIAL_READONLY",
+      "edited": false,
+      "note": "担当入口/consumerの必要範囲のみ。ファイル全域REVIEWEDとしない。"
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "W_sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "read_ranges": [
+        [
+          1,
+          72
+        ]
+      ],
+      "state": "REVIEWED",
+      "edited": false,
+      "note": "担当入口/consumerの必要範囲のみ。ファイル全域REVIEWEDとしない。"
+    },
+    {
+      "path": "changes/README.md",
+      "W_sha256": "fa8948acb3c7f2c56269b77dd6086c0c79b6a966fbbd79f5445f686c94a55b11",
+      "read_ranges": [
+        [
+          1,
+          25
+        ]
+      ],
+      "state": "REVIEWED",
+      "edited": false,
+      "note": "担当入口/consumerの必要範囲のみ。ファイル全域REVIEWEDとしない。"
+    },
+    {
+      "path": "tests/ops/ops_testkit.py",
+      "W_sha256": "de797908293db35c75d5c8521b6c962ed1ca8b305cc4f65aa1023bc308267354",
+      "read_ranges": [
+        [
+          1,
+          181
+        ]
+      ],
+      "state": "REVIEWED",
+      "edited": false,
+      "note": "担当入口/consumerの必要範囲のみ。ファイル全域REVIEWEDとしない。"
+    }
+  ],
+  "findings": [
+    {
+      "id": "F01",
+      "status": "CONFIRMED_FIXED",
+      "priority": "high",
+      "root_cause": "_apply_signal_dismiss_txのSQL json_valid(content)が同keyの破損最新行を先に捨て、旧openを現在として処理する。",
+      "path": "mcs/ops/mcs_operations.py",
+      "entry_to_consumer": "mcs_cli/hermes_plugin/common envelope→bounded command/actor/human/project/reason検証→apply_command BEGIN IMMEDIATEとreplay hash→operation/request state mutation→receipt一括commit→job_ops/notify drainとsnapshot consumer。update/restore post-commit実行は親owner。",
+      "before": "最終canonical P13case中7fail6safe control。旧pin/無pinでmalformed/deepを旧openとして適用、latest pinではchangedへ誤分類、foreign latestをskipしてscope誤適用。",
+      "repair": "最新row→project scope→expected artifact pin→JSON object/state/evidence検証。破損はsignal_corrupt receipt、staleはsignal_changed。",
+      "regression": "4raw×3pin＋foreign latest=13case; 旧raw不変更、再実行receipt同一、foreign current_artifact_id非開示。",
+      "criteria": [
+        "C02",
+        "C03",
+        "C05",
+        "C07",
+        "C08",
+        "C10",
+        "C11",
+        "X03",
+        "X07"
+      ],
+      "commit": "2883d7481f55562715011f40fe7ff4a5713c1cd4",
+      "shared_dependency": "notify ownerがplugin _control_reference同根本原因を修理。Pのpluginは旧filterだがcore実行時拒否は維持。親Iで両方の統合を検証する。"
+    },
+    {
+      "id": "F02",
+      "status": "CONFIRMED_FIXED",
+      "priority": "high",
+      "root_cause": "_approved_policy/_latest_self_profile/latest_station_staffのjson_valid(content)先行filterが破損最新を捨て、古い承認閾値・自己主体・所属を復活。",
+      "path": "mcs/ops/mcs_signals.py",
+      "entry_to_consumer": "保存済み収集/抽出/依頼と承認済みpolicy・自己identity→current publication/source hash/candidate根拠→latest signal state/resolution→artifact appendとoutbox→notify/views/C1 consumer。latest破損はold記録を復活させない。",
+      "before": "最終canonical12case中6fail6safe control。3reader×malformed/deepで旧値復活、array/nullは旧実装でも安全control。初期4policy transaction fixture errorは証明から除外。",
+      "repair": "最新kind行を先に取得しJSON/object/approvalを検証。不正は既存default policy/unknown identity、明示config優先と閾値既定は保持。",
+      "regression": "3reader×4raw=12case; current_open readonly/no misleading aging/no outbox、プロフィール明示空設定、所属unknown。",
+      "criteria": [
+        "C02",
+        "C03",
+        "C05",
+        "C06",
+        "C07",
+        "C10",
+        "C11",
+        "X03",
+        "X07"
+      ],
+      "commit": "cda13362edceb7a21b3ed297ff65a541baa97f43"
+    },
+    {
+      "id": "F03",
+      "status": "CONFIRMED_FIXED",
+      "priority": "medium",
+      "root_cause": "深い保存JSONでPython3.10はRecursionErrorを返すが、job操作/candidatesのcatchがValueError等だけでcommand receiptや候補表示を中断。3.13ではValueError系で既存catchが通り環境差が隠れる。",
+      "paths": [
+        "mcs/ops/mcs_operations.py",
+        "mcs/ops/mcs_requests.py"
+      ],
+      "before": "最終canonical P Python3.10でjob4+candidate4=8fail。単独job3.13では4passを反証として保持。",
+      "repair": "json parse/canonical hashの既存不正入力経路にRecursionErrorを加える。scan/retryは拒否receipt、pause/resumeはskipped_jobs、candidateは同kind latest seen維持で古い抽出へ戻らない。",
+      "regression": "4commandのraw job不変/再receipt同一＋2kind×2fieldのlatest候補不採用/readonly/positive older artifactあり。",
+      "criteria": [
+        "C02",
+        "C03",
+        "C07",
+        "C10",
+        "C11",
+        "C12",
+        "X06",
+        "X07"
+      ],
+      "commit": "d0b660405efe373e6c9b40eb387ddf37915a2e29"
+    },
+    {
+      "id": "F04",
+      "status": "CONFIRMED_FIXED_TEST_HARNESS",
+      "priority": "medium",
+      "root_cause": "CLI doctorのfake selected pythonがexit0/stdout空でruntime metadataを返さず必ず安全拒否。3.13の現SQLite3.50.4では期待1で隠れるが、3.10の安全SQLite3.53.1では本来期待0に失敗。",
+      "path": "tests/ops/test_mcs_cli.py",
+      "before": "P bytesの既存doctor testはPython3.10で1fail、最終familyでは739pass1fail。",
+      "repair": "fake executableが既存_runtime_probe仕様の完全合成Python/SQLite/packages JSONを返す。returncodeのSQLite安全判定・secret非表示・合成files不変更assertionは維持。",
+      "regression": "最終3.10 family740pass、3.13 CLI21pass。source/setupは不変更、runtime動作変更なしのためchanges fragment不要。",
+      "criteria": [
+        "C11",
+        "C12",
+        "X01"
+      ],
+      "commit": "1b94f04d8253a29195d709f1f66d1f3c11f28343"
+    }
+  ],
+  "disproved": [
+    {
+      "question": "配列/nullでも旧policy/identity/signalが復活するか",
+      "result": "P safe controls12caseは旧実装でも拒否/defaults/unknown。malformed/deepだけが実証failureで、safe controlsを除去せず残した。"
+    },
+    {
+      "question": "candidatesが旧extractへfallbackするか",
+      "result": "seen.add(kind)はJSON検証前にあるため旧同kind fallback自体は既存防御。F03は3.10例外による表示停止を修復しseen順序を保つ。"
+    },
+    {
+      "question": "C1巨大part.countでcount範囲をallocationするか",
+      "result": "validate_collectionはlen/member index setとの整合から判定し巨大rangeを生成しない。既存envelope異常系と容量テストがWで通過、無根拠な改修なし。"
+    },
+    {
+      "question": "reference receiverのmissing body/未完partsが医療行為なし/対応済みになるか",
+      "result": "currentはunknown/body_unavailable/newer_incomplete/partial、complete known intervalのみnot_reposted。既存absence/boundary/withdraw testsで維持。"
+    },
+    {
+      "question": "public APIや保存形式が変更されたか",
+      "result": "全7sourceのAST関数signature/return annotation同一。新module/schema/dependencyなし、wire goldens保持。"
+    }
+  ],
+  "deferred": [
+    {
+      "topic": "最終I全域検証・fresh independent review",
+      "owner": "parent",
+      "reason": "Wのpacket検証と区別する。親が統合固定Iに対して必須lint/typecheck/test/build/独立reviewを実施。"
+    },
+    {
+      "topic": "plugin preview/confirm latest signal guard",
+      "owner": "maintenance_notify/parent",
+      "reason": "Pのreadonly _control_referenceは旧filter。notifyが同契約修復を担当、core拒否回帰は完了。親Iで併合境界を照合。"
+    },
+    {
+      "topic": "実MCS・PHI・外部partner/native delivery・service lifecycle・実機migration",
+      "owner": "explicit future authorization",
+      "reason": "今回禁止。完全合成のlocal receiver/一時DB/スタブのみ。実外部署名や到達性の保証をしない。"
+    },
+    {
+      "topic": "packet4外remaining source/test・schema_upgrade全fixtures",
+      "owner": "parent next packet",
+      "reason": "明示所有22fileは全読済み。所有外を全文監査済みとして数えず次投入へ。"
+    }
+  ],
+  "tests": [
+    {
+      "id": "baseline",
+      "role": "fixed_P_existing_baseline",
+      "code_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ops/test_c1_authorization.py tests/ops/test_c1_cli.py tests/ops/test_c1_contract.py tests/ops/test_c1_delivery.py tests/ops/test_c1_envelopes.py tests/ops/test_c1_receiver.py tests/ops/test_c1_records.py tests/ops/test_c1_withdraw_receive.py tests/ops/test_receipt_contract.py tests/ops/test_mcs_operation_cli.py tests/ops/test_mcs_operations.py tests/ops/test_mcs_request_reason.py tests/ops/test_mcs_signal_feedback.py tests/ops/test_mcs_signals.py tests/ops/test_mcs_cli.py --junitxml=/tmp/mcs-maintenance-core-packet4-20261005/baseline.xml > /tmp/mcs-maintenance-core-packet4-20261005/baseline.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "env": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "env -i; temporary HOME/TMPDIR/XDG dirs; LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC PYTHONDONTWRITEBYTECODE=1 MCS_TEST_SANDBOX=1; conftest socket blockade"
+      },
+      "collected": 707,
+      "passed": 707,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 27.574,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/baseline.xml",
+      "junit_sha256": "77e96fe4e9b3f322d3fcbe2c1c2b76e0bda1a7f4d0ba11156d93fe689a073da5",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/baseline.log",
+      "log_sha256": "2509742d00fca177e45ae8cadc992a2013413e478b334c0fe49748a1b093b53e",
+      "exit_status": 0
+    },
+    {
+      "id": "final-canonical-before310",
+      "role": "fixed_P_source_with_final_W_tests_only",
+      "code_ref": "bb533f588026b3640310f4b89c6973a892fe52fa",
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-maintenance-python310-20261005/bin/python scripts/run_tests.sh tests/ops/test_mcs_operations.py tests/ops/test_mcs_signals.py tests/ops/test_mcs_request_reason.py -k 'never_falls_back_past_corrupt_latest or corrupt_foreign_latest or corrupt_latest_policy or corrupt_latest_profile or corrupt_latest_roster or deep_stored_job_payload or deep_latest_extraction' --junitxml=/tmp/mcs-maintenance-core-packet4-20261005/final-canonical-before310.xml > /tmp/mcs-maintenance-core-packet4-20261005/final-canonical-before310.log 2>&1",
+      "cwd": "/tmp/mcs-maintenance-core-packet4-20261005/isolated-P",
+      "env": {
+        "MCS_TEST_PYTHON": "/tmp/mcs-maintenance-python310-20261005/bin/python",
+        "runner": "env -i; temporary HOME/TMPDIR/XDG dirs; LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC PYTHONDONTWRITEBYTECODE=1 MCS_TEST_SANDBOX=1; conftest socket blockade"
+      },
+      "collected": 33,
+      "passed": 12,
+      "failed": 21,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 3.002,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/final-canonical-before310.xml",
+      "junit_sha256": "c6327eef644b035299aac2e8e15e78c1a6f588f2e1db7dbdea22ff6f5c428267",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/final-canonical-before310.log",
+      "log_sha256": "c6354193fc6cbbc65974246b05a5db963a3aa253458141779375aecc6424dc8b",
+      "exit_status": 1
+    },
+    {
+      "id": "final-family",
+      "role": "full_family_before_doctor_fixture_repair",
+      "code_ref": "d0b660405efe373e6c9b40eb387ddf37915a2e29",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ops/test_c1_authorization.py tests/ops/test_c1_cli.py tests/ops/test_c1_contract.py tests/ops/test_c1_delivery.py tests/ops/test_c1_envelopes.py tests/ops/test_c1_receiver.py tests/ops/test_c1_records.py tests/ops/test_c1_withdraw_receive.py tests/ops/test_receipt_contract.py tests/ops/test_mcs_operation_cli.py tests/ops/test_mcs_operations.py tests/ops/test_mcs_request_reason.py tests/ops/test_mcs_signal_feedback.py tests/ops/test_mcs_signals.py tests/ops/test_mcs_cli.py --junitxml=/tmp/mcs-maintenance-core-packet4-20261005/final-family.xml > /tmp/mcs-maintenance-core-packet4-20261005/final-family.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "env": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "env -i; temporary HOME/TMPDIR/XDG dirs; LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC PYTHONDONTWRITEBYTECODE=1 MCS_TEST_SANDBOX=1; conftest socket blockade"
+      },
+      "collected": 740,
+      "passed": 740,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 24.587,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/final-family.xml",
+      "junit_sha256": "43abe4af2314a99e578acbe327b9ba01c7e5062a8bbe4ccd8b764b488b5c93a3",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/final-family.log",
+      "log_sha256": "759c2505ea1a03da3e5989f75a55b04b3dd947b9e913f823bc1992cb11439f39",
+      "exit_status": 0
+    },
+    {
+      "id": "final-family310",
+      "role": "full_family_detects_existing_doctor_stub_defect",
+      "code_ref": "d0b660405efe373e6c9b40eb387ddf37915a2e29",
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-maintenance-python310-20261005/bin/python scripts/run_tests.sh tests/ops/test_c1_authorization.py tests/ops/test_c1_cli.py tests/ops/test_c1_contract.py tests/ops/test_c1_delivery.py tests/ops/test_c1_envelopes.py tests/ops/test_c1_receiver.py tests/ops/test_c1_records.py tests/ops/test_c1_withdraw_receive.py tests/ops/test_receipt_contract.py tests/ops/test_mcs_operation_cli.py tests/ops/test_mcs_operations.py tests/ops/test_mcs_request_reason.py tests/ops/test_mcs_signal_feedback.py tests/ops/test_mcs_signals.py tests/ops/test_mcs_cli.py --junitxml=/tmp/mcs-maintenance-core-packet4-20261005/final-family310.xml > /tmp/mcs-maintenance-core-packet4-20261005/final-family310.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "env": {
+        "MCS_TEST_PYTHON": "/tmp/mcs-maintenance-python310-20261005/bin/python",
+        "runner": "env -i; temporary HOME/TMPDIR/XDG dirs; LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC PYTHONDONTWRITEBYTECODE=1 MCS_TEST_SANDBOX=1; conftest socket blockade"
+      },
+      "collected": 740,
+      "passed": 739,
+      "failed": 1,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 26.767,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/final-family310.xml",
+      "junit_sha256": "e539d5492f3da9dbcb87afa37cce2d13b8578ebb45b0c61f07e8d607c9b0ea4a",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/final-family310.log",
+      "log_sha256": "cff44760eb0f8724e1d9eb07e9eb6cb7af4ef38cd675d77895abc590bfacfac6",
+      "exit_status": 1
+    },
+    {
+      "id": "doctor310",
+      "role": "existing_fixture_failure_repro_before",
+      "code_ref": "d0b660405efe373e6c9b40eb387ddf37915a2e29",
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-maintenance-python310-20261005/bin/python scripts/run_tests.sh tests/ops/test_mcs_cli.py::test_doctor_runs_through_real_cli_without_touching_synthetic_files --showlocals --junitxml=/tmp/mcs-maintenance-core-packet4-20261005/doctor310.xml > /tmp/mcs-maintenance-core-packet4-20261005/doctor310.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "env": {
+        "MCS_TEST_PYTHON": "/tmp/mcs-maintenance-python310-20261005/bin/python",
+        "runner": "env -i; temporary HOME/TMPDIR/XDG dirs; LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC PYTHONDONTWRITEBYTECODE=1 MCS_TEST_SANDBOX=1; conftest socket blockade"
+      },
+      "collected": 1,
+      "passed": 0,
+      "failed": 1,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 1.536,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/doctor310.xml",
+      "junit_sha256": "6646df4c6dafec1a8fee665a9248a41a789a14c2ed0fcf50e1af20cd45cf3838",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/doctor310.log",
+      "log_sha256": "1cdef1e95314b7a2ed6d6f60fc3aa9346b5ad8af5652eeb9bcb1fdf6b735ac4f",
+      "exit_status": 1
+    },
+    {
+      "id": "doctor-valid",
+      "role": "final_fixture_family",
+      "code_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ops/test_mcs_cli.py --junitxml=/tmp/mcs-maintenance-core-packet4-20261005/doctor-valid.xml > /tmp/mcs-maintenance-core-packet4-20261005/doctor-valid.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "env": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runner": "env -i; temporary HOME/TMPDIR/XDG dirs; LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC PYTHONDONTWRITEBYTECODE=1 MCS_TEST_SANDBOX=1; conftest socket blockade"
+      },
+      "collected": 21,
+      "passed": 21,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 10.483,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/doctor-valid.xml",
+      "junit_sha256": "3859a0c246f3865d34e038765530304062108fb0c86f13c67782232d8c13c1f4",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/doctor-valid.log",
+      "log_sha256": "3ccec5125d1d3a0dae7e0cdaf3220cb3ca0dfcdc4f316fc52c51c9cb4fd0ae59",
+      "exit_status": 0
+    },
+    {
+      "id": "final-valid-family310",
+      "role": "final_W_full_family",
+      "code_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343",
+      "command": "MCS_TEST_PYTHON=/tmp/mcs-maintenance-python310-20261005/bin/python scripts/run_tests.sh tests/ops/test_c1_authorization.py tests/ops/test_c1_cli.py tests/ops/test_c1_contract.py tests/ops/test_c1_delivery.py tests/ops/test_c1_envelopes.py tests/ops/test_c1_receiver.py tests/ops/test_c1_records.py tests/ops/test_c1_withdraw_receive.py tests/ops/test_receipt_contract.py tests/ops/test_mcs_operation_cli.py tests/ops/test_mcs_operations.py tests/ops/test_mcs_request_reason.py tests/ops/test_mcs_signal_feedback.py tests/ops/test_mcs_signals.py tests/ops/test_mcs_cli.py --junitxml=/tmp/mcs-maintenance-core-packet4-20261005/final-valid-family310.xml > /tmp/mcs-maintenance-core-packet4-20261005/final-valid-family310.log 2>&1",
+      "cwd": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-20261005",
+      "env": {
+        "MCS_TEST_PYTHON": "/tmp/mcs-maintenance-python310-20261005/bin/python",
+        "runner": "env -i; temporary HOME/TMPDIR/XDG dirs; LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC PYTHONDONTWRITEBYTECODE=1 MCS_TEST_SANDBOX=1; conftest socket blockade"
+      },
+      "collected": 740,
+      "passed": 740,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 26.03,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/final-valid-family310.xml",
+      "junit_sha256": "c60a592f016c18c9fac9a36e383be4dc39ae69f44be66e1b185fffa4847f5881",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/final-valid-family310.log",
+      "log_sha256": "588a4bdab716ad0271a8ce952a1bb16acff2e6d563389ca67bd37689fd1b7075",
+      "exit_status": 0
+    }
+  ],
+  "historical_artifacts": [
+    {
+      "id": "signal-before",
+      "collected": 13,
+      "passed": 6,
+      "failed": 7,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 0.817,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/signal-before.xml",
+      "junit_sha256": "1143d8016ee3d4ba03cdb956425acc5c65dbf0d8c4650affe2bd602e82f7b6a5",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/signal-before.log",
+      "log_sha256": "df8730a0e46b55f86bede3403ff7db94437acdb9bfa4344b936f47ce23a90a15",
+      "acceptance_use": false,
+      "note": "過程の完全ログ。受入再現は固定P final-canonical-before310と最終W familyを正本とする。"
+    },
+    {
+      "id": "signal-after",
+      "collected": 210,
+      "passed": 210,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 5.603,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/signal-after.xml",
+      "junit_sha256": "01aef652d15490fb0263bcfd004aeb64228c572b194091b6079788847f5400e1",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/signal-after.log",
+      "log_sha256": "c5e469cb6b1a810f6b053ce678031edef378a1d6430507920b049b938bc36997",
+      "acceptance_use": false,
+      "note": "過程の完全ログ。受入再現は固定P final-canonical-before310と最終W familyを正本とする。"
+    },
+    {
+      "id": "identity-before",
+      "collected": 12,
+      "passed": 4,
+      "failed": 8,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 5.727,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/identity-before.xml",
+      "junit_sha256": "0f0182a0e35e0d24042f6803b73b911df7ff5b1fd2d77858183f981c227c6127",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/identity-before.log",
+      "log_sha256": "e7fc30c0545666ec221835eb31984ba9c15428aeb00bcd8b8b2eac7fe109d926",
+      "acceptance_use": false,
+      "note": "HARNESS_INVALID: _req未commitの後に_policy BEGINを呼んだfixture順序がpolicy4caseでtransaction例外。初期結果をsource defect証明/成功として採用しない。fixtureを_policy→_reqへ直し期待値は維持。"
+    },
+    {
+      "id": "identity-after",
+      "collected": 218,
+      "passed": 214,
+      "failed": 4,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 10.04,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/identity-after.xml",
+      "junit_sha256": "44bc2a4e016f42fb79e2fc50950d63b6ab289feba184cf4186e58666f5cfa0ec",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/identity-after.log",
+      "log_sha256": "e44ce0ffe5d0830e01877f7d1f1a2c1256f2f58d6e53723dbb9d57b3ffdcb88a",
+      "acceptance_use": false,
+      "note": "HARNESS_INVALID: _req未commitの後に_policy BEGINを呼んだfixture順序がpolicy4caseでtransaction例外。初期結果をsource defect証明/成功として採用しない。fixtureを_policy→_reqへ直し期待値は維持。"
+    },
+    {
+      "id": "latest-canonical-before",
+      "collected": 25,
+      "passed": 12,
+      "failed": 13,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 1.402,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/latest-canonical-before.xml",
+      "junit_sha256": "680f6f7417963268005a89dc74ff894e0f013a81b817a4ce053cfd391d5fb6ab",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/latest-canonical-before.log",
+      "log_sha256": "957b79d4e13ad6124facc7bacd4ea10fb8b4c01d31bd8342113b0fc842430472",
+      "acceptance_use": false,
+      "note": "過程の完全ログ。受入再現は固定P final-canonical-before310と最終W familyを正本とする。"
+    },
+    {
+      "id": "identity-valid-after",
+      "collected": 218,
+      "passed": 218,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 5.903,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/identity-valid-after.xml",
+      "junit_sha256": "5bd4f3e66e24e8ffef7ad20381046d0fe79b1cefe0f1e8825670b06669726239",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/identity-valid-after.log",
+      "log_sha256": "e67980cda8748023c6b2b4f316b1a0da6c0d1ff8ae06549a8b999ef87ea9495c",
+      "acceptance_use": false,
+      "note": "過程の完全ログ。受入再現は固定P final-canonical-before310と最終W familyを正本とする。"
+    },
+    {
+      "id": "job-payload-before",
+      "collected": 4,
+      "passed": 4,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 0.223,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/job-payload-before.xml",
+      "junit_sha256": "a5b766da243a3da52f291b3b166cc4a0b07cb5f87eb58f053f469259a4f8bf2f",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/job-payload-before.log",
+      "log_sha256": "a8963810b24a641530e25880ce1ffba739792f961fd86a24d38a6e95d186f53f",
+      "acceptance_use": false,
+      "note": "Python3.13では深いJSONがValueError系となり既存catchで4pass。最低runtime3.10ではRecursionErrorで4fail。"
+    },
+    {
+      "id": "job-payload-before310",
+      "collected": 4,
+      "passed": 0,
+      "failed": 4,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 0.66,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/job-payload-before310.xml",
+      "junit_sha256": "7ee528ab24976c0fef2c12119a34b26b54f3695f9105caf90eaea66dd3eac8cf",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/job-payload-before310.log",
+      "log_sha256": "14fc1cf48420bb98c6f093679e39681736e0b288d475961ae414aecd91834324",
+      "acceptance_use": false,
+      "note": "過程の完全ログ。受入再現は固定P final-canonical-before310と最終W familyを正本とする。"
+    },
+    {
+      "id": "candidate-before310",
+      "collected": 4,
+      "passed": 0,
+      "failed": 4,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 0.53,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/candidate-before310.xml",
+      "junit_sha256": "da40b8f498efbcd25ab565a4ff50692a8f543ddba0d680eb431543053daadcf6",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/candidate-before310.log",
+      "log_sha256": "7ecc81a10d035850ca39c82f9c4efffac90a678025d729acaa719165562f938d",
+      "acceptance_use": false,
+      "note": "過程の完全ログ。受入再現は固定P final-canonical-before310と最終W familyを正本とする。"
+    },
+    {
+      "id": "deep-after",
+      "collected": 56,
+      "passed": 56,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 3.392,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/deep-after.xml",
+      "junit_sha256": "192f354a757f1b62acb04717b13dc8944820df90b732ad7b7da1a45897a807ff",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/deep-after.log",
+      "log_sha256": "2a70ce27b8e3ae3215a4fb0b7824af734c4f09a35861ea844c334dccf52b688e",
+      "acceptance_use": false,
+      "note": "過程の完全ログ。受入再現は固定P final-canonical-before310と最終W familyを正本とする。"
+    },
+    {
+      "id": "deep-after310",
+      "collected": 56,
+      "passed": 56,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_s": 3.147,
+      "junit": "/tmp/mcs-maintenance-core-packet4-20261005/deep-after310.xml",
+      "junit_sha256": "26b66bc23094d6fd77a2d84b09f14d8db84cd5c4bc090749bde204b312ddefe6",
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/deep-after310.log",
+      "log_sha256": "93237be2fabeebff5c692bff37648d70378ac72ce46dc269a937fa1a2beaa87b",
+      "acceptance_use": false,
+      "note": "過程の完全ログ。受入再現は固定P final-canonical-before310と最終W familyを正本とする。"
+    }
+  ],
+  "checks": {
+    "pinned_ruff": {
+      "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check mcs/ops/mcs_operations.py mcs/ops/mcs_requests.py mcs/ops/mcs_signals.py mcs/ops/c1_contract.py mcs/ops/c1_envelopes.py mcs/ops/c1_receiver.py mcs/ops/c1_records.py tests/ops/test_c1_authorization.py tests/ops/test_c1_cli.py tests/ops/test_c1_contract.py tests/ops/test_c1_delivery.py tests/ops/test_c1_envelopes.py tests/ops/test_c1_receiver.py tests/ops/test_c1_records.py tests/ops/test_c1_withdraw_receive.py tests/ops/test_receipt_contract.py tests/ops/test_mcs_operation_cli.py tests/ops/test_mcs_operations.py tests/ops/test_mcs_request_reason.py tests/ops/test_mcs_signal_feedback.py tests/ops/test_mcs_signals.py tests/ops/test_mcs_cli.py",
+      "exit_status": 0,
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/final-ruff.log",
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "state_note": "W最後のtest_mcs_cli fixture変更は別doctor-ruffで0。その他bytesはfinal-ruffと同一。"
+    },
+    "doctor_pinned_ruff": {
+      "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check tests/ops/test_mcs_cli.py",
+      "exit_status": 0,
+      "log": "/tmp/mcs-maintenance-core-packet4-20261005/doctor-ruff.log",
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    "diff_check": {
+      "command": "git diff bb533f588026b3640310f4b89c6973a892fe52fa 1b94f04d8253a29195d709f1f66d1f3c11f28343 --check",
+      "exit_status": 0
+    },
+    "full_diff_review": {
+      "command": "git diff bb533f588026b3640310f4b89c6973a892fe52fa 1b94f04d8253a29195d709f1f66d1f3c11f28343 -- changes/maintenance-core-packet4-deep-stored-json.json changes/maintenance-core-packet4-latest-identity-policy.json changes/maintenance-core-packet4-signal-latest.json mcs/ops/mcs_operations.py mcs/ops/mcs_requests.py mcs/ops/mcs_signals.py tests/ops/test_mcs_cli.py tests/ops/test_mcs_operations.py tests/ops/test_mcs_request_reason.py tests/ops/test_mcs_signals.py",
+      "all_changed_paths_read": true,
+      "changed_paths": [
+        "changes/maintenance-core-packet4-deep-stored-json.json",
+        "changes/maintenance-core-packet4-latest-identity-policy.json",
+        "changes/maintenance-core-packet4-signal-latest.json",
+        "mcs/ops/mcs_operations.py",
+        "mcs/ops/mcs_requests.py",
+        "mcs/ops/mcs_signals.py",
+        "tests/ops/test_mcs_cli.py",
+        "tests/ops/test_mcs_operations.py",
+        "tests/ops/test_mcs_request_reason.py",
+        "tests/ops/test_mcs_signals.py"
+      ],
+      "line_delta": {
+        "insertions": 207,
+        "deletions": 18
+      }
+    },
+    "new_regression_P_to_W": {
+      "total": 33,
+      "P_failed": 21,
+      "P_safe_controls": 12,
+      "W_passed": 33,
+      "cases": [
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_deep_stored_job_payload_is_receipted_without_rewriting_job[ops.scan]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_deep_stored_job_payload_is_receipted_without_rewriting_job[ops.retry]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_deep_stored_job_payload_is_receipted_without_rewriting_job[ops.pause]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_deep_stored_job_payload_is_receipted_without_rewriting_job[ops.resume]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_signal_dismiss_never_falls_back_past_corrupt_latest[old-malformed]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_signal_dismiss_never_falls_back_past_corrupt_latest[old-deep]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_signal_dismiss_never_falls_back_past_corrupt_latest[old-array]",
+          "fixed_P_outcome": "PASS_SAFE_CONTROL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_signal_dismiss_never_falls_back_past_corrupt_latest[old-null]",
+          "fixed_P_outcome": "PASS_SAFE_CONTROL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_signal_dismiss_never_falls_back_past_corrupt_latest[latest-malformed]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_signal_dismiss_never_falls_back_past_corrupt_latest[latest-deep]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_signal_dismiss_never_falls_back_past_corrupt_latest[latest-array]",
+          "fixed_P_outcome": "PASS_SAFE_CONTROL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_signal_dismiss_never_falls_back_past_corrupt_latest[latest-null]",
+          "fixed_P_outcome": "PASS_SAFE_CONTROL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_signal_dismiss_never_falls_back_past_corrupt_latest[absent-malformed]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_signal_dismiss_never_falls_back_past_corrupt_latest[absent-deep]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_signal_dismiss_never_falls_back_past_corrupt_latest[absent-array]",
+          "fixed_P_outcome": "PASS_SAFE_CONTROL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_signal_dismiss_never_falls_back_past_corrupt_latest[absent-null]",
+          "fixed_P_outcome": "PASS_SAFE_CONTROL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_operations",
+          "name": "test_signal_dismiss_corrupt_foreign_latest_checks_scope_before_pin",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_signals",
+          "name": "test_corrupt_latest_policy_never_revives_prior_approval[malformed]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_signals",
+          "name": "test_corrupt_latest_policy_never_revives_prior_approval[deep]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_signals",
+          "name": "test_corrupt_latest_policy_never_revives_prior_approval[array]",
+          "fixed_P_outcome": "PASS_SAFE_CONTROL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_signals",
+          "name": "test_corrupt_latest_policy_never_revives_prior_approval[null]",
+          "fixed_P_outcome": "PASS_SAFE_CONTROL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_signals",
+          "name": "test_corrupt_latest_profile_never_revives_prior_identity[malformed]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_signals",
+          "name": "test_corrupt_latest_profile_never_revives_prior_identity[deep]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_signals",
+          "name": "test_corrupt_latest_profile_never_revives_prior_identity[array]",
+          "fixed_P_outcome": "PASS_SAFE_CONTROL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_signals",
+          "name": "test_corrupt_latest_profile_never_revives_prior_identity[null]",
+          "fixed_P_outcome": "PASS_SAFE_CONTROL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_signals",
+          "name": "test_corrupt_latest_roster_never_revives_prior_membership[malformed]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_signals",
+          "name": "test_corrupt_latest_roster_never_revives_prior_membership[deep]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_signals",
+          "name": "test_corrupt_latest_roster_never_revives_prior_membership[array]",
+          "fixed_P_outcome": "PASS_SAFE_CONTROL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_signals",
+          "name": "test_corrupt_latest_roster_never_revives_prior_membership[null]",
+          "fixed_P_outcome": "PASS_SAFE_CONTROL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_request_reason",
+          "name": "test_deep_latest_extraction_hides_suggestions_without_history_fallback[content-extract_v1]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_request_reason",
+          "name": "test_deep_latest_extraction_hides_suggestions_without_history_fallback[content-extract_llm]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_request_reason",
+          "name": "test_deep_latest_extraction_hides_suggestions_without_history_fallback[meta-extract_v1]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        },
+        {
+          "classname": "tests.ops.test_mcs_request_reason",
+          "name": "test_deep_latest_extraction_hides_suggestions_without_history_fallback[meta-extract_llm]",
+          "fixed_P_outcome": "FAIL",
+          "final_W_outcome": "PASS"
+        }
+      ]
+    },
+    "reuse_success": {
+      "Python3.13_full_family": "final-family740passはd0b6604。後続変更はdoctor fixtureのみで同file21pass、他14fileのbytes/envは同一のため再利用。",
+      "Python3.10_full_family": "final-valid-family310は最終Wと全22source/test bytes一致。"
+    }
+  },
+  "patch_reconstruction": {
+    "P": "bb533f588026b3640310f4b89c6973a892fe52fa",
+    "W": "1b94f04d8253a29195d709f1f66d1f3c11f28343",
+    "patch": "/tmp/mcs-maintenance-core-packet4-20261005/P-to-W.patch",
+    "patch_sha256": "5313ba3efc0eb9eaafcc2413df79781a389520a3147c7bc4e5f84c38262ced4f",
+    "changed_paths": [
+      "changes/maintenance-core-packet4-deep-stored-json.json",
+      "changes/maintenance-core-packet4-latest-identity-policy.json",
+      "changes/maintenance-core-packet4-signal-latest.json",
+      "mcs/ops/mcs_operations.py",
+      "mcs/ops/mcs_requests.py",
+      "mcs/ops/mcs_signals.py",
+      "tests/ops/test_mcs_cli.py",
+      "tests/ops/test_mcs_operations.py",
+      "tests/ops/test_mcs_request_reason.py",
+      "tests/ops/test_mcs_signals.py"
+    ],
+    "apply_exit": 0,
+    "reconstructed_tracked_files": 867,
+    "all_modes_and_bytes_match": true,
+    "manifest": "/tmp/mcs-maintenance-core-packet4-20261005/W-tracked-manifest.json",
+    "manifest_sha256": "707de9ce2b13fac18e0273e54ff6228e5e2b21c0212ac7ccb66f651ad3ddd029",
+    "signature_comparison": [
+      {
+        "path": "mcs/ops/mcs_operations.py",
+        "signatures_unchanged": true,
+        "declarations": 29
+      },
+      {
+        "path": "mcs/ops/mcs_requests.py",
+        "signatures_unchanged": true,
+        "declarations": 17
+      },
+      {
+        "path": "mcs/ops/mcs_signals.py",
+        "signatures_unchanged": true,
+        "declarations": 56
+      },
+      {
+        "path": "mcs/ops/c1_contract.py",
+        "signatures_unchanged": true,
+        "declarations": 8
+      },
+      {
+        "path": "mcs/ops/c1_envelopes.py",
+        "signatures_unchanged": true,
+        "declarations": 18
+      },
+      {
+        "path": "mcs/ops/c1_receiver.py",
+        "signatures_unchanged": true,
+        "declarations": 30
+      },
+      {
+        "path": "mcs/ops/c1_records.py",
+        "signatures_unchanged": true,
+        "declarations": 5
+      }
+    ],
+    "canonical_before_owned_source": [
+      {
+        "path": "mcs/ops/mcs_operations.py",
+        "sha256": "c564dc2db5f0bc0e5b396ef6fad425aca67d0556b93591945d035f99eaa4f149",
+        "matches_fixed_P": true
+      },
+      {
+        "path": "mcs/ops/mcs_requests.py",
+        "sha256": "49170be641eb7d838981d37e1d08161468ff98d730cd228645ca6f5b20b47b21",
+        "matches_fixed_P": true
+      },
+      {
+        "path": "mcs/ops/mcs_signals.py",
+        "sha256": "62a2f961c98d14d49b8ca6746b3b2d9d5c482bea085fe6f8c99d3f29c7b3b4d4",
+        "matches_fixed_P": true
+      },
+      {
+        "path": "mcs/ops/c1_contract.py",
+        "sha256": "7bf70b5a580d189ab6560e837be544bc0b75ab18b922c21963167d25b07308f3",
+        "matches_fixed_P": true
+      },
+      {
+        "path": "mcs/ops/c1_envelopes.py",
+        "sha256": "da302fe72935dc9a1ef79e1deabe98e8eb5f4ee9cf4df5aa17acc18a5b62f7ae",
+        "matches_fixed_P": true
+      },
+      {
+        "path": "mcs/ops/c1_receiver.py",
+        "sha256": "df7844bacd994e854bcf8cfa71c7f3acff0f20b12801e48bc31d00129a7c0163",
+        "matches_fixed_P": true
+      },
+      {
+        "path": "mcs/ops/c1_records.py",
+        "sha256": "21a4c2608152bd98016b2f227fa37ae410ae8687a154db7db0d31f2c1547d422",
+        "matches_fixed_P": true
+      }
+    ],
+    "W_definition": "修復source/test/3fragments確定commit。evidence自身は後続receipt commitとして分離し自己hash循環を避ける。"
+  },
+  "API_contract_comparison": {
+    "all_7_source_signatures_unchanged": true,
+    "files": [
+      {
+        "path": "mcs/ops/mcs_operations.py",
+        "signatures_unchanged": true,
+        "declarations": 29
+      },
+      {
+        "path": "mcs/ops/mcs_requests.py",
+        "signatures_unchanged": true,
+        "declarations": 17
+      },
+      {
+        "path": "mcs/ops/mcs_signals.py",
+        "signatures_unchanged": true,
+        "declarations": 56
+      },
+      {
+        "path": "mcs/ops/c1_contract.py",
+        "signatures_unchanged": true,
+        "declarations": 8
+      },
+      {
+        "path": "mcs/ops/c1_envelopes.py",
+        "signatures_unchanged": true,
+        "declarations": 18
+      },
+      {
+        "path": "mcs/ops/c1_receiver.py",
+        "signatures_unchanged": true,
+        "declarations": 30
+      },
+      {
+        "path": "mcs/ops/c1_records.py",
+        "signatures_unchanged": true,
+        "declarations": 5
+      }
+    ],
+    "schema_ledger_public_API_storage_dependencies": "不変更",
+    "new_module_manifest_or_distribution_change": false,
+    "legacy_C1_wire": "既存goldenが両runtime familyで通過"
+  },
+  "prior_reviews_reused": [
+    {
+      "path": "mcs/core/bounded_http.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "abf4a9613b99b9a09ec75557ff0cd7fdb46a9a998d5f2bd010397ae74f2d130b",
+      "current_W_sha256": "abf4a9613b99b9a09ec75557ff0cd7fdb46a9a998d5f2bd010397ae74f2d130b",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/core/ledger.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
+      "current_W_sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/core/ledger_audit.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "f4867747a344fc1942621ff7fa6b9e2e405a3131a0b1408f2f0f72b3fd27a4a1",
+      "current_W_sha256": "f4867747a344fc1942621ff7fa6b9e2e405a3131a0b1408f2f0f72b3fd27a4a1",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/core/llm_admission.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "35a5cff1767504fa1eef2f837a6075d65e929245811a49536515bbf62a46dac1",
+      "current_W_sha256": "35a5cff1767504fa1eef2f837a6075d65e929245811a49536515bbf62a46dac1",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/core/local_llm.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "843fc041e37fb41a8cb452932637e75e04c4f323c1c8928eae2965465bae5917",
+      "current_W_sha256": "843fc041e37fb41a8cb452932637e75e04c4f323c1c8928eae2965465bae5917",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/core/maintenance.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "479be147dcd695ca6ca81d069bd353ffbd00e4d204f5dd6467e4430cf66f6865",
+      "current_W_sha256": "479be147dcd695ca6ca81d069bd353ffbd00e4d204f5dd6467e4430cf66f6865",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/core/mcs_queries.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "7a6c84fc645b990d77f6838bc978559b73291e38dd5bb0d2884cb088e366fa7c",
+      "current_W_sha256": "7a6c84fc645b990d77f6838bc978559b73291e38dd5bb0d2884cb088e366fa7c",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/core/mcs_runtime.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "79df8cf48f3fe5da4ee4fa0dd68a41778dcc888252d15f3ff68b349cb3dc4c60",
+      "current_W_sha256": "79df8cf48f3fe5da4ee4fa0dd68a41778dcc888252d15f3ff68b349cb3dc4c60",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/core/mcs_util.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "7bd01ea343e712d3ea24c59f92fde16cc3efa8013110810a103fec9193c1f420",
+      "current_W_sha256": "7bd01ea343e712d3ea24c59f92fde16cc3efa8013110810a103fec9193c1f420",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_artifact_json_guards.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "98903fe7a29b73a8c4f10f8f95a80204d363dd849a2065d5e94babd69aa55253",
+      "current_W_sha256": "98903fe7a29b73a8c4f10f8f95a80204d363dd849a2065d5e94babd69aa55253",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_core_misc.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "9f2299e4903644757f6be3b1c1fee39e7956e15abfe2a813d4afddc99895f3ab",
+      "current_W_sha256": "9f2299e4903644757f6be3b1c1fee39e7956e15abfe2a813d4afddc99895f3ab",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_job_reasons.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "5e74275e3f1e904af75af603090dda941b05128a8cf2bd1c1a1e19a831b05e21",
+      "current_W_sha256": "5e74275e3f1e904af75af603090dda941b05128a8cf2bd1c1a1e19a831b05e21",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_ledger_audit.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "ff237bca5a243c5c79005ce9017328f860a057cce6bc6e6267665c20366f7624",
+      "current_W_sha256": "ff237bca5a243c5c79005ce9017328f860a057cce6bc6e6267665c20366f7624",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_ledger_candidate_validation.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "d47dd5fea867f0bbd20aaa97b9f76f5afaeaa743d1d06273df48883d4486d7b4",
+      "current_W_sha256": "d47dd5fea867f0bbd20aaa97b9f76f5afaeaa743d1d06273df48883d4486d7b4",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_ledger_guards.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "99d4a80f723de45448441ca32d95758a24951b0660af0f4626747c16c8a701c3",
+      "current_W_sha256": "99d4a80f723de45448441ca32d95758a24951b0660af0f4626747c16c8a701c3",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_ledger_recovery_contract.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "62ce3c4f925518cf1f09227d2f2183307ee6ce5872c8a883713d6808c655c71a",
+      "current_W_sha256": "62ce3c4f925518cf1f09227d2f2183307ee6ce5872c8a883713d6808c655c71a",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_ledger_reply_recovery.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "08bf2d8bd7d43abfcd1b40971f00393ee675eaede4162b08822b6e86dec34c4a",
+      "current_W_sha256": "08bf2d8bd7d43abfcd1b40971f00393ee675eaede4162b08822b6e86dec34c4a",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_llm_admission.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "c93985c9b5fc4f954023e33f3c35999e263f5895ca1baabcb23b153583e5cd93",
+      "current_W_sha256": "c93985c9b5fc4f954023e33f3c35999e263f5895ca1baabcb23b153583e5cd93",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_local_llm.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "c48f548b9742e1f311ec1f4644dd2d27a20f7091cb089188ebe63c4c18da4c91",
+      "current_W_sha256": "c48f548b9742e1f311ec1f4644dd2d27a20f7091cb089188ebe63c4c18da4c91",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_local_llm_deadline.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "fe83d5ef6f456b0b03eafdfa6556bb87d897d18c37f2fb6a0cbdc6923533054c",
+      "current_W_sha256": "fe83d5ef6f456b0b03eafdfa6556bb87d897d18c37f2fb6a0cbdc6923533054c",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_maintenance_root.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "00675df942ed139b879c95d490b16426fd6f748bb8db79e8d827e350394d2a4c",
+      "current_W_sha256": "00675df942ed139b879c95d490b16426fd6f748bb8db79e8d827e350394d2a4c",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_mcs_util.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "1c34dd400756b57cd45563b0568739e058bf2a8b88492ca62eacf189251431c0",
+      "current_W_sha256": "1c34dd400756b57cd45563b0568739e058bf2a8b88492ca62eacf189251431c0",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_message_revisions.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "a26cdb3de149f6465ea13dec52f6fddab6cc6732c079883f5229934bfbceb0ec",
+      "current_W_sha256": "a26cdb3de149f6465ea13dec52f6fddab6cc6732c079883f5229934bfbceb0ec",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_metadata_watch.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "930ed8fb48f1c4d749365d3a81578fa1a0a1c7f375f858ed8b97c705b4514092",
+      "current_W_sha256": "930ed8fb48f1c4d749365d3a81578fa1a0a1c7f375f858ed8b97c705b4514092",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_supported_schema_upgrade.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "6cb3d5cdbc886109ffa901dd86bf6a5a39dbc3716b887ddf28e6f32372bc21a9",
+      "current_W_sha256": "6cb3d5cdbc886109ffa901dd86bf6a5a39dbc3716b887ddf28e6f32372bc21a9",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/core/test_thread_reply_pairs.py",
+      "prior_packet": 1,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "previous_review_sha256": "6d916b5854162839f6d37dbf17af73d80321ea58e95b93db34218b3a6ad50e2f",
+      "current_W_sha256": "6d916b5854162839f6d37dbf17af73d80321ea58e95b93db34218b3a6ad50e2f",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/ingest/cross_lists.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "3580d54982ca68a320ab27e765a9eaa7dbd515d8edd194378575dca83661c54a",
+      "current_W_sha256": "3580d54982ca68a320ab27e765a9eaa7dbd515d8edd194378575dca83661c54a",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/ingest/health_watch.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "981b5ab0e68ccf49bcce05e2814b1e2702408520f369ae9f43d2bc44f1050e65",
+      "current_W_sha256": "981b5ab0e68ccf49bcce05e2814b1e2702408520f369ae9f43d2bc44f1050e65",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/ingest/init_data.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "17a0d32d0eb95202c0725877ad5e4dacf9fdeee06cffd21dd52004189e500dd4",
+      "current_W_sha256": "17a0d32d0eb95202c0725877ad5e4dacf9fdeee06cffd21dd52004189e500dd4",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/ingest/job_ops.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "d5b64a681b8b43a7f08decf4adddcf075465c94da1cfadcc3d515b98f2fea12f",
+      "current_W_sha256": "d5b64a681b8b43a7f08decf4adddcf075465c94da1cfadcc3d515b98f2fea12f",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/ingest/mcs_adapter.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "c3be0fa89a12ccc357273913c53d6c779ac391debfc4b7e179979ad694ca444d",
+      "current_W_sha256": "c3be0fa89a12ccc357273913c53d6c779ac391debfc4b7e179979ad694ca444d",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/ingest/mcs_worker.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "c0d1946942450adc1d794128ca162f84a12761171c13de94d992d44588c28747",
+      "current_W_sha256": "c0d1946942450adc1d794128ca162f84a12761171c13de94d992d44588c28747",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/ingest/project_metadata.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "257afe64943606ecac5f5706af8ca0564d003156e20133b2cc613cba9bad1cfa",
+      "current_W_sha256": "257afe64943606ecac5f5706af8ca0564d003156e20133b2cc613cba9bad1cfa",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "mcs/ingest/run_check.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "915d6784befb59fcfffae019020dac59c92fa272571dfc325c36585b283ef00d",
+      "current_W_sha256": "915d6784befb59fcfffae019020dac59c92fa272571dfc325c36585b283ef00d",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/ingest_testkit.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "03d5831494c33b78a32a2f24d95c2efd4f1367f6d0aea7b3f095b2b9da02dde4",
+      "current_W_sha256": "03d5831494c33b78a32a2f24d95c2efd4f1367f6d0aea7b3f095b2b9da02dde4",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_acquisition_contracts.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "510f94d404fe632c0b7775b43b4a602adfde24a26c8ca160e9ef5c38fc9fefb0",
+      "current_W_sha256": "510f94d404fe632c0b7775b43b4a602adfde24a26c8ca160e9ef5c38fc9fefb0",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_adapter_wire.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "26c12487b689d48f78a2719b39083bac487be7401caab84367465201d92caf5b",
+      "current_W_sha256": "26c12487b689d48f78a2719b39083bac487be7401caab84367465201d92caf5b",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_cross_lists.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "962d20c5472c2825b4e5a095c80ac27ace295d025f09e91a6e53bde5f47b1edd",
+      "current_W_sha256": "962d20c5472c2825b4e5a095c80ac27ace295d025f09e91a6e53bde5f47b1edd",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_drug_map_pipeline.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "13e720e558f7aa0e071f55b3365212aea470803d224f4da9f7437507edfdd57e",
+      "current_W_sha256": "13e720e558f7aa0e071f55b3365212aea470803d224f4da9f7437507edfdd57e",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_fixture_synthetic.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "870ab4a897e9dc0b83548a6f9731991af227a25e2993ac53b128d8d99dc94a5a",
+      "current_W_sha256": "870ab4a897e9dc0b83548a6f9731991af227a25e2993ac53b128d8d99dc94a5a",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_group_consultations.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "47b64f165e5e766813dc4e0566919021f85b8cf08ff00a7ac9d1eabf6bdfc6d2",
+      "current_W_sha256": "47b64f165e5e766813dc4e0566919021f85b8cf08ff00a7ac9d1eabf6bdfc6d2",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_health_watch.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "d4f017bdb1705cad86cb41111ac4538deec2409aa8c3c898f089ef0b994ca69e",
+      "current_W_sha256": "d4f017bdb1705cad86cb41111ac4538deec2409aa8c3c898f089ef0b994ca69e",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_job_drain.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "6842a5576dc6adf4534137f04faf6f41ad5fee35694d6ff0731509d33bfa1ac0",
+      "current_W_sha256": "6842a5576dc6adf4534137f04faf6f41ad5fee35694d6ff0731509d33bfa1ac0",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_job_reasons_ingest.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "d6b08c095e5182de1c39c0e2d399abd2cb47c8f364917899170bfdf2c41c2726",
+      "current_W_sha256": "d6b08c095e5182de1c39c0e2d399abd2cb47c8f364917899170bfdf2c41c2726",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_message_metadata.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "2be63c91caccb9c5effc5957421dd102c9e508d42c7e627d67bc3ab39f9d9ebc",
+      "current_W_sha256": "2be63c91caccb9c5effc5957421dd102c9e508d42c7e627d67bc3ab39f9d9ebc",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_metadata_probe_observation.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "47d4cc72d024f5879e6c51c5f38ba9d6e7fa41cebe9e7c6c145f3f585ac3fe23",
+      "current_W_sha256": "47d4cc72d024f5879e6c51c5f38ba9d6e7fa41cebe9e7c6c145f3f585ac3fe23",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_metadata_probe_paging.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "fdfcabb7ceaa1dfe45371979eb117740edeae686d401505fd3185623a5b156f8",
+      "current_W_sha256": "fdfcabb7ceaa1dfe45371979eb117740edeae686d401505fd3185623a5b156f8",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_metadata_probe_usage.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "4317e9024dd14cc90b6f4e5a142a0632f392884a77561cb75bd3fa36cf14d386",
+      "current_W_sha256": "4317e9024dd14cc90b6f4e5a142a0632f392884a77561cb75bd3fa36cf14d386",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_project_metadata.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "a1bc35d7bd41b8d4ad7aa7b1e84a10da900f036bb8fbdd6d63dfe63308dc0e77",
+      "current_W_sha256": "a1bc35d7bd41b8d4ad7aa7b1e84a10da900f036bb8fbdd6d63dfe63308dc0e77",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_reaction_actors.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "345332fa7496fa249dbfecabd941c8d59573c624295c85fce7c8a10bf8920476",
+      "current_W_sha256": "345332fa7496fa249dbfecabd941c8d59573c624295c85fce7c8a10bf8920476",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_run_check_stages.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "5ec818caf83f9dd8d327ef557610c7d067dddbc130accbe3cba7e9b9c19a28aa",
+      "current_W_sha256": "5ec818caf83f9dd8d327ef557610c7d067dddbc130accbe3cba7e9b9c19a28aa",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_run_watchdog.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "ba09be62a9dfec332460658a791c350a383637fcb578afe12c36a4b4859966f9",
+      "current_W_sha256": "ba09be62a9dfec332460658a791c350a383637fcb578afe12c36a4b4859966f9",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_semantic_ingest_revisions.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "e306a9036680ec8416260ac859dfc8a05c85f4dc6ee896025e2f079d08015e02",
+      "current_W_sha256": "e306a9036680ec8416260ac859dfc8a05c85f4dc6ee896025e2f079d08015e02",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_thread_count_retry.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "708d993c47da2d6f466d450ad5e2cb5960f29293a223ee3e6391a8a708d3be82",
+      "current_W_sha256": "708d993c47da2d6f466d450ad5e2cb5960f29293a223ee3e6391a8a708d3be82",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/ingest/test_thread_tombstone_gap.py",
+      "prior_packet": 2,
+      "prior_evidence_ref": "1b94f04d8253a29195d709f1f66d1f3c11f28343:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "previous_review_sha256": "c1bd116a7aaf3f7fcd0281361a38e07b4266f6d818614f69ff88ad27c3c0e287",
+      "current_W_sha256": "c1bd116a7aaf3f7fcd0281361a38e07b4266f6d818614f69ff88ad27c3c0e287",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "adapters/discord/__init__.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "b7060721cd27ed534ef3edf580f29829bb649331542a97fbbfd3bf6118da218c",
+      "current_W_sha256": "b7060721cd27ed534ef3edf580f29829bb649331542a97fbbfd3bf6118da218c",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "adapters/discord/actions.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "a1f6fe925ffa5e87d1e8ec77ab8b78b32f30dad9a047ad56790be84035aac527",
+      "current_W_sha256": "a1f6fe925ffa5e87d1e8ec77ab8b78b32f30dad9a047ad56790be84035aac527",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "adapters/discord/cards.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "bccbc08e862a31b5c46fe1db6e0b06347f82bbe3ed5020f5ee71f222c2650dac",
+      "current_W_sha256": "bccbc08e862a31b5c46fe1db6e0b06347f82bbe3ed5020f5ee71f222c2650dac",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "adapters/discord/delivery.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "678d279ef9097bf55871e5abe5ca1b237f991023ffb9b57a6fc7e423fd583bf0",
+      "current_W_sha256": "678d279ef9097bf55871e5abe5ca1b237f991023ffb9b57a6fc7e423fd583bf0",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "adapters/discord/runtime_compat.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "ba8ca159e89c3ceb85d558bd253aefeda3d627a47fab244c9b1bd650f671054c",
+      "current_W_sha256": "ba8ca159e89c3ceb85d558bd253aefeda3d627a47fab244c9b1bd650f671054c",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "adapters/discord/standalone.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "d51ee1d292ab6dff21b4d3dc425afc2b7038e2f07cda7c9b72c50c13fe21fb46",
+      "current_W_sha256": "d51ee1d292ab6dff21b4d3dc425afc2b7038e2f07cda7c9b72c50c13fe21fb46",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "adapters/discord/tasks.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "9d8097b152441f26d17469351bcf15f09f3358b82e2bcc076f088f08d712da56",
+      "current_W_sha256": "9d8097b152441f26d17469351bcf15f09f3358b82e2bcc076f088f08d712da56",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "adapters/slack/__init__.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "179cbcb2e57b187d300652bbdf60dce120170eb2ee9d986a7db25a1a8bbe551b",
+      "current_W_sha256": "179cbcb2e57b187d300652bbdf60dce120170eb2ee9d986a7db25a1a8bbe551b",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "adapters/slack/actions.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "ecd490dd85d591c2b9189fe33a3a70453a8fcb3072fa6eef1db544ab060d417b",
+      "current_W_sha256": "ecd490dd85d591c2b9189fe33a3a70453a8fcb3072fa6eef1db544ab060d417b",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "adapters/slack/cards.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "080400362ed3876a8e202bf5ba789bed91858f1dbb41954386bdff8e3027b807",
+      "current_W_sha256": "080400362ed3876a8e202bf5ba789bed91858f1dbb41954386bdff8e3027b807",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "adapters/slack/delivery.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "3129b7fc6753f4b83bbc2965daced330daf68b77c9d9661b621f379027245b8b",
+      "current_W_sha256": "3129b7fc6753f4b83bbc2965daced330daf68b77c9d9661b621f379027245b8b",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "adapters/slack/paths.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "bffc8204582e5bc00f71c5d37a686287d479c6d936fd6b1cb54e61ab6e1e4486",
+      "current_W_sha256": "bffc8204582e5bc00f71c5d37a686287d479c6d936fd6b1cb54e61ab6e1e4486",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "adapters/slack/runtime_compat.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "cfdb6b6c57ffcf5dc1587f83b06e3104581f082ff9a10503ff6ea296d19c749d",
+      "current_W_sha256": "cfdb6b6c57ffcf5dc1587f83b06e3104581f082ff9a10503ff6ea296d19c749d",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "adapters/slack/standalone.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "2d25aef0679b535cd8afeb5cf7588cd813f55b97f639f9c2c8422790fb79b1e5",
+      "current_W_sha256": "2d25aef0679b535cd8afeb5cf7588cd813f55b97f639f9c2c8422790fb79b1e5",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "adapters/slack/tasks.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "05f8eee2d706f9c17a1a2480f8d905d9abb3f1e1615e6f50e289e614600b5b9a",
+      "current_W_sha256": "05f8eee2d706f9c17a1a2480f8d905d9abb3f1e1615e6f50e289e614600b5b9a",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/discord/discord_delivery_testkit.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "099e034b1e2a13e2ddc23a570866910c70f5dc70a9fc86ee140b996fd610e922",
+      "current_W_sha256": "099e034b1e2a13e2ddc23a570866910c70f5dc70a9fc86ee140b996fd610e922",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/discord/discord_testkit.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "b0c1b8386daa85dd795e3571edcca38b2a25a30f892cf68c923d1009ade34c6e",
+      "current_W_sha256": "b0c1b8386daa85dd795e3571edcca38b2a25a30f892cf68c923d1009ade34c6e",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/discord/test_discord_sdk_real.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "e6c807e5b73361deb7f30e2af73c0293331b880d603aa9dcf7c9c9c4e6c87d01",
+      "current_W_sha256": "e6c807e5b73361deb7f30e2af73c0293331b880d603aa9dcf7c9c9c4e6c87d01",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/discord/test_discord_standalone.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "6c3a8b52e66a4b3b7dec768e444219fd3a4035e165fbb0689a5670831f17d78a",
+      "current_W_sha256": "6c3a8b52e66a4b3b7dec768e444219fd3a4035e165fbb0689a5670831f17d78a",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/discord/test_mcs_discord.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "77a5610e4e3c976015fb7fdb646c891cb31b1988c7a7c0d6c8cad9bb06321a55",
+      "current_W_sha256": "77a5610e4e3c976015fb7fdb646c891cb31b1988c7a7c0d6c8cad9bb06321a55",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/discord/test_mcs_discord_delivery.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "6faa874e540aa9e3530161ecf9d74bbeb1e943df954a955f50704045c982d732",
+      "current_W_sha256": "6faa874e540aa9e3530161ecf9d74bbeb1e943df954a955f50704045c982d732",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/discord/test_mcs_discord_single_post.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "5c38afe8b375e33c2b05c7d685080e88cbad8b0d42a63a06b3cf329f375f21d8",
+      "current_W_sha256": "5c38afe8b375e33c2b05c7d685080e88cbad8b0d42a63a06b3cf329f375f21d8",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/slack/slack_card_testkit.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "e2f44aa2bbe95e41f749105cd88319760066517e3eb3f6d9d4f2ee4cdf555fe8",
+      "current_W_sha256": "e2f44aa2bbe95e41f749105cd88319760066517e3eb3f6d9d4f2ee4cdf555fe8",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/slack/slack_testkit.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "56804a8524760b412c149b9cb79d9810c7b5f9df33698690e089db9b48ef7ae5",
+      "current_W_sha256": "56804a8524760b412c149b9cb79d9810c7b5f9df33698690e089db9b48ef7ae5",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/slack/test_mcs_slack.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "abddd1d1828db0597da8f594e2b37c6647f7426ce4f6040ace7e9136a3216983",
+      "current_W_sha256": "abddd1d1828db0597da8f594e2b37c6647f7426ce4f6040ace7e9136a3216983",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/slack/test_mcs_slack_actions.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "419375484017cb8906c52e9339897f600ed7a1b2c1cb75c232af932343fb2562",
+      "current_W_sha256": "419375484017cb8906c52e9339897f600ed7a1b2c1cb75c232af932343fb2562",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/slack/test_mcs_slack_cards.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "4e8452cde46595b14303afbb4b90fb88ee9073eb41f9e256c79948d6584df1d6",
+      "current_W_sha256": "4e8452cde46595b14303afbb4b90fb88ee9073eb41f9e256c79948d6584df1d6",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/slack/test_slack_human_receipt.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "1018c93df602910a12633809bf294feb7b66e28bf2c417b5d8adde3e440ce652",
+      "current_W_sha256": "1018c93df602910a12633809bf294feb7b66e28bf2c417b5d8adde3e440ce652",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/slack/test_slack_standalone.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "39b7f4852af6c56ecd3b3bc4af32f54fd123320aacd06ca6508f123c98242b11",
+      "current_W_sha256": "39b7f4852af6c56ecd3b3bc4af32f54fd123320aacd06ca6508f123c98242b11",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "integration/test_standalone_sdk.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "011aa5173469b15b6017167e66c309173d006214b8407dae6b5a40aa13fb1df3",
+      "current_W_sha256": "011aa5173469b15b6017167e66c309173d006214b8407dae6b5a40aa13fb1df3",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/discord/test_discord_runtime_compat.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "093ac29c1970c5d166c52181631bbfdff3a3be9f4ff936c82d14b407905f9932",
+      "current_W_sha256": "093ac29c1970c5d166c52181631bbfdff3a3be9f4ff936c82d14b407905f9932",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    },
+    {
+      "path": "tests/adapters/slack/test_slack_runtime_compat.py",
+      "prior_packet": 3,
+      "prior_evidence_ref": "10ace2f0f84b17ac8874c8327ab0fdb34b0c3a3d:docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "previous_review_sha256": "998f294b66b0d10d7eca99554c5ed5887df7a337c4509e15a0b5e8c1a4f454b1",
+      "current_W_sha256": "998f294b66b0d10d7eca99554c5ed5887df7a337c4509e15a0b5e8c1a4f454b1",
+      "state": "REVIEWED_REUSED",
+      "note": "所有外の再監査完了ではなく、同一bytesの既存証拠再利用。"
+    }
+  ],
+  "commits": [
+    {
+      "commit": "2883d7481f55562715011f40fe7ff4a5713c1cd4",
+      "finding": "F01",
+      "changed_paths": [
+        "changes/maintenance-core-packet4-signal-latest.json",
+        "mcs/ops/mcs_operations.py",
+        "tests/ops/test_mcs_operations.py"
+      ]
+    },
+    {
+      "commit": "cda13362edceb7a21b3ed297ff65a541baa97f43",
+      "finding": "F02",
+      "changed_paths": [
+        "changes/maintenance-core-packet4-latest-identity-policy.json",
+        "mcs/ops/mcs_signals.py",
+        "tests/ops/test_mcs_signals.py"
+      ]
+    },
+    {
+      "commit": "d0b660405efe373e6c9b40eb387ddf37915a2e29",
+      "finding": "F03",
+      "changed_paths": [
+        "changes/maintenance-core-packet4-deep-stored-json.json",
+        "mcs/ops/mcs_operations.py",
+        "mcs/ops/mcs_requests.py",
+        "tests/ops/test_mcs_operations.py",
+        "tests/ops/test_mcs_request_reason.py"
+      ]
+    },
+    {
+      "commit": "1b94f04d8253a29195d709f1f66d1f3c11f28343",
+      "finding": "F04",
+      "changed_paths": [
+        "tests/ops/test_mcs_cli.py"
+      ]
+    }
+  ],
+  "Japanese_changes": [
+    "changes/maintenance-core-packet4-signal-latest.json",
+    "changes/maintenance-core-packet4-latest-identity-policy.json",
+    "changes/maintenance-core-packet4-deep-stored-json.json"
+  ],
+  "user_contracts": {
+    "ten_minutes": "自動MCS取得run開始10分gridの理由はMCSサーバーの負荷対策。親setup/deployment所有。HTTP pages/手動approval/LLM timeoutは変更しない。このpacketはcadence不変更。",
+    "lifecycle": "1.0.13 install/update/recoveryは親owner、今回は既存人承認/receipt/pinsのoperation境界と合成CLIのみ。",
+    "channels": "Slack/Discord/LINE WORKS表示は親/notify/nativeのpacketで処理。本packetはcommon signal_dismiss envelopeとの契約をreadonly照合。"
+  },
+  "runtime": {
+    "default": {
+      "path": "/Users/yusuke/.mcs/.venv/bin/python",
+      "python": "3.13.12",
+      "SQLite": "3.50.4"
+    },
+    "minimum": {
+      "path": "/tmp/mcs-maintenance-python310-20261005/bin/python",
+      "python": "3.10.22",
+      "SQLite": "3.53.1"
+    },
+    "pytest": "9.1.1",
+    "network": "conftest socket遮断、実SDK/API/LLM未使用",
+    "runner_sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95"
+  },
+  "safety": {
+    "real_db_access": false,
+    "real_services_or_api_access": false,
+    "PHI_PII_or_secret_fixtures": false,
+    "Keychain_Jev_LLM_access": false,
+    "push_PR_merge_deploy_restart": false,
+    "child_spawn": false,
+    "other_owner_files_edited": false,
+    "permanent_instructions_edited": false,
+    "all_synthetic_inputs": true
+  },
+  "instructions": {
+    "v7_spec": {
+      "path": "/Users/yusuke/.codex/attachments/9bb89786-a65f-4f06-8123-c608a4bb4464/pasted-text-1.txt",
+      "sha256": "5207aa2fe1d3b7a0e67eb64b4b8577ae21e305f222903c5d67beeb8bf01226bf",
+      "read": "全文read済み（本packet開始時）"
+    },
+    "AGENTS": {
+      "path": "/Users/yusuke/.mcs/AGENTS.md",
+      "read": "全文read済み、本turn user正本指示も継承"
+    },
+    "agent_defaults": {
+      "path": "/Users/yusuke/.agents/skills/agent-defaults/SKILL.md",
+      "read": "適用・既読を継承"
+    }
+  },
+  "acceptance_note": "所有22file全文/全20観点適用性/確定修復/固定Pbefore failure/最終W合成回帰/byte再現が揃ったpacket受入候補。全域監査のCOMPLETE宣言ではない。",
+  "evidence_commit": "このJSONのみ後続checkpoint commitとして保存。Wは実装検証対象commit、report自身のcommitは親へのhandoff fullSHAで示す。",
+  "excluded_runtime_artifacts": [],
+  "evidence_validation": {
+    "exit_status": 0,
+    "checks": [
+      "所有22fileのSHA/P全文ranges/W全行coverage",
+      "20criteria×3moduleと全file参照",
+      "全testログ/XML path・SHA・収集数",
+      "canonicalP33caseの21fail12control→W33passの正確なnode照合",
+      "最終740tests0skip・3.13無変更family成功再利用",
+      "P→W patch適用・全867tracked bytes/modes同一",
+      "全7source公開signature同一・所有外変更なし"
+    ],
+    "complete_packet_evidence": true,
+    "whole_repository_complete": false
+  }
+}

@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import difflib
 import json
+import sqlite3
 from types import SimpleNamespace
 
-from mcs_requests import payload_hash, positive, valid_hash
+from mcs_requests import parse_command, payload_hash, positive, valid_hash, validate
 
 
 def _json_object(value, code: str) -> dict:
@@ -159,14 +160,57 @@ def _adoption_rows(db, project_id: int, message_id: int,
             meta = _json_object(row["meta"], "adoption_meta_malformed")
         except ValueError:
             continue
+        receipt_verified = False
+        command_id = content.get("command_id")
+        if isinstance(command_id, str) and command_id:
+            try:
+                receipt_row = db.execute(
+                    "SELECT receipt_json,payload_hash FROM command_receipts "
+                    "WHERE command_id=? AND project_id=? AND outcome='applied'",
+                    (command_id, project_id)).fetchone()
+                if receipt_row is not None:
+                    receipt = parse_command(receipt_row[0])
+                    if not isinstance(receipt, dict):
+                        raise ValueError("adoption_receipt_malformed")
+                    command = {
+                        "version": 1, "cmd": "ops.adopt_summary", "command_id": command_id,
+                        "actor": content.get("actor"), "human_confirmed": True,
+                        "project_id": project_id, "message_id": message_id,
+                        "summary_artifact_id": content.get("summary_artifact_id"),
+                        "comparison_hash": content.get("comparison_hash"), "reason": content.get("reason"),
+                    }
+                    identities = {
+                        "adoption_artifact_id": row["artifact_id"], "project_id": project_id,
+                        "message_id": message_id,
+                        "summary_artifact_id": content.get("summary_artifact_id"),
+                        "baseline_artifact_id": content.get("baseline_artifact_id"),
+                    }
+                    receipt_verified = bool(
+                        validate(command) is None
+                        and receipt.get("payload_hash") == receipt_row[1] == payload_hash(command)
+                        and receipt.get("outcome") == "applied"
+                        and receipt.get("error") is None
+                        and receipt.get("command_id") == command_id
+                        and valid_hash(content.get("comparison_hash"))
+                        and receipt.get("comparison_hash") == content["comparison_hash"]
+                        and all(positive(value) and type(receipt.get(key)) is int
+                                and receipt[key] == value
+                                for key, value in identities.items())
+                        and isinstance(content.get("actor"), str) and content["actor"].strip()
+                        and isinstance(content.get("reason"), str) and content["reason"].strip()
+                        and receipt.get("actor") == content.get("actor")
+                        and receipt.get("reason") == content.get("reason"))
+            except (sqlite3.Error, ValueError, TypeError):
+                pass
         current = bool(
-            comparison_hash
+            receipt_verified and comparison_hash
             and content.get("comparison_hash") == comparison_hash
             and content.get("summary_artifact_id") == summary_artifact_id
             and meta.get("source_fingerprint") == source_fingerprint
             and meta.get("policy_fingerprint") == policy_fingerprint)
         result.append({"artifact_id": row["artifact_id"],
-                       "content": content, "meta": meta, "current": current})
+                       "content": content, "meta": meta, "current": current,
+                       "receipt_verified": receipt_verified})
     return result
 
 

@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "Discordカード表示の内部保持を抑制",
+  "summary": "Discordカードを大量に送ると、操作処理に使わないSDK内部の表示オブジェクトが通知ごとに残る問題を修正しました。カード本文・通知プレビュー・ボタンと人による確認操作は維持します。",
+  "upgrade": "HermesのDiscordはgateway、独立Discordはadapterを更新後に再起動してください。再起動で更新前から保持されているSDK内部の表示状態も解放されます。設定変更や通知の追加送信はありません。",
+  "details": [
+    "MCS操作は既存のon_interaction共通listenerで処理します。新規標準カードと既存Components V2カードの描画用Viewだけを送信前にstopし、SDKの永続ViewStoreへの登録を防ぎます。表示componentsとdurable token、receipt、単一POST制御を維持します。",
+    "固定discord.py 2.7.1の無通信・完全合成1000カードで登録条件を再現しました。修正前の保持View1000/dispatch map1000に対し、修正後は両方0です。tracemallocの一試行では保持メモリ2,033,912bytes対32bytesでした。実サービス負荷や一般的な使用量の削減率を示す測定ではありません。",
+    "実SDKで標準/V2各1000回のcomponents serializationと登録抑止を検証し、既存の操作・配送・再試行抑止をスタブで回帰確認します。"
+  ],
+  "refs": ["adapters/discord/cards.py", "adapters/discord/actions.py", "tests/adapters/discord/test_discord_sdk_real.py", "docs/development/stability-audit-round2-adapters-1.0.15.json"]
+}

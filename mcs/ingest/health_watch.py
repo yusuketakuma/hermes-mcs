@@ -13,7 +13,8 @@ Freshness deadline comes from config (health.tick_interval_s, default
 
 Output contract: alert content is status codes/counters only — never
 patient data. stdout carries one alert line on alert transitions
-(watchdog convention); data/health_watch_status.json is the durable
+(watchdog convention) and the same lines go to notify_system_target
+(else notify_target); data/health_watch_status.json is the durable
 machine-readable status, published atomically.
 """
 import argparse
@@ -118,6 +119,9 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
               "disk_free_mb": h.get("disk_free_mb")}
     report["status"] = ("stale" if age > deadline_s
                         else OVERALL_STATUS[overall])
+    unread_unknown = "unread_at" in h and not _finite_number(unread_at)
+    if report["status"] == "ok" and unread_unknown:
+        report["status"] = "degraded"
     run = h.get("run")
     if isinstance(run, dict):
         overshoot = run.get("overshoot_s")
@@ -131,6 +135,10 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     reasons = h.get("state_reasons")
     reasons = (reasons if isinstance(reasons, list)
                and all(_is_code(r) for r in reasons) else None)
+    if unread_unknown and report["status"] == "degraded":
+        reasons = list(reasons or [])
+        if "unread_collection_unknown" not in reasons:
+            reasons.append("unread_collection_unknown")
     if report["status"] == "stale":
         # the stale file's codes describe its own run, not the current
         # staleness: keep them labelled as recorded, the cause unknown
@@ -181,7 +189,8 @@ def evaluate(home: str = HOME, now: float | None = None,
     a healthy producer keeping cadence is not an event. Alerts fire
     on: first non-ok observation, every transition INTO a non-ok
     status, one bad->ok recovery, and an unchanged non-ok state
-    re-alerted after REALERT_S. 'ok' is only produced by a fresh
+    re-alerted after REALERT_S, plus a fresh non-ok verdict that gains
+    a state reason not yet alerted in the current episode. 'ok' is only produced by a fresh
     in-deadline file — recovery can never be assumed. State files
     that predate evidence_at are read via health_at.
 
@@ -189,6 +198,8 @@ def evaluate(home: str = HOME, now: float | None = None,
     file flips it (either way); stale/missing/corrupt evidence keeps
     the last known value."""
     now = time.time() if now is None else now
+    if not _finite_number(now):
+        raise ValueError("health_now_invalid")
     cfg = load_config() if cfg is None else cfg
     deadline = freshness_deadline(cfg)
     health_path = os.path.join(home, HEALTH_REL)
@@ -206,6 +217,22 @@ def evaluate(home: str = HOME, now: float | None = None,
                 else None)
     prior_known = bool(last)
     transition = key != last_key
+    # a fresh non-ok verdict whose producer codes gain a reason not yet
+    # alerted in this episode is news (e.g. degraded by notifications,
+    # then also by collection) — a reason that drops and returns stays
+    # silent until the episode ends, so flapping codes cannot spam
+    reasons = obs.get("state_reasons") or []
+    seen = state.get("alerted_reasons")
+    if transition:
+        seen = set()
+    elif seen is None:
+        seen = set(reasons)     # state from before this field: no news
+    else:
+        seen = (set(seen) if isinstance(seen, list)
+                and all(isinstance(r, str) for r in seen) else set())
+    new_reason = (prior_known and not transition
+                  and obs["status"] not in ("ok", "stale")
+                  and not set(reasons) <= seen)
     alerted_at = state.get("alerted_at")
     invalid_alert_at = not _finite_number(alerted_at) \
         or alerted_at > now
@@ -220,7 +247,7 @@ def evaluate(home: str = HOME, now: float | None = None,
         # transition into a non-ok status carry an alert
         alert = transition and (obs["status"] != "ok"
                                 or last.get("status") != "ok")
-    alert = alert or realert
+    alert = alert or realert or new_reason
     disk_prev = state.get("disk_low") is True
     disk_low = (obs["disk_low"] if obs["status"] in OVERALL_STATUS
                 else disk_prev)
@@ -236,6 +263,8 @@ def evaluate(home: str = HOME, now: float | None = None,
                      "evidence_at": _dedup_stamp(obs)}
     if alert:
         state["alerted_at"] = now
+    state["alerted_reasons"] = sorted(seen | set(reasons) if alert
+                                      else seen)
     try:
         maintenance.atomic_publish_text(
             state_path, json.dumps(state, ensure_ascii=False))
@@ -246,6 +275,26 @@ def evaluate(home: str = HOME, now: float | None = None,
     return report
 
 
+def deliver_alert(cfg: dict, text: str) -> bool:
+    """Best-effort copy of an alert line to the system notification
+    target. cron/launchd stdout only reaches a log file, and the
+    outbox drains inside run_check — the very producer a stale verdict
+    says is down — so this uses notify_flush's sender directly. The
+    watcher's own dedup already bounds the rate; a failed send stays
+    silent (stdout line and status file remain)."""
+    try:
+        import notify_flush
+        target = notify_flush._target(cfg, "run_failed")
+        if not target:
+            return False
+        notify_flush._send(notify_flush._send_argv(cfg, target),
+                           "[MCS] 監視警報\n" + text,
+                           deadline=time.monotonic() + 60)
+        return True
+    except Exception:
+        return False
+
+
 def main(argv: list | None = None) -> int:
     ap = argparse.ArgumentParser(description="MCS health watcher")
     ap.add_argument("--home", default=HOME)
@@ -254,26 +303,34 @@ def main(argv: list | None = None) -> int:
     ap.add_argument("--config", default=None,
                     help="config.json path (default ~/.mcs/config.json)")
     args = ap.parse_args(argv)
-    cfg = load_config(args.config) if args.config else None
+    if args.now is not None and not _finite_number(args.now):
+        ap.error("now must be a finite number")
+    cfg = load_config(args.config) if args.config else load_config()
     report = evaluate(home=args.home, now=args.now, cfg=cfg)
+    lines = []
     if report["alert"]:
         age = report.get("age_s")
         reasons = report.get("state_reasons")
-        print("mcs health: {status} (overall={overall} "
-              "health_at={health_at} age_s={age} deadline_s={dl} "
-              "reasons={reasons} last_ok_at={last_ok})".format(
-                  status=report["status"],
-                  overall=report.get("overall"),
-                  health_at=report.get("health_at"),
-                  age=age, dl=report["deadline_s"],
-                  reasons=(",".join(reasons) or "none")
-                  if reasons is not None else "unknown",
-                  last_ok=report.get("last_ok_at")
-                  if report.get("last_ok_at") is not None else "unknown"))
+        lines.append("mcs health: {status} (overall={overall} "
+                     "health_at={health_at} age_s={age} deadline_s={dl} "
+                     "reasons={reasons} last_ok_at={last_ok})".format(
+                         status=report["status"],
+                         overall=report.get("overall"),
+                         health_at=report.get("health_at"),
+                         age=age, dl=report["deadline_s"],
+                         reasons=(",".join(reasons) or "none")
+                         if reasons is not None else "unknown",
+                         last_ok=report.get("last_ok_at")
+                         if report.get("last_ok_at") is not None
+                         else "unknown"))
     if report["disk_alert"]:
-        print("mcs disk: {} (free_mb={})".format(
+        lines.append("mcs disk: {} (free_mb={})".format(
             "low" if report["disk_low"] else "recovered",
             report.get("disk_free_mb")))
+    for line in lines:
+        print(line)
+    if lines:
+        deliver_alert(cfg, "\n".join(lines))
     return 0
 
 

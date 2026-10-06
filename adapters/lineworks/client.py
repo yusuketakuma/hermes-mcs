@@ -45,6 +45,17 @@ def valid_filename(filename):
     return _text(filename, 255) and not any(c in filename for c in '/\\"')
 
 
+def _valid_action(action):
+    if not isinstance(action, dict) or not _text(action.get("label"), 20):
+        return False
+    if action.get("type") == "message":
+        return (_text(action.get("postback"), 1000)
+                and ("text" not in action or _text(action["text"], 300)))
+    if action.get("type") == "uri":
+        return _text(action.get("uri"), 1000) and action["uri"].startswith(("https://", "http://"))
+    return False
+
+
 def _validate_content(content):
     if not isinstance(content, dict):
         raise ClientError("validation_invalid")
@@ -59,19 +70,30 @@ def _validate_content(content):
         valid = (isinstance(value, str) and 0 < len(value) <= 1000
                  and isinstance(actions, list) and 1 <= len(actions) <= 10)
         if valid:
-            for action in actions:
-                if not isinstance(action, dict) or not _text(action.get("label"), 20):
-                    valid = False
-                    break
-                if action.get("type") == "message":
-                    valid = _text(action.get("postback"), 1000)
-                elif action.get("type") == "uri":
-                    valid = (_text(action.get("uri"), 1000)
-                             and action["uri"].startswith(("https://", "http://")))
-                else:
-                    valid = False
-                if not valid:
-                    break
+            valid = all(_valid_action(action) for action in actions)
+    elif kind == "flex":
+        bubble = content.get("contents")
+        body = bubble.get("body") if isinstance(bubble, dict) else None
+        footer = bubble.get("footer") if isinstance(bubble, dict) else None
+        texts = body.get("contents") if isinstance(body, dict) else None
+        actions = footer.get("contents") if isinstance(footer, dict) else None
+        valid = (_text(content.get("altText"), 400)
+                 and isinstance(bubble, dict) and bubble.get("type") == "bubble"
+                 and isinstance(body, dict) and body.get("type") == "box"
+                 and body.get("layout") == "vertical" and isinstance(texts, list) and len(texts) == 1
+                 and isinstance(texts[0], dict) and texts[0].get("type") == "text"
+                 and isinstance(texts[0].get("text"), str) and 0 < len(texts[0]["text"]) <= 1000
+                 and texts[0].get("wrap") is True
+                 and isinstance(footer, dict) and footer.get("type") == "box"
+                 and footer.get("layout") == "vertical" and isinstance(actions, list)
+                 and 1 <= len(actions) <= 10
+                 and all(isinstance(button, dict) and button.get("type") == "button"
+                         and _valid_action(button.get("action")) for button in actions))
+        if valid:
+            try:
+                valid = len(json.dumps(bubble, ensure_ascii=False, allow_nan=False).encode("utf-8")) <= 15000
+            except (ValueError, TypeError, UnicodeError, RecursionError):
+                valid = False
     else:
         valid = False
     if not valid:
@@ -86,7 +108,15 @@ def _silent_content(content):
         return re.sub(r"<(?=m(?:\s|/?>))", "＜", value, flags=re.IGNORECASE)
 
     out = dict(content)
-    for key in ("text", "contentText"):
+    if isinstance(out.get("contents"), dict):
+        out["contents"] = _silent_content(out["contents"])
+    elif isinstance(out.get("contents"), list):
+        out["contents"] = [_silent_content(row) if isinstance(row, dict) else row
+                           for row in out["contents"]]
+    for key in ("body", "footer", "action"):
+        if isinstance(out.get(key), dict):
+            out[key] = _silent_content(out[key])
+    for key in ("text", "contentText", "altText"):
         if isinstance(out.get(key), str):
             out[key] = literal(out[key])
     for key, text_key in (("i18nTexts", "text"), ("i18nContentTexts", "contentText")):

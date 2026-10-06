@@ -7,9 +7,11 @@ import os
 import re
 import threading
 import time
+from contextlib import suppress
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from socket import SHUT_RDWR
 
 from adapters.common.paths import atomic_write, fsync_dir
 
@@ -17,6 +19,7 @@ from .client import verify_signature
 
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}\Z")
 MAX_BODY = 65536
+CONNECTION_TIMEOUT_S = 5
 
 
 def callback_result(path):
@@ -141,7 +144,25 @@ def callback_server(inbox, *, host="127.0.0.1", port=8788):
 
         def setup(self):
             super().setup()
-            self.connection.settimeout(5)
+            self.connection.settimeout(CONNECTION_TIMEOUT_S)
+
+        def _expire_connection(self):
+            with suppress(OSError):
+                self.connection.shutdown(SHUT_RDWR)
+            with suppress(OSError):
+                self.connection.close()
+
+        def handle(self):
+            # Socket timeouts reset per recv; bound trickled headers/body too.
+            deadline = threading.Timer(CONNECTION_TIMEOUT_S, self._expire_connection)
+            deadline.daemon = True
+            deadline.start()
+            try:
+                with suppress(OSError):
+                    super().handle()
+            finally:
+                deadline.cancel()
+                deadline.join()
 
         def do_POST(self):
             status = 400

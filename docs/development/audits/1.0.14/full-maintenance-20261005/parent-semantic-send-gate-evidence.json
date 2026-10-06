@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "packet": "parent-semantic-send-gate-delta",
+  "P": "da33af7e77eca73608f0cebac12467b6bd0f8a65",
+  "source_W": "fb488c83f1af21a4a8b99b5234ab111c4a79f5e0",
+  "scope": [
+    {
+      "path": "mcs/semantic/semantic_send_gate.py",
+      "sha256": "8fcca50e7f9a3080395ed7f5a35c8aaf27ddeb50bba538f8888483fc99523b09",
+      "lines": 388,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          388
+        ]
+      ],
+      "status": "REVIEWED"
+    },
+    {
+      "path": "tests/semantic/test_semantic_send_gate.py",
+      "sha256": "ac58e101720523edbaeb2ac6ac8efe81dfc13f52438660c812e4344aaa351b7b",
+      "lines": 286,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          286
+        ]
+      ],
+      "status": "REVIEWED"
+    },
+    {
+      "path": "changes/maintenance-semantic-send-gate-deep-json-20261005.json",
+      "sha256": "dedc24d1ef2bee3d1c9d96fa8f2499e9b433c981074b54954e6efd28ea8aed0b",
+      "lines": 8,
+      "full_content_read": true,
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "status": "REVIEWED"
+    }
+  ],
+  "consumer_flow": "notify_flush thin compatibility delegates -> semantic shared gate/render snapshot -> latest artifact/source payload/progress JSON -> existing stale before send/freeze after partial acceptance -> no writes to ledger; normal raw post excludes invalid summary",
+  "full_read_proof": "semantic_send_gate1..240 and241..end; original test1..211 + authored current71line addition; relevant notify_flush435..505 and source caller reads; prior packet3 all20 source review retained for unchanged bodies",
+  "finding": {
+    "id": "PARENT-SEM-SEND-001",
+    "status": "FIXED",
+    "cause": "RecursionError on saved summary content/meta, source payload or degraded source progress escaped three existing JSON exception boundaries; interrupted safe exclusion/stale/freeze decisions.",
+    "change": "Catch RecursionError only alongside JSONDecodeError/TypeError in three JSON loads scopes; newest corrupt summary stays ineligible, no fallback to older generation, no data rewrite."
+  },
+  "criteria_delta": {
+    "C02": "latest invalid summary is absent; progress unknown is never assumed unsent or approved",
+    "C03": "iterdump whole synthetic DB is unchanged across render/state/gate requests",
+    "C05": "mode/scope/paused/policy/audit/whole-thread fingerprint/target revision checks unchanged",
+    "C06": "only synthetic data in tests and logs; no secrets/live DB/external model/platform traffic",
+    "C07": "all top-level function args/return annotations AST-identical to P; legacy notify_flush delegates unchanged",
+    "C08": "invalid summary absent; raw post consumer remains functional; full text no older summary fallback",
+    "C09": "bounded10000 nesting fixture20001bytes; no new parse attempts/provider/model/dependency",
+    "C10": "same StaleSend before first send and FreezeSend after partial delivery, existing diagnostic codes retained",
+    "C11": "6 independently expected invalid-state regressions fail before on actual3.10/3.13; existing9 semantic+41notify positive/negative behavior controls after both runtimes",
+    "C12": "stdlib/recursiveflatimports retained; pinnedRuff0.16.10 passes via offline uv tool; final I full gates pending",
+    "X03": "no restore/delete/recovery writes; saved allrows unchanged",
+    "X04": "no SDK network sends; gate interruption repaired without broadening send eligibility",
+    "X06": "AI stored output is untrusted, no prompt/tool dispatch or live model",
+    "X07": "no clinical criteria changed; PASS/current-generation publication guard remains",
+    "X01": "local source integration only; distribution/finalI actualchecks pending"
+  },
+  "unchanged_criteria_reuse": "C01,C04,X02,X05,X08 prior full module evidence docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json; no corresponding source boundary change",
+  "verification": [
+    {
+      "path": "/tmp/mcs-parent-send-gate-before-20261005.log",
+      "sha256": "83d58ae8b3c8660c5badf5bf1700d11f60bf3a3440e6b2c067bccc68ef9bfd56",
+      "exit_status": 1,
+      "result": "6fail/9deselected"
+    },
+    {
+      "path": "/tmp/mcs-parent-send-gate-before-python310-20261005.log",
+      "sha256": "41d7c68ae5424c23ac13349931cf9c9ea0d1db2cc6823ee570c6ebdb25786881",
+      "exit_status": 1,
+      "result": "6fail/9deselected"
+    },
+    {
+      "path": "/tmp/mcs-parent-send-gate-after-20261005.log",
+      "sha256": "bb78e6dfb3a6ef217effe0a544b05f897e23190c4cc9535ef1e968cf240fe3dd",
+      "exit_status": 0,
+      "result": "56pass/0skip"
+    },
+    {
+      "path": "/tmp/mcs-parent-send-gate-after-python310-20261005.log",
+      "sha256": "91dc89d68e9fd1b54fcc086691c411610100b57f7b641053bf1d8821676a36dd",
+      "exit_status": 0,
+      "result": "56pass/0skip"
+    }
+  ],
+  "noncanonical_attempts": [
+    "Initial1100-level JSON probe passed on3.13 and did not detect deep parser limit; strengthened fixture to10000 and asserts decoder RecursionError before gate test.",
+    "Nonexistent checkout .venv/bin/ruff and PATH ruff exited127; corrected cached uv tool run --offline --from ruff==0.16.10 ruff check passes."
+  ],
+  "limits": [
+    "No live platform/MCS/model/PHI/service/install operation.",
+    "No final fixedI suite, distribution or independent review claimed by local56test success."
+  ]
+}

@@ -1,0 +1,145 @@
+{
+  "version": "1.0.15",
+  "date": "2026-10-06",
+  "requirements": [
+    "患者名",
+    "発信者",
+    "所属",
+    "時間",
+    "要約"
+  ],
+  "order": "patient -> meaningful summary -> sender(organization)/existing local time",
+  "no_extra_llm": true,
+  "no_extra_post": true,
+  "actual_device_validation": "not performed; no live sends/settings changes",
+  "sources": {
+    "slack_mobile": "https://docs.slack.dev/messaging/formatting-message-text/",
+    "slack_post": "https://docs.slack.dev/reference/methods/chat.postMessage/",
+    "slack_update": "https://docs.slack.dev/reference/methods/chat.update/",
+    "discord_components": "https://docs.discord.com/developers/components/reference",
+    "discord_v2": "https://github.com/discord/discord-api-docs/blob/main/developers/components/using-message-components.mdx",
+    "discord_message": "https://github.com/discord/discord-api-docs/blob/main/developers/resources/message.mdx",
+    "lineworks_flex": "https://developers.worksmobile.com/jp/docs/bot-send-flex",
+    "lineworks_button": "https://developers.worksmobile.com/jp/docs/bot-send-flex-button",
+    "lineworks_file": "https://developers.worksmobile.com/en/docs/bot-send-file"
+  },
+  "targets": [
+    {
+      "platform": "slack",
+      "os": "iOS",
+      "field": "chat.postMessage/chat.update text fallback",
+      "status": "supported_payload_verified",
+      "limits": "Mobile uses message.text; provider/OS settings and truncation control actual display.",
+      "actual_device": "not verified"
+    },
+    {
+      "platform": "slack",
+      "os": "Android",
+      "field": "chat.postMessage/chat.update text fallback",
+      "status": "supported_payload_verified",
+      "limits": "Mobile uses message.text; provider/OS settings and truncation control actual display.",
+      "actual_device": "not verified"
+    },
+    {
+      "platform": "discord",
+      "os": "iOS",
+      "field": "new classic message content + complete Embed + existing View",
+      "status": "new_payload_verified_legacy_v2_constraint",
+      "limits": "New creates carry content. Existing V2 flag cannot be unset: edits retain V2 without invalid content/embeds, and no duplicate POST is added. Actual legacy V2 push content is provider-controlled.",
+      "actual_device": "not verified"
+    },
+    {
+      "platform": "discord",
+      "os": "Android",
+      "field": "new classic message content + complete Embed + existing View",
+      "status": "new_payload_verified_legacy_v2_constraint",
+      "limits": "New creates carry content. Existing V2 flag cannot be unset: edits retain V2 without invalid content/embeds, and no duplicate POST is added. Actual legacy V2 push content is provider-controlled.",
+      "actual_device": "not verified"
+    },
+    {
+      "platform": "lineworks",
+      "os": "iOS",
+      "field": "button cards official flex altText <=400; plain notices text",
+      "status": "supported_payload_verified_native_file_constraint",
+      "limits": "Native file messages have no custom text/altText field. Existing accompanying text/followup carries context; file push itself cannot be forced without an extra message. No extra send added.",
+      "actual_device": "not verified"
+    },
+    {
+      "platform": "lineworks",
+      "os": "Android",
+      "field": "button cards official flex altText <=400; plain notices text",
+      "status": "supported_payload_verified_native_file_constraint",
+      "limits": "Native file messages have no custom text/altText field. Existing accompanying text/followup carries context; file push itself cannot be forced without an extra message. No extra send added.",
+      "actual_device": "not verified"
+    }
+  ],
+  "families": [
+    {
+      "family": "new_message/thread_card",
+      "fields": "stored patient/sender/organization/local posted_at + current validated summary or exact source excerpt (pending/failed explicit)",
+      "source": "notify_render.notification_preview -> notify_cards._build_spec -> adapters cards"
+    },
+    {
+      "family": "signal/digest_card",
+      "fields": "each shown patient + latest signal note/state, evidence source sender/organization/time if available; missing metadata explicit; candidates remain unconfirmed",
+      "source": "notify_render._latest_signals/_signal_evidence -> notification_preview"
+    },
+    {
+      "family": "body_parts",
+      "fields": "original patient/time/sender(profession/organization), summary, stamps, full original body; continuation chunks preserve complete original content without repeating header",
+      "source": "notify_render._message_post -> notify_cards._build_part_manifest -> adapters delivery",
+      "constraint": "Native text already contains content; per-chunk/OS push length can hide later source lines. Full display/order/chunk bytes/remote dedupe retained."
+    },
+    {
+      "family": "attachment_parts",
+      "fields": "new captions carry source five fields and filename in existing same-message Slack initial_comment/Discord content",
+      "source": "notify_cards._attachment_captions -> adapters delivery",
+      "constraint": "LINE WORKS native file payload cannot specify caption/altText; no extra create added."
+    },
+    {
+      "family": "attachment_followup",
+      "fields": "existing text-plus-file flow source five fields + filename",
+      "source": "notify_flush._followup_files",
+      "constraint": "native file push provider-controlled; contextual preceding text remains"
+    },
+    {
+      "family": "urgent_recheck",
+      "fields": "current source five fields + AI observation/stage + records absence distinction",
+      "source": "notify_urgent.render_text(checked, db)",
+      "constraint": "does not invent urgency, completion, or lack of real care"
+    },
+    {
+      "family": "task_reminder",
+      "fields": "human registered request title + patient/source sender/org/time + due date and assignee",
+      "source": "notify_cards.task_reminders",
+      "constraint": "source sender differs from assignee; only registered title is the task"
+    },
+    {
+      "family": "daily_digest",
+      "fields": "aggregate new/high urgency/open task counts, selected displayed items, date; include_names setting preserved",
+      "source": "notify_digest -> notify_cards._notice_spec",
+      "constraint": "no single patient/sender/organization assumed for aggregate"
+    },
+    {
+      "family": "system/update/semantic_notices",
+      "fields": "specific state/problem/recovery/required action or validated frozen semantic notice",
+      "source": "notify_flush._format_event -> existing text delivery",
+      "constraint": "patient/source metadata only when event actually contains a bound source; system events do not fabricate them"
+    }
+  ],
+  "verification": {
+    "synthetic_payloads": "6 passed",
+    "semantic_preview": "9 passed",
+    "discord_sdk_serialization": "discord.py==2.7.1 Python3.13 isolated runner, 11 passed, no network",
+    "compat_recovery_related": "175 passed",
+    "images": "LINE WORKS two SVG/PNG pairs regenerated, checked and visually inspected; Slack seven existing diagrams unchanged and check passed",
+    "final_task_reminder_and_five_fields": "43passed0.56sec; all existing task reminder behaviors retained, known/unknown organization/time fields and primary task early assertions",
+    "final_long_preview_boundary": "109passed1.35sec; patient30/sender24/organization24 + long summary/title retain source-time/all5fields in outgoing reminder/caption300"
+  },
+  "important_remaining_constraints": [
+    "OS/app preview settings/permissions/notification scheduling/truncation cannot be overridden by message payload",
+    "Discord existing V2 cannot carry standard content",
+    "LINE WORKS native file notifications cannot carry custom preview",
+    "Local full owned suite caught old-format test decoders/stubs and these were corrected; parent reruns final scope after freeze"
+  ]
+}

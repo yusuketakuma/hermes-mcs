@@ -45,6 +45,23 @@ BODY_MAX_CHUNKS = 4        # ephemeral replies only — durable thread
                            # delivery passes max_chunks=None
 
 
+def notification_preview(parts: dict, limit: int = 600) -> str:
+    """A sealed content-first preview, or visible text from an older spec."""
+    preview = parts.get("preview_text")
+    if not isinstance(preview, str) or not preview.strip():
+        head, body = [], []
+        for item in parts.get("containers") or []:
+            kind = item.get("type")
+            if kind == "meta":
+                continue
+            value = (f"{item['name']}: {item['value']}" if kind == "field"
+                     else item.get("text") or "")
+            (head if kind == "heading" else body).append(value)
+        preview = "\n".join(body[:2] + head[:1]) or "MCS 通知"
+    preview = " ".join(preview.split())
+    return preview if len(preview) <= limit else preview[:limit - 1] + "…"
+
+
 def split_body(text: str, limit: int = BODY_CHUNK,
                max_chunks: int | None = BODY_MAX_CHUNKS) -> list:
     """Split a full-text answer on line boundaries into <=limit chunks,
@@ -101,6 +118,17 @@ def _answer_chunks(value: str) -> list:
     return chunks
 
 
+def _literal(value: str, plain: bool) -> str:
+    """Source text in the Discord dialect (``plain`` false) as literal
+    text — no masked link, heading or spoiler. ``escape_md`` keeps the
+    length, so no chunk budget moves."""
+    if plain:
+        return value
+    # lazy: cards imports this module at load time
+    from adapters.discord.cards import escape_md
+    return escape_md(value)
+
+
 def body_messages(result: dict, *, plain: bool = False) -> list:
     """title + chunked body as sendable messages — shared by the live
     interaction path and the delayed followup sweep."""
@@ -110,8 +138,10 @@ def body_messages(result: dict, *, plain: bool = False) -> list:
     # Titles are source-derived and may be arbitrarily long.
     if len(title) > 80:
         title = title[:79] + "…"
-    chunks = _answer_chunks(body)
-    heading = title if plain else f"**{title}**"
+    # escaped per chunk: a chunk is its own message, so a split line's
+    # remainder starts a line there
+    chunks = [_literal(c, plain) for c in _answer_chunks(body)]
+    heading = title if plain else f"**{_literal(title, plain)}**"
     return [f"{heading}（{i + 1}/{len(chunks)}）\n{c}"
             if len(chunks) > 1 else f"{heading}\n{c}"
             for i, c in enumerate(chunks)]
@@ -299,20 +329,24 @@ def list_messages(result: dict, allowed, markdown: bool = True, *,
     items = [i for i in view.get("items") or []
              if isinstance(i, dict) and allowed(i.get("project_id"))]
     bold = "" if plain else "**" if markdown else "*"
-    lines = [f"{bold}{view.get('title') or '一覧'}{bold}"]
-    lines += [str(x) for x in view.get("head") or []]
+
+    def lit(value) -> str:
+        return _literal(str(value), not markdown or plain)
+
+    lines = [f"{bold}{lit(view.get('title') or '一覧')}{bold}"]
+    lines += [lit(x) for x in view.get("head") or []]
     group = None
     for i in items[:LIST_SHOW]:
         if i.get("group") and i["group"] != group:
             group = i["group"]
-            lines.append(f"■ {group}")
-        lines.append(str(i.get("text") or ""))
+            lines.append(f"■ {lit(group)}")
+        lines.append(lit(i.get("text") or ""))
     if not items:
-        lines.append(str(view.get("empty") or "該当なし"))
+        lines.append(lit(view.get("empty") or "該当なし"))
     rest = len(items) - min(len(items), LIST_SHOW) + int(view.get("more") or 0)
     if rest > 0:
         lines.append(f"他{rest}件")
-    lines += [str(x) for x in view.get("notes") or []]
+    lines += [lit(x) for x in view.get("notes") or []]
     return _answer_chunks("\n".join(lines))
 
 
@@ -387,8 +421,9 @@ def task_list_text(items: list, *, plain: bool = False) -> str:
         if t.get("due_date"):
             meta.append(f"期限: {t['due_date']}")
         lines.append(f"{marks.get(t['status'], '⬜')} "
-                     f"#{t['request_id']} {t['title']}"
-                     + (" — " + "・".join(meta) if meta else ""))
+                     f"#{t['request_id']} "
+                     + _literal(str(t['title']) + (" — " + "・".join(meta)
+                                                   if meta else ""), plain))
     return "\n".join(lines)
 
 

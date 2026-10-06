@@ -6,7 +6,7 @@
 **1.1.xは人承認付きの発信**（MCSへのスタンプ押下・返信投稿、合意済み契約での外部送付）。
 
 本書は優先順位・実施順・版割当の正本。1.0.13の全件成果物・CLI・受入条件は
-[安定稼働版の開発計画](development/RELEASE_1.0.13.md)、詳細設計は`docs/roadmap/`に置く。
+[安定稼働版の開発計画](development/plans/RELEASE_1.0.13.md)、詳細設計は`docs/roadmap/`に置く。
 スタンプは[スタンプ取得・活用計画](roadmap/stamps.md)、MCS公開クライアントのAPI調査は
 [API調査](roadmap/mcs-api-survey.md)、接続契約と合意済み判断は[引継ぎ記録](roadmap/connector-decisions.md)。
 計画・実装・実API検証・本番有効化・リリースを区別し、未確認を完了扱いにしない。
@@ -66,7 +66,7 @@ hermes-mcsはMCSの取得・保存・根拠付き抽出・通知を担当する�
 
 v1.0.11/v1.0.12は公開済み。原MCS確認はユーザーの完了申告を受領済みで、
 エージェント実測とは区別する。新機能の実機受入・有効化・配備は別の状態として追跡する。
-[1.0.12受入](development/ACCEPTANCE_1.0.12.md)と
+[1.0.12受入](development/acceptance/ACCEPTANCE_1.0.12.md)と
 [今回の全体レビュー](dev-records/stability-1.0.13-20261004.md)を参照。
 
 | 対象 | 現行実装 | 1.0.13で残ること |
@@ -160,7 +160,7 @@ F-3の受領status検査は反映済み。ルール世代は8、拒否receiptは
 旧1.0.13/1.0.14/1.0.15、追加提案4件、検知済みバグ修正、
 install/update/setup/doctorの統一を一つのリリースへ集約する。
 全件の成果物・依存・内部工程・公開条件は
-[開発・受入計画](development/RELEASE_1.0.13.md)を正本とする。
+[開発・受入計画](development/plans/RELEASE_1.0.13.md)を正本とする。
 
 先にF-2・取得失敗理由・CLI/診断と更新回帰を整え、backup/restore・期限/配送・整合/hash履歴、
 読取機能・統計、品質/G6/canonicalとC0/C1を順に完了する。

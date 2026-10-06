@@ -57,9 +57,16 @@ def append(state_dir: str, worker_id: str, record: dict, *,
                       separators=(",", ":")) + "\n"
     created = not os.path.exists(path)
     # 0600 like every other state file — never the umask default
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+    data = line.encode("utf-8")
+    size = os.fstat(fd).st_size
+    if size and os.pread(fd, 1, size - 1) != b"\n":
+        # A torn tail (ENOSPC, power loss) stays its own unparsable line —
+        # the scan still reports it incomplete — instead of swallowing
+        # this good row into one unreadable concatenation.
+        data = b"\n" + data
     with os.fdopen(fd, "ab") as handle:
-        handle.write(line.encode("utf-8"))
+        handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())
     if created:
@@ -120,7 +127,8 @@ def compact(state_dir: str, *, active: str, file_ok, prunable) -> int:
                     aid = row.get("attempt_id") if isinstance(row, dict) \
                         else None
                     if not isinstance(aid, str) or not aid \
-                            or not raw.endswith(b"\n"):
+                            or not raw.endswith(b"\n") \
+                            or row.get("phase") not in PHASES:
                         clean = False
                         continue
                     homes.setdefault(aid, set()).add(name)
@@ -333,7 +341,7 @@ def unfinished(records: dict[str, list[dict]]) -> dict[str, dict]:
     """
     out: dict[str, dict] = {}
     for aid, rows in records.items():
-        phases = {r.get("phase") for r in rows}
+        phases = {r["phase"] for r in rows if r.get("phase") in PHASES}
         if "result" in phases or "denied" in phases or "receipt" in phases:
             continue
         last = rows[-1]
@@ -348,7 +356,7 @@ def unreported(records: dict[str, list[dict]]) -> dict[str, dict]:
     Re-publishing the same factual receipt is idempotent runner-side."""
     out: dict[str, dict] = {}
     for aid, rows in records.items():
-        phases = {r.get("phase") for r in rows}
+        phases = {r["phase"] for r in rows if r.get("phase") in PHASES}
         if "result" in phases and "receipt" not in phases:
             result_row = next(r for r in reversed(rows)
                               if r.get("phase") == "result")

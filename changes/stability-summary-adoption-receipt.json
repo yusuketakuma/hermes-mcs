@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "採用済み要約の表示を確定した承認記録へ結び付け",
+  "summary": "要約の採用結果は、対応する処理済みreceiptと採用記録・対象・比較結果・承認者・理由が一致した場合だけ採用済みと表示します。採用の派生記録だけが残った場合やreceiptが壊れている場合は、未確認として保持します。",
+  "upgrade": "追加操作は不要です。通常の人承認と再実行の扱いは変わりません。receiptが確認できない採用記録は未確認となるため、記録の状態を確認してください。",
+  "details": ["semantic_adoptionとapplied command receiptの各ID・比較ハッシュ・actor/reasonを照合する。", "現在の採用判定にreceipt_verifiedを要求し、未確認記録にも確認状態を明示する。"],
+  "refs": ["mcs/views/summary_review.py", "tests/views/test_summary_adoption_receipt_stability.py"]
+}

@@ -401,7 +401,8 @@ def test_verified_attachment_mapping_and_corruption_never_sends(tmp_path):
     w = world(tmp_path)
     worker = delivery.DeliveryWorker(sender=w.sender, settings=w.settings, root=str(w.data),
                                      reg=w.reg, worker_id="synthetic", log=lambda *a, **kw: None)
-    attachment = tmp_path / "sealed.txt"
+    (w.data / "attachments").mkdir(exist_ok=True)
+    attachment = w.data / "attachments" / "sealed.txt"
     attachment.write_bytes(b"synthetic-sealed")
     part = {"kind": "attachment_part", "part_id": "attachment:1", "path": str(attachment),
             "name": "sealed.txt", "bytes": 16, "sha256": hashlib.sha256(b"synthetic-sealed").hexdigest()}
@@ -458,9 +459,10 @@ def test_card_shows_only_primary_link_and_more_in_fixed_order():
     spec = overflow_spec()
     cards.validate(spec)  # no actions#N parts are planned any more
     content = cards.render(spec)
-    assert [a["label"] for a in content["actions"]] == [
+    actions = [button["action"] for button in content["contents"]["footer"]["contents"]]
+    assert [a["label"] for a in actions] == [
         "確認する", "担当する", "タスク作成", "MCSで開く", "その他の操作"]
-    assert content["actions"][3] == {"type": "uri", "label": "MCSで開く",
+    assert actions[3] == {"type": "uri", "label": "MCSで開く",
                                      "uri": "https://example.invalid/mcs"}
     assert [b["id"] for b in cards.secondary(spec)] == list(SECONDARY)
 
@@ -483,7 +485,7 @@ def _display_overflow_spec():
 def test_display_overflow_uses_line_boundary_split_and_exact_tail():
     spec, head, tails = _display_overflow_spec()
     cards.validate(spec)
-    assert cards.render(spec)["contentText"] == head and head.endswith("\n↓ 続き")
+    assert cards.render(spec)["contents"]["body"]["contents"][0]["text"] == head and head.endswith("\n↓ 続き")
     assert len(head) <= 1000
     parts = spec["parts"]
     parts["thread_body_parts"][0] = tails[0][:-1]
@@ -693,7 +695,7 @@ def test_runner_grant_delivers_complete_card_body_with_logical_binding(tmp_path,
                 worker.release_scope_lock()
 
         asyncio.run(scenario())
-        assert w.client.calls[0][1]["type"] == "button_template"
+        assert w.client.calls[0][1]["type"] == "flex"
         assert body not in json.dumps(w.client.calls[0], ensure_ascii=False)
         sent_chunks = [c[1]["text"] for c in w.client.calls if c[1]["type"] == "text"]
         names = [p["name"] for p in spec["parts"]["manifest"] if p["kind"] == "body_part"]
@@ -796,9 +798,9 @@ def test_more_opens_secondary_actions_in_dm_and_only_they_run_from_dm(tmp_path):
         assert command_files(w) == []
         menus = [c[1] for c in w.client.calls]
         assert all(c[2] == {"user_id": "operator", "channel_id": None} for c in w.client.calls)
-        assert [m["contentText"] for m in menus] == ["💬 合成 患者 様（合成）"] * 2
-        offered = [a["postback"] for m in menus for a in m["actions"]]
-        assert [len(m["actions"]) for m in menus] == [10, 1]
+        assert [m["contents"]["body"]["contents"][0]["text"] for m in menus] == ["💬 合成 患者 様（合成）"] * 2
+        offered = [a["action"]["postback"] for m in menus for a in m["contents"]["footer"]["contents"]]
+        assert [len(m["contents"]["footer"]["contents"]) for m in menus] == [10, 1]
         assert offered == ["mcs:a:" + by_action[a] for a in SECONDARY]
         # A primary token pressed from the 1:1 talk stays room-only.
         await w.actions.handle(event(postback="mcs:a:" + by_action["ack"], channel=None))

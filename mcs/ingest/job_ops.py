@@ -32,6 +32,7 @@ from mcs_util import HOME, loads_dict
 import mcs_requests
 
 CMD_DIR = os.path.join(HOME, "data", "cmd")
+CMD_TORN_S = 3600
 
 TRICKLE_PAGES = 3        # timeline pages per patient per run
 TRICKLE_PATIENTS = 3     # patients advanced per run
@@ -95,7 +96,8 @@ def _valid_history_payload(pl) -> bool:
                  or (type(pl["pages"]) is int and 1 <= pl["pages"] <= 40))
             and ("trickle" not in pl or type(pl["trickle"]) is bool)
             and ("stalls" not in pl
-                 or (type(pl["stalls"]) is int and pl["stalls"] >= 0)))
+                 or (type(pl["stalls"]) is int and pl["stalls"] >= 0))
+            and ("notify" not in pl or type(pl["notify"]) is bool))
 
 
 def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
@@ -123,6 +125,12 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
         except (OSError, ValueError, RecursionError):
             # WatchPaths can fire while a producer is still writing. Never
             # consume a request until it is complete enough to validate.
+            # One still unparsable after CMD_TORN_S is a torn write, not
+            # an in-flight one — quarantine it instead of re-reading forever.
+            with suppress(OSError):
+                if time.time() - os.path.getmtime(path) > CMD_TORN_S:
+                    os.replace(path, path + ".invalid")
+                    result["errors"].append("cmd_invalid: unparsable")
             continue
         if consent_only and (not isinstance(req, dict)
                              or req.get("cmd") != "ops.restore_approve"):
@@ -182,9 +190,8 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
             if floor and floor <= since:
                 ok, reason = False, "already_floored"
             else:
-                # an in-flight walk should DEEPEN on a newer request rather
-                # than drop it — pages are newest-first so a bigger cutoff
-                # just extends the same walk (page cursor stays valid)
+                # A deeper request must revisit the old cutoff page: rows
+                # below that cutoff were filtered out before persistence.
                 existing = ledger.history_job(req["project_id"])
                 if existing:
                     try:
@@ -196,6 +203,9 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                                         reason_code="invalid_payload")
                         existing = None
                 if existing:
+                    if since < pl["since"]:
+                        pl["page"] = 1
+                        pl["stalls"] = 0
                     pl["since"] = min(since, pl.get("since", since))
                     pl["pages"] = max(pl.get("pages", 10),
                                       req.get("pages", 10))
@@ -285,6 +295,11 @@ def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
         for f in full:
             cur = merged.get(f.message_id)
             if cur is None or cur.body_state not in TERMINAL_BODY_STATES:
+                # the thread API carries no per-reply unread flag — keep
+                # the embedded one, or the reply is never offered for
+                # notification before thread-read acknowledges it
+                if cur is not None and cur.is_unread:
+                    f.is_unread = True
                 merged[f.message_id] = f
         m.replies = list(merged.values())
         if len(got) < m.reply_count:
@@ -446,12 +461,16 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                      trickle_pages: int = TRICKLE_PAGES,
                      max_jobs: int | None = None,
                      min_margin: float | None = None,
-                     semantic: bool = False):
+                     semantic: bool = False,
+                     notify_max_age_s: float | None = None):
     """Work the durable history-import queue.
 
     trickle=False drains user-requested/cmd jobs (payload pages cap).
     trickle=True drains deep-import jobs at TRICKLE_PAGES per patient and
     only while `min_margin` of deadline remains — idle-capacity work.
+    A payload with "notify": true (post_ack_gap) notifies every newly
+    stored row: the plain-list acknowledgement already cleared their
+    unread flag, so the unread gate alone would never offer them.
     """
     limit = max_jobs or (TRICKLE_PATIENTS if trickle else HISTORY_JOB_LIMIT)
     done_n = 0
@@ -496,8 +515,14 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
             result["errors"].append(
                 f"import {pid} replies: {type(e).__name__}")
             merged = MergeResult(checkpoint_safe=False)
-        new_ids = ledger.save_messages(hist, project_id=pid,
-                                       semantic=semantic)
+        if pl.get("notify"):
+            new_ids = ledger.save_messages(
+                hist, project_id=pid, semantic=semantic,
+                notify={"source": "history"},
+                notify_max_age_s=notify_max_age_s, notify_all_new=True)
+        else:
+            new_ids = ledger.save_messages(hist, project_id=pid,
+                                           semantic=semantic)
         if batch.pages and merged.checkpoint_safe:
             pl["page"] = sp + batch.pages
             pl["stalls"] = 0

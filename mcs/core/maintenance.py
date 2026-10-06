@@ -11,7 +11,7 @@ import sqlite3
 import tempfile
 import time
 from pathlib import Path
-from contextlib import suppress
+from contextlib import closing, suppress
 
 from ledger import publish_snapshot as _publish_snapshot, valid_mcs_db
 from mcs_util import HOME, atomic_write, disk_floor_mb, publish_tmp
@@ -20,8 +20,11 @@ BACKUP_DIR = os.path.join(HOME, "data", "backups")
 SNAPSHOT_DIR = os.path.join(HOME, "data", "snapshots")
 LOGFILE = os.path.join(HOME, "data", "run.log")
 BACKUP_KEEP = 7
+BACKUP_OVERDUE_S = 2 * 86400
 LOG_MAX = 5 * 1024 * 1024
 ATTACHMENT_KEEP_S = 14 * 86400
+PRUNE_BATCH = 100
+LEFTOVER_KEEP_S = 86400
 # an apply publishes its preupdate backup, then waits up to 20min for the
 # run lock before recording backup_path in state; prune must not race it
 PREUPDATE_GRACE_S = 86400
@@ -61,6 +64,28 @@ def _verified_unchanged(dest: str) -> bool:
     return bool(marker) and marker == _stat_sig(dest)
 
 
+def _publish_backup(db_path: str, tmp: str, dest: str) -> None:
+    """Copy, verify and publish a backup while owning its staging file."""
+    try:
+        with closing(sqlite3.connect(
+                Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as src:
+            with closing(sqlite3.connect(tmp)) as dst:
+                src.backup(dst)
+                dst.execute("PRAGMA journal_mode=DELETE")
+        if not valid_mcs_db(tmp):
+            raise MaintenanceError("backup_verify_failed")
+        publish_tmp(tmp, dest, mode=0o600)
+    except BaseException:
+        with suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def _backup_need_mb(db_path: str) -> float:
+    """Room for two ledger copies above the disk floor."""
+    return os.path.getsize(db_path) * 2 / (1024 * 1024) + disk_floor_mb()
+
+
 def daily_backup(db_path: str):
     """One VERIFIED sqlite .backup per day — write to tmp, schema/quick_check,
     then atomic publish. A present-but-broken file must never block a
@@ -76,31 +101,12 @@ def daily_backup(db_path: str):
     # missing marker falls back to validation (B24)
     if _verified_unchanged(dest) or valid_mcs_db(dest):
         return
-    need_mb = os.path.getsize(db_path) * 2 / (1024 * 1024) + disk_floor_mb()
-    if shutil.disk_usage(BACKUP_DIR).free / (1024 * 1024) < need_mb:
+    if shutil.disk_usage(BACKUP_DIR).free / (1024 * 1024) < _backup_need_mb(db_path):
         return "skipped_disk_low"
     tmp = dest + ".tmp"
     with suppress(FileNotFoundError):
         os.unlink(tmp)
-    src = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro",
-                          uri=True)
-    try:
-        dst = sqlite3.connect(tmp)
-        try:
-            src.backup(dst)
-            dst.execute("PRAGMA journal_mode=DELETE")
-        finally:
-            dst.close()
-            src.close()
-        if not valid_mcs_db(tmp):
-            raise MaintenanceError("backup_verify_failed")
-    except BaseException:
-        with suppress(OSError):   # never strand a partial PHI copy
-            os.unlink(tmp)
-        raise
-    # chmod -> fsync -> os.replace -> dir fsync: a power loss never
-    # leaves a torn rollback point at dest
-    publish_tmp(tmp, dest, mode=0o600)
+    _publish_backup(db_path, tmp, dest)
     sig = _stat_sig(dest)
     if sig:
         with suppress(OSError):   # marker is only a fast path
@@ -113,41 +119,43 @@ def daily_backup(db_path: str):
     prune_preupdate_backups()
 
 
+def backup_overdue() -> bool:
+    """True when the newest daily backup is older than BACKUP_OVERDUE_S.
+    No backup yet is not overdue: a fresh install gets its first one on
+    the next tick that has budget left."""
+    stamps = []
+    for path in glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db")):
+        with suppress(OSError):   # rotated away mid-scan
+            stamps.append(os.path.getmtime(path))
+    return bool(stamps) and time.time() - max(stamps) > BACKUP_OVERDUE_S
+
+
 def preupdate_backup(db_path: str) -> str:
     """Verified .backup before an apply — distinct 'preupdate-' prefix
     so the daily ledger-* rotation can never evict a rollback point
     (B3). Returns the published path."""
     os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
     os.chmod(BACKUP_DIR, 0o700)
+    # same room check as daily_backup: apply bails on this before quiesce
+    if shutil.disk_usage(BACKUP_DIR).free / (1024 * 1024) < _backup_need_mb(db_path):
+        raise MaintenanceError("backup_disk_low")
     stamp = time.strftime("%Y%m%d-%H%M%S")
     fd, tmp = tempfile.mkstemp(
         prefix=f"preupdate-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
     os.close(fd)
     dest = tmp[:-4]
-    src = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro",
-                          uri=True)
-    try:
-        dst = sqlite3.connect(tmp)
-        try:
-            src.backup(dst)
-            dst.execute("PRAGMA journal_mode=DELETE")
-        finally:
-            dst.close()
-            src.close()
-        if not valid_mcs_db(tmp):
-            raise MaintenanceError("backup_verify_failed")
-    except BaseException:
-        with suppress(OSError):   # never strand a partial PHI copy
-            os.unlink(tmp)
-        raise
-    publish_tmp(tmp, dest, mode=0o600)
+    _publish_backup(db_path, tmp, dest)
     return dest
 
 
 def prune_preupdate_backups(state_path: str | None = None) -> int:
     """Delete only preupdate-* backups NOT referenced by an actionable
-    applying/applied record — reference-based retention (B3): a flapping
-    fetch loop can never push out the backup a rollback still needs."""
+    record — reference-based retention (B3): a flapping fetch loop can
+    never push out the backup a rollback still needs. Actionable means
+    the in-flight `applying` journal, a pending `restore_consent` hold,
+    and the newest schema_bump `applied` entry (rollback restores the DB
+    only for schema_bump entries; applied[] only grows, so referencing
+    every entry kept a full ledger copy per update forever)."""
     import json
     state_path = state_path or os.path.join(
         HOME, "data", "update_state.json")
@@ -157,17 +165,22 @@ def prune_preupdate_backups(state_path: str | None = None) -> int:
             state = json.load(f)
         if not isinstance(state, dict) or not isinstance(state.get("applied"), list):
             return 0
-        records = list(state["applied"])
-        if state.get("applying") is not None:
-            records.append(state["applying"])
-        for rec in records:
+        applied = list(state["applied"])
+        held = [state[k] for k in ("applying", "restore_consent")
+                if state.get(k) is not None]
+        for rec in applied + held:
             if not isinstance(rec, dict):
                 return 0
             bp = rec.get("backup_path")
             if bp is not None and (not isinstance(bp, str) or not bp.strip()):
                 return 0
-            if isinstance(bp, str):
-                referenced.add(os.path.abspath(bp))
+        newest_bump = next(
+            (r for r in reversed(applied) if r.get("schema_bump")), None)
+        # ponytail: only the newest bump is kept — rolling back across two
+        # schema bumps needs the older copy too; keep all bumps if that matters
+        for rec in held + [newest_bump or {}]:
+            if isinstance(rec.get("backup_path"), str):
+                referenced.add(os.path.abspath(rec["backup_path"]))
     except (OSError, ValueError, TypeError, RecursionError):
         # unreadable state => keep EVERYTHING (fail-safe, S17)
         return 0
@@ -202,7 +215,14 @@ def rotate_log(paths=None):
                           # runtime_mode=standalone connector / launchd jobs
                           os.path.join(HOME, "data", "standalone.log"),
                           os.path.join(HOME, "data", "cron.log"),
-                          os.path.join(HOME, "data", "llamacpp-restart.log")):
+                          os.path.join(HOME, "data", "llamacpp-restart.log"),
+                          # mcs_update.sh / org.mcs.recovery / local.mcs-int
+                          os.path.join(HOME, "data", "update.log"),
+                          os.path.join(HOME, "data", "recovery.log"),
+                          os.path.join(HOME, "data", "cmd_int.log"),
+                          # ai.mcs.llamaserver plist (__HERMES_HOME__/logs)
+                          os.path.join(os.path.expanduser("~/.hermes"),
+                                       "logs", "llamacpp.log")):
         with suppress(OSError):
             if os.path.getsize(path) > LOG_MAX:
                 shutil.copyfile(path, path + ".1")
@@ -223,9 +243,10 @@ def prune_attachments(db_path: str) -> int:
     still referenced by an unsent notification are kept. Returns the
     number of payloads actually deleted."""
     cutoff = time.time() - ATTACHMENT_KEEP_S
-    con = sqlite3.connect(db_path)
+    con = sqlite3.connect(db_path, timeout=30)
     con.row_factory = sqlite3.Row
     try:
+        con.execute("PRAGMA busy_timeout=30000")
         keep_mids = {r[0] for r in con.execute("""
           SELECT DISTINCT value FROM notify_outbox,
             json_each(notify_outbox.payload, '$.message_ids')
@@ -243,40 +264,67 @@ def prune_attachments(db_path: str) -> int:
           WHERE p.kind='attachment_part' AND p.state IN ('pending','unknown','held')
             AND r.state IS NOT 'cancelled' AND p.attachment_id IS NOT NULL
         """))
-        rows = con.execute("""
+        rows = [a for a in con.execute("""
           SELECT attachment_id, message_id, name, local_path
           FROM attachments
           WHERE state IN ('downloaded','withdrawn')
             AND local_path IS NOT NULL AND downloaded_at < ?""",
           (cutoff,)).fetchall()
+          if a["message_id"] not in keep_mids
+          and a["attachment_id"] not in keep_ids]
         pruned = 0
-        for a in rows:
-            if a["message_id"] in keep_mids or a["attachment_id"] in keep_ids:
-                continue
-            path = a["local_path"]
-            try:
-                if path and os.path.isfile(path):
-                    os.unlink(path)
-                # notify_flush._media_path hardlink/copy alias — same asset
-                if path and not os.path.splitext(path)[1]:
-                    for alias in glob.glob(glob.escape(path) + ".*"):
-                        ext = alias[len(path):]
-                        if (1 < len(ext) <= 9 and ext[1:].isascii()
-                                and ext[1:].isalnum()
-                                and os.path.isfile(alias)):
-                            os.unlink(alias)
-            except OSError:
-                continue   # unlink failed — retry next tick
-            con.execute("""
-              UPDATE attachments SET
-                state=CASE WHEN state='withdrawn' THEN 'withdrawn' ELSE 'pruned' END,
-                local_path=NULL
-              WHERE attachment_id=?""", (a["attachment_id"],))
-            pruned += 1
-        con.commit()
+        # short write transactions; files go only after the row stopped
+        # pointing at them, so a reader never follows a dangling path
+        for i in range(0, len(rows), PRUNE_BATCH):
+            batch = []
+            for a in rows[i:i + PRUNE_BATCH]:
+                cur = con.execute("""
+                  UPDATE attachments SET
+                    state=CASE WHEN state='withdrawn' THEN 'withdrawn' ELSE 'pruned' END,
+                    local_path=NULL
+                  WHERE attachment_id=? AND local_path=?""",
+                  (a["attachment_id"], a["local_path"]))
+                if cur.rowcount:
+                    batch.append(a["local_path"])
+            con.commit()
+            for path in batch:
+                _unlink_attachment(path)
+            pruned += len(batch)
         return pruned
     finally:
         con.close()
+
+
+def _unlink_attachment(path: str) -> None:
+    """Remove a payload and its notify_flush._media_path alias (F12)."""
+    with suppress(OSError):
+        os.unlink(path)
+    if os.path.splitext(path)[1]:
+        return
+    for alias in glob.glob(glob.escape(path) + ".*"):
+        ext = alias[len(path):]
+        if (1 < len(ext) <= 9 and ext[1:].isascii() and ext[1:].isalnum()
+                and os.path.isfile(alias)):
+            with suppress(OSError):
+                os.unlink(alias)
+
+
+def prune_leftovers() -> int:
+    """Delete day-old download temp files (a hard kill skips the
+    adapter's own cleanup) and quarantined cmd/ and cmd_int/
+    *.json.invalid files. ctime: a quarantine rename keeps the original
+    mtime."""
+    cutoff = time.time() - LEFTOVER_KEEP_S
+    removed = 0
+    for pattern in (os.path.join(HOME, "data", "attachments", ".download-*.part"),
+                    os.path.join(HOME, "data", "cmd", "*.json.invalid"),
+                    os.path.join(HOME, "data", "cmd_int", "*.json.invalid")):
+        for path in glob.glob(pattern):
+            with suppress(OSError):
+                if os.stat(path).st_ctime < cutoff:
+                    os.unlink(path)
+                    removed += 1
+    return removed
 
 
 def publish_snapshot(db_path: str) -> bool:

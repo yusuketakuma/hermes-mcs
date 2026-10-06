@@ -2,15 +2,17 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 import copy
 from html import escape
+import math
 import re
 import time
 from collections.abc import Mapping
 
 from adapters.common.paths import read_verified_attachment
 from adapters.common.spec import token_map
-from adapters.common.worker import DeliveryWorker as _BaseWorker
+from adapters.common.worker import WorkspaceDeliveryWorker as _BaseWorker
 
 from .actions import origin as parse_action_origin
 from .cards import mention_ids, render, validate
@@ -21,6 +23,7 @@ _CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 # A failed users.info (missing scope, 429, network) is retried after this
 # long — same idea as registry.CAPABILITY_NEG_S; successes never expire.
 NAME_NEG_S = 900
+NAME_CACHE_MAX = 1024
 
 
 def _upload_file_id(data) -> str | None:
@@ -57,6 +60,43 @@ def single_attempt(client):
     return sender
 
 
+RATE_WAIT_MAX_S = 60.0   # cap on one Retry-After wait (LINE WORKS uses 60 s too)
+
+
+def _rate_wait(exc) -> float | None:
+    """Seconds to wait before the single retry a Slack 429 earns, else
+    None. A rate-limit rejection proves nothing was written, so one
+    resend cannot duplicate; any other failure is never retried here."""
+    response = getattr(exc, "response", None)
+    if getattr(response, "status_code", None) != 429 \
+            and _payload(response).get("error") != "ratelimited":
+        return None
+    headers = getattr(response, "headers", None)
+    raw = (headers.get("Retry-After", headers.get("retry-after"))
+           if isinstance(headers, Mapping) else None)
+    try:
+        wait = float(raw)
+    except (TypeError, ValueError):
+        wait = 1.0
+    return min(max(wait, 0.0), RATE_WAIT_MAX_S) if math.isfinite(wait) \
+        else RATE_WAIT_MAX_S
+
+
+async def _call(fn, **kwargs):
+    """One Slack write; a 429 waits out Retry-After and resends once.
+    A second failure propagates for _failed() to classify as before."""
+    try:
+        return await fn(**kwargs)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        wait = _rate_wait(exc)
+        if wait is None:
+            raise
+    await asyncio.sleep(wait)
+    return await fn(**kwargs)
+
+
 # chat.update rejections that prove the prior reply cannot be edited
 _REPOST_ON_UPDATE = frozenset({"message_not_found", "cant_update_message",
                                "edit_window_closed"})
@@ -82,11 +122,12 @@ class SlackCardAdapter:
     """An inert native-client adapter until explicitly bound and called."""
 
     def __init__(self, app, *, team_id, application_id, channel_id,
-                 profile, allowed_user_ids, native_adapter=None):
+                 profile, allowed_user_ids, native_adapter=None, root=None):
         # Hermes keeps one native client per workspace; app.client is only
         # the first workspace's client when several bot tokens are connected.
         self._client = (native_adapter._get_client(channel_id, team_id=team_id)
                         if native_adapter is not None else app.client)
+        self._root = root   # MCS data root: attachments must resolve under it
         self._team_id = team_id
         self._application_id = application_id
         self._channel_id = channel_id
@@ -94,7 +135,7 @@ class SlackCardAdapter:
         self._allowed_user_ids = frozenset(allowed_user_ids)
         self._bound = False
         self._bot_id = ""
-        self._names: dict = {}
+        self._names: OrderedDict = OrderedDict()
 
     async def display_name(self, uid):
         """The member's Slack display (or real) name via users.info —
@@ -104,6 +145,7 @@ class SlackCardAdapter:
         hit = self._names.get(uid)
         if hit is not None and (hit[1] is None
                                 or time.monotonic() < hit[1]):
+            self._names.move_to_end(uid)
             return hit[0]
         name = None
         try:
@@ -121,6 +163,9 @@ class SlackCardAdapter:
             pass
         self._names[uid] = (name, None if name
                             else time.monotonic() + NAME_NEG_S)
+        self._names.move_to_end(uid)
+        if len(self._names) > NAME_CACHE_MAX:
+            self._names.popitem(last=False)
         return name
 
     async def bind(self):
@@ -180,15 +225,16 @@ class SlackCardAdapter:
         message_id = delivery.get("message_id")
         try:
             if op == "revoke":
-                response = await sender.chat_delete(
+                response = await _call(sender.chat_delete,
                     channel=self._channel_id, ts=message_id)
             elif op == "update":
-                response = await sender.chat_update(
-                    channel=self._channel_id, ts=message_id,
-                    text=text, blocks=blocks)
+                response = await _call(
+                    sender.chat_update, channel=self._channel_id, ts=message_id,
+                    text=text, blocks=blocks, parse="none", link_names=False)
             else:
-                response = await sender.chat_postMessage(
-                    channel=self._channel_id, text=text, blocks=blocks,
+                response = await _call(
+                    sender.chat_postMessage, channel=self._channel_id, text=text, blocks=blocks,
+                    parse="none", link_names=False,
                     unfurl_links=False, unfurl_media=False)
         except asyncio.CancelledError:
             raise
@@ -226,22 +272,8 @@ class DeliveryWorker(_BaseWorker):
                          reg=reg, worker_id=worker_id, log=log)
         self._sender = sender
 
-    def scope(self):
-        return {key: self._settings[key] for key in
-                ("transport", "profile", "application_id",
-                 "team_id", "channel_id")}
-
-    def _ours(self, delivery):
-        return all(delivery.get(key) == value
-                   for key, value in self.scope().items())
-
     def _validate_spec(self, spec):
         validate(spec)
-
-    def _verify_grant(self, claim, result):
-        return (super()._verify_grant(claim, result)
-                and result.get("transport") == "slack"
-                and result.get("team_id") == self._settings["team_id"])
 
     async def _perform(self, claim):
         outcome = await self._sender.perform(claim["spec"])
@@ -252,10 +284,7 @@ class DeliveryWorker(_BaseWorker):
                 token: {**context, "message_id": message_id,
                         "team_id": self._settings["team_id"]}
                 for token, context in token_map(claim["spec"]).items()
-            })
-            # The shared worker batches saves, but its receipt can be durable
-            # before that batch exits. Keep Slack's posted-button pins durable.
-            self._reg.save(immediate=True)
+            }, durable=True)  # pins durable before the receipt publishes
         return outcome
 
     # -- durable render parts (T9) ----------------------------------------
@@ -318,7 +347,8 @@ class DeliveryWorker(_BaseWorker):
             return {"result": "not_sent",
                     "error_code": "retry_policy_unknown"}
         try:
-            response = await sender.chat_postMessage(
+            response = await _call(
+                sender.chat_postMessage,
                 channel=self._settings["channel_id"],
                 thread_ts=thread_ts, text=text, link_names=False,
                 mrkdwn=False, unfurl_links=False, unfurl_media=False)
@@ -358,7 +388,8 @@ class DeliveryWorker(_BaseWorker):
         if not self._sender.authored(target) or sender is None:
             return None
         try:
-            response = await sender.chat_update(
+            response = await _call(
+                sender.chat_update,
                 channel=self._settings["channel_id"], ts=prior, text=text,
                 link_names=False, mrkdwn=False)
         except asyncio.CancelledError:
@@ -417,7 +448,7 @@ class DeliveryWorker(_BaseWorker):
             if rid is not None:
                 return {"result": "delivered", "remote_id": rid}
         blob = await asyncio.to_thread(
-            read_verified_attachment, part.get("path"), part)
+            read_verified_attachment, part.get("path"), part, self._root)
         if blob is None:
             return {"result": "not_sent",
                     "error_code": "attachment_mismatch"}
@@ -427,7 +458,8 @@ class DeliveryWorker(_BaseWorker):
             # the file's visible line: 📎 name — patient/post
             extra["initial_comment"] = escape(part["caption"], quote=False)
         try:
-            response = await upload(
+            response = await _call(
+                upload,
                 channel=self._settings["channel_id"],
                 thread_ts=thread_ts, file=blob,
                 filename=name, title=name, **extra)

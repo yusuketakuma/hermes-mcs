@@ -104,8 +104,12 @@ def test_chunk_survives_later_exception_and_all_leases_release(db, monkeypatch, 
         return {"summary": "完了チャンク"}
 
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
-    with pytest.raises(RuntimeError, match="synthetic interruption"):
-        extract_llm.run_pending(db, workers=workers)
+    if workers == 1:
+        with pytest.raises(RuntimeError, match="synthetic interruption"):
+            extract_llm.run_pending(db, workers=workers)
+    else:
+        # a worker crash defers only its own row; the run completes
+        assert extract_llm.run_pending(db, workers=workers)["deferred"] == 2
     assert db.artifacts("extract_llm_chunk")
     assert not db.artifacts("extract_llm")
     assert db.db.execute("SELECT count(*) FROM fetch_jobs WHERE kind='extract_claim'").fetchone()[0] == 0

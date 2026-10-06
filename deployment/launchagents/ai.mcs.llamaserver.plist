@@ -21,6 +21,7 @@
     <string>--cache-ram</string><string>0</string>
   </array>
   <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
   <key>RunAtLoad</key><true/>
   <key>LimitLoadToSessionType</key>
   <array><string>Aqua</string><string>Background</string></array>

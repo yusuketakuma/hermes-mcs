@@ -1,0 +1,478 @@
+{
+  "schema": "mcs-stability-audit/1",
+  "version": "1.0.15",
+  "date": "2026-10-06",
+  "scope": [
+    "mcs/ingest/*.py"
+  ],
+  "file_count": 8,
+  "method": "All eight Python files and their runtime/CLI/transport/normalization/state boundaries were inventoried and inspected, with caller contracts and synthetic failure proofs. Real-service acceptance remains explicitly unclaimed.",
+  "verification": {
+    "python": "3.13.12",
+    "commands": [
+      {
+        "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/ingest",
+        "result": "1220 passed in 14.42s on final ingest source hashes"
+      },
+      {
+        "command": "uv run --no-project --with ruff ruff check mcs/ingest [new focused tests]",
+        "result": "All checks passed"
+      },
+      {
+        "command": "git diff --check -- [owned changed files]",
+        "result": "passed"
+      }
+    ]
+  },
+  "global_limitations": [
+    "No real MCS/CDP/Keychain/LLM/gateway, original DB, credentials or production/shared records accessed",
+    "No deployment, runtime process restart, commit or external write",
+    "Synthetic tests establish implemented boundaries, not SDK/provider behavior or clinical truth"
+  ],
+  "entries": [
+    {
+      "path": "mcs/ingest/cross_lists.py",
+      "sha256": "3580d54982ca68a320ab27e765a9eaa7dbd515d8edd194378575dca83661c54a",
+      "status": "no_change",
+      "checks": [
+        "Dataset/option and identity/project/parent validation prevent scope widening; optional absent unread remains unknown",
+        "Bounded cached-session GET walks require stable continuation timestamp, consistent totals, unique IDs and terminal state; failures expose no partial rows",
+        "Storage capture allowlists identities/body availability/optional metadata without body/name/attachmentURL retention; source writes, notification and read flags untouched",
+        "Explicit CLI writer lock and opt-in GET remain separate from publication"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "CapturedRow",
+          "CapturedList",
+          "CrossListEntry",
+          "CrossListFetch",
+          "_options",
+          "_normalize",
+          "fetch_cross_list",
+          "capture_rows",
+          "validate_capture",
+          "sync_cross_list",
+          "main"
+        ],
+        "class_methods": {
+          "CapturedRow": [],
+          "CapturedList": [],
+          "CrossListEntry": [],
+          "CrossListFetch": []
+        },
+        "tests": [
+          "tests/ingest/test_cross_lists.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "Real API continuation/session/read preservation acceptance remains required; no API or host token cache accessed"
+      ]
+    },
+    {
+      "path": "mcs/ingest/health_watch.py",
+      "sha256": "4db1002b61afa7fe60caa192362a1a945e13c66d90b0e80ef2db8620ff1ec445",
+      "status": "fixed",
+      "checks": [
+        "Freshness is derived from file evidence and confirmed unread clock, not producer exit code",
+        "Finite clock validation rejects NaN/infinity/bool/overflow before config/file I/O and CLI mutation",
+        "Explicit unread_at unknown on first jobs-only producer degrades rather than falsely certifying unread collection; legacy files lacking the field retain compatibility",
+        "Reason-code/counter alerts, hourly dedupe, disk-state carry and atomic status/state publication retained"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_finite_number",
+          "_tick_settings",
+          "freshness_deadline",
+          "_is_code",
+          "classify_health",
+          "_dedup_stamp",
+          "evaluate",
+          "main"
+        ],
+        "class_methods": {},
+        "tests": [
+          "tests/ingest/test_health_watch.py",
+          "tests/ingest/test_health_clock_validation.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "No real health/config files or OS clock manipulation; physical clock/failure scenarios use synthetic inputs"
+      ]
+    },
+    {
+      "path": "mcs/ingest/init_data.py",
+      "sha256": "72aa5bd7245cca637d40a83d0aaca272a28c662187ed199fe0f1a9bf14a28064",
+      "status": "no_change",
+      "checks": [
+        "CLI validates fetch budgets and locks single writer; progress logs only IDs/counts",
+        "Deeper cutoff already resets history cursor; shallower/same ranges reuse durable progress",
+        "Chunks merge required replies before save/checkpoint; floor requires completed history and no reply/deadline gaps",
+        "Embedded auth failures trigger one per-patient relogin and safe cursor refund; no mark-read, binaries or notices"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "main"
+        ],
+        "class_methods": {},
+        "tests": [
+          "tests/ingest/test_bugfix_r3_0_init_deeper_since.py",
+          "tests/ingest/test_bugfix_r2_1_init_reauth_reached.py",
+          "tests/ingest/test_bugfix_r3_1_history_deadline_stall.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "One-shot CLI startup/unexpected failures rely on process teardown outside ordinary handled paths; no actual Chrome/Keychain/import executed"
+      ]
+    },
+    {
+      "path": "mcs/ingest/job_ops.py",
+      "sha256": "b26ca87e6ece3cc2700946d9a5c6b11a0e69ec6df8f3ef54a7d42dbe97005068",
+      "status": "fixed",
+      "checks": [
+        "Commands validate and commit durable job/receipt before consuming files; restore-consent hold preserves queued writes",
+        "Deeper pending import now restarts at page1 and resets window stalls so old cutoff-filtered rows cannot be skipped or falsely floored; same/shallower requests preserve progress",
+        "Reply/thread windows persist partial progress and seed durable gaps; auth errors remain attempt-free run boundaries",
+        "History/reconcile floors require full root/reply coverage; failed windows consume bounded retries/stalls and fair rotation; history_head does not rewrite deep floor",
+        "Discovery active/archive separation and atomic archive reservations preserve prior coverage; periodic discovery retries stay bounded/pending"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "MergeResult",
+          "_valid_cmd",
+          "_valid_history_payload",
+          "drain_commands",
+          "merge_full_replies",
+          "_job_failure_reason",
+          "run_reply_jobs",
+          "run_history_jobs",
+          "seed_reconcile",
+          "run_reconcile_jobs",
+          "seed_discovery",
+          "run_discovery",
+          "seed_trickle"
+        ],
+        "class_methods": {
+          "MergeResult": []
+        },
+        "tests": [
+          "tests/ingest/test_job_drain.py",
+          "tests/ingest/test_history_command_deepen.py",
+          "tests/ingest/test_bugfix_r2_2_reconcile_stall.py",
+          "tests/ingest/test_thread_count_retry.py",
+          "tests/ingest/test_job_reasons_ingest.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "Adapter batch/message contracts and core job identity/transaction invariants are caller prerequisites; no real command requests or network history"
+      ]
+    },
+    {
+      "path": "mcs/ingest/mcs_adapter.py",
+      "sha256": "4076ff51552ec939c3e5bd75701528bbfa183349b2ba45a4bfd7874cf4f0f243",
+      "status": "fixed",
+      "checks": [
+        "HTTP/download origin+port/no-proxy/no-redirect rules prevent bearer egress; structured errors exclude response bodies",
+        "Absolute reaped-worker deadlines bound DNS/header/trickle/CDP; existing WS fragment memory and advertised/control-frame caps retained",
+        "Required chat identity/body/count fields and independent optional metadata normalization preserve unknown/partial evidence",
+        "Cached/CDP session bootstrap, origin-checked form fill and deadline-bounded login maintain credential/log isolation; no real secrets read",
+        "Unread snapshot minimum timestamp, partial page/thread/history outcomes, pinned-sort natural-end rule and latest identity-only probe preserve fetch completeness",
+        "ACK requires exact snapshot and valid project detail; absent oldest-unread marker is the documented existing wire confirmation contract, not an unknown generic omission; thread ACK contract likewise retained",
+        "Attachment parts are bounded, synced and renamed only by supervising parent; errors remove partials; actor/metadata GETs remain bounded opt-ins"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "project_url",
+          "MCSError",
+          "SessionExpired",
+          "KeychainLocked",
+          "SchemaError",
+          "BootstrapError",
+          "_allowed_port",
+          "_WSConn",
+          "_ws_eval",
+          "_SameHostRedirect",
+          "_assert_allowed_url",
+          "Attachment",
+          "Message",
+          "UnreadPatient",
+          "UnreadSnapshot",
+          "MessageBatch",
+          "ReplyBatch",
+          "_text",
+          "_sender_name",
+          "_profession",
+          "_organization",
+          "_valid_id",
+          "_has_next",
+          "_unread_patient",
+          "_attachments",
+          "_message_metadata",
+          "walk_reaction_actors",
+          "_norm_message",
+          "_norm_threads",
+          "_disk_kind",
+          "MCSAdapter"
+        ],
+        "class_methods": {
+          "MCSError": [
+            "__init__"
+          ],
+          "SessionExpired": [
+            "__init__"
+          ],
+          "KeychainLocked": [],
+          "SchemaError": [
+            "__init__"
+          ],
+          "BootstrapError": [
+            "__init__"
+          ],
+          "_WSConn": [
+            "__init__",
+            "_handshake",
+            "_fill",
+            "_read_exact",
+            "_read_until",
+            "_send_frame",
+            "send_text",
+            "recv_message",
+            "close"
+          ],
+          "_SameHostRedirect": [
+            "redirect_request"
+          ],
+          "Attachment": [],
+          "Message": [],
+          "UnreadPatient": [],
+          "UnreadSnapshot": [],
+          "MessageBatch": [],
+          "ReplyBatch": [],
+          "MCSAdapter": [
+            "__init__",
+            "set_deadline",
+            "_remaining_timeout",
+            "_io",
+            "bootstrap_token",
+            "_read_cache",
+            "_write_cache",
+            "_token_via_cdp",
+            "_probe_session_ok",
+            "check_session",
+            "self_profile",
+            "fetch_message_metadata",
+            "fetch_reaction_actors",
+            "station_staffs",
+            "_cdp_up",
+            "_ensure_chrome",
+            "_cdp_eval",
+            "_cdp_json",
+            "_login_page",
+            "_keychain_password",
+            "_login_password",
+            "_config",
+            "_recover_session",
+            "auto_login",
+            "_request",
+            "_sleep_bounded",
+            "_get",
+            "fetch_cross_list",
+            "fetch_project_members",
+            "fetch_observation_values",
+            "fetch_group_consultations",
+            "fetch_memo_summary",
+            "list_unread",
+            "fetch_unread_messages",
+            "_project_detail",
+            "oldest_unread_id",
+            "_thread_page",
+            "fetch_thread",
+            "fetch_thread_window",
+            "fetch_unread_replies",
+            "list_projects",
+            "list_archived_kartes",
+            "fetch_history",
+            "fetch_latest",
+            "_open_download",
+            "download",
+            "_download_to_part",
+            "thread_unread",
+            "read_thread",
+            "mark_patient_read"
+          ]
+        },
+        "tests": [
+          "tests/ingest/test_adapter_wire.py",
+          "tests/ingest/test_bugfix_r1_2_adapter_login_download.py",
+          "tests/ingest/test_websocket_fragment_memory.py",
+          "tests/ingest/test_acquisition_contracts.py",
+          "tests/ingest/test_thread_read.py",
+          "tests/ingest/test_reaction_actors.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "Prior WS memory fix was preserved, not reworked; no real CDP, MCS, Keychain or downloads",
+        "GET read-side effects and residual arrival race depend on documented real-service contract; post-ACK gap repair remains active"
+      ]
+    },
+    {
+      "path": "mcs/ingest/mcs_worker.py",
+      "sha256": "c0d1946942450adc1d794128ca162f84a12761171c13de94d992d44588c28747",
+      "status": "no_change",
+      "checks": [
+        "Credentials/body travel only via stdin; subprocess argv and stderr exclude sensitive data and environment is allowlisted",
+        "Absolute deadline kills and reaps worker on timeout/interruption; successful/error envelope shapes and statuses are checked",
+        "API prefix and local CDP origin validation plus no-proxy/no-redirect openers preserve network boundary",
+        "API/CDP response byte caps and parent-owned final attachment rename prevent partial publication; worker errors serialize fixed kind/status only"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "WorkerError",
+          "_worker_command",
+          "bounded_call",
+          "_loopback_url",
+          "_execute",
+          "worker_main"
+        ],
+        "class_methods": {
+          "WorkerError": [
+            "__init__"
+          ]
+        },
+        "tests": [
+          "tests/ingest/test_adapter_wire.py",
+          "tests/ingest/test_run_watchdog.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "Synthetic worker/process seams only; real DNS, OS process termination and provider SDK behavior not exercised"
+      ]
+    },
+    {
+      "path": "mcs/ingest/project_metadata.py",
+      "sha256": "257afe64943606ecac5f5706af8ca0564d003156e20133b2cc613cba9bad1cfa",
+      "status": "no_change",
+      "checks": [
+        "Dataset-specific typed fields, row limits, ID/association and explicit name-retention options allowlist metadata",
+        "Paged GETs require consistent timestamp/totals/unique IDs/terminal state; singleton medication endpoint forbids speculative pagination",
+        "Scope comes only from stored inventory; group consultation association is rechecked around fetch; failures preserve prior complete artifacts with no partial rows",
+        "Explicit storage-only cached-session sync and read-only view CLI maintain writer locks and no scheduler/publication/read flags"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "MetadataFetch",
+          "MetadataTarget",
+          "_string",
+          "_number",
+          "_boolean",
+          "_rows",
+          "_item",
+          "normalize_rows",
+          "fetch_metadata",
+          "metadata_target",
+          "sync_metadata",
+          "main"
+        ],
+        "class_methods": {
+          "MetadataFetch": [],
+          "MetadataTarget": []
+        },
+        "tests": [
+          "tests/ingest/test_project_metadata.py",
+          "tests/ingest/test_group_consultations.py",
+          "tests/ingest/test_metadata_probe_observation.py",
+          "tests/ingest/test_metadata_probe_paging.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "Server-side session/read preservation is not proved by GET/no_extend_session; real API acceptance not executed"
+      ]
+    },
+    {
+      "path": "mcs/ingest/run_check.py",
+      "sha256": "c8cd3f38b49241790689a21268755ca82ca8d8c990e9b0182ec97e60b1b7ec70",
+      "status": "no_change",
+      "checks": [
+        "Whole-run deadline, optional-stage deferral, explicit watchdog, generation-change check and single writer lock govern stage order",
+        "Unread commit+notification intent precede ACK; incomplete/snippet/reply gaps and snapshot failures never certify fetched state; fallback ACK checks old/new stored boundaries and post-ACK gaps",
+        "Self probe remembers missing IDs only after complete checkpoint-safe history; backfill uses confirmed coverage and durable head gaps",
+        "Attachments respect disk reserve/deadline/auth recovery; memo/metadata/actor refreshes are bounded, preserve failed prior sets and restore adapter deadline",
+        "Relogin is single-stage replay/idempotent and per-run bounded; restore consent freezes all non-consent work; commands-only has no adapter/ingest/send",
+        "Derived/semantic admission remains fail-closed and committed sends precede new model work; tail result/status/snapshot/health failure are explicit",
+        "Health queries expose codes/counters/unknown backup evidence; jobs-only carries unread proof rather than minting new collection evidence"
+      ],
+      "evidence": {
+        "source_symbols": [
+          "_err_str",
+          "_config",
+          "_prev_health",
+          "_unread_at",
+          "_free_mb",
+          "_disk_low",
+          "_collection",
+          "_backup_health",
+          "_health",
+          "_write_health",
+          "_code_stamp",
+          "_code_changed",
+          "_wait_run_lock",
+          "_alert_throttled",
+          "_alert_session_expired",
+          "_alert_session_recovered",
+          "_attempt_relogin",
+          "_with_relogin",
+          "_cap_cleared",
+          "_post_ack_gap",
+          "stage_unread",
+          "stage_thread_read",
+          "stage_backfill",
+          "_head_stall",
+          "stage_self_probe",
+          "_download_session_ok",
+          "stage_attachments",
+          "stage_karte_summary",
+          "stage_metadata_shadow",
+          "_stage_reaction_actors",
+          "_run_metadata_shadow",
+          "stage_derive",
+          "_consent_only",
+          "_commands_only",
+          "_semantic_enabled",
+          "_stage_fetch",
+          "_run_jobs",
+          "_refresh_station_staff",
+          "_notify_max_age_s",
+          "_deliver",
+          "_semantic_skipped",
+          "_run_semantic",
+          "_housekeeping",
+          "_finish_run",
+          "_fail_run",
+          "_arm_watchdog",
+          "_run_stage",
+          "main",
+          "_main"
+        ],
+        "class_methods": {},
+        "tests": [
+          "tests/ingest/test_run_check_stages.py",
+          "tests/ingest/test_bugfix_r1_3_run_check_session.py",
+          "tests/ingest/test_run_watchdog.py",
+          "tests/ingest/test_drug_map_pipeline.py",
+          "tests/ingest/test_thread_read.py",
+          "tests/ingest/test_metadata_probe_usage.py"
+        ],
+        "verification": "Every owned file source/call boundaries reviewed with synthetic regression/contract evidence; no grep or green-only completeness inference"
+      },
+      "limitations": [
+        "No production stages, notifications, backups, credentials or configuration accessed; physical watchdog/SIGKILL and real-service race cannot be established synthetically"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "意味解析のバックログ処理で1件ごとの全件走査を削減",
+  "summary": "バックログ側の意味解析は1件ごとに全患者の解析結果を失効確認していましたが、これを5分に1回までにしました。定期tickと新着側の処理は従来どおり毎回確認します。未完了事項の候補判定も、対象スレッドの候補と同じ世代の判定結果だけを読み込みます。",
+  "upgrade": "追加操作は不要です。バックログ常駐の再起動後に適用されます。失効の判定条件・候補の作成条件・Jevへの問い合わせ内容は変わりません。バックログ側だけが動いている間は、失効の反映が最大5分遅れることがあります。",
+  "details": ["semantic_drain.run_due は lane=backlog のとき invalidate_projections を300秒間隔に制限する。", "update_loops はスレッド構成メッセージの候補と、同じ source fingerprint の loop_event だけを読む。"],
+  "refs": ["mcs/semantic/semantic_drain.py", "mcs/semantic/semantic_loops.py"]
+}

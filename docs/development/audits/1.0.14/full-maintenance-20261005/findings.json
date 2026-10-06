@@ -1,0 +1,2977 @@
+{
+  "schema_version": 1,
+  "findings": [
+    {
+      "id": "SEM-P1-F01",
+      "class": "confirmed-defect",
+      "priority": "P2",
+      "status": "FIXED",
+      "paths": [
+        "mcs/semantic/semantic.py"
+      ],
+      "cause": "Remaining budget was floored to 0.5s and omitted cache I/O, allowing model dispatch after format preflight/rejection consumed the absolute deadline.",
+      "change": "One monotonic absolute deadline includes probe/cache I/O/fallback/length state; no dispatch once exhausted; deadline forwarded to shared transport.",
+      "before_evidence": "regression-before.log: 8 deadline cases failed",
+      "after_evidence": "packet-final.log and semantic-family-final.log pass",
+      "compatibility": "No route, model, timeout default, token ceiling, request limit or not-sent retry policy widened.",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P1-F02",
+      "class": "confirmed-defect",
+      "priority": "P2",
+      "status": "FIXED",
+      "paths": [
+        "mcs/semantic/semantic_llm.py"
+      ],
+      "cause": "Malformed limitations were iterated/coerced or raised, while malformed claims were silently dropped into an empty candidate.",
+      "change": "Non-object/empty-text claims and non-list/non-string limitations fail with model outcome; missing/null limitations remain the compatible empty case.",
+      "before_evidence": "regression-before.log: five limitations failures; claims-regression-before.log: five silent-drop failures",
+      "after_evidence": "packet-final.log: malformed limitations9/claims5 and deadline8 cases pass; semantic-family-final.log: 822 pass",
+      "compatibility": "Valid Claim shape, evidence references, audit/repair routes, oversize stub and call signatures remain.",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "F01",
+      "classification": "confirmed",
+      "priority": "P2/security",
+      "status": "FIXED",
+      "path": "mcs/notify/notify_flush.py:912",
+      "root_cause": "JSON sender handles both independent packages but stored sha256 pins were enabled only for LINE WORKS. Standalone could reseal replaced/untracked bytes under their new hash.",
+      "fix": "use existing _hermes_free(cfg,target) for stored attachment pins; no dependencies/API/schema change",
+      "regression_before": {
+        "exit": 1,
+        "failed": 6,
+        "log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/regression-before.log"
+      },
+      "regression_after": "six cases included in final 224-pass Junit (both Slack/Discord; before/after fingerprint and untracked attachment)",
+      "change_record": "changes/maintenance-notify-standalone-attachment-pins.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "F02",
+      "classification": "confirmed",
+      "priority": "P2/correctness-compatibility",
+      "status": "FIXED",
+      "path": "mcs/notify/notify_urgent.py:83,297",
+      "root_cause": "explicit artifact project equality in JOIN excluded legacy project=NULL LLM rows that current_fact_pred and urgency display intentionally permit by unique message/hash.",
+      "fix": "join by message_id; retain the shared current_fact_pred project/hash/current-generation restriction",
+      "regression_before": {
+        "exit": 1,
+        "failed": 1,
+        "passed": 2,
+        "deselected": 55,
+        "log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-20261005/urgency-before.log"
+      },
+      "regression_after": "legacy NULL and scoped LLM both enqueue/check_delivery/send; incompatible project mutation is rejected by g1 and rolled back; all in final PASS",
+      "change_record": "changes/maintenance-notify-legacy-urgency-scope.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "D01",
+      "classification": "disproved",
+      "status": "NO_CHANGE",
+      "hypothesis": "top-level interactive accepted could escalate a suppressed/uncovered member",
+      "evidence": "_base requires intersection of frozen message_ids and delivered ic.coverage; test_partial_interactive_acceptance_is_not_delivery_of_suppressed_member and sealed E2 PASS",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "D02",
+      "classification": "disproved",
+      "status": "NO_CHANGE",
+      "hypothesis": "text initial delivery could create unconfirmable E2",
+      "evidence": "_stage stops text after E1, _base text excludes sealed batch; text E2 enqueue/send-time cancellation tests PASS",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "D03",
+      "classification": "disproved",
+      "status": "NO_CHANGE",
+      "hypothesis": "old generation or hidden page acknowledgement could silence urgency",
+      "evidence": "_confirmed matches current source_generation/source_fp and shown integer member; page/old-generation regressions PASS",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "D04",
+      "classification": "disproved",
+      "status": "NO_CHANGE",
+      "hypothesis": "digest built outside write lock could enqueue twice",
+      "evidence": "latest event id compared after BEGIN IMMEDIATE; test_body_is_built_outside_the_write_lock proves competing insert wins",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "D05",
+      "classification": "disproved",
+      "status": "NO_CHANGE",
+      "hypothesis": "hold could rescue an already/uncertain delivered event and duplicate it",
+      "evidence": "_hold_event reloads current receipt; holds disable rescue for unknown outcome, corrupt receipt retains invalid_progress; current-receipt/crash tests PASS",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "D06",
+      "classification": "disproved_for_current_entry_paths",
+      "status": "NO_CHANGE",
+      "hypothesis": "_fail_event old ev.progress could suppress/park after a newly accepted chunk on StaleSend/DeferredSend",
+      "evidence": "semantic_gate/render_gate convert changes in_progress into FreezeSend (unconditional hold); current urgent fixed short text is below1900, and retry entry ev already has previous progress. No current production path was found; no speculative fix introduced.",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "L01",
+      "classification": "deferred",
+      "status": "PARENT_SCOPE",
+      "topic": "all caller auth/transport/schema and fresh independent fixed-I review",
+      "reason": "shared modules are another owner and were read only at relevant boundaries; this packet does not claim their full audit or final integration acceptance.",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending",
+      "current_disposition": "ALL_SHARED_SOURCES_REVIEWED; final-I checks/fresh review pending"
+    },
+    {
+      "id": "CORE-001",
+      "classification": "confirmed",
+      "priority": "P2",
+      "state": "RESOLVED",
+      "target": "mcs/core/ledger.py:_save_message_metadata",
+      "evidence": "Pでloads_dict(nonobject/不正/deep JSON)→Noneを.content.updateへ渡し、20合成caseすべてAttributeError。capture再収集のsource transactionやshadow記録が停止。",
+      "fix": "parse failureを{}へ正規化し、新規observed fieldsとerror状態を既存transactionで保存。",
+      "contract": "有効な既存field/unchanged observed_at、capture vs shadow、unknown≠emptyは保持。",
+      "regression": [
+        "test_corrupt_optional_metadata_does_not_block_recapture"
+      ],
+      "before_cases": 20,
+      "before_log": "regression-before.log",
+      "owner": "maintenance_core",
+      "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-002",
+      "classification": "confirmed",
+      "priority": "P2",
+      "state": "RESOLVED",
+      "target": "mcs/core/local_llm.py:admitted_chat,admitted_probe_format,_validate_chat_args",
+      "evidence": "Pで不正deadline/endpoint/timeoutがpermit後に判定され、transport/unknown又は不正callback sendへ到達。11合成case fail。",
+      "fix": "deadline型/finite共通検証、probe endpoint/timeoutもpermit取得前に検証。",
+      "contract": "正当なdeadline/loopback/route/class/signature/response shapeは保持、未送信argument errorでpermitゼロ。",
+      "regression": [
+        "test_invalid_deadline_rejected_before_admission",
+        "test_invalid_probe_args_rejected_before_admission"
+      ],
+      "before_cases": 11,
+      "before_log": "regression-before.log",
+      "owner": "maintenance_core",
+      "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-003",
+      "classification": "confirmed",
+      "priority": "P1",
+      "state": "RESOLVED",
+      "target": "mcs/core/ledger.py:_init,_migrate,_backfill_v3",
+      "evidence": "P相当_migrateはversion commit後にbackfillしbackfill自身もcommit。旧version2は失敗しても9になり、current9の初回FTSも空tableが残るため次openで補完をskip。途中/全更新後中断×2schema条件の4case fail。",
+      "fix": "FTS作成からmigration/derived fill/version保存まで同じBEGIN IMMEDIATEでcommit/rollback、backfill内部commit除去。",
+      "contract": "SCHEMA_VERSION=9/DDL/保存形式/正常時派生内容は維持、歴史DDL改変なし。_backfill_v3の実callerは_migrateのみ確認。",
+      "regression": [
+        "test_interrupted_derived_backfill_retries_without_advancing_version",
+        "test_backfill_exception_after_all_updates_rolls_back_the_batch"
+      ],
+      "before_cases": 4,
+      "before_log": "migration-before-expanded.log",
+      "owner": "maintenance_core",
+      "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-004",
+      "classification": "confirmed",
+      "priority": "P2",
+      "state": "RESOLVED",
+      "target": "mcs/core/ledger.py:metadata_watch_targets,reaction_actor_targets",
+      "evidence": "P相当SQLはjson_eachのstring valueをjson_extractへ直接渡すため、通常文字列/{broken要素でmalformed JSON。watch/actorの4caseが停止。",
+      "fix": "json_each.type=objectのvalueだけCASEでJSON operandへ渡す。",
+      "contract": "既存priority/latest/project/time/cap/backoff維持。取得selectorだけ修正し、display consumerのinvalid配列をvalid扱いしない。",
+      "regression": [
+        "test_invalid_reaction_element_does_not_abort_metadata_selectors"
+      ],
+      "before_cases": 4,
+      "before_log": "reaction-before.log",
+      "owner": "maintenance_core",
+      "dependency": "共有ledger/local_llmのownerとして自packetで完結。親固定Iのconsumer整合と独立レビュー待ち。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P2-F01",
+      "class": "confirmed-defect",
+      "priority": "P1",
+      "status": "FIXED",
+      "paths": [
+        "mcs/semantic/semantic_policy.py",
+        "tests/semantic/test_canonical_drain.py",
+        "tests/semantic/test_semantic_policy_generation.py"
+      ],
+      "cause": "fact_source omitted from policy fingerprint. A legacy PASS summary/coverage/audit could survive canonical switch and skip required canonical mandatory facts; old frozen intent also passed unchanged policy identity.",
+      "change": "Add non-legacy fact_source to interpretation hash; retain exact historical legacy hash and leave retry budgets outside interpretation identity.",
+      "before_evidence": "policy-regression-before.log: new mandatory-render source-switch case failed on reuse without new summary call.",
+      "after_evidence": "Final828 tests and explicit both-direction old gate/new receipt cases pass.",
+      "compatibility": "No schema, thresholds, model, human approval, endpoint, mode/default or retry allowance change. Old shadow/canonical policy artifacts require normal reevaluation or replay; pending old intents stop at send-time gate.",
+      "notification_handoff": "Parent informed and shared with notify owner; source display/page full adapter proof remains notify-owned.",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P2-F02",
+      "class": "confirmed-defect",
+      "priority": "P1",
+      "status": "FIXED",
+      "paths": [
+        "mcs/semantic/semantic_drain.py",
+        "tests/semantic/test_mcs_semantic.py"
+      ],
+      "cause": "Lock-free revival selected failed payload then UPDATE fenced only failed state, allowing replacement failed generation to be overwritten; unconditional increment also counted zero-row update after another revival.",
+      "change": "CAS on selected failed state, attempts, payload and updated_at; increment actual SQLite rowcount.",
+      "before_evidence": "revive-regression-before.log: 2 deterministic pending/failed interleavings fail.",
+      "after_evidence": "revive-regression-after.log:2pass; final semantic828 pass.",
+      "compatibility": "Same cooldown/per-input/pass bounds and retry receipt mechanism; unchanged public return keys; only truthful revival count and preservation of replacement input.",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-LIFECYCLE-001",
+      "status": "FIXED_LOCAL",
+      "cause": "Deep corrupt JSON receipt aborts both bound restore-consent scans.",
+      "before": "4 failed",
+      "after": "109 passed including watchdog family",
+      "contract": "Only scheduled ops.restore_approve bound to exact report/hash/schema may consent.",
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-LIFECYCLE-002",
+      "status": "FIXED_LOCAL",
+      "cause": "Post-merge timeout kills child but never reaps it before setting returncode.",
+      "before": "2 failed",
+      "after": "170 passed including updater family",
+      "contract": "Durable done bookkeeping remains authoritative; otherwise timeout is failure.",
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-01",
+      "status": "confirmed",
+      "resolution": "REQUESTED_CHANGE_IMPLEMENTED",
+      "priority": "P2",
+      "title": "10分取得契約にhealth producerの鮮度既定を合わせる",
+      "criteria": [
+        "C01",
+        "C02",
+        "C10",
+        "X01"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/health_watch.py"
+      ],
+      "evidence": "親指定のMCSサーバー負荷対策。default300だと正常10分producerでも900秒でstaleになり欠測許容が短くなる。600へ変更し明示300を維持。",
+      "regression": "test_deadline_derives_from_config_not_hardcode + default_ten_minute_cadence 5例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-02",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P1",
+      "title": "取得endpointと異なるraw患者IDの再ラベルを拒否",
+      "criteria": [
+        "C05",
+        "C07",
+        "X04"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/mcs_adapter.py"
+      ],
+      "evidence": "P _norm_messageはoptional raw project_idを無視しrequested pidへ置換。5取得経路×不正/別pid4種の後続pageをcompleteとして保存しかねない。共通入口でrejectし前完成pageを保持。",
+      "regression": "test_conflicting_message_project_does_not_relabel_a_completed_page:20例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-03",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P2",
+      "title": "巨大検査数値をschema失敗として記録し旧完成artifact保持",
+      "criteria": [
+        "C02",
+        "C07",
+        "C10",
+        "X07"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/project_metadata.py"
+      ],
+      "evidence": "math.isfinite(10**400)のOverflowErrorがMCSError境界を越えattempt artifactが書かれない。有限性conversion失敗をSchemaErrorへ変換。",
+      "regression": "test_out_of_range_number_records_failure_without_losing_complete_artifact:2例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-04",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P2",
+      "title": "最終受信chunkに終端があるWS headerの容量超過拒否",
+      "criteria": [
+        "C07",
+        "C09",
+        "C10"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/mcs_adapter.py"
+      ],
+      "evidence": "P _read_untilはmarker到着前だけcapを確認し、最後のchunkでmarker到着するとover capを返す。終端idxのcapを検証。正確capと後続frameは許容。",
+      "regression": "test_ws_header_terminator_cannot_bypass_header_limit:2例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-05",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P2",
+      "title": "過深な旧health JSONから正常producer公開を復旧",
+      "criteria": [
+        "C02",
+        "C08",
+        "C10"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/run_check.py"
+      ],
+      "evidence": "_prev_healthのRecursionErrorが_write_healthのtryへ伝播し正常runもhealth_write_failedとなる。壊れた旧状態は{}へ隔離しatomic正常記録へ。",
+      "regression": "test_deeply_nested_previous_health_does_not_block_fresh_publication:1例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-06",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P1",
+      "title": "MCS_ROOTとは別rootのcommand queueを消費する分離違反",
+      "criteria": [
+        "C01",
+        "C03",
+        "C05",
+        "X01"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/job_ops.py"
+      ],
+      "evidence": "CMD_DIRがHOME/.mcs固定、DB/lockはMCS_ROOT。2合成root subprocessでPは旧rootのprojectをselected Ledgerへ取り込みselected queueを無視。共通HOMEへ揃える。",
+      "regression": "test_default_command_drain_follows_mcs_root_and_preserves_other_root:1例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-07",
+      "status": "confirmed",
+      "resolution": "FIXED",
+      "priority": "P2",
+      "title": "初期取込の非有限delayをロック・認証前に拒否",
+      "criteria": [
+        "C07",
+        "C10"
+      ],
+      "owner": "maintenance_core",
+      "paths": [
+        "mcs/ingest/init_data.py"
+      ],
+      "evidence": "nan/infはdelay<0を通り、取得が始まってからtime.sleepでValueError/OverflowError停止。math.isfiniteをCLI validationへ追加。",
+      "regression": "test_initial_import_nonfinite_delay_rejected_before_writer_lock:2例",
+      "before_log": "/tmp/mcs-maintenance-core-packet2-20261005/isolated-P-before.log",
+      "after_log": "/tmp/mcs-maintenance-core-packet2-20261005/final-W.log",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-D01",
+      "status": "disproved",
+      "title": "mark_readのoldest_unreadキー省略はschema欠損か",
+      "evidence": "既存test_mark_read_confirms_when_oldest_unread_is_goneと_project_detail契約で省略は既読済み状態。is_archivedのboolean検証を維持。未確認を成功にする変更はしていない。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-D02",
+      "status": "disproved",
+      "title": "login候補URLの別port/originでcredential注入可能か",
+      "evidence": "auto_loginのstate→fill→clickそれぞれでlocation.originを固定https originと厳密比較。資格情報取得/注入前にbad_originが止まる。実Keychainへアクセスしていない。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-D03",
+      "status": "disproved",
+      "title": "download HTTPError response bodyを閉じ忘れるか",
+      "evidence": "合成allowed302/rejected302/404の3診断は修正前からpass。例外unwind/worker終了でcleanup。実益のないGC依存追加テストは除去、source変更なし。resource-before.logの3passは最終regressionとして数えない。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-D04",
+      "status": "disproved",
+      "title": "thread_window失敗時next_pageなしでcursorを誤認するか",
+      "evidence": "実fetch_thread_windowはerror時reached=False、pagesは完成pageのみ。job_opsはcompleted rows保存とnext page durable reservation後SessionExpired伝播。acquisition/job_drain異常系で確認。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P2-ING-DEP01",
+      "status": "deferred",
+      "title": "親所有schedule/導入/upgrade説明の最終I整合",
+      "owner": "/root",
+      "evidence": "configured_cron_jobsをstandalone/runtimeが利用。parentがunread */10、deep10,40、health watcher */5と明示設定300→600必要操作を担当。子は10分health契約とroot isolationを実装したが親Iのscript/cron移行結果をここでは検証していない。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending",
+      "current_disposition": "SOURCE_AND_GUIDES_REVIEWED; final-I test pending",
+      "current_evidence": "parent-lifecycle-evidence.json + maintenance-notify-packet6-evidence.json; current cron/host/health/source cadence10 min=MCS server load measure."
+    },
+    {
+      "id": "CORE-P2-ING-DEP02",
+      "status": "deferred",
+      "title": "固定Iのfresh-context独立レビューと全域最終検証",
+      "owner": "/root",
+      "evidence": "子自身の修復/検証は独立レビューではない。親で全packet統合後、非実装reviewerがI/差分/台帳/consumer境界を確認する必要がある。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P2-F01",
+      "classification": "CONFIRMED_FIXED",
+      "priority": "P1",
+      "title": "最新の壊れたsignalから旧open表示/操作対象が復活",
+      "root_cause": "json_valid(content)を最新選択の前に掛け、型/状態/evidenceの共通validatorを使わなかった。最新key行を先に選び_signal_contentで検証する。",
+      "paths": [
+        "mcs/notify/notify_render.py"
+      ],
+      "regressions": [
+        "test_latest_invalid_signal_never_revives_old_display_or_actions"
+      ],
+      "synthetic_cases": 12,
+      "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-before.log",
+      "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-after.log",
+      "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P2-F02",
+      "classification": "CONFIRMED_FIXED",
+      "priority": "P1",
+      "title": "restore失attemptの人確定が兄弟未配達をacceptedにし、revokedを復活",
+      "root_cause": "rebindが生存renderを無視してcard/outboxを直更新した。共通_settle_attemptへ委譲しsealedcardpart/coverage/取消不変条件を保つ。",
+      "paths": [
+        "mcs/notify/notify_transport.py"
+      ],
+      "regressions": [
+        "test_rebind_delivered_completes_only_its_coverage_and_waits_for_siblings",
+        "test_rebind_never_revives_a_revoked_card"
+      ],
+      "synthetic_cases": 3,
+      "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-before.log",
+      "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-after.log",
+      "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P2-F03",
+      "classification": "CONFIRMED_FIXED",
+      "priority": "P1",
+      "title": "restore holdの別attempt/投稿ID/未送信証明でjournal事実を覆せた",
+      "root_cause": "hold rebind分岐だけがhold.attempt_idと_journal_contradictionを検査しなかった。通常resolveと同じ事実witnessを必須にする。",
+      "paths": [
+        "mcs/notify/notify_transport.py"
+      ],
+      "regressions": [
+        "test_rebind_checks_the_held_attempt_and_its_journal_witness"
+      ],
+      "synthetic_cases": 3,
+      "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/rebind-witness-before.log",
+      "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-all-after.log",
+      "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P2-F04",
+      "classification": "CONFIRMED_FIXED",
+      "priority": "P1",
+      "title": "unknown部分配送の後着確定を拒否し、新renderで重複送信する",
+      "root_cause": "unknownを確定terminalと扱い、in-flight待機はpending body/attachmentだけだった。unknown thread/body/attachmentは再計画待機、同sealed receipt/journalの後着事実は確定可能にする。",
+      "paths": [
+        "mcs/notify/notify_cards.py",
+        "mcs/notify/notify_transport.py",
+        "mcs/notify/notify_reconcile.py"
+      ],
+      "regressions": [
+        "test_unknown_part_accepts_a_late_factual_receipt",
+        "test_unknown_body_keeps_update_waiting_until_the_post_identity_is_known",
+        "test_unknown_thread_waits_for_its_identity_before_replanning",
+        "test_unknown_part_catches_up_from_a_journaled_factual_result"
+      ],
+      "synthetic_cases": 5,
+      "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/unknown-before.log",
+      "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/full-notify-final.log",
+      "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
+      "additional_before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-before.log",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P2-F05",
+      "classification": "CONFIRMED_FIXED",
+      "priority": "P2",
+      "title": "再描画前の新返信が古いackで未確認一覧から隠れた",
+      "root_cause": "永続card.source_generationと最新manifestだけでackを判断し、別カードからのlive一覧が未保存source driftを観測しなかった。scope後のack候補に共通current generation判定を適用する。",
+      "paths": [
+        "mcs/notify/notify_views.py"
+      ],
+      "regressions": [
+        "test_unacked_observes_new_content_before_a_card_refresh"
+      ],
+      "synthetic_cases": 3,
+      "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-before.log",
+      "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-after.log",
+      "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P2-F06",
+      "classification": "CONFIRMED_FIXED",
+      "priority": "P1",
+      "title": "破損hold scopeのJSON深さ/型が人確定receipt経路を中断した",
+      "root_cause": "json.loadsのRecursionError未捕捉とdict/transport str未検査。実resolveで拒否receipt保存とhold保持に変換する。",
+      "paths": [
+        "mcs/notify/notify_transport.py"
+      ],
+      "regressions": [
+        "test_rebind_rejects_corrupt_scope_with_a_durable_receipt"
+      ],
+      "synthetic_cases": 6,
+      "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-before.log",
+      "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-after.log",
+      "commit": "872747183be090367d6890f1c22ca2d64bcdf5ae",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-LIFECYCLE-003",
+      "status": "FIXED_LOCAL",
+      "cause": "Non-object recovery plist raises AttributeError inside ownership gate instead of refusing mutations.",
+      "before": "3 synthetic invalid plist cases failed before the source repair",
+      "after": "Five related setup/runtime families exited 0; 342 pass dots, no skip/failure",
+      "contract": "Unverifiable ownership remains a blocker; no files or service state modified.",
+      "paths": [
+        "mcs/ops/mcs_setup.py",
+        "tests/ops/test_runtime_compatibility.py"
+      ],
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "integration_status": "local integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P3-P3-F01",
+      "state": "CONFIRMED_FIXED",
+      "path": "mcs/semantic/semantic_send_gate.py",
+      "function": "semantic_summary_block",
+      "before": "claimsのみを表示し、空ならreturn。監査済みmandatory_factsが補助表示から全欠落。",
+      "after": "current PASS/enforce/policy/source gateを通った全mandatory_factsをclaimsとは独立に表示。source/evidenceの生成文字列を変更しない。",
+      "regressions": [
+        "test_raw_notice_keeps_all_verified_mandatory_facts[claims0]",
+        "test_raw_notice_keeps_all_verified_mandatory_facts[claims1]"
+      ],
+      "before_failed": 2,
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P3-P3-F02",
+      "state": "CONFIRMED_FIXED",
+      "path": "mcs/semantic/semantic_send_gate.py",
+      "function": "semantic_chunk_parts",
+      "before": "最初のfooter marker/後続HTTPSを本文由来でも採用。後続の必須factと本来のsource linkが脱落、誤ったリンクを反復。",
+      "after": "末尾2行の生成footerのみ構造扱いし本文内markerを保持。予期しないfooter後尾は拒否。通常byte-pinned出力/receipt契約は維持。",
+      "regressions": [
+        "test_chunker_preserves_embedded_footer_text_and_uses_terminal_source_link",
+        "test_chunker_rejects_unexpected_text_after_source_footer"
+      ],
+      "before_failed": 2,
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P3-P3-F03",
+      "state": "CONFIRMED_FIXED",
+      "path": "mcs/semantic/semantic_relations.py",
+      "function": "_iso/_ordered_before",
+      "before": "ISO prefixだけ検査して文字列比較し、offsetの実際の前後/等価instant/invaliddate/精度を取り違えてsupersession候補を作成。",
+      "after": "stdlib date/datetimeが有効時刻を解析。UTC instantで順序比較、naive/awareとdate/datetimeが混在または同時刻なら順序を推測しない。candidate-only人承認境界維持。",
+      "regressions": [
+        "test_temporal_relations_require_valid_comparable_instants (7 × event_time/valid_time)"
+      ],
+      "before_failed": 14,
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P3-P3-F04",
+      "state": "CONFIRMED_FIXED",
+      "path": "mcs/semantic/semantic_bench.py",
+      "function": "cmd_corpus/cmd_run",
+      "before": "既定real ledgerを開き本文bundleをportable corpusへ固定。run --jevは凍結real corpusを外部へ送れる。AGENTS完全合成bench規約に反する既定入口。",
+      "after": "既存evaluation/extract_cases.jsonだけからsynthetic corpusを固定、runは全case data exact equalityをdispatch/credential前に検証。source標識だけでは不十分、旧/無効/未結合入力はexit2。原本読取/匿名化経路を追加しない。",
+      "regressions": [
+        "test_corpus_cli_freezes_only_checked_in_synthetic_sources",
+        "test_run_refuses_unbound_corpus_before_model_or_credentials (2 × Jev off/on)",
+        "test_run_accepts_frozen_synthetic_corpus_with_injected_pipeline",
+        "invalid count/malformed JSON/missing synthetic asset"
+      ],
+      "before_failed": 6,
+      "operational_change": "旧corpus再利用不可、同CLIで合成資産から再作成。asset欠落時fail closed。日本語upgrade記録あり。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-DEPLOYMENT-001",
+      "cause": "curl localhost slot probe inherited configured proxies",
+      "before": "1 failed, 5 deselected; stub captured curl argv without --noproxy",
+      "after": "69 passed including deployment and standalone families",
+      "contract": "fixed localhost URL, no redirect following and existing 5s request / 15min restart window retained",
+      "state": "CONFIRMED_FIXED",
+      "path": "deployment/scripts/llamacpp_restart_if_idle.sh",
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "integration_status": "local repair; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-LIFECYCLE-004",
+      "cause": "Jev value CLI labels arbitrary case content synthetic, dispatches before provenance validation and accepts nonfinite deadlines; deep JSON aborts",
+      "before": "13 initial cases: 11 failed/2 control passed; missing asset: 1 failed/3 asset controls passed; 12 unique failing regressions",
+      "after": "240 passed in 2.12s",
+      "contract": "three checked-in fully synthetic assets exact dictionary equality, copied unique subsets accepted; finite positive deadline before credentials/dispatch; human labels remain zero",
+      "state": "CONFIRMED_FIXED",
+      "path": "mcs/ops/mcs_setup.py",
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "integration_status": "local repair; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-VIEWS-001",
+      "state": "CONFIRMED_FIXED",
+      "path": "mcs/views/structured_view.py",
+      "cause": "Empty selected current fact dictionaries are mistaken for absent facts and revive rule events/vitals",
+      "before": "3 failed/4 controls passed/95 deselected for extract_llm/canonical_projection/semantic_facts_v4 versus absent/stale facts",
+      "after": "214 passed in 7.08s across structured views and notification consumers",
+      "contract": "Empty current facts suppress excluded events/vitals; media reference and absent/stale rule fallback retained; symptoms/medication-candidate/request fallback unchanged",
+      "integration_status": "local repaired source; final whole-I checks and independent review pending",
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-views-evidence.json"
+    },
+    {
+      "id": "NOTIFY-P3-F01",
+      "status": "confirmed_and_fixed",
+      "priority": "高",
+      "before": "破損行を黙ってskipするとstarted欠落を未送信と誤確定する。deep JSONはstartupを中断する。",
+      "fix": "scan_checkedが構造/改行/IOの完全性を返し、taint時はunknown receiptとして保持、valid rowsは保持。",
+      "paths": [
+        "adapters/common/journal.py",
+        "adapters/common/worker.py"
+      ],
+      "regression": "tests/adapters/common/test_worker_reconcile_integrity.py",
+      "before_fail_count": 7,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F02",
+      "status": "confirmed_and_fixed",
+      "priority": "高",
+      "before": "persisted claimに対応するjournal全欠落をstartup reconcileが訪問せず、receiptが未報告になる。",
+      "fix": "記録のないown claimからunknown receiptを作り、registry tombstoneを耐久保持。",
+      "paths": [
+        "adapters/common/worker.py"
+      ],
+      "regression": "tests/adapters/common/test_worker_reconcile_integrity.py",
+      "before_fail_count": 2,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F03",
+      "status": "confirmed_and_fixed",
+      "priority": "高",
+      "before": "既存カードのpart started行が破損すると、残るcard factからdependent partを未送信と推測して再投稿する。",
+      "fix": "tainted startupを送信gateへ保持し、新primary/part wireを止める。unknownを自動解除しない。",
+      "paths": [
+        "adapters/common/worker.py"
+      ],
+      "regression": "tests/adapters/common/test_worker_reconcile_integrity.py",
+      "before_fail_count": 1,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F04",
+      "status": "confirmed_and_fixed",
+      "priority": "低",
+      "before": "旧registryのdeep破損JSONは既存の安全な非移行経路ではなくRecursionErrorで起動を止める。",
+      "fix": "既存OSError/ValueError拒否にRecursionErrorを追加。旧ファイル/権限を保持。",
+      "paths": [
+        "adapters/common/registry.py"
+      ],
+      "regression": "tests/adapters/common/test_deep_local_state.py",
+      "before_fail_count": 1,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F05",
+      "status": "confirmed_and_fixed",
+      "priority": "低",
+      "before": "snapshot脇configのdeep破損JSONがサマリーの既存defaults経路を中断する。",
+      "fix": "限定config helperだけRecursionErrorを既存defaultsへ含め、project範囲/readonly snapshotを維持。",
+      "paths": [
+        "adapters/common/summary.py"
+      ],
+      "regression": "tests/adapters/common/test_deep_local_state.py",
+      "before_fail_count": 1,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F06",
+      "status": "confirmed_and_fixed",
+      "priority": "中",
+      "before": "LINE WORKS shared cooldownのdeep破損はwire前失敗なのにunknown配送結果になる。",
+      "fix": "通信前のrate_state_invalid/not_sentへ安定拒否。ファイルを保持。",
+      "paths": [
+        "adapters/lineworks/delivery.py"
+      ],
+      "regression": "tests/adapters/common/test_deep_local_state.py",
+      "before_fail_count": 1,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F07",
+      "status": "confirmed_and_fixed",
+      "priority": "低",
+      "before": "LW private body/tasks/listの見出しにMarkdown記号をraw表示する。",
+      "fix": "keyword-only plainを共有APIへ互換追加し、LW consumerだけplain=True。原文とprivate scopeを保持。",
+      "paths": [
+        "adapters/common/text.py",
+        "adapters/lineworks/actions.py"
+      ],
+      "regression": "tests/adapters/lineworks/test_lineworks_plain_views.py",
+      "before_fail_count": 3,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F08",
+      "status": "confirmed_and_fixed",
+      "priority": "中",
+      "before": "既存4page個別表示予算を超えたbody/digest/listの末尾を黙って省略する。",
+      "fix": "既存上限を維持し最終ページに省略/MCS確認を表示。durable splitter(None)は全件保持。",
+      "paths": [
+        "adapters/common/text.py"
+      ],
+      "regression": "tests/adapters/lineworks/test_lineworks_plain_views.py",
+      "before_fail_count": 6,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "8db6805974eb762921555bb27ff3273e60316c49",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P3-F09",
+      "status": "confirmed_and_fixed",
+      "priority": "中",
+      "before": "LW native mention記法を原文の表示値としてraw wireへ渡すと、公式仕様上のmember/all通知になる。",
+      "fix": "唯一のclient wire境界でnative <mだけ同長の全角括弧へ変換。多言語textも対象、入力/URI/postback/容量/通常特殊文字を維持。大文字形は保守的な無音化。",
+      "paths": [
+        "adapters/lineworks/client.py"
+      ],
+      "regression": "tests/adapters/lineworks/test_lineworks_silent_text.py",
+      "before_fail_count": 5,
+      "accepted_before": "validation.runs:all-before-P-accepted",
+      "accepted_after": "validation.runs:reproduced-accepted",
+      "commit": "7601c88db3a61866c04e76263691a9aaaf8853c0",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet3-evidence.json",
+      "integration_status": "integrated at e730e10/da3426a; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-VIEWS-002",
+      "state": "CONFIRMED_FIXED",
+      "paths": [
+        "mcs/views/project_metadata_view.py",
+        "mcs/views/cross_lists_view.py"
+      ],
+      "cause": "Oversized JSON numbers/options raise OverflowError; parser recursion error escapes the metadata view instead of unknown.",
+      "before": "Accepted fixed P with final tests: combined 12 failed/14 controls passed/98 deselected includes 8 view regressions and 4 UTC relation regressions.",
+      "after": "259 passed in 6.05s across views/relations and metadata/cross-list ingestion consumers.",
+      "contract": "Invalid candidate numeric items excluded; unreadable current evidence yields unknown without old set as current; options rejected before SQL; API/scope/names/publication maintained.",
+      "integration_status": "local fixed source; final whole-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-SEMANTIC-001",
+      "status": "FIXED",
+      "paths": [
+        "mcs/semantic/semantic_relations.py"
+      ],
+      "root_cause": "Terminal explicit UTC Z unsupported by datetime.fromisoformat on Python3.10.",
+      "repair": "Normalize terminal Z only; candidate precision/equality/state untouched.",
+      "evidence": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-semantic-utc-evidence.json",
+      "integration_status": "parent local source; final fixed-I checks pending"
+    },
+    {
+      "id": "CORE-P3-F01",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/discord/delivery.py:_remote_match"
+      ],
+      "cause": "bot.user/id不在時にauthor検査を飛ばし、foreign同一bodyをdeliveredへbindできた。",
+      "change": "identity欠落ではmatchしない。authorは常に同一botであることを要求。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "source_finding": "F01",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F02",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/slack/delivery.py:_body_part/_rewrite_prior"
+      ],
+      "cause": "raw &<>がSlack manual mention/markupとなりlink_names Falseだけでは保護できない。",
+      "change": "send/edit/remote matchの同一html escape、link_names False。lossless decodeと同一id/restart dedupe回帰。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "source_finding": "F02",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F03",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/slack/actions.py:_say"
+      ],
+      "cause": "ephemeral raw text/manual mentionとUTF-8/escape膨張がnative budgetを越える。",
+      "change": "4000 UTF-8 bytes以内で文字単位にescapeしentity境界を維持して本人へ順次全文分割、blocksは先頭だけ。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "source_finding": "F03",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F04",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/slack/cards.py:render"
+      ],
+      "cause": "link URL/labelのnative区切り・manual mention・制御文字・空hostとencoded context容量が未検証。",
+      "change": "HTTPS host/whitespace/control/delimiter拒否、label/query escape、2000 context容量の最終wireを検証。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "source_finding": "F04",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F05",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/slack/delivery.py:_replies"
+      ],
+      "cause": "has_more/next_cursorを無視し一部履歴のmissを旧投稿なしとしてfresh送信許可した。",
+      "change": "有界200件readの続きがあればunknown保持しno-resend。追加ページや無制限scanは導入しない。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "source_finding": "F05",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F06",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/slack/delivery.py:_file_remote_match"
+      ],
+      "cause": "Slackが保証しないremote sha256だけを要求し、runnerのsame-hash delivered prior receiptを捨てるため同一uploadが繰返される。",
+      "change": "exact prior id+author+name/size+hosted/is_external False/editable False+remote hash矛盾なしを確認して同一fileをreuse。外国・外部・編集可・receiptなし・hash矛盾は再利用しない。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "source_finding": "F06",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F07",
+      "class": "confirmed-maintenance",
+      "status": "FIXED",
+      "paths": [
+        "tests/adapters/discord/discord_testkit.py / test_mcs_discord.py"
+      ],
+      "cause": "FakeThread.send None、history id毎回生成、kwargs不一致がunknownの正当な保持を誤って発生させ6baseline fail。旧backfillは500を再送期待していた。",
+      "change": "stable send receipt/history/fetch/edit APIを模倣し実SDK Messageable send/history/fetch/edit id不変で裏付け。400の確定未送信backfillと500 unknown no-new-render/no-new-postを独立して強化。期待値は既存in-place rewrite契約と照合。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "source_finding": "F07",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F08",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/slack/runtime_compat.py / adapters/discord/runtime_compat.py"
+      ],
+      "cause": "旧公開aliasの実SDK REST/WSがproxy/redirect/任意URLとambient OAuthを許し現行standalone guardを共有していなかった。",
+      "change": "現在のofficial URL/no-proxy/no-redirect/closed-session/専用loggerを再利用。Slack WS sessionもguardし終了時閉じる。旧API引数・戻り値とcatch-all ackは維持。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "source_finding": "F08",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "CORE-P3-F09",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "adapters/discord/runtime_compat.py:_mcs_command"
+      ],
+      "cause": "real SDK webhook followupが500後5回POSTし未知結果を重複させる。",
+      "change": "現在のsingle_postをinteraction.clientと同じsessionへ適用し、500後1POSTでunknownを保持。ephemeral/no-pings/handler呼出1回/署名を維持。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet3-evidence.json",
+      "source_finding": "F09",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P4-P4-F01",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/extract/v4/extract_llm.py"
+      ],
+      "cause": "revive_failed SELECT snapshot then artifact_id-only UPDATE overwrites a concurrently revived/succeeded meta and counts deleted rows.",
+      "change": "WHERE artifact_id=? AND meta=?; increment cur.rowcount, preserving nightly/per-input caps and exact storage shape.",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet4-evidence.json",
+      "source_finding": "P4-F01",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P4-P4-F02",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/extract/v4/extract_llm.py"
+      ],
+      "cause": "_posted_epoch truncates fractional timestamps and implicitly assigns host timezone to naive/date-only strings, permitting future/uncertain karte context.",
+      "change": "stdlib aware datetime comparison preserving precision/offset; no context for missing/bad/date-only/unknown timezone. Explicit terminal Z is normalized to +00:00 for supported Python3.10; no timezone is inferred.",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet4-evidence.json",
+      "source_finding": "P4-F02",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P4-P4-F03",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/extract/rollup.py"
+      ],
+      "cause": "lm truthiness conflates valid empty current artifact with no fact source, resurrecting excluded v1 vitals.",
+      "change": "Track valid source existence separately from dict content; PERIOD_CHECK_VERSION5 dirties old persisted rollups through normal maintenance.",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet4-evidence.json",
+      "source_finding": "P4-F03",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P4-P4-F04",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/extract/clinical_values.py"
+      ],
+      "cause": "Qualitative value prefix match labels a different whole quoted result as quote_supported (陰性ではありません/疑い/etc).",
+      "change": "Require complete text value followed by optional affirmative copula and sentence delimiter/end; retain unsupported original as unverified candidate.",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet4-evidence.json",
+      "source_finding": "P4-F04",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P4-P4-F05",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/extract/v4/extract_llm.py"
+      ],
+      "cause": "NaN/infinite budgets disable comparisons; invalid --stop-after enters unbounded resident path. CLI DB/start side effects precede rejection.",
+      "change": "Strict finite numeric run_pending budget and early finite/nonnegative CLI stop validation before DB/lock/inference.",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet4-evidence.json",
+      "source_finding": "P4-F05",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "SEM-P4-P4-F06",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/extract/v4/extract_bench.py"
+      ],
+      "cause": "Arbitrary --cases content/context is sent to model; a synthetic label cannot establish wholly fictional input required by AGENTS.",
+      "change": "Model path requires exact approved-case equality to existing2 repo corpora, with finite known-case count/no duplicates. Copies/subsets accepted; --mock-ok custom local validation preserved.",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet4-evidence.json",
+      "source_finding": "P4-F06",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P4-N4-F01",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "hermes_plugin/__init__.py:_control_reference"
+      ],
+      "cause": "最新の破損signal transitionを除外して旧openを人承認できる",
+      "change": "最新key rowを先に選び、parse ValueError/TypeError/RecursionError、nonobject/nonopen、expectedartifact差分をsignal_changedで拒否。project scope先行保持。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet4-evidence.json",
+      "source_finding": "N4-F01",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P4-N4-F02",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "hermes_plugin/__init__.py:_dispatch_op summary"
+      ],
+      "cause": "native JSON summaryがDiscord形式固定でSlack/LWに不適切表示",
+      "change": "trusted identity.transportからslack/plainを選びDiscorddefaultを維持。allowed scope/names=False不変。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet4-evidence.json",
+      "source_finding": "N4-F02",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "NOTIFY-P4-N4-M01",
+      "class": "confirmed-maintenance",
+      "status": "FIXED",
+      "paths": [
+        "hermes_plugin/README.md:229-235"
+      ],
+      "cause": "READMEのprestarted判定条件がjournal完全性条件を欠く",
+      "change": "scope lock＋journal完全性＋自claim存在を満たした時だけnot_sent、それ以外unknown保持をpacket3sourceへ同期。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet4-evidence.json",
+      "source_finding": "N4-M01",
+      "integration_status": "integrated; final fixed-I checks and independent review pending"
+    },
+    {
+      "id": "PARENT-VIEWS-003",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/views/mcs_view.py",
+        "mcs/views/mcs_stats.py",
+        "mcs/views/response_observation_view.py"
+      ],
+      "cause": "Filtering nonempty/valid rows before latest selection resurrects old clinical state; deep persisted JSON escapes existing unknown/error paths; max_age numeric overflow and terminalZ fail on supported runtime.",
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-views-evidence.json",
+      "integration_status": "Own local source fixed; fixed-I checks/review pending"
+    },
+    {
+      "id": "CORE-P4-F01",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_operations.py"
+      ],
+      "cause": "_apply_signal_dismiss_txのSQL json_valid(content)が同keyの破損最新行を先に捨て、旧openを現在として処理する。",
+      "change": "最新row→project scope→expected artifact pin→JSON object/state/evidence検証。破損はsignal_corrupt receipt、staleはsignal_changed。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet4-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "CORE-P4-F02",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_signals.py"
+      ],
+      "cause": "_approved_policy/_latest_self_profile/latest_station_staffのjson_valid(content)先行filterが破損最新を捨て、古い承認閾値・自己主体・所属を復活。",
+      "change": "最新kind行を先に取得しJSON/object/approvalを検証。不正は既存default policy/unknown identity、明示config優先と閾値既定は保持。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet4-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "CORE-P4-F03",
+      "class": "confirmed-defect",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_operations.py",
+        "mcs/ops/mcs_requests.py"
+      ],
+      "cause": "深い保存JSONでPython3.10はRecursionErrorを返すが、job操作/candidatesのcatchがValueError等だけでcommand receiptや候補表示を中断。3.13ではValueError系で既存catchが通り環境差が隠れる。",
+      "change": "json parse/canonical hashの既存不正入力経路にRecursionErrorを加える。scan/retryは拒否receipt、pause/resumeはskipped_jobs、candidateは同kind latest seen維持で古い抽出へ戻らない。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet4-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "CORE-P4-F04",
+      "class": "confirmed-test-harness",
+      "status": "FIXED",
+      "paths": [
+        "tests/ops/test_mcs_cli.py"
+      ],
+      "cause": "CLI doctorのfake selected pythonがexit0/stdout空でruntime metadataを返さず必ず安全拒否。3.13の現SQLite3.50.4では期待1で隠れるが、3.10の安全SQLite3.53.1では本来期待0に失敗。",
+      "change": "fake executableが既存_runtime_probe仕様の完全合成Python/SQLite/packages JSONを返す。returncodeのSQLite安全判定・secret非表示・合成files不変更assertionは維持。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet4-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F01",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_restore.py"
+      ],
+      "cause": "復元済みresumeが失効bindingを再確認しない; same activation alone granted true although writers_resumed false after equal-byte DB/report/marker inode replacement, dir move, missing marker",
+      "change": "再試行時static=Falseで同じ証拠/identity照合。通常DB更新positive controlは許可、hold_all/receipt/actor/reasonとBLOCKED防止は維持。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F02",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_backup.py"
+      ],
+      "cause": "drillのos.replaceが競合ledgerを上書き/cleanup対象にする; mark-restored then synthetic concurrent ledger was replaced and operation succeeded",
+      "change": "fsync+exclusive os.link、published flag、collision時他者ledgerとhold保持。自身partial destination failure cleanupは既存試験のseamだけ変更し同じassert保持。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F03",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_backup.py"
+      ],
+      "cause": "finite判定で巨大intがOverflowErrorを漏らす; 10**1000 in trusted timestamp or max_seconds escaped stable refusal",
+      "change": "既存numeric bool/type/NaN/Inf拒否意味を局所finite helperで共有、OverflowError=False。status/plan/fresh/metricの同じ判定を整合。有効値/保存形/既定budgetは変更なし。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F04",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_repair.py"
+      ],
+      "cause": "malformed v1 metaをrepairがstale候補0と報告; valid structural audit plus invalid artifact JSON produced zero, satisfying skip zero criterion",
+      "change": "SQL JSON guardを保持し不明meta/content_hashならNone、既存valid count/dedupは維持。原snapshot bytes不変/完了偽証なし。producer _STALEは所有外handoff。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F05",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/request_loops.py"
+      ],
+      "cause": "深いLoop候補JSONのRecursionErrorが拒否receiptを中断; actual minimum Python parser raised in shared receipt tx for candidate content/meta",
+      "change": "decode失敗だけValueError/codeへ整合。current source/project/exact quote/hash/policy/人承認を緩めずrejected receipt1/request0/link0を実DBで確認。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F06",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/mcs_refstats.py"
+      ],
+      "cause": "壊れた承認JSONが正規旧reference baselineを隠す; corrupt latest artifact or receipt yielded RecursionError instead of verifying older real approval",
+      "change": "JSON解析不可行は承認根拠にならず無視。正常baselineはexact filehash+artifact id+committed commandreceipt一致のままmatch。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F07",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "evaluation/request_following_review.py"
+      ],
+      "cause": "review queueがminimum Pythonで起動せず型required集合も誤る; NotRequired/Required unavailable on 3.10; deferred annotations also yielded wrong runtime required/optional keys on 3.13",
+      "change": "stdlib TypedDict required基底＋total=False継承。Quote契約/SourceCase5required1optional/Proposal3required6optionalを維持。実3.10 outside-repo CLIと全220synthetic export。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F08",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/import_drug_master.py"
+      ],
+      "cause": "medicine pin deep JSONのCLI traceback; bounded local pin raised RecursionError before source open",
+      "change": "existing CLI refusal handlerへRecursionErrorだけ追加。report shape/code/dryrun/local/private/source hash/medicine policyは維持、output/source writes0。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F09",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "evaluation/request_following_review.py"
+      ],
+      "cause": "review source_time明示UTC Zが3.10で拒否; Z valid on 3.13 but actual3.10 fromisoformat rejects; +00/+09 controls pass",
+      "change": "末尾Zのみ+00:00に正規化。naive/unknown TZは推定せず拒否保持、元worksheet原文日時/hashを変更しない。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F10",
+      "class": "confirmed-test-maintenance",
+      "status": "FIXED",
+      "paths": [
+        "tests/ops/test_mcs_request_loops.py",
+        "tests/ops/test_mcs_refstats.py",
+        "tests/ops/test_mcs_features.py"
+      ],
+      "cause": "3.10 fault testのNone authorizer解除が全SQLを拒否; 7 real fault tests failed after intended release, not at denial/rollback contract",
+      "change": "fault期間のDENY callbackは維持しcleanupのみSQLITE_OK callableへ。minimum full related46とmodern7control成功、rollback/oldfile/receipt/inbox assertionを削除/弱化/skipしていない。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F11",
+      "class": "confirmed-test-maintenance",
+      "status": "FIXED",
+      "paths": [
+        "tests/extract/test_drug_map.py"
+      ],
+      "cause": "drug_map testのNotRequired importが3.10 collectionを阻害; collection error before test execution; parent views consumer imports shared DOCUMENT/_dictionary/_seed",
+      "change": "required6基底+total=False source_codes optional1、実3.10 test family49 pass、fixture contents/consumer helpers/clinical candidate logic unchanged。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "SEM-P5-F12",
+      "class": "confirmed-runtime-fix",
+      "status": "FIXED",
+      "paths": [
+        "evaluation/request_following_review.py"
+      ],
+      "cause": "queue不正入力の例外境界でtraceback/私有path漏洩; deep manifest uncaught; missing manifest stderr reason included synthetic private-directory path",
+      "change": "parse/IO/schema不正を理由codeへ。既知ValueError tokens/caseid/field codesは保持し、raw parser/OS exception textをqueue_input_invalidにする。stdout export0、existing queue_manifest_invalid互換保持。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "N5-01",
+      "class": "confirmed-runtime",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/brain_export.py"
+      ],
+      "cause": "--out下のgenerated child symlink、preflight後の差替え、_write parentcheck後open前swap、FDopen後replace前/unlink前swap、stale p999.md symlink; Pではforeigndirectoryへ書込み/regularasset削除/foreignlink削除、または途中FileNotFoundError。生成dirname確認だけでは狭いTOCTOUを覆わない。",
+      "change": "_directory_fdがroot/childを保持、childO_NOFOLLOW; _write/GC/retentionはdir_fdで原inodeへ操作。newchild0700/staging600、regular生成名に限定。明示selectedrootaliasは既存契約を保持。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "N5-02",
+      "class": "confirmed-runtime",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/brain_export.py"
+      ],
+      "cause": "hostTZ UTC/NY、UTC2026-01-01 15:30でJST2026-01-02 00:30; PのJSTbannerがUTC/NY値を表示、humanfacts/signals/dailyfilenameもホスト日付、retention日付interpretationもホストTZ。",
+      "change": "datetime fixedUTC+09 _jst、日付名・保持日解釈もJST。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "N5-03",
+      "class": "confirmed-runtime",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/ext_contract.py"
+      ],
+      "cause": "receive precheck後のexpire hookが receipts_out regularfile/symlink を作成; Pは新規receiptpath契約なのにatomicreplaceで競合内容/linkを上書き。receiverは既に保存済みなので失敗後再送推論不可。",
+      "change": "600完成tmp→fsync→exclusive os.link publish、競合receipts_out_exists/no clobber、receiverpayload証拠保持。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "N5-04",
+      "class": "confirmed-runtime",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/ext_contract.py"
+      ],
+      "cause": "receive --input explicit FIFO/symlinkfileまたはsymlink-to-directory root; P FIFO nativeopenは期限2sでhang、file/rootlinkは通常inputとして処理される。",
+      "change": "explicit rootis_symlink拒否、各leafos.openNOFOLLOW|NONBLOCK+fstatREG、normaldirectorybulkAPIは維持。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "N5-05",
+      "class": "confirmed-runtime",
+      "status": "FIXED",
+      "paths": [
+        "mcs/ops/ext_contract.py"
+      ],
+      "cause": "10000nested JSON inmanualauth、lostackの保存ack/payload/journal; PはRecursionErrorが既存安全拒否・hold分類を中断。unknown送達・削除結果を成功/未送信と扱わない。",
+      "change": "対象4catchへRecursionError追加、authunreadable/journalunreadableまたはNone/False→hold、savedbytesを変更せず。delete receiptは既にsafeで変更不要。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI gates/independent review pending"
+    },
+    {
+      "id": "CORE-P5-F01",
+      "status": "FIXED",
+      "disposition": "fixed",
+      "criteria": [
+        "C02",
+        "C03",
+        "X03"
+      ],
+      "source": "mcs/extract/v1/extract.py:_STALE",
+      "cause": "json_valid(meta)=falseでELSE0、破損artifactが存在するとrun_pendingがstaleと認識せず永久に旧結果を残す。",
+      "fix": "ELSE1、正常currenthashとtransaction/deadline/原message境界を維持。",
+      "regression": "invalidmetadata4×bodystate3 + deadline4",
+      "commit": "328c7ec6e7e1ca0bea29f2393762b783f583fffc",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI checks and independent review pending"
+    },
+    {
+      "id": "CORE-P5-F02",
+      "status": "FIXED",
+      "disposition": "fixed",
+      "criteria": [
+        "C02",
+        "C12",
+        "X07"
+      ],
+      "source": "mcs/extract/v1/extract.py:extract_message",
+      "cause": "実Python3.10 fromisoformatは末尾Zを拒否し、等価+00:00に対し訪問日/次回/薬剤期間の年anchorが失われる。",
+      "fix": "時刻成分を持つ末尾Zだけ+00:00へ正規化、naive/date/invalidは既存境界、RULE_VERSION8。",
+      "regression": "Z/offset3、naive/date2、invalid6、v7matchinghash再抽出1",
+      "commit": "328c7ec6e7e1ca0bea29f2393762b783f583fffc",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI checks and independent review pending"
+    },
+    {
+      "id": "CORE-P5-F03",
+      "status": "FIXED",
+      "disposition": "fixed",
+      "criteria": [
+        "C11",
+        "C12"
+      ],
+      "source": "integration/test_pinned_sdk_versions.py:module import",
+      "cause": "3.11専用tomllibのmoduleimportがcore最低3.10 optionalcollectionを壊す。",
+      "fix": "既存>=3.11強制Hermeslane分岐でのみimport、pinassertion不変更。",
+      "regression": "実3.10 beforecollectionerror+simulatedmissingstdlib newmeta、actualSDK25/17pass",
+      "commit": "89d7f32628db3d66d48d96a08ea6fecb30618769",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI checks and independent review pending"
+    },
+    {
+      "id": "CORE-P5-F04",
+      "status": "FIXED",
+      "disposition": "fixed",
+      "criteria": [
+        "C11",
+        "C12"
+      ],
+      "source": "ci/mine_gates.py:test_names",
+      "cause": "regex def test_ がcomment/説明string/docstringをtest存在として誤認。",
+      "fix": "AST FunctionDef/AsyncFunctionDef名を照合、SyntaxErrorを隠さない。",
+      "regression": "three decoys before3fail→pass、currentmanifest50参照は実pytest収集に存在",
+      "commit": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI checks and independent review pending"
+    },
+    {
+      "id": "CORE-P5-F05",
+      "status": "FIXED",
+      "disposition": "fixed",
+      "criteria": [
+        "C05",
+        "C11",
+        "C12"
+      ],
+      "source": "ci/gates.py:gate_plugin_sandbox",
+      "cause": "独立Slacklegacy入口は公開互換境界で同じnegativeOAuth拒否guardを持つが、CI例外がstandalone.pyだけで実P9/10fail。",
+      "fix": "sameASTguardを独立Slack2入口のみへ、環境秘密値読む/code変更したguard/一般adapterは依然拒否。",
+      "regression": "legacybefore1fail、standalonecontrolpass、bothsecret/topSDK拒否assertion維持",
+      "commit": "f49c51b37c731cb66b8fbaa388211a6fe2a1a43e",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI checks and independent review pending"
+    },
+    {
+      "id": "CORE-P5-Q01",
+      "status": "DISPROVED",
+      "disposition": "documented_static_limit",
+      "criteria": [
+        "C11"
+      ],
+      "source": "mine_gates:AST nested def/ifFalse",
+      "cause": "ast.walkはnested/ifFalse定義も存在名へ含める。sourcedoc/main/record規約は既存定義参照の整合ゲートで実行成功の証明ではない。",
+      "evidence": "50 currentmanifestrefs全部が実pytestcollectionに存在。3decoyは定義自体が存在しなかった独立欠陥として修復。",
+      "limit": "到達性/collection/successを一般に証明しない。今後実行保証が必要ならpytest結果をconsumerが使う。未定義を黙認する新例外はない。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI checks and independent review pending"
+    },
+    {
+      "id": "CORE-P5-Q02",
+      "status": "DISPROVED",
+      "disposition": "documented_historical_boundary",
+      "criteria": [
+        "C04",
+        "X01"
+      ],
+      "source": "schema_upgrade/update-paths.json",
+      "cause": "historical26は旧binary実行証明ではなくroute分類manifest。14historical origins/6distinct staticDDL shapes+current16pathsでforward/consent契約を合成検証。",
+      "evidence": "origins.json fullread、originalcolumns/allrows/FK/FTS/hash tests、test names explicitlyclassify。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet5-evidence.json",
+      "integration_status": "integrated; final fixedI checks and independent review pending"
+    },
+    {
+      "id": "PARENT-SEM-SEND-001",
+      "status": "FIXED",
+      "cause": "RecursionError on saved summary content/meta, source payload or degraded source progress escaped three existing JSON exception boundaries; interrupted safe exclusion/stale/freeze decisions.",
+      "change": "Catch RecursionError only alongside JSONDecodeError/TypeError in three JSON loads scopes; newest corrupt summary stays ineligible, no fallback to older generation, no data rewrite.",
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-semantic-send-gate-evidence.json",
+      "integration_status": "integrated; final fixedI checks/independent review pending"
+    },
+    {
+      "id": "CORE6-DOC-MODE",
+      "state": "confirmed",
+      "severity": "low",
+      "path": "README.md",
+      "lines": [
+        226,
+        228
+      ],
+      "criterion": [
+        "C01",
+        "C12",
+        "X01"
+      ],
+      "cause": "mode選択の説明直後でHermes同期をSlack/Discord一般に記載し、standaloneにも必要と読める。",
+      "proof": "固定Pの_sync_gateway実関数をASTから隔離して5合成modecase実行。standalone Slack/DiscordとHermes LWはgateway非呼出、Hermes Slack/Discordだけ既存gateway確認。",
+      "repair_owner": "parent",
+      "proposal": "HermesモードのSlack/DiscordではHermesとの同期も行います。",
+      "local_patch": null,
+      "parent_followup": "親から同一文言のREADME1文修正実装済みと受領。親I commit/最終検証は別receipt。P/W正文は変更せず固定。",
+      "status": "FIXED",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet6-evidence.json",
+      "integration_status": "parent fix fb488c8 or notify refs fix15c8c04 integrated; final I checks pending"
+    },
+    {
+      "id": "CORE6-REFS-GATE",
+      "state": "confirmed",
+      "severity": "medium",
+      "path": "changes/maintenance-notify-packet3-lineworks-silent-20261005.json",
+      "criterion": [
+        "C07",
+        "C11",
+        "C12",
+        "X02",
+        "X08"
+      ],
+      "cause": "https公式根拠refをfragmentのrefs構文が拒否するためP release_notes.py check exit1。",
+      "proof": "verification.release_check / invalid-fragments.json、拒否1file exact。",
+      "repair_owner": "maintenance_notify packet6",
+      "local_patch": null,
+      "parent_followup": "既知のrefs URL移動fix所有へ共有、重複編集なし。P失敗を親I成功へ読み替えない。",
+      "status": "FIXED",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet6-evidence.json",
+      "integration_status": "parent fix fb488c8 or notify refs fix15c8c04 integrated; final I checks pending"
+    },
+    {
+      "id": "CORE6-HISTORY-CADENCE",
+      "state": "disproved",
+      "reason": "旧5分/夜20分/15分は日付付き版履歴で、現在guide10分・CRON_JOBS */10/deep10,40/healthdefault600と時点分離。旧値を現設定として一括置換不要。",
+      "status": "DISPROVED",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet6-evidence.json"
+    },
+    {
+      "id": "CORE6-RELEASE-GEN8",
+      "state": "disproved",
+      "reason": "1.0.13のrule6→7記録と現RULE_VERSION8の差は後続未compilefragmentで記録済。releaseprep/build/versionbumpは今回未承認。現在READMEmain説明とrelease記録を区別。",
+      "status": "DISPROVED",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet6-evidence.json"
+    },
+    {
+      "id": "CORE6-UMASK-PROMISE",
+      "state": "disproved",
+      "reason": "CHANGELOG/READMEはresidenttemplate Umask077と定期generatedplist未対応を明示。_cron_plist/standalone serviceにUmaskなしというPと矛盾しない。",
+      "status": "DISPROVED",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet6-evidence.json"
+    },
+    {
+      "id": "CORE6-SYNTHETIC-IS-LIVE",
+      "state": "disproved",
+      "reason": "currentguide/security/changelog/briefすべて合成/SDK型/実API/人ラベル/部署受入を分離。本文中のhistoricalPASSを全域v7受入に計上しない。",
+      "status": "DISPROVED",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet6-evidence.json"
+    },
+    {
+      "id": "SEM-P6-F01",
+      "status": "FIXED",
+      "title": "release以外の生成marker破損が成功扱い/手書き本文を置換する",
+      "paths": [
+        "scripts/development/update_readme.py"
+      ],
+      "root_cause_and_fix": "全5markerの個数/順序をrender前検査、全doc validation終了前writeなし。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_generated_marker_damage_keeps_manual_text",
+          "test_marker_failure_in_second_doc_does_not_write_first"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-F02",
+      "status": "FIXED",
+      "title": "READMEとDEVELOPMENTが両方ないのに検査/生成が0終了",
+      "paths": [
+        "scripts/development/update_readme.py"
+      ],
+      "root_cause_and_fix": "両targetゼロを1終了にする。片方のみ/disabled blocks互換を保持。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_missing_all_generated_docs_is_not_success",
+          "test_single_enabled_doc_and_absent_sections_remain_supported"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-F03",
+      "status": "FIXED",
+      "title": "PNG scanline filter5以上を正常画像として受入れる",
+      "paths": [
+        "scripts/development/generate_slack_gallery.py"
+      ],
+      "root_cause_and_fix": "bounded decode後の全行filterを0..4と検査。RGB/RGBA正常5filter保持。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_png_check_rejects_invalid_scanline_filters",
+          "test_png_check_keeps_all_standard_filters"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-F04",
+      "status": "FIXED",
+      "title": "不正Release identity/状態型が書込計画へ進み判定不能",
+      "paths": [
+        "scripts/development/sync_release_notes.py"
+      ],
+      "root_cause_and_fix": "全一覧/直前GET/PATCH応答/再GETのstable record型を検査。既存identity/concurrency/draft/tag/idempotence境界維持。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_release_response_contract_rejected_before_any_write"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-F05",
+      "status": "FIXED",
+      "title": "最低対応3.10の深いJSONでRecursionErrorがCLI診断を抜ける",
+      "paths": [
+        "scripts/development/release_notes.py",
+        "scripts/development/readme_release.py",
+        "scripts/development/sync_release_notes.py"
+      ],
+      "root_cause_and_fix": "ValueError/OSError等の既存top-level診断へRecursionErrorを追加。source/入力payloadやTracebackを出さない。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_deep_json_cli_has_controlled_offline_diagnostic"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-F06",
+      "status": "FIXED",
+      "title": "shadow budgetのNaN/inf/非正値がモデルへ伝播",
+      "paths": [
+        "scripts/development/semantic_shadow_e2e.py"
+      ],
+      "root_cause_and_fix": "モデル利用前にfiniteかつpositiveを検査、0.25/300の有効値と任意合成fixtureを保持。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_shadow_cli_rejects_nonfinite_or_nonpositive_budget_before_model",
+          "test_shadow_cli_preserves_valid_operator_fixture_and_budget"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-F07",
+      "status": "FIXED",
+      "title": "不正case/message memberがshadow runnerへ進む",
+      "paths": [
+        "scripts/development/semantic_shadow_e2e.py"
+      ],
+      "root_cause_and_fix": "case objectsとtruthy messages list/member objectsを入口検査、deep JSON診断。falsy/empty messages fallbackとvalid body/threadを保持。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_shadow_cli_malformed_cases_stop_before_model",
+          "test_shadow_cli_preserves_valid_operator_fixture_and_budget"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-M01",
+      "status": "IMPLEMENTED",
+      "title": "runtime diagramの5分/deep7,37を現在の10分/deep10,40へ同期",
+      "paths": [
+        "docs/assets/runtime-topology.svg"
+      ],
+      "evidence": "mcs/ops/mcs_setup.py:2390-2422 CRON_JOBS全文範囲、P→W SVG差分。static正本、PNG pairなし。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-M02",
+      "status": "IMPLEMENTED",
+      "title": "Slack/Discord説明の絶対重複保証を結果不明保留/人確認へ修正",
+      "paths": [
+        "docs/screenshots/slack-thread.svg",
+        "docs/screenshots/discord-thread.svg"
+      ],
+      "evidence": "合成static canonical sourceと通知receipt/unknown契約。PNG pairなし、native/browser renderは未実行。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-D01",
+      "status": "DISPROVED",
+      "title": "release buildの任意IO途中失敗を汎用transactionへ置換すべきか",
+      "evidence": [
+        "docs/development/README_MAINTENANCE.md:35-38",
+        "docs/development/RELEASE_NOTES.md:65-70",
+        "scripts/development/release_notes.py build",
+        "tests/release/test_release_notes.py"
+      ],
+      "decision": "既存手順はgit diffでCHANGELOG/README/残fragment/archiveを照合して手動復旧と明示。validateで中断する異常入力を既存testで確認し、無関係なtransaction追加をしない。任意IO完全atomic性・途中IO実fault injectionは未検証。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-D02",
+      "status": "DISPROVED",
+      "title": "shadow任意--casesをpacket3 bench同様fixedasset限定にするべきか",
+      "evidence": [
+        "scripts/development/semantic_shadow_e2e.py:2-16,28-79",
+        "mcs/semantic/semantic_evaluation.py:1075-1172",
+        "mcs/semantic/semantic_bench.py:148-173"
+      ],
+      "decision": "本driverはoperatorが--casesを指定する完全合成CLI契約で、実DBを既定で凍結するpacket3入口と異なる。任意合成fixture/保存形を保持。実データ/匿名化は本auditでは禁止。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-D03",
+      "status": "DISPROVED",
+      "title": "readme_release -Iでsibling importが消える",
+      "evidence": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-readme_release.py.log",
+      "decision": "通常Python CLIはscript dirをsys.pathに含む。-Iはそれを除去する通常CLI外条件、parent判断受入済み。正式CLIをenv-i/PYTHONPATHなし/-S/repo外cwdでboth runtime起動、追加runpy bindingsでarchive内source束縛を確認。不要bootstrapなし。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-H01",
+      "status": "RESOLVED_PARENT_DELTA",
+      "title": "固定Pのnotify fragment refsにURLがありrelease_notes checkが拒否",
+      "path": "changes/maintenance-notify-packet3-lineworks-silent-20261005.json",
+      "sha256_P": "e40278900656f54f28c45a1e704ba917fdd037a65517cdf18f5ed0b128d22575",
+      "child_result": "P/Wのcheck exit1を保持しvalidatorを弱めない。今回fragment含むその他はindividual validator成功。",
+      "parent_report": "notify3e1824c→親15c8c04で修復済み、親Iでrelease_notes/readme checks正常と連絡。child固定P/Wで再検証した結果ではない。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-H02",
+      "status": "RESOLVED_PARENT_DELTA",
+      "title": "新test fileでDEVELOPMENT生成countが254→255",
+      "child_result": "親正本は未編集。isolated archiveで再生成するとcount1行だけ、README unchanged、その後both-runtime bootstrap success。",
+      "patch": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-generated.diff",
+      "parent_report": "親I追加他owner testを含め256filesへ再生成しb3140f4へ記録と連絡。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-H03",
+      "status": "SAFETY_LIMITATION",
+      "title": "実MCS/原本DB/token-cache/LLM/Jev/Keychain/外部API/実送信/配備/native renderer",
+      "decision": "明示禁止、全fixtureは完全合成。SDK/実認証/transport/browserアプリ/productionの検証をlocal passから推測しない。最終I全体統合とfresh独立レビューはparent owner。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending"
+    },
+    {
+      "id": "SEM-P6-H04",
+      "status": "FIXED",
+      "title": "semantic_send_gate deep corrupt JSON predicate疑義",
+      "decision": "packet6完了時にparentが所有者を分けて合成確認へ投入。packet6所有外で未編集・未確認、全域未完了を維持。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending",
+      "parent_resolution": "fb488c8/84b23db; parent-semantic-send-gate-evidence.json deepJSON6before-fail/both-runtime56after-pass"
+    },
+    {
+      "id": "SEM-P6-H05",
+      "status": "REVIEWED",
+      "title": "CHANGELOG全3492行を現在fragmentから再生成できるか",
+      "decision": "buildは既存header/historyを保持し新sectionを挿入。RELEASE_NOTES95-103にv1.0.0〜1.0.8を2026-10-01人手再編集し旧原本をarchive保存と記載。checkはformat/source同期を検査し過去本文の事実を再検証しない。rootCHANGELOGはparent readonly、全文reviewを本packetに算入しない。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+      "integration_status": "accepted current SHA; final I integration/distribution/fresh review pending",
+      "parent_resolution": "core6全3492行manualhistory全文/140観点受入7c90b16/a525f96"
+    },
+    {
+      "id": "CORE-DOCS7-DOCS7-CURRENT-GUIDE-PATH",
+      "status": "FIXED",
+      "criteria": [
+        "C01",
+        "X08"
+      ],
+      "priority": "low",
+      "path": "docs/dev-records/phase-j-record.md",
+      "lines": [
+        6,
+        8
+      ],
+      "evidence": "前置きは「現在の操作手順には docs/DEVELOPMENT.md」と明示するがP treeに不存在。docs/development/DEVELOPMENT.mdは実在。一般のhistorical旧pathと異なる現在導線。",
+      "reproduction": {
+        "command": "verify_static.py:confirmed_current_guide_counterexample/counterexample_minimal_correction_resolves",
+        "log": "/tmp/mcs-maintenance-core-docs7-20261005/static.log",
+        "result": "不存在原パスと実在最小訂正パスを固定P tracked inventoryで実証、外部なし。"
+      },
+      "minimal_proposal": "現在guide参照1箇所を docs/development/DEVELOPMENT.md へ補正。他historical pathsは保持。",
+      "owner": "parent/rootdocs",
+      "worker_edit": "禁止に従い原本無変更",
+      "handoff": "親へcollaboration.send_messageで先に共有",
+      "I_status": "親から1行の最小修正完了報告を受領（docs/DEVELOPMENT.md → docs/development/DEVELOPMENT.md）。親Iのexact SHA/byte receiptは親が別管理。本packetのP/W原本は無変更。",
+      "parent_resolution": {
+        "state": "resolved_reported_by_parent",
+        "change": "前置きの現在手順path1箇所のみ。歴史本文・記載時点は保持。",
+        "verification_owner": "parent",
+        "fixed_P_W_original_unchanged": true
+      },
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json",
+      "parent_fix_commit": "d836818",
+      "parent_verification": "P本文を1回byte置換した結果とcurrent Iが完全一致。対象currentpath実在、historicalbody保持。"
+    },
+    {
+      "id": "CORE-DOCS7-HISTORICAL-CADENCE-AND-SLOTS",
+      "status": "DISPROVED",
+      "hypothesis": "旧15/5分run・2slot・3日QCを現要件違反として全置換する必要がある",
+      "evidence": [
+        "r00-baseline.md:3-24",
+        "continuation-20260923.md:414-950,1077-1094",
+        "review-20260923.md:3-5,126-133",
+        "docs/dev-records/README.md:8-10",
+        "mcs/ops/mcs_setup.py:2419-2437",
+        "mcs/ingest/health_watch.py:38",
+        "mcs/semantic/semantic_qc.py:23-31"
+      ],
+      "counterexample": "固定Pはunread*/10/deep10,40、health600、QC60日。記録は当時値、MCS取得10分はサーバー負荷対策で新usercontract、LLMtimeout/circuit300秒とは異なる。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json"
+    },
+    {
+      "id": "CORE-DOCS7-INTERIM-HANDOFF-GAPS",
+      "status": "DISPROVED",
+      "hypothesis": "handoffのreceiverCLI未接続・未完16が今も未実装",
+      "evidence": [
+        "HANDOFF_CLAUDE_1.0.13_20261004.md:119,153-159,251-269",
+        "stability-1.0.13-20261004.md:349-373"
+      ],
+      "counterexample": "同file末尾の2026-10-05追記がlocal完了、実機/人手/相手repo条件は未完と明示。interimstatusを現在source未実装へ流用不可。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json"
+    },
+    {
+      "id": "CORE-DOCS7-STANDALONE-CALENDAR-CURRENT",
+      "status": "DISPROVED",
+      "hypothesis": "10-02calendar案を現在singlehostへ書換える必要がある",
+      "evidence": [
+        "standalone-worktree-20261002.md:3,32-37,89-90",
+        "standalone-20261001.md:14-16,109-110",
+        "mcs_standalone/runtime.py:39-54,118-135"
+      ],
+      "counterexample": "原本は統合前履歴でcurrentguideへ誘導。現在Runtime configured_cron_jobs経路を確認、旧案の保全が正しい。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json"
+    },
+    {
+      "id": "CORE-DOCS7-ALL-HISTORICAL-PASS-FRESH",
+      "status": "DISPROVED",
+      "hypothesis": "旧全件pass/独立review/SDKlaneを今回I全域受入へ加算できる",
+      "evidence": [
+        "refactor-1.0.12-20261004.md:9-13",
+        "repo-review-20261001.md:3-8,73-92",
+        "stability-1.0.13-20261004.md:438-464",
+        "refactor-revalidation.md:39-40,256-293"
+      ],
+      "counterexample": "各tree/hash/candidate/skip/runtimeが異なり、main元baseline6780passも全域全文review証明ではない。今回static150/Mine成功のみ新証拠。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json"
+    },
+    {
+      "id": "CORE-DOCS7-OLD-DESTRUCTIVE-UPDATE-RECIPE",
+      "status": "DISPROVED",
+      "hypothesis": "auto-updateplan後段の外科的untracked削除/WAL消去が現在推奨される",
+      "evidence": [
+        "auto-update-plan.md:3-20,302-313,851-865",
+        "mcs/ops/mcs_update.py:2102-2171",
+        "deployment/recovery/mcs_recover.py:905-975"
+      ],
+      "counterexample": "冒頭で明示撤回/非current、実sourceは専用restoreconsent/loss/hash・private staging/checkpoint/sidecar拒否。historical commandsは未実行。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json"
+    },
+    {
+      "id": "CORE-DOCS7-LOCAL-RELATIVE-LINKS-BROKEN",
+      "status": "DISPROVED",
+      "hypothesis": "対象20記録の実Markdown相対targetリンクが失われている",
+      "counterexample": "固定Pで28実Markdown相対target全てtrackedに存在。code記法の旧path/oldGitobjectsはhistoryとして別分類。",
+      "receipt": "/tmp/mcs-maintenance-core-docs7-20261005/static-receipt.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-docs7-evidence.json"
+    },
+    {
+      "id": "N6-01",
+      "state": "CONFIRMED_FIXED",
+      "path": "changes/maintenance-notify-packet3-lineworks-silent-20261005.json",
+      "criteria": [
+        "C01",
+        "C04",
+        "C12",
+        "X02"
+      ],
+      "before": "正式release_notes.validate全180→179valid/1reject、refs external URL",
+      "repair": "sourcepathrefsだけにし公式URLはdetailsへ保持。runtime/C1/notify契約変更なし。",
+      "evidence": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet6-20261005/fragment-schema-P.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-02",
+      "state": "CONFIRMED_FIXED",
+      "path": "docs/specs/external-export-contract.md",
+      "criteria": [
+        "C01",
+        "C05",
+        "C06",
+        "C07",
+        "X04",
+        "X07"
+      ],
+      "before": "PHI節が/1限定を明記せずbody一律禁止と記述し、同文書explicitC1 paragraphと実consumerのrootbody_text例外に矛盾。",
+      "repair": "default/1禁止と明示C1pairedmessage_bodyのrootbody_textだけ許可を分け、PHIになり得ること/人許可・byte/hash・残るfield禁止・retention/withdrawを明記。",
+      "basis": "packet5 617syntheticfamily+sameSHA全文contract; packet6 sections65–155/210–272 actualread。runtime変更なし。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-03",
+      "state": "CONFIRMED_FIXED",
+      "path": "hermes_plugin/README.md",
+      "criteria": [
+        "C01",
+        "C03",
+        "C04",
+        "C05",
+        "C08",
+        "C10",
+        "X04",
+        "X06"
+      ],
+      "before": "旧『SHAが返らなければ再upload』説明がsealedprior immutablehosted contractを否定。partialpagination/latesthumanauthority/currentgeneration条件が明示されない。",
+      "repair": "現delivery._file_remote_match/_replies、samehash prior seal、人承認receiptcurrentauthority/legacytoken、semanticgeneration gateを補記。runtime追加/既存allowlist緩和なし。",
+      "basis": "同SHA priorpacket4全読再利用＋今回README382行再読、ownedruntimeはreadonly関数ranges、coreから受領の既存合成test IDsに照合。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-04",
+      "paths": [
+        "docs/guides/USER_GUIDE.md",
+        "docs/guides/LINEWORKS.md"
+      ],
+      "issue": "ガイドの配送再開保証と任意辞書の未実装断定、LINE WORKS silent本文説明が現行ガードと不一致",
+      "fix": "確認済み未送信partのみ再開、不明結果を保留し自動再送しない説明へ。任意辞書の現行候補条件とネイティブメンション抑止を明記",
+      "evidence": [
+        "mcs/notify/notify_cards.py:_parts_in_flight",
+        "mcs/views/mcs_stats.py:med_reference_breakdown",
+        "adapters/lineworks/client.py:_silent_content"
+      ],
+      "state": "CONFIRMED_FIXED",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-05",
+      "paths": [
+        "docs/guides/SETUP_AGENT.md"
+      ],
+      "issue": "導入形態A/Bの選択表に定義のないS分岐が残る",
+      "fix": "重複S分岐を削除しA→Phase3/B→Phase6の実在する選択肢だけ保持",
+      "evidence": [
+        "docs/guides/SETUP_AGENT.md:Phase2",
+        "docs/guides/SETUP_AGENT.md:Phase6"
+      ],
+      "state": "CONFIRMED_FIXED",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-06",
+      "paths": [
+        "docs/guides/USER_GUIDE.md"
+      ],
+      "issue": "自動signal resolvedを確認済みと説明し人の確認/対応と混同し得る",
+      "fix": "評価した検出条件の解消と説明し、人承認・カード確認と別であることを明記",
+      "evidence": [
+        "mcs/ops/mcs_signals.py:1180-1248",
+        "docs/guides/USER_GUIDE.md:350",
+        "docs/guides/USER_GUIDE.md:423"
+      ],
+      "state": "CONFIRMED_FIXED",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-07",
+      "paths": [
+        "docs/specs/lifecycle-spec.md"
+      ],
+      "issue": "現行doctorがcheckを実行するとの旧説明、offsite明示scheduleのローカル実装と実機適用を混同",
+      "fix": "doctorのread-only/明示probe/未確認状態と、明示schedule接続の合成検証・実機未適用を区別",
+      "evidence": [
+        "mcs/ops/mcs_setup.py:cmd_doctor",
+        "mcs/ops/mcs_setup.py:_cron_jobs",
+        "docs/guides/BACKUP.md:9"
+      ],
+      "state": "CONFIRMED_FIXED",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-08",
+      "paths": [
+        "docs/ROADMAP.md"
+      ],
+      "issue": "F-2/F-3初期レビューを現行未修正と読める照合表が残る",
+      "fix": "初期記録は保持し日付とローカル修正状態を追記、実API/本番/C0未受入を区別",
+      "evidence": [
+        "mcs/extract/v1/extract.py:RULE_VERSION",
+        "mcs/ops/ext_contract.py:_valid_ack",
+        "changes/maintenance-core-packet5-rule-repair.json",
+        "changes/archive/1.0.13/20261004-receipt-contract.json"
+      ],
+      "state": "CONFIRMED_FIXED",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-09",
+      "paths": [
+        "docs/specs/semantic-evaluation.md"
+      ],
+      "issue": "partial配送fingerprintが再照合されないとの旧説明とカード全体へ意味内容なしの過剰断定",
+      "fix": "現行width/明示send cfgでtargetとchunksのfingerprintを再計算し不一致を未証明とする、card receiptをこのlifecycle chainで使わない範囲へ限定",
+      "evidence": [
+        "mcs/semantic/semantic_lifecycle.py:124-185",
+        "tests/semantic/test_semantic_blind.py:test_cli_credits_a_matching_partial_receipt_from_supplied_config",
+        "tests/semantic/test_semantic_blind.py:test_cli_partial_receipt_with_changed_chunk_width_is_unprovable",
+        "owner:/root/maintenance_semantic"
+      ],
+      "state": "CONFIRMED_FIXED",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-10",
+      "paths": [
+        "docs/roadmap/signals-stats.md"
+      ],
+      "summary": "#19の現状節が記録上の解消原因・再open統計・小標本抑制等を未実装とし、冒頭追記と固定Pの実装に矛盾していた。現状のみ同期し古い設計と未達の人手/privacyゲートを保持。",
+      "evidence": [
+        "mcs/views/mcs_stats.py:775-1047 full boundary read",
+        "mcs/ops/mcs_signals.py:1180-1248 prior boundary read"
+      ],
+      "runtime_modified": false,
+      "state": "CONFIRMED_FIXED",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "N6-11",
+      "state": "CONFIRMED_TRANSFERRED_PARENT_DELTA",
+      "path": "docs/dev-records/phase-j-record.md",
+      "criteria": [
+        "C01",
+        "X08"
+      ],
+      "issue": "現在操作手順と明示したprefaceのdocs/DEVELOPMENT.mdがfixedPでは不存在。history本文の古いpathとは別。",
+      "resolution": "core docs7にて合成静的counterexampleを確認。親が別Iでpreface1行をdocs/development/DEVELOPMENT.mdへ修復と報告。sourceW d0dac97では原本を変えず、親I receiptは親owner。",
+      "receipt": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-core-docs7-20261005/docs/development/maintenance-core-docs7-evidence.json",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet6-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending.",
+      "current_disposition": "RESOLVED_PARENT_DELTA"
+    },
+    {
+      "id": "STAMP-01",
+      "status": "CONFIRMED_FIXED",
+      "cause": "card/post helperのprefixがMCSでユーザー指定のスタンプ表示でない。",
+      "fix": "shared card_reaction_lines/stamp_lineのprefixとempty/unfetched表示を統一。",
+      "regression": "3platform rendered footer+body actual worker methods / snapshot evidence controls。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-stamps-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "STAMP-02",
+      "status": "CONFIRMED_FIXED",
+      "cause": "actor_lineが未取得でNone、自分は氏名を消して自分だけ、stale/failedが日付のみ、長氏名/制御文字は無上限。",
+      "fix": "kind別氏名、実名+自分、未取得/失敗/古い情報とcomplete_at観測時点、12/40/20文字上限とsilent inline化。",
+      "regression": "6状態+kind/self/unknown+longnames/MAXactors+partial保持。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-stamps-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "STAMP-03",
+      "status": "CONFIRMED_FIXED",
+      "cause": "actor-only changeがcontent_fpに入らずqueued/delivered bodyが更新されない。named prior postがpage外になると新body planに入らない。",
+      "fix": "表示actor hashをpresentation_fpへ追加、既配送named memberをbody planへ再投入しprior_remote_idを維持。",
+      "regression": "実dispatch/grant/validated transport/part receipts、queued/delivered/unknowncontrol、page外post、source identity/human ack。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-stamps-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending."
+    },
+    {
+      "id": "DEFAULT-01",
+      "status": "DISPROVED_CHANGE_NEEDED",
+      "evidence": "名前到達は既存metadata_shadow=True AND metadata_actors=True。どちらも既定off。表示依頼に取得既定変更は含めず親が有効化条件を文書化。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-stamps-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending.",
+      "current_disposition": "DISPROVED"
+    },
+    {
+      "id": "LEGACY-01",
+      "status": "MAINTAINED_COMPATIBILITY_LIMIT",
+      "evidence": "旧unnamed legacy bodyは既存frozen経路。named partsのupdateを証明し、旧postのリライトや重複再送を勝手に開始しない。本文表示操作はcurrent viewを読む。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-stamps-evidence.json",
+      "integration_status": "Current source/doc exact SHA accepted by parent; final fixed-I execution/fresh review pending.",
+      "current_disposition": "MAINTAINED_COMPATIBILITY_BOUNDARY"
+    },
+    {
+      "id": "DRUGMAP-READONLY",
+      "status": "CONFIRMED_FIXED",
+      "evidence": "notify ownerからload/current_refs JSON RecursionError未捕捉候補を受領。fixed docPと現在Iは未照合、stamp所有外なので確定扱いせず親/coreへ移管。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-stamps-evidence.json",
+      "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending.",
+      "current_disposition": "RESOLVED_BY_DRUG_JSON_F01_TO_F04",
+      "resolution_packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-drug-json-evidence.json",
+      "resolution_source_commit": "37da210"
+    },
+    {
+      "id": "DRUG-JSON-F01",
+      "status": "CONFIRMED_FIXED",
+      "boundary": "drug_map.load195",
+      "cause": "owner-private/pinned 20001byte深度10000 JSONでもRecursionErrorがValueError変換から漏れtickがgeneric exception。",
+      "fix": "except tupleへRecursionError追加→ValueError(drug_map_json)→invalid_dictionary/status invalid。",
+      "before": "dictionary load1 + pipeline tick1, both runtimes FAIL",
+      "validation": "実decoder error; empty synthetic Ledger dump不変; path無し。通常invalid設定の旧med_ref retirementは維持。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-drug-json-evidence.json",
+      "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending."
+    },
+    {
+      "id": "DRUG-JSON-F02",
+      "status": "CONFIRMED_FIXED",
+      "boundary": "drug_map.current_refs283 content/meta",
+      "cause": "注記depth10000 RecursionErrorがstats/rollupへ伝播し候補集計を中断。",
+      "fix": "既存安全[] except tupleへRecursionError追加。",
+      "before": "read content/meta2 + stats/rollup/export content/meta2, both runtimes FAIL",
+      "validation": "valid resolved control→honest unavailable、action/name統計不変、source薬剤保持、候補値/ID非表示、全dump/total_changes不変。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-drug-json-evidence.json",
+      "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending."
+    },
+    {
+      "id": "DRUG-JSON-F03",
+      "status": "CONFIRMED_FIXED",
+      "boundary": "P current_refs296/derive354",
+      "cause": "SQL-valid深度999はPython3.10 decode不能。SQL JSON制約はPython安全深度保証ではない。",
+      "fix": "refsはRecursionErrorで[]、deriveはsource=None→既存med_ref-only retirement/pids/idempotence。",
+      "before": "3.10追加2FAIL / 3.13 native2PASS control",
+      "validation": "read全DB不変、derive原文/source不変・古いrefsだけ除去、pids=[1]、再実行done0。stdlib sweepは3.10 depth995–999 SQL1/RecursionError、depth10000 SQL0。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-drug-json-evidence.json",
+      "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending."
+    },
+    {
+      "id": "DRUG-JSON-F04",
+      "status": "CONFIRMED_FIXED",
+      "boundary": "rollup facts149/158 catch163; raw reply225→_llm_reply_kind62 catch63",
+      "cause": "同SQL-valid source停止。fact catchだけ補ってもraw legacy reply再decodeで停止する同根。",
+      "fix": "2つの既存except tupleへRecursionError追加。既存empty facts/None replyを利用。",
+      "before": "3.10 v1/llm/canonical3 + shadowed reply1 FAIL / 3.13 native4PASS",
+      "validation": "全dump/total_changes不変、valid vitals/done保持、破損根拠からvitals/done無し。最初のscope外probeは親追加所有後に解消。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-drug-json-evidence.json",
+      "integration_status": "Current I exact-W source/tests accepted; final whole-I execution/review pending."
+    },
+    {
+      "id": "FINAL-LW-DOC-01",
+      "status": "CONFIRMED_FIXED",
+      "priority": "P2",
+      "cause": "Stamp fragment generalized same-message update across all channels, while LINE WORKS documented Bot API requires replacement posts.",
+      "fix": "Canonical fragment and stamp guide now name Slack/Discord edit versus LINE WORKS replacement and token retirement.",
+      "validation": "Fresh reviewer independent live-free real-method probe, canonical API tables, docs/source and exact 2-document patch reviewed.",
+      "source": "changes/20261005-stamp-actors-display.json",
+      "review_packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-stamp-ui-evidence.json"
+    },
+    {
+      "id": "FINAL-CRITERION-TRACE-01",
+      "status": "CONFIRMED_FIXED",
+      "priority": "P3",
+      "cause": "11 parent stamp delta entries carried old 20-criterion pointers but current delta review_packet lacked original criteria.",
+      "fix": "Explicit criteria_source_packet preserves base criterion packet; review_packet remains current delta packet.",
+      "validation": "7300 directly resolved plus all220 affected pointers actual base-SHA/current-path-SHA resolved.",
+      "evidence": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-fa9385c/criterion-trace-supplement.json"
+    },
+    {
+      "id": "FINAL-LEDGER-310-01",
+      "status": "CONFIRMED_FIXED",
+      "priority": "P1",
+      "cause": "PがSQLite_CORRUPT/NOTADBを無条件に参照。Python3.10 native exceptionにsqlite_errorcodeがなくmodule constantsもない。",
+      "fix": "code=Noneかつtype(error) is sqlite3.DatabaseErrorのみ一般unreadable。code付きはgetattrでmodern既存code判定。OperationalError/IntegrityError/unknown subclassはunknown、予算優先。",
+      "meaning_limit": "legacy exact DatabaseErrorは一般読取不能のfailclosed分類であり、厳密な破損code判定の証明ではない。",
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-ledger-audit-evidence.json",
+      "before": {
+        "native310": {
+          "fail": 1
+        },
+        "native313": {
+          "control_pass": 1
+        },
+        "added_each_runtime": {
+          "fail": 4,
+          "control_pass": 6
+        }
+      },
+      "after_each_runtime": {
+        "pass": 96,
+        "skip": 0
+      },
+      "current_source_I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+      "parent_full_suite_results": [
+        {
+          "acceptance_basis": "7390 whole-run successes + unchanged-source single failed performance node accepted by standalone control; whole-run exit1 preserved",
+          "effective_unique_successful_cases": 7391,
+          "performance_control": {
+            "receipt": "/tmp/mcs-perf-control-20261005-1cf0505/receipt.json",
+            "sha256": "62f1d84e5c37df81350652f0d88e16c08c1ee875f5d1b4de7c45858ad5aeeb5a",
+            "tests": 2,
+            "exit": 0,
+            "n100_p95_wall_seconds": 0.6416,
+            "n1000_p95_wall_seconds": 6.5117,
+            "budget_seconds": 30,
+            "code_tests_budget_unchanged": true,
+            "all1000_delivered_exactly_once_and_message_id_bound": true,
+            "scope": "Root-owned competing test jobs ended; other host workloads not stopped. Observed alone-run success does not prove parallel load as sole cause or production throughput."
+          },
+          "lane": "313",
+          "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+          "exit": 1,
+          "runtime": "3.13.12 (main, Feb 12 2026, 01:06:02) [Clang 21.1.4 ]\n3.50.4",
+          "runtime_executable": "/Users/yusuke/.mcs/.venv/bin/python",
+          "runtime_binary_sha256": "b2c50fdcd4f1d79413218f91bb67b16a70a987cbf109a1dbc239dcb9c4ec96cb",
+          "pytest_terminal_counts": {
+            "passed": 7390,
+            "failed": 1,
+            "skipped": 8,
+            "subtests_passed": 26
+          },
+          "JUnit": {
+            "tests": 7425,
+            "failures": 1,
+            "errors": 0,
+            "skipped": 8
+          },
+          "skips": [
+            {
+              "case": ".tests.adapters.discord.test_discord_runtime_compat",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_runtime_compat.py', 8, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".tests.adapters.discord.test_discord_sdk_real",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_sdk_real.py', 16, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".tests.adapters.slack.test_slack_runtime_compat",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/slack/test_slack_runtime_compat.py', 8, \"Skipped: could not import 'aiohttp': No module named 'aiohttp'\")"
+            },
+            {
+              "case": ".integration.test_standalone_discord",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_discord.py', 9, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".integration.test_standalone_sdk",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_sdk.py', 12, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".integration.test_standalone_slack_sdk",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_slack_sdk.py', 12, \"Skipped: could not import 'slack_bolt': No module named 'slack_bolt'\")"
+            },
+            {
+              "case": "integration.test_pinned_sdk_versions.test_actual_distribution_versions_match_lane",
+              "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+              "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:32: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+            },
+            {
+              "case": "integration.test_pinned_sdk_versions.test_hermes_import_source_matches_ci_pin",
+              "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+              "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:67: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+            }
+          ],
+          "receipt": "/tmp/mcs-final-I-313-rerun-20261005-1cf0505/receipt.json",
+          "receipt_sha256": "a3fe268e2ae53c39b5e6dcdbd8d97871c6e371cd49c1968f428da9f48d1fafbc",
+          "fixed_input_unchanged": true,
+          "tracked_files": 910,
+          "owner_correction": "Both final suites are root-owned. helper parallel_lane is historical descriptive metadata; no maintenance_semantic job was run."
+        },
+        {
+          "acceptance_basis": "Actual whole-run exit0; no failure",
+          "effective_unique_successful_cases": 7391,
+          "performance_control": null,
+          "lane": "310",
+          "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+          "exit": 0,
+          "runtime": "3.10.22 (main, Oct  3 2026, 00:53:54) [Clang 22.1.3 ]\n3.53.1",
+          "runtime_executable": "/tmp/mcs-maintenance-python310-20261005/bin/python",
+          "runtime_binary_sha256": "e14b1554e3e5ca8e6784d69072d0fea4d5a8dab1f26efd7bca6275a517517888",
+          "pytest_terminal_counts": {
+            "passed": 7391,
+            "failed": 0,
+            "skipped": 8,
+            "subtests_passed": 26
+          },
+          "JUnit": {
+            "tests": 7425,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 8
+          },
+          "skips": [
+            {
+              "case": ".tests.adapters.discord.test_discord_runtime_compat",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_runtime_compat.py', 8, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".tests.adapters.discord.test_discord_sdk_real",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_sdk_real.py', 16, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".tests.adapters.slack.test_slack_runtime_compat",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/slack/test_slack_runtime_compat.py', 8, \"Skipped: could not import 'aiohttp': No module named 'aiohttp'\")"
+            },
+            {
+              "case": ".integration.test_standalone_discord",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_discord.py', 9, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".integration.test_standalone_sdk",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_sdk.py', 12, \"Skipped: could not import 'discord': No module named 'discord'\")"
+            },
+            {
+              "case": ".integration.test_standalone_slack_sdk",
+              "message": "collection skipped",
+              "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_slack_sdk.py', 12, \"Skipped: could not import 'slack_bolt': No module named 'slack_bolt'\")"
+            },
+            {
+              "case": "integration.test_pinned_sdk_versions.test_actual_distribution_versions_match_lane",
+              "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+              "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:32: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+            },
+            {
+              "case": "integration.test_pinned_sdk_versions.test_hermes_import_source_matches_ci_pin",
+              "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+              "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:67: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+            }
+          ],
+          "receipt": "/tmp/mcs-final-I-310-rerun-20261005-1cf0505/receipt.json",
+          "receipt_sha256": "269d0c9beb1d8789025279b27971b1274eb435cb2f15c8e9f62f3d7811c573b0",
+          "fixed_input_unchanged": true,
+          "tracked_files": 910,
+          "owner_correction": "Both final suites are root-owned. helper parallel_lane is historical descriptive metadata; no maintenance_semantic job was run."
+        }
+      ]
+    },
+    {
+      "id": "FINAL-PERF-CONDITION-01",
+      "status": "RESOLVED_VERIFICATION_CONDITION",
+      "priority": "P2",
+      "cause": "Fixed-I Python3.13 whole run while two suites competed recorded non-contended delivery wall p95=36.9443>30s, CPU5.7866s; all1000 deliveries/IDs still succeeded. Product defect and sole-cause contention were not established.",
+      "resolution": "Same code/tests/runtime and30s budget, no root-owned competing jobs: existing100/1000 cases bothpass,1000 p95wall6.5117s. Other7390 unchanged whole-run successes reused; full exit1 retained.",
+      "control": {
+        "receipt": "/tmp/mcs-perf-control-20261005-1cf0505/receipt.json",
+        "sha256": "62f1d84e5c37df81350652f0d88e16c08c1ee875f5d1b4de7c45858ad5aeeb5a",
+        "tests": 2,
+        "exit": 0,
+        "n100_p95_wall_seconds": 0.6416,
+        "n1000_p95_wall_seconds": 6.5117,
+        "budget_seconds": 30,
+        "code_tests_budget_unchanged": true,
+        "all1000_delivered_exactly_once_and_message_id_bound": true,
+        "scope": "Root-owned competing test jobs ended; other host workloads not stopped. Observed alone-run success does not prove parallel load as sole cause or production throughput."
+      },
+      "need_product_fix": false
+    },
+    {
+      "id": "FINAL-HARNESS-TMP-01",
+      "status": "DISPROVED_PRODUCT_FIX_NEEDED",
+      "cause": "External full-suite harness --basetemp placed the synthetic Hermes stub outside the canonical temporary HOME/TMP allowed by the existing sandbox.",
+      "resolution": "Only external harness removes --basetemp. Product, test fixture, tests/conftest guard and runner remain unchanged. Canonical controls each5pass and corresponding gateway nodes pass in both final full attempts.",
+      "evidence_packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-ledger-audit-evidence.json",
+      "external_helper_sha256": "5f302c2ab57a9d435f6fc21b549e2fd683d451a393269c31e4c14507ab58bbef"
+    }
+  ],
+  "deferred": [],
+  "integration": [
+    {
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-evidence.json",
+      "P": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "worker_behavior": "acc15e946f3a7a4e8a2f1e282a9d5af227bf6e43",
+      "integrated_behavior": "cb118fd",
+      "source_hashes_match": true,
+      "tests": "worker-local evidence retained; unchanged checks reused; final I validation pending"
+    },
+    {
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
+      "P": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "worker_behavior": "bd62135162a5ff556c4129e6d25312fe821b7c13",
+      "integrated_behavior": "882ae43",
+      "source_hashes_match": true,
+      "tests": "worker-local evidence retained; unchanged checks reused; final I validation pending"
+    },
+    {
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-evidence.json",
+      "P": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+      "worker_behavior": "12a7dabc",
+      "integrated_behavior": "c825663",
+      "source_hashes_match": true,
+      "tests": "541 worker-local checks retained; final I validation pending"
+    },
+    {
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet2-evidence.json",
+      "P": "1ed5b0495cd0e34c9993740928395bf411e3bcf9",
+      "worker_behavior": "aedf7ac",
+      "integrated_behavior": "9e92cfe",
+      "source_hashes_match": true,
+      "tests": "828 semantic passed, Ruff passed; final I pending"
+    },
+    {
+      "packet": "docs/development/audits/1.0.14/full-maintenance-20261005/parent-lifecycle-evidence.json",
+      "integrated_behavior": "c97df9f",
+      "tests": "408 lifecycle, 109 watchdog/consent, 170 updater/reaping; 197 unchanged cadence-family checks and 8 changed follow-up pass; final I pending"
+    },
+    {
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-core-packet2-evidence.json",
+      "P": "999944434eaad4bdf0000b67f654a421df0ffdbe",
+      "worker_behavior": "0da054fee754edb25f272a6660c0518a85dda4de",
+      "source_hashes_match": true,
+      "tests": "Worker-local evidence retained; final fixed-I validation and independent review pending"
+    },
+    {
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-packet2-evidence.json",
+      "P": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+      "worker_behavior": "872747183be090367d6890f1c22ca2d64bcdf5ae",
+      "source_hashes_match": true,
+      "tests": "Worker-local evidence retained; final fixed-I validation and independent review pending"
+    },
+    {
+      "packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet3-evidence.json",
+      "P": "755f4c779ebf280ba856ca7c600f0525fbd82076",
+      "worker_behavior": "e58119363a940acb1e119d4ae117bf0301167176",
+      "integrated_behavior": "4d97c28",
+      "source_hashes_match": true,
+      "tests": "857 semantic passed/0skip, 39 Ruff paths pass; final I pending"
+    }
+  ],
+  "independent_review": {
+    "status": "SOURCE_AND_FORMAL_PACKET_REVIEWED",
+    "reviewer": "/root/final_fresh_review",
+    "fresh_context": true,
+    "implementation_role": false,
+    "runtime_source_I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+    "final_bound_result_authority": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-1cf0505/final-acceptance.json",
+    "report_directory": "/tmp/mcs-formalreview-fa9385c-5l06576f",
+    "note": "Historical packet-level pending states remain historical. Final record HEAD review and actual SDK/archive/replay acceptance are bound externally after their execution."
+  },
+  "coverage_current": "All applicable current source and owned records REVIEWED; current source-I 3.10 whole exit0,3.13 whole7390pass/one wall-performancefail resolved by unchanged standalone100/1000 control, and nine short checks passed. Actual313 whole exit1 is preserved. Final record HEAD path/criteria/equivalence/SDK/archive/replay/fresh-review acceptance is bound to the external current_final_acceptance.final_result_authority.",
+  "current_final_acceptance": {
+    "schema": 1,
+    "runtime_source_I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+    "B": "4167697cf19a11a2b8cac3d076907450a5ff8654",
+    "candidate_branch": "audit/full-maintenance-20261005",
+    "full_suites": [
+      {
+        "acceptance_basis": "7390 whole-run successes + unchanged-source single failed performance node accepted by standalone control; whole-run exit1 preserved",
+        "effective_unique_successful_cases": 7391,
+        "performance_control": {
+          "receipt": "/tmp/mcs-perf-control-20261005-1cf0505/receipt.json",
+          "sha256": "62f1d84e5c37df81350652f0d88e16c08c1ee875f5d1b4de7c45858ad5aeeb5a",
+          "tests": 2,
+          "exit": 0,
+          "n100_p95_wall_seconds": 0.6416,
+          "n1000_p95_wall_seconds": 6.5117,
+          "budget_seconds": 30,
+          "code_tests_budget_unchanged": true,
+          "all1000_delivered_exactly_once_and_message_id_bound": true,
+          "scope": "Root-owned competing test jobs ended; other host workloads not stopped. Observed alone-run success does not prove parallel load as sole cause or production throughput."
+        },
+        "lane": "313",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "exit": 1,
+        "runtime": "3.13.12 (main, Feb 12 2026, 01:06:02) [Clang 21.1.4 ]\n3.50.4",
+        "runtime_executable": "/Users/yusuke/.mcs/.venv/bin/python",
+        "runtime_binary_sha256": "b2c50fdcd4f1d79413218f91bb67b16a70a987cbf109a1dbc239dcb9c4ec96cb",
+        "pytest_terminal_counts": {
+          "passed": 7390,
+          "failed": 1,
+          "skipped": 8,
+          "subtests_passed": 26
+        },
+        "JUnit": {
+          "tests": 7425,
+          "failures": 1,
+          "errors": 0,
+          "skipped": 8
+        },
+        "skips": [
+          {
+            "case": ".tests.adapters.discord.test_discord_runtime_compat",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_runtime_compat.py', 8, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".tests.adapters.discord.test_discord_sdk_real",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_sdk_real.py', 16, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".tests.adapters.slack.test_slack_runtime_compat",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/slack/test_slack_runtime_compat.py', 8, \"Skipped: could not import 'aiohttp': No module named 'aiohttp'\")"
+          },
+          {
+            "case": ".integration.test_standalone_discord",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_discord.py', 9, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".integration.test_standalone_sdk",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_sdk.py', 12, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".integration.test_standalone_slack_sdk",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_slack_sdk.py', 12, \"Skipped: could not import 'slack_bolt': No module named 'slack_bolt'\")"
+          },
+          {
+            "case": "integration.test_pinned_sdk_versions.test_actual_distribution_versions_match_lane",
+            "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+            "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:32: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+          },
+          {
+            "case": "integration.test_pinned_sdk_versions.test_hermes_import_source_matches_ci_pin",
+            "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+            "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:67: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+          }
+        ],
+        "receipt": "/tmp/mcs-final-I-313-rerun-20261005-1cf0505/receipt.json",
+        "receipt_sha256": "a3fe268e2ae53c39b5e6dcdbd8d97871c6e371cd49c1968f428da9f48d1fafbc",
+        "fixed_input_unchanged": true,
+        "tracked_files": 910,
+        "owner_correction": "Both final suites are root-owned. helper parallel_lane is historical descriptive metadata; no maintenance_semantic job was run."
+      },
+      {
+        "acceptance_basis": "Actual whole-run exit0; no failure",
+        "effective_unique_successful_cases": 7391,
+        "performance_control": null,
+        "lane": "310",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "exit": 0,
+        "runtime": "3.10.22 (main, Oct  3 2026, 00:53:54) [Clang 22.1.3 ]\n3.53.1",
+        "runtime_executable": "/tmp/mcs-maintenance-python310-20261005/bin/python",
+        "runtime_binary_sha256": "e14b1554e3e5ca8e6784d69072d0fea4d5a8dab1f26efd7bca6275a517517888",
+        "pytest_terminal_counts": {
+          "passed": 7391,
+          "failed": 0,
+          "skipped": 8,
+          "subtests_passed": 26
+        },
+        "JUnit": {
+          "tests": 7425,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 8
+        },
+        "skips": [
+          {
+            "case": ".tests.adapters.discord.test_discord_runtime_compat",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_runtime_compat.py', 8, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".tests.adapters.discord.test_discord_sdk_real",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/discord/test_discord_sdk_real.py', 16, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".tests.adapters.slack.test_slack_runtime_compat",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/tests/adapters/slack/test_slack_runtime_compat.py', 8, \"Skipped: could not import 'aiohttp': No module named 'aiohttp'\")"
+          },
+          {
+            "case": ".integration.test_standalone_discord",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_discord.py', 9, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".integration.test_standalone_sdk",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_sdk.py', 12, \"Skipped: could not import 'discord': No module named 'discord'\")"
+          },
+          {
+            "case": ".integration.test_standalone_slack_sdk",
+            "message": "collection skipped",
+            "text": "('/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_standalone_slack_sdk.py', 12, \"Skipped: could not import 'slack_bolt': No module named 'slack_bolt'\")"
+          },
+          {
+            "case": "integration.test_pinned_sdk_versions.test_actual_distribution_versions_match_lane",
+            "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+            "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:32: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+          },
+          {
+            "case": "integration.test_pinned_sdk_versions.test_hermes_import_source_matches_ci_pin",
+            "message": "explicit SDK lane: sh scripts/check_pinned_sdks.sh",
+            "text": "/Users/yusuke/.herdr/worktrees/mcs/full-maintenance-20261005/integration/test_pinned_sdk_versions.py:67: explicit SDK lane: sh scripts/check_pinned_sdks.sh"
+          }
+        ],
+        "receipt": "/tmp/mcs-final-I-310-rerun-20261005-1cf0505/receipt.json",
+        "receipt_sha256": "269d0c9beb1d8789025279b27971b1274eb435cb2f15c8e9f62f3d7811c573b0",
+        "fixed_input_unchanged": true,
+        "tracked_files": 910,
+        "owner_correction": "Both final suites are root-owned. helper parallel_lane is historical descriptive metadata; no maintenance_semantic job was run."
+      }
+    ],
+    "short_checks": [
+      {
+        "name": "diff-whitespace",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "git",
+          "diff",
+          "--check",
+          "4167697cf19a11a2b8cac3d076907450a5ff8654",
+          "1cf0505eb5c9155d19afa3e3ba218f2640096d20"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 3.3588790000067092,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/diff-whitespace.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "gates",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.mcs/.venv/bin/python",
+          "ci/gates.py"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 13.009261999977753,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/gates.log",
+        "bytes": 230,
+        "sha256": "6d3e27382794f6b740cc62e0f2c74a2b4a2f33de32aab94287063b63b53befab",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "generated-readme",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.mcs/.venv/bin/python",
+          "scripts/development/update_readme.py",
+          "--check"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 2.884446540963836,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/generated-readme.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "lineworks-gallery",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.mcs/.venv/bin/python",
+          "scripts/development/generate_lineworks_gallery.py",
+          "--check"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 0.8420095840119757,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/lineworks-gallery.log",
+        "bytes": 46,
+        "sha256": "6e6fb86018912449ddf024f5d10619d1aa70704e5ea74100cfe6eef07deabbcc",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "mine",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.mcs/.venv/bin/python",
+          "ci/mine_gates.py",
+          "--check"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 4.882289708999451,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/mine.log",
+        "bytes": 6961,
+        "sha256": "e9ad907742a002a8c7b823f4fd224ccb23b01f45f52bc31a3013b295c70da208",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "readme-release",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.mcs/.venv/bin/python",
+          "scripts/development/readme_release.py",
+          "--check"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 1.0832286670338362,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/readme-release.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "release-fragments",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.mcs/.venv/bin/python",
+          "scripts/development/release_notes.py",
+          "check",
+          "--base",
+          "4167697cf19a11a2b8cac3d076907450a5ff8654"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 1.661831917008385,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/release-fragments.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "ruff",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.local/bin/uv",
+          "tool",
+          "run",
+          "--offline",
+          "--from",
+          "ruff==0.16.10",
+          "ruff",
+          "check",
+          "mcs/",
+          "tests/",
+          "hermes_plugin/",
+          "adapters/",
+          "lineworks_adapter/",
+          "mcs_standalone/",
+          "integration/",
+          "ci/",
+          "scripts/",
+          "deployment/",
+          "conftest.py"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 2.2834557500318624,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/ruff.log",
+        "bytes": 19,
+        "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+        "fixed_head_and_clean": true
+      },
+      {
+        "name": "slack-gallery",
+        "I": "1cf0505eb5c9155d19afa3e3ba218f2640096d20",
+        "argv": [
+          "/Users/yusuke/.mcs/.venv/bin/python",
+          "scripts/development/generate_slack_gallery.py",
+          "--check"
+        ],
+        "environment": {
+          "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "exit": 0,
+        "elapsed_seconds": 0.7666980000212789,
+        "log": "/tmp/mcs-final-I-checks-20261005-1cf0505/slack-gallery.log",
+        "bytes": 41,
+        "sha256": "3532aa19eada25bd385b9a2f71454bcc8ef9d7d555a6b200ed22ddaeada2e9a2",
+        "fixed_head_and_clean": true
+      }
+    ],
+    "performance_control": {
+      "receipt": "/tmp/mcs-perf-control-20261005-1cf0505/receipt.json",
+      "sha256": "62f1d84e5c37df81350652f0d88e16c08c1ee875f5d1b4de7c45858ad5aeeb5a",
+      "tests": 2,
+      "exit": 0,
+      "n100_p95_wall_seconds": 0.6416,
+      "n1000_p95_wall_seconds": 6.5117,
+      "budget_seconds": 30,
+      "code_tests_budget_unchanged": true,
+      "all1000_delivered_exactly_once_and_message_id_bound": true,
+      "scope": "Root-owned competing test jobs ended; other host workloads not stopped. Observed alone-run success does not prove parallel load as sole cause or production throughput."
+    },
+    "ledger_formal_packet": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-ledger-audit-evidence.json",
+    "ledger_evidence_W": "6ee0866aedd52fd63d773840068a5536ebbcf26d",
+    "historical_failure_preservation": "Initial fa9385c full 3.13=7376pass/5fail/8skip;3.10=7375pass/6fail/8skip, not overwritten. Five shared failures caused by external basetemp incompatibility; one extra3.10 failure is fixed ledger exception compatibility. No fixture/assertion/guard weakening.",
+    "final_result_authority": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-1cf0505/final-acceptance.json",
+    "equivalence_authority": "/Users/yusuke/.herdr/evidence/mcs/final-I-20261005-1cf0505/final-source-record-equivalence.json",
+    "final_sdk_archive_and_independent_review": "Final record HEAD checks are recorded only in the external authoritative receipt after execution, never inferred from packet or old SDK pass.",
+    "protected_original": "main c26a009e2bfe17d57779d7028eb3ac8601ddf503 remains outside this candidate; no push/deploy or real-service test."
+  }
+}

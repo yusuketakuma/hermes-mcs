@@ -9,10 +9,12 @@ PNGはREADME表示用、SVGは編集用のソース。配置・書体・絵文�
 
 | 画面 | 根拠 |
 |---|---|
-| `01-delivery` | `adapters/lineworks/cards.py`（`確認する`・`担当する`・`タスク作成`・`MCSで開く`・`その他の操作`のボタンテンプレート）、`mcs/notify/notify_render.py`の`display_text`（区画を`────────────`で区切ったカード本文）・`_message_post`（原文投稿は`↳`見出し・📋 要約・本文。スタンプ行なし）、`adapters/lineworks/delivery.py`（同じトークルームへカード・原文・添付を連続投稿） |
+| `01-delivery` | `adapters/lineworks/cards.py`（`確認する`・`担当する`・`タスク作成`・`MCSで開く`・`その他の操作`のFlexメッセージ）、`mcs/notify/notify_render.py`の`display_text`（区画を`────────────`で区切ったカード本文）・`_message_post`（原文投稿は`↳`見出し・📋 要約・本文。スタンプ行なし）、`adapters/lineworks/delivery.py`（同じトークルームへカード・原文・添付を連続投稿） |
 | `02-task-confirm` | `adapters/lineworks/actions.py`（`_more`による「その他の操作」の1:1メニュー、本人の1:1トークへの項目別入力・確認・確定）、`adapters/common/text.py`（入力ラベル・確認本文・結果の文言） |
 
-ボタンの種類とCallbackは[公式ボタンテンプレート仕様](https://developers.worksmobile.com/jp/docs/bot-send-button)とも照合。
+ボタンの種類とCallbackは[公式Flex仕様](https://developers.worksmobile.com/jp/docs/bot-send-flex)・[Flexボタン](https://developers.worksmobile.com/jp/docs/bot-send-flex-button)とも照合。
+Flexの`altText`には患者・発信者・所属・時間・要約を送る。本文は図の表示を保持し、
+実際のプッシュ表示は端末・アプリの通知設定に依存する。
 架空の元投稿と抽出参照があるカードを例にしている。ボタンは状態・設定で変わり、
 本文の長さや操作数によって追加投稿に分割される。
 添付は保存・通知のみで、画像内容の解析は示していない。

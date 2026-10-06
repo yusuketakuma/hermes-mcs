@@ -1,0 +1,1579 @@
+{
+  "schema_version": 1,
+  "version": "1.0.15",
+  "round": 2,
+  "audit_date": "2026-10-06",
+  "worktree": "/Users/yusuke/.herdr/worktrees/mcs/release-1.0.15-20261006",
+  "branch": "fix/1.0.15-performance",
+  "scope_roots": [
+    "adapters",
+    "hermes_plugin",
+    "mcs_standalone",
+    "lineworks_adapter",
+    "mcs/notify"
+  ],
+  "inventory_count": 60,
+  "inventory_complete": true,
+  "prior_dossier": "docs/development/audits/1.0.15/baseline/stability-audit-adapters-1.0.15.json",
+  "method": "Reuse matching-SHA source/behavior evidence; target new preview capacity/serialization and shutdown/recovery questions only. No repeat hypothetical audit loop or claims from enumeration alone. No real data/services/DB/SDK connections/credentials.",
+  "finding": {
+    "id": "discord_render_view_retention",
+    "runtime_changed": "adapters/discord/cards.py",
+    "change_record": "changes/stability-discord-card-view-retention.json",
+    "callers": [
+      "adapters/discord/delivery.py:DeliveryWorker._perform new create and update",
+      "adapters/discord/cards.py:message_payload classic and components_v2 compatibility"
+    ],
+    "mechanism": "Pinned SDK Messageable.send/Message.edit register unfinished dispatchable Views in ConnectionState.ViewStore. MCS cards timeout=None therefore one View retained per delivered message; MCS already handles all component tokens through bot-wide Actions.on_interaction. Stop render-only Views before send/edit so store condition false; wire components still serialized. ConnectionState.parse_interaction_create always dispatches interaction after store dispatch, including no-match.",
+    "measurement": {
+      "python": "3.13.12",
+      "sdk": "discord.py==2.7.1",
+      "fixture": "1000 classic payloads against actual in-memory ViewStore; exact pinned send/edit registration condition; no connection/network",
+      "before": {
+        "dispatch_maps": 1000,
+        "synced_views": 1000,
+        "tracemalloc_retained_bytes": 2033912,
+        "tracemalloc_peak_bytes": 2036088
+      },
+      "with_stop": {
+        "dispatch_maps": 0,
+        "synced_views": 0,
+        "tracemalloc_retained_bytes": 32,
+        "tracemalloc_peak_bytes": 275896
+      },
+      "limitations": "One synthetic tracemalloc trial; primary stable criterion is retained View counts, not extrapolated runtime memory saving."
+    }
+  },
+  "validation": [
+    {
+      "id": "pinned_sdk_current",
+      "command": "uv ephemeral Python3.13 pytest9.1.1 discord.py2.7.1 -> scripts/run_tests.sh tests/adapters/discord/test_discord_sdk_real.py",
+      "result": {
+        "passed": 13,
+        "seconds": 0.31
+      },
+      "scope": "Actual SDK serialized classic and V2 message payloads, new stop-based persistent retention suppression2x1000, actual parse_interaction_create global listener dispatch with empty actual ViewStore. SDK Interaction construction stubbed; no network/client connection."
+    },
+    {
+      "id": "discord_actions_delivery_guard_perf",
+      "command": "isolated Python3.13 runner tests/adapters/discord/test_mcs_discord.py tests/adapters/discord/test_mcs_discord_delivery.py tests/adapters/discord/test_mcs_discord_single_post.py tests/adapters/common/test_mobile_notification_payloads.py tests/notify/test_perf_cards.py",
+      "result": {
+        "passed": 247,
+        "seconds": 63.23
+      },
+      "scope": "All action/modal/confirm, receipts/parts/recovery/singlePOST synthetic faults and100/1000 card pipeline at current runtime source."
+    },
+    {
+      "id": "ruff",
+      "result": "pass",
+      "command": "ruff check adapters/discord/cards.py tests/adapters/discord tests/notify/test_perf_cards.py"
+    },
+    {
+      "id": "mandatory_gates",
+      "result": "10/10 pass",
+      "command": "python3 ci/gates.py"
+    },
+    {
+      "id": "diff_check",
+      "result": "pass",
+      "command": "git diff --check"
+    }
+  ],
+  "entries": [
+    {
+      "path": "adapters/__init__.py",
+      "sha256": "8b68bbbbdca7acbd688af3e53dfaf34fcbd29b0aa60600d124329db750e69227",
+      "prior_sha256": "8b68bbbbdca7acbd688af3e53dfaf34fcbd29b0aa60600d124329db750e69227",
+      "lines": 1,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/common/__init__.py",
+      "sha256": "dd30c38589a16589d0ad79829cf72146bee90fe21b50d7930e2985fb5211d56b",
+      "prior_sha256": "dd30c38589a16589d0ad79829cf72146bee90fe21b50d7930e2985fb5211d56b",
+      "lines": 1,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/common/commands.py",
+      "sha256": "4a1c1011caabba83c9b8b2ccdc51e3f0903c603e1ba2f7928e85b619d659915b",
+      "prior_sha256": "4a1c1011caabba83c9b8b2ccdc51e3f0903c603e1ba2f7928e85b619d659915b",
+      "lines": 38,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_native_commands.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/common/envelopes.py",
+      "sha256": "c2a645b0570bb402db6675722fa04e166ba6f400ae90d2cb6bd05db5c09fa885",
+      "prior_sha256": "c2a645b0570bb402db6675722fa04e166ba6f400ae90d2cb6bd05db5c09fa885",
+      "lines": 283,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/discord/test_mcs_discord.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/common/journal.py",
+      "sha256": "52f88ab61b5b253a35dc323e185bdb7e3f7efa02edc13a8ad35f72dca4e971be",
+      "prior_sha256": "52f88ab61b5b253a35dc323e185bdb7e3f7efa02edc13a8ad35f72dca4e971be",
+      "lines": 357,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_journal_phase_recovery.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "復元証拠の保持量はbackup horizon/未解決配送に依存。証拠の無断削除や容量上限による切捨ては行わない。"
+      ]
+    },
+    {
+      "path": "adapters/common/paths.py",
+      "sha256": "5d1cff058cfb855406bbc74ffa53dda86df86626850006a53eb538d12ab810bc",
+      "prior_sha256": "5d1cff058cfb855406bbc74ffa53dda86df86626850006a53eb538d12ab810bc",
+      "lines": 147,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_worker_reconcile_integrity.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/common/registry.py",
+      "sha256": "3bee93f668e90807946c605c611c22a82e82595568e55ff34b19c46d19ea82d8",
+      "prior_sha256": "3bee93f668e90807946c605c611c22a82e82595568e55ff34b19c46d19ea82d8",
+      "lines": 460,
+      "prior_evidence_reusable": true,
+      "status": "additional_boundary_checked",
+      "round2_check": "Re-inspected bounded persisted JSON error handling; reused repeated-expiry and pending delivery recovery proofs.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_registry_lock.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/common/spec.py",
+      "sha256": "a0966f9c8c310a9d745f8d567f22d1d2ec284fa988d5764ea45f776cd0c124b4",
+      "prior_sha256": "a0966f9c8c310a9d745f8d567f22d1d2ec284fa988d5764ea45f776cd0c124b4",
+      "lines": 411,
+      "prior_evidence_reusable": true,
+      "status": "additional_boundary_checked",
+      "round2_check": "Re-inspected sealed preview600/manifest hash and display/component budgets; optional preview remains compatibility fail-closed and content bounded.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/discord/test_mcs_discord_delivery.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/common/summary.py",
+      "sha256": "922efc6f390011fd588b6e2bbda8538a9080d5a6dcf2cf23903a14961b75da5c",
+      "prior_sha256": "922efc6f390011fd588b6e2bbda8538a9080d5a6dcf2cf23903a14961b75da5c",
+      "lines": 88,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_deep_local_state.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/common/text.py",
+      "sha256": "2cdb40d2eefa590568991c36e54ac17c25401e9fff7dc32913994c849d83924c",
+      "prior_sha256": "2cdb40d2eefa590568991c36e54ac17c25401e9fff7dc32913994c849d83924c",
+      "lines": 417,
+      "prior_evidence_reusable": true,
+      "status": "additional_boundary_checked",
+      "round2_check": "Re-inspected public-only older-spec fallback, preview bounds and body split capacity; no new state or resource retention.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/discord/test_mcs_discord.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/common/worker.py",
+      "sha256": "64d0699b62cea9d3c2dd0e8af26fae7acb6670512f156f4aca4394659c221023",
+      "prior_sha256": "64d0699b62cea9d3c2dd0e8af26fae7acb6670512f156f4aca4394659c221023",
+      "lines": 1048,
+      "prior_evidence_reusable": true,
+      "status": "additional_boundary_checked",
+      "round2_check": "Reused actual ScanCache/recovery corruption/capacity evidence and checked spec parse isolation/RecursionError path; no new speculative cache.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_worker_reconcile_integrity.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/discord/__init__.py",
+      "sha256": "b7060721cd27ed534ef3edf580f29829bb649331542a97fbbfd3bf6118da218c",
+      "prior_sha256": "b7060721cd27ed534ef3edf580f29829bb649331542a97fbbfd3bf6118da218c",
+      "lines": 13,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/discord/actions.py",
+      "sha256": "3fd94028385d67e1ddeb6db9223583ea7c4e5988e53b21d2948322a1866f7d4d",
+      "prior_sha256": "3fd94028385d67e1ddeb6db9223583ea7c4e5988e53b21d2948322a1866f7d4d",
+      "lines": 793,
+      "prior_evidence_reusable": true,
+      "status": "additional_boundary_checked",
+      "round2_check": "Rechecked global on_interaction component/menu/modal/confirm dispatch, which does not use native View callbacks. New stop affects render-only card View, not user confirmation state.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/discord/test_mcs_discord.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "adapters/discord/cards.py",
+      "sha256": "53c7b2f3ac64d3d5ed993f866843241d1cf7e0e9c222186112bbb4195931cd79",
+      "prior_sha256": "c777144d2005b181cd28fac6acb7e9455b948ba0fe2b3666c3dd582de0751893",
+      "lines": 324,
+      "prior_evidence_reusable": false,
+      "status": "fixed_additional_issue",
+      "round2_check": "Additional pinned2.7.1 ViewStore lifetime investigation found persistent render-only View registration. Stop new classic and old V2 payload Views before SDK send/edit, preserving serialized components; source changed and targeted regression run.",
+      "evidence": [
+        {
+          "kind": "synthetic_real_sdk",
+          "path": "tests/adapters/discord/test_discord_sdk_real.py"
+        },
+        {
+          "kind": "action_and_delivery_regression",
+          "path": "tests/adapters/discord/test_mcs_discord.py"
+        },
+        {
+          "kind": "action_and_delivery_regression",
+          "path": "tests/adapters/discord/test_mcs_discord_delivery.py"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/discord/delivery.py",
+      "sha256": "4fd69dd876e5801409b8654c6ea266f66a98a10f25b14b68e4dfa101b52c7024",
+      "prior_sha256": "4fd69dd876e5801409b8654c6ea266f66a98a10f25b14b68e4dfa101b52c7024",
+      "lines": 293,
+      "prior_evidence_reusable": true,
+      "status": "additional_boundary_checked",
+      "round2_check": "Rechecked message_payload single create/update paths, V2 detection and partial delivery plain body/remote matching; receipts and no-duplicate guard retained.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/discord/test_mcs_discord_delivery.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/discord/runtime_compat.py",
+      "sha256": "9e771efb1eea9efc325760a447d1a82b30a121abe8ce15d4319e95d4d804911e",
+      "prior_sha256": "9e771efb1eea9efc325760a447d1a82b30a121abe8ce15d4319e95d4d804911e",
+      "lines": 172,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_compat_cleanup.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "adapters/discord/standalone.py",
+      "sha256": "d51ee1d292ab6dff21b4d3dc425afc2b7038e2f07cda7c9b72c50c13fe21fb46",
+      "prior_sha256": "d51ee1d292ab6dff21b4d3dc425afc2b7038e2f07cda7c9b72c50c13fe21fb46",
+      "lines": 458,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/discord/test_discord_standalone.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "adapters/discord/tasks.py",
+      "sha256": "9d8097b152441f26d17469351bcf15f09f3358b82e2bcc076f088f08d712da56",
+      "prior_sha256": "9d8097b152441f26d17469351bcf15f09f3358b82e2bcc076f088f08d712da56",
+      "lines": 135,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/discord/test_mcs_discord.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "adapters/lineworks/__init__.py",
+      "sha256": "123e9023ad3914863eed4ce305b0d6c9055c32b751b9ba6b47ea46ce82db1ed9",
+      "prior_sha256": "123e9023ad3914863eed4ce305b0d6c9055c32b751b9ba6b47ea46ce82db1ed9",
+      "lines": 11,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/lineworks/__main__.py",
+      "sha256": "0859564f6caec2a25cddac56519840ac75718182a73316d646bff4af6fab0b94",
+      "prior_sha256": "0859564f6caec2a25cddac56519840ac75718182a73316d646bff4af6fab0b94",
+      "lines": 270,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_shutdown_cleanup.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/lineworks/actions.py",
+      "sha256": "1093ff944ba2260c1ad115a1cf14b0838d1008dd90992c0b0401149648c61656",
+      "prior_sha256": "1093ff944ba2260c1ad115a1cf14b0838d1008dd90992c0b0401149648c61656",
+      "lines": 352,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_lineworks_actions_review.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/lineworks/cards.py",
+      "sha256": "f32643573e31fc106e1a97a7a5a48d5dfbc8ee3a7e565c5f2820def93e0a1de0",
+      "prior_sha256": "f32643573e31fc106e1a97a7a5a48d5dfbc8ee3a7e565c5f2820def93e0a1de0",
+      "lines": 113,
+      "prior_evidence_reusable": true,
+      "status": "additional_boundary_checked",
+      "round2_check": "Re-inspected Flex preview400 and full text/buttons budget. No new callback lifetime or sender mutation.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_lineworks_adapter.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/lineworks/client.py",
+      "sha256": "ddc91e6ee562ad15d284ed5f0dc6a5f8f28eb35025eacbda76c3dcb1fe996d15",
+      "prior_sha256": "ddc91e6ee562ad15d284ed5f0dc6a5f8f28eb35025eacbda76c3dcb1fe996d15",
+      "lines": 428,
+      "prior_evidence_reusable": true,
+      "status": "additional_boundary_checked",
+      "round2_check": "Re-inspected Flex bubble15KB actual ensure_ascii=False wire bytes, surrogate/recursive payload isolation and silent mentions recursion; serialization is before real request. No live requests performed.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_lineworks_client.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/lineworks/config.py",
+      "sha256": "81d398f6facae4e97660ab4a19515dead988f5a3732072816d8b7fdfd19a8d54",
+      "prior_sha256": "81d398f6facae4e97660ab4a19515dead988f5a3732072816d8b7fdfd19a8d54",
+      "lines": 67,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_lineworks_adapter.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/lineworks/delivery.py",
+      "sha256": "54d3f17b8e44a5049387fa779534dce0a115c9bcdf38a7bfaca2fa4fb656525c",
+      "prior_sha256": "54d3f17b8e44a5049387fa779534dce0a115c9bcdf38a7bfaca2fa4fb656525c",
+      "lines": 273,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_bugfix_r3_15_part_cooldown.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/lineworks/server.py",
+      "sha256": "c045484906e6003fe946b839062f614491ffca2dee9769e365b266609d6f12f4",
+      "prior_sha256": "c045484906e6003fe946b839062f614491ffca2dee9769e365b266609d6f12f4",
+      "lines": 192,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_callback_deadline.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/lineworks/service.py",
+      "sha256": "53631613494cbdaa1eb5c65262288425dee43618aff6e9a63f4d7665feddd4fd",
+      "prior_sha256": "53631613494cbdaa1eb5c65262288425dee43618aff6e9a63f4d7665feddd4fd",
+      "lines": 65,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_lineworks_adapter.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実機service install/startは未実施。生成候補と合成path検証のみ。"
+      ]
+    },
+    {
+      "path": "adapters/slack/__init__.py",
+      "sha256": "179cbcb2e57b187d300652bbdf60dce120170eb2ee9d986a7db25a1a8bbe551b",
+      "prior_sha256": "179cbcb2e57b187d300652bbdf60dce120170eb2ee9d986a7db25a1a8bbe551b",
+      "lines": 2,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/slack/actions.py",
+      "sha256": "deeb2d90c79c1ec73ca757c52b1eaeea5f73d4a56418db3e9f580451463bab75",
+      "prior_sha256": "deeb2d90c79c1ec73ca757c52b1eaeea5f73d4a56418db3e9f580451463bab75",
+      "lines": 731,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/slack/test_mcs_slack_actions.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "adapters/slack/cards.py",
+      "sha256": "a7574796feedfd6860bff256eea5001261c197db10d77e953dd4ae2e1c66beec",
+      "prior_sha256": "a7574796feedfd6860bff256eea5001261c197db10d77e953dd4ae2e1c66beec",
+      "lines": 159,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/slack/test_mcs_slack_cards.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/slack/delivery.py",
+      "sha256": "3a7588690541b3fe3f80eedc228fa8a0d67c0838ba35fd6b8b37497cbcc10072",
+      "prior_sha256": "3a7588690541b3fe3f80eedc228fa8a0d67c0838ba35fd6b8b37497cbcc10072",
+      "lines": 535,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/slack/test_mcs_slack.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/slack/paths.py",
+      "sha256": "bffc8204582e5bc00f71c5d37a686287d479c6d936fd6b1cb54e61ab6e1e4486",
+      "prior_sha256": "bffc8204582e5bc00f71c5d37a686287d479c6d936fd6b1cb54e61ab6e1e4486",
+      "lines": 17,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/slack/test_mcs_slack.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/slack/runtime_compat.py",
+      "sha256": "c6afce252ecdd02017cddd963f74d8e71526c89e979a2ef2a756f969766eea65",
+      "prior_sha256": "c6afce252ecdd02017cddd963f74d8e71526c89e979a2ef2a756f969766eea65",
+      "lines": 134,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_compat_cleanup.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "adapters/slack/standalone.py",
+      "sha256": "26f22375a1983798336fd85c4685a6a1db6edd90ba4ddec35528c42923abbd35",
+      "prior_sha256": "26f22375a1983798336fd85c4685a6a1db6edd90ba4ddec35528c42923abbd35",
+      "lines": 388,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/slack/test_slack_standalone.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "adapters/slack/tasks.py",
+      "sha256": "05f8eee2d706f9c17a1a2480f8d905d9abb3f1e1615e6f50e289e614600b5b9a",
+      "prior_sha256": "05f8eee2d706f9c17a1a2480f8d905d9abb3f1e1615e6f50e289e614600b5b9a",
+      "lines": 106,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/slack/test_mcs_slack.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "hermes_plugin/__init__.py",
+      "sha256": "6893322c9d96368a4b6325cbddf963350574d8813fe54c06fe70e481155f5020",
+      "prior_sha256": "6893322c9d96368a4b6325cbddf963350574d8813fe54c06fe70e481155f5020",
+      "lines": 1089,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/plugin/test_hermes_plugin_mcs.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "hermes_plugin/card_workers.py",
+      "sha256": "74cf55c0916ddf3aab7a266892a797119c2f91ae2c3bde7d267e0bb8cb55c9ca",
+      "prior_sha256": "74cf55c0916ddf3aab7a266892a797119c2f91ae2c3bde7d267e0bb8cb55c9ca",
+      "lines": 159,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/plugin/test_bugfix_r2_18_slack_card_settings.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/__init__.py",
+      "sha256": "f0eab407de8f38ce6120e7803f8e230b5692a879ffe30834d532a47badd76a25",
+      "prior_sha256": "f0eab407de8f38ce6120e7803f8e230b5692a879ffe30834d532a47badd76a25",
+      "lines": 12,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "hermes_plugin/mcs_discord/__init__.py",
+      "sha256": "4ff9611d251c4b922b0151a62110b83300e5a5f6f1add80f2e9b668861328c2e",
+      "prior_sha256": "4ff9611d251c4b922b0151a62110b83300e5a5f6f1add80f2e9b668861328c2e",
+      "lines": 12,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "hermes_plugin/mcs_slack/__init__.py",
+      "sha256": "25d006bbb378c48768d38dcfd5be3c3c7d9ee18d45e316f5e72f5b2800717435",
+      "prior_sha256": "25d006bbb378c48768d38dcfd5be3c3c7d9ee18d45e316f5e72f5b2800717435",
+      "lines": 12,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "hermes_plugin/projects.py",
+      "sha256": "8893de2d8093b9ac7759f2a6f4697082042c97e84cdd40507169b163d2e60c59",
+      "prior_sha256": "8893de2d8093b9ac7759f2a6f4697082042c97e84cdd40507169b163d2e60c59",
+      "lines": 86,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/plugin/test_project_cache_retention.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "lineworks_adapter/__init__.py",
+      "sha256": "969cdc82d7a785516592ddd633fc7b9cdf47ad5e179b8a5623b3aab7a9b01862",
+      "prior_sha256": "969cdc82d7a785516592ddd633fc7b9cdf47ad5e179b8a5623b3aab7a9b01862",
+      "lines": 4,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "lineworks_adapter/__main__.py",
+      "sha256": "87231e560c93987bc624d149e605d68b9a430b0ebaec0a74951ea374145ac406",
+      "prior_sha256": "87231e560c93987bc624d149e605d68b9a430b0ebaec0a74951ea374145ac406",
+      "lines": 11,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_lineworks_adapter.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_cards.py",
+      "sha256": "77322de3d28e1857bc569cd39decbb0dbe9b91cddeea4492f023ec0dfb99b9c4",
+      "prior_sha256": "77322de3d28e1857bc569cd39decbb0dbe9b91cddeea4492f023ec0dfb99b9c4",
+      "lines": 3174,
+      "prior_evidence_reusable": true,
+      "status": "additional_boundary_checked",
+      "round2_check": "Reused final109 long-field/title/summary regression, old/unknown pending spec recovery and GC protection. View stop only native Discord UI registration; source render/spec/part bytes unchanged.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_gc_mixed_parts.py"
+        },
+        {
+          "kind": "validation",
+          "id": "current_cards_hash_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_card_buttons.py"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_cmds.py",
+      "sha256": "ecc827553c1b8855edfce9a4b1c9f3aed3c89f92f429a2c17039ca37367541b4",
+      "prior_sha256": "ecc827553c1b8855edfce9a4b1c9f3aed3c89f92f429a2c17039ca37367541b4",
+      "lines": 502,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_drain_int_sweep.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_digest.py",
+      "sha256": "10b3d593ff7530563e800efb2be7a6722cc1d6ffdbf27357b2f46260d524da31",
+      "prior_sha256": "10b3d593ff7530563e800efb2be7a6722cc1d6ffdbf27357b2f46260d524da31",
+      "lines": 630,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_notify_digest.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_flush.py",
+      "sha256": "b1d4e0aa7af27ecc9910aab7e7145ef942b99ae9e233a8714efd06158ee67d65",
+      "prior_sha256": "b1d4e0aa7af27ecc9910aab7e7145ef942b99ae9e233a8714efd06158ee67d65",
+      "lines": 1141,
+      "prior_evidence_reusable": true,
+      "status": "additional_boundary_checked",
+      "round2_check": "Re-inspected attachment followup bound message metadata and deep-progress error isolation; frozen source and existing text/file send counts retained.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_deep_progress_isolation.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_reconcile.py",
+      "sha256": "d83c1c352f1f0f164d5bfcaa3d42466f3d5829e7eef481dc511fd75d3d5cd4e0",
+      "prior_sha256": "d83c1c352f1f0f164d5bfcaa3d42466f3d5829e7eef481dc511fd75d3d5cd4e0",
+      "lines": 559,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_restore_journal_shape.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_render.py",
+      "sha256": "af85049bbbda3fde819e63333f9e363d67db39452785d0ba78dcf240f3f92056",
+      "prior_sha256": "af85049bbbda3fde819e63333f9e363d67db39452785d0ba78dcf240f3f92056",
+      "lines": 1051,
+      "prior_evidence_reusable": true,
+      "status": "additional_boundary_checked",
+      "round2_check": "Re-inspected 5field header/summary budget, unknown/deleted body isolation, signal evidence source binding and preview fingerprint. Final long metadata/summary regression reused at matching SHA.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_notify_render.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_transport.py",
+      "sha256": "197221ac6fae558767183b7014ca24ba61392a29b252543c22c329b8cf50e54e",
+      "prior_sha256": "197221ac6fae558767183b7014ca24ba61392a29b252543c22c329b8cf50e54e",
+      "lines": 947,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_notify_reconcile.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_urgent.py",
+      "sha256": "137bb708ff662bee530c649231797c05dfc02ff0dea178c14fb66347613c346f",
+      "prior_sha256": "137bb708ff662bee530c649231797c05dfc02ff0dea178c14fb66347613c346f",
+      "lines": 368,
+      "prior_evidence_reusable": true,
+      "status": "additional_boundary_checked",
+      "round2_check": "Reused current-source preview and absence-of-record distinction proofs; no new urgency source or automatic clinical decision.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_notify_urgent.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_views.py",
+      "sha256": "d4eeb6d947ba9601d1a31ce8e0665ca564d996d5551008355e8d2df4f3c521d7",
+      "prior_sha256": "d4eeb6d947ba9601d1a31ce8e0665ca564d996d5551008355e8d2df4f3c521d7",
+      "lines": 382,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_card_extras.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/__init__.py",
+      "sha256": "8f3f40b4b6cde6a7687dcc4ca1bc80659d7f1b8b2fa7c16ebada1ab604217556",
+      "prior_sha256": "8f3f40b4b6cde6a7687dcc4ca1bc80659d7f1b8b2fa7c16ebada1ab604217556",
+      "lines": 9,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_standalone_runtime.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/__main__.py",
+      "sha256": "5da74575426ce3442b2022ddb01c39313aa76a5420348aba9629b16b38b282e9",
+      "prior_sha256": "5da74575426ce3442b2022ddb01c39313aa76a5420348aba9629b16b38b282e9",
+      "lines": 275,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_standalone_error_codes.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/config.py",
+      "sha256": "4bc32cc402abb34f27705845dafbdeced3b416d37a9de7d365aa13caa86ffac6",
+      "prior_sha256": "4bc32cc402abb34f27705845dafbdeced3b416d37a9de7d365aa13caa86ffac6",
+      "lines": 240,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_standalone_runtime.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/discord_runtime.py",
+      "sha256": "a1565406c01e079c1940205a87bb405fc2e8ddf7766c6eb3f1bb7d267f7de70b",
+      "prior_sha256": "a1565406c01e079c1940205a87bb405fc2e8ddf7766c6eb3f1bb7d267f7de70b",
+      "lines": 6,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_standalone_runtime.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/host.py",
+      "sha256": "ba9bde1682ef25410e9ca3e73f4a2b799eb7a7af6be37c35de0ee2c608baf802",
+      "prior_sha256": "ba9bde1682ef25410e9ca3e73f4a2b799eb7a7af6be37c35de0ee2c608baf802",
+      "lines": 79,
+      "prior_evidence_reusable": true,
+      "status": "additional_boundary_checked",
+      "round2_check": "Re-inspected close callback exceptions/cancellation -> remaining task cancellation/gather and closing admission guard. Reused previous cleanup suite; no arbitrary timeout added without demonstrated wait boundary.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_shutdown_stability.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/runtime.py",
+      "sha256": "53d6dcfb384ac6e37528bf5b209aaa818f2282c00ab972c1c783670749b7f6c6",
+      "prior_sha256": "53d6dcfb384ac6e37528bf5b209aaa818f2282c00ab972c1c783670749b7f6c6",
+      "lines": 205,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_runtime.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/service.py",
+      "sha256": "9575bab334e3de3bf9b0a39fe4cd5c9e4dd70b2ad8203f6a6de16331a03b8915",
+      "prior_sha256": "9575bab334e3de3bf9b0a39fe4cd5c9e4dd70b2ad8203f6a6de16331a03b8915",
+      "lines": 90,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_standalone_runtime.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実機service install/startは未実施。生成候補と合成path検証のみ。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/slack_runtime.py",
+      "sha256": "40c6d34e50942ed1246247acd3947de1e8c2c51cdaa291f5a4c5cc706a977a84",
+      "prior_sha256": "40c6d34e50942ed1246247acd3947de1e8c2c51cdaa291f5a4c5cc706a977a84",
+      "lines": 6,
+      "prior_evidence_reusable": true,
+      "status": "reused_matching_sha",
+      "round2_check": "Previous per-file source review, callers/contracts and synthetic behavioral evidence reused because SHA matches. No new unresolved question or evidence justifying repeated successful tests.",
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_standalone_runtime.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    }
+  ],
+  "remaining_constraints": [
+    "No real mobile devices or provider network exercised. Existing DiscordV2 and native LINEWORKSfile preview format constraints unchanged.",
+    "Existing SDK View retention from earlier process requires restart to release; new registration prevented after update.",
+    "Prior dossier covers per-file shutdown/recovery/resource limits; arbitrary external callback stalls not proven here and no broad timeout contract invented.",
+    "Pinned SDK gate remains exact constructors and imports; no new SDK constructor/native connection permission added."
+  ],
+  "complete": true,
+  "unresolved_demonstrated_blockers": []
+}

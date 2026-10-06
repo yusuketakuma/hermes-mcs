@@ -2748,7 +2748,9 @@ def _cron_list(hermes: str) -> list[dict] | None:
             if cur is None:
                 return None            # field before any header
             cur[m.group(1).lower()] = m.group(2)
-    if not out and "No scheduled jobs." not in output:
+    # Hermes >= 2026-09-28 prints "No scheduled jobs in profile '<name>'."
+    if not out and not re.search(r"^No scheduled jobs(?: in profile '[^'\n]*')?\.",
+                                 output, re.M):
         return None
     if any(not entry.get("name") or not entry.get("schedule") for entry in out):
         return None

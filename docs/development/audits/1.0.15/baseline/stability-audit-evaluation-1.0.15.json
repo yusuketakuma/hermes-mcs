@@ -1,0 +1,60 @@
+{
+  "version": "1.0.15",
+  "entries": [
+    {
+      "path": "evaluation/canonical_request_eval.py",
+      "sha256": "bca99ce4a6a26ee1303965715a2c2a0bb4b636d84433b1c9ec2e4901fe8e97ca",
+      "status": "fixed",
+      "checks": [
+        "Offline fictional projection comparison and human-gate nonpromotion; readonly shadow source/hash/project binding; deep JSON error isolation; no raw exception diagnostic"
+      ],
+      "source_symbols": [
+        "_unknown",
+        "_output",
+        "_document",
+        "_quality",
+        "_shadow_requests",
+        "_overlaps",
+        "shadow_compare",
+        "capacity_report",
+        "evaluate",
+        "main"
+      ],
+      "evidence": [
+        "tests/semantic/test_canonical_request_evaluation.py",
+        "tests/semantic/test_request_following_generation.py"
+      ],
+      "limitations": [
+        "Synthetic evaluation is not a clinical accuracy or production readiness measurement."
+      ]
+    },
+    {
+      "path": "evaluation/request_following_review.py",
+      "sha256": "01ba3487d1723c319f074773141fd1280b675a78210a3d54da06c65799f7fd55",
+      "status": "reviewed_no_change",
+      "checks": [
+        "Fixed local manifest basename and SHA binding; fully-synthetic pending labels; quoted source fields; held-out focus/diversity completeness; export never activation receipt"
+      ],
+      "source_symbols": [
+        "_SourceCaseRequired",
+        "SourceCase",
+        "Quote",
+        "_ProposalRequired",
+        "Proposal",
+        "ReviewReport",
+        "fingerprint",
+        "validate",
+        "load_queue",
+        "worksheet",
+        "main"
+      ],
+      "evidence": [
+        "tests/semantic/test_canonical_human_review_assets.py"
+      ],
+      "limitations": [
+        "Synthetic evaluation is not a clinical accuracy or production readiness measurement."
+      ]
+    }
+  ],
+  "verification": "Canonical evaluation/generation focused tests passed; held-out assets covered in integrated semantic suite."
+}

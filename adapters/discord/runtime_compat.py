@@ -98,6 +98,7 @@ async def run(settings: dict, tokens: dict, stop: asyncio.Event) -> None:
     command = _mcs_command(settings, host)
     bot.tree.add_command(command)
     gateway = None
+    waiter = None
     try:
         await bot.login(tokens["DISCORD_BOT_TOKEN"])
         if str(bot.application_id) != settings["application_id"]:
@@ -119,11 +120,16 @@ async def run(settings: dict, tokens: dict, stop: asyncio.Event) -> None:
         waiter.cancel()
         raise_ended(done, waiter)
     finally:
-        await host.close()
-        await bot.close()
-        if gateway is not None:
-            gateway.cancel()
-            await asyncio.gather(gateway, return_exceptions=True)
+        try:
+            await host.close()
+        finally:
+            try:
+                await bot.close()
+            finally:
+                tasks = [task for task in (gateway, waiter) if task is not None]
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def send(token: str, channel_id: str, text: str,

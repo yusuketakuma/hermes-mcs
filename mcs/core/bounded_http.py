@@ -171,12 +171,14 @@ def bounded_http_request(endpoint: str, method: str, body,
     elif not isinstance(api_key, str) or endpoint not in allowed:
         raise ValueError("endpoint_not_allowed")
     if (isinstance(timeout, bool) or not isinstance(timeout, int | float)
+            or abs(timeout) > sys.float_info.max
             or not math.isfinite(timeout) or timeout <= 0):
         raise ValueError("timeout_invalid")
     operation_deadline = time.monotonic() + float(timeout)
     if deadline is not None:
         if (isinstance(deadline, bool)
                 or not isinstance(deadline, int | float)
+                or abs(deadline) > sys.float_info.max
                 or not math.isfinite(deadline)):
             raise ValueError("deadline_invalid")
         operation_deadline = min(operation_deadline, float(deadline))

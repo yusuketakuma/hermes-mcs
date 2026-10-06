@@ -52,6 +52,9 @@ def _fake_discord():
         def add_item(self, item):
             self.items.append(item)
 
+        def stop(self):
+            self.stopped = True
+
     class TextDisplay:
         def __init__(self, content):
             self.content = content
@@ -85,7 +88,8 @@ def _fake_discord():
         def __init__(self, visible=True, spacing=None):
             self.visible, self.spacing = visible, spacing
 
-    mod.ui = SimpleNamespace(LayoutView=LayoutView, TextDisplay=TextDisplay,
+    mod.Embed = lambda description=None, colour=None: SimpleNamespace(description=description, colour=colour)
+    mod.ui = SimpleNamespace(View=LayoutView, LayoutView=LayoutView, TextDisplay=TextDisplay,
                              ActionRow=ActionRow, Container=Container,
                              Button=Button, Select=Select, Separator=Separator)
     mod.SelectOption = SelectOption
@@ -107,7 +111,7 @@ class FakeChannel:
         self.sent = []
         self._next = 9000
 
-    async def send(self, view=None, allowed_mentions=None):
+    async def send(self, view=None, allowed_mentions=None, content=None, embed=None):
         self._next += 1
         m = FakeMessage(self._next)
         self.sent.append(m)

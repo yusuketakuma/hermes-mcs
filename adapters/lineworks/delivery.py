@@ -13,7 +13,7 @@ from contextlib import contextmanager
 
 from adapters.common import paths
 from adapters.common.spec import token_map
-from adapters.common.worker import DeliveryWorker as BaseWorker
+from adapters.common.worker import WorkspaceDeliveryWorker as BaseWorker
 
 from . import cards
 from .client import ClientError
@@ -186,21 +186,11 @@ class DeliveryWorker(BaseWorker):
                          worker_id=worker_id, log=log)
         self._sender = sender
 
-    def scope(self):
-        return {key: self._settings[key] for key in
-                ("transport", "profile", "application_id", "team_id", "channel_id")}
-
-    def _ours(self, delivery):
-        return all(delivery.get(key) == value for key, value in self.scope().items())
-
     def _validate_spec(self, spec):
         cards.validate(spec)
 
     def _verify_grant(self, claim, result):
-        return (super()._verify_grant(claim, result)
-                and result.get("transport") == "lineworks"
-                and result.get("team_id") == self._settings["team_id"]
-                and self._sender.route_current(claim["spec"]))
+        return super()._verify_grant(claim, result) and self._sender.route_current(claim["spec"])
 
     async def _perform(self, claim):
         spec = claim["spec"]
@@ -223,8 +213,7 @@ class DeliveryWorker(BaseWorker):
                         context.update(menu=menu, heading=cards.heading(spec))
                     elif any(item["token"] == token for item in menu):
                         context["via_more"] = True
-            self._reg.put_tokens(tokens)
-            self._reg.save(immediate=True)
+            self._reg.put_tokens(tokens, durable=True)  # durable before the receipt
         return outcome
 
     async def _perform_part(self, claim, part, ctx):
@@ -261,7 +250,7 @@ class DeliveryWorker(BaseWorker):
                 if part.get("prior_remote_id"):
                     return {"result": "delivered", "remote_id": part["prior_remote_id"]}
                 blob = await asyncio.to_thread(paths.read_verified_attachment,
-                                               part.get("path"), part)
+                                               part.get("path"), part, self._root)
                 if blob is None:
                     return {"result": "not_sent", "error_code": "attachment_mismatch"}
                 rid = await locked(self._sender.attachment, blob, part.get("name") or "file",

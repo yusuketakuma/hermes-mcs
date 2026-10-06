@@ -19,7 +19,8 @@ from ledger import LedgerReader, reaction_actor_summary
 from project_metadata_view import physician_viewed_status
 from mcs_queries import incomplete_reply_roots
 from mcs_signals import is_own_station_message
-from mcs_util import loads_dict
+from mcs_util import loads_dict, register_search_fold, search_fold
+from read_model import _snapshot_meta
 from message_metadata import (
     flag_lines, get_message_metadata, get_metadata_shadow_status, is_self_sender)
 import mcs_requests as requests
@@ -69,10 +70,10 @@ class View:
                 raise ValueError("snapshot_upgrade_required")
             if self.db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
                 raise ValueError("published_snapshot_required")
-            row = self.db.execute("SELECT generation_id,generated_at FROM snapshot_meta WHERE singleton=1").fetchone()
-            if row is None:
+            meta = _snapshot_meta(self.db)
+            if not meta["published"]:
                 raise ValueError("published_snapshot_required")
-            self.meta = dict(row)
+            self.meta = {key: meta[key] for key in ("generation_id", "generated_at")}
         except Exception:
             self.close()
             raise
@@ -173,9 +174,12 @@ class View:
         if kind == "search":
             if not isinstance(query, str) or not query.strip() or len(query) > 500:
                 raise ValueError("bad_query")
-            for term in query.split():
-                sql += " AND (instr(lower(replace(replace(m.body_text,' ',''),'　','')),lower(?))>0" \
-                       " OR instr(lower(replace(replace(m.sender_name,' ',''),'　','')),lower(?))>0)"
+            # NFKC + casefold + whitespace-free on both sides (mcs_fold),
+            # so width variants (ﾛｷｿﾆﾝ / ロキソニン, ＢＳ / bs) match
+            register_search_fold(self.db)
+            for term in filter(None, map(search_fold, query.split())):
+                sql += " AND (instr(mcs_fold(m.body_text),?)>0" \
+                       " OR instr(mcs_fold(m.sender_name),?)>0)"
                 params += [term, term]
         for value, operator in ((since, ">="), (until, "<=")):
             if value is not None:

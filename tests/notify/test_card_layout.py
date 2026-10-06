@@ -90,7 +90,7 @@ def test_signal_face_labels_type_and_state_in_japanese(led):
     texts = _texts(_spec(led))
     assert texts[0] == "💬 アラート ［要確認］"           # discharge is immediate
     assert "・【期限超過】note s1（解消）" in texts[-1]
-    assert "・【退院連絡】note s2（未対応）" in texts[-1]
+    assert "・【退院連絡】note s2（未確認）" in texts[-1]
     assert "resolved" not in "".join(texts)
 
 
@@ -106,7 +106,7 @@ def test_signal_thread_posts_are_keyed_per_signal(led):
     assert len(names) == 2 and all(n.startswith("s:") for n in names)
     assert names[0] != names[1]
     body = "".join(_spec(led)["parts"]["thread_body_parts"])
-    assert "/ 状態: 未対応" in body and "↳ 患者A 様 · " in body
+    assert "/ 状態: 未確認" in body and "↳ 患者A 様 · " in body
     assert "[MCS]" not in body and "project 1" not in body
 
 
@@ -119,7 +119,8 @@ def test_attachment_parts_carry_a_caption(led):
     _dispatch(led, _intent(led))
     att = next(p for p in _spec(led)["parts"]["manifest"]
                if p["kind"] == "attachment_part")
-    assert att["caption"] == "📎 a.jpg — 患者A 様 09-24 08:40 職員"
+    assert "患者A:" in att["caption"] and "職員（所属未取得） / 09-24 08:40" in att["caption"]
+    assert "要約処理待ち" in att["caption"] and "📎 a.jpg" in att["caption"]
 
 
 def test_lineworks_card_member_names_repost_marker_and_more(led):

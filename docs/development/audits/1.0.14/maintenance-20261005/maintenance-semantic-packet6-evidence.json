@@ -1,0 +1,4225 @@
+{
+  "schema_version": 1,
+  "packet": "maintenance-semantic-packet6",
+  "language": "ja",
+  "date": "2026-10-05",
+  "status": "PACKET_REVIEWED_REPAIRS_VALIDATED_PENDING_PARENT_INTEGRATION_NOT_GLOBAL_COMPLETE",
+  "identity": {
+    "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-semantic-20261005",
+    "branch": "audit/maintenance-semantic-packet6-20261005",
+    "B": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+    "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+    "W_behavior_commit": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+    "behavior_commits": [
+      "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "db7a4edbac6e002e72a21af0c552803f7acc87a0"
+    ],
+    "evidence_commit": "このファイルを追加した専用branch commit。自己参照SHAはgit log -1 --format=%H -- docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.jsonで解決。",
+    "parent_owner": "/root",
+    "parent_reported_integration": "24261b→931f292、URL fragment→15c8c04、generated DEVELOPMENT→b3140f4。child sourceW判定に読み替えない。"
+  },
+  "scope": {
+    "existing_owned_files": 51,
+    "source": 8,
+    "existing_release_tests": 3,
+    "maintenance_docs": 4,
+    "docs_assets": 8,
+    "docs_screenshots": 28,
+    "text_full_read_files": 42,
+    "text_full_read_lines_P": 4041,
+    "generated_binary_files": 9,
+    "generated_binary_visual_checked": 9,
+    "new_reviewed_text": [
+      "tests/meta/test_maintenance_development_regressions.py",
+      "changes/20261005-development-offline-validation.json"
+    ],
+    "new_run_record": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-semantic-packet6-evidence.json",
+    "source_review_states": {
+      "REVIEWED": 51,
+      "PARTIAL": 0,
+      "UNSEEN": 0,
+      "EXCLUDED": 0
+    },
+    "reviewed_with_new_text": 53,
+    "full_repository_complete": false,
+    "not_owned": [
+      "rootREADME/CHANGELOG/DEVELOPMENT/AGENTS/inventory",
+      "existingmetaexceptnewapprovedfile",
+      "core/semantic/notify/ops/adapters/views/ingest/plugin",
+      "contracts/guides/dev-records/fullchanges"
+    ]
+  },
+  "safety": {
+    "data": "完全合成のみ、実投稿匿名化も禁止",
+    "never_accessed": [
+      "原本/実DB",
+      "実LLM/Jev/MCS/API",
+      "Keychain/private config/token cache",
+      "実送信/再起動/配備"
+    ],
+    "external_mutations": false,
+    "new_dependencies": false,
+    "instruction_changes": false,
+    "child_spawn": false,
+    "guards_weakened": false,
+    "local_commits_only": true,
+    "renderer_invoked": false
+  },
+  "read_evidence": {
+    "inventory_input": "/tmp/mcs-maintenance-semantic-packet6-input.json",
+    "ranges": "/tmp/mcs-maintenance-semantic-packet6-reads.json",
+    "visual": "/tmp/mcs-maintenance-semantic-packet6-visual.json",
+    "nontruncated_text": true,
+    "method": "P source/doc全文を分割readしSHA照合。callersは実source/部分範囲/正確symbol検索で区別。P→W全deltaを読取、owned51path集合を受入集合と一致検査。grep-onlyをREVIEWEDへ算入しない。"
+  },
+  "files": [
+    {
+      "path": "docs/assets/analytics-overview.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "efa874a310f20b459423dc6ce5710d1e6092c5babfcc404045ac5216ed4f286d",
+      "sha256_W": "efa874a310f20b459423dc6ce5710d1e6092c5babfcc404045ac5216ed4f286d",
+      "bytes_P": 2415,
+      "bytes_W": 2415,
+      "read_ranges_P": [
+        [
+          1,
+          31
+        ]
+      ],
+      "lines_P": 31,
+      "lines_W": 31,
+      "criteria_group": "static_docs",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ]
+    },
+    {
+      "path": "docs/assets/flow-journey.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "5fd5290fd75682abe041f3dfa8e9eb98c85067cd29e20707a40cb6397e5148b1",
+      "sha256_W": "5fd5290fd75682abe041f3dfa8e9eb98c85067cd29e20707a40cb6397e5148b1",
+      "bytes_P": 2869,
+      "bytes_W": 2869,
+      "read_ranges_P": [
+        [
+          1,
+          36
+        ]
+      ],
+      "lines_P": 36,
+      "lines_W": 36,
+      "criteria_group": "static_docs",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ]
+    },
+    {
+      "path": "docs/assets/flow-network.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "083ff5eb31c26caeecbbdc096cb9b16bb8d0e40dec8df8b295ec363f90567c59",
+      "sha256_W": "083ff5eb31c26caeecbbdc096cb9b16bb8d0e40dec8df8b295ec363f90567c59",
+      "bytes_P": 3231,
+      "bytes_W": 3231,
+      "read_ranges_P": [
+        [
+          1,
+          38
+        ]
+      ],
+      "lines_P": 38,
+      "lines_W": 38,
+      "criteria_group": "static_docs",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ]
+    },
+    {
+      "path": "docs/assets/flow-overview.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "aeff8973e7e57bda3863c09211f37d22af2eadf99a8bd087d57852248d6dc1f7",
+      "sha256_W": "aeff8973e7e57bda3863c09211f37d22af2eadf99a8bd087d57852248d6dc1f7",
+      "bytes_P": 2942,
+      "bytes_W": 2942,
+      "read_ranges_P": [
+        [
+          1,
+          35
+        ]
+      ],
+      "lines_P": 35,
+      "lines_W": 35,
+      "criteria_group": "static_docs",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ]
+    },
+    {
+      "path": "docs/assets/flow-pipeline.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "794651d32c5732ae343da37de2c518d06030a0b9caa73464618e546295ca0878",
+      "sha256_W": "794651d32c5732ae343da37de2c518d06030a0b9caa73464618e546295ca0878",
+      "bytes_P": 3878,
+      "bytes_W": 3878,
+      "read_ranges_P": [
+        [
+          1,
+          47
+        ]
+      ],
+      "lines_P": 47,
+      "lines_W": 47,
+      "criteria_group": "static_docs",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ]
+    },
+    {
+      "path": "docs/assets/flow-signals.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "2fbf6910392281d0d22ec70306a2da9c27a547f96265e2cffd20d05402acba1f",
+      "sha256_W": "2fbf6910392281d0d22ec70306a2da9c27a547f96265e2cffd20d05402acba1f",
+      "bytes_P": 3181,
+      "bytes_W": 3181,
+      "read_ranges_P": [
+        [
+          1,
+          42
+        ]
+      ],
+      "lines_P": 42,
+      "lines_W": 42,
+      "criteria_group": "static_docs",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ]
+    },
+    {
+      "path": "docs/assets/flow-timeline.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "aa6564ecfd5a97dd7c575b113ea570a1a033251256ea31e769d56544cb3b312f",
+      "sha256_W": "aa6564ecfd5a97dd7c575b113ea570a1a033251256ea31e769d56544cb3b312f",
+      "bytes_P": 1674,
+      "bytes_W": 1674,
+      "read_ranges_P": [
+        [
+          1,
+          27
+        ]
+      ],
+      "lines_P": 27,
+      "lines_W": 27,
+      "criteria_group": "static_docs",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ]
+    },
+    {
+      "path": "docs/assets/runtime-topology.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "31efff361d40ac84a66d53ffb30d589328922720efc990f5765b69830ac11d03",
+      "sha256_W": "b583fcb7befbf840125251f1d0f10d528e6b6d2dfa7da4e2172a47a8620d266e",
+      "bytes_P": 8585,
+      "bytes_W": 8587,
+      "read_ranges_P": [
+        [
+          1,
+          117
+        ]
+      ],
+      "lines_P": 117,
+      "lines_W": 117,
+      "criteria_group": "static_docs",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ]
+    },
+    {
+      "path": "docs/development/README_MAINTENANCE.md",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "dcfb3af671339b3e26af29aba42cbcd283abc495ac3c331fc2cccf7409d5b256",
+      "sha256_W": "dcfb3af671339b3e26af29aba42cbcd283abc495ac3c331fc2cccf7409d5b256",
+      "bytes_P": 6680,
+      "bytes_W": 6680,
+      "read_ranges_P": [
+        [
+          1,
+          82
+        ]
+      ],
+      "lines_P": 82,
+      "lines_W": 82,
+      "criteria_group": "readme",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "source由来のREADME/DEVELOPMENT生成blockとrelease要約/review根拠の検査・ローカル再生成",
+      "callers": [
+        "Makefile:23-26",
+        ".github/workflows/ci.yml:32,46",
+        "docs/development/README_MAINTENANCE.md:30-38",
+        "tests/meta/test_ci_scripts.py:49-107,298-316",
+        "tests/release/test_readme_release.py"
+      ]
+    },
+    {
+      "path": "docs/development/plans/RELEASE_1.0.13.md",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "6604b6984d96ff58f13647ca478f7d653c6536b79364522e733a136fbd6bcf82",
+      "sha256_W": "6604b6984d96ff58f13647ca478f7d653c6536b79364522e733a136fbd6bcf82",
+      "bytes_P": 16192,
+      "bytes_W": 16192,
+      "read_ranges_P": [
+        [
+          1,
+          146
+        ]
+      ],
+      "lines_P": 146,
+      "lines_W": 146,
+      "criteria_group": "static_docs",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ]
+    },
+    {
+      "path": "docs/development/RELEASE_NOTES.md",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "3f41412df7b4308348313c7c42d16e94802e23bcb0083d5dbc84e70dd225af56",
+      "sha256_W": "3f41412df7b4308348313c7c42d16e94802e23bcb0083d5dbc84e70dd225af56",
+      "bytes_P": 7767,
+      "bytes_W": 7767,
+      "read_ranges_P": [
+        [
+          1,
+          114
+        ]
+      ],
+      "lines_P": 114,
+      "lines_W": 114,
+      "criteria_group": "release",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "日本語変更fragmentから版sectionを検査・生成・exportし、既存GitHub Release本文/タイトルだけを明示同期",
+      "callers": [
+        "docs/development/RELEASE_NOTES.md:51-60",
+        ".github/workflows/release-notes.yml:45-124",
+        "tests/release/test_release_notes.py",
+        "tests/release/test_sync_release_notes.py",
+        "scripts/development/readme_release.py"
+      ]
+    },
+    {
+      "path": "docs/development/readme-review.json",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "b68cca16cf73b155b2edd3d0a0d31e699586e4815345e941262df9844a97f9d6",
+      "sha256_W": "b68cca16cf73b155b2edd3d0a0d31e699586e4815345e941262df9844a97f9d6",
+      "bytes_P": 10282,
+      "bytes_W": 10282,
+      "read_ranges_P": [
+        [
+          1,
+          100
+        ]
+      ],
+      "lines_P": 100,
+      "lines_W": 100,
+      "criteria_group": "readme",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "source由来のREADME/DEVELOPMENT生成blockとrelease要約/review根拠の検査・ローカル再生成",
+      "callers": [
+        "Makefile:23-26",
+        ".github/workflows/ci.yml:32,46",
+        "docs/development/README_MAINTENANCE.md:30-38",
+        "tests/meta/test_ci_scripts.py:49-107,298-316",
+        "tests/release/test_readme_release.py"
+      ]
+    },
+    {
+      "path": "docs/screenshots/discord-card.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "3a866efc72ff3e6289982b76b54809c170af2b38a3c5e69efeeff6233299112f",
+      "sha256_W": "3a866efc72ff3e6289982b76b54809c170af2b38a3c5e69efeeff6233299112f",
+      "bytes_P": 6566,
+      "bytes_W": 6566,
+      "read_ranges_P": [
+        [
+          1,
+          86
+        ]
+      ],
+      "lines_P": 86,
+      "lines_W": 86,
+      "criteria_group": "static_docs",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ]
+    },
+    {
+      "path": "docs/screenshots/discord-thread.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "dfe2305ddeb69c8015e59d899aa3d5879c26af9ef6bde9dd065d0716fef97584",
+      "sha256_W": "89867d2ea162024cd9e501c63173fab530035a985fdd1a89141d5531a2f19c40",
+      "bytes_P": 6631,
+      "bytes_W": 6646,
+      "read_ranges_P": [
+        [
+          1,
+          84
+        ]
+      ],
+      "lines_P": 84,
+      "lines_W": 84,
+      "criteria_group": "static_docs",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ]
+    },
+    {
+      "path": "docs/screenshots/lineworks-gallery/01-delivery.png",
+      "type": "binary/generated",
+      "state": "REVIEWED",
+      "sha256_P": "d290c1b3822e6671acba3bb97d782873488a4ec94c1f3ef822d289ac991ffc29",
+      "sha256_W": "d290c1b3822e6671acba3bb97d782873488a4ec94c1f3ef822d289ac991ffc29",
+      "bytes_P": 428436,
+      "bytes_W": 428436,
+      "read_ranges_P": [],
+      "lines_P": null,
+      "lines_W": null,
+      "criteria_group": "gallery",
+      "review_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。",
+      "generated_from": [
+        "scripts/development/generate_lineworks_gallery.py",
+        "docs/screenshots/lineworks-gallery/01-delivery.svg",
+        "docs/screenshots/lineworks-gallery/assets.json",
+        "docs/screenshots/lineworks-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "gallery_pair_unchanged": true
+    },
+    {
+      "path": "docs/screenshots/lineworks-gallery/01-delivery.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "1e1243ff6bddbf0d6fb58b1b5392c64f5851df96a0a8c0721c7555a4f5b4b8d6",
+      "sha256_W": "1e1243ff6bddbf0d6fb58b1b5392c64f5851df96a0a8c0721c7555a4f5b4b8d6",
+      "bytes_P": 6859,
+      "bytes_W": 6859,
+      "read_ranges_P": [
+        [
+          1,
+          70
+        ]
+      ],
+      "lines_P": 70,
+      "lines_W": 70,
+      "criteria_group": "gallery",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ]
+    },
+    {
+      "path": "docs/screenshots/lineworks-gallery/02-task-confirm.png",
+      "type": "binary/generated",
+      "state": "REVIEWED",
+      "sha256_P": "e63bf43804611adf3363ff59597bd955d91359ce7c60651706d9dd58c51c293d",
+      "sha256_W": "e63bf43804611adf3363ff59597bd955d91359ce7c60651706d9dd58c51c293d",
+      "bytes_P": 363561,
+      "bytes_W": 363561,
+      "read_ranges_P": [],
+      "lines_P": null,
+      "lines_W": null,
+      "criteria_group": "gallery",
+      "review_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。",
+      "generated_from": [
+        "scripts/development/generate_lineworks_gallery.py",
+        "docs/screenshots/lineworks-gallery/02-task-confirm.svg",
+        "docs/screenshots/lineworks-gallery/assets.json",
+        "docs/screenshots/lineworks-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "gallery_pair_unchanged": true
+    },
+    {
+      "path": "docs/screenshots/lineworks-gallery/02-task-confirm.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "ac28e593323c7a5c8b353cdfc0583025e6cc481cc159f84708bd55f79a38f127",
+      "sha256_W": "ac28e593323c7a5c8b353cdfc0583025e6cc481cc159f84708bd55f79a38f127",
+      "bytes_P": 5721,
+      "bytes_W": 5721,
+      "read_ranges_P": [
+        [
+          1,
+          60
+        ]
+      ],
+      "lines_P": 60,
+      "lines_W": 60,
+      "criteria_group": "gallery",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ]
+    },
+    {
+      "path": "docs/screenshots/lineworks-gallery/README.md",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "7e04de4357258ebe14084b723fc1e0420326497bf4df8e2be92becd265920224",
+      "sha256_W": "7e04de4357258ebe14084b723fc1e0420326497bf4df8e2be92becd265920224",
+      "bytes_P": 2603,
+      "bytes_W": 2603,
+      "read_ranges_P": [
+        [
+          1,
+          38
+        ]
+      ],
+      "lines_P": 38,
+      "lines_W": 38,
+      "criteria_group": "gallery",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ]
+    },
+    {
+      "path": "docs/screenshots/lineworks-gallery/assets.json",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "08d9f139b7346e3ef2b5e7d410e05a118b72e59dd0a49685c1e08a7fcaeac96d",
+      "sha256_W": "08d9f139b7346e3ef2b5e7d410e05a118b72e59dd0a49685c1e08a7fcaeac96d",
+      "bytes_P": 369,
+      "bytes_W": 369,
+      "read_ranges_P": [
+        [
+          1,
+          10
+        ]
+      ],
+      "lines_P": 10,
+      "lines_W": 10,
+      "criteria_group": "gallery",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ]
+    },
+    {
+      "path": "docs/screenshots/signals-cli.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "1847467b96615b637a9ee9e297dea5284e9bb676fdcaf2ae543381fabdb96b1d",
+      "sha256_W": "1847467b96615b637a9ee9e297dea5284e9bb676fdcaf2ae543381fabdb96b1d",
+      "bytes_P": 1641,
+      "bytes_W": 1641,
+      "read_ranges_P": [
+        [
+          1,
+          19
+        ]
+      ],
+      "lines_P": 19,
+      "lines_W": 19,
+      "criteria_group": "static_docs",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ]
+    },
+    {
+      "path": "docs/screenshots/slack-card.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "3dbd082f74547619dc92d03be1c82ae1d3e38507fe8b8662b24564e4f66f8132",
+      "sha256_W": "3dbd082f74547619dc92d03be1c82ae1d3e38507fe8b8662b24564e4f66f8132",
+      "bytes_P": 7418,
+      "bytes_W": 7418,
+      "read_ranges_P": [
+        [
+          1,
+          101
+        ]
+      ],
+      "lines_P": 101,
+      "lines_W": 101,
+      "criteria_group": "static_docs",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ]
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/01-overview.png",
+      "type": "binary/generated",
+      "state": "REVIEWED",
+      "sha256_P": "43acd8b463ae71e7df344ae1702b69d99d2347afd72e27f428528952d28fdbd5",
+      "sha256_W": "43acd8b463ae71e7df344ae1702b69d99d2347afd72e27f428528952d28fdbd5",
+      "bytes_P": 296727,
+      "bytes_W": 296727,
+      "read_ranges_P": [],
+      "lines_P": null,
+      "lines_W": null,
+      "criteria_group": "gallery",
+      "review_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。",
+      "generated_from": [
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/01-overview.svg",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/slack-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "gallery_pair_unchanged": true
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/01-overview.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "53dc21ccca3976dce6b3373b3647587b11b6339c7995c678512c2d9863d1dfe3",
+      "sha256_W": "53dc21ccca3976dce6b3373b3647587b11b6339c7995c678512c2d9863d1dfe3",
+      "bytes_P": 4887,
+      "bytes_W": 4887,
+      "read_ranges_P": [
+        [
+          1,
+          53
+        ]
+      ],
+      "lines_P": 53,
+      "lines_W": 53,
+      "criteria_group": "gallery",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ]
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/02-notification.png",
+      "type": "binary/generated",
+      "state": "REVIEWED",
+      "sha256_P": "c61b4e8854947d8a96bdd1d95e3f65604938d5a7f56dcefbdf4e266defbd6680",
+      "sha256_W": "c61b4e8854947d8a96bdd1d95e3f65604938d5a7f56dcefbdf4e266defbd6680",
+      "bytes_P": 227592,
+      "bytes_W": 227592,
+      "read_ranges_P": [],
+      "lines_P": null,
+      "lines_W": null,
+      "criteria_group": "gallery",
+      "review_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。",
+      "generated_from": [
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/02-notification.svg",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/slack-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "gallery_pair_unchanged": true
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/02-notification.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "a84a13417a607b1ee1d59e875d837dcfe8f283fc005f2e622387f9c1d6bafe0d",
+      "sha256_W": "a84a13417a607b1ee1d59e875d837dcfe8f283fc005f2e622387f9c1d6bafe0d",
+      "bytes_P": 4217,
+      "bytes_W": 4217,
+      "read_ranges_P": [
+        [
+          1,
+          45
+        ]
+      ],
+      "lines_P": 45,
+      "lines_W": 45,
+      "criteria_group": "gallery",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ]
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/03-actions.png",
+      "type": "binary/generated",
+      "state": "REVIEWED",
+      "sha256_P": "557fee9a41ebb3663db7edd3f75c863cb5c2a5e0f1b7e21b0f37ee5dc12af8fb",
+      "sha256_W": "557fee9a41ebb3663db7edd3f75c863cb5c2a5e0f1b7e21b0f37ee5dc12af8fb",
+      "bytes_P": 258482,
+      "bytes_W": 258482,
+      "read_ranges_P": [],
+      "lines_P": null,
+      "lines_W": null,
+      "criteria_group": "gallery",
+      "review_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。",
+      "generated_from": [
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/03-actions.svg",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/slack-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "gallery_pair_unchanged": true
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/03-actions.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "6dca61a9bcf6ad6203b43b45083f1dd6fbd7867aa274d420934f5e82193e9378",
+      "sha256_W": "6dca61a9bcf6ad6203b43b45083f1dd6fbd7867aa274d420934f5e82193e9378",
+      "bytes_P": 4358,
+      "bytes_W": 4358,
+      "read_ranges_P": [
+        [
+          1,
+          49
+        ]
+      ],
+      "lines_P": 49,
+      "lines_W": 49,
+      "criteria_group": "gallery",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ]
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/04-task-form.png",
+      "type": "binary/generated",
+      "state": "REVIEWED",
+      "sha256_P": "32b56acf90251a20dc522ede033436fdbd71d78c08d390cf8697c0683f0b77ec",
+      "sha256_W": "32b56acf90251a20dc522ede033436fdbd71d78c08d390cf8697c0683f0b77ec",
+      "bytes_P": 224837,
+      "bytes_W": 224837,
+      "read_ranges_P": [],
+      "lines_P": null,
+      "lines_W": null,
+      "criteria_group": "gallery",
+      "review_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。",
+      "generated_from": [
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/04-task-form.svg",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/slack-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "gallery_pair_unchanged": true
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/04-task-form.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "0cf9d0d6876f4b3ab1e696a2be50e3db75bb9903f3286ee44479646ae6299bdc",
+      "sha256_W": "0cf9d0d6876f4b3ab1e696a2be50e3db75bb9903f3286ee44479646ae6299bdc",
+      "bytes_P": 4113,
+      "bytes_W": 4113,
+      "read_ranges_P": [
+        [
+          1,
+          45
+        ]
+      ],
+      "lines_P": 45,
+      "lines_W": 45,
+      "criteria_group": "gallery",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ]
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/05-task-preview.png",
+      "type": "binary/generated",
+      "state": "REVIEWED",
+      "sha256_P": "06707ada2dbe594b1f198e6f285f4e1a68c411d959f47ec5284dc96594258d0a",
+      "sha256_W": "06707ada2dbe594b1f198e6f285f4e1a68c411d959f47ec5284dc96594258d0a",
+      "bytes_P": 240841,
+      "bytes_W": 240841,
+      "read_ranges_P": [],
+      "lines_P": null,
+      "lines_W": null,
+      "criteria_group": "gallery",
+      "review_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。",
+      "generated_from": [
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/05-task-preview.svg",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/slack-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "gallery_pair_unchanged": true
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/05-task-preview.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "37f36fd185fb7d9fb3bcc54cf6144b3d228b8c549c7772811f0caf92412561f7",
+      "sha256_W": "37f36fd185fb7d9fb3bcc54cf6144b3d228b8c549c7772811f0caf92412561f7",
+      "bytes_P": 3696,
+      "bytes_W": 3696,
+      "read_ranges_P": [
+        [
+          1,
+          39
+        ]
+      ],
+      "lines_P": 39,
+      "lines_W": 39,
+      "criteria_group": "gallery",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ]
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/06-task-list.png",
+      "type": "binary/generated",
+      "state": "REVIEWED",
+      "sha256_P": "96bb3c03c0609f0f239b7ee4b6e803790c101cda8ac002007e7f0be9a0574f51",
+      "sha256_W": "96bb3c03c0609f0f239b7ee4b6e803790c101cda8ac002007e7f0be9a0574f51",
+      "bytes_P": 241136,
+      "bytes_W": 241136,
+      "read_ranges_P": [],
+      "lines_P": null,
+      "lines_W": null,
+      "criteria_group": "gallery",
+      "review_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。",
+      "generated_from": [
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/06-task-list.svg",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/slack-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "gallery_pair_unchanged": true
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/06-task-list.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "6a72e7ca999ff11116326c3e9ecd3e8d9d9e248c83aecc2c0380ba465994a4f3",
+      "sha256_W": "6a72e7ca999ff11116326c3e9ecd3e8d9d9e248c83aecc2c0380ba465994a4f3",
+      "bytes_P": 3985,
+      "bytes_W": 3985,
+      "read_ranges_P": [
+        [
+          1,
+          44
+        ]
+      ],
+      "lines_P": 44,
+      "lines_W": 44,
+      "criteria_group": "gallery",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ]
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/07-patient-summary.png",
+      "type": "binary/generated",
+      "state": "REVIEWED",
+      "sha256_P": "6aab67a6dd20a413390f66dbb9c99428463160ab1cc33b4ad2589cc039d639cc",
+      "sha256_W": "6aab67a6dd20a413390f66dbb9c99428463160ab1cc33b4ad2589cc039d639cc",
+      "bytes_P": 353761,
+      "bytes_W": 353761,
+      "read_ranges_P": [],
+      "lines_P": null,
+      "lines_W": null,
+      "criteria_group": "gallery",
+      "review_basis": "binary分類。正本generator/SVG/manifestを全文確認、9PNG source/hash/CRC/解凍/寸法/filterを--check、実画像を表示して視覚確認。",
+      "generated_from": [
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/07-patient-summary.svg",
+        "docs/screenshots/slack-gallery/assets.json",
+        "docs/screenshots/slack-gallery/README.md"
+      ],
+      "visual_checked": true,
+      "gallery_pair_unchanged": true
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/07-patient-summary.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "6f141fc75074ad0e7038cad9370aa9e620310bc3c34290111de600c7eae5d6e2",
+      "sha256_W": "6f141fc75074ad0e7038cad9370aa9e620310bc3c34290111de600c7eae5d6e2",
+      "bytes_P": 4248,
+      "bytes_W": 4248,
+      "read_ranges_P": [
+        [
+          1,
+          41
+        ]
+      ],
+      "lines_P": 41,
+      "lines_W": 41,
+      "criteria_group": "gallery",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ]
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/README.md",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "056e36341de45f8b34e6dc728bac76fee58728202d1c49b0723d176542b6b50b",
+      "sha256_W": "056e36341de45f8b34e6dc728bac76fee58728202d1c49b0723d176542b6b50b",
+      "bytes_P": 3449,
+      "bytes_W": 3449,
+      "read_ranges_P": [
+        [
+          1,
+          44
+        ]
+      ],
+      "lines_P": 44,
+      "lines_W": 44,
+      "criteria_group": "gallery",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ]
+    },
+    {
+      "path": "docs/screenshots/slack-gallery/assets.json",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "dbbbdf2df5ad799dcc316bca69c3d89e37c9cdff032e398428276afad1bfa362",
+      "sha256_W": "dbbbdf2df5ad799dcc316bca69c3d89e37c9cdff032e398428276afad1bfa362",
+      "bytes_P": 1286,
+      "bytes_W": 1286,
+      "read_ranges_P": [
+        [
+          1,
+          30
+        ]
+      ],
+      "lines_P": 30,
+      "lines_W": 30,
+      "criteria_group": "gallery",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ]
+    },
+    {
+      "path": "docs/screenshots/slack-thread.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "a3da73714f3fcade726c8dfc942973b4ca5eddb3df2e06a6848998867cd1f84d",
+      "sha256_W": "bc58cd25dfd4115c84b1f1f677e2c8a2a90b20f23e13c0c6c7dc1c425c6fc649",
+      "bytes_P": 9123,
+      "bytes_W": 9096,
+      "read_ranges_P": [
+        [
+          1,
+          131
+        ]
+      ],
+      "lines_P": 131,
+      "lines_W": 131,
+      "criteria_group": "static_docs",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ]
+    },
+    {
+      "path": "docs/screenshots/view-status.svg",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "20421da20261a83a5ab16737e46154853654a5373816231954f2ed20c0bb039f",
+      "sha256_W": "20421da20261a83a5ab16737e46154853654a5373816231954f2ed20c0bb039f",
+      "bytes_P": 2208,
+      "bytes_W": 2208,
+      "read_ranges_P": [
+        [
+          1,
+          22
+        ]
+      ],
+      "lines_P": 22,
+      "lines_W": 22,
+      "criteria_group": "static_docs",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ]
+    },
+    {
+      "path": "scripts/development/generate_lineworks_gallery.py",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "5d9c64a3ad63e024fb0ad4c889326842a9f90e27c3833bf57f76c08b4aef9ea1",
+      "sha256_W": "5d9c64a3ad63e024fb0ad4c889326842a9f90e27c3833bf57f76c08b4aef9ea1",
+      "bytes_P": 9505,
+      "bytes_W": 9505,
+      "read_ranges_P": [
+        [
+          1,
+          180
+        ]
+      ],
+      "lines_P": 180,
+      "lines_W": 180,
+      "criteria_group": "gallery",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ]
+    },
+    {
+      "path": "scripts/development/generate_slack_gallery.py",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "b168bef9f8a8f399ffca66ba2a98e561bc044dd54fdd9d9c12114de4c9844f44",
+      "sha256_W": "7dd0af58daafc8c562719a7c8735e69a0925ebae8e381524d617ddb4015f1928",
+      "bytes_P": 17534,
+      "bytes_W": 17719,
+      "read_ranges_P": [
+        [
+          1,
+          185
+        ],
+        [
+          186,
+          366
+        ]
+      ],
+      "lines_P": 366,
+      "lines_W": 369,
+      "criteria_group": "gallery",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ]
+    },
+    {
+      "path": "scripts/development/probe_message_metadata.py",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "d548cf16d8336ec148405d8908fe06d88809a3bb6feaab7373e0ebade777e880",
+      "sha256_W": "d548cf16d8336ec148405d8908fe06d88809a3bb6feaab7373e0ebade777e880",
+      "bytes_P": 26308,
+      "bytes_W": 26308,
+      "read_ranges_P": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          483
+        ]
+      ],
+      "lines_P": 483,
+      "lines_W": 483,
+      "criteria_group": "probe",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "明示承認されたread-only targetのmetadata/未読保持/actorページ観測だけを診断する既存operator CLI（本audit実接続禁止）",
+      "callers": [
+        "tests/ingest/test_message_metadata.py:653,700,744,774 (SEARCH_ONLY)",
+        "tests/ingest/test_metadata_probe_observation.py:30 (SEARCH_ONLY)",
+        "tests/ingest/test_metadata_probe_usage.py:19 (SEARCH_ONLY)",
+        "tests/ingest/test_metadata_probe_paging.py:27 (SEARCH_ONLY)"
+      ]
+    },
+    {
+      "path": "scripts/development/readme_release.py",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "d7ae74693b94ea0a67054893eae7ad824aa64e56f2abd601dc5a9ca384a7e63b",
+      "sha256_W": "5d83b3ca32ff48ca968d855ee16f1b1926db96798c007636fd8ac123d0c130ab",
+      "bytes_P": 7099,
+      "bytes_W": 7115,
+      "read_ranges_P": [
+        [
+          1,
+          158
+        ]
+      ],
+      "lines_P": 158,
+      "lines_W": 158,
+      "criteria_group": "readme",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "source由来のREADME/DEVELOPMENT生成blockとrelease要約/review根拠の検査・ローカル再生成",
+      "callers": [
+        "Makefile:23-26",
+        ".github/workflows/ci.yml:32,46",
+        "docs/development/README_MAINTENANCE.md:30-38",
+        "tests/meta/test_ci_scripts.py:49-107,298-316",
+        "tests/release/test_readme_release.py"
+      ]
+    },
+    {
+      "path": "scripts/development/release_notes.py",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "6a4d4d5a748cbab54027707e2be01dd7f49749f798bafcdaa2b69a3c7a9578b5",
+      "sha256_W": "181f9551a24a1ff8f46d3cbcc9d40443651e93eee4b9934f38f7ad0987bc6be4",
+      "bytes_P": 11812,
+      "bytes_W": 11828,
+      "read_ranges_P": [
+        [
+          1,
+          245
+        ]
+      ],
+      "lines_P": 245,
+      "lines_W": 245,
+      "criteria_group": "release",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "日本語変更fragmentから版sectionを検査・生成・exportし、既存GitHub Release本文/タイトルだけを明示同期",
+      "callers": [
+        "docs/development/RELEASE_NOTES.md:51-60",
+        ".github/workflows/release-notes.yml:45-124",
+        "tests/release/test_release_notes.py",
+        "tests/release/test_sync_release_notes.py",
+        "scripts/development/readme_release.py"
+      ]
+    },
+    {
+      "path": "scripts/development/semantic_shadow_e2e.py",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "8ae2bae57778b8e5280a26579612ec0a446db4b9131846b8e172766a7472dbe7",
+      "sha256_W": "f5833aa4cc4fe294114534d97ac38b3719085a009a2d5d001e6ccfe1a9846bd8",
+      "bytes_P": 2739,
+      "bytes_W": 3156,
+      "read_ranges_P": [
+        [
+          1,
+          74
+        ]
+      ],
+      "lines_P": 74,
+      "lines_W": 80,
+      "criteria_group": "shadow",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "任意の完全合成operator casesからcanonical shadow pipelineを明示起動しINCOMPLETEを含む評価reportを保存（本auditはstubだけ）",
+      "callers": [
+        "scripts/development/semantic_shadow_e2e.py:11-13 usage",
+        "mcs/semantic/semantic_evaluation.py:1075-1172 run_shadow_e2e",
+        "tests/meta/test_ci_scripts.py:35-45",
+        "tests/meta/test_maintenance_development_regressions.py:178-235"
+      ]
+    },
+    {
+      "path": "scripts/development/sync_release_notes.py",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "6d68fa6a2ebaf031d66d371a7a9c759d98cab037f710e254f2ce425ff1d3a337",
+      "sha256_W": "fea761590871e47f7b79685006c466f02afeff4d58222b43fff549e6cb1661fa",
+      "bytes_P": 5177,
+      "bytes_W": 6121,
+      "read_ranges_P": [
+        [
+          1,
+          107
+        ]
+      ],
+      "lines_P": 107,
+      "lines_W": 122,
+      "criteria_group": "release",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "日本語変更fragmentから版sectionを検査・生成・exportし、既存GitHub Release本文/タイトルだけを明示同期",
+      "callers": [
+        "docs/development/RELEASE_NOTES.md:51-60",
+        ".github/workflows/release-notes.yml:45-124",
+        "tests/release/test_release_notes.py",
+        "tests/release/test_sync_release_notes.py",
+        "scripts/development/readme_release.py"
+      ]
+    },
+    {
+      "path": "scripts/development/update_readme.py",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "59087f2d7d7cb0d0a078f445d1aec1a23b1ef6e81f8b48d733d6e386a38fc7a3",
+      "sha256_W": "d8fc9726eed1c85d91efce00f4c3c44bb9131dc42cafb89a9abbecb547abd4cc",
+      "bytes_P": 7765,
+      "bytes_W": 7893,
+      "read_ranges_P": [
+        [
+          1,
+          208
+        ]
+      ],
+      "lines_P": 208,
+      "lines_W": 212,
+      "criteria_group": "readme",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "source由来のREADME/DEVELOPMENT生成blockとrelease要約/review根拠の検査・ローカル再生成",
+      "callers": [
+        "Makefile:23-26",
+        ".github/workflows/ci.yml:32,46",
+        "docs/development/README_MAINTENANCE.md:30-38",
+        "tests/meta/test_ci_scripts.py:49-107,298-316",
+        "tests/release/test_readme_release.py"
+      ]
+    },
+    {
+      "path": "tests/release/test_readme_release.py",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "103d0c40c9bc53007e12d3dc2f36c0e48e127383b9260de5d9b31218440ff3ea",
+      "sha256_W": "103d0c40c9bc53007e12d3dc2f36c0e48e127383b9260de5d9b31218440ff3ea",
+      "bytes_P": 6561,
+      "bytes_W": 6561,
+      "read_ranges_P": [
+        [
+          1,
+          123
+        ]
+      ],
+      "lines_P": 123,
+      "lines_W": 123,
+      "criteria_group": "readme",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "source由来のREADME/DEVELOPMENT生成blockとrelease要約/review根拠の検査・ローカル再生成",
+      "callers": [
+        "Makefile:23-26",
+        ".github/workflows/ci.yml:32,46",
+        "docs/development/README_MAINTENANCE.md:30-38",
+        "tests/meta/test_ci_scripts.py:49-107,298-316",
+        "tests/release/test_readme_release.py"
+      ]
+    },
+    {
+      "path": "tests/release/test_release_notes.py",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "fd2b7f93666c8f658726d4a9acef001e3682302f880d8ccac6b57a0c28d55152",
+      "sha256_W": "fd2b7f93666c8f658726d4a9acef001e3682302f880d8ccac6b57a0c28d55152",
+      "bytes_P": 7848,
+      "bytes_W": 7848,
+      "read_ranges_P": [
+        [
+          1,
+          147
+        ]
+      ],
+      "lines_P": 147,
+      "lines_W": 147,
+      "criteria_group": "release",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "日本語変更fragmentから版sectionを検査・生成・exportし、既存GitHub Release本文/タイトルだけを明示同期",
+      "callers": [
+        "docs/development/RELEASE_NOTES.md:51-60",
+        ".github/workflows/release-notes.yml:45-124",
+        "tests/release/test_release_notes.py",
+        "tests/release/test_sync_release_notes.py",
+        "scripts/development/readme_release.py"
+      ]
+    },
+    {
+      "path": "tests/release/test_sync_release_notes.py",
+      "type": "text",
+      "state": "REVIEWED",
+      "sha256_P": "29e97b5318f1b606109afe0840b838e06cf2ee9f9d0ce7b59adb024806e96857",
+      "sha256_W": "29e97b5318f1b606109afe0840b838e06cf2ee9f9d0ce7b59adb024806e96857",
+      "bytes_P": 5622,
+      "bytes_W": 5622,
+      "read_ranges_P": [
+        [
+          1,
+          124
+        ]
+      ],
+      "lines_P": 124,
+      "lines_W": 124,
+      "criteria_group": "release",
+      "review_basis": "全文Pを非省略read、P→Wの全変更行をdiff確認。未変更本文は入力SHA一致で再利用。",
+      "responsibility": "日本語変更fragmentから版sectionを検査・生成・exportし、既存GitHub Release本文/タイトルだけを明示同期",
+      "callers": [
+        "docs/development/RELEASE_NOTES.md:51-60",
+        ".github/workflows/release-notes.yml:45-124",
+        "tests/release/test_release_notes.py",
+        "tests/release/test_sync_release_notes.py",
+        "scripts/development/readme_release.py"
+      ]
+    },
+    {
+      "path": "tests/meta/test_maintenance_development_regressions.py",
+      "type": "new_text",
+      "state": "REVIEWED",
+      "sha256_P": null,
+      "sha256_W": "2067ad3a9bc4d01cdd9f064c460af9f80e66a7abafd2b4644246aac1cd2ba8ae",
+      "bytes_W": 10951,
+      "lines_W": 235,
+      "read_ranges_W": [
+        [
+          1,
+          235
+        ]
+      ],
+      "review_basis": "parent専任承認の新規pytest回帰。unittest-only release directory外に配置し全235行を確認。",
+      "criteria_groups": [
+        "release",
+        "readme",
+        "gallery",
+        "shadow"
+      ],
+      "responsibility": "今回の合成回帰または日本語利用者向け変更記録",
+      "callers": [
+        "scripts/run_tests.sh",
+        "general CI pytest (test)",
+        "scripts/development/release_notes.py check (fragment)"
+      ]
+    },
+    {
+      "path": "changes/20261005-development-offline-validation.json",
+      "type": "new_text",
+      "state": "REVIEWED",
+      "sha256_P": null,
+      "sha256_W": "1c9d9038c9dfaa4e922d7b0be2baa23c9d2fc9359bcb168e41b63dd39813d39e",
+      "bytes_W": 1734,
+      "lines_W": 21,
+      "read_ranges_W": [
+        [
+          1,
+          21
+        ]
+      ],
+      "review_basis": "日本語runtimefragment。変更影響/upgrade/根拠pathsを全21行確認しcompiler validatorで検査。",
+      "criteria_groups": [
+        "release",
+        "readme",
+        "gallery",
+        "shadow"
+      ],
+      "responsibility": "今回の合成回帰または日本語利用者向け変更記録",
+      "callers": [
+        "scripts/run_tests.sh",
+        "general CI pytest (test)",
+        "scripts/development/release_notes.py check (fragment)"
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "id": "release",
+      "responsibility": "日本語変更fragmentから版sectionを検査・生成・exportし、既存GitHub Release本文/タイトルだけを明示同期",
+      "callers": [
+        "docs/development/RELEASE_NOTES.md:51-60",
+        ".github/workflows/release-notes.yml:45-124",
+        "tests/release/test_release_notes.py",
+        "tests/release/test_sync_release_notes.py",
+        "scripts/development/readme_release.py"
+      ],
+      "paths": [
+        "docs/development/RELEASE_NOTES.md",
+        "scripts/development/release_notes.py",
+        "scripts/development/sync_release_notes.py",
+        "tests/release/test_release_notes.py",
+        "tests/release/test_sync_release_notes.py"
+      ],
+      "all_20_criteria": [
+        {
+          "id": "C01",
+          "scope": "設計・責務・依存・循環・重複・dead code・文書乖離",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "fragment検査・render・version切出しをrelease_notesに集約しreadme/syncから再利用。既存release3testsはstdlib unittest、追加pytest回帰をmetaへ配置してCI収集契約を保持。buildは既存header/historyを保持する挿入型で、全CHANGELOGの原資料からの完全再構築ではない。"
+        },
+        {
+          "id": "C02",
+          "scope": "状態遷移・不変条件・欠損・日時/単位/丸め/境界",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "stable version/date/category/必須文言を検査。Release idは正のint（bool除外）、draft/prereleaseはbool、識別日時/targetは非空str、nullable name/body/publishedは存在と型を検査。nullと偽の区別・既存公開状態を維持。"
+        },
+        {
+          "id": "C03",
+          "scope": "制約・transaction・upsert・排他・冪等性・削除",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "全Releaseを初回write前にpreflight、直前GETでidentity/body/updated_atを比較し、PATCH後identityと再GET本文を検査。idempotent dry-run/applyとtag保持を継続。buildの途中IOは既存の明示手動復旧契約（D01）を保持。"
+        },
+        {
+          "id": "C04",
+          "scope": "migration・旧schema・値/FK/index/trigger・途中失敗",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "既存section/header、旧版archive、nullable Release name/bodyを維持。fragment archive移動は既存の明示buildだけ。DB/FK/index/trigger/migrationを持たないためその部分は非該当。途中writeの完全atomic性は主張しない。"
+        },
+        {
+          "id": "C05",
+          "scope": "認証/認可・tenant・injection/XSS/CSRF/SSRF・暗号",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "ghはgithub.com固定、owner/nameとrelease endpointを正規表現制約、PATCHはname/bodyと保持tag_nameのみ。新しい認証・外部許可・一般URL送信を導入しない。CI認証は既存workflow ownerのread-only境界。"
+        },
+        {
+          "id": "C06",
+          "scope": "PII/PHI・ログ/URL/cache/storage/export/telemetry",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "完全合成の一時CHANGELOG/fragment/Release応答のみ。syncの失敗表示はpayload/捕捉stdoutを出さず、raw JSON/深い入力を診断へ返さない。実GitHub/認証/患者データは取得しない。"
+        },
+        {
+          "id": "C07",
+          "scope": "API/CLI/イベント契約・入力上限・互換性・pagination",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "fragment refs/version/category/sectionとAPI一覧のlist/record形を検査。100件×100pageを上限としstable以外のtagを既存どおり対象外へ。--root/--base/export/dry-run/applyの保存・CLI契約を保持。"
+        },
+        {
+          "id": "C08",
+          "scope": "UI・stale state・二重操作・入力消失・復旧・accessibility",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "古い本文を更新前に再GETし並行変更では停止。公開/下書き状態を変えず既存Releaseのtitle/bodyだけを同期。build途中失敗時のgit diff確認・残fragment/CHANGELOG/README照合は文書化された手動操作。"
+        },
+        {
+          "id": "C09",
+          "scope": "N+1・計算量・無制限処理・memory・起動/import・費用",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "一覧page cap、gh subprocess timeout60秒、stdlibだけの起動を確認。新しい外部依存や追加プロバイダ・バックグラウンド処理・性能数値を導入しない。巨大JSONの任意サイズ上限は既存CLI契約として追加しない。"
+        },
+        {
+          "id": "C10",
+          "scope": "race/retry/queue/timeout・キャンセル・例外・観測性",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "RecursionErrorを3.10実runtimeでbefore/after確認。部分applyのreceipt/read-backと競合検出を維持し、未知の外部writeを自動再送しない。実外部API/取消シグナルは未実行で、合成response stubの異常系だけを検証。"
+        },
+        {
+          "id": "C11",
+          "scope": "テスト偽陽性・mock依存・回帰/異常系/競合・flaky/skip",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "固定Pで新回帰68caseを実行しdeep JSON/11bad Release recordsを失敗検出。正常nullable/draft/idempotence/競合などの既存22testsと26subtestsを両runtime確認。pytestをunittest-only release directoryへ置かない。skip/期待値追従なし。"
+        },
+        {
+          "id": "C12",
+          "scope": "build・runtime/lockfile・依存リスク・script・設定/CI差",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "source3と既存release3testsはstdlibのみ、Python3.10/3.13実行、archiveの-Sとstdlib-only unittestでno site/editableを確認。新pytestは既存general test toolだけを使用しruntime依存を増やさない。"
+        },
+        {
+          "id": "X01",
+          "scope": "配布物・起動終了・旧新version・切戻し",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "archiveの正常CLIをenv-i/一時HOME/PYTHONPATHなし/-S/repo外cwdで起動。source __file__/ROOT/sibling importはcopy内。根拠のない-I bootstrap追加、rootでの新release build/export/tag/publishは行わない。"
+        },
+        {
+          "id": "X02",
+          "scope": "供給網・取得元・CI権限・ライセンス",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "既存gh/固定github.comとpinned CI workflowを照合。外部writeは本taskでは全禁止。公開Ruff0.16.10以外に依存取得・token/CI権限の拡張なし。"
+        },
+        {
+          "id": "X03",
+          "scope": "backup/restore/削除・派生物/鍵・削除データ復活",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "旧変更記録とhistoryの保持・build後archive移動・既存manual recoveryを確認。患者DB/private keysのbackup/restore/削除・削除済みデータ復活の処理はなく、その部分は非該当。履歴を付随作業で削除しない。"
+        },
+        {
+          "id": "X04",
+          "scope": "外部連携・署名・主体/宛先・再送/順序・部分取込",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "fixed endpoint/主体repo/保持tag/draft/既存Release identity/更新後の本文をstubで確認。実APIの署名・認証・送信・レート制限やunknown結果からの再送は未検証（安全境界）。"
+        },
+        {
+          "id": "X05",
+          "scope": "offline・複数tab・容量/eviction・OS差・native/FFI",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "offline temp fixtureとmacOS上3.10/3.13で検査・archive起動。外部同期のoffline失敗は診断して停止。複数tab UI/native FFIは持たず、Windows/Linux環境は未実行。"
+        },
+        {
+          "id": "X06",
+          "scope": "AI/MCP・prompt injection・tool権限・承認・記憶越境",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "release/同期compilerはAI/MCP/model/tool連携を持たずfragmentは検証したデータとして扱う。入力本文をshell評価せず、任意プロバイダ・記憶保存・モデル権限を追加しない。"
+        },
+        {
+          "id": "X07",
+          "scope": "医療/算定/金銭の適用日/対象/根拠・監査・人の承認",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "利用者への影響/upgrade/human confirmationを日本語fragmentで保持。完全合成の通知説明を使用し医療・算定ルールの適用や事実認定は行わない。制度一次資料による新規判断は本変更にない。"
+        },
+        {
+          "id": "X08",
+          "scope": "公開Webの導線・フォーム・link/index・公開境界",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "CHANGELOGがRelease本文の正本、README同期/version/相対link/review根拠を検査。公開導線文書と外部publishを区別。rootCHANGELOG全文監査・全changesの原文監査は親/notify次packet担当で本packetに算入しない。"
+        }
+      ]
+    },
+    {
+      "id": "readme",
+      "responsibility": "source由来のREADME/DEVELOPMENT生成blockとrelease要約/review根拠の検査・ローカル再生成",
+      "callers": [
+        "Makefile:23-26",
+        ".github/workflows/ci.yml:32,46",
+        "docs/development/README_MAINTENANCE.md:30-38",
+        "tests/meta/test_ci_scripts.py:49-107,298-316",
+        "tests/release/test_readme_release.py"
+      ],
+      "paths": [
+        "docs/development/README_MAINTENANCE.md",
+        "docs/development/readme-review.json",
+        "scripts/development/readme_release.py",
+        "scripts/development/update_readme.py",
+        "tests/release/test_readme_release.py"
+      ],
+      "all_20_criteria": [
+        {
+          "id": "C01",
+          "scope": "設計・責務・依存・循環・重複・dead code・文書乖離",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "update_readmeはAST/source-derived tablesとrelease要約を担当。正式生成先README/DEVELOPMENT、生成block手編集なし。書込ownerは親で一時copyのみ再生成。5blockのmarker規則を統一して責務と実益を確認。"
+        },
+        {
+          "id": "C02",
+          "scope": "状態遷移・不変条件・欠損・日時/単位/丸め/境界",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "begin/endの個数・順序を全5blockで検査。片欠け/重複/逆順で元textを保持、両targetゼロを失敗に変更。片方のdocだけや両marker不在のdisabled sectionは有効のまま。"
+        },
+        {
+          "id": "C03",
+          "scope": "制約・transaction・upsert・排他・冪等性・削除",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "全対象renderを先に行い、どれかvalidation失敗ならいずれもwriteしない。checkのread-only性、同じsourceからのidempotent outputを既存meta/new regressionで確認。ファイルIO障害の汎用transactionは追加しない。"
+        },
+        {
+          "id": "C04",
+          "scope": "migration・旧schema・値/FK/index/trigger・途中失敗",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "旧manual text/disabled sections/片方だけのdocを維持。生成module tableをREADMEからDEVELOPMENTへ置く既存契約を保持。DB migration/FK等なし。途中writeの原子性一般保証はしない。"
+        },
+        {
+          "id": "C05",
+          "scope": "認証/認可・tenant・injection/XSS/CSRF/SSRF・暗号",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "ASTのsource読取りで患者DB/APIを実行せず、生成元はrepoの既知paths。readme_releaseのreview根拠はrelative pathをresolveしroot外/symlink escape/絶対pathを拒否する契約を照合。"
+        },
+        {
+          "id": "C06",
+          "scope": "PII/PHI・ログ/URL/cache/storage/export/telemetry",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "公開docstring先頭文・静的CLI情報・完全合成screen assetsだけを生成。rootprivate config/.env/DBを参照しない。stdoutはsource由来の検査結果で秘密値/実投稿を含まない。"
+        },
+        {
+          "id": "C07",
+          "scope": "API/CLI/イベント契約・入力上限・互換性・pagination",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "--check exit nonzero/malformed marker/zero targetsを合成で確認。生成module/test countのdriftは255への変化として親依存に分離。README reviewのversion5項目/evidence type契約を維持。"
+        },
+        {
+          "id": "C08",
+          "scope": "UI・stale state・二重操作・入力消失・復旧・accessibility",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "手書き本文を壊す欠損marker・duplicateをbeforefailで検出し保存前に停止。読者向けdocs導線をfull-read、stale source表は親生成で解決。既存public README rootは親owner。"
+        },
+        {
+          "id": "C09",
+          "scope": "N+1・計算量・無制限処理・memory・起動/import・費用",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "ASTを用いたrepo module列挙とknown source symbols、stdlib bootstrappingを確認。根拠のない細分化/cache/config/新依存なし。全repo-countを子の全域レビュー件数に読み替えない。"
+        },
+        {
+          "id": "C10",
+          "scope": "race/retry/queue/timeout・キャンセル・例外・観測性",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "generator例外を診断して失敗、全render前write防止とmissing/marker破損を確認。同期write後の任意IO失敗はD01既存手動復旧契約に従い、auto retryを追加しない。"
+        },
+        {
+          "id": "C11",
+          "scope": "テスト偽陽性・mock依存・回帰/異常系/競合・flaky/skip",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "20marker cases/zero-doc2/cross-doc1/control1と既存5meta testsを検証。生成doc count driftの起動test失敗を隠さずarchiveのみ再生成後both-runtime1pass。runnerの成功とCI全体成功を分ける。"
+        },
+        {
+          "id": "C12",
+          "scope": "build・runtime/lockfile・依存リスク・script・設定/CI差",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "runtime stdlib、flat import roots _mcs_pathを使用。3.10/3.13のarchive -S正常CLI/-I明示bootstrapを区別。一般CIはpytest、release directoryはunittestだけで収集可能。"
+        },
+        {
+          "id": "X01",
+          "scope": "配布物・起動終了・旧新version・切戻し",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "isolated archiveの__file__/ROOT/sys.pathを実測し元checkout/editable/siteに依存しない。親owned DEVELOPMENTは未編集、archive内の生成差分はtest file数254→255のみ。"
+        },
+        {
+          "id": "X02",
+          "scope": "供給網・取得元・CI権限・ライセンス",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "Makefile/CI sourceに既存のstdlib compiler実行とRuff pinned toolを照合。公開/配備/CI権限を変更せず新しいbuild-time依存を追加しない。"
+        },
+        {
+          "id": "X03",
+          "scope": "backup/restore/削除・派生物/鍵・削除データ復活",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "生成文書のみ、ユーザデータのbackup/restore/purgeや秘密鍵復活は扱わない。手書きtextの損失防止はC03/C08で評価し旧履歴は保持。"
+        },
+        {
+          "id": "X04",
+          "scope": "外部連携・署名・主体/宛先・再送/順序・部分取込",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "update_readme自体はローカルsource/docだけを読み書き、外部連携の主体/署名/再送はない。Release同期はrelease moduleのX04で別途適用評価。"
+        },
+        {
+          "id": "X05",
+          "scope": "offline・複数tab・容量/eviction・OS差・native/FFI",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "一時HOME/no PYTHONPATH/-S/cwd outsideでoffline CLIを両runtime実行。Windows/Linux/ブラウザtab/native FFIは未実行、compilerにtab/cache同期の責務はない。"
+        },
+        {
+          "id": "X06",
+          "scope": "AI/MCP・prompt injection・tool権限・承認・記憶越境",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "compilerはLLM/MCP/tool/memoryを起動せずAST/dataとして解析。任意コードや自然言語命令から本番操作へ移さない。"
+        },
+        {
+          "id": "X07",
+          "scope": "医療/算定/金銭の適用日/対象/根拠・監査・人の承認",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "公開説明の承認/安全/unknown≠absenceをdocsと合成画面に照合。医療・算定の規則をcompilerから変えず、実臨床事実・効果の根拠には使わない。"
+        },
+        {
+          "id": "X08",
+          "scope": "公開Webの導線・フォーム・link/index・公開境界",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "version/README release block/ローカルrelative links/5項目review evidenceをfull sourceとtestで照合。新release準備/versionだけ更新/publishはせず、公開root READMEの最終reviewは親owner。"
+        }
+      ]
+    },
+    {
+      "id": "gallery",
+      "responsibility": "完全合成Slack7/LINE WORKS2 screenのcanonical source→SVG/PNG/manifestの生成と整合検査",
+      "callers": [
+        ".github/workflows/release-notes.yml:49-51",
+        "docs/development/README_MAINTENANCE.md:57",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_lineworks_gallery.py:15"
+      ],
+      "paths": [
+        "docs/screenshots/lineworks-gallery/01-delivery.png",
+        "docs/screenshots/lineworks-gallery/01-delivery.svg",
+        "docs/screenshots/lineworks-gallery/02-task-confirm.png",
+        "docs/screenshots/lineworks-gallery/02-task-confirm.svg",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/assets.json",
+        "docs/screenshots/slack-gallery/01-overview.png",
+        "docs/screenshots/slack-gallery/01-overview.svg",
+        "docs/screenshots/slack-gallery/02-notification.png",
+        "docs/screenshots/slack-gallery/02-notification.svg",
+        "docs/screenshots/slack-gallery/03-actions.png",
+        "docs/screenshots/slack-gallery/03-actions.svg",
+        "docs/screenshots/slack-gallery/04-task-form.png",
+        "docs/screenshots/slack-gallery/04-task-form.svg",
+        "docs/screenshots/slack-gallery/05-task-preview.png",
+        "docs/screenshots/slack-gallery/05-task-preview.svg",
+        "docs/screenshots/slack-gallery/06-task-list.png",
+        "docs/screenshots/slack-gallery/06-task-list.svg",
+        "docs/screenshots/slack-gallery/07-patient-summary.png",
+        "docs/screenshots/slack-gallery/07-patient-summary.svg",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/slack-gallery/assets.json",
+        "scripts/development/generate_lineworks_gallery.py",
+        "scripts/development/generate_slack_gallery.py"
+      ],
+      "all_20_criteria": [
+        {
+          "id": "C01",
+          "scope": "設計・責務・依存・循環・重複・dead code・文書乖離",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "Slack source Screen/render/verify_pngが正本、LINE WORKSは同helperをimport。SVG・PNG・assets.json・各READMEの対応を9pair全件追う。内容未変更なので不要なrenderer再生成は行わない。"
+        },
+        {
+          "id": "C02",
+          "scope": "状態遷移・不変条件・欠損・日時/単位/丸め/境界",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "signature/CRC/IHDR/color/寸法/IEND/zlibデータ量に加え全行filter0..4を検査。RGB/RGBAの6invalid/10valid合成casesでPNG形式の不変条件を保持。"
+        },
+        {
+          "id": "C03",
+          "scope": "制約・transaction・upsert・排他・冪等性・削除",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "--checkは生成物を変更しない。明示再生成時のみ正本からSVG/PNG同時作成・manifest更新する既存契約。今回9pair byte不変、誤ったsnapshot受入なし。DB transaction/upsert/deleteは非該当。"
+        },
+        {
+          "id": "C04",
+          "scope": "migration・旧schema・値/FK/index/trigger・途中失敗",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "既存PNG RGB/RGBA/filter0..4/source hashとmanifest形を維持。asset format変更・migrationやDB schemaはなく、旧保存物のfilter validityだけ厳密化。"
+        },
+        {
+          "id": "C05",
+          "scope": "認証/認可・tenant・injection/XSS/CSRF/SSRF・暗号",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "合成文言はSVG textにescape、固定属性とsource pathsを使用。XML解析はlocal fixed assetsで外部API/認証なし。患者投稿/外部HTMLを画像sourceへ流さない。"
+        },
+        {
+          "id": "C06",
+          "scope": "PII/PHI・ログ/URL/cache/storage/export/telemetry",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "画面全9PNG実視覚確認、全SVG/manifest source全文読取。完全合成と明示され実匿名化投稿を使用しない。private HOME/原本DB/key/env値をfixtureに取り込まない。"
+        },
+        {
+          "id": "C07",
+          "scope": "API/CLI/イベント契約・入力上限・互換性・pagination",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "--check/--pngの既存CLI・manifest形式・source sha・9pair内容を保持。invalid scanline filtersだけreject。両galleryのarchive --checkは7+2枚を検証して成功。"
+        },
+        {
+          "id": "C08",
+          "scope": "UI・stale state・二重操作・入力消失・復旧・accessibility",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "9PNGを実際に表示して重なり・文字切れ・source文言を確認。受付≠反映/候補/unknown/human confirmの表示を維持。動作アプリ/browser accessibility測定は本packetで未実行。"
+        },
+        {
+          "id": "C09",
+          "scope": "N+1・計算量・無制限処理・memory・起動/import・費用",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "PNG decodeは期待量でbounded decompress、行filter検査はheightに比例。不要なrenderer/外部API/新画像toolを起動しない。実レンダラー性能やピクセル完全semantic一致は未測定。"
+        },
+        {
+          "id": "C10",
+          "scope": "race/retry/queue/timeout・キャンセル・例外・観測性",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "decode/CRC/marker/dimension不正はcontrolled check failure。Inkscape/QuickLook生成は既存の明示ローカル作業で今回は未実行、native renderer timeout/cancel/OS挙動の実検証は残る。"
+        },
+        {
+          "id": "C11",
+          "scope": "テスト偽陽性・mock依存・回帰/異常系/競合・flaky/skip",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "specに基づくfilterbyte5/9/255のinvalidと全標準5filterを独立PNGで生成、旧verifyが受入れるbefore6failを検出。既存9PNGのsource/hash/integrity checksをboth runtime確認しskip/snapshot追従なし。"
+        },
+        {
+          "id": "C12",
+          "scope": "build・runtime/lockfile・依存リスク・script・設定/CI差",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "検査sourceはstdlib、PNG exportだけ既存local native tool。3.10/3.13 -Sで通常CLI/siblinghelper importを確認。元repo/editable dependenciesなし、PNG source pairs unchanged。"
+        },
+        {
+          "id": "X01",
+          "scope": "配布物・起動終了・旧新version・切戻し",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "配布archive内に9pair/manifest/generatorを収録、bytes/mode一致とarchive check/visual receiptを確認。新version/tag/release準備/配備をしない。"
+        },
+        {
+          "id": "X02",
+          "scope": "供給網・取得元・CI権限・ライセンス",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "native export toolは既存Inkscape/OS toolのみ、追加取得・新依存なし。今回はPNG再生成を実行せず既存配布bytesを検査。native toolの供給網検証は実行範囲外と記録。"
+        },
+        {
+          "id": "X03",
+          "scope": "backup/restore/削除・派生物/鍵・削除データ復活",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "画像説明assetのみ、患者データ/鍵のbackup/restore/deletion/revivalを持たない。生成元とpair保持の損失防止はC03で評価。"
+        },
+        {
+          "id": "X04",
+          "scope": "外部連携・署名・主体/宛先・再送/順序・部分取込",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "完全合成local export/checkだけ、Slack/LINE WORKSの実送信・認証・署名・再送を実装しない。描画説明を本番delivery successへ読み替えない。"
+        },
+        {
+          "id": "X05",
+          "scope": "offline・複数tab・容量/eviction・OS差・native/FFI",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "offline PNG verificationとmacOS実視覚、3.10/3.13 archiveでcheck。Inkscape/QuickLookのOS差/native/font availabilityをsourceで確認するが実再生成/Windows/Linuxは未実行。"
+        },
+        {
+          "id": "X06",
+          "scope": "AI/MCP・prompt injection・tool権限・承認・記憶越境",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "画像生成sourceは固定完全合成文言とstdlib、LLM/MCP/prompt/memory連携を持たない。user attachment/raw textから画像tool実行への経路なし。"
+        },
+        {
+          "id": "X07",
+          "scope": "医療/算定/金銭の適用日/対象/根拠・監査・人の承認",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "合成医療関連例は説明用候補として扱い、unknown≠対応なし/人承認/受付≠実MCS反映を画面で保持。実臨床判断や制度適用を画像から保証しない。"
+        },
+        {
+          "id": "X08",
+          "scope": "公開Webの導線・フォーム・link/index・公開境界",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "public READMEのsource-gallery対応とPNG/SVG/manifest/source hashを照合。公開操作なし。text意味/導線/可読性を全9枚確認、実ブラウザフォーム動作やindex/publicサーバーは未実行。"
+        }
+      ]
+    },
+    {
+      "id": "probe",
+      "responsibility": "明示承認されたread-only targetのmetadata/未読保持/actorページ観測だけを診断する既存operator CLI（本audit実接続禁止）",
+      "callers": [
+        "tests/ingest/test_message_metadata.py:653,700,744,774 (SEARCH_ONLY)",
+        "tests/ingest/test_metadata_probe_observation.py:30 (SEARCH_ONLY)",
+        "tests/ingest/test_metadata_probe_usage.py:19 (SEARCH_ONLY)",
+        "tests/ingest/test_metadata_probe_paging.py:27 (SEARCH_ONLY)"
+      ],
+      "paths": [
+        "scripts/development/probe_message_metadata.py"
+      ],
+      "all_20_criteria": [
+        {
+          "id": "C01",
+          "scope": "設計・責務・依存・循環・重複・dead code・文書乖離",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "probe_message_metadataは明示read-only診断、MCSAdapter/cache/deadlineのconsumer。bodyを返さずkeys/types/countsとobservationsを比較。ingest testsのcaller pathは検索確認に留め、全文REVIEWEDへ算入しない。"
+        },
+        {
+          "id": "C02",
+          "scope": "状態遷移・不変条件・欠損・日時/単位/丸め/境界",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "read/unread/viewedのunknownをfalseと決めずsnapshot前後を比較。schema error/unverified route/不完全page walkはdeferred/incomplete/nonzeroで返す。生データがないことを対応なしとはしない。"
+        },
+        {
+          "id": "C03",
+          "scope": "制約・transaction・upsert・排他・冪等性・削除",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "POST/mark/autologin/cache-refreshなし、cached tokenを明示read-only-targetで読む既存契約。未読targetや観測不一致時は追加GET routesを保留。DB write/upsert/deleteはない。"
+        },
+        {
+          "id": "C04",
+          "scope": "migration・旧schema・値/FK/index/trigger・途中失敗",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "診断は保存schema/DB migration/FK/triggerを変更しない。既存private token cache pathの読取り契約はC03/C05/C06で評価し、この監査では実cacheを開かない。"
+        },
+        {
+          "id": "C05",
+          "scope": "認証/認可・tenant・injection/XSS/CSRF/SSRF・暗号",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "--read-only-target必須、ID/parent/per-page/flag組合せ検査、MCSAdapter既存認証/endpoint/no redirect/no proxyはreadonly consumer。cacheのみ・Keychain/再loginなし。実APIへのpermissionは本auditでは与えない。"
+        },
+        {
+          "id": "C06",
+          "scope": "PII/PHI・ログ/URL/cache/storage/export/telemetry",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "型/keys/counts/boolean/エラーkindだけをreport、body/patientIDs/秘密tokenを出さない。usage-countsは登録数だけを返す。実原本/credential/cacheは一切読まない。"
+        },
+        {
+          "id": "C07",
+          "scope": "API/CLI/イベント契約・入力上限・互換性・pagination",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "--actor-per-page1..50、--usage-countsとpost IDs/extended flag排他、parent distinct positive ID、bounded pagingと各exit statusを全文確認。実API応答互換を合成成功から推測しない。"
+        },
+        {
+          "id": "C08",
+          "scope": "UI・stale state・二重操作・入力消失・復旧・accessibility",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "診断CLIのunknown/deferredと未読保持証明不足を明確化。勝手な既読化/二重操作/状態の推測修復をしない。browser/native UIはこのscriptの責務外。"
+        },
+        {
+          "id": "C09",
+          "scope": "N+1・計算量・無制限処理・memory・起動/import・費用",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "project/usage/unread/actor walksにpage/件数上限、set_deadline45/90/300秒で予算を限定。無限GET/auto session延長なし。実データの件数/速度/費用は測定しない。"
+        },
+        {
+          "id": "C10",
+          "scope": "race/retry/queue/timeout・キャンセル・例外・観測性",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "MCSError.kindのcontrolled failure、schema observations/read-state差分/deadline/deferred routeを評価。実race/cancel/network timeoutは未実行で、adapter/core ownerの検証と区別。"
+        },
+        {
+          "id": "C11",
+          "scope": "テスト偽陽性・mock依存・回帰/異常系/競合・flaky/skip",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "対応ingest testsのexistence/callerをrgで確認し既存parent ownerのsource/test coverageへ引継ぐ。source不変のため無変更のfamilyを再実行しない。本packetにprobeの動的合成test成功は算入しない。"
+        },
+        {
+          "id": "C12",
+          "scope": "build・runtime/lockfile・依存リスク・script・設定/CI差",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "stdlib sourceとflat _mcs_path bootstrap、MCSAdapter関数のconsumer境界を確認。実MCS/model/Jev import先呼出しは禁止。依存/設定追加やSDK導入なし。"
+        },
+        {
+          "id": "X01",
+          "scope": "配布物・起動終了・旧新version・切戻し",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "scriptはarchiveに収録しsource bytes/mode同一を確認。実token-cache診断・MCSプロセス起動は未実行、実配備/起動終了の完全検証は未確認。"
+        },
+        {
+          "id": "X02",
+          "scope": "供給網・取得元・CI権限・ライセンス",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "新依存/新endpoint/CI権限を増やさず既存stdlib/MCSAdapterだけを使用。認証取得元はprivate explicit token cacheで自動Keychainアクセスなし。cache自体はこのauditでは開かない。"
+        },
+        {
+          "id": "X03",
+          "scope": "backup/restore/削除・派生物/鍵・削除データ復活",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "backup/restore/purge/keys複製/削除データ復活を行わない。cache read-only/pathの秘密保護はC06で評価。"
+        },
+        {
+          "id": "X04",
+          "scope": "外部連携・署名・主体/宛先・再送/順序・部分取込",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "本scriptは外部GET診断用で主体/宛先/既読状態の観測に制約。target未読/状態不明時の未検証routes保留を確認。実API/署名/認証/順序は安全境界により未実行。"
+        },
+        {
+          "id": "X05",
+          "scope": "offline・複数tab・容量/eviction・OS差・native/FFI",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "script/sourceはlocal offline audit可能、実GET診断のoffline failureはMCSError/不完全として報告。multi-tab/native FFI/evictionは直接責務なし、実OS差は未実行。"
+        },
+        {
+          "id": "X06",
+          "scope": "AI/MCP・prompt injection・tool権限・承認・記憶越境",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "metadata probeはLLM/MCP/memory/tool prompt経路を持たない。実MCSの明示GET入口はX04で適用評価、LLM/Jevを呼ばない。"
+        },
+        {
+          "id": "X07",
+          "scope": "医療/算定/金銭の適用日/対象/根拠・監査・人の承認",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "未知と無しを分け、実医療/介護投稿をfixtureやstdoutへ載せず認証と既読保持を維持。臨床/算定ルールは変更しない。"
+        },
+        {
+          "id": "X08",
+          "scope": "公開Webの導線・フォーム・link/index・公開境界",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "operator CLIに限定しpublic Web page/form/indexを提供しない。公開/送信の新許可へ解釈しない。"
+        }
+      ]
+    },
+    {
+      "id": "shadow",
+      "responsibility": "任意の完全合成operator casesからcanonical shadow pipelineを明示起動しINCOMPLETEを含む評価reportを保存（本auditはstubだけ）",
+      "callers": [
+        "scripts/development/semantic_shadow_e2e.py:11-13 usage",
+        "mcs/semantic/semantic_evaluation.py:1075-1172 run_shadow_e2e",
+        "tests/meta/test_ci_scripts.py:35-45",
+        "tests/meta/test_maintenance_development_regressions.py:178-235"
+      ],
+      "paths": [
+        "scripts/development/semantic_shadow_e2e.py"
+      ],
+      "all_20_criteria": [
+        {
+          "id": "C01",
+          "scope": "設計・責務・依存・循環・重複・dead code・文書乖離",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "明示operator用shadow driverは--cases完全合成入力をrun_shadow_e2eへ渡しreportを保存。packet3 semantic_benchの危険な実DB既定入口と用途を区別し任意合成fixture契約を維持。新設定抽象化なし。"
+        },
+        {
+          "id": "C02",
+          "scope": "状態遷移・不変条件・欠損・日時/単位/丸め/境界",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "positive finite deadlineを入口で検査、NaN/inf/0/negativeはmodel前に拒否。case object/messages list/member objectを検査し、既存falsy/empty messages→body fallback、INCOMPLETE/report形と300既定を維持。"
+        },
+        {
+          "id": "C03",
+          "scope": "制約・transaction・upsert・排他・冪等性・削除",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "不正入力はmodel/Jev呼出し・report作成前に停止。valid operator fixtureは明示outへ従来JSON保存。DB write/削除/implicit realtime ingestionはなく、評価の再実行transactionを導入しない。"
+        },
+        {
+          "id": "C04",
+          "scope": "migration・旧schema・値/FK/index/trigger・途中失敗",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "既存JSON report形・arbitrary synthetic fixtures・finite fraction0.25/default300を保存。thread messages有効、empty messages legacy fallback保持。DB migration/schema/version変更なし。"
+        },
+        {
+          "id": "C05",
+          "scope": "認証/認可・tenant・injection/XSS/CSRF/SSRF・暗号",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "--jevの明示flagとenv_valueのみで既存JevClientを構築する契約。raw case textをtool命令として実行せず既存pipelineへdata入力。実キー/LLM/Jevへの接続は本audit禁止、testではsys.modules stub固定。"
+        },
+        {
+          "id": "C06",
+          "scope": "PII/PHI・ログ/URL/cache/storage/export/telemetry",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "完全合成JSON/投稿だけを使用し、匿名化実投稿も不可。beforeログ/fixture/reportにsecret/PHIなし。--cases/--outの任意operator pathはCLI契約でありprivate実ファイルを読まない。"
+        },
+        {
+          "id": "C07",
+          "scope": "API/CLI/イベント契約・入力上限・互換性・pagination",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "--cases/--out必須、optional--jev/--deadline300、正有限値と既存保存schemaを維持。JSON深さ/outer case/nested messages形異常をcontrolled error。新asset固定/プロバイダ設定は導入しない。"
+        },
+        {
+          "id": "C08",
+          "scope": "UI・stale state・二重操作・入力消失・復旧・accessibility",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "model/audit未確認はINCOMPLETEを保持しpassを捏造しない。input error時にoutputがないことをassert。operator report/statusの意味を変更しない。実UIはない。"
+        },
+        {
+          "id": "C09",
+          "scope": "N+1・計算量・無制限処理・memory・起動/import・費用",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "nonfinite deadlineの無制限予算を止める。valid budgetを共有pipelineに同じfloatで渡し、post/member型不正の無駄なmodel呼出しを防ぐ。実性能/費用/モデル予算最適化は測定なし。"
+        },
+        {
+          "id": "C10",
+          "scope": "race/retry/queue/timeout・キャンセル・例外・観測性",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "RecursionErrorと入出力失敗の診断、finite budgetのforwardingを検証。pipeline deadline/cancel/retryはreadonly semantic ownerで、実model/subprocess cancellationをここで実行しない。"
+        },
+        {
+          "id": "C11",
+          "scope": "テスト偽陽性・mock依存・回帰/異常系/競合・flaky/skip",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "固定Pではbudget5/case5を失敗検出。最新14casesはboth-runtime合成stubでpass、valid body/thread各0.25/300の4controls。stubが呼ばれたか/output有無をassertしfake successを検出。"
+        },
+        {
+          "id": "C12",
+          "scope": "build・runtime/lockfile・依存リスク・script・設定/CI差",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "stdlib driver、_mcs_pathのflat import契約、実3.10/3.13 archiveで__file__/sys.path copy束縛を確認。新外部依存・typing_extensions・実SDKを追加しない。"
+        },
+        {
+          "id": "X01",
+          "scope": "配布物・起動終了・旧新version・切戻し",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "archive同一source/modeと既存明示bootstrapを確認。operator CLIは保持しversion/tag/deployやlive benchmarkは実行しない。配布後実model結合は未検証。"
+        },
+        {
+          "id": "X02",
+          "scope": "供給網・取得元・CI権限・ライセンス",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "既存semantic/Jev client依存だけを使用し新providerやcredential取得元を導入しない。既存providerにコード/fixtureを送る操作も本audit禁止。"
+        },
+        {
+          "id": "X03",
+          "scope": "backup/restore/削除・派生物/鍵・削除データ復活",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "driverは評価reportのみを保存、backup/restore/private key複製/原本DB取得/削除データ復活をしない。packet3 benchの実DB凍結禁止契約を迂回しない。"
+        },
+        {
+          "id": "X04",
+          "scope": "外部連携・署名・主体/宛先・再送/順序・部分取込",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "本来は明示operatorのlocal LLM/--jev連携入口だが実サービス未実行。全before/afterは完全合成stub経路で、認証/宛先/送信/partial-provider responseの実証はshared owner/親の別承認境界。"
+        },
+        {
+          "id": "X05",
+          "scope": "offline・複数tab・容量/eviction・OS差・native/FFI",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "offline合成fixtureとsys.modules stubsで制約・保存形を検証、3.10/3.13。モデルなし/キーなしのINCOMPLETE契約をsourceで照合。実OS差/FFI/live LLMは未実行。"
+        },
+        {
+          "id": "X06",
+          "scope": "AI/MCP・prompt injection・tool権限・承認・記憶越境",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "raw医療風合成textは入力data、任意prompt命令で権限追加しない。モデル/Jevの使用は既存operator flags、秘密環境自動取得はtest隔離で遮断。case型/finite budget不正をtool実行前に停止。記憶保存/MCP追加なし。"
+        },
+        {
+          "id": "X07",
+          "scope": "医療/算定/金銭の適用日/対象/根拠・監査・人の承認",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "評価資産は完全合成、unknown/INCOMPLETEを虚偽passにしない。医療・算定/対応の真偽を実データやモデル未実行から断定せず、臨床適用を変更しない。"
+        },
+        {
+          "id": "X08",
+          "scope": "公開Webの導線・フォーム・link/index・公開境界",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "CLI report入口のみ、public Web/form/indexは提供せず評価結果の外部公開なし。"
+        }
+      ]
+    },
+    {
+      "id": "static_docs",
+      "responsibility": "runtime topology/通知表示/機能・履歴の説明用完全合成静的SVGと開発文書",
+      "callers": [
+        "docs/guides/USER_GUIDE.md:23,31,190 (source link search)",
+        "mcs/ops/mcs_setup.py:2390-2422 readonly CRON_JOBS",
+        "adapters/common/text.py:150-282 readonly human input contract",
+        "mcs/notify/notify_views.py:29-80 readonly summary contract"
+      ],
+      "paths": [
+        "docs/assets/analytics-overview.svg",
+        "docs/assets/flow-journey.svg",
+        "docs/assets/flow-network.svg",
+        "docs/assets/flow-overview.svg",
+        "docs/assets/flow-pipeline.svg",
+        "docs/assets/flow-signals.svg",
+        "docs/assets/flow-timeline.svg",
+        "docs/assets/runtime-topology.svg",
+        "docs/development/plans/RELEASE_1.0.13.md",
+        "docs/screenshots/discord-card.svg",
+        "docs/screenshots/discord-thread.svg",
+        "docs/screenshots/signals-cli.svg",
+        "docs/screenshots/slack-card.svg",
+        "docs/screenshots/slack-thread.svg",
+        "docs/screenshots/view-status.svg"
+      ],
+      "all_20_criteria": [
+        {
+          "id": "C01",
+          "scope": "設計・責務・依存・循環・重複・dead code・文書乖離",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "手書きcanonical SVG8assets+6screenshotsのsourceを全文読み、USER_GUIDEのconsumerを照合。runtime-topologyはreadonly CRON_JOBS現行10分/deep10,40に同期。gallery generated pairsとは別の静的正本でPNG pairなし。"
+        },
+        {
+          "id": "C02",
+          "scope": "状態遷移・不変条件・欠損・日時/単位/丸め/境界",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "current scheduleの数値10/deep10,40、通知unknown≠重複なし保証、人確認とreceiptの状態表現を確認。旧release documentは時点固定の履歴でversionだけ書換えない。"
+        },
+        {
+          "id": "C03",
+          "scope": "制約・transaction・upsert・排他・冪等性・削除",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "通知図の絶対重複防止保証を結果不明時保留/人確認へ修正し、現行receipt/idempotencyの限界と一致させる。図の変更はruntime状態操作・DB transaction/削除を実行しない。"
+        },
+        {
+          "id": "C04",
+          "scope": "migration・旧schema・値/FK/index/trigger・途中失敗",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "静的説明図はDB schema/migration/FK/triggerや保存患者値を変更しない。旧version doc/history/source assetsを保持。"
+        },
+        {
+          "id": "C05",
+          "scope": "認証/認可・tenant・injection/XSS/CSRF/SSRF・暗号",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "SVGは固定完全合成文言でscript/外部認証処理なし。人承認/宛先/previewの説明を維持し、図を実送信や操作承認の代替に使わない。"
+        },
+        {
+          "id": "C06",
+          "scope": "PII/PHI・ログ/URL/cache/storage/export/telemetry",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "合成名・数値・例示は実データ/匿名化実投稿を含まない。全text source読取り、9generated PNG visualと区別し実操作/DB/env/秘密取得をしない。"
+        },
+        {
+          "id": "C07",
+          "scope": "API/CLI/イベント契約・入力上限・互換性・pagination",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "source path/USER_GUIDEの画像consumerを確認。図の文言とscheduleだけ修正し公開CLI/API/保存形式の変更はない。静的SVG3changedにはPNG pairがない。"
+        },
+        {
+          "id": "C08",
+          "scope": "UI・stale state・二重操作・入力消失・復旧・accessibility",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "Slack/Discord companion説明の結果不明を保留/人確認へ正す。全source text確認、9generatedPNG実視覚、変更したstaticSVGのネイティブ/browser rendered視覚は未実行と明示。"
+        },
+        {
+          "id": "C09",
+          "scope": "N+1・計算量・無制限処理・memory・起動/import・費用",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "静的SVG説明図はN+1/queue/追加計算やモデル費用を持たない。不要なPNG再生成/native rendererを起動しない。"
+        },
+        {
+          "id": "C10",
+          "scope": "race/retry/queue/timeout・キャンセル・例外・観測性",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "通知unknown write/retryの意味を説明とreadonly contractへ照合し絶対保証を撤去。実retry/cancel/race/transportは各runtime ownerで、本packetの静的図から実証しない。"
+        },
+        {
+          "id": "C11",
+          "scope": "テスト偽陽性・mock依存・回帰/異常系/競合・flaky/skip",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "文書だけの変更へ実装鏡像テストを加えず実source CRON_JOBS・delivery契約とbefore/afterdiffを確認。generated9PNGは独立source/hash/integrityとvisualで検査。"
+        },
+        {
+          "id": "C12",
+          "scope": "build・runtime/lockfile・依存リスク・script・設定/CI差",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "SVG textは配布archiveに収録しbyte/mode一致。新dependency/version/buildを加えずstatic canonical sourceを直接修正、generated pairは無変更。"
+        },
+        {
+          "id": "X01",
+          "scope": "配布物・起動終了・旧新version・切戻し",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "current runtime sourceと配布SVGのscheduleを一致、archive byte/modeを確認。新release/tag/publish/deploymentやgateway restartはしない。"
+        },
+        {
+          "id": "X02",
+          "scope": "供給網・取得元・CI権限・ライセンス",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "固定local SVG/documentのみでコード取得/CI権限/新依存/認証供給元を変更しない。renderer供給網はgallery groupで別評価。"
+        },
+        {
+          "id": "X03",
+          "scope": "backup/restore/削除・派生物/鍵・削除データ復活",
+          "applicability": "NOT_APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "図はbackup/restore/purge/秘密鍵/削除データを操作しない。archive/historical documentsは保持。"
+        },
+        {
+          "id": "X04",
+          "scope": "外部連携・署名・主体/宛先・再送/順序・部分取込",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "Slack/Discord/LINE WORKS説明の主体/受付と反映/unknown結果/人確認を保持。図の内容を実連携成功・署名検証・送信receipt証拠にしない。"
+        },
+        {
+          "id": "X05",
+          "scope": "offline・複数tab・容量/eviction・OS差・native/FFI",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "local offline説明図と対応guideを確認。9PNG macOS実視覚、staticSVGのbrowser/native render/Windows/Linux/字体差は未実行。"
+        },
+        {
+          "id": "X06",
+          "scope": "AI/MCP・prompt injection・tool権限・承認・記憶越境",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "LLM/semantic/extractionの図は既存責務・合成例の説明で、tool権限・記憶保存・prompt処理を追加しない。AI出力は候補/根拠付きの説明を保持。"
+        },
+        {
+          "id": "X07",
+          "scope": "医療/算定/金銭の適用日/対象/根拠・監査・人の承認",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "医療関連例は合成の候補/対応記録提示として扱い、未知≠対応なし、人承認/receiptを表示。新しい臨床/算定ルールや一次資料なしの判断を追加しない。"
+        },
+        {
+          "id": "X08",
+          "scope": "公開Webの導線・フォーム・link/index・公開境界",
+          "applicability": "APPLICABLE",
+          "judgment": "REVIEWED",
+          "evidence": "public docs image pathとguide導線/source対応を確認、公開操作なし。rootREADME全文/CHANGELOG全historyの内容確認は親/他ownerへ分離。"
+        }
+      ]
+    }
+  ],
+  "readonly_boundaries": [
+    {
+      "path": "AGENTS.md",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          174
+        ]
+      ],
+      "sha256_W": "5022b4fbc28963d7a3ba6106ae67f39cf6839be9c64c838169804268149b84a9",
+      "bytes_W": 14296,
+      "lines_W": 174,
+      "reason": "過去packet全読取を同SHAで再利用。"
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          46
+        ]
+      ],
+      "sha256_W": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "bytes_W": 1358,
+      "lines_W": 46,
+      "reason": "既存runner再利用、今回も全46行確認。"
+    },
+    {
+      "path": "tests/conftest.py",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          237
+        ]
+      ],
+      "sha256_W": "4d9b63c62c42873bd9ee00d7c6d251c866cc44191ed2c7d16c13ab195b0ac452",
+      "bytes_W": 9335,
+      "lines_W": 237,
+      "reason": "既存packet全文receiptを同SHAで再利用。"
+    },
+    {
+      "path": "changes/README.md",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          25
+        ]
+      ],
+      "sha256_W": "fa8948acb3c7f2c56269b77dd6086c0c79b6a966fbbd79f5445f686c94a55b11",
+      "bytes_W": 1390,
+      "lines_W": 25,
+      "reason": "既存packet全文receiptを同SHAで再利用。"
+    },
+    {
+      "path": "Makefile",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          32
+        ]
+      ],
+      "sha256_W": "f49eac487c1e0d717bc95b2c5d110389f7e75cc047a67ca545bccc75dbaaad53",
+      "bytes_W": 1266,
+      "lines_W": 32,
+      "reason": "stdlib/CI consumer全内容確認。"
+    },
+    {
+      "path": "tests/meta/test_ci_scripts.py",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1,
+          130
+        ],
+        [
+          290,
+          316
+        ]
+      ],
+      "sha256_W": "20d17b93801f37372e66d95085363ae8f6fa4e09f45651efa2a907f07f4d5044",
+      "bytes_W": 14449,
+      "lines_W": 316,
+      "reason": "関係する生成/bootstrap/meta regressionのみ全文範囲確認。他metaはowner readonly。"
+    },
+    {
+      "path": ".github/workflows/release-notes.yml",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1,
+          128
+        ]
+      ],
+      "sha256_W": "036c8f65e7b7862bad2e2b450c0466fd19c79d148f81459487044afc3f8da2d2",
+      "bytes_W": 5096,
+      "lines_W": 132,
+      "reason": "unittest-only release収集とchecks/sync/permissions/exportのconsumerを確認。残129-132は未確認。"
+    },
+    {
+      "path": "docs/guides/USER_GUIDE.md",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          172,
+          222
+        ]
+      ],
+      "sha256_W": "f86efffc500438acdfc2c57b2611426b55864bec7dc37efd54ca82b8bc76de55",
+      "bytes_W": 37607,
+      "lines_W": 542,
+      "reason": "runtime source SVGのconsumerと説明境界。画像リンク23/31はsearchだけ。"
+    },
+    {
+      "path": "mcs/ops/mcs_setup.py",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          2390,
+          2422
+        ]
+      ],
+      "sha256_W": "6c8602a8b1abfcdc79da35b5cf9eb7605a1438304a42438ef762cb7b0e369b9f",
+      "bytes_W": 161563,
+      "lines_W": 3488,
+      "reason": "CRON_JOBS現行10分/deep10,40のみreadonly照合。"
+    },
+    {
+      "path": "adapters/common/text.py",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          150,
+          282
+        ]
+      ],
+      "sha256_W": "f7525792d18b44fa022b1afc0b75ed52938f7767d6dc0e910c4166122e1eb476",
+      "bytes_W": 18850,
+      "lines_W": 397,
+      "reason": "人承認modal/reason/既存入力契約をreadonly照合。"
+    },
+    {
+      "path": "mcs/notify/notify_views.py",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          29,
+          80
+        ]
+      ],
+      "sha256_W": "d7231b1733636131875d47d4608e82b3099ed96ff9414a06e2dc940f3209dc2d",
+      "bytes_W": 18649,
+      "lines_W": 376,
+      "reason": "summary/unknown表示契約をreadonly照合。"
+    },
+    {
+      "path": "mcs/semantic/semantic_evaluation.py",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          132,
+          151
+        ],
+        [
+          1075,
+          1172
+        ]
+      ],
+      "sha256_W": "6e97b38b5c3ac89e84c66b05a4ba7192e6fabbc30c18e01199c71d6ee42f05ae",
+      "bytes_W": 53426,
+      "lines_W": 1172,
+      "reason": "_eval_member/run_shadow_e2eのmessage memberとcase contract、以前packet3全文はここでSHA付き再算入しない。"
+    },
+    {
+      "path": "mcs/semantic/semantic_bench.py",
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          148,
+          173
+        ]
+      ],
+      "sha256_W": "d8bb8b320266ed0f4c8371e8450eb8b41137feca60218d33b26d1e8ff55b1a02",
+      "bytes_W": 18058,
+      "lines_W": 406,
+      "reason": "packet3実DB freeze入口の用途と本operator CLIの差異。"
+    },
+    {
+      "path": "changes/maintenance-notify-packet3-lineworks-silent-20261005.json",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "sha256_W": "e40278900656f54f28c45a1e704ba917fdd037a65517cdf18f5ed0b128d22575",
+      "bytes_W": 1147,
+      "lines_W": 8,
+      "reason": "固定PのURL refs不正全本文。所有外・親修復報告と区別。"
+    },
+    {
+      "path": "/Users/yusuke/.agents/skills/agent-defaults/SKILL.md",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          52
+        ]
+      ],
+      "sha256_W": "562eaf42717a70ce98299f521fd9a355953ef1e2e89e903cdd7f2c052e2f166e",
+      "reason": "今回全文再確認、上位の機密/合成/全20基準/非省略/再帰spawn禁止の契約。"
+    },
+    {
+      "path": "/Users/yusuke/.codex/attachments/9bb89786-a65f-4f06-8123-c608a4bb4464/pasted-text-1.txt",
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          67
+        ]
+      ],
+      "sha256_W": "5207aa2fe1d3b7a0e67eb64b4b8577ae21e305f222903c5d67beeb8bf01226bf",
+      "reason": "今回全文再確認、上位の機密/合成/全20基準/非省略/再帰spawn禁止の契約。"
+    }
+  ],
+  "visual": {
+    "files": [
+      "docs/screenshots/slack-gallery/01-overview.png",
+      "docs/screenshots/slack-gallery/02-notification.png",
+      "docs/screenshots/slack-gallery/03-actions.png",
+      "docs/screenshots/slack-gallery/04-task-form.png",
+      "docs/screenshots/slack-gallery/05-task-preview.png",
+      "docs/screenshots/slack-gallery/06-task-list.png",
+      "docs/screenshots/slack-gallery/07-patient-summary.png",
+      "docs/screenshots/lineworks-gallery/01-delivery.png",
+      "docs/screenshots/lineworks-gallery/02-task-confirm.png"
+    ],
+    "state": "9_IMAGES_VISUALLY_INSPECTED",
+    "result": "文字切れ/重なりを認めず、候補/未知≠無し/受付≠反映/人確認の文言を保持。source/hash/integrity検査と実画像表示を分けて記録。",
+    "gallery_svg_png_manifest_unchanged": true,
+    "static_svg_changed_without_png_pair": [
+      "docs/assets/runtime-topology.svg",
+      "docs/screenshots/slack-thread.svg",
+      "docs/screenshots/discord-thread.svg"
+    ],
+    "static_changed_svg_native_or_browser_render": "未実行、source全文/diff・caller契約を確認。"
+  },
+  "findings": [
+    {
+      "id": "F01",
+      "status": "CONFIRMED_FIXED",
+      "title": "release以外の生成marker破損が成功扱い/手書き本文を置換する",
+      "paths": [
+        "scripts/development/update_readme.py"
+      ],
+      "root_cause_and_fix": "全5markerの個数/順序をrender前検査、全doc validation終了前writeなし。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_generated_marker_damage_keeps_manual_text",
+          "test_marker_failure_in_second_doc_does_not_write_first"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6"
+    },
+    {
+      "id": "F02",
+      "status": "CONFIRMED_FIXED",
+      "title": "READMEとDEVELOPMENTが両方ないのに検査/生成が0終了",
+      "paths": [
+        "scripts/development/update_readme.py"
+      ],
+      "root_cause_and_fix": "両targetゼロを1終了にする。片方のみ/disabled blocks互換を保持。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_missing_all_generated_docs_is_not_success",
+          "test_single_enabled_doc_and_absent_sections_remain_supported"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6"
+    },
+    {
+      "id": "F03",
+      "status": "CONFIRMED_FIXED",
+      "title": "PNG scanline filter5以上を正常画像として受入れる",
+      "paths": [
+        "scripts/development/generate_slack_gallery.py"
+      ],
+      "root_cause_and_fix": "bounded decode後の全行filterを0..4と検査。RGB/RGBA正常5filter保持。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_png_check_rejects_invalid_scanline_filters",
+          "test_png_check_keeps_all_standard_filters"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6"
+    },
+    {
+      "id": "F04",
+      "status": "CONFIRMED_FIXED",
+      "title": "不正Release identity/状態型が書込計画へ進み判定不能",
+      "paths": [
+        "scripts/development/sync_release_notes.py"
+      ],
+      "root_cause_and_fix": "全一覧/直前GET/PATCH応答/再GETのstable record型を検査。既存identity/concurrency/draft/tag/idempotence境界維持。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_release_response_contract_rejected_before_any_write"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6"
+    },
+    {
+      "id": "F05",
+      "status": "CONFIRMED_FIXED",
+      "title": "最低対応3.10の深いJSONでRecursionErrorがCLI診断を抜ける",
+      "paths": [
+        "scripts/development/release_notes.py",
+        "scripts/development/readme_release.py",
+        "scripts/development/sync_release_notes.py"
+      ],
+      "root_cause_and_fix": "ValueError/OSError等の既存top-level診断へRecursionErrorを追加。source/入力payloadやTracebackを出さない。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_deep_json_cli_has_controlled_offline_diagnostic"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6"
+    },
+    {
+      "id": "F06",
+      "status": "CONFIRMED_FIXED",
+      "title": "shadow budgetのNaN/inf/非正値がモデルへ伝播",
+      "paths": [
+        "scripts/development/semantic_shadow_e2e.py"
+      ],
+      "root_cause_and_fix": "モデル利用前にfiniteかつpositiveを検査、0.25/300の有効値と任意合成fixtureを保持。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_shadow_cli_rejects_nonfinite_or_nonpositive_budget_before_model",
+          "test_shadow_cli_preserves_valid_operator_fixture_and_budget"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6"
+    },
+    {
+      "id": "F07",
+      "status": "CONFIRMED_FIXED",
+      "title": "不正case/message memberがshadow runnerへ進む",
+      "paths": [
+        "scripts/development/semantic_shadow_e2e.py"
+      ],
+      "root_cause_and_fix": "case objectsとtruthy messages list/member objectsを入口検査、deep JSON診断。falsy/empty messages fallbackとvalid body/threadを保持。",
+      "before": {
+        "P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+        "regression_tests": [
+          "test_shadow_cli_malformed_cases_stop_before_model",
+          "test_shadow_cli_preserves_valid_operator_fixture_and_budget"
+        ],
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log"
+        ]
+      },
+      "after": {
+        "W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+        "logs": [
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+          "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log"
+        ]
+      },
+      "owner": "maintenance_semantic packet6"
+    },
+    {
+      "id": "M01",
+      "status": "MAINTENANCE_IMPLEMENTED",
+      "title": "runtime diagramの5分/deep7,37を現在の10分/deep10,40へ同期",
+      "paths": [
+        "docs/assets/runtime-topology.svg"
+      ],
+      "evidence": "mcs/ops/mcs_setup.py:2390-2422 CRON_JOBS全文範囲、P→W SVG差分。static正本、PNG pairなし。"
+    },
+    {
+      "id": "M02",
+      "status": "MAINTENANCE_IMPLEMENTED",
+      "title": "Slack/Discord説明の絶対重複保証を結果不明保留/人確認へ修正",
+      "paths": [
+        "docs/screenshots/slack-thread.svg",
+        "docs/screenshots/discord-thread.svg"
+      ],
+      "evidence": "合成static canonical sourceと通知receipt/unknown契約。PNG pairなし、native/browser renderは未実行。"
+    },
+    {
+      "id": "D01",
+      "status": "DISPROVED_AS_AUTOMATIC_FIX_REQUIREMENT",
+      "title": "release buildの任意IO途中失敗を汎用transactionへ置換すべきか",
+      "evidence": [
+        "docs/development/README_MAINTENANCE.md:35-38",
+        "docs/development/RELEASE_NOTES.md:65-70",
+        "scripts/development/release_notes.py build",
+        "tests/release/test_release_notes.py"
+      ],
+      "decision": "既存手順はgit diffでCHANGELOG/README/残fragment/archiveを照合して手動復旧と明示。validateで中断する異常入力を既存testで確認し、無関係なtransaction追加をしない。任意IO完全atomic性・途中IO実fault injectionは未検証。"
+    },
+    {
+      "id": "D02",
+      "status": "DISPROVED",
+      "title": "shadow任意--casesをpacket3 bench同様fixedasset限定にするべきか",
+      "evidence": [
+        "scripts/development/semantic_shadow_e2e.py:2-16,28-79",
+        "mcs/semantic/semantic_evaluation.py:1075-1172",
+        "mcs/semantic/semantic_bench.py:148-173"
+      ],
+      "decision": "本driverはoperatorが--casesを指定する完全合成CLI契約で、実DBを既定で凍結するpacket3入口と異なる。任意合成fixture/保存形を保持。実データ/匿名化は本auditでは禁止。"
+    },
+    {
+      "id": "D03",
+      "status": "DISPROVED_AS_SUPPORTED_CLI_DEFECT",
+      "title": "readme_release -Iでsibling importが消える",
+      "evidence": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-readme_release.py.log",
+      "decision": "通常Python CLIはscript dirをsys.pathに含む。-Iはそれを除去する通常CLI外条件、parent判断受入済み。正式CLIをenv-i/PYTHONPATHなし/-S/repo外cwdでboth runtime起動、追加runpy bindingsでarchive内source束縛を確認。不要bootstrapなし。"
+    },
+    {
+      "id": "H01",
+      "status": "BASELINE_PARENT_DEPENDENCY_RESOLVED_BY_PARENT_REPORT",
+      "title": "固定Pのnotify fragment refsにURLがありrelease_notes checkが拒否",
+      "path": "changes/maintenance-notify-packet3-lineworks-silent-20261005.json",
+      "sha256_P": "e40278900656f54f28c45a1e704ba917fdd037a65517cdf18f5ed0b128d22575",
+      "child_result": "P/Wのcheck exit1を保持しvalidatorを弱めない。今回fragment含むその他はindividual validator成功。",
+      "parent_report": "notify3e1824c→親15c8c04で修復済み、親Iでrelease_notes/readme checks正常と連絡。child固定P/Wで再検証した結果ではない。"
+    },
+    {
+      "id": "H02",
+      "status": "GENERATED_PARENT_DEPENDENCY_RESOLVED_BY_PARENT_REPORT",
+      "title": "新test fileでDEVELOPMENT生成countが254→255",
+      "child_result": "親正本は未編集。isolated archiveで再生成するとcount1行だけ、README unchanged、その後both-runtime bootstrap success。",
+      "patch": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-generated.diff",
+      "parent_report": "親I追加他owner testを含め256filesへ再生成しb3140f4へ記録と連絡。"
+    },
+    {
+      "id": "H03",
+      "status": "DEFERRED_SAFETY_BOUNDARY",
+      "title": "実MCS/原本DB/token-cache/LLM/Jev/Keychain/外部API/実送信/配備/native renderer",
+      "decision": "明示禁止、全fixtureは完全合成。SDK/実認証/transport/browserアプリ/productionの検証をlocal passから推測しない。最終I全体統合とfresh独立レビューはparent owner。"
+    },
+    {
+      "id": "H04",
+      "status": "DEFERRED_OTHER_OWNER",
+      "title": "semantic_send_gate deep corrupt JSON predicate疑義",
+      "decision": "packet6完了時にparentが所有者を分けて合成確認へ投入。packet6所有外で未編集・未確認、全域未完了を維持。"
+    },
+    {
+      "id": "H05",
+      "status": "CLASSIFIED_GENERATED_WITH_PRESERVED_MANUAL_HISTORY",
+      "title": "CHANGELOG全3492行を現在fragmentから再生成できるか",
+      "decision": "buildは既存header/historyを保持し新sectionを挿入。RELEASE_NOTES95-103にv1.0.0〜1.0.8を2026-10-01人手再編集し旧原本をarchive保存と記載。checkはformat/source同期を検査し過去本文の事実を再検証しない。rootCHANGELOGはparent readonly、全文reviewを本packetに算入しない。"
+    }
+  ],
+  "runtimes": {
+    "python313": "3.13.12 SQLite3.50.4",
+    "python310": "3.10.22 SQLite3.53.1 pytest9.1.1",
+    "os": "macOS",
+    "other_os_not_executed": [
+      "Windows",
+      "Linux"
+    ]
+  },
+  "validation": [
+    {
+      "id": "fixed-P-regressions313.log",
+      "phase": "BEFORE_FIXED_P",
+      "source_state": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "python": "/Users/yusuke/.mcs/.venv/bin/python",
+      "argv": [
+        "scripts/run_tests.sh",
+        "tests/meta/test_maintenance_development_regressions.py",
+        "-o",
+        "addopts=",
+        "-q"
+      ],
+      "launcher_env": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python"
+      },
+      "effective_env": {
+        "method": "scripts/run_tests.sh env -i",
+        "HOME": "per-run mktemp /mcs-test-home.* (trap cleanup)",
+        "TMPDIR": "$HOME/tmp",
+        "XDG_CONFIG_HOME": "$HOME/config",
+        "XDG_CACHE_HOME": "$HOME/cache",
+        "XDG_DATA_HOME": "$HOME/data",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MCS_TEST_SANDBOX": "1",
+        "PATH": "caller PATH only; no credential/provider/proxy variables",
+        "PYTHONPATH": "absent",
+        "guards": "tests/conftest socket/MCS/LLM/Jev/Hermes/launchd/Keychain guards unchanged"
+      },
+      "exit": 1,
+      "counts": {
+        "failed": 47,
+        "passed": 21,
+        "skipped": 0,
+        "total": 68
+      },
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+      "notes": "git archive Pのproduct source無変更、新規最終235行testだけコピー。fixed-P-regression-input.json参照。"
+    },
+    {
+      "id": "fixed-P-regressions310.log",
+      "phase": "BEFORE_FIXED_P",
+      "source_state": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "python": "/tmp/mcs-maintenance-python310-20261005/bin/python",
+      "argv": [
+        "scripts/run_tests.sh",
+        "tests/meta/test_maintenance_development_regressions.py",
+        "-o",
+        "addopts=",
+        "-q"
+      ],
+      "launcher_env": {
+        "MCS_TEST_PYTHON": "/tmp/mcs-maintenance-python310-20261005/bin/python"
+      },
+      "effective_env": {
+        "method": "scripts/run_tests.sh env -i",
+        "HOME": "per-run mktemp /mcs-test-home.* (trap cleanup)",
+        "TMPDIR": "$HOME/tmp",
+        "XDG_CONFIG_HOME": "$HOME/config",
+        "XDG_CACHE_HOME": "$HOME/cache",
+        "XDG_DATA_HOME": "$HOME/data",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MCS_TEST_SANDBOX": "1",
+        "PATH": "caller PATH only; no credential/provider/proxy variables",
+        "PYTHONPATH": "absent",
+        "guards": "tests/conftest socket/MCS/LLM/Jev/Hermes/launchd/Keychain guards unchanged"
+      },
+      "exit": 1,
+      "counts": {
+        "failed": 49,
+        "passed": 19,
+        "skipped": 0,
+        "total": 68
+      },
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log",
+      "notes": "git archive Pのproduct source無変更、新規最終235行testだけコピー。fixed-P-regression-input.json参照。"
+    },
+    {
+      "id": "final-release313.log",
+      "phase": "AFTER_W1_BEFORE_TEST_MOVE",
+      "source_state": "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "python": "/Users/yusuke/.mcs/.venv/bin/python",
+      "argv": [
+        "scripts/run_tests.sh",
+        "tests/release/",
+        "tests/meta/test_ci_scripts.py::test_update_readme_check_fails_when_generator_fails",
+        "tests/meta/test_ci_scripts.py::test_update_readme_write_fails_without_partial_write",
+        "tests/meta/test_ci_scripts.py::test_update_readme_check_flags_stale_dev_doc",
+        "tests/meta/test_ci_scripts.py::test_update_readme_write_regenerates_dev_doc",
+        "tests/meta/test_ci_scripts.py::test_update_readme_module_description_keeps_hyphenated_words",
+        "-o",
+        "addopts=",
+        "-q"
+      ],
+      "launcher_env": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python"
+      },
+      "effective_env": {
+        "method": "scripts/run_tests.sh env -i",
+        "HOME": "per-run mktemp /mcs-test-home.* (trap cleanup)",
+        "TMPDIR": "$HOME/tmp",
+        "XDG_CONFIG_HOME": "$HOME/config",
+        "XDG_CACHE_HOME": "$HOME/cache",
+        "XDG_DATA_HOME": "$HOME/data",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MCS_TEST_SANDBOX": "1",
+        "PATH": "caller PATH only; no credential/provider/proxy variables",
+        "PYTHONPATH": "absent",
+        "guards": "tests/conftest socket/MCS/LLM/Jev/Hermes/launchd/Keychain guards unchanged"
+      },
+      "exit": 0,
+      "counts": {
+        "passed": 91,
+        "subtests_passed": 26,
+        "skipped": 0
+      },
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+      "notes": "当時新pytest64casesはtests/release/test_maintenance_development_regressions.py、commit前metaへ同内容移動。22既存release+64新+5既存meta。最新shadow14を置換してSHA不変54新/22release/5metaは再利用。"
+    },
+    {
+      "id": "final-shadow313.log",
+      "phase": "AFTER_LATEST",
+      "source_state": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+      "python": "/Users/yusuke/.mcs/.venv/bin/python",
+      "argv": [
+        "scripts/run_tests.sh",
+        "tests/meta/test_maintenance_development_regressions.py",
+        "-k",
+        "shadow",
+        "-o",
+        "addopts=",
+        "-q"
+      ],
+      "launcher_env": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python"
+      },
+      "effective_env": {
+        "method": "scripts/run_tests.sh env -i",
+        "HOME": "per-run mktemp /mcs-test-home.* (trap cleanup)",
+        "TMPDIR": "$HOME/tmp",
+        "XDG_CONFIG_HOME": "$HOME/config",
+        "XDG_CACHE_HOME": "$HOME/cache",
+        "XDG_DATA_HOME": "$HOME/data",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MCS_TEST_SANDBOX": "1",
+        "PATH": "caller PATH only; no credential/provider/proxy variables",
+        "PYTHONPATH": "absent",
+        "guards": "tests/conftest socket/MCS/LLM/Jev/Hermes/launchd/Keychain guards unchanged"
+      },
+      "exit": 0,
+      "counts": {
+        "passed": 14,
+        "deselected": 54,
+        "skipped": 0
+      },
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+      "notes": "最終source/test deltaの必要14caseのみ再実行。body/thread有効fixture4controls、invalidbudget5、malformedcases5。"
+    },
+    {
+      "id": "final-release310.log",
+      "phase": "AFTER_W1_BEFORE_TEST_MOVE",
+      "source_state": "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "python": "/tmp/mcs-maintenance-python310-20261005/bin/python",
+      "argv": [
+        "scripts/run_tests.sh",
+        "tests/release/",
+        "tests/meta/test_ci_scripts.py::test_update_readme_check_fails_when_generator_fails",
+        "tests/meta/test_ci_scripts.py::test_update_readme_write_fails_without_partial_write",
+        "tests/meta/test_ci_scripts.py::test_update_readme_check_flags_stale_dev_doc",
+        "tests/meta/test_ci_scripts.py::test_update_readme_write_regenerates_dev_doc",
+        "tests/meta/test_ci_scripts.py::test_update_readme_module_description_keeps_hyphenated_words",
+        "-o",
+        "addopts=",
+        "-q"
+      ],
+      "launcher_env": {
+        "MCS_TEST_PYTHON": "/tmp/mcs-maintenance-python310-20261005/bin/python"
+      },
+      "effective_env": {
+        "method": "scripts/run_tests.sh env -i",
+        "HOME": "per-run mktemp /mcs-test-home.* (trap cleanup)",
+        "TMPDIR": "$HOME/tmp",
+        "XDG_CONFIG_HOME": "$HOME/config",
+        "XDG_CACHE_HOME": "$HOME/cache",
+        "XDG_DATA_HOME": "$HOME/data",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MCS_TEST_SANDBOX": "1",
+        "PATH": "caller PATH only; no credential/provider/proxy variables",
+        "PYTHONPATH": "absent",
+        "guards": "tests/conftest socket/MCS/LLM/Jev/Hermes/launchd/Keychain guards unchanged"
+      },
+      "exit": 0,
+      "counts": {
+        "passed": 91,
+        "subtests_passed": 26,
+        "skipped": 0
+      },
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+      "notes": "当時新pytest64casesはtests/release/test_maintenance_development_regressions.py、commit前metaへ同内容移動。22既存release+64新+5既存meta。最新shadow14を置換してSHA不変54新/22release/5metaは再利用。"
+    },
+    {
+      "id": "final-shadow310.log",
+      "phase": "AFTER_LATEST",
+      "source_state": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+      "python": "/tmp/mcs-maintenance-python310-20261005/bin/python",
+      "argv": [
+        "scripts/run_tests.sh",
+        "tests/meta/test_maintenance_development_regressions.py",
+        "-k",
+        "shadow",
+        "-o",
+        "addopts=",
+        "-q"
+      ],
+      "launcher_env": {
+        "MCS_TEST_PYTHON": "/tmp/mcs-maintenance-python310-20261005/bin/python"
+      },
+      "effective_env": {
+        "method": "scripts/run_tests.sh env -i",
+        "HOME": "per-run mktemp /mcs-test-home.* (trap cleanup)",
+        "TMPDIR": "$HOME/tmp",
+        "XDG_CONFIG_HOME": "$HOME/config",
+        "XDG_CACHE_HOME": "$HOME/cache",
+        "XDG_DATA_HOME": "$HOME/data",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MCS_TEST_SANDBOX": "1",
+        "PATH": "caller PATH only; no credential/provider/proxy variables",
+        "PYTHONPATH": "absent",
+        "guards": "tests/conftest socket/MCS/LLM/Jev/Hermes/launchd/Keychain guards unchanged"
+      },
+      "exit": 0,
+      "counts": {
+        "passed": 14,
+        "deselected": 54,
+        "skipped": 0
+      },
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log",
+      "notes": "最終source/test deltaの必要14caseのみ再実行。body/thread有効fixture4controls、invalidbudget5、malformedcases5。"
+    },
+    {
+      "id": "final-moved-regressions313.log",
+      "phase": "AFTER_TEST_PATH_MOVE",
+      "source_state": "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "python": "/Users/yusuke/.mcs/.venv/bin/python",
+      "argv": [
+        "scripts/run_tests.sh",
+        "tests/meta/test_maintenance_development_regressions.py",
+        "-o",
+        "addopts=",
+        "-q"
+      ],
+      "launcher_env": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python"
+      },
+      "effective_env": {
+        "method": "scripts/run_tests.sh env -i",
+        "HOME": "per-run mktemp /mcs-test-home.* (trap cleanup)",
+        "TMPDIR": "$HOME/tmp",
+        "XDG_CONFIG_HOME": "$HOME/config",
+        "XDG_CACHE_HOME": "$HOME/cache",
+        "XDG_DATA_HOME": "$HOME/data",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MCS_TEST_SANDBOX": "1",
+        "PATH": "caller PATH only; no credential/provider/proxy variables",
+        "PYTHONPATH": "absent",
+        "guards": "tests/conftest socket/MCS/LLM/Jev/Hermes/launchd/Keychain guards unchanged"
+      },
+      "exit": 0,
+      "counts": {
+        "passed": 64,
+        "skipped": 0
+      },
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-moved-regressions313.log",
+      "notes": "unittest CI path互換維持のため親承認専任metaへ移動。source不変64casesを同内容検証。"
+    },
+    {
+      "id": "after-release313.log",
+      "phase": "INTERMEDIATE_EXPECTED_GENERATED_DRIFT",
+      "source_state": "intermediate repaired sources",
+      "python": "/Users/yusuke/.mcs/.venv/bin/python",
+      "argv": [
+        "scripts/run_tests.sh",
+        "tests/release/",
+        "tests/meta/test_ci_scripts.py",
+        "-k",
+        "not gates and not snapshot",
+        "-o",
+        "addopts=",
+        "-q"
+      ],
+      "launcher_env": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python"
+      },
+      "effective_env": {
+        "method": "scripts/run_tests.sh env -i",
+        "HOME": "per-run mktemp /mcs-test-home.* (trap cleanup)",
+        "TMPDIR": "$HOME/tmp",
+        "XDG_CONFIG_HOME": "$HOME/config",
+        "XDG_CACHE_HOME": "$HOME/cache",
+        "XDG_DATA_HOME": "$HOME/data",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MCS_TEST_SANDBOX": "1",
+        "PATH": "caller PATH only; no credential/provider/proxy variables",
+        "PYTHONPATH": "absent",
+        "guards": "tests/conftest socket/MCS/LLM/Jev/Hermes/launchd/Keychain guards unchanged"
+      },
+      "exit": 1,
+      "counts": {
+        "passed": 112,
+        "failed": 1,
+        "deselected": 9,
+        "subtests_passed": 26,
+        "skipped": 0
+      },
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/after-release313.log",
+      "notes": "sole failure test_readme_generator_bootstraps_outside_repositoryは新test count drift。green扱いしない、archiveのみ生成後startup1pass。"
+    },
+    {
+      "id": "after-release310.log",
+      "phase": "INTERMEDIATE_EXPECTED_GENERATED_DRIFT",
+      "source_state": "intermediate repaired sources",
+      "python": "/tmp/mcs-maintenance-python310-20261005/bin/python",
+      "argv": [
+        "scripts/run_tests.sh",
+        "tests/release/",
+        "tests/meta/test_ci_scripts.py",
+        "-k",
+        "not gates and not snapshot",
+        "-o",
+        "addopts=",
+        "-q"
+      ],
+      "launcher_env": {
+        "MCS_TEST_PYTHON": "/tmp/mcs-maintenance-python310-20261005/bin/python"
+      },
+      "effective_env": {
+        "method": "scripts/run_tests.sh env -i",
+        "HOME": "per-run mktemp /mcs-test-home.* (trap cleanup)",
+        "TMPDIR": "$HOME/tmp",
+        "XDG_CONFIG_HOME": "$HOME/config",
+        "XDG_CACHE_HOME": "$HOME/cache",
+        "XDG_DATA_HOME": "$HOME/data",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MCS_TEST_SANDBOX": "1",
+        "PATH": "caller PATH only; no credential/provider/proxy variables",
+        "PYTHONPATH": "absent",
+        "guards": "tests/conftest socket/MCS/LLM/Jev/Hermes/launchd/Keychain guards unchanged"
+      },
+      "exit": 1,
+      "counts": {
+        "passed": 112,
+        "failed": 1,
+        "deselected": 9,
+        "subtests_passed": 26,
+        "skipped": 0
+      },
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/after-release310.log",
+      "notes": "sole failure test_readme_generator_bootstraps_outside_repositoryは新test count drift。green扱いしない、archiveのみ生成後startup1pass。"
+    },
+    {
+      "id": "ruff-latest.log",
+      "phase": "AFTER_LATEST",
+      "source_state": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+      "argv": [
+        "/Users/yusuke/.local/bin/uv",
+        "run",
+        "--no-project",
+        "--with",
+        "ruff==0.16.10",
+        "ruff",
+        "check",
+        "scripts/development/",
+        "tests/release/",
+        "tests/meta/test_maintenance_development_regressions.py"
+      ],
+      "env": "ordinary local lint environment; no source execution or services",
+      "exit": 0,
+      "result": "All checks passed!",
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/ruff-latest.log"
+    },
+    {
+      "id": "artifact-readme_release.py313.log",
+      "phase": "ISOLATED_ARCHIVE_W1_GENERATED_COUNT_ONLY",
+      "source_state": "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "argv": [
+        "/Users/yusuke/.mcs/.venv/bin/python",
+        "-S",
+        "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/scripts/development/readme_release.py",
+        "--check"
+      ],
+      "cwd": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+      "env": {
+        "HOME": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+        "PATH": "/bin:/usr/bin",
+        "LC_ALL": "en_US.UTF-8",
+        "PYTHONHASHSEED": "0",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-readme_release.py313.log",
+      "counts": {},
+      "notes": "正式CLI/checkは-S env-i/PYTHONPATH無し/repo外cwd。stdlib unittestは-I -Sでpytest/siteなし。release-notes exit1はH01 baseline不正の正しい拒否。source/asset不変の成功はWにも再利用（shadow変更は別14回帰）。"
+    },
+    {
+      "id": "artifact-generate_slack_gallery.py313.log",
+      "phase": "ISOLATED_ARCHIVE_W1_GENERATED_COUNT_ONLY",
+      "source_state": "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "argv": [
+        "/Users/yusuke/.mcs/.venv/bin/python",
+        "-S",
+        "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/scripts/development/generate_slack_gallery.py",
+        "--check"
+      ],
+      "cwd": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+      "env": {
+        "HOME": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+        "PATH": "/bin:/usr/bin",
+        "LC_ALL": "en_US.UTF-8",
+        "PYTHONHASHSEED": "0",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-generate_slack_gallery.py313.log",
+      "counts": {
+        "assets": 7
+      },
+      "notes": "正式CLI/checkは-S env-i/PYTHONPATH無し/repo外cwd。stdlib unittestは-I -Sでpytest/siteなし。release-notes exit1はH01 baseline不正の正しい拒否。source/asset不変の成功はWにも再利用（shadow変更は別14回帰）。"
+    },
+    {
+      "id": "artifact-generate_lineworks_gallery.py313.log",
+      "phase": "ISOLATED_ARCHIVE_W1_GENERATED_COUNT_ONLY",
+      "source_state": "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "argv": [
+        "/Users/yusuke/.mcs/.venv/bin/python",
+        "-S",
+        "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/scripts/development/generate_lineworks_gallery.py",
+        "--check"
+      ],
+      "cwd": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+      "env": {
+        "HOME": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+        "PATH": "/bin:/usr/bin",
+        "LC_ALL": "en_US.UTF-8",
+        "PYTHONHASHSEED": "0",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-generate_lineworks_gallery.py313.log",
+      "counts": {
+        "assets": 2
+      },
+      "notes": "正式CLI/checkは-S env-i/PYTHONPATH無し/repo外cwd。stdlib unittestは-I -Sでpytest/siteなし。release-notes exit1はH01 baseline不正の正しい拒否。source/asset不変の成功はWにも再利用（shadow変更は別14回帰）。"
+    },
+    {
+      "id": "artifact-release-notes313.log",
+      "phase": "ISOLATED_ARCHIVE_W1_GENERATED_COUNT_ONLY",
+      "source_state": "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "argv": [
+        "/Users/yusuke/.mcs/.venv/bin/python",
+        "-S",
+        "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/scripts/development/release_notes.py",
+        "check"
+      ],
+      "cwd": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+      "env": {
+        "HOME": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+        "PATH": "/bin:/usr/bin",
+        "LC_ALL": "en_US.UTF-8",
+        "PYTHONHASHSEED": "0",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit": 1,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-release-notes313.log",
+      "counts": {},
+      "notes": "正式CLI/checkは-S env-i/PYTHONPATH無し/repo外cwd。stdlib unittestは-I -Sでpytest/siteなし。release-notes exit1はH01 baseline不正の正しい拒否。source/asset不変の成功はWにも再利用（shadow変更は別14回帰）。"
+    },
+    {
+      "id": "artifact-stdlib-unittest313.log",
+      "phase": "ISOLATED_ARCHIVE_W1_GENERATED_COUNT_ONLY",
+      "source_state": "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "argv": [
+        "/Users/yusuke/.mcs/.venv/bin/python",
+        "-I",
+        "-S",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/tests/release",
+        "-v"
+      ],
+      "cwd": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+      "env": {
+        "HOME": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+        "PATH": "/bin:/usr/bin",
+        "LC_ALL": "en_US.UTF-8",
+        "PYTHONHASHSEED": "0",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-stdlib-unittest313.log",
+      "counts": {
+        "tests": 22,
+        "passed": 22
+      },
+      "notes": "正式CLI/checkは-S env-i/PYTHONPATH無し/repo外cwd。stdlib unittestは-I -Sでpytest/siteなし。release-notes exit1はH01 baseline不正の正しい拒否。source/asset不変の成功はWにも再利用（shadow変更は別14回帰）。"
+    },
+    {
+      "id": "artifact-startup313.log",
+      "phase": "ISOLATED_ARCHIVE_W1_GENERATED_COUNT_ONLY",
+      "source_state": "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "argv": [
+        "bash",
+        "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/scripts/run_tests.sh",
+        "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/tests/meta/test_ci_scripts.py::test_readme_generator_bootstraps_outside_repository",
+        "-o",
+        "addopts=",
+        "-q"
+      ],
+      "cwd": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+      "env": {
+        "HOME": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+        "PATH": "/bin:/usr/bin",
+        "LC_ALL": "en_US.UTF-8",
+        "PYTHONHASHSEED": "0",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python"
+      },
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-startup313.log",
+      "counts": {
+        "passed": 1
+      },
+      "notes": "正式CLI/checkは-S env-i/PYTHONPATH無し/repo外cwd。stdlib unittestは-I -Sでpytest/siteなし。release-notes exit1はH01 baseline不正の正しい拒否。source/asset不変の成功はWにも再利用（shadow変更は別14回帰）。"
+    },
+    {
+      "id": "artifact-readme_release.py310.log",
+      "phase": "ISOLATED_ARCHIVE_W1_GENERATED_COUNT_ONLY",
+      "source_state": "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "argv": [
+        "/tmp/mcs-maintenance-python310-20261005/bin/python",
+        "-S",
+        "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/scripts/development/readme_release.py",
+        "--check"
+      ],
+      "cwd": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+      "env": {
+        "HOME": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+        "PATH": "/bin:/usr/bin",
+        "LC_ALL": "en_US.UTF-8",
+        "PYTHONHASHSEED": "0",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-readme_release.py310.log",
+      "counts": {},
+      "notes": "正式CLI/checkは-S env-i/PYTHONPATH無し/repo外cwd。stdlib unittestは-I -Sでpytest/siteなし。release-notes exit1はH01 baseline不正の正しい拒否。source/asset不変の成功はWにも再利用（shadow変更は別14回帰）。"
+    },
+    {
+      "id": "artifact-generate_slack_gallery.py310.log",
+      "phase": "ISOLATED_ARCHIVE_W1_GENERATED_COUNT_ONLY",
+      "source_state": "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "argv": [
+        "/tmp/mcs-maintenance-python310-20261005/bin/python",
+        "-S",
+        "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/scripts/development/generate_slack_gallery.py",
+        "--check"
+      ],
+      "cwd": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+      "env": {
+        "HOME": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+        "PATH": "/bin:/usr/bin",
+        "LC_ALL": "en_US.UTF-8",
+        "PYTHONHASHSEED": "0",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-generate_slack_gallery.py310.log",
+      "counts": {
+        "assets": 7
+      },
+      "notes": "正式CLI/checkは-S env-i/PYTHONPATH無し/repo外cwd。stdlib unittestは-I -Sでpytest/siteなし。release-notes exit1はH01 baseline不正の正しい拒否。source/asset不変の成功はWにも再利用（shadow変更は別14回帰）。"
+    },
+    {
+      "id": "artifact-generate_lineworks_gallery.py310.log",
+      "phase": "ISOLATED_ARCHIVE_W1_GENERATED_COUNT_ONLY",
+      "source_state": "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "argv": [
+        "/tmp/mcs-maintenance-python310-20261005/bin/python",
+        "-S",
+        "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/scripts/development/generate_lineworks_gallery.py",
+        "--check"
+      ],
+      "cwd": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+      "env": {
+        "HOME": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+        "PATH": "/bin:/usr/bin",
+        "LC_ALL": "en_US.UTF-8",
+        "PYTHONHASHSEED": "0",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-generate_lineworks_gallery.py310.log",
+      "counts": {
+        "assets": 2
+      },
+      "notes": "正式CLI/checkは-S env-i/PYTHONPATH無し/repo外cwd。stdlib unittestは-I -Sでpytest/siteなし。release-notes exit1はH01 baseline不正の正しい拒否。source/asset不変の成功はWにも再利用（shadow変更は別14回帰）。"
+    },
+    {
+      "id": "artifact-release-notes310.log",
+      "phase": "ISOLATED_ARCHIVE_W1_GENERATED_COUNT_ONLY",
+      "source_state": "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "argv": [
+        "/tmp/mcs-maintenance-python310-20261005/bin/python",
+        "-S",
+        "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/scripts/development/release_notes.py",
+        "check"
+      ],
+      "cwd": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+      "env": {
+        "HOME": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+        "PATH": "/bin:/usr/bin",
+        "LC_ALL": "en_US.UTF-8",
+        "PYTHONHASHSEED": "0",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit": 1,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-release-notes310.log",
+      "counts": {},
+      "notes": "正式CLI/checkは-S env-i/PYTHONPATH無し/repo外cwd。stdlib unittestは-I -Sでpytest/siteなし。release-notes exit1はH01 baseline不正の正しい拒否。source/asset不変の成功はWにも再利用（shadow変更は別14回帰）。"
+    },
+    {
+      "id": "artifact-stdlib-unittest310.log",
+      "phase": "ISOLATED_ARCHIVE_W1_GENERATED_COUNT_ONLY",
+      "source_state": "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "argv": [
+        "/tmp/mcs-maintenance-python310-20261005/bin/python",
+        "-I",
+        "-S",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/tests/release",
+        "-v"
+      ],
+      "cwd": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+      "env": {
+        "HOME": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+        "PATH": "/bin:/usr/bin",
+        "LC_ALL": "en_US.UTF-8",
+        "PYTHONHASHSEED": "0",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-stdlib-unittest310.log",
+      "counts": {
+        "tests": 22,
+        "passed": 22
+      },
+      "notes": "正式CLI/checkは-S env-i/PYTHONPATH無し/repo外cwd。stdlib unittestは-I -Sでpytest/siteなし。release-notes exit1はH01 baseline不正の正しい拒否。source/asset不変の成功はWにも再利用（shadow変更は別14回帰）。"
+    },
+    {
+      "id": "artifact-startup310.log",
+      "phase": "ISOLATED_ARCHIVE_W1_GENERATED_COUNT_ONLY",
+      "source_state": "24261b049872e406f5ab09dab2b4b1fb28f4ee8c",
+      "argv": [
+        "bash",
+        "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/scripts/run_tests.sh",
+        "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/tests/meta/test_ci_scripts.py::test_readme_generator_bootstraps_outside_repository",
+        "-o",
+        "addopts=",
+        "-q"
+      ],
+      "cwd": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+      "env": {
+        "HOME": "/var/folders/yg/_v84mvr55kb5dqdpzhvm79bc0000gn/T/mcs-maintenance-semantic-packet6-replay-jdoio_4q/audit-home",
+        "PATH": "/bin:/usr/bin",
+        "LC_ALL": "en_US.UTF-8",
+        "PYTHONHASHSEED": "0",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MCS_TEST_PYTHON": "/tmp/mcs-maintenance-python310-20261005/bin/python"
+      },
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-startup310.log",
+      "counts": {
+        "passed": 1
+      },
+      "notes": "正式CLI/checkは-S env-i/PYTHONPATH無し/repo外cwd。stdlib unittestは-I -Sでpytest/siteなし。release-notes exit1はH01 baseline不正の正しい拒否。source/asset不変の成功はWにも再利用（shadow変更は別14回帰）。"
+    },
+    {
+      "id": "artifact-bindings",
+      "phase": "ISOLATED_ARCHIVE_LATEST",
+      "source_state": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+      "argv": [
+        "python3",
+        "/tmp/mcs-maintenance-semantic-packet6-bindings.py"
+      ],
+      "exit": 0,
+      "counts": {
+        "binding_checks": 12
+      },
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-bindings.log",
+      "record": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-bindings.json",
+      "notes": "6 entrypoint×both runtime。env-i/-S/repo外cwd。instrumented runpyはaudit-nameでmain未実行、通常CLIの実起動はartifact.jsonと区別。__file__/ROOT/sys.path/sibling sourceはarchive内、元checkout/site/editable無し。probeのreal入口は未実行。"
+    },
+    {
+      "id": "baseline-generate_slack_gallery.py",
+      "phase": "BASELINE",
+      "source_state": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "argv": [
+        "/Users/yusuke/.mcs/.venv/bin/python",
+        "scripts/development/generate_slack_gallery.py",
+        "--check"
+      ],
+      "env": "ordinary local environment; known repo synthetic/public source only, HOME unused",
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-generate_slack_gallery.py.baseline.log"
+    },
+    {
+      "id": "baseline-generate_lineworks_gallery.py",
+      "phase": "BASELINE",
+      "source_state": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "argv": [
+        "/Users/yusuke/.mcs/.venv/bin/python",
+        "scripts/development/generate_lineworks_gallery.py",
+        "--check"
+      ],
+      "env": "ordinary local environment; known repo synthetic/public source only, HOME unused",
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-generate_lineworks_gallery.py.baseline.log"
+    },
+    {
+      "id": "baseline-readme_release.py",
+      "phase": "BASELINE",
+      "source_state": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "argv": [
+        "/Users/yusuke/.mcs/.venv/bin/python",
+        "scripts/development/readme_release.py",
+        "--check"
+      ],
+      "env": "ordinary local environment; known repo synthetic/public source only, HOME unused",
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-readme_release.py.baseline.log"
+    },
+    {
+      "id": "baseline-update_readme.py",
+      "phase": "BASELINE",
+      "source_state": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+      "argv": [
+        "/Users/yusuke/.mcs/.venv/bin/python",
+        "scripts/development/update_readme.py",
+        "--check"
+      ],
+      "env": "ordinary local environment; known repo synthetic/public source only, HOME unused",
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-update_readme.py.baseline.log"
+    }
+  ],
+  "log_manifest": [
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/after-release310.log",
+      "sha256": "777721c36392a7cdfb4cfbaac4b8d2b6ac23c6a8dd18679f435d896a914fec45",
+      "bytes": 1496
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/after-release313.log",
+      "sha256": "ef112099e74e94bf2b637ef083ecff146751ea952d64112ec029f24a10b99105",
+      "bytes": 1496
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-bindings-generate_lineworks_gallery.py310.log",
+      "sha256": "3ba067f8bcc81d9a302fd8b2eb38c049d34e27e97800726fa1fd444aa60fef1f",
+      "bytes": 928
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-bindings-generate_lineworks_gallery.py313.log",
+      "sha256": "139071c841ccf3912ad5030429792991b2e42e191cf6978ed62fbdaf6406e648",
+      "bytes": 934
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-bindings-generate_slack_gallery.py310.log",
+      "sha256": "87319e3b75cf1a4d860027e63423febb3ffb573eef080d92330a7360d4e0f89e",
+      "bytes": 739
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-bindings-generate_slack_gallery.py313.log",
+      "sha256": "e81a3927c61739278dd40a9240c1ade8c60cdce3bf78e4605f667fcf5a491cb8",
+      "bytes": 745
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-bindings-readme_release.py310.log",
+      "sha256": "69ed57baa92d12d279e60938bdb9bfe368764c13feb626ef6f2cb7e959212bdc",
+      "bytes": 898
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-bindings-readme_release.py313.log",
+      "sha256": "a04cd3932302bb25b103ba7a3c4ce38e2ee9a436765e1a9f93c80696ced2be63",
+      "bytes": 904
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-bindings-semantic_shadow_e2e.py310.log",
+      "sha256": "ba3a0abffedca66a425b225125b84a9592f786a8f08be94dfcfdc70ca9218c07",
+      "bytes": 2137
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-bindings-semantic_shadow_e2e.py313.log",
+      "sha256": "def58a84202660a4b4acaaea08e5d715f3ad93cff9eb15cf2ac9b6024adc5f17",
+      "bytes": 2143
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-bindings-sync_release_notes.py310.log",
+      "sha256": "cee8492dff3d527918f4f5539ee38c105f8f160b07be1874c043fc32f6d9acec",
+      "bytes": 902
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-bindings-sync_release_notes.py313.log",
+      "sha256": "661df302e51ad22decd6fa8a4d44b622c298cb5707c623d62420ccb40d049af4",
+      "bytes": 908
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-bindings-update_readme.py310.log",
+      "sha256": "585de3db36011072ef56baea9299e4bdf9ca51b9fc980d08cfbf7df8c9659d60",
+      "bytes": 2266
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-bindings-update_readme.py313.log",
+      "sha256": "bff7656a8ac346c5c8d556d4e65d930993e8c7efd69a30d5e8f853cb834f8cc7",
+      "bytes": 2272
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-bindings.log",
+      "sha256": "0b775e85841400552f8d10cc15251e56d66183aed873158a8c80a8d2a56c6793",
+      "bytes": 104
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-drift-before.log",
+      "sha256": "e5a9a6511f0efcfd0059d0c52455a452a78a7c55016238bf2616d814ea9ad9be",
+      "bytes": 98
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-generate_lineworks_gallery.py310.log",
+      "sha256": "6e6fb86018912449ddf024f5d10619d1aa70704e5ea74100cfe6eef07deabbcc",
+      "bytes": 46
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-generate_lineworks_gallery.py313.log",
+      "sha256": "6e6fb86018912449ddf024f5d10619d1aa70704e5ea74100cfe6eef07deabbcc",
+      "bytes": 46
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-generate_slack_gallery.py310.log",
+      "sha256": "3532aa19eada25bd385b9a2f71454bcc8ef9d7d555a6b200ed22ddaeada2e9a2",
+      "bytes": 41
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-generate_slack_gallery.py313.log",
+      "sha256": "3532aa19eada25bd385b9a2f71454bcc8ef9d7d555a6b200ed22ddaeada2e9a2",
+      "bytes": 41
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-generated-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-readme_release.py.log",
+      "sha256": "8bc5f30edb1123b227afa6e9fa6212654cad781735703f35a805d5676ed6f31f",
+      "bytes": 288
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-readme_release.py310.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-readme_release.py313.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-regeneration.log",
+      "sha256": "0ad18d6d805b615c3a4be1aa1ee924315f4720def059ddeb287aeb5e9747a1de",
+      "bytes": 27
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-release-notes310.log",
+      "sha256": "1abaf3c5593d50c2ce4bac1b73945c7f6a75522d09012f89d2785d5c4ac99bce",
+      "bytes": 90
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-release-notes313.log",
+      "sha256": "1abaf3c5593d50c2ce4bac1b73945c7f6a75522d09012f89d2785d5c4ac99bce",
+      "bytes": 90
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-replay.log",
+      "sha256": "ed4fb82d6bf29f578fd06779462e73026ae28b360a136bd7397d7ca766c74b30",
+      "bytes": 929
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-resume-final.log",
+      "sha256": "cb3d3abaf320b9fd9454865f53b2abc7078d3b5f81c8810b25c97c08a435f071",
+      "bytes": 26
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-resume.log",
+      "sha256": "2bc646ab3426d973dc4f490f0704ad8265aec56ee94ad1896cb9630b5dcc9aa2",
+      "bytes": 620
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-startup310.log",
+      "sha256": "2826a5e72c9f873a0370a41fe46a67989c4a682af951a8514eeb48dfd0b0e61b",
+      "bytes": 98
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-startup313.log",
+      "sha256": "1ab9905d8b0f34f6d791ff7da4efa2de0f7f3e282a078758cc0496cc0230c0f0",
+      "bytes": 98
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-stdlib-unittest310.log",
+      "sha256": "4ac370366b03fa08e88307d3cec321a9a85adea54f36ac7b8256b03d87793d40",
+      "bytes": 2440
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-stdlib-unittest313.log",
+      "sha256": "fce98fdcc98e83a210877c0685fdc259a65136fbd470a83296bf0ec0cc37e7fb",
+      "bytes": 3511
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/before-json310.log",
+      "sha256": "86b7b6cfbcaff01d75f9663fa7863b25ab207b3970bab3a25e01a0ef4ae281a6",
+      "bytes": 10670
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/before-refined-regressions313.log",
+      "sha256": "9d75cf934cbd255d857f1e01edb693030880ed099f952a4231f9be7a89cb3a1f",
+      "bytes": 62736
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/before-regressions313.log",
+      "sha256": "7d2c57c695c0ffb64e9713de69c4fb255841fdc090eefb379df40c38f4e3c94e",
+      "bytes": 50752
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/before-shadow-budget313.log",
+      "sha256": "ee08475093bf9c013af1bd25cf7be803dd82c5c764f558d4b68914a814378acb",
+      "bytes": 9281
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/before-shadow-cases310.log",
+      "sha256": "377178199f93bfd29388c09a27f759223a0869807303c20a42863997e1be3ef5",
+      "bytes": 7676
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/before-shadow-cases313.log",
+      "sha256": "69606164595eb706e06161df712a8c12f09bbf296fefeaac109295a6c4a4d371",
+      "bytes": 6672
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/before-shadow-nested313.log",
+      "sha256": "842b895d3b3aee0e476adbc38455f42be3c020959f25b075714be9dd7b3f06f8",
+      "bytes": 4933
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-moved-regressions313.log",
+      "sha256": "e0c2280947e77703fb1667ab3325423f60998faa8c6b3f974722758ebcdbacf6",
+      "bytes": 99
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release310.log",
+      "sha256": "4850634f84a3d9761a4df8d23c072f997072a01fd2e3e75ef087e5713f363f39",
+      "bytes": 165
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-release313.log",
+      "sha256": "bd02e9070aad7ae622623336d733c29d3f65fce694c2b173ca03abad537d9c06",
+      "bytes": 165
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow310.log",
+      "sha256": "5f9acddabe0a6ca446edbb9e2e98a6b4210ac8d3253f0bc103d702f0ffbce2cd",
+      "bytes": 114
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-shadow313.log",
+      "sha256": "d8661e8bd5ddb8f1e62718544d11500267859296cba7919cafe21b7fb64b55c3",
+      "bytes": 114
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions310.log",
+      "sha256": "7e96106b39bdbe5bd560e57e7feb962a028cdcb23116dbc19fee2f74ca4f800e",
+      "bytes": 89928
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/fixed-P-regressions313.log",
+      "sha256": "d85a7f0f27e36ea04a2d9d8ea2b8114dc76eedeac9bf161de1ec8e947fb44a55",
+      "bytes": 83412
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/ruff-final.log",
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "bytes": 19
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/ruff-latest.log",
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "bytes": 19
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/ruff-owned-final.log",
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "bytes": 19
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/ruff-preliminary.log",
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "bytes": 19
+    }
+  ],
+  "historical_diagnostics": [
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/before-regressions313.log",
+      "sha256": "7d2c57c695c0ffb64e9713de69c4fb255841fdc090eefb379df40c38f4e3c94e",
+      "bytes": 50752,
+      "purpose": "調査経過。before fixture精密化/段階修復/-I sibling import契約外条件の失敗を含む。固定P最終68caseの再現ログを主要before証拠とし重複加算しない。"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/before-refined-regressions313.log",
+      "sha256": "9d75cf934cbd255d857f1e01edb693030880ed099f952a4231f9be7a89cb3a1f",
+      "bytes": 62736,
+      "purpose": "調査経過。before fixture精密化/段階修復/-I sibling import契約外条件の失敗を含む。固定P最終68caseの再現ログを主要before証拠とし重複加算しない。"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/before-json310.log",
+      "sha256": "86b7b6cfbcaff01d75f9663fa7863b25ab207b3970bab3a25e01a0ef4ae281a6",
+      "bytes": 10670,
+      "purpose": "調査経過。before fixture精密化/段階修復/-I sibling import契約外条件の失敗を含む。固定P最終68caseの再現ログを主要before証拠とし重複加算しない。"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/before-shadow-budget313.log",
+      "sha256": "ee08475093bf9c013af1bd25cf7be803dd82c5c764f558d4b68914a814378acb",
+      "bytes": 9281,
+      "purpose": "調査経過。before fixture精密化/段階修復/-I sibling import契約外条件の失敗を含む。固定P最終68caseの再現ログを主要before証拠とし重複加算しない。"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/before-shadow-cases313.log",
+      "sha256": "69606164595eb706e06161df712a8c12f09bbf296fefeaac109295a6c4a4d371",
+      "bytes": 6672,
+      "purpose": "調査経過。before fixture精密化/段階修復/-I sibling import契約外条件の失敗を含む。固定P最終68caseの再現ログを主要before証拠とし重複加算しない。"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/before-shadow-cases310.log",
+      "sha256": "377178199f93bfd29388c09a27f759223a0869807303c20a42863997e1be3ef5",
+      "bytes": 7676,
+      "purpose": "調査経過。before fixture精密化/段階修復/-I sibling import契約外条件の失敗を含む。固定P最終68caseの再現ログを主要before証拠とし重複加算しない。"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/before-shadow-nested313.log",
+      "sha256": "842b895d3b3aee0e476adbc38455f42be3c020959f25b075714be9dd7b3f06f8",
+      "bytes": 4933,
+      "purpose": "調査経過。before fixture精密化/段階修復/-I sibling import契約外条件の失敗を含む。固定P最終68caseの再現ログを主要before証拠とし重複加算しない。"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/ruff-preliminary.log",
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "bytes": 19,
+      "purpose": "調査経過。before fixture精密化/段階修復/-I sibling import契約外条件の失敗を含む。固定P最終68caseの再現ログを主要before証拠とし重複加算しない。"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/ruff-final.log",
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "bytes": 19,
+      "purpose": "調査経過。before fixture精密化/段階修復/-I sibling import契約外条件の失敗を含む。固定P最終68caseの再現ログを主要before証拠とし重複加算しない。"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/ruff-owned-final.log",
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "bytes": 19,
+      "purpose": "調査経過。before fixture精密化/段階修復/-I sibling import契約外条件の失敗を含む。固定P最終68caseの再現ログを主要before証拠とし重複加算しない。"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-replay.log",
+      "sha256": "ed4fb82d6bf29f578fd06779462e73026ae28b360a136bd7397d7ca766c74b30",
+      "bytes": 929,
+      "purpose": "調査経過。before fixture精密化/段階修復/-I sibling import契約外条件の失敗を含む。固定P最終68caseの再現ログを主要before証拠とし重複加算しない。"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-resume.log",
+      "sha256": "2bc646ab3426d973dc4f490f0704ad8265aec56ee94ad1896cb9630b5dcc9aa2",
+      "bytes": 620,
+      "purpose": "調査経過。before fixture精密化/段階修復/-I sibling import契約外条件の失敗を含む。固定P最終68caseの再現ログを主要before証拠とし重複加算しない。"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-readme_release.py.log",
+      "sha256": "8bc5f30edb1123b227afa6e9fa6212654cad781735703f35a805d5676ed6f31f",
+      "bytes": 288,
+      "purpose": "調査経過。before fixture精密化/段階修復/-I sibling import契約外条件の失敗を含む。固定P最終68caseの再現ログを主要before証拠とし重複加算しない。"
+    },
+    {
+      "path": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/artifact-resume-final.log",
+      "sha256": "cb3d3abaf320b9fd9454865f53b2abc7078d3b5f81c8810b25c97c08a435f071",
+      "bytes": 26,
+      "purpose": "調査経過。before fixture精密化/段階修復/-I sibling import契約外条件の失敗を含む。固定P最終68caseの再現ログを主要before証拠とし重複加算しない。"
+    }
+  ],
+  "final_record_checks": [
+    {
+      "argv": [
+        "python3",
+        "/tmp/mcs-maintenance-semantic-packet6-final-replay.py"
+      ],
+      "env": "local stdlib-only git archive/diff/apply byte+mode validator; no services",
+      "exit": 0,
+      "counts": {
+        "tracked_files": 883
+      },
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/byte-replay-final.log",
+      "receipt": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/byte-replay-final.json"
+    },
+    {
+      "argv": [
+        "python3",
+        "/tmp/mcs-maintenance-semantic-packet6-validate.py"
+      ],
+      "env": "local stdlib-only source/coverage/JSON/fragment/logcount validator; no services",
+      "exit": 0,
+      "counts": {
+        "existing_files": 51,
+        "text": 42,
+        "binary": 9,
+        "new_text": 2,
+        "criteria": 120
+      },
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/evidence-validation.log"
+    },
+    {
+      "argv": [
+        "git",
+        "diff",
+        "--cached",
+        "--check"
+      ],
+      "env": "local git/index only",
+      "exit": 0,
+      "log": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/final-diff-check.log"
+    }
+  ],
+  "aggregate": {
+    "latest_new_regression_cases": 68,
+    "existing_release_cases": 22,
+    "related_existing_meta_cases": 5,
+    "accepted_test_union_per_runtime": 95,
+    "accepted_test_union_not_a_single_run": true,
+    "reuse_basis": "W1両runtime91pass（新64+旧22+meta5）から変更shadow10を除外して81不変case証拠を再利用、最新W両runtimeshadow14passを加え95。同条件source/testの全deltaで変更関係を確認。newtest内非shadow54caseは完全不変。",
+    "baseline_fixed_P": {
+      "python313": {
+        "failed": 47,
+        "passed_controls": 21
+      },
+      "python310": {
+        "failed": 49,
+        "passed_controls": 19
+      }
+    },
+    "skipped": 0,
+    "subtests_both_runtime": 26,
+    "artifact_stdlib_unittest_both_runtime": 22,
+    "artifact_bootstrap_both_runtime": 1,
+    "artifact_generated_assets_both_runtime": 9,
+    "CI_all_jobs": "未実行/parent integration checks owner",
+    "independent_review": "未実行/parent fresh-context reviewer owner"
+  },
+  "replay": {
+    "fixed_P": "6a90697307c64ff5a9a6becb4a2f39ac834ab594",
+    "behavior_W": "db7a4edbac6e002e72a21af0c552803f7acc87a0",
+    "behavior_receipt": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/byte-replay-final-behavior.json",
+    "behavior_patch": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/P-to-W-final-behavior.patch",
+    "behavior_compared_files": 882,
+    "behavior_all_bytes_modes_equal": true,
+    "full_W_with_evidence_receipt": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/byte-replay-final.json",
+    "full_W_with_evidence_patch": "/tmp/mcs-maintenance-semantic-packet6-20261005-logs/P-to-W-final.patch",
+    "full_W_expected_files": 883,
+    "finalization": "evidence書出し/index追加後に同builderで全883fileをP archive+binary patchへreplayしbyte/mode一致をassert。外部receiptがevidence自身SHAとpatchSHAを保存し自己参照を避ける。最終commit前にreceipt/全51coverage/全120criterion/logcounts/diffを検査。"
+  },
+  "remaining": {
+    "owned_unread_files": 0,
+    "owned_confirmed_unfixed": 0,
+    "global_complete": false,
+    "parent_integration_and_fresh_review_required": true,
+    "baseline_and_generated_owner_dependencies": [
+      "H01/H02は親修復報告済み。fixedP/Wの歴史的失敗を上書きしない。"
+    ],
+    "out_of_packet_issues": [
+      "H04 parent semantic predicate investigation",
+      "H05 parent CHANGELOG/changes archive classification"
+    ],
+    "actual_service_os_native_limits": [
+      "H03実サービス/認証/本番/臨床/モデル/配備なし",
+      "gallery native renderer未実行",
+      "static changed SVG browser render未実行",
+      "Windows/Linux未実行"
+    ]
+  }
+}

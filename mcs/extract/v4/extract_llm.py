@@ -1210,7 +1210,10 @@ def _llm_call(prompt: str, deadline: float | None = None,
             fmt = _FMT_MODE = _NEXT_FMT[fmt]
             continue
         _integrity_note(response)
-        if response is None or status != 200:
+        # a length stop is truncated JSON: json_object would salvage an
+        # inner complete object (one med dict) that validates to {} and
+        # gets saved as the message's extraction — reject it as failed
+        if local_llm.acceptance_error(response) is not None:
             return None
         text = response.get("text")
         if not isinstance(text, str):
@@ -1235,6 +1238,7 @@ def _merge(outs: list[dict]) -> dict:
     Drop counters are summed."""
     out: dict = {}
     seen_requests: set = set()
+    med_order: dict = {}
     sym_idx: dict = {}
     lab_idx: dict = {}
     for d in outs:
@@ -1242,10 +1246,9 @@ def _merge(outs: list[dict]) -> dict:
             k = (m["name"], m.get("subject"), m.get("action"))
             # Retain the latest occurrence in source order: start -> stop
             # -> start must end at the restart, including its new dose.
-            meds = out.setdefault("meds", [])
-            meds[:] = [old for old in meds
-                       if (old["name"], old.get("subject"), old.get("action")) != k]
-            meds.append(m)
+            out.setdefault("meds", [])
+            med_order.pop(k, None)
+            med_order[k] = m
         for s in d.get("symptoms") or []:
             key = (s["text"], s.get("subject"))
             if key in sym_idx:
@@ -1288,6 +1291,8 @@ def _merge(outs: list[dict]) -> dict:
         for k in ("_items_dropped", "_evidence_dropped"):
             if d.get(k):
                 out[k] = out.get(k, 0) + d[k]
+    if med_order:
+        out["meds"] = list(med_order.values())
     if "urgency" not in out \
             and any(d.get("urgency") == "routine" for d in outs):
         out["urgency"] = "routine"
@@ -1645,9 +1650,10 @@ def _thread_context(ledger, r) -> str | None:
              AND body_text IS NOT NULL
              AND body_text != ''
              AND (body_state IS NULL OR body_state='full')
-           ORDER BY posted_at_ts, message_id""",
+           ORDER BY (message_id=?) DESC,
+                    COALESCE(posted_at_ts,0) DESC, message_id DESC LIMIT 4""",
         (r["project_id"], root, r["message_id"], root, ts, ts,
-         r["message_id"])).fetchall()
+         r["message_id"], root)).fetchall()
     thread = "\n".join(_ctx_lines(rows, root, _CTX_TOTAL_MAX - len(karte)))
     return (karte + thread) or None
 
@@ -1727,7 +1733,7 @@ def revive_failed(ledger, now: float | None = None) -> dict:
             break
         try:
             meta = json.loads(row["meta"])
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             continue
         n = meta.get("auto_retry")
         n = n if type(n) is int and n >= 0 else 0
@@ -2034,7 +2040,7 @@ def _qc_feedback(ledger, src_artifact_id):
         return None
     try:
         c = json.loads(row["content"] or "{}")
-    except (json.JSONDecodeError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return None
     notes = []
     items = c.get("items")
@@ -2217,7 +2223,11 @@ def _saved_chunks(ledger, r, context: str | None = None) -> dict:
     out = {}
     context_hash = _chunk_context(r, context)
     count = len(text_chunks(r["body_text"], _CHUNK_SIZE))
-    for a in ledger.artifacts("extract_llm_chunk", message_id=r["message_id"]):
+    stream = getattr(ledger, "iter_artifacts", None)
+    rows = (stream("extract_llm_chunk", message_id=r["message_id"])
+            if callable(stream) else
+            ledger.artifacts("extract_llm_chunk", message_id=r["message_id"]))
+    for a in rows:
         try:
             meta = json.loads(a["meta"] or "{}")
             content = json.loads(a["content"])
@@ -2702,7 +2712,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 if content is None:
                     deferred += 1
                     return
-                prior = json.loads(content)
+                try:
+                    prior = json.loads(content)
+                except (ValueError, TypeError, RecursionError):
+                    prior = None
                 if not _improves(d, prior):
                     d = prior
             d["_model"] = MODEL
@@ -2731,18 +2744,25 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # drainer/tick makes the conflict-update a no-op, so two workers
     # never pay for the same LLM call (F14)
     claimed = []
-    for index, (r, ctx, saved, hints, qc) in enumerate(jobs):
-        if circuit_s or disk_low:
-            break
-        lease = _claim(ledger, r, max(_EXTRACT_LEASE_S,
-                                      deadline - time.monotonic() + TIMEOUT + 30))
-        if lease is not None:
-            leases[index] = lease
-            # the v3 pass performs the v1/v2 (rule) work simultaneously —
-            # claimed rows mint/refresh their extract_v1 artifact here so
-            # speed-lane readers never wait on the LLM queue
-            _ensure_v1(ledger, r, hints)
-            claimed.append((index, r, ctx, saved, hints, qc, lease))
+    try:
+        for index, (r, ctx, saved, hints, qc) in enumerate(jobs):
+            if circuit_s or disk_low:
+                break
+            lease = _claim(ledger, r, max(_EXTRACT_LEASE_S,
+                                          deadline - time.monotonic() + TIMEOUT + 30))
+            if lease is not None:
+                leases[index] = lease
+                claimed.append((index, r, ctx, saved, hints, qc, lease))
+                # the v3 pass performs the v1/v2 (rule) work simultaneously —
+                # claimed rows mint/refresh their extract_v1 artifact here so
+                # speed-lane readers never wait on the LLM queue
+                _ensure_v1(ledger, r, hints)
+    except BaseException:
+        # Preparation precedes inference's finally; release its committed
+        # claims too when a rule write fails or the worker is interrupted.
+        for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
+            _release(ledger, r, lease)
+        raise
 
     def _exec_batch(tups):
         """One shared call for context-free single-chunk rows ->
@@ -2875,15 +2895,27 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                              return_when=FIRST_COMPLETED)
                     _flush_checkpoints()
                     for fut in finished:
-                        kind, tups = futs[fut]
+                        kind, tups = futs.pop(fut)
+                        try:
+                            res = fut.result()
+                        except Exception as e:
+                            # one worker crash must not discard the
+                            # other finished (paid) inferences: only its
+                            # rows stay pending, claims are released
+                            # below and no attempt is burned
+                            print(json.dumps({"event": "extract_worker_error",
+                                              "error": type(e).__name__}),
+                                  file=sys.stderr, flush=True)
+                            deferred += len(tups)
+                            continue
                         if kind == "single":
                             index, r, ctx, saved, hints, qc, lease = \
                                 tups[0]
-                            d, chunks_out = fut.result()
+                            d, chunks_out = res
                             _handle(r, ctx, d, metas[index], lease,
                                     chunks_out, qc)
                         else:
-                            status, results, meta = fut.result()
+                            status, results, meta = res
                             for tup in _handle_batch(status, results,
                                                      meta, tups):
                                 nfut = _single_future(pool, tup)
@@ -2922,9 +2954,15 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         finally:
             for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
                 _release(ledger, r, lease)
-    left, age_min, age_max = ledger.db.execute(
-        "SELECT COUNT(*), MIN(m.posted_at_ts), MAX(m.posted_at_ts) "
-        f"FROM messages m WHERE {pending_pred()}").fetchone()
+    left = age_min = age_max = None
+    if len(rows) < (limit or 20):
+        # A short selection means the backlog is nearly drained, so the
+        # full pending scan is cheap enough to report. A full selection
+        # (the resident --all --semantic lane runs limit=1 per job)
+        # reports None = unknown instead of an O(backlog) scan per job.
+        left, age_min, age_max = ledger.db.execute(
+            "SELECT COUNT(*), MIN(m.posted_at_ts), MAX(m.posted_at_ts) "
+            f"FROM messages m WHERE {pending_pred()}").fetchone()
     now_ts = time.time()
     return {"done": done, "failed": failed, "left": left,
             "selected": len(rows), "deferred": deferred,
@@ -2987,17 +3025,35 @@ def legacy_admissions(ledger, cfg) -> set | None:
     to legacy and reopen unrestricted v3 inference."""
     try:
         if not isinstance(cfg, dict):
+            _admission_closed(["config_not_object"])
             return set()
         import semantic_policy
         policy, error = semantic_policy.semantic_config(cfg)
         if error:
+            _admission_closed(error)
             return set()
         if policy.get("fact_source") != "canonical":
             return None
         import semantic_v4
         return semantic_v4.active_legacy_admissions(ledger)
-    except Exception:
+    except Exception as e:
+        _admission_closed([type(e).__name__])
         return set()
+
+
+_admission_closed_last = None
+
+
+def _admission_closed(reasons) -> None:
+    """One stderr event per distinct closure — a closed admission stops
+    ALL legacy extraction, so it must never be silent (nor spam the
+    resident drainer's loop)."""
+    global _admission_closed_last
+    reasons = sorted(str(r) for r in reasons)
+    if reasons != _admission_closed_last:
+        _admission_closed_last = reasons
+        print(json.dumps({"event": "admission_closed", "reasons": reasons}),
+              file=sys.stderr, flush=True)
 
 
 def _background_semantic(ledger, stop=None):
@@ -3165,17 +3221,34 @@ def _main() -> int:
                         break
                 # One newest extraction per lane before semantic/QC;
                 # existing claim leases exclude the other worker's item.
-                r = run_pending(led, limit=1 if args.semantic else 8,
-                                budget_s=min(budget, 900), oldest_first=False,
-                                per_write_lock=True,
-                                workers=max(1, min(args.workers, 8)),
-                                shard=shard, batch_k=args.batch,
-                                admitted_ids=_admitted())
-                sem = None
-                if args.semantic and not held():
-                    sem = _background_semantic(led, stop)
-                    print(json.dumps({"semantic": sem, "ts": time.time()},
-                                     ensure_ascii=False), flush=True)
+                try:
+                    r = run_pending(led, limit=1 if args.semantic else 8,
+                                    budget_s=min(budget, 900),
+                                    oldest_first=False,
+                                    per_write_lock=True,
+                                    workers=max(1, min(args.workers, 8)),
+                                    shard=shard, batch_k=args.batch,
+                                    admitted_ids=_admitted())
+                    sem = None
+                    if args.semantic and not held():
+                        sem = _background_semantic(led, stop)
+                        print(json.dumps({"semantic": sem,
+                                          "ts": time.time()},
+                                         ensure_ascii=False), flush=True)
+                        if sem.get("run_lock_lost"):
+                            # an updater won the run lock mid-transport: exit
+                            # so launchd / the standalone host respawns this
+                            # resident on the new code instead of re-locking
+                            return 0
+                except Exception as e:
+                    # a transient failure ('database is locked') must not
+                    # kill the resident worker — log, back off, retry
+                    print(json.dumps({"event": "extract_loop_error",
+                                      "error": type(e).__name__,
+                                      "ts": time.time()}),
+                          file=sys.stderr, flush=True)
+                    pause(30)
+                    continue
                 total["done"] += r["done"]
                 total["failed"] += r["failed"]
                 total["left"] = r["left"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 
 from adapters.common.spec import PRIMARY_ACTIONS, validate as validate_display
+from adapters.common.text import notification_preview
 from notify_render import display_text, lineworks_card_split
 from notify_cards import _split_body_chunks
 
@@ -49,13 +50,21 @@ def logical_message_id(spec):
     return "lw:" + hashlib.sha256(spec["card_key"].encode()).hexdigest()[:32]
 
 
-def buttons(text, actions):
+def buttons(text, actions, *, preview=None):
     if not actions:
         return {"type": "text", "text": text or "MCS"}
     if len(text) > 1000 or not 1 <= len(actions) <= 10:
         raise ValueError("lineworks_button_budget")
-    return {"type": "button_template", "contentText": text or "MCS",
-            "actions": actions}
+    contents = {"type": "bubble", "body": {
+        "type": "box", "layout": "vertical", "contents": [
+            {"type": "text", "text": text or "MCS", "wrap": True}]},
+        "footer": {"type": "box", "layout": "vertical", "contents": [
+            {"type": "button", "style": "secondary", "action": {
+                **action, **({"text": action["label"]} if action["type"] == "message" else {})}}
+            for action in actions]}}
+    alt = " ".join((preview or text or "MCS").split())
+    return {"type": "flex", "altText": alt[:399] + "…" if len(alt) > 400 else alt,
+            "contents": contents}
 
 
 # Card buttons, in display order; every other action sits behind ``more``.
@@ -101,4 +110,4 @@ def render(spec):
     validate(spec)
     # The runner seals the remaining display into durable display#k parts.
     return buttons(lineworks_card_split(display_text(spec["parts"]))[0],
-                   action_buttons(spec)[:10])
+                   action_buttons(spec)[:10], preview=notification_preview(spec["parts"], 400))

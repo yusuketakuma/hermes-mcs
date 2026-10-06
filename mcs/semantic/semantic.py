@@ -175,7 +175,7 @@ def _format_marks() -> dict:
     try:
         with open(_FMT_PATH, encoding="utf-8") as f:
             marks = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
     if not isinstance(marks, dict):
         return {}
@@ -254,7 +254,7 @@ def _long_marks() -> dict:
     try:
         with open(_LONG_PATH, encoding="utf-8") as f:
             marks = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
     if not isinstance(marks, dict):
         return {}

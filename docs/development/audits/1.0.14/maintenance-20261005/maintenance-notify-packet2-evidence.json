@@ -1,0 +1,2634 @@
+{
+  "schema_version": 1,
+  "packet": "maintenance-notify-packet2-20261005",
+  "status": "LOCAL_READY_FOR_PARENT_INTEGRATION; 全域STATUSはPARTIAL",
+  "assignment": {
+    "parent": "/root",
+    "worker": "/root/maintenance_notify",
+    "requested_model": "GPT-6.1-sol ultra（親packet指定）",
+    "effective_model_verification": "モデル識別/推論設定のread APIは取得できていない。モデル/恒久設定を変更していない。",
+    "branch": "audit/maintenance-notify-packet2-20261005",
+    "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005",
+    "one_writer": true,
+    "no_child_spawn": true,
+    "no_real_service_or_data": true,
+    "external_operations": "push/PR/merge/deploy/実機再起動なし。parentのみ専用統合を所有。",
+    "instructions": "agent-defaults適用、ユーザー提供AGENTS.md、全読したv7仕様、親packet2所有を遵守。"
+  },
+  "snapshots": {
+    "P": "19865fff895d86655c22880b2ef6132fdf9dd8dd",
+    "start_status": "clean（packet1統合Iからgit switch -c、reset/rebase/stashなし）",
+    "B": "Pと同じclean専用worktree",
+    "W_first_code_commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
+    "W_code_commit": "872747183be090367d6890f1c22ca2d64bcdf5ae",
+    "I": "親の統合候補は別。workerはIのPASSを主張しない。",
+    "evidence_commit": "この報告を保存する後続commit。self SHA循環を避けgit historyから解決。",
+    "patch_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/P-to-W.patch",
+    "patch_sha256": "fb38a606ccef0db19ea3bd2ed50d822a7b62188e895f68e54eb1ca22ac8c3f4b",
+    "patch_reproduction": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/patch-reproduction.json",
+    "existing_or_parallel_changes": "本worktree既存差分なし、packet1 reportは保持、owned pathsと2fragment以外のsource編集なし。"
+  },
+  "scope": {
+    "sources": 6,
+    "direct_test_files": 16,
+    "prior_packet_tests_excluded_from_reread": [
+      "tests/notify/test_notify_urgent.py",
+      "tests/notify/test_notify_flush.py",
+      "tests/notify/test_notify_flush_paths.py",
+      "tests/notify/test_notify_digest.py",
+      "tests/notify/test_notify_lineworks_flush.py",
+      "tests/notify/test_notify_standalone_flush.py",
+      "tests/notify/test_notify_summary.py",
+      "tests/notify/test_notify_summary_notice.py",
+      "tests/notify/test_notification_reliability.py",
+      "tests/notify/notify_testkit.py"
+    ],
+    "readonly_boundaries": [
+      "mcs/views/",
+      "mcs/core/ledger/schema",
+      "semantic_send_gate",
+      "mcs/semantic/",
+      "adapters/",
+      "hermes_plugin/"
+    ],
+    "generated_document_owner": "docs/development/DEVELOPMENT.mdは親。_parts_in_flight docstring先頭変更を報告、親再生成待ち。",
+    "target_version": "1.0.13",
+    "display_channels": [
+      "Slack",
+      "Discord",
+      "LINE WORKS"
+    ],
+    "new_runtime_change_records": [
+      {
+        "path": "changes/maintenance-notify-display-20261005.json",
+        "sha256": "18c0a6e0071bf33774ee0779e762dd9e51f9720188e3917ddf3177c8d3278865",
+        "lines": 14,
+        "status": "REVIEWED",
+        "full_read_ranges": [
+          [
+            1,
+            14
+          ]
+        ],
+        "responsibility": "target1.0.13の日本語実行時変更記録",
+        "P": "absent",
+        "W": "新規全文を作成/確認、構造とrefs検証済み"
+      },
+      {
+        "path": "changes/maintenance-notify-delivery-20261005.json",
+        "sha256": "51659e98f82d90132956b58505fac403766d01a67f2694a7a354ce0c872a675e",
+        "lines": 17,
+        "status": "REVIEWED",
+        "full_read_ranges": [
+          [
+            1,
+            17
+          ]
+        ],
+        "responsibility": "target1.0.13の日本語実行時変更記録",
+        "P": "absent",
+        "W": "新規全文を作成/確認、構造とrefs検証済み"
+      }
+    ]
+  },
+  "coverage": {
+    "REVIEWED": 22,
+    "PARTIAL": 0,
+    "UNSEEN": 0,
+    "EXCLUDED": 0,
+    "primary_lines_P": 13851,
+    "primary_lines_W": 14176,
+    "new_reviewed_release_fragments": 2,
+    "supporting_context_reviewed": 5,
+    "supporting_context_partial": 8,
+    "supporting_context_previous_reviewed": 1,
+    "scope_note": "割当6source+残16testの22件。共有caller/producerはread rangesを明示しPARTIALとする。全repo完了の主張なし。"
+  },
+  "inventory": [
+    {
+      "path": "mcs/notify/notify_cards.py",
+      "P_sha256": "da0b0da2b6c4bcc2a3b855733e1435d364503c78ffa3bc71d46678949536fffa",
+      "W_sha256": "4da262ffadfdff40160dcf59847923ed7cd74d0b88d3bf609bb07486e692def0",
+      "P_lines": 2986,
+      "W_lines": 2987,
+      "changed": true,
+      "module": "notify_cards",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          230
+        ],
+        [
+          231,
+          465
+        ],
+        [
+          466,
+          700
+        ],
+        [
+          701,
+          920
+        ],
+        [
+          921,
+          1160
+        ],
+        [
+          1161,
+          1390
+        ],
+        [
+          1391,
+          1630
+        ],
+        [
+          1631,
+          1870
+        ],
+        [
+          1871,
+          2110
+        ],
+        [
+          2111,
+          2350
+        ],
+        [
+          2351,
+          2590
+        ],
+        [
+          2591,
+          2800
+        ],
+        [
+          2801,
+          2986
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。",
+      "responsibility": "カード・意図coverage・token/manifest・配送計画の永続化、操作認可、復旧・GC",
+      "callers": [
+        "notify_flush.flush",
+        "run_check._deliver",
+        "notify_cmds.dispatch",
+        "notify_transport",
+        "hermes_plugin"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_cmds.py",
+      "P_sha256": "4ae2cd7e4a114106bcd4ac414fbfeb84f357406d26ae985fa35b6027315b2dc9",
+      "W_sha256": "4ae2cd7e4a114106bcd4ac414fbfeb84f357406d26ae985fa35b6027315b2dc9",
+      "P_lines": 494,
+      "W_lines": 494,
+      "changed": false,
+      "module": "notify_cmds",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          175
+        ],
+        [
+          176,
+          340
+        ],
+        [
+          341,
+          494
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "responsibility": "cmd_int型/範囲検証、begin→receipt→interaction順の有限drain、人承認forward",
+      "callers": [
+        "mcs/ingest/run_check.py:_run_commands_only",
+        "mcs/ingest/run_check.py:_deliver"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_reconcile.py",
+      "P_sha256": "82826639545e42c24babe57bf8405bfe66e12406a7a70416d024785d011be98d",
+      "W_sha256": "79b6f6be6901c76260a711d0a0d230b687bdada2c86353bc63ad93627890d5dd",
+      "P_lines": 552,
+      "W_lines": 552,
+      "changed": true,
+      "module": "notify_reconcile",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          205
+        ],
+        [
+          206,
+          405
+        ],
+        [
+          406,
+          552
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。",
+      "responsibility": "復元後のjournal/DB照合、配送結果再適用、証拠不明scopeの保留",
+      "callers": [
+        "mcs/ingest/run_check.py:_run_commands_only",
+        "notify_transport._journal_contradiction"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_render.py",
+      "P_sha256": "f851606d4d2a0b2531ae9b2f50c87430d644f51e0867bf772a7aa39666d81870",
+      "W_sha256": "f42d1837ccada87b926d397976f56fe21bb02888e9c06dfdf406f2b0fb22838e",
+      "P_lines": 797,
+      "W_lines": 795,
+      "changed": true,
+      "module": "notify_render",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          210
+        ],
+        [
+          211,
+          400
+        ],
+        [
+          401,
+          610
+        ],
+        [
+          611,
+          797
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。",
+      "responsibility": "共通表示モデル・lossless本文・pagination/予算・source fingerprint・確認footer",
+      "callers": [
+        "notify_cards._build_spec",
+        "notify_views",
+        "notify_digest",
+        "adapters/{slack,discord,lineworks}/cards.py"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_transport.py",
+      "P_sha256": "92746c3179f6020ea5fee502ae168cc65d896ccd702d86de55b0dc2a39722555",
+      "W_sha256": "38428f3b4d0c76c7eb9b5ca088738c52b74f05b5de97adfc53a53fedc520580b",
+      "P_lines": 932,
+      "W_lines": 948,
+      "changed": true,
+      "module": "notify_transport",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          205
+        ],
+        [
+          206,
+          405
+        ],
+        [
+          406,
+          600
+        ],
+        [
+          601,
+          780
+        ],
+        [
+          781,
+          932
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。",
+      "responsibility": "排他送信grant、sealed receipt、部分配送、理由/証拠付き人による復旧確定",
+      "callers": [
+        "notify_cmds.dispatch",
+        "mcs/views/mcs_view.py:ops.card_resolve",
+        "notify_reconcile"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_views.py",
+      "P_sha256": "1d21d4a925f0a90946c72d536c1391e89534114e013756b1611537985681d3fd",
+      "W_sha256": "d7231b1733636131875d47d4608e82b3099ed96ff9414a06e2dc940f3209dc2d",
+      "P_lines": 371,
+      "W_lines": 376,
+      "changed": true,
+      "module": "notify_views",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          160
+        ],
+        [
+          161,
+          371
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。",
+      "responsibility": "clicker範囲の患者サマリー・自分のタスク・未確認一覧・患者内検索",
+      "callers": [
+        "notify_cards._act_view",
+        "hermes_plugin:private response renderers"
+      ]
+    },
+    {
+      "path": "tests/notify/test_card_attachment_followups.py",
+      "P_sha256": "0fff0e0f11e9bb97d055e1c6ab7c401ca55623dcf460c21b43b717764361d29b",
+      "W_sha256": "0fff0e0f11e9bb97d055e1c6ab7c401ca55623dcf460c21b43b717764361d29b",
+      "P_lines": 108,
+      "W_lines": 108,
+      "changed": false,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          108
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "responsibility": "カード配送後の追加添付と既配布添付の重複抑止",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    },
+    {
+      "path": "tests/notify/test_card_buttons.py",
+      "P_sha256": "dad70f533ece9e41c7c0e10898ef4037766ef7e72eade2cdfbed706bbae4de06",
+      "W_sha256": "dad70f533ece9e41c7c0e10898ef4037766ef7e72eade2cdfbed706bbae4de06",
+      "P_lines": 692,
+      "W_lines": 692,
+      "changed": false,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          475
+        ],
+        [
+          476,
+          692
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "responsibility": "確認/担当/依頼/報告/タスク遷移、人承認・footer・buttons予算",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    },
+    {
+      "path": "tests/notify/test_card_extras.py",
+      "P_sha256": "40cca23cc728cacf45f14e70736327cbf1aa46516b16d3cc406bd8f9e0bfbcbd",
+      "W_sha256": "8917c08b54e630c33d4fa816c28134d2a554eba7887f225e9a1a2bee6864a5bc",
+      "P_lines": 180,
+      "W_lines": 196,
+      "changed": true,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          180
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。",
+      "responsibility": "private一覧・患者検索・元資料更新とscope/count",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    },
+    {
+      "path": "tests/notify/test_drain_int_sweep.py",
+      "P_sha256": "62bec5afebaadad005d964dc87bbeafcfb805c9d17b3672dcd136c324eb8d055",
+      "W_sha256": "62bec5afebaadad005d964dc87bbeafcfb805c9d17b3672dcd136c324eb8d055",
+      "P_lines": 48,
+      "W_lines": 48,
+      "changed": false,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          48
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "responsibility": "操作後即時sweepとtransport-onlyの有限drain",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    },
+    {
+      "path": "tests/notify/test_metadata_display.py",
+      "P_sha256": "07f6f3c1c90dc1e3a2e1bcd3cae318008018067c28455518d3a57b17daa325bd",
+      "W_sha256": "07f6f3c1c90dc1e3a2e1bcd3cae318008018067c28455518d3a57b17daa325bd",
+      "P_lines": 330,
+      "W_lines": 330,
+      "changed": false,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          175
+        ],
+        [
+          176,
+          330
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "responsibility": "summary・stamp・専門職metadata順/省略/3チャネル表示",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notify_cards.py",
+      "P_sha256": "22ddb5ebb351f50cc68970a999db5b6968f5e0d84404f2a79736ceabdce959e6",
+      "W_sha256": "22ddb5ebb351f50cc68970a999db5b6968f5e0d84404f2a79736ceabdce959e6",
+      "P_lines": 2727,
+      "W_lines": 2727,
+      "changed": false,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          480
+        ],
+        [
+          481,
+          715
+        ],
+        [
+          716,
+          955
+        ],
+        [
+          956,
+          1195
+        ],
+        [
+          1196,
+          1425
+        ],
+        [
+          1426,
+          1665
+        ],
+        [
+          1666,
+          1905
+        ],
+        [
+          1906,
+          2145
+        ],
+        [
+          2146,
+          2385
+        ],
+        [
+          2386,
+          2615
+        ],
+        [
+          2616,
+          2727
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "responsibility": "カード状態・route/source/権限・冪等・fanout・復旧・旧schema・notice全経路",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notify_lineworks.py",
+      "P_sha256": "cc972eb83207f9142880f62ca0dc2efcf4de9b50d2e7e07541160a137825f7cf",
+      "W_sha256": "cc972eb83207f9142880f62ca0dc2efcf4de9b50d2e7e07541160a137825f7cf",
+      "P_lines": 262,
+      "W_lines": 262,
+      "changed": false,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          262
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "responsibility": "LINE WORKS native render契約、scope/version/append-only/overflow",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notify_parts.py",
+      "P_sha256": "666a1168bd12a87002653c40b421d7b6fb22d42dde5b650738b027979510f817",
+      "W_sha256": "ba51be8e686019c6673440e1e4fc3969441869c57fa3ecf200af39eea13321b1",
+      "P_lines": 916,
+      "W_lines": 979,
+      "changed": true,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          480
+        ],
+        [
+          481,
+          710
+        ],
+        [
+          711,
+          916
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。",
+      "responsibility": "sealed部分配送計画、長文・添付・予算・unknown・prior_remote_id・旧投稿互換",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notify_reconcile.py",
+      "P_sha256": "3e8a83653022968046f402c77a88734fa4e6254aca0fb09579f597ae88f5bc0d",
+      "W_sha256": "b3586726e5375d0bba602a572e65ad5af9cc5120a09e6661fcc6286f7aa825af",
+      "P_lines": 619,
+      "W_lines": 796,
+      "changed": true,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          235
+        ],
+        [
+          236,
+          460
+        ],
+        [
+          461,
+          619
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。",
+      "responsibility": "合成journal/復元DBのhold/確定/矛盾/失試行・fanout・text保留",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notify_render.py",
+      "P_sha256": "221b8bd302f52b29c8782e59672ae5370c412c09d4b4df713fecc1e4a5e8fefe",
+      "W_sha256": "8acd2a0948d5a07636817e85f499459568eb66ea37263c060b68a1d6c473129b",
+      "P_lines": 165,
+      "W_lines": 214,
+      "changed": true,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          165
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P全文＋Wの全差分を非切断git diffで再確認。未変更行はPと同一。",
+      "responsibility": "他患者evidence排除、source drift、malformed latest tombstoneと3チャネル",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notify_review_regressions.py",
+      "P_sha256": "814db729a1b95804d3bdd1c89986b3aabe3437cb4f012827bf0714d14644d1a6",
+      "W_sha256": "814db729a1b95804d3bdd1c89986b3aabe3437cb4f012827bf0714d14644d1a6",
+      "P_lines": 36,
+      "W_lines": 36,
+      "changed": false,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          36
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "responsibility": "抽出世代変化の表示/操作source更新",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    },
+    {
+      "path": "tests/notify/test_notify_slack.py",
+      "P_sha256": "518d373e50623028efa51e4fd6d3664cb9828d9adcb5a565195bc44bf817b8c0",
+      "W_sha256": "518d373e50623028efa51e4fd6d3664cb9828d9adcb5a565195bc44bf817b8c0",
+      "P_lines": 476,
+      "W_lines": 476,
+      "changed": false,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          240
+        ],
+        [
+          241,
+          476
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "responsibility": "Slack native card/ts/thread/receipt/versionと旧scope互換",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    },
+    {
+      "path": "tests/notify/test_perf_cards.py",
+      "P_sha256": "58f145b1d221ed36346c92c4ab6ff58d8fc90f79c68aa3cc9dc2d5bcd306780a",
+      "W_sha256": "58f145b1d221ed36346c92c4ab6ff58d8fc90f79c68aa3cc9dc2d5bcd306780a",
+      "P_lines": 447,
+      "W_lines": 447,
+      "changed": false,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          230
+        ],
+        [
+          231,
+          447
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "responsibility": "有限100/1000/10000規模の配送・操作・stage時間/件数上限",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    },
+    {
+      "path": "tests/notify/test_signal_notify_off.py",
+      "P_sha256": "104ec312255e8dc6a12303f4f20a0b3b07a64e300d5410adbd4f75b81417973d",
+      "W_sha256": "104ec312255e8dc6a12303f4f20a0b3b07a64e300d5410adbd4f75b81417973d",
+      "P_lines": 91,
+      "W_lines": 91,
+      "changed": false,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          91
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "responsibility": "アラートoff時のunsent抑止/済カード読取保持",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    },
+    {
+      "path": "tests/notify/test_stamps_display.py",
+      "P_sha256": "b756e9eb2cea75b23a6102fb01f4720968932543b121f72a0e2125abded29a2f",
+      "W_sha256": "b756e9eb2cea75b23a6102fb01f4720968932543b121f72a0e2125abded29a2f",
+      "P_lines": 344,
+      "W_lines": 344,
+      "changed": false,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          180
+        ],
+        [
+          181,
+          344
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "responsibility": "stampと確認の区別、ID主体、取得coverage、表示順・長文",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    },
+    {
+      "path": "tests/notify/test_summary_rendering_regressions.py",
+      "P_sha256": "db0c3a31393618e4c3ad48bfea425ba05c3a7ef15aae6081c4fd1da4d29da045",
+      "W_sha256": "db0c3a31393618e4c3ad48bfea425ba05c3a7ef15aae6081c4fd1da4d29da045",
+      "P_lines": 278,
+      "W_lines": 278,
+      "changed": false,
+      "module": "notify_tests",
+      "status": "REVIEWED",
+      "P_full_read_ranges": [
+        [
+          1,
+          160
+        ],
+        [
+          161,
+          278
+        ]
+      ],
+      "full_read_method": "非切断のsed/cat chunksを逐次読取。候補探索のrgは全文読取の代用にしていない。",
+      "W_review": "P=WのSHA一致により全文確認を再利用。",
+      "responsibility": "実3rendererの長文/注記/緊急度/非表示ack/アーカイブ/観測時点",
+      "callers": [
+        "scripts/run_tests.sh",
+        "pytest（一時Ledger/journal、socket/実サービス遮断）"
+      ]
+    }
+  ],
+  "supporting_context": [
+    {
+      "path": "mcs/ops/mcs_signals.py",
+      "sha256": "62a2f961c98d14d49b8ca6746b3b2d9d5c482bea085fe6f8c99d3f29c7b3b4d4",
+      "lines": 1691,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1,
+          65
+        ],
+        [
+          980,
+          1048
+        ]
+      ],
+      "responsibility": "最新lifecycle tombstoneの共有validator正本（readonly、core owner）",
+      "readonly": true,
+      "whole_file_review_claim": false
+    },
+    {
+      "path": "mcs/views/structured_view.py",
+      "sha256": "96b97db5f5ef6243bfabf16769e5051fad012af9b1b8bdbba8b6a5b628b52783",
+      "lines": 436,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1,
+          135
+        ]
+      ],
+      "responsibility": "selected current fact artifact_id世代とcurrent predicate（readonly、次packet/source owner）",
+      "readonly": true,
+      "whole_file_review_claim": false
+    },
+    {
+      "path": "adapters/common/worker.py",
+      "sha256": "ae7b338abcc72a3f4317713d960effcd501c4d84d7adfc0d394fdceb4dd3f442",
+      "lines": 988,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          270,
+          365
+        ],
+        [
+          525,
+          615
+        ]
+      ],
+      "responsibility": "journal pre-HTTP→result envelope→receiptの実producer順序（readonly、後続adapter packet）",
+      "readonly": true,
+      "whole_file_review_claim": false
+    },
+    {
+      "path": "adapters/common/journal.py",
+      "sha256": "53cf4ffbb423e46a63a464ae29adc0e93d496d6909316372f15931b30a8d2d8a",
+      "lines": 335,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1,
+          160
+        ],
+        [
+          285,
+          350
+        ]
+      ],
+      "responsibility": "fsync/閉journalのwhole-attempt compaction（readonly、後続adapter packet）",
+      "readonly": true,
+      "whole_file_review_claim": false
+    },
+    {
+      "path": "hermes_plugin/__init__.py",
+      "sha256": "520af78445d02b3f8736b2aad1ab81cd17b94d6b412180e0ed0c79fce2e41594",
+      "lines": 1078,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          530,
+          612
+        ]
+      ],
+      "responsibility": "native actor/operatorのcard resolve scope/project許可境界（readonly）",
+      "readonly": true,
+      "whole_file_review_claim": false
+    },
+    {
+      "path": "mcs/ingest/run_check.py",
+      "sha256": "1cf0eca3d2b3384023e9dfdee4f19147832362ea6f53c785f48f64baf0fa691a",
+      "lines": 1928,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          890,
+          925
+        ],
+        [
+          1305,
+          1378
+        ],
+        [
+          1560,
+          1608
+        ]
+      ],
+      "responsibility": "commands-only/drain/recovery/reconcile/deliverの実caller（readonly、ingest owner）",
+      "readonly": true,
+      "whole_file_review_claim": false
+    },
+    {
+      "path": "mcs/views/mcs_view.py",
+      "sha256": "ec5d000c746779260b4d043db09b88d0d07d2b16c7bbc07efa26829fb5f3fae4",
+      "lines": 1070,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          734,
+          832
+        ]
+      ],
+      "responsibility": "CLI/context actor+scope+projects/operator認可・receipt入口（readonly、次packet）",
+      "readonly": true,
+      "whole_file_review_claim": false
+    },
+    {
+      "path": "tests/notify/notify_testkit.py",
+      "sha256": "20843cef264834c43c47495541303e9526ac313dcac49e33329a3ff9ffa2aafa",
+      "lines": 246,
+      "state": "PREVIOUSLY_REVIEWED",
+      "read_ranges": [
+        [
+          115,
+          165
+        ]
+      ],
+      "responsibility": "packet1で全文REVIEWED済みの合成helper、今回P=W継承",
+      "readonly": true,
+      "whole_file_review_claim": true
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "sha256": "e16eaae5c89a132712bb93f9f268264aae93ea985f7f6eac02e0d5ef843f5c95",
+      "lines": 46,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          46
+        ]
+      ],
+      "responsibility": "env-i/一時HOME/credential除去の必須runner",
+      "readonly": true,
+      "whole_file_review_claim": true
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256": "4d9b63c62c42873bd9ee00d7c6d251c866cc44191ed2c7d16c13ab195b0ac452",
+      "lines": 237,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          237
+        ]
+      ],
+      "responsibility": "socket/real MCS/LLM/Jev/Keychain/Hermes遮断testguard",
+      "readonly": true,
+      "whole_file_review_claim": true
+    },
+    {
+      "path": "changes/README.md",
+      "sha256": "fa8948acb3c7f2c56269b77dd6086c0c79b6a966fbbd79f5445f686c94a55b11",
+      "lines": 25,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          25
+        ]
+      ],
+      "responsibility": "日本語release fragment正本",
+      "readonly": true,
+      "whole_file_review_claim": true
+    },
+    {
+      "path": "docs/development/audits/1.0.14/maintenance-20261005/maintenance-notify-evidence.json",
+      "sha256": "27495aa7d8e2a2381d14f92290a85ccce653752af6b0b25163a3a927b082d56f",
+      "lines": 1448,
+      "state": "PARTIAL",
+      "read_ranges": [
+        [
+          1,
+          135
+        ]
+      ],
+      "responsibility": "保持したpacket1記録、今回変更なし",
+      "readonly": true,
+      "whole_file_review_claim": false
+    },
+    {
+      "path": "/Users/yusuke/.agents/skills/agent-defaults/SKILL.md",
+      "sha256": "562eaf42717a70ce98299f521fd9a355953ef1e2e89e903cdd7f2c052e2f166e",
+      "lines": 52,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          52
+        ]
+      ],
+      "responsibility": "データ保護・承認・正本・完了条件の適用skill",
+      "readonly": true,
+      "whole_file_review_claim": true
+    },
+    {
+      "path": "/Users/yusuke/.codex/attachments/9bb89786-a65f-4f06-8123-c608a4bb4464/pasted-text-1.txt",
+      "sha256": "5207aa2fe1d3b7a0e67eb64b4b8577ae21e305f222903c5d67beeb8bf01226bf",
+      "lines": 67,
+      "state": "REVIEWED",
+      "read_ranges": [
+        [
+          1,
+          67
+        ]
+      ],
+      "responsibility": "全域メンテナンスv7仕様",
+      "readonly": true,
+      "whole_file_review_claim": true
+    }
+  ],
+  "entry_to_consumer": [
+    {
+      "path": "通知intent→native表示",
+      "entry": "run_check._deliver→notify_flush.flush→notify_cards.dispatch_intent",
+      "authorization": "interactive transport+route_epoch、patient/root/evidence同scope、semantic公開条件はreadonly上流gate",
+      "processing": "_resolve_targets/_card_for→_issue_render/_build_spec、表示generationとページ/metadata/budget、named本文/添付plan",
+      "storage": "BEGIN IMMEDIATEにrender/token/manifest/parts/coverage、commit後atomicpublish",
+      "consumer": "adapter common worker sealed spec→transport_begin grant→card receipt→thread/body/attachment receipt（producer部分読取）",
+      "proof": "E1=カードのfactual remote receiptと全fanout coverage。E2=sealed parts_stateがplanned part集合とdelivered集合一致時だけcomplete。E1 acceptedだけでE2本文/添付完全を主張しない。urgent E1/E2段階のdelivery checkはpacket1記録に基づく。"
+    },
+    {
+      "path": "native click→private/live/human command",
+      "entry": "plugin/adapters native origin→cmd_int",
+      "authorization": "notify_cmds.validate_int→token/source/UI/request revision、origin/profile/app/channel/guild/team一致、live scope.projects",
+      "processing": "begin→receipt→interaction順drain。_apply_notification_txがread/writeを分岐、stale操作は拒否",
+      "storage": "command_id/payload_hash receiptで冪等。private body/list/tasks/form内容はdurable receiptから除外",
+      "consumer": "個々のrequest_idのresult file→adapter private response。request/dismiss/reportはreason/pin/confirm+receipt既存human経路",
+      "proof": "確認ackはshownページの確認だけ。assign/stamp/request業務完了・医療対応とは別。"
+    },
+    {
+      "path": "restore→reconcile→人確定",
+      "entry": "run_check commands-only recovery→restore marker→notify_reconcile.reconcile_after_restore",
+      "authorization": "awaiting_consent/markerがsenderを止め、sealed journal/DBのscopeとidentityを照合",
+      "processing": "taint/失journal/失attemptはhold。通常fact再適用、lost-attempt人確定はhold attempt+journal反証、深い/不正scopeは拒否",
+      "storage": "scope hold/command receipt/parts/coverageを原子的更新。durable restore receipt後だけmarker解除",
+      "consumer": "queued spec再公開/後続sweep、結果不明は自動再送しない",
+      "proof": "兄弟未配達をacceptedにせずrevoked維持。text効果不明は別holdでcard_resolveの権限外。"
+    }
+  ],
+  "criteria": [
+    {
+      "id": "C01",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "通知テーブル・intent/manifest/token/partsの凝集責務を全文確認。行数を理由とした分割はせず、unknown待機だけ最小修正。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "型/範囲検証と有限drain、human forwardを分離。dispatcherの共有入口/signatureを保持。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "独立journalと復元DBの照合を所有。transport確定helperへ委譲し状態更新の二重定義を増やさない。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "最新シグナルの手書き検証をmcs_signals._signal_contentへ統一（F01）。render/body/contextで共通利用。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "lost-attempt rebindでも生存renderは_settle_attemptへ統一しfanout/部分配送/取消不変条件を保持（F02）。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "private live viewを永続receiptと分離。現在世代判定を共通_source_fp/_current_generationへ委譲（F05）。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "C02",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "queued/sending/delivered/revoked、generation drift、旧結合返信、thread/body/attachment、MAX_PARTSの境界。unknownを待機へ追加（F04）。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "boolを正のintと扱わず、UUID/attempt/correlation/route_epoch/result/opと上限を検証。version1/2/3を維持。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "claim/started/result/receiptの各証拠と結果不明/破損、awaiting_consentを区別。unknownを後着事実で確定（F04）。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "表示順・JST・current generation・shown set・最新の読めない遷移をtombstoneとして扱う（F01）。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "確定結果の矛盾は拒否、unknownは未確定。取消済みカードを復活させず、lost-attemptの試行IDも照合（F02–F04）。 F06: 壊れたhold scopeの深さ/型/transport型を安全拒否しreceiptとholdを保持（6beforeFAIL→44PASS）。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "未取得≠無し、薬/依頼候補≠確定、直近7日、期限JST、最新資料に対する古い確認を区別（F05）。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "C03",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "BEGIN IMMEDIATE内にrender/parts/token/coverageを保存。atomic spec publish、fanout完了、公平sweep/限定GCを検証。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "run lock下のdependency順、mutation receiptの冪等、result公開失敗時command保持。sqlite例外はretry可能。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "receipt durable保存後だけ復元marker解除。holdの重複通知を抑止し、journal欠落はfail-closed。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "読取モデル自体はDBを書換えず、SQL値はparameter。世代更新はcards transactionが所有。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "BEGIN IMMEDIATEでattempt/card/parts/coverageを一括確定。lost-attemptでも兄弟coverageを偽完了させない（F02）。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "read-only一覧。既存ackは変更せず、scope内の現在generationだけ再読してstale判定（F05）。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "C04",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "通知テーブル/index/legacy actorの既存migration互換testsを確認。既存parts/schemaを変更せずunknownの解釈のみ修正。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "旧version1 Discordと2 Slack/3 LINE WORKSの型契約。schema/migration変更なし。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "旧DB行と外部journal/specの不一致に保留を置く。DBそのもののrestore/migrationは他owner。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "legacy project=NULL signal互換は共通validatorに委譲。旧/current fact artifact世代はstructured_viewが選択。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "試行行を復元DBが失った経路とrenderも失ったfallbackを保持。DB schema/保存形式は変更なし。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "旧rollup/karte_summaryの欠損・空・壊れた資料を注記。ack/manifest保存形式は変更なし。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "C05",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "token期限/source/UI/request revision、native origin+profile/app/channel/guild/team、同患者root/evidence、route_epochを実経路で確認。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "unknown_field/type/ID/actor/input.projects/size上限を検証。human gateはmcs_requests既存経路より緩めない。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "sealed spec/receipt identity・scopeを検査。unlinked効果は全pending interactiveを保留し推測送信しない。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "signal.project/content project一致、evidence messageの同患者条件、最新壊れた型/状態を拒否。3チャネルcanary検証。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "sealed render hash/rev/correlation/route/scope、human reason/receipt。held attemptとjournal投稿ID/結果矛盾も拒否（F03）。 F06: 壊れたhold scopeの深さ/型/transport型を安全拒否しreceiptとholdを保持（6beforeFAIL→44PASS）。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "projects scopeを件数にも適用し、検索は患者に限定。stale fp評価もscope後で範囲外情報を扱わない（F05）。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "C06",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "private body/list/formをdurable command receiptから除去。公開カードscopeを固定、token/context資料はprivate local保存。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "例外は型名だけを結果へ出し本文/秘密/pathを埋めない。通知private結果ファイルは個々のrequest_idへ分離。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "hold/alertはstable reasonと件数、journal署名/秘密取得や外部照会は実施しない。合成DBのみ。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "metadata・氏名・本文は許可scopeカードの仕様として渡す。actor無効値は中立表示、silent mention契約を保持。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "operator証拠はローカルcommand receiptへ保存。配送本文を追加ログへ出さず、結果codesのみ。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "live private内容はcallerへ一回返す、durable receiptに一覧本文を残さない。scope外の件数/患者を表示しない。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "C07",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "MAX_COMPONENTS/MAX_PARTS、1900本文lossless chunk、native3チャネルversion/LINE WORKS overflowを既存testで確認。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "version1/2/3、op/human cmd、入力1001projects拒否、UUID/fields/receipt上限、有限scan32×16。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "journal attempt/part identity、jsonl途中破損、旧claim/spec/receiptを明示区別。結果再公開は元のsealed envelope。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "ページ切替・footer込みtext予算・shown物件・無制限本文followupを保持。最新シグナルの公開形は不変。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "begin/receipt/thread/part/resolveの公開signature維持。unknownの事実確定だけ許可し確定結果矛盾は拒否。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "60一覧・検索10件+more、assignee表記・暫定サマリー・coverage注記。出力dict契約は不変。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "C08",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "二重click/replayでもscope/source認可を先に実施。ページackはshownだけ、request完了とは別。unknown重複防止（F04）。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "receipt→interaction順で直後の操作を可能にし、click応答のrequest_idとmutation IDを区別。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "復旧中はsender freeze、claimedを死亡とみなさず、未知/矛盾をhold。後着事実でunknownを解消（F04）。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "source変化はack/操作generationを失効。全rendererの長文/注記/metadata/ボタン予算を合成実rendererで検証。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "人の手動確定は同じattempt/journal witnessに限定。revoked維持、unknown後着事実を拒否しない（F02–F04）。 F06: 壊れたhold scopeの深さ/型/transport型を安全拒否しreceiptとholdを保持（6beforeFAIL→44PASS）。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "他カードから一覧を読む時も未保存source driftを未確認として表示。3チャネルで再描画前を再現（F05）。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "C09",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "有限sweep/GC、MAX_PARTS共通予算、prior named post/attachment再利用。既存100/1000/10000perf上限を維持。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "有限drain/scan window/deadline。分類はscan範囲のみで永続file全体のmutationを行わない。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "復元時のみjournal全走査、通常tickはmarker制御。tainted再実行のnotice重複抑止。性能向上は主張しない。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "ページcount/text予算、read-only fact generation選択を再利用。全thread fingerprint走査の現仕様は保持。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "送信grantと結果をDB-localで処理しHTTPを所有しない。既存pipeline perf上限を変更せず検証。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "7日windowとscopeを先に適用、fp再計算はack候補だけ。正確な総件数のため候補全走査は保持し性能改善は主張しない。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "C10",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "ファイルpublish失敗再公開・公平sweep・boundedretry・deadline・unknown/no-auto-resendを合成検証。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "begin優先→receipt→interaction、deadline/IO例外、result公開に成功するまでcommand保持。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "claim≠未送信、pre_httpの破損≠未送信、result/receipt遅延、taint/失journal/失attemptの保留と再照合。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "壊れた最新遷移で旧状態を復活させず、構造化表示失敗はカード全体を落とさない。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "exclusive grant、late cancelled receipt、unknown facts、restore witness conflict、fanout raceを回帰検証。 F06: 壊れたhold scopeの深さ/型/transport型を安全拒否しreceiptとholdを保持（6beforeFAIL→44PASS）。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "live取得でsnapshot/source遅延を吸収、readonlyで重複操作しない。取得欠損を完了/処理無しと推定しない。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "C11",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "実Ledger/JSON/render planを使用しHTTPだけstub。unknown body/threadのbeforeFAILを含む既存異常・競合回帰。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "実filedrain/resultpublishとvalidatorsを通す、順序/invalid quarantine/transaction例外の既存回帰。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "synthetic journal+temp復元DBでlost-attempt/fanout/取消/矛盾/unknownを修正前FAIL→後PASS。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "3transport×4corruptionの12casesは旧open/壊れた最新canaryの本文・context再表示を検出。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "fanout/取消3件、witness3件、unknown後着3件をbeforeFAIL。確定結果の拒否期待値は弱めない。 F06: 壊れたhold scopeの深さ/型/transport型を安全拒否しreceiptとholdを保持（6beforeFAIL→44PASS）。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "3transport stale ack一覧をbeforeFAIL→afterPASS。既存scope/count/注記/実3renderer回帰も全notifyで検証。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "C12",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "stdlib core・flat import維持、module/export/依存追加なし。isolated runner/pinned Ruffで検証。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "stdlibのみ、一時HOME/env-i/socket/実サービス遮断runner確認、CLI/UIversion契約を維持。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "journal consumerはstdlibのみ。runner隔離と固定ruff、restore consent gateを維持。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "共通validatorはlazy flat import、循環なし。依存追加なし、3rendererは合成SDK stub。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "stdlibのみ、公開handler/signature維持。全notify617件と固定ruff、core/adapter依存追加なし。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "既存stdlib/共通表示helperのみ。readonly viewsのSDK/API追加なし、isolated runnerで検証。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "X01",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "保存schema/仕様version/APIを保持。1.0.13変更fragmentを記録。実配備/再起動なし、生成DEVELOPMENTは親owner。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "独立/Hermes双方が同じcmd_intを使う。旧新workerのversion拒否契約保持。実起動/停止は未実施。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "復旧marker/receiptと旧新journal互換を保持。実バックアップ/実DB復元は実施しない。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "実3rendererの表示契約を合成検証。新module/export/asset/package変更なし、実画面/実SDK検証は含まない。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "配布構成/schema変更なし。従来のhuman reason/receipt/worker-stopped証拠を維持。実sender再起動なし。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "既存private view consumer/signatureを維持、version1.0.13への変更記録を作成。実配布物構成変更なし。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "X02",
+      "modules": {
+        "notify_cards": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "依存取得・CI権限・ライセンス変更なし。pinned Ruffは既存開発ツール。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "外部取得やSDK/新依存を所有しない。供給網契約の変更なし。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "外部取得・署名鍵/ライセンス処理を所有しない。journal読みだけ。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "stdlib+既存moduleのみ、外部取得・ライセンス変更なし。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "HTTP/SDK認証を所有しない、依存・取得先・CI権限変更なし。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "外部取得/追加依存/ライセンス変更なし。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "X03",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "restore marker/consent hold・hold/queued recovery・revoked維持。既存migration/履歴/既存差分を削除しない。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "command再試行はreceiptで冪等、parse invalidは削除せずquarantine。実DB/実データ操作なし。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "本責務はrestore後照合。lost-attempt、taint、unlinked、text効果不明をholdし削除データ/取消を復活させない。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "deleted messageと最新broken signalを再表示しない。旧artifactは削除せず読取選択のみ修正。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "取消済みカードを人の配送確定で復活させない（F02）。hold解除は事実/証拠との整合を確認（F03）。 F06: 壊れたhold scopeの深さ/型/transport型を安全拒否しreceiptとholdを保持（6beforeFAIL→44PASS）。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "deleted/archived/未取得の表示とscopeを既存回帰で確認。read-onlyで削除/restoreを実行しない。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "X04",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "3native transportsのsealed spec、scope/version/routeepoch、named部分配布・添付順/重複抑止を確認。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "producerとのbegin/receipt順序・transport version・nativeorigin/actor認可連鎖。producer全監査は後続packet。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "独立journalの同attempt/part記録とDBを照合し順序/部分欠損をfail-closed。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "各rendererへ渡すplain/Slack/Discord dialectとsilent mention、LINE WORKS overflow。実service未使用。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "外部効果はsealed receipt/journalと同scope/identityで確定、操作側の証拠はjournal事実を上書きしない。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "private reply consumerへのscope/count/responseを確認。renderer実画面・Callback署名は後続adapter所有。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "X05",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "file planeのオフライン/再起動・missing spec/claimed、共通part件数/byte上限・restoreholdを適用。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "OS file atomicpublishとinvalidquarantine、IO transientの再試行。native/FFIは使わない。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "journal欠落/部分書込・読み不能をhold、consent freeze保持。実OS差を新たに拡張しない。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "表示容量/ページ上限を全3rendererで検証。browser tab/native FFIは所有しない。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "worker失/結果不明/後着を処理。nativeFFIやOS固有認証処理は持たない。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "live readonly replyで古いviewを使い回さず、一覧容量+moreを保持。offline/複数tabの保存状態を所有しない。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "X06",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "抽出資料は表示/候補に限定、human mutationはtoken/revision/confirm+reason+receipt。LLM実呼出なし。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "tool相当humancmdはexisting mcs_requestsへforward、reason/pinned artifactを強化する契約を保持。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "AI/MCP/記憶処理やツール実行を所有しない。journalは配送事実だけ、推測結果を作らない。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "選択済みfact世代を表示。患者文中の指示をmutationとして実行せず、shared semantic公開条件はreadonly。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "AI/MCPツール・モデル・記憶保存は所有しない。人の確定はconfirm/reason/evidence/receiptのみ。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "暫定rollupと抽出薬/依頼に原本確認の注意を保持しAI結果を確定処方/台帳と呼ばない。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "X07",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "確認/担当と業務完了を分離、requestsにsnapshot/revisionと人承認を要求。医療適用日/制度を変更しない。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "request.create/signal dismiss/extract feedbackにhuman-confirm/reason/pin/receiptを維持。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "配送証拠と医療対応を混同しない、推測送信/処理済み判定なし。restore操作人承認はcaller所有。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "緊急度はcurrent sourceへ合わせる、診断/医療算定ルールを変えない。確認footerは業務完了を意味しない。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "手動配送確定をhuman-confirm/reason/evidence receiptへ記録。journal反証を無視せず兄弟未配達を完了にしない。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "暫定/未取得/記録なし≠対応なし・確認≠完了を3チャネルで保持。処方/診断/算定の判断は実装しない。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    },
+    {
+      "id": "X08",
+      "modules": {
+        "notify_cards": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "生成リンクはpositive project/message IDと固定MCS origin、公開Web server/form/indexはこのmodule外。",
+          "source": "mcs/notify/notify_cards.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_cmds": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "ローカルfile intakeだけで公開Web入口/フォーム/SEOを持たない。",
+          "source": "mcs/notify/notify_cmds.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_reconcile": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "ローカルjournal/file consumerだけ、公開Webの導線/フォームを持たない。",
+          "source": "mcs/notify/notify_reconcile.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_render": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "本文・MCS原本リンク・platform dialectの表示はconsumerへ渡す。公開Webroutingは所有しない。",
+          "source": "mcs/notify/notify_render.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_transport": {
+          "applicability": "NOT_APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "ローカルtransport状態/receipt consumerだけ、HTTPCallback公開境界はadapter所有。",
+          "source": "mcs/notify/notify_transport.py（inventoryの全文範囲とverification参照）"
+        },
+        "notify_views": {
+          "applicability": "APPLICABLE",
+          "verdict": "REVIEWED",
+          "evidence": "MCS/Discord固定原本リンクを表示。公開Webのserver/form/indexは持たない。",
+          "source": "mcs/notify/notify_views.py（inventoryの全文範囲とverification参照）"
+        }
+      }
+    }
+  ],
+  "findings": {
+    "confirmed": [
+      {
+        "id": "F01",
+        "classification": "CONFIRMED_FIXED",
+        "priority": "P1",
+        "title": "最新の壊れたsignalから旧open表示/操作対象が復活",
+        "root_cause": "json_valid(content)を最新選択の前に掛け、型/状態/evidenceの共通validatorを使わなかった。最新key行を先に選び_signal_contentで検証する。",
+        "paths": [
+          "mcs/notify/notify_render.py"
+        ],
+        "regressions": [
+          "test_latest_invalid_signal_never_revives_old_display_or_actions"
+        ],
+        "synthetic_cases": 12,
+        "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-before.log",
+        "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-after.log",
+        "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12"
+      },
+      {
+        "id": "F02",
+        "classification": "CONFIRMED_FIXED",
+        "priority": "P1",
+        "title": "restore失attemptの人確定が兄弟未配達をacceptedにし、revokedを復活",
+        "root_cause": "rebindが生存renderを無視してcard/outboxを直更新した。共通_settle_attemptへ委譲しsealedcardpart/coverage/取消不変条件を保つ。",
+        "paths": [
+          "mcs/notify/notify_transport.py"
+        ],
+        "regressions": [
+          "test_rebind_delivered_completes_only_its_coverage_and_waits_for_siblings",
+          "test_rebind_never_revives_a_revoked_card"
+        ],
+        "synthetic_cases": 3,
+        "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-before.log",
+        "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-after.log",
+        "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12"
+      },
+      {
+        "id": "F03",
+        "classification": "CONFIRMED_FIXED",
+        "priority": "P1",
+        "title": "restore holdの別attempt/投稿ID/未送信証明でjournal事実を覆せた",
+        "root_cause": "hold rebind分岐だけがhold.attempt_idと_journal_contradictionを検査しなかった。通常resolveと同じ事実witnessを必須にする。",
+        "paths": [
+          "mcs/notify/notify_transport.py"
+        ],
+        "regressions": [
+          "test_rebind_checks_the_held_attempt_and_its_journal_witness"
+        ],
+        "synthetic_cases": 3,
+        "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/rebind-witness-before.log",
+        "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-all-after.log",
+        "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12"
+      },
+      {
+        "id": "F04",
+        "classification": "CONFIRMED_FIXED",
+        "priority": "P1",
+        "title": "unknown部分配送の後着確定を拒否し、新renderで重複送信する",
+        "root_cause": "unknownを確定terminalと扱い、in-flight待機はpending body/attachmentだけだった。unknown thread/body/attachmentは再計画待機、同sealed receipt/journalの後着事実は確定可能にする。",
+        "paths": [
+          "mcs/notify/notify_cards.py",
+          "mcs/notify/notify_transport.py",
+          "mcs/notify/notify_reconcile.py"
+        ],
+        "regressions": [
+          "test_unknown_part_accepts_a_late_factual_receipt",
+          "test_unknown_body_keeps_update_waiting_until_the_post_identity_is_known",
+          "test_unknown_thread_waits_for_its_identity_before_replanning",
+          "test_unknown_part_catches_up_from_a_journaled_factual_result"
+        ],
+        "synthetic_cases": 5,
+        "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/unknown-before.log",
+        "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/full-notify-final.log",
+        "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12",
+        "additional_before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-before.log"
+      },
+      {
+        "id": "F05",
+        "classification": "CONFIRMED_FIXED",
+        "priority": "P2",
+        "title": "再描画前の新返信が古いackで未確認一覧から隠れた",
+        "root_cause": "永続card.source_generationと最新manifestだけでackを判断し、別カードからのlive一覧が未保存source driftを観測しなかった。scope後のack候補に共通current generation判定を適用する。",
+        "paths": [
+          "mcs/notify/notify_views.py"
+        ],
+        "regressions": [
+          "test_unacked_observes_new_content_before_a_card_refresh"
+        ],
+        "synthetic_cases": 3,
+        "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-before.log",
+        "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-after.log",
+        "commit": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12"
+      },
+      {
+        "id": "F06",
+        "classification": "CONFIRMED_FIXED",
+        "priority": "P1",
+        "title": "破損hold scopeのJSON深さ/型が人確定receipt経路を中断した",
+        "root_cause": "json.loadsのRecursionError未捕捉とdict/transport str未検査。実resolveで拒否receipt保存とhold保持に変換する。",
+        "paths": [
+          "mcs/notify/notify_transport.py"
+        ],
+        "regressions": [
+          "test_rebind_rejects_corrupt_scope_with_a_durable_receipt"
+        ],
+        "synthetic_cases": 6,
+        "before_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-before.log",
+        "after_full_log": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-after.log",
+        "commit": "872747183be090367d6890f1c22ca2d64bcdf5ae"
+      }
+    ],
+    "disproved": [
+      {
+        "id": "D01",
+        "candidate": "receiptのみ残りdelivered partのremote_idがない通常producer経路",
+        "verdict": "DISPROVED_FOR_VALID_PRODUCER",
+        "evidence": "common workerはfactual result+sealed envelopeをjournal fsyncしてからreceipt publish、receipt phaseはその後。journal compactは同closed fileにwhole attemptがある場合だけ削除。結果rowなしの破損はholdが妥当、推測修正しない。",
+        "readonly_ranges": [
+          "adapters/common/worker.py:270–365,525–615",
+          "adapters/common/journal.py:1–160,285–350"
+        ]
+      },
+      {
+        "id": "D02",
+        "candidate": "legacy→canonical公開条件切替でcard consumerにもpolicy fingerprint修正が必要",
+        "verdict": "NO_ADDITIONAL_NOTIFY_FIX_CONFIRMED",
+        "evidence": "_source_fpはstructured_view.fact_generations選択artifactkind/idを含む。consumer自身はpolicy fingerprintを再利用しない。shared semantic ownerのfact_source fingerprint修正を親へ共有、固定Iの連鎖検証待ち。",
+        "readonly_ranges": [
+          "mcs/views/structured_view.py:1–135",
+          "mcs/notify/notify_render.py:P280–330"
+        ]
+      },
+      {
+        "id": "D03",
+        "candidate": "通常のpending threadまで新しい待機条件に加える",
+        "verdict": "REJECTED_BY_COMPATIBILITY_TESTS",
+        "evidence": "中間全notifyで33既存動作失敗。body/attachment pendingの既存待機を保ち、threadはunknownだけ待つ最小条件へ限定。最終W1全notify617件成功。"
+      }
+    ],
+    "deferred": [
+      {
+        "id": "B01",
+        "classification": "BOUNDARY_NOT_OWNED",
+        "owner": "親/次mcs views/adapters packets",
+        "evidence": "Callback署名/native actor解決/SDK実配布起動/adapter3源文の全文は本packet外。読取caller範囲と実合成renderer検証は保存。確定した担当内未修復findingは0。"
+      },
+      {
+        "id": "B02",
+        "classification": "INTEGRATION_PENDING",
+        "owner": "親",
+        "evidence": "semantic policy fact_source変更・10分schedule・1.0.13 installer等は他owner。W1/W2の局所PASSを固定IのPASSに読み替えない。"
+      },
+      {
+        "id": "B03",
+        "classification": "GENERATED_DOCUMENT_PENDING",
+        "owner": "親",
+        "evidence": "cards helper docstring先頭が変化。親のupdate_readme再生成を依頼、生成DEVELOPMENTを子は直接編集しない。"
+      }
+    ]
+  },
+  "verification": [
+    {
+      "name": "regression-before",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_render.py tests/notify/test_notify_reconcile.py -o addopts='' -q -k 'latest_invalid_signal or rebind_delivered_completes_only or rebind_never_revives' > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-before.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 1,
+      "counts": {
+        "passed": 0,
+        "failed": 15,
+        "skipped": 0,
+        "deselected": 46
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-before.log",
+      "note": "F01/F02: 12+3件、修正前に期待した各不変条件を検出。"
+    },
+    {
+      "name": "regression-after",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_render.py tests/notify/test_notify_reconcile.py -o addopts='' -q -k 'latest_invalid_signal or rebind_delivered_completes_only or rebind_never_revives' > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-after.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 0,
+      "counts": {
+        "passed": 15,
+        "failed": 0,
+        "skipped": 0,
+        "deselected": 46
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-after.log",
+      "note": "F01/F02の局所修正後。"
+    },
+    {
+      "name": "unknown-before",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_parts.py tests/notify/test_notify_reconcile.py -o addopts='' -q -k 'unknown_part_accepts or unknown_body_keeps or unknown_part_catches' > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/unknown-before.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 1,
+      "counts": {
+        "passed": 0,
+        "failed": 4,
+        "skipped": 0,
+        "deselected": 75
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/unknown-before.log",
+      "note": "F04: 後着事実2件・body再送防止1件・復元journal1件の修正前。"
+    },
+    {
+      "name": "rebind-witness-before",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_reconcile.py -o addopts='' -q -k 'rebind_checks_the_held' > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/rebind-witness-before.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 1,
+      "counts": {
+        "passed": 0,
+        "failed": 3,
+        "skipped": 0,
+        "deselected": 35
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/rebind-witness-before.log",
+      "note": "F03: attempt/post ID・既delivered反証3件。"
+    },
+    {
+      "name": "regression-all-after",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_render.py tests/notify/test_notify_parts.py tests/notify/test_notify_reconcile.py -o addopts='' -q -k 'latest_invalid_signal or rebind_delivered_completes_only or rebind_never_revives or rebind_checks_the_held or unknown_part_accepts or unknown_body_keeps or unknown_part_catches' --junitxml=/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-all-after.xml > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-all-after.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 0,
+      "counts": {
+        "passed": 22,
+        "failed": 0,
+        "skipped": 0,
+        "deselected": 87
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-all-after.log",
+      "note": "最初の22回帰。"
+    },
+    {
+      "name": "stale-thread-before",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_parts.py tests/notify/test_card_extras.py -o addopts='' -q -k 'unknown_thread_waits or unacked_observes' > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-before.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 1,
+      "counts": {
+        "passed": 0,
+        "failed": 4,
+        "skipped": 0,
+        "deselected": 58
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-before.log",
+      "note": "F04 thread1/F05 3transport、修正前。"
+    },
+    {
+      "name": "stale-thread-after",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_parts.py tests/notify/test_card_extras.py -o addopts='' -q -k 'unknown_thread_waits or unacked_observes' > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-after.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 0,
+      "counts": {
+        "passed": 4,
+        "failed": 0,
+        "skipped": 0,
+        "deselected": 58
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-after.log",
+      "note": "最終の独立期待値：既知thread IDをupdateへ再利用、未確認scope/count。"
+    },
+    {
+      "name": "affected",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_parts.py tests/notify/test_card_extras.py tests/notify/test_notify_render.py tests/notify/test_notify_reconcile.py -o addopts='' -q --junitxml=/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/affected.xml > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/affected.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 0,
+      "counts": {
+        "passed": 127,
+        "failed": 0,
+        "skipped": 0,
+        "deselected": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/affected.log",
+      "note": "最終直接影響範囲。",
+      "snapshot": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12"
+    },
+    {
+      "name": "full-notify-intermediate",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/ -o addopts='' -q --junitxml=/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/full-notify.xml > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/full-notify.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 1,
+      "counts": {
+        "passed": 583,
+        "failed": 34,
+        "skipped": 0,
+        "deselected": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/full-notify-intermediate.log",
+      "note": "元log/XMLをintermediate名へ保持。中間pending thread待機を既存契約より広げて33失敗、unknown threadのみへ限定修正。perf1000は並行強負荷で67.3315>30s、閾値を変更せず最終Wで再実行。途中に待機queryを編集したため固定W証拠として採用しない。"
+    },
+    {
+      "name": "full-notify-final",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/ -o addopts='' -q --junitxml=/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/full-notify-final.xml > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/full-notify-final.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 0,
+      "counts": {
+        "passed": 617,
+        "failed": 0,
+        "skipped": 0,
+        "deselected": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/full-notify-final.log",
+      "note": "固定最終Wで617件、67.34秒、Junit error/failure/skip全0。既存性能上限を維持。",
+      "snapshot": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12"
+    },
+    {
+      "name": "ruff-final",
+      "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check mcs/notify/ tests/notify/ > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/ruff-final.log 2>&1",
+      "environment": {
+        "ruff": "0.16.10",
+        "core_dependencies_added": 0
+      },
+      "exit": 0,
+      "counts": {
+        "files": "mcs/notify/ tests/notify/ 全python（担当22を包含）",
+        "errors": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/ruff-final.log",
+      "snapshot": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12"
+    },
+    {
+      "name": "diff-check",
+      "command": "git diff --check > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/diff-check.log 2>&1",
+      "environment": {
+        "worktree": "/Users/yusuke/.herdr/worktrees/mcs/maintenance-notify-20261005"
+      },
+      "exit": 0,
+      "counts": {
+        "whitespace_errors": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/diff-check.log"
+    },
+    {
+      "name": "patch-reproduction",
+      "command": "git diff --binary P W_code_commit > P-to-W.patch; git archive P の既存変更9pathを一時dirへ展開、git apply --checkとgit apply、11pathのbyteをgit show Wと一致比較（patch-reproduction.json参照）",
+      "environment": {
+        "real_data": false,
+        "archive_paths": "変更された非機密source/test9pathのみ",
+        "temporary_directory": "tempfile.TemporaryDirectory（終了後削除）"
+      },
+      "exit": 0,
+      "counts": {
+        "reproduced_files": 11,
+        "matched_files": 11
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/patch-reproduction.log",
+      "snapshot": "872747183be090367d6890f1c22ca2d64bcdf5ae"
+    },
+    {
+      "name": "restore-scope-before",
+      "snapshot": "8f3d98ab8adaf7cf97e5692baf3a9ea889387a12 + 新規6合成回帰",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_reconcile.py -o addopts='' -q -k 'rebind_rejects_corrupt_scope' > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-before.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 1,
+      "counts": {
+        "passed": 0,
+        "failed": 6,
+        "deselected": 38,
+        "skipped": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-before.log",
+      "note": "10,000段の実RecursionError、scope配列/文字列/nullのAttributeError、transport配列/オブジェクトのTypeErrorを実resolveから再現。"
+    },
+    {
+      "name": "restore-scope-after",
+      "snapshot": "872747183be090367d6890f1c22ca2d64bcdf5ae",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_reconcile.py -o addopts='' -q --junitxml=/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-after.xml > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-after.log 2>&1",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 0,
+      "counts": {
+        "passed": 44,
+        "failed": 0,
+        "skipped": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-after.log",
+      "note": "追加6件＋既存38件。拒否receipt保存・同command再試行同値・hold維持・message未bind。親指定により不変範囲の617PASSを再利用。"
+    },
+    {
+      "name": "restore-scope-ruff",
+      "snapshot": "872747183be090367d6890f1c22ca2d64bcdf5ae",
+      "command": "/Users/yusuke/.local/bin/uv run --no-project --with 'ruff==0.16.10' ruff check mcs/notify/notify_transport.py tests/notify/test_notify_reconcile.py > /Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-ruff.log 2>&1",
+      "environment": {
+        "ruff": "0.16.10"
+      },
+      "exit": 0,
+      "counts": {
+        "files": 2,
+        "errors": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-ruff.log"
+    },
+    {
+      "name": "restore-scope-fixture-before",
+      "command": "scripts/run_tests.sh tests/notify/test_notify_reconcile.py -o addopts='' -q（beforeは -k rebind_rejects_corrupt_scope、afterは全file）",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 1,
+      "counts": {
+        "passed": 0,
+        "failed": 6,
+        "skipped": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-fixture-before.log",
+      "acceptance_evidence": false,
+      "note": "初期fixtureはclaim-onlyでpre-HTTP not_sentとなりholdを作らなかった。unknown resultを与えhold作成もassertする修正後のbeforeを採用。"
+    },
+    {
+      "name": "restore-scope-shape-before",
+      "command": "scripts/run_tests.sh tests/notify/test_notify_reconcile.py -o addopts='' -q（beforeは -k rebind_rejects_corrupt_scope、afterは全file）",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 1,
+      "counts": {
+        "passed": 0,
+        "failed": 6,
+        "skipped": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-shape-before.log",
+      "acceptance_evidence": false,
+      "note": "shape5件の例外を検出、1500段deepはC decoderにとって浅くscope_mismatchだった。深さを測定して修正。"
+    },
+    {
+      "name": "restore-scope-depth-observation-before",
+      "command": "scripts/run_tests.sh tests/notify/test_notify_reconcile.py -o addopts='' -q（beforeは -k rebind_rejects_corrupt_scope、afterは全file）",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 1,
+      "counts": {
+        "passed": 0,
+        "failed": 6,
+        "skipped": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-depth-observation-before.log",
+      "acceptance_evidence": false,
+      "note": "Python recursion limit+100もC decoderの上限ではなくdeepはscope_mismatch。5shape例外の証拠であり深いJSONの証拠には使わない。"
+    },
+    {
+      "name": "restore-scope-depth-observation-after",
+      "command": "scripts/run_tests.sh tests/notify/test_notify_reconcile.py -o addopts='' -q（beforeは -k rebind_rejects_corrupt_scope、afterは全file）",
+      "environment": {
+        "MCS_TEST_PYTHON": "/Users/yusuke/.mcs/.venv/bin/python",
+        "test_python": "Python 3.13.12",
+        "audit_python": "Python 3.14.8",
+        "platform": "Darwin arm64",
+        "isolation": "scripts/run_tests.shはmktemp一時HOMEとenv-i。tests/conftest.pyでsocket/実service/Keychain/MCS/LLM/Jevを遮断。完全合成のみ。"
+      },
+      "exit": 1,
+      "counts": {
+        "passed": 43,
+        "failed": 1,
+        "skipped": 0
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-depth-observation-after.log",
+      "acceptance_evidence": false,
+      "note": "shape5件はguard後成功、deep fixtureのみ期待したparser例外に至らず失敗。10,000段へ修正。"
+    },
+    {
+      "name": "parser-depth-measurement",
+      "command": "/Users/yusuke/.mcs/.venv/bin/python - <<'PY'（json.loadsへ合成profile配列を1500/5000/10000/20000/50000段で渡し、最初のRecursionErrorでbreak）",
+      "environment": {
+        "python": "3.13.12",
+        "network": false,
+        "real_data": false
+      },
+      "exit": 0,
+      "counts": {
+        "parsed_depths": [
+          1500,
+          5000
+        ],
+        "first_observed_recursion_error": 10000,
+        "python_recursion_limit": 1000
+      },
+      "full_log_path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/parser-depth-measurement.log"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/P-to-W-first.patch",
+      "sha256": "e9adf54ca0ed0d6094e35cbc5f076689f0c87c60901f2467101d0b91454ea96a",
+      "bytes": 27916
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/P-to-W.patch",
+      "sha256": "fb38a606ccef0db19ea3bd2ed50d822a7b62188e895f68e54eb1ca22ac8c3f4b",
+      "bytes": 30750
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/affected.log",
+      "sha256": "ecafc4d2d34ea4c2d1cd956b8e4d0652217e4ac8af17fcf93f38fdad247af1ee",
+      "bytes": 181
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/affected.xml",
+      "sha256": "7790af030354d41e5eb709d2a4db5ff78c762ff549053809a86bbce6a83a3eb9",
+      "bytes": 16584
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/full-notify-final.log",
+      "sha256": "264c3c272f45c306f64ac9a13bc30b413d0fa77a32eefb5155759b77b02017f4",
+      "bytes": 751
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/full-notify-final.xml",
+      "sha256": "c060f4a4b5ae5b6e33758dbbf9740d7e176401341a6fcd6ddc1200eeb109dc61",
+      "bytes": 82855
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/full-notify-intermediate.log",
+      "sha256": "07a70f057e77aa60c68b5817551cd77d74cb082d45e9b2c2dd6e1fdc1174d0d5",
+      "bytes": 50276
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/full-notify-intermediate.xml",
+      "sha256": "62154f0a04c01b6e3f118668d30e0e9c6785877828e77e0bcf0d1434679c696a",
+      "bytes": 130504
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/parser-depth-measurement.log",
+      "sha256": "504e33c2fba1f50e173cd18d473633172f4e366aa459b00cf704569109995726",
+      "bytes": 141
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/patch-reproduction-first.json",
+      "sha256": "55b937ad4a1c52fe8e523067b909603ec5e9b398d8d67571114a116ea3cf8223",
+      "bytes": 2141
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/patch-reproduction-first.log",
+      "sha256": "3a5b71110c8eac3ad7dd2a4049bb5033e3c67195a9e4422f75a189daf3b8cb29",
+      "bytes": 74
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/patch-reproduction.json",
+      "sha256": "dc06834fd37fbf04a4c3753a3bf010c82d985989cad7a188d9a1d8d4002872a2",
+      "bytes": 2141
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/patch-reproduction.log",
+      "sha256": "47d54b27dc99095e4f98f767bf01983f1593f3c91d94a560987d2fda563c62cb",
+      "bytes": 37
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/rebind-witness-before.log",
+      "sha256": "44580bf1e465b85180ae913586e2813eaa20ad98295ce8ed803af7bbd3e56370",
+      "bytes": 7180
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-after.log",
+      "sha256": "694a7804c0c4a55e6edb47917820d7dbb6e2f53b8c6e99654119e1bc624395e2",
+      "bytes": 114
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-all-after.log",
+      "sha256": "2b153f82a9323531fe4d88ae24ffeac0bc0cfd86c278f190f12a8859af9dac21",
+      "bytes": 114
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-all-after.xml",
+      "sha256": "d922bcb9ebe24ca22cd9ec47779b4daf5c897b1dc428ac788d79d33e35dea7be",
+      "bytes": 3607
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/regression-before.log",
+      "sha256": "7263f473219caa45f60e710f23f898347cda59fb8e3d31ceba4055518aacfc0a",
+      "bytes": 39642
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-after.log",
+      "sha256": "4baa7783e345388ba7d3b465cf39483dbf2289fbd68a0a27535b77f5b545c886",
+      "bytes": 99
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-after.xml",
+      "sha256": "b99838b8699d4d29e77f107160d3031efa5412daa2d889ed1ab52adf5e72ece6",
+      "bytes": 6108
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-before.log",
+      "sha256": "259a489ff829579b8516722aa57128a1f64e4b1d75731fbfe5f2a2d9b8c07338",
+      "bytes": 23454
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-depth-observation-after.log",
+      "sha256": "7f30df36ee0118d37973604ffaaedf621b2814ba2785c676485d66a39aa5415c",
+      "bytes": 3107
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-depth-observation-before.log",
+      "sha256": "ca6b8a221991eb65b8215f044a1d648c3381329fe107d95e79402e134359b6d4",
+      "bytes": 21606
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-fixture-before.log",
+      "sha256": "fa160bc0de5fe202c74b5d1c8544bbe7197254e81ca148e9f31b9c868bcb891b",
+      "bytes": 19945
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-ruff.log",
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "bytes": 19
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/restore-scope-shape-before.log",
+      "sha256": "0088cdc0b045debe3810bb8556a2a74d3eb06a7e8ade8d32778c5ca289c185e5",
+      "bytes": 20784
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/ruff-final.log",
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "bytes": 19
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/ruff.log",
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "bytes": 19
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-after.log",
+      "sha256": "6bb3ac3dcb93e13b104184ab330840da077ff03f180c9992fc148987fe546009",
+      "bytes": 113
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/stale-thread-before.log",
+      "sha256": "c3abd3d524e0c71b63eb7babe593a4994c66000f184da03f4f96dbc882357ae3",
+      "bytes": 5433
+    },
+    {
+      "path": "/Users/yusuke/.herdr/evidence/mcs/maintenance-notify-packet2-20261005/unknown-before.log",
+      "sha256": "fcbfc397ebb107b041394ef496660492822c51a44389d654150b722ed15f139f",
+      "bytes": 5864
+    }
+  ],
+  "acceptance": {
+    "local_source_read": "PASS: 22/22 full P＋changed full W diff、owned UNSEEN/PARTIAL=0",
+    "criteria": "PASS: 6module×20=120判定",
+    "confirmed_fixes": "PASS: 6finding/new synthetic32cases with before FAIL",
+    "local_required_checks": "W1 full notify617/0failure/0skip＋全notify Ruff。W2限定scope guard追加後reconcile family44/0failure/0skip＋changed2paths Ruff。親指定どおり不変617範囲は再利用。",
+    "full_suite_on_W2": "NOT_RERUN（source変更はscope parse guard限定、親は必要resolve familyのみ指定。I検証は親所有）",
+    "patch": "PASS: clean隔離Pの変更9existing+2new pathsへ適用しW2の11path byte一致",
+    "independent_review": "PENDING: 親のfixed I fresh-context review",
+    "integration_candidate": "PENDING/PARENT_OWNED",
+    "global_goal_complete": false,
+    "real_deployment": "NOT_PERFORMED",
+    "limitations": "実SDK/実画面/本番DB/LLM/Jevは使用せず完全合成。worker自己点検を独立reviewとは呼ばない。"
+  }
+}

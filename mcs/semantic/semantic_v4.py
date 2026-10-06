@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import math
 import time
+from mcs_util import loads_dict
 
 ENGINE_VERSION = 4
 KIND_V4 = "semantic_facts_v4"
@@ -68,10 +69,7 @@ def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
         "ORDER BY artifact_id DESC LIMIT 1",
         (KIND_V4_STAGE, mid, stage, fp, policy)).fetchone()
     if prev is not None:
-        try:
-            last = json.loads(prev["content"])
-        except (json.JSONDecodeError, TypeError):
-            last = None
+        last = loads_dict(prev["content"])
         if isinstance(last, dict):
             last.pop("ts", None)
             if last == receipt:
@@ -96,11 +94,7 @@ def stage_ledger(ledger, mid: int, fp: str) -> list:
             "SELECT content,meta FROM artifacts WHERE kind=? "
             "AND message_id=? ORDER BY artifact_id",
             (KIND_V4_STAGE, mid)):
-        try:
-            meta = json.loads(r["meta"] or "{}")
-            content = json.loads(r["content"])
-        except (json.JSONDecodeError, TypeError):
-            continue
+        meta, content = loads_dict(r["meta"]), loads_dict(r["content"])
         if isinstance(meta, dict) and isinstance(content, dict) \
                 and meta.get("fingerprint") == fp:
             out.append({"stage": meta.get("stage"), **content})
@@ -120,9 +114,11 @@ def current_v4(ledger, mid: int, content_hash: str):
         + current_v4_pred("a", "m.content_hash")
         + " ORDER BY a.artifact_id DESC LIMIT 1",
         (KIND_V4, mid, content_hash)).fetchone()
-    return ({"artifact_id": row["artifact_id"],
-             "content": json.loads(row["content"]),
-             "meta": json.loads(row["meta"])} if row else None)
+    if row is None:
+        return None
+    content, meta = loads_dict(row["content"]), loads_dict(row["meta"])
+    return ({"artifact_id": row["artifact_id"], "content": content, "meta": meta}
+            if content is not None and meta is not None else None)
 
 
 def stage_request_following(ledger, bundle, doc, *, policy):
@@ -315,10 +311,22 @@ def reproject_stale(ledger, scfg: dict,
         (KIND_FACT_PROJ, KIND_V4, KIND_FACT_PROJ, PROJECTION_VERSION,
          PROJECTION_VERSION, limit)).fetchall()
     for row in rows:
-        meta = json.loads(row["meta"])
-        doc, reason = reproject_doc(ledger, row["message_id"], meta)
+        meta = loads_dict(row["meta"])
+        content = None
+        try:
+            doc, reason = (reproject_doc(ledger, row["message_id"], meta)
+                           if meta is not None
+                           else (None, "metadata_unreadable"))
+            if doc is not None:
+                content = json.dumps(project_v2_doc_legacy(doc),
+                                     ensure_ascii=False, allow_nan=False)
+        except Exception:
+            # a stored v2 doc of the wrong shape (KeyError/unhashable)
+            # must be marked skipped, or it stays first in the ORDER BY
+            # and blocks every later row forever
+            reason = "projection_failed"
         with ledger.db:
-            if doc is None:
+            if content is None:
                 ledger.db.execute(
                     "UPDATE artifacts SET meta=json_set(meta,"
                     "'$.reproject_skipped',?) WHERE artifact_id=?",
@@ -332,9 +340,7 @@ def reproject_stale(ledger, scfg: dict,
             new_meta["projection_version"] = PROJECTION_VERSION
             new_meta["reprojected_from"] = row["artifact_id"]
             ledger.artifact_add_tx(
-                row["kind"], json.dumps(project_v2_doc_legacy(doc),
-                                        ensure_ascii=False,
-                                        allow_nan=False),
+                row["kind"], content,
                 project_id=row["project_id"],
                 message_id=row["message_id"], model=row["model"] or "",
                 meta=new_meta)
@@ -494,10 +500,7 @@ def _cohort(ledger, cohort: str) -> dict | None:
     for r in ledger.db.execute(
             "SELECT content FROM artifacts WHERE kind=? "
             "ORDER BY artifact_id DESC", (KIND_V4_COHORT,)):
-        try:
-            doc = json.loads(r["content"])
-        except (json.JSONDecodeError, TypeError):
-            continue
+        doc = loads_dict(r["content"])
         if isinstance(doc, dict) and doc.get("cohort") == cohort:
             return doc
     return None
@@ -509,10 +512,7 @@ def cohort_items_done(ledger, cohort: str) -> dict:
     for r in ledger.db.execute(
             "SELECT content FROM artifacts WHERE kind=? "
             "ORDER BY artifact_id", (KIND_V4_ITEM,)):
-        try:
-            doc = json.loads(r["content"])
-        except (json.JSONDecodeError, TypeError):
-            continue
+        doc = loads_dict(r["content"])
         if isinstance(doc, dict) and doc.get("cohort") == cohort \
                 and type(doc.get("message_id")) is int:
             done[doc["message_id"]] = doc

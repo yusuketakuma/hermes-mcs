@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "承認表示で曖昧なreceiptとコマンド不整合を拒否",
+  "summary": "要約採用と基準統計の承認表示で、重複キーを含むreceiptや保存列とJSONのハッシュが矛盾する記録を確認済みとして扱いません。承認したコマンドの内容からハッシュを再計算し、記録の一致を確かめます。",
+  "upgrade": "追加操作は不要です。正常な人承認・再実行は変わりません。不整合のある採用・基準統計は未確認となるため、記録を確認して通常の承認経路でやり直してください。",
+  "details": ["既存の厳格なコマンドJSONパーサをreceipt読取りでも使用し、重複キー・非有限値・深さ・容量を検証する。", "承認記録から再構成したversion1のコマンドを既存validatorで検証し、SQL列・receipt JSON・再計算payload_hashの一致を要求する。"],
+  "refs": ["mcs/views/summary_review.py", "mcs/ops/mcs_refstats.py", "tests/views/test_round2_receipt_integrity.py", "tests/ops/test_round2_refstat_receipt_integrity.py"]
+}

@@ -208,6 +208,9 @@ def test_mine_gates_requires_test_definitions_instead_of_text(monkeypatch, tmp_p
 
 @pytest.mark.parametrize(("relative", "source", "allowed"), [
     ("mcs_discord/cards.py", "def make():\n import discord\n return discord.ui.View()\n", True),
+    ("mcs_discord/cards.py", "def make():\n import discord\n return discord.Embed(description='synthetic')\n", True),
+    ("mcs_discord/cards.py", "import discord\nx = discord.Embed()\n", False),
+    ("mcs_discord/actions.py", "def make():\n import discord\n return discord.Embed()\n", False),
     ("mcs_discord/cards.py", "import discord\n", False),
     ("other.py", "def make():\n import discord\n", False),
     ("mcs_discord/actions.py", "def make():\n import discord\n return discord.Client()\n", False),

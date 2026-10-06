@@ -1,0 +1,29 @@
+{
+  "category": "changed",
+  "title": "通知プレビューで患者・発信者・所属・時間・内容を確認",
+  "summary": "新着・確認候補・再確認通知に、保存済みの患者名、発信者、所属、投稿時刻、要約を含む短い通知文を用意しました。患者名と内容を先に示し、要約が未完成なら原文と処理状態、所属が未取得ならその旨を表示します。自動抽出による依頼候補は人が確定した依頼と区別します。",
+  "upgrade": "HermesのSlack/Discordはgateway、独立実行は使用中のadapterを更新後に再起動してください。旧workerは新しいプレビュー付きspecを保留します。通知文に患者名・投稿内容が含まれるため、端末の通知プレビュー設定を確認してください。iOS/Androidの実際の表示・省略・受信は端末、アプリ、通知設定に依存します。既存のDiscord Components V2カードは互換編集を維持し、contentを追加できないため新規形式の通知プレビューと同じ表示にはなりません。LINE WORKSのネイティブファイル通知には独自の通知文を指定できません。",
+  "details": [
+    "Slackカードの固定textを内容付きfallbackへ変更し、全文blocksと操作tokenを保持します。parse=noneとlink_names=falseを指定し、メンションを通知文で再発火させません。",
+    "Discordの新規カードは標準content・全文Embed・既存ボタン/選択メニューを一つのメッセージに載せます。既存V2の不可逆flagを維持し、content/embedsの不正な追加や追加POSTは行いません。allowed_mentions.noneと単一POST制御を保持します。",
+    "LINE WORKSのボタン付きカードは公式FlexのaltTextを使用し、本文、Callback token、URIを保持します。旧button_templateの受理は維持します。",
+    "プレビューはspecとcard partのhash、presentation fingerprintに含めます。本文partsの原文、順序、chunk bytes、remote照合を維持します。添付captionは既存の同一upload経路を使用し、後送テキストと期限リマインドにもsource metadataを示します。",
+    "日次集計とシステム通知は件数・状態・必要な操作を示し、患者や発信者を捏造しません。ローカル合成payloadとdiscord.py 2.7.1の無通信serializationで検証し、実端末成功は未検証です。",
+    "長いタスク名は名称だけを既存上限で省略し、発信者・所属・時刻を全体200字制限で失わないようにしました。添付captionは300字契約の中で要約の予算を調整し、5項目とファイル名を保持します。"
+  ],
+  "refs": [
+    "mcs/notify/notify_render.py",
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_flush.py",
+    "mcs/notify/notify_urgent.py",
+    "adapters/common/spec.py",
+    "adapters/common/text.py",
+    "adapters/slack/cards.py",
+    "adapters/slack/delivery.py",
+    "adapters/discord/cards.py",
+    "adapters/discord/delivery.py",
+    "adapters/lineworks/cards.py",
+    "adapters/lineworks/client.py",
+    "docs/development/audits/1.0.15/mobile-notification-preview-1.0.15.json"
+  ]
+}
