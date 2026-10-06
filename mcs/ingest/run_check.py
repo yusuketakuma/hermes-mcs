@@ -529,9 +529,10 @@ SESSION_ALERT_MIN_INTERVAL_S = 3600
 # stage allows one attempt, and _attempt_relogin (the single entry point
 # for every caller, run boundary included) bounds the per-run total
 RELOGIN_MAX_PER_RUN = 3
-# a recovery after an outage longer than this re-walks every active
-# patient from the last healthy run — posts read elsewhere meanwhile
-# (phone/browser) are no longer unread and would otherwise stay silent
+# unread collection silent longer than this (any cause: session, sleep,
+# network, stopped scheduler) makes the next collecting run announce
+# every newly stored post — posts read elsewhere meanwhile (phone/browser)
+# are no longer unread and would otherwise be stored silently
 OUTAGE_CATCHUP_S = 1200
 
 
@@ -588,36 +589,41 @@ def _attempt_relogin(adapter, ledger, result, where: str,
         state = "failed"
         attempt["detail"] = type(exc).__name__
     attempt["state"] = state
-    if getattr(adapter, "healed_tabs", 0):
-        attempt["healed_tabs"] = adapter.healed_tabs
+    for key in ("healed_tabs", "chrome_restarted"):
+        if getattr(adapter, key, 0):
+            attempt[key] = getattr(adapter, key)
     if state == "ok":
         _alert_session_recovered(ledger, result.get("run_id"),
                                  f"{where}: {attempt['error']}")
-        _seed_outage_catchup(ledger, result)
     return state
 
 
-def _seed_outage_catchup(ledger, result, now: float | None = None) -> None:
-    """After a session outage longer than OUTAGE_CATCHUP_S, queue the
-    same bounded notifying history_head walk _post_ack_gap uses, for
-    every active patient, from the last healthy run. Only cheap job rows
-    are written here; the fetches run in the normal job drains under the
-    existing per-run limits, and notify_max_age_s still bounds what is
-    announced. Runs once per run (several relogins share it)."""
-    if result.get("outage_catchup") is not None:
-        return
+def _outage_since(now: float | None = None) -> float | None:
+    """When unread collection last completed, if that is longer ago than
+    OUTAGE_CATCHUP_S — else None. unread_at only advances on runs that
+    collected unread, so every outage cause (and a run that recovered
+    the session only at its boundary) keeps the gap open until a
+    collecting run succeeds."""
     now = time.time() if now is None else now
-    last_ok = _prev_health().get("last_ok_at")
-    if not _finite_number(last_ok) or now - last_ok <= OUTAGE_CATCHUP_S:
-        result["outage_catchup"] = 0
-        return
+    unread_at = _prev_health().get("unread_at")
+    if not _finite_number(unread_at) or now - unread_at <= OUTAGE_CATCHUP_S:
+        return None
+    return unread_at
+
+
+def _seed_outage_catchup(ledger, result, since: float) -> None:
+    """Queue the bounded notifying history_head walk _post_ack_gap uses
+    for every active patient — it finishes what this run's backfill did
+    not reach. Cheap job rows only; the fetches run in the normal job
+    drains, and notify_max_age_s still bounds what is announced. A
+    pending head job keeps its own `since` and only gains the flag."""
     seeded = 0
     for row in ledger.frontier_patients():
         pid = row["project_id"]
-        since = min(last_ok, ledger.coverage_ts(pid) or ledger.high_watermark(pid)
-                    or last_ok) - BACKFILL_OVERLAP_S
+        start = min(since, ledger.coverage_ts(pid) or ledger.high_watermark(pid)
+                    or since) - BACKFILL_OVERLAP_S
         ledger.job_add("history_head", pid, payload={
-            "since": max(0, int(since)), "page": 1,
+            "since": max(0, int(start)), "page": 1,
             "pages": BACKFILL_MAX_PAGES, "trickle": False, "notify": True})
         ledger.job_set_flag("history_head", pid, 0, "notify")
         seeded += 1
@@ -912,8 +918,11 @@ def stage_thread_read(adapter, ledger, result, deadline):
 
 def stage_backfill(adapter, ledger, result, deadline, run_id,
                    semantic: bool = False,
-                   notify_max_age_s: float | None = None):
+                   notify_max_age_s: float | None = None,
+                   notify_all_new: bool = False):
     """Catch posts the unread API misses (e.g. read by another human).
+    notify_all_new (the first collecting run after an outage) announces
+    every newly stored row, not only unread ones.
     Walk each patient's history down to CONFIRMED coverage — never the
     newest stored message, so storing a new unread cannot skip older
     unfetched items (Oracle B06). Coverage only advances on a complete
@@ -943,7 +952,8 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
         new_ids = ledger.save_messages(
             hist, project_id=pid,
             notify={"run_id": run_id, "source": "history"},
-            semantic=semantic, notify_max_age_s=notify_max_age_s)
+            semantic=semantic, notify_max_age_s=notify_max_age_s,
+            notify_all_new=notify_all_new)
         if new_ids:
             result["backfilled"] += len(new_ids)
         if merged.error:
@@ -1580,6 +1590,9 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
     if args.jobs_only:
         result["jobs_only"] = True
         return
+    outage_since = _outage_since()
+    if outage_since is not None:
+        result["outage_since"] = outage_since
     _with_relogin(adapter, ledger, result, "unread",
                   stage_unread, adapter, ledger, args, result, deadline,
                   run_id, semantic=sem_on,
@@ -1600,7 +1613,10 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
         _with_relogin(adapter, ledger, result, "backfill",
                       stage_backfill, adapter, ledger, result, deadline,
                       run_id, semantic=sem_on,
-                      notify_max_age_s=notify_max_age_s)
+                      notify_max_age_s=notify_max_age_s,
+                      notify_all_new=outage_since is not None)
+    if outage_since is not None:
+        _seed_outage_catchup(ledger, result, outage_since)
 
 
 def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,

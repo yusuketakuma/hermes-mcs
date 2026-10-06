@@ -640,6 +640,7 @@ def test_chrome_launch_disables_on_device_model_download(monkeypatch):
     launched = []
     monkeypatch.setattr(a, "_cdp_up", lambda: bool(launched))
     monkeypatch.setattr(a, "_sleep_bounded", lambda s: None)
+    monkeypatch.setattr(a, "_stop_profile_chrome", lambda profile: False)
     monkeypatch.setattr(subprocess, "Popen",
                         lambda argv, **kw: launched.append(argv))
     a._ensure_chrome("/synthetic/profile", "/synthetic/chrome")
@@ -1501,3 +1502,48 @@ def test_heal_never_raises_when_cdp_listing_fails(monkeypatch):
         raise mcs_adapter.MCSError("network_error")
     monkeypatch.setattr(a, "_cdp_json", down)
     assert a._heal_hung_pages() == 0
+
+
+
+def test_cdp_down_stops_only_this_profiles_chrome_before_relaunch(monkeypatch):
+    """A hung browser (or the profile opened without the debugging port)
+    absorbs a same-profile relaunch, so CDP never comes up. Only main
+    processes of exactly this profile are stopped; helpers, other
+    profiles and prefix-matching paths are left alone."""
+    import signal
+    a = mcs_adapter.MCSAdapter()
+    listing = "\n".join([
+        "101 /Apps/Chrome --remote-debugging-port=9333 --user-data-dir=/p/chrome-profile https://x",
+        "102 /Apps/Chrome Helper --type=renderer --user-data-dir=/p/chrome-profile",
+        "103 /Apps/Chrome --user-data-dir=/p/chrome-profile-other",
+        "104 /Apps/Chrome --user-data-dir=/p/other",
+    ])
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(stdout=listing, returncode=0))
+    alive, sent = {101}, []
+
+    def kill(pid, sig):
+        if sig == 0:
+            if pid not in alive:
+                raise ProcessLookupError
+            return
+        sent.append((pid, sig))
+        if sig == signal.SIGKILL:
+            alive.discard(pid)
+
+    monkeypatch.setattr(mcs_adapter.os, "kill", kill)
+    monkeypatch.setattr(a, "_sleep_bounded", lambda s: None)
+    assert a._stop_profile_chrome("/p/chrome-profile") is True
+    # SIGTERM ignored (hung) -> escalates to SIGKILL, only for pid 101
+    assert sent == [(101, signal.SIGTERM), (101, signal.SIGKILL)]
+    assert a.chrome_restarted is True
+    assert a._stop_profile_chrome("relative/profile") is False
+
+
+def test_auto_login_resets_per_attempt_journal_facts(monkeypatch, tmp_path):
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+    a.healed_tabs, a.chrome_restarted = 3, True
+    monkeypatch.setattr(a, "_ensure_chrome", lambda *a, **k: None)
+    monkeypatch.setattr(a, "_recover_session", lambda: True)
+    assert a.auto_login() == "ok"
+    assert (a.healed_tabs, a.chrome_restarted) == (0, False)
