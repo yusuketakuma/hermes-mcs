@@ -876,8 +876,8 @@ def quiesce() -> list[str]:
     stopped = []
     for label in RESIDENT_LABELS:
         _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
-        deadline = time.time() + 15
-        while time.time() < deadline:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
             if _agent_pid(label, unknown=-1) is None:
                 break
             time.sleep(0.5)
@@ -932,9 +932,9 @@ def restart_agents(bounce: bool = True) -> list[str]:
             time.sleep(0.2)
         return _standalone_drainer_problems()
     problems = []
-    deadline = time.time() + RESTART_BUDGET_S
+    deadline = time.monotonic() + RESTART_BUDGET_S
     for label in RESIDENT_LABELS:
-        if time.time() >= deadline:
+        if time.monotonic() >= deadline:
             problems.append(f"restart_deadline:{label}")
             continue
         plist = os.path.join(AGENTS_DIR, label + ".plist")
@@ -949,9 +949,9 @@ def restart_agents(bounce: bool = True) -> list[str]:
             continue
         if not bounce:
             _run(["launchctl", "kickstart", target])
-        until = time.time() + 15       # never shadow the budget deadline
+        until = time.monotonic() + 15  # never shadow the budget deadline
         pid = None
-        while time.time() < until:
+        while time.monotonic() < until:
             pid = _agent_pid(label)
             if pid:
                 break
@@ -966,7 +966,7 @@ def restart_agents(bounce: bool = True) -> list[str]:
         if os.path.exists(plist) and not _bootstrap_agent(label, plist):
             problems.append(f"bootstrap_failed:{label}")
     for label in WATCHER_LABELS:
-        if time.time() >= deadline:
+        if time.monotonic() >= deadline:
             problems.append(f"restart_deadline:{label}")
             continue
         r = _run(["launchctl", "print", f"gui/{_uid()}/{label}"])
@@ -1732,19 +1732,13 @@ def _reconcile_membership(desired: dict) -> list[str]:
         pass        # launchd agents (below) carry the schedule; no hermes cron
     elif mcs_setup._hermes_ok(hermes):
         try:
-            r = subprocess.run([hermes, "cron", "list", "--all"],
-                               capture_output=True, text=True,
-                               timeout=30)
-            if r.returncode != 0:
+            # one parser with mcs_setup: ANSI-tolerant, None = unparsable
+            entries = mcs_setup._cron_list(hermes)
+            if entries is None:
                 problems.append("cron_list_unverifiable")
-            for block in re.finditer(
-                    r"^\s{2}([0-9a-f]{6,})\s+\[[^\]]*\]\n"
-                    r"((?:\s{4}\S[^\n]*\n?)+)",
-                    r.stdout if r.returncode == 0 else "", re.M):
-                jid, body = block.group(1), block.group(2)
-                fields = dict(re.findall(
-                    r"^\s{4}(\w[\w ]*?):\s{2,}(.+)$", body, re.M))
-                script = (fields.get("Script") or "").strip()
+            for entry in entries or []:
+                jid = entry["id"]
+                script = (entry.get("script") or "").strip()
                 actual = os.path.normpath(os.path.join(SCRIPTS_DIR, script))
                 owned = any(
                     isinstance(row, dict) and row.get("id") == jid

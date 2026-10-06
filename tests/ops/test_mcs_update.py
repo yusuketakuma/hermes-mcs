@@ -392,6 +392,41 @@ def test_precheck_schema_unreadable_ledger_is_unknown_not_zero(
     assert not any(e.startswith("schema_bump:") for e in errors)
 
 
+def _cron_listing(script, ansi=False):
+    """Synthetic `hermes cron list --all` in the hermes_cli/cron.py layout:
+    `  <id> [badge]` then `    <Label:><pad to 11><value>` rows."""
+    jid, badge = ("\x1b[33mabcdef\x1b[0m", "\x1b[31m[disabled]\x1b[0m") if ansi \
+        else ("abcdef", "[disabled]")
+    return (f"Scheduled Jobs (profile: default)\n\n  {jid} {badge}\n"
+            f"    Name:      synthetic-job\n    Schedule:  */10 * * * *\n"
+            f"    Repeat:    \u221e\n    Script:    {script}\n\n")
+
+
+@pytest.mark.parametrize(("output", "problems", "removed"), [
+    ("ansi", [], True),
+    ("No scheduled jobs in profile 'default'.\nCreate one with 'hermes cron create ...'", [], False),
+    ("Jobs:\n  - id=abcdef script=mcs_backup.sh\n", ["cron_list_unverifiable"], False),
+])
+def test_cron_reconcile_shares_the_setup_parser(updater, monkeypatch, output, problems, removed):
+    """Coloured ids, the per-profile empty message and a format drift go
+    through mcs_setup._cron_list: drift is reported, never silently skipped."""
+    import mcs_setup
+    script = mcs_setup.CRON_JOBS[0][2]
+    if output == "ansi":
+        output = _cron_listing(f"{updater.SCRIPTS_DIR}/{script}", ansi=True)
+    monkeypatch.setattr(updater, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_setup, "_hermes_exe", lambda cfg: "synthetic-hermes")
+    monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda path: True)
+    calls = []
+
+    def execute(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, output if argv[2] == "list" else "", "")
+    monkeypatch.setattr(updater.subprocess, "run", execute)
+    assert updater._reconcile_membership({"cron": [], "agents": []}) == problems
+    assert (["synthetic-hermes", "cron", "remove", "abcdef"] in calls) is removed
+
+
 @pytest.mark.parametrize("returncode", [0, 1])
 def test_cron_job_removal_requires_successful_list(updater, monkeypatch, returncode):
     import mcs_setup
@@ -406,7 +441,7 @@ def test_cron_job_removal_requires_successful_list(updater, monkeypatch, returnc
         if argv[1:] == ["cron", "list", "--all"]:
             return subprocess.CompletedProcess(
                 argv, returncode,
-                f"  abcdef [disabled]\n    Script:  {updater.SCRIPTS_DIR}/{script}\n",
+                _cron_listing(f"{updater.SCRIPTS_DIR}/{script}"),
                 "synthetic listing failure")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
@@ -439,7 +474,7 @@ def test_rollback_offsite_cron_requires_matching_owned_identity(
     calls = []
     def execute(argv, **kwargs):
         calls.append(argv)
-        output = f"  abcdef [disabled]\n    Script:  {script}\n" if argv[2] == "list" else ""
+        output = _cron_listing(script) if argv[2] == "list" else ""
         return subprocess.CompletedProcess(argv, 0, output, "")
     monkeypatch.setattr(updater.subprocess, "run", execute)
     assert updater._reconcile_membership({"cron": [], "agents": []}) == []
@@ -1637,6 +1672,32 @@ def test_restart_agents_survives_hung_launchctl(
     assert not os.path.exists(mcs_update.MARKER_PATH)
 
 
+def test_launchd_waits_ignore_wall_clock_jump(updater, monkeypatch):
+    """quiesce/restart_agents pid waits run on the monotonic clock: a
+    sleep/NTP jump of time.time() must not end them on the first poll."""
+    from types import SimpleNamespace
+    wall, mono = [1000.0], [0.0]
+
+    def sleep(s):
+        mono[0] += s
+        wall[0] += 3600                # system clock jumps an hour per poll
+    monkeypatch.setattr(mcs_update, "time", SimpleNamespace(
+        time=lambda: wall[0], monotonic=lambda: mono[0], sleep=sleep))
+    monkeypatch.setattr(mcs_update, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_update, "RESIDENT_LABELS", ("ai.mcs.a",))
+    monkeypatch.setattr(mcs_update, "LEGACY_LABELS", ())
+    monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
+    monkeypatch.setattr(mcs_update, "_run", lambda argv:
+                        subprocess.CompletedProcess(argv, 0, "", ""))
+    monkeypatch.setattr(mcs_update, "_bootstrap_agent", lambda label, plist: True)
+    monkeypatch.setattr(mcs_update, "_stray_drainer_pids", lambda: [])
+    pids = iter([4242, 4242, None, None])
+    monkeypatch.setattr(mcs_update, "_agent_pid", lambda label, unknown=None: next(pids))
+    assert mcs_update.quiesce() == ["ai.mcs.a"]
+    pids = iter([None, None, 4343])
+    assert mcs_update.restart_agents() == []
+
+
 @pytest.mark.parametrize("exc", _HANG_EXCS)
 def test_quiesce_never_takes_unverifiable_stop_as_stopped(
         updater, monkeypatch, exc):
@@ -1646,7 +1707,7 @@ def test_quiesce_never_takes_unverifiable_stop_as_stopped(
     from types import SimpleNamespace
     clock = [1000.0]
     monkeypatch.setattr(mcs_update, "time", SimpleNamespace(
-        time=lambda: clock[0],
+        time=lambda: clock[0], monotonic=lambda: clock[0],
         sleep=lambda s: clock.__setitem__(0, clock[0] + s)))
     monkeypatch.setattr(mcs_update, "RESIDENT_LABELS",
                         ("ai.mcs.a", "ai.mcs.b"))
@@ -1680,7 +1741,7 @@ def test_rollback_partial_quiesce_restarts_despite_hung_launchctl(
         lambda argv, *a, **k: (fake if argv[0] == "launchctl"
                                else real_run)(argv, *a, **k))
     monkeypatch.setattr(mcs_update, "time", SimpleNamespace(
-        time=time.time, sleep=lambda s: None))
+        time=time.time, monotonic=time.monotonic, sleep=lambda s: None))
     monkeypatch.setattr(mcs_util, "time",
                         SimpleNamespace(time=time.time, sleep=lambda s: None))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
@@ -1905,7 +1966,7 @@ def test_restart_agents_all_hung_stays_within_budget(
         advance(k["timeout"])
         raise subprocess.TimeoutExpired(argv, k["timeout"])
     fake_time = SimpleNamespace(time=lambda: clock[0],
-                                sleep=advance)
+                                monotonic=lambda: clock[0], sleep=advance)
     monkeypatch.setattr(mcs_update.subprocess, "run", run)
     monkeypatch.setattr(mcs_update, "time", fake_time)
     monkeypatch.setattr(mcs_util, "time", fake_time)
@@ -2133,7 +2194,7 @@ def test_restart_agents_slow_drainer_does_not_starve_the_next(
     clock = iter(range(0, 10 ** 6))
     monkeypatch.setattr(mcs_update.subprocess, "run", fake)
     monkeypatch.setattr(mcs_update, "time", SimpleNamespace(
-        time=lambda: next(clock), sleep=lambda s: None))
+        time=time.time, monotonic=lambda: next(clock), sleep=lambda s: None))
     monkeypatch.setattr(mcs_util, "time",
                         SimpleNamespace(time=time.time, sleep=lambda s: None))
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))

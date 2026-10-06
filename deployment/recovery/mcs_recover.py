@@ -425,8 +425,8 @@ def _restart_drainers(bounce=True):
             continue
         if not bounce:
             _launchctl(["kickstart", target])
-        deadline = time.time() + 15
-        while time.time() < deadline:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
             if _agent_pid(label):
                 break
             time.sleep(0.5)
