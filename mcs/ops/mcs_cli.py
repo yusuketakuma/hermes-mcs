@@ -20,7 +20,7 @@ from mcs_util import load_config  # noqa: E402
 def main(argv: list[str] | None = None) -> int:
     """Route arguments without shells, retaining downstream contracts."""
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("command", choices=("install", "update", "setup", "doctor"))
+    ap.add_argument("command", choices=("install", "update", "setup", "doctor", "drug"))
     forwarded = list(sys.argv[1:] if argv is None else argv)
     args = ap.parse_args(forwarded[:1])
     rest = forwarded[1:]
@@ -46,6 +46,9 @@ def main(argv: list[str] | None = None) -> int:
                                  args.command, *rest])
 
     match args.command:
+        case "drug":
+            import mcs_drug
+            return mcs_drug.main(rest)
         case "setup":
             import mcs_setup
             # services/check are explicit; init owns its final check and secrets.

@@ -136,6 +136,91 @@ class DrugMap:
                     "generic": "総称のため個別薬剤を確定できません。",
                     "unresolved": "一致する候補はありません。類似名から推定しません。"}[ref["status"]]}
 
+    def search(self, query: str, *, limit: int = 20) -> dict:
+        """Search reference names/IDs by normalized substring, without resolution."""
+        if (not _text(query) or not fold(query) or type(limit) is not int
+                or not 0 <= limit <= 200):
+            raise ValueError("drug_map_search_argument")
+        needle = fold(query)
+        identities, matches = {}, {}
+        for alias, entries in self.aliases.items():
+            for entry in entries:
+                if entry.id not in identities:
+                    identities[entry.id] = (entry, needle in fold(entry.id))
+                id_match = identities[entry.id][1]
+                if id_match or needle in alias:
+                    matches[entry.id] = entry
+        items = []
+        for code in sorted(matches)[:limit]:
+            entry = matches[code]
+            aliases = [alias for alias in entry.aliases if needle in fold(alias)]
+            items.append({"id": entry.id, "display": entry.display, "kind": entry.kind,
+                "matching_aliases": aliases[:limit], "matching_alias_count": len(aliases),
+                "aliases_truncated": len(aliases) > limit,
+                "matched_by": (["alias"] if aliases else [])
+                              + (["id"] if identities[code][1] else [])})
+        return {"query": query, "normalized_query": needle,
+                "candidate_only": True, "read_only": True,
+                "dictionary": {"id": self.dict_id, "sha256": self.sha256,
+                    "approved": self.approved, "source": {"name": self.source.name,
+                        "url": self.source.url, "terms_checked_on": self.source.terms_checked_on}},
+                "total": len(matches), "returned": len(items), "limit": limit,
+                "truncated": len(matches) > len(items), "items": items,
+                "explanation": "名称・別名・識別子の部分一致による参照検索です。処方や成分を特定せず、照合済み候補の付与・承認・設定変更は行いません。"}
+
+    def diff(self, other: "DrugMap", *, limit: int = 50) -> dict:
+        """Compare validated dictionary identities; never infer clinical equivalence."""
+        if not isinstance(other, DrugMap) or type(limit) is not int or not 0 <= limit <= 200:
+            raise ValueError("drug_map_diff_argument")
+        before = {entry.id: entry for hits in self.aliases.values() for entry in hits}
+        after = {entry.id: entry for hits in other.aliases.values() for entry in hits}
+        counts = {"added": 0, "removed": 0, "changed": 0, "display_changed": 0,
+                  "kind_changed": 0, "aliases_changed": 0,
+                  "new_ambiguous_aliases": 0, "expanded_ambiguous_aliases": 0}
+        changes, collisions = [], []
+        for code in sorted(before.keys() | after.keys()):
+            old, new = before.get(code), after.get(code)
+            fields = ([field for field in ("display", "kind", "aliases")
+                       if getattr(old, field) != getattr(new, field)]
+                      if old is not None and new is not None else [])
+            if old is not None and new is not None and not fields:
+                continue
+            change = "added" if old is None else "removed" if new is None else "changed"
+            counts[change] += 1
+            for field in fields:
+                counts[field + "_changed"] += 1
+            if len(changes) < limit:
+                changes.append({"id": code, "change": change, "fields": fields,
+                    "before": ({"display": old.display, "kind": old.kind,
+                                "aliases": list(old.aliases)} if old else None),
+                    "after": ({"display": new.display, "kind": new.kind,
+                               "aliases": list(new.aliases)} if new else None)})
+        for alias in sorted(other.aliases):
+            old = {entry.id for entry in self.aliases.get(alias, ())}
+            new = {entry.id for entry in other.aliases[alias]}
+            if len(new) < 2 or not new - old:
+                continue
+            change = "new" if len(old) < 2 else "expanded"
+            counts[change + "_ambiguous_aliases"] += 1
+            if len(collisions) < limit:
+                collisions.append({"alias": alias, "change": change,
+                    "before_count": len(old), "after_count": len(new),
+                    "added_count": len(new - old), "removed_count": len(old - new),
+                    "before_candidates": sorted(old)[:limit],
+                    "after_candidates": sorted(new)[:limit],
+                    "candidates_truncated": max(len(old), len(new)) > limit})
+        changed_count = sum(counts[key] for key in ("added", "removed", "changed"))
+        collision_count = counts["new_ambiguous_aliases"] + counts["expanded_ambiguous_aliases"]
+        return {"before": {"id": self.dict_id, "sha256": self.sha256,
+                           "approved": self.approved},
+                "after": {"id": other.dict_id, "sha256": other.sha256,
+                          "approved": other.approved},
+                "counts": counts, "changes": changes, "collisions": collisions,
+                "limit": limit,
+                "truncated": {"changes": changed_count > len(changes),
+                              "collisions": collision_count > len(collisions)},
+                "explanation": "辞書の識別子・名称・別名の差分です。臨床的な同等性や成分の一致を示さず、承認・設定変更は行いません。"}
+
     def resolve(self, name: str, i: int = 0) -> Ref:
         """Return identity candidates; official product/general names are exact-only."""
         hits = self.aliases.get(fold(name), ())
@@ -572,3 +657,75 @@ def candidate_note(ref: Annotation | None) -> str:
               else "薬剤候補" if kinds & {"product", "general_name"} else "成分候補")
     return (f"{prefix}: {label}（辞書 {ref['dict_id']}@"
             f"{ref['dict_sha256'][:8]}・未確認）")
+
+
+IMPACT_TRANSITIONS = ("unchanged", "newly_matched", "lost_match", "became_ambiguous",
+                      "disambiguated", "candidates_changed")
+
+
+def _transition(old: Ref, new: Ref) -> str:
+    codes = ({c["code"] for c in old["cands"]}, {c["code"] for c in new["cands"]})
+    if old["status"] == new["status"] and codes[0] == codes[1]:
+        return "unchanged"
+    if new["status"] == "unresolved":
+        return "lost_match"
+    if old["status"] == "unresolved":
+        return "newly_matched"
+    if (old["status"], new["status"]) == ("resolved", "ambiguous"):
+        return "became_ambiguous"
+    if (old["status"], new["status"]) == ("ambiguous", "resolved"):
+        return "disambiguated"
+    # Same status with other codes, or any change to/from a generic class.
+    return "candidates_changed"
+
+
+def impact(db: sqlite3.Connection, before: DrugMap, after: DrugMap, *,
+           limit: int = 50) -> dict:
+    """Re-match current-source medication names with two dictionaries; names-only aggregate."""
+    if (not isinstance(before, DrugMap) or not isinstance(after, DrugMap)
+            or type(limit) is not int or not 0 <= limit <= 200):
+        raise ValueError("drug_map_impact_argument")
+    messages = {"evaluated": 0, "unevaluated_no_extraction": 0, "unevaluated_malformed": 0}
+    counts = dict.fromkeys(IMPACT_TRANSITIONS, 0)
+    names = {key: set() for key in IMPACT_TRANSITIONS}
+    resolved, groups = {}, {}
+    for (mid,) in db.execute("SELECT message_id FROM messages ORDER BY message_id").fetchall():
+        source = _source(db, mid)
+        if source is None:
+            messages["unevaluated_no_extraction"] += 1
+            continue
+        try:
+            meds = _source_meds(source)
+        except ValueError:
+            messages["unevaluated_malformed"] += 1
+            continue
+        messages["evaluated"] += 1
+        for _i, name in meds:
+            if name not in resolved:
+                old, new = before.resolve(name), after.resolve(name)
+                resolved[name] = (_transition(old, new), old["status"], len(old["cands"]),
+                                  new["status"], len(new["cands"]))
+            key = resolved[name]
+            counts[key[0]] += 1
+            names[key[0]].add(fold(name))
+            group = (fold(name), *key)
+            groups[group] = groups.get(group, 0) + 1
+    changed = sorted(((count, group) for group, count in groups.items()
+                      if group[1] != "unchanged"), key=lambda row: (-row[0], row[1]))
+    examples = [{"name": name, "transition": transition, "mentions": count,
+                 "before": {"status": old_status, "candidate_count": old_count},
+                 "after": {"status": new_status, "candidate_count": new_count}}
+                for count, (name, transition, old_status, old_count, new_status, new_count)
+                in changed[:limit]]
+    return {"before": {"id": before.dict_id, "sha256": before.sha256,
+                       "approved": before.approved},
+            "after": {"id": after.dict_id, "sha256": after.sha256,
+                      "approved": after.approved},
+            "messages": messages, "mentions": sum(counts.values()), "counts": counts,
+            "names": {key: len(value) for key, value in names.items()},
+            "examples": examples, "limit": limit,
+            "truncated": {"examples": len(changed) > len(examples)},
+            "read_only": True, "candidate_only": True,
+            "explanation": "更新前後の辞書で、公開スナップショットの現行抽出にある薬剤名を照合し直した件数です。"
+                           "辞書照合結果の変化であり、診療上の問題件数ではありません。"
+                           "DB・辞書・設定は変更していません。"}
