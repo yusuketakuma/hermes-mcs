@@ -1446,3 +1446,58 @@ def test_project_row_without_usable_karte_id_is_tolerated(karte_id):
 def test_project_row_karte_id_lands_on_unread_patient():
     snap = _UnreadListAdapter([(100, False, [_unread_project(11)])]).list_unread()
     assert snap.patients[0].karte_id == 110
+
+
+def _tab(ident, host="www.medical-care.net"):
+    return {"type": "page", "id": ident, "url": f"https://{host}/home",
+            "webSocketDebuggerUrl": f"ws://127.0.0.1:9333/devtools/page/{ident}"}
+
+
+@pytest.mark.parametrize("kind,closed", [("network_error", True),
+                                         ("deadline_exceeded", False)])
+def test_hung_mcs_tab_is_closed_and_verified(monkeypatch, kind, closed):
+    """A browser that answers /json/version can still hold an MCS tab
+    whose renderer never answers — every token read then times out.
+    Only that tab closes; a run deadline is not evidence of a hang."""
+    a = mcs_adapter.MCSAdapter()
+    hung, live, other = "A" * 32, "B" * 32, "C" * 32
+    tabs = [_tab(hung), _tab(live), _tab(other, "example.invalid")]
+    calls = []
+
+    def cdp_json(path, method="GET", timeout=5):
+        calls.append(path)
+        if path.startswith("/json/close/"):
+            tabs[:] = [t for t in tabs if t["id"] != path.rsplit("/", 1)[1]]
+            raise mcs_adapter.MCSError("network_error")   # plain-text reply
+        return list(tabs)
+
+    def cdp_eval(ws, expr, timeout=15):
+        assert expr == "1" and timeout == mcs_adapter.HUNG_PROBE_S
+        if ws.endswith(hung):
+            raise mcs_adapter.MCSError(kind, retryable=True)
+        return 1
+
+    monkeypatch.setattr(a, "_cdp_json", cdp_json)
+    monkeypatch.setattr(a, "_cdp_eval", cdp_eval)
+    assert a._heal_hung_pages() == int(closed)
+    assert a.healed_tabs == int(closed)
+    assert (f"/json/close/{hung}" in calls) is closed
+    assert not any(p.endswith(live) or p.endswith(other) for p in calls)
+
+
+def test_ensure_chrome_heals_tabs_only_when_browser_is_up(monkeypatch):
+    a = mcs_adapter.MCSAdapter()
+    healed = []
+    monkeypatch.setattr(a, "_heal_hung_pages", lambda: healed.append(1))
+    monkeypatch.setattr(a, "_cdp_up", lambda: True)
+    a._ensure_chrome("/synthetic/profile", "/synthetic/chrome")
+    assert healed == [1]
+
+
+def test_heal_never_raises_when_cdp_listing_fails(monkeypatch):
+    a = mcs_adapter.MCSAdapter()
+
+    def down(*args, **kwargs):
+        raise mcs_adapter.MCSError("network_error")
+    monkeypatch.setattr(a, "_cdp_json", down)
+    assert a._heal_hung_pages() == 0
