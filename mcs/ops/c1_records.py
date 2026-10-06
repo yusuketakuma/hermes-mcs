@@ -12,7 +12,7 @@ from typing import TypeAlias, TypedDict
 import mcs_signals
 import read_model
 from c1_contract import JSONValue, MAX_BODY_BYTES, validate_record
-from export_schema import project_record
+from export_schema import finite_number, project_record
 
 JSON: TypeAlias = JSONValue
 Record: TypeAlias = dict[str, JSON]
@@ -46,7 +46,7 @@ def _timestamp(value: JSON) -> int | float | None:
         case bool():
             return None
         case int() | float():
-            return value if math.isfinite(value) and value >= 0 else None
+            return value if finite_number(value) and value >= 0 else None
         case None | str() | list() | dict():
             return None
         case _:

@@ -24,7 +24,6 @@ shell user it runs as.
 from __future__ import annotations
 
 import argparse
-import fcntl
 import glob
 import hashlib
 import json
@@ -48,6 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401,E402  registers every subdir as import root
 import mcs_runtime  # noqa: E402
+from mcs_requests import parse_command  # noqa: E402
 
 from mcs_util import (HOME, REPO, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
                       atomic_write, launchd_bootstrap, load_config)
@@ -211,14 +211,7 @@ def journal(state: dict, stage: str) -> None:
 
 def acquire_update_lock() -> int | None:
     """Non-blocking flock on data/update.lock; fd or None."""
-    os.makedirs(DATA, exist_ok=True)
-    fd = os.open(UPDATE_LOCK, os.O_WRONLY | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        os.close(fd)
-        return None
-    return fd
+    return acquire_run_lock(UPDATE_LOCK)
 
 
 def _acquire_run_lock_wait(tries: int = RUN_LOCK_TRIES) -> int | None:
@@ -237,9 +230,12 @@ def _git(args: list[str], timeout: int = T_GIT) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env.update(GIT_ENV)
     try:
-        return subprocess.run(["git", "-C", REPO, *args],
-                              capture_output=True, text=True,
-                              timeout=timeout, env=env)
+        result = subprocess.run(["git", "-C", REPO, *args],
+                                capture_output=True, text=True,
+                                timeout=timeout, env=env)
+        if result.returncode != 0:
+            result.stderr = f"exit={result.returncode}"
+        return result
     except subprocess.TimeoutExpired as e:
         raise UpdateError("git_timeout: " + " ".join(args[:1])) from e
     except OSError as e:
@@ -250,7 +246,7 @@ def _git_out(args: list[str], timeout: int = T_GIT) -> str:
     r = _git(args, timeout)
     if r.returncode != 0:
         raise UpdateError("git_failed: " + " ".join(args[:1])
-                          + " — " + r.stderr.strip()[:200])
+                          + f" (exit={r.returncode})")
     return r.stdout
 
 
@@ -1020,6 +1016,21 @@ def _clean_stale_git_locks() -> list[str]:
 
 # ------------------------------------------------------------- approval
 
+def _approval_receipt(raw, command_id):
+    """Read a scheduled receipt without ambiguous JSON or contradictory identity."""
+    try:
+        receipt = parse_command(raw)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if (not isinstance(command_id, str) or not command_id.strip()
+            or not isinstance(receipt, dict) or receipt.get("scheduled") is not True
+            or receipt.get("command_id", command_id) != command_id
+            or receipt.get("outcome", "applied") != "applied"
+            or receipt.get("error") is not None):
+        return None
+    return receipt
+
+
 def scan_pending_approvals(state: dict
                            ) -> tuple[list[dict], list[str]]:
     """Read command_receipts read-only (no Ledger init — R16).
@@ -1052,21 +1063,23 @@ def scan_pending_approvals(state: dict
     for cid, rj, at, rowid in rows:
         if cid in executed:
             continue
-        try:
-            rec = json.loads(rj)
-        except (ValueError, TypeError, RecursionError):
+        if at is not None and (type(at) not in (int, float) or not 0 <= at < 1e12):
             continue
-        if not isinstance(rec, dict) or rec.get("scheduled") is not True:
+        rec = _approval_receipt(rj, cid)
+        if rec is None:
             continue
         cmd = rec.get("cmd")
         if cmd == "ops.update_apply":
+            base = rec.get("base_sha")
             if _ver_key(rec.get("tag")) is None \
                     or not isinstance(rec.get("target_sha"), str) \
-                    or not HEX_RE.fullmatch(rec["target_sha"]):
+                    or not HEX_RE.fullmatch(rec["target_sha"]) \
+                    or (base is not None and (not isinstance(base, str)
+                                              or not HEX_RE.fullmatch(base))):
                 continue
             applies.append({"command_id": cid, "tag": rec.get("tag"),
                             "target_sha": rec.get("target_sha"),
-                            "base_sha": rec.get("base_sha"),
+                            "base_sha": base,
                             "at": at, "rowid": rowid})
         elif cmd == "ops.update_rollback":
             consumed.extend((p["command_id"], "vetoed")
@@ -1686,6 +1699,16 @@ def _reconcile_membership(desired: dict) -> list[str]:
     if cfg.get("runtime_mode") == "standalone":
         # One host owns jobs; its restored code reconciles membership on restart.
         return []
+    desired = {} if desired is None else desired
+    if not isinstance(desired, dict):
+        return ["service_snapshot_invalid"]
+    for section, key in (("cron", "script"), ("agents", "label")):
+        rows = desired.get(section, [])
+        if (not isinstance(rows, list) or any(
+                not isinstance(row, dict)
+                or (row.get(key) is not None and not isinstance(row[key], str))
+                for row in rows)):
+            return ["service_snapshot_invalid"]
     hermes = mcs_setup._hermes_exe(cfg)
     desired_cron = {(d.get("script") or ""): d for d in
                     (desired or {}).get("cron", [])}
@@ -2029,14 +2052,11 @@ def _restore_consent(report: dict) -> str | None:
     finally:
         con.close()
     for cid, rj in rows:
-        try:
-            rec = json.loads(rj)
-        except (json.JSONDecodeError, TypeError, RecursionError):
-            continue
-        if not isinstance(rec, dict):
+        rec = _approval_receipt(rj, cid)
+        if rec is None:
             continue
         if rec.get("cmd") != "ops.restore_approve" \
-                or rec.get("scheduled") is not True:
+                or type(rec.get("backup_schema")) is not int:
             continue
         if rec.get("report_id") == report["report_id"] \
                 and rec.get("backup_sha256") == report["backup_sha256"] \

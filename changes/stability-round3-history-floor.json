@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "壊れた履歴取得境界で依頼処理が止まる問題を修正",
+  "summary": "保存済みの履歴取得境界が文字列・バイト列・非有限値など不正な場合は、例外で依頼処理を止めず、理由付きの拒否receiptを記録します。不正値を取得完了として扱ったり、新しい取得を開始したりしません。",
+  "upgrade": "追加操作は不要です。invalid_history_floorが報告された場合は保存状態を確認して通常の人承認経路で再依頼してください。NULL/0の未記録、-1の自然末尾、有効な未来の境界は従来どおり扱います。",
+  "details": ["比較前に保存済み境界の数値型・有限性・負値sentinelを検証する。取得の追加・receiptは既存のtransaction経路を維持する。"],
+  "refs": ["mcs/ops/mcs_operations.py", "tests/ops/test_round3_scan_floor_types.py"]
+}

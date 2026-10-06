@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "不正な投稿時刻で時間帯統計が停止する問題を修正",
+  "summary": "保存済みの投稿時刻を日付として表現できない場合も、時間帯統計を確認不能として返します。例外の詳細や元の投稿時刻を出力せず、正常な統計と入力引数の検証は維持します。",
+  "upgrade": "追加操作は不要です。不正な保存済み時刻がある場合はworkload統計がunavailableとなるため、元の取得状態を確認してください。集計期間・判定条件・通知設定は変わりません。",
+  "details": ["日時変換のValueError・OverflowError・OS依存エラーを個別のdata_errorとして扱う。"],
+  "refs": ["mcs/views/mcs_stats.py", "tests/views/test_stats_timestamp_stability.py"]
+}

@@ -12,6 +12,7 @@ import sqlite3
 import sys
 import time
 from collections import Counter
+from itertools import groupby
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 sys.path.insert(0, os.path.dirname(os.path.dirname(
@@ -34,7 +35,7 @@ def _lag_bucket(seconds):
     return next(name for limit, name in LAG_BUCKETS if seconds < limit)
 
 
-def _watch(reader, now, project_id=None):
+def _watch(reader, now, project_id, shadow_checks):
     """Due watch-set targets via the ledger's own selector (read only)."""
     try:
         targets = reader.metadata_watch_targets(limit=-1, now=now)
@@ -42,13 +43,8 @@ def _watch(reader, now, project_id=None):
             targets = [r for r in targets if r["project_id"] == project_id]
     except sqlite3.Error:
         return {"available": False}
-    checked = []
-    for row in targets:
-        hit = reader.db.execute(
-            "SELECT checked_at FROM message_metadata WHERE message_id=? "
-            "AND source='shadow'", (row["message_id"],)).fetchone()
-        if hit is not None:
-            checked.append(hit[0])
+    checked = [shadow_checks[row["message_id"]] for row in targets
+               if row["message_id"] in shadow_checks]
     return {"available": True, "due": len(targets),
             "due_never_attempted": len(targets) - len(checked),
             "oldest_shadow_check_age_s":
@@ -57,7 +53,7 @@ def _watch(reader, now, project_id=None):
 
 def build_report(reader, now=None, *, project_id=None) -> dict:
     """Count-only comparison of capture and shadow rows."""
-    from message_metadata import REACTION_LABELS, _read_metadata
+    from message_metadata import REACTION_LABELS, _decode_metadata
     now = time.time() if now is None else now
     db = reader.db
     counts = Counter()
@@ -65,15 +61,24 @@ def build_report(reader, now=None, *, project_id=None) -> dict:
     failures, lag, direction = Counter(), Counter(), Counter()
     has_table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
                            "AND name='message_metadata'").fetchone()
-    mids = [r[0] for r in db.execute(
-        "SELECT DISTINCT md.message_id FROM message_metadata md "
-        "JOIN messages m ON m.message_id=md.message_id WHERE m.project_id=?",
-        (project_id,))] if has_table and project_id is not None else (
-        [r[0] for r in db.execute("SELECT DISTINCT message_id FROM message_metadata")]
-        if has_table else [])
-    for mid in mids:
-        cap = _read_metadata(db, mid, "capture")
-        sh = _read_metadata(db, mid, "shadow")
+    rows = []
+    if has_table:
+        sql = ("SELECT md.message_id,md.source,md.content,md.checked_at,md.last_error "
+               "FROM message_metadata md")
+        params = ()
+        if project_id is not None:
+            sql += " JOIN messages m ON m.message_id=md.message_id WHERE m.project_id=?"
+            params = (project_id,)
+        rows = db.execute(sql + " ORDER BY md.message_id,md.source", params)
+    messages = 0
+    shadow_checks = {}
+    for mid, records in groupby(rows, key=lambda row: row[0]):
+        messages += 1
+        sources = {row[1]: tuple(row[2:]) for row in records}
+        cap = _decode_metadata(sources.get("capture"))
+        sh = _decode_metadata(sources.get("shadow"))
+        if "shadow" in sources:
+            shadow_checks[mid] = sources["shadow"][1]
         cap_seen = cap["reactions"] is not None
         if sh["checked_at"] is None:
             counts["shadow_not_attempted" if cap_seen
@@ -81,8 +86,7 @@ def build_report(reader, now=None, *, project_id=None) -> dict:
             continue
         if sh["last_error"]:
             counts["shadow_failed"] += 1
-            raw = db.execute("SELECT last_error FROM message_metadata WHERE "
-                             "message_id=? AND source='shadow'", (mid,)).fetchone()[0]
+            raw = sources["shadow"][2]
             # codes only: anything not code-shaped is never echoed
             for code in str(raw).split(","):
                 failures[code if _CODE.fullmatch(code) else "metadata_error"] += 1
@@ -110,14 +114,14 @@ def build_report(reader, now=None, *, project_id=None) -> dict:
                  "shadow_newer" if cap["checked_at"] < sh["checked_at"] else
                  "same_time")
         direction[f"{outcome}_{newer}"] += 1
-    return {"as_of": round(now), "messages": len(mids),
+    return {"as_of": round(now), "messages": messages,
             "outcomes": dict(sorted(counts.items())),
             "count_diff_by_type": dict(sorted(count_diff.items())),
             "self_flag_diff_by_type": dict(sorted(self_diff.items())),
             "shadow_failures_by_code": dict(sorted(failures.items())),
             "time_direction": dict(sorted(direction.items())),
             "capture_to_shadow_lag": dict(sorted(lag.items())),
-            "watch": _watch(reader, now, project_id), "note": NOTE}
+            "watch": _watch(reader, now, project_id, shadow_checks), "note": NOTE}
 
 
 def render_text(rep) -> str:

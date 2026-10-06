@@ -212,9 +212,14 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
                     attempt.get("reason") is not None or attempt.get("http_status") is not None))):
             raise SchemaError("metadata view: group scope/state invalid")
         if (attempt.get("contract") != "project-metadata/1"
+                or attempt.get("scope") != target["scope"]
                 or type(attempt.get("complete")) is not bool
                 or type(attempt.get("attempted_at")) not in (int, float)
                 or not math.isfinite(attempt["attempted_at"])
+                or attempt["attempted_at"] < 0
+                or (attempt["complete"] and (attempt.get("reason") is not None
+                                             or attempt.get("http_status") is not None))
+                or (not attempt["complete"] and attempt.get("reason") is None)
                 or attempt.get("reason") not in {
                     None, "schema_error", "http_error", "forbidden", "session_expired",
                     "network_error", "deadline_exceeded", "fetch_error",
@@ -242,7 +247,11 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
                 raise SchemaError("metadata view: complete group scope/state invalid")
             fetched_at = payload["attempted_at"]
             if (payload.get("contract") != "project-metadata/1"
-                    or type(fetched_at) not in (int, float) or not math.isfinite(fetched_at)):
+                    or payload.get("scope") != target["scope"]
+                    or payload.get("complete") is not True
+                    or payload.get("reason") is not None or payload.get("http_status") is not None
+                    or type(fetched_at) not in (int, float) or not math.isfinite(fetched_at)
+                    or fetched_at < 0):
                 raise SchemaError("metadata view: freshness invalid")
             rows = payload["rows"]
             if dataset == "care_team":
@@ -274,7 +283,8 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
     except (ValueError, KeyError, TypeError, AttributeError, RecursionError, OverflowError, SchemaError):
         result.update(state="unknown", reason="artifact_invalid", rows=[],
                       definition=None, http_status=None, attempted_at=None,
-                      current_known=False, historical=False, stale=None)
+                      current_known=False, historical=False, stale=None,
+                      last_complete_at=None, age_s=None)
     return result
 
 

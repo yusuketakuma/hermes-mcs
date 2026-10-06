@@ -20,6 +20,7 @@ from project_metadata_view import physician_viewed_status
 from mcs_queries import incomplete_reply_roots
 from mcs_signals import is_own_station_message
 from mcs_util import loads_dict
+from read_model import _snapshot_meta
 from message_metadata import (
     flag_lines, get_message_metadata, get_metadata_shadow_status, is_self_sender)
 import mcs_requests as requests
@@ -69,10 +70,10 @@ class View:
                 raise ValueError("snapshot_upgrade_required")
             if self.db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
                 raise ValueError("published_snapshot_required")
-            row = self.db.execute("SELECT generation_id,generated_at FROM snapshot_meta WHERE singleton=1").fetchone()
-            if row is None:
+            meta = _snapshot_meta(self.db)
+            if not meta["published"]:
                 raise ValueError("published_snapshot_required")
-            self.meta = dict(row)
+            self.meta = {key: meta[key] for key in ("generation_id", "generated_at")}
         except Exception:
             self.close()
             raise

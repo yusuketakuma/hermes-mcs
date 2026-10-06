@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "不正な統計項目を固定の不明・破損状態として扱う",
+  "summary": "シグナルの却下件数では、不正・未知の種別をunknownにまとめ、保存済みの自由文を種別名として出力しません。基準統計の不正な時点は破損として報告し、大きな整数の差分も丸めて一致扱いにしません。",
+  "upgrade": "追加操作は不要です。通常の種別別件数と判定時点の扱いは変わりません。未知の種別だけはunknownにまとめます。基準統計の破損が報告された場合は取得し直して通常の人承認経路で承認してください。",
+  "details": ["却下件数の種別ラベルを既存検知器の固定一覧またはunknownへ限定する。", "基準統計のas_ofの非有限値をint変換前に拒否しrefstat_corruptへ分類する。", "浮動小数点の微小誤差許容を整数が正確に表現できる範囲へ限定し、大きな整数とfloatの比較の丸め・OverflowErrorを防ぐ。"],
+  "refs": ["mcs/ops/mcs_signals.py", "mcs/ops/mcs_refstats.py", "tests/ops/test_ops_aggregate_stability.py"]
+}

@@ -44,17 +44,22 @@ _FIELD_ONLY_ERRORS = {k + "_invalid" for k in _FIELDS if k != "reactions"}
 
 
 def _read_metadata(db, mid, source) -> dict:
+    row = None
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                  "AND name='message_metadata'").fetchone():
+        row = db.execute("SELECT content,checked_at,last_error FROM message_metadata "
+                         "WHERE message_id=? AND source=?", (mid, source)).fetchone()
+    return _decode_metadata(row)
+
+
+def _decode_metadata(row) -> dict:
+    """Validate one stored metadata row using the shared observation rules."""
     result = {"reactions": None, "reactions_status": "not_fetched",
               "reactions_observed_at": None, "checked_at": None,
               "last_error": None, "mentions_observed_at": None}
     for key, (_, status) in _FIELDS.items():
         result.setdefault(key, None)
         result[status] = "not_fetched"
-    if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
-                      "AND name='message_metadata'").fetchone():
-        return result
-    row = db.execute("SELECT content,checked_at,last_error FROM message_metadata "
-                     "WHERE message_id=? AND source=?", (mid, source)).fetchone()
     if row is None:
         return result
     raw, checked, error = row

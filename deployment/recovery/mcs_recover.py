@@ -174,6 +174,7 @@ def _save_state(state):
 
 
 def _report(result, detail, **extra):
+    tmp = None
     try:
         fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".rpt.",
                                    suffix=".tmp")
@@ -185,6 +186,10 @@ def _report(result, detail, **extra):
         os.replace(tmp, REPORT_PATH)
     except OSError:
         pass
+    finally:
+        if tmp is not None:
+            with suppress(OSError):
+                os.unlink(tmp)
 
 
 def _alert_key(state, detail):
@@ -506,6 +511,15 @@ def _reconcile_membership(snapshot):
     pre-update manifest snapshot. Union with the CURRENT desired sets
     so a no-op rollback never deletes what it still wants; recreation
     belongs to the repo's own `services` run (old code re-renders)."""
+    if snapshot is None:
+        snapshot = {}
+    if (not isinstance(snapshot, dict)
+            or any(not isinstance(snapshot.get(key, []), list)
+                   or any(not isinstance(row, dict)
+                          or row.get(field) is not None and not isinstance(row[field], str)
+                          for row in snapshot.get(key, []))
+                   for key, field in (("cron", "script"), ("agents", "label")))):
+        return ["service_snapshot_invalid"]
     problems = []
     standalone = _runtime_mode() == "standalone"
     if _runtime_mode() not in ("hermes", "standalone"):
@@ -787,6 +801,7 @@ def _loss_report(backup_path):
         json.dumps(metrics, sort_keys=True, separators=(",", ":"),
                    ensure_ascii=False).encode("utf-8")).hexdigest()
     report = dict(metrics, computed_at=time.time())
+    tmp = None
     try:
         fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".rreport.",
                                    suffix=".tmp")
@@ -802,6 +817,10 @@ def _loss_report(backup_path):
             os.close(dfd)
     except OSError:
         pass                            # report file is best-effort
+    finally:
+        if tmp is not None:
+            with suppress(OSError):
+                os.unlink(tmp)
     return report
 
 

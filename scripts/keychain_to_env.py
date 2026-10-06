@@ -18,9 +18,13 @@ from mcs_setup import _env_write, ENV_PATH, KEYCHAIN_SERVICE
 
 
 def main() -> int:
-    r = subprocess.run(
-        ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE,
-         "-w"], capture_output=True, text=True)
+    try:
+        r = subprocess.run(
+            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE,
+             "-w"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        print("keychain read failed — check access and retry", file=sys.stderr)
+        return 1
     pw = r.stdout.strip()
     if r.returncode != 0 or not pw:
         print("keychain read failed — unlock first: "

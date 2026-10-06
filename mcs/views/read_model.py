@@ -30,6 +30,7 @@ Missing/unmeasurable inputs stay null (unknown), never zero.
 from __future__ import annotations
 
 import json
+import math
 from contextlib import suppress
 
 CONTRACT = "mcs-read-model/1"
@@ -58,7 +59,9 @@ def _snapshot_meta(db) -> dict:
     row = db.execute(
         "SELECT generation_id, generated_at FROM snapshot_meta "
         "WHERE singleton=1").fetchone()
-    if row is None:
+    if (row is None or not isinstance(row[0], str) or not row[0].strip()
+            or type(row[1]) not in (int, float)
+            or not math.isfinite(row[1]) or row[1] < 0):
         return {"generation_id": None, "generated_at": None,
                 "published": False}
     return {"generation_id": row[0], "generated_at": row[1],
@@ -151,46 +154,40 @@ def _message_records(db, project_id):
              CASE WHEN {_ELIGIBLE} THEN 1 ELSE 0 END AS eligible
       FROM messages m {where} ORDER BY m.message_id
     """
-    rows = db.execute(sql, params).fetchall()
-    # One batched artifacts scan per ~500 messages replaces the
-    # per-message query (N+1). Chunking stays under SQLite's host-variable
-    # ceiling; kind remains the leading term so idx_artifacts_kind_msg
-    # serves each chunk. Rows arrive globally artifact_id-DESC, which
-    # preserves the newest-first order _kind_map relies on.
-    arts_by_mid: dict = {}
-    pid_by_mid = {m["message_id"]: m["project_id"] for m in rows}
-    mids = list(pid_by_mid)
-    for i in range(0, len(mids), 500):
-        chunk = mids[i:i + 500]
-        ph = ",".join("?" * len(chunk))
+    cursor = db.execute(sql, params)
+    # Classify one batch at a time: historical artifact bodies must not
+    # stay resident for every message merely to count whole-scope coverage.
+    while rows := cursor.fetchmany(500):
+        arts_by_mid = {}
+        pid_by_mid = {m["message_id"]: m["project_id"] for m in rows}
+        mids = list(pid_by_mid)
+        ph = ",".join("?" * len(mids))
         for a in db.execute(
                 "SELECT a.message_id, a.project_id, a.kind, a.artifact_id,"
                 " a.content, a.meta FROM artifacts a WHERE a.kind IN "
                 "('extract_v1','extract_llm','canonical_projection',"
                 "'semantic_facts_v4') AND a.message_id IN (" + ph + ") "
-                "ORDER BY a.artifact_id DESC", chunk):
+                "ORDER BY a.artifact_id DESC", mids):
             if a["project_id"] != pid_by_mid[a["message_id"]]:
-                continue  # same guard as the per-message project_id=? clause
+                continue
             arts_by_mid.setdefault(a["message_id"], []).append(a)
-    records = []
-    for msg in rows:
-        mid = msg["message_id"]
-        art_rows = arts_by_mid.get(mid, [])
-        by_kind = _kind_map(art_rows, msg["content_hash"])
-        if msg["body_state"] == "deleted":
-            for entry in by_kind.values():
-                if entry["state"] == "current":
-                    entry.update(state="stale", artifact_id=None)
-        rec = {"project_id": msg["project_id"], "message_id": mid,
-               "parent_id": msg["parent_id"],
-               "posted_at_ts": msg["posted_at_ts"],
-               "body_state": msg["body_state"],
-               "content_hash": msg["content_hash"],
-               "extraction_eligible": bool(msg["eligible"]),
-               "state": _record_state(msg, by_kind),
-               "extraction": by_kind}
-        records.append((rec, by_kind, art_rows))
-    return records
+        for msg in rows:
+            mid = msg["message_id"]
+            art_rows = arts_by_mid.get(mid, [])
+            by_kind = _kind_map(art_rows, msg["content_hash"])
+            if msg["body_state"] == "deleted":
+                for entry in by_kind.values():
+                    if entry["state"] == "current":
+                        entry.update(state="stale", artifact_id=None)
+            rec = {"project_id": msg["project_id"], "message_id": mid,
+                   "parent_id": msg["parent_id"],
+                   "posted_at_ts": msg["posted_at_ts"],
+                   "body_state": msg["body_state"],
+                   "content_hash": msg["content_hash"],
+                   "extraction_eligible": bool(msg["eligible"]),
+                   "state": _record_state(msg, by_kind),
+                   "extraction": by_kind}
+            yield rec, by_kind, art_rows
 
 
 def _kind_map(art_rows, content_hash) -> dict:
@@ -296,13 +293,16 @@ def _attachments(db, scope: str, project_id=None):
 def _coverage(db, records, attachments, project_id=None) -> dict:
     extraction = {k: {"current": 0, "stale": 0, "pending": 0,
                       "unknown": 0} for k in EXTRACTION_KINDS}
+    collection = {"patients": None, "messages": 0,
+                  "deleted": 0, "extraction_eligible": 0}
     for rec in records:
+        collection["messages"] += 1
+        collection["deleted"] += rec["body_state"] == "deleted"
+        collection["extraction_eligible"] += bool(rec["extraction_eligible"])
         if not rec["extraction_eligible"]:
             continue
         for kind in EXTRACTION_KINDS:
             extraction[kind][rec["extraction"][kind]["state"]] += 1
-    collection = {"patients": None, "messages": len(records),
-                  "deleted": None, "extraction_eligible": None}
     with suppress(Exception):
         if project_id is None:
             collection["patients"] = db.execute(
@@ -311,10 +311,6 @@ def _coverage(db, records, attachments, project_id=None) -> dict:
             collection["patients"] = db.execute(
                 "SELECT COUNT(*) FROM patients WHERE project_id=?",
                 (project_id,)).fetchone()[0]
-    collection["deleted"] = sum(
-        1 for r in records if r["body_state"] == "deleted")
-    collection["extraction_eligible"] = sum(
-        1 for r in records if r["extraction_eligible"])
     att_counts = None
     if attachments is not None:
         att_counts = {"total": len(attachments)}
@@ -339,23 +335,26 @@ def read_model(db, scope: str = "aggregate", project_id=None,
         raise ValueError("bad_limit")
     # coverage describes the whole scope like `total` does — never just
     # the page `limit` cut
-    counted = _message_records(db, project_id)
-    total = len(counted)
-    truncated = limit is not None and total > limit
     records = []
-    for rec, by_kind, art_rows in (counted[:limit] if truncated else counted):
-        rec["facts"], rec["relations"] = _fact_relations(
-            by_kind, art_rows, scope)
-        records.append(rec)
+
+    def counted_records():
+        for rec, by_kind, art_rows in _message_records(db, project_id):
+            if limit is None or len(records) < limit:
+                rec["facts"], rec["relations"] = _fact_relations(
+                    by_kind, art_rows, scope)
+                records.append(rec)
+            yield rec
+
     attachments = _attachments(db, scope, project_id)
+    coverage = _coverage(db, counted_records(), attachments, project_id)
+    total = coverage["collection"]["messages"]
     return {
         "contract": CONTRACT,
         "snapshot": _snapshot_meta(db),
         "scope": scope,
-        "coverage": _coverage(db, [c[0] for c in counted], attachments,
-                              project_id),
+        "coverage": coverage,
         "attachments": attachments,
         "records": records,
         "total": total,
-        "truncated": truncated,
+        "truncated": limit is not None and total > limit,
     }

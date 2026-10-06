@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "日付に変換できない保存時刻を確認不能として扱う",
+  "summary": "有限でも日付として表現できない保存時刻の場合、薬剤期間と依頼経過の統計を確認不能として返します。基準統計の取得も固定のエラーで終了し、読取りを閉じて不完全な出力を残しません。",
+  "upgrade": "追加操作は不要です。時刻が不正と報告された場合は取得元の保存状態を確認してください。公開・C1 wireの時刻許容条件、正常な未来の時刻、集計期間と承認条件は変わりません。",
+  "details": ["日付を必要とする統計で実際のdatetime変換可否を共通helperで確認し、任意の数値上限は追加しない。薬剤期間の14日後が日付範囲を超える場合も同じ確認不能状態へ分類する。", "基準統計のas_of pin変換のValueError・OverflowError・OSエラーをrefstat_time_unrepresentableへ分類する。"],
+  "refs": ["mcs/views/mcs_stats.py", "mcs/ops/mcs_refstats.py", "tests/views/test_round3_datetime_boundaries.py"]
+}

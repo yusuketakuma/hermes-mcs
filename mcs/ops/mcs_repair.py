@@ -10,6 +10,7 @@ import re
 import sqlite3
 import stat
 import sys
+import tempfile
 import time
 import uuid
 from contextlib import closing
@@ -361,11 +362,16 @@ def _private_parent(path):
 def save_new(path: str | Path, value) -> None:
     """Create a private JSON result exclusively; never overwrite an existing file."""
     path = _private_parent(path)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "wb") as stream:
-        stream.write(canonical(value) + b"\n")
-        stream.flush()
-        os.fsync(stream.fileno())
+    payload = canonical(value) + b"\n"
+    fd, temporary = tempfile.mkstemp(prefix=".repair-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, path, follow_symlinks=False)
+    finally:
+        os.unlink(temporary)
 
 
 def _read_json(path):

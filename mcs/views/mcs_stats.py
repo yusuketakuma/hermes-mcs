@@ -129,6 +129,14 @@ def _result(status: str, scope: dict, data: dict, reason=None) -> dict:
     return out
 
 
+def _as_of_day(scope):
+    """Return the local calendar day only when the stored timestamp is representable."""
+    try:
+        return datetime.fromtimestamp(scope["as_of"], JST).date()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
 # ---------------- T0 ----------------
 
 def st_data_quality(db, scope):
@@ -297,7 +305,11 @@ def st_workload(db, scope):
     bands = {}
     room_seen = {}
     for ts, pid in rows:
-        dt = datetime.fromtimestamp(ts, JST)
+        try:
+            dt = datetime.fromtimestamp(ts, JST)
+        except (ValueError, OverflowError, OSError) as error:
+            return _result("unavailable", scope, {},
+                           reason=f"data_error:{type(error).__name__}")
         weekend = dt.weekday() >= 5
         day = 8 <= dt.hour < 18
         band = ("weekend" if weekend else
@@ -541,8 +553,13 @@ def st_rx_expiry(db, scope):
     room. Period expressions are parsed surface forms (e.g. '4/8-4/21')
     — NOT verified prescription periods, and not linked to specific
     drug names."""
-    today = datetime.fromtimestamp(scope["as_of"], JST).date()
-    horizon = today + timedelta(days=14)
+    today = _as_of_day(scope)
+    if today is None:
+        return _result("unavailable", scope, {}, reason="data_error:timestamp_unrepresentable")
+    try:
+        horizon = today + timedelta(days=14)
+    except OverflowError:
+        return _result("unavailable", scope, {}, reason="data_error:timestamp_unrepresentable")
     per_room = {}
     items = []
     seen = set()
@@ -605,11 +622,13 @@ def st_med_change_followup(db, scope):
         tracked = db.execute(
             "SELECT 1 FROM requests WHERE source_message_id=? "
             "AND created_at<=? LIMIT 1", (mid, scope["as_of"])).fetchone()
+        if tracked:
+            continue
         follow = db.execute(
-            "SELECT COUNT(*) FROM messages WHERE project_id=? "
-            "AND posted_at_ts > ? AND posted_at_ts <= ?",
-            (pid, ts, ts + 7 * DAY_S)).fetchone()[0]
-        if not tracked and follow == 0:
+            "SELECT 1 FROM messages WHERE project_id=? "
+            "AND posted_at_ts > ? AND posted_at_ts <= ? LIMIT 1",
+            (pid, ts, ts + 7 * DAY_S)).fetchone()
+        if not follow:
             no_follow.append({"project_id": pid, "message_id": mid})
     return _result("ok", scope, {
         "change_mentions_7d_plus": _ratio(total, total, "messages"),
@@ -666,7 +685,9 @@ def st_open_loop_aging(db, scope):
     ).fetchall()
     buckets = {"not_yet_due": 0, "0-7d": 0, "8-30d": 0, "31-90d": 0,
                "over_90d": 0, "no_due": 0}
-    as_of_day = datetime.fromtimestamp(scope["as_of"], JST).date()
+    as_of_day = _as_of_day(scope)
+    if as_of_day is None:
+        return _result("unavailable", scope, {}, reason="data_error:timestamp_unrepresentable")
     items = []
     for rid, pid, status, due in rows:
         age_d = None

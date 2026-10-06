@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "復旧レポートの失敗時と認証設定補助の待機を安全に終了",
+  "summary": "復旧レポートの書込み失敗や中断後に一時ファイルが残り続ける問題を修正しました。Keychainから認証設定を移す補助コマンドは、読取りが停止しても30秒で失敗として終了し、秘密値を出力しません。",
+  "upgrade": "追加の設定操作は不要です。配備済みの独立復旧ツールへ反映する場合は、通常のinstall.sh再実行による同期が必要です。Keychain読取りが30秒を超える場合はアクセス状態を確認して再実行してください。復旧承認・取得・通知の条件は変わりません。",
+  "details": ["復旧・復元レポートの一時ファイルをfinallyで除去し、既存の保存済みレポートとbest-effort方針を維持する。", "Keychain補助のタイムアウトと起動失敗を固定メッセージで扱い、取得できない場合は設定を書き込まない。"],
+  "refs": ["deployment/recovery/mcs_recover.py", "scripts/keychain_to_env.py", "tests/meta/test_operation_cleanup_stability.py"]
+}

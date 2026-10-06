@@ -93,7 +93,9 @@ def main(argv: list[str] | None = None) -> int:
                     return result.returncode
                 try:
                     report = json.loads(result.stdout)
-                except ValueError:
+                    if not isinstance(report, dict):
+                        raise ValueError
+                except (ValueError, RecursionError):
                     print("Update plan did not return JSON.", file=sys.stderr)
                     return 1
                 return 1 if report.get("route") == "blocked" else 0

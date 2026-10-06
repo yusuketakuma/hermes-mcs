@@ -1031,8 +1031,8 @@ def _latest_signal_states(db):
             continue
         key = meta.get("key") if isinstance(meta, dict) else None
         if isinstance(key, str) and key:
-            latest[key] = _signal_content(content_s, pid)
-    return latest
+            latest[key] = (content_s, pid)
+    return {key: _signal_content(*row) for key, row in latest.items()}
 
 
 def signal_message_ids(sig):
@@ -1644,6 +1644,7 @@ def dismiss_reason_counts(db, project_id=None, *, since=None, until=None,
     A dismissal is a label, not proof the signal was wrong."""
     from mcs_operations import DISMISS_REASON_CODES
     out: dict = {}
+    known_types = {name for name, _ in DETECTORS} | {"med_followup"}
     where, params = (" AND project_id=?", (ARTIFACT_KIND, project_id)) if project_id is not None else (
         "", (ARTIFACT_KIND,))
     for (content_s,) in db.execute(
@@ -1663,7 +1664,10 @@ def dismiss_reason_counts(db, project_id=None, *, since=None, until=None,
         code = c.get("dismiss_reason_code")
         if code not in DISMISS_REASON_CODES:
             code = "unclassified"
-        by_type = out.setdefault(str(c.get("type") or "unknown"), {})
+        type_ = c.get("type")
+        if not isinstance(type_, str) or type_ not in known_types:
+            type_ = "unknown"
+        by_type = out.setdefault(type_, {})
         by_type[code] = by_type.get(code, 0) + 1
     return out
 
