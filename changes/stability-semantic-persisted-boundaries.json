@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "不正な履歴が通知判定や監査表示を止める問題を修正",
+  "summary": "読めない保存JSONや不正な未決候補の履歴を個別に除外し、正常な候補の照合・通知の安全判定・監査表示を継続します。不正な公開結果は利用せず、未決候補を正式な依頼や完了記録へ変換することもありません。",
+  "upgrade": "追加操作は不要です。更新後の履歴参照から適用されます。モデル・取得範囲・通知の公開条件・人承認条件は変わりません。不正な保存結果や候補は履歴として残りますが、現行結果や照合済みの証拠には採用しません。",
+  "details": ["v4の段階記録・公開結果・変換履歴と、通知ゲート・配送キー・統計表示で既存の安全なJSON読込みを使う。", "未決候補の必須文字列・根拠オブジェクトと照合イベントのID型を検証してから利用する。", "深すぎるJSONの障害記録でも一定時間の安全側の停止を維持し、補助キャッシュの破損ではモデル準備を停止しない。"],
+  "refs": ["mcs/semantic/semantic_v4.py", "mcs/semantic/semantic_loops.py", "mcs/semantic/semantic_send_gate.py", "mcs/semantic/semantic_render.py", "mcs/semantic/semantic_observe.py", "mcs/semantic/semantic_runtime.py", "mcs/semantic/semantic.py"]
+}

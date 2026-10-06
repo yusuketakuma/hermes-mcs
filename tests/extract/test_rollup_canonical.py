@@ -58,6 +58,28 @@ def test_rollup_collects_canonical_facts_newest_first(db):
     assert by_id["f_new"]["evidence"] == "嘔気"
 
 
+def test_symptom_dates_reuse_first_timestamp_row_without_rescanning(db, monkeypatch):
+    for mid in (1, 2, 3, 4):
+        _add(db, mid, "extract_v1", {"symptoms": [f"合成症状{mid}"]},
+             f"2026-09-{mid:02d}T00:00:00+09:00")
+    db.db.execute("UPDATE messages SET posted_at_ts=42 WHERE message_id IN (2,3)")
+    db.db.execute("UPDATE messages SET posted_at_ts=NULL,posted_at='' "
+                  "WHERE message_id IN (1,4)")
+    msgs = db.db.execute("SELECT message_id,posted_at_ts,posted_at FROM messages "
+                         "ORDER BY posted_at_ts DESC,message_id DESC").fetchall()
+    expected = [{"symptom": f"合成症状{m['message_id']}",
+                 "last": rollup.msgs_by_ts(msgs, m["posted_at_ts"] or 0)}
+                for m in msgs]
+
+    def no_rescan(*args):
+        raise AssertionError("symptom date must reuse timestamp lookup")
+
+    monkeypatch.setattr(rollup, "msgs_by_ts", no_rescan)
+    assert rollup.build_rollup(db, 1)["recent_symptoms"] == expected
+    assert [row["last"] for row in expected] == [
+        "2026-09-03T00:00:00+09:00", "2026-09-03T00:00:00+09:00", "msg:4", "msg:4"]
+
+
 def test_rollup_canonical_shadows_and_stale_falls_back(db):
     """current_fact_pred: a hash-current projection owns the fact
     source; once the revision changes it drops out and the legacy row
@@ -271,6 +293,30 @@ def test_rollup_reply_survives_canonical_projection_shadowing(db):
                     meta={"hash": _hash(db, 2)})
     rows = rollup.build_rollup(db, 1)["recent_requests"]
     assert rows[0]["reply_state"] == "done"
+
+
+def test_rollup_reply_work_is_bounded_by_returned_requests(db, monkeypatch):
+    """Mixed rule/LLM requests keep their cap/order; old rows need no scan."""
+    requests = [{"to": "SYNTH", "action": f"合成依頼{i}"} for i in range(120)]
+    _thread(db, [(1, None, "SYNTH-A", "2026-09-19T00:30:00+09:00",
+                 {"requests": requests}),
+                (2, 1, "SYNTH-B", "2026-09-19T01:00:00+09:00", _reply("done"))])
+    db.artifact_add("extract_v1", json.dumps(
+        {"requests": [{"kind": "rule", "ctx": f"合成ルール{i}"} for i in range(4)]}),
+        project_id=1, message_id=1, meta={"hash": _hash(db, 1)})
+    calls = []
+
+    class Stages(dict):
+        def get(self, key, default=None):
+            calls.append(key)
+            return super().get(key, default)
+
+    monkeypatch.setattr(rollup, "_REPLY_STAGE", Stages(rollup._REPLY_STAGE))
+    rows = rollup.build_rollup(db, 1)["recent_requests"]
+    assert [row["ctx"] for row in rows] == (
+        [f"合成ルール{i}" for i in range(4)] + [f"合成依頼{i}" for i in range(11)])
+    assert all(row["reply_state"] == "done" for row in rows[4:])
+    assert calls == ["done"] * 11
 
 
 def test_rollup_sql_valid_shadowed_reply_at_python_depth_limit_is_safe(db):

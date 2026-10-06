@@ -43,9 +43,12 @@ def _cached_detail(ledger, project_id, target_id, source_fp, policy_fp,
                    fact_id, dimension, options: dict) -> dict | None:
     if ledger is None:
         return None
-    rows = ledger.artifacts(KIND_ASSESS, project_id=project_id,
-                            message_id=target_id)
-    for row in reversed(rows):
+    stream = getattr(ledger, "iter_artifacts", None)
+    rows = (stream(KIND_ASSESS, project_id=project_id, message_id=target_id,
+                   descending=True) if callable(stream) else
+            reversed(ledger.artifacts(KIND_ASSESS, project_id=project_id,
+                                      message_id=target_id)))
+    for row in rows:
         meta = loads_dict(row["meta"])
         if meta is None:
             continue

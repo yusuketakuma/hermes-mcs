@@ -167,3 +167,49 @@ def test_real_offline_cli_reports_only_local_fixture_runtime(capsys):
     assert runtime["llm_capacity_measurement"] is False
     assert report["g6"]["gate"]["g6_eligible"] is False
     assert report["capacity"]["eligible"] is False
+
+
+def test_cli_rejects_deep_synthetic_json_without_traceback(tmp_path, capsys):
+    source = tmp_path / 'deep.json'
+    source.write_text('[' * 20000 + '0' + ']' * 20000)
+    assert support.main(['--input', str(source)]) == 1
+    assert json.loads(capsys.readouterr().out) == {'error': 'RecursionError'}
+
+
+@pytest.mark.parametrize('bad_field,bad_value', [
+    ('statement', []), ('statement', {}), ('quote', ['bad1', 'bad2', 'bad3', 'bad4']),
+    ('quote', {'bad1': 1, 'bad2': 2, 'bad3': 3, 'bad4': 4}),
+])
+def test_shadow_corrupt_evidence_does_not_block_other_candidate(bad_field, bad_value):
+    import sqlite3
+    db = sqlite3.connect(':memory:')
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute('CREATE TABLE messages(message_id INTEGER,project_id INTEGER,'
+                   'content_hash TEXT,body_state TEXT)')
+        db.execute('CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY,kind TEXT,'
+                   'project_id INTEGER,message_id INTEGER,content TEXT,meta TEXT)')
+        for mid in (1, 2):
+            text = '架空資料を確認してください'
+            fact = {'_v2_kind': 'request_pending', 'statement': text, '_evidence': {'quote': text}}
+            if mid == 1:
+                if bad_field == 'quote':
+                    fact['_evidence']['quote'] = bad_value
+                else:
+                    fact['statement'] = bad_value
+            candidate = {'source': {'revision': 'synthetic'},
+                         'projection': {'requests': [{'action': text}]}, 'loop_facts': [fact]}
+            db.execute('INSERT INTO messages VALUES(?,?,?,?)', (mid, 1, 'synthetic', 'full'))
+            db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,meta) VALUES(?,?,?,?,?)',
+                       ('v4_stage', 1, mid, json.dumps({'candidate': candidate}),
+                        json.dumps({'stage': 'request_following_candidate'})))
+            db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,meta) VALUES(?,?,?,?,?)',
+                       ('extract_llm', 1, mid, json.dumps({'requests': [{'action': text, 'evidence': text}]}),
+                        json.dumps({'hash': 'synthetic'})))
+        before = db.total_changes
+        result = support.shadow_compare(db)
+        assert db.total_changes == before
+        assert result['candidates'] == 2 and result['stale_or_invalid'] == 1
+        assert result['compared'] == result['matched'] == 1
+    finally:
+        db.close()

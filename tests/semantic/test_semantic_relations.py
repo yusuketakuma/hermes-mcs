@@ -37,6 +37,47 @@ def test_exact_duplicate_same_statement():
     sf.validate_relation(rel)
 
 
+def test_reconciliation_reuses_tokens_without_changing_pairs_or_fingerprint(monkeypatch):
+    active = [_fact("fact_active", "合成薬剤投与", action="start")]
+    new = [_fact(f"fact_new{i}", text, action=action)
+           for i, (text, action) in enumerate([
+               ("合成薬剤投与", "start"), ("合成薬剤中止", "stop"),
+               ("OtherEntity", "unknown"), ("OtherEntity", "stop")])]
+    from itertools import chain, combinations, product
+    expected = {}
+    for left, right in chain(product(active, new), combinations(new, 2)):
+        relation = sr.classify_pair(left, right)
+        if relation is not None:
+            expected[relation["relation_id"]] = relation
+    expected = sorted(expected.values(), key=lambda relation: relation["relation_id"])
+    calls = []
+    real = sr._entity_tokens
+
+    def counted(statement):
+        calls.append(statement)
+        return real(statement)
+
+    monkeypatch.setattr(sr, "_entity_tokens", counted)
+    compared = []
+    real_classify = sr._classify_pair
+
+    def classify(left, right, token_cache=None):
+        compared.append((left["fact_id"], right["fact_id"]))
+        return real_classify(left, right, token_cache)
+
+    monkeypatch.setattr(sr, "_classify_pair", classify)
+    before = copy.deepcopy((active, new))
+    result = sr.reconcile_facts(active, new)
+    assert result["relations"] == expected
+    assert result["fingerprint"] == sr.relation_set_fingerprint(expected)
+    assert (active, new) == before
+    assert len(compared) == len(active) * len(new) + len(new) * (len(new) - 1) // 2
+    assert sorted(calls) == sorted({fact["statement"] for fact in active + new})
+    calls.clear()
+    assert sr.reconcile_facts(active, new) == result
+    assert len(calls) == 3  # per-call reuse only; no cross-call cache
+
+
 @pytest.mark.parametrize("changed", [
     {"subject": "person:family01"}, {"actor": "sender:s2"},
     {"polarity": "negated"}, {"epistemic": "suspected"},

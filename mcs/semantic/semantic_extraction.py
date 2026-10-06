@@ -12,9 +12,9 @@ import bisect
 import json
 import re
 import time
-from contextlib import suppress
 
 import semantic_facts as sf
+from mcs_util import loads_dict
 from semantic_policy import KIND_MANIFEST
 
 
@@ -274,16 +274,12 @@ def _persist_manifest(ledger, project_id, message_id, model, source_fp,
     existing = ledger.artifacts(KIND_MANIFEST, project_id=project_id,
                                 message_id=message_id)
     for row in reversed(existing or []):
-        try:
-            meta = json.loads(row["meta"] or "{}")
-        except (TypeError, json.JSONDecodeError):
-            continue
-        if isinstance(meta, dict) \
+        meta = loads_dict(row["meta"])
+        if meta is not None \
                 and meta.get("source_fingerprint") == source_fp \
                 and meta.get("version") == MANIFEST_VERSION:
-            with suppress(TypeError, json.JSONDecodeError):
-                if json.loads(row["content"]) == doc:
-                    return
+            if loads_dict(row["content"]) == doc:
+                return
             break
     ledger.artifact_add(
         KIND_MANIFEST,
@@ -377,8 +373,10 @@ def _cached_chunks(ledger, project_id, message_id, source_fp, body_hash,
     if ledger is None:
         return {}
     cached = {}
-    rows = ledger.artifacts(kind, project_id=project_id,
-                            message_id=message_id)
+    stream = getattr(ledger, "iter_artifacts", None)
+    rows = (stream(kind, project_id=project_id, message_id=message_id)
+            if callable(stream) else
+            ledger.artifacts(kind, project_id=project_id, message_id=message_id))
     wanted = {spec["index"]: spec for spec in specs}
     for row in rows:
         try:
@@ -439,7 +437,7 @@ def _cached_chunks(ledger, project_id, message_id, source_fp, body_hash,
                                                     "start_codepoint",
                                                     "end_codepoint",
                                                     "facts", "dropped"}}}
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        except (KeyError, TypeError, ValueError, RecursionError):
             continue
     return cached
 

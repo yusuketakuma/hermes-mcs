@@ -309,7 +309,7 @@ def _circuit_state(ledger, now=None) -> dict:
         return {"consecutive_failures": min(count, _CIRCUIT_FAILURE_LIMIT),
                 "open_until": float(open_until),
                 "failure_class": failure_class}
-    except (AttributeError, OverflowError, TypeError, ValueError,
+    except (AttributeError, OverflowError, TypeError, ValueError, RecursionError,
             json.JSONDecodeError):
         # A malformed circuit record is fail-closed for one bounded cooldown.
         # Its artifact timestamp survives a process restart, so corruption
@@ -406,6 +406,8 @@ def accepts_timeout(fn) -> bool:
     except (TypeError, ValueError):
         return False
     return any(p.name == "timeout"
+               and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                               inspect.Parameter.KEYWORD_ONLY)
                or p.kind is inspect.Parameter.VAR_KEYWORD
                for p in params)
 

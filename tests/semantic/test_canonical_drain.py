@@ -56,19 +56,11 @@ def test_per_target_v2_doc_reaches_mandatory_render(tmp_path):
         db.close()
 
 
-def _seed_incomplete_v2(db, mid, fp, *, retried=False):
-    doc = {"version": sf.CONTRACT_VERSION,
-           "source": {"message_id": f"m{mid}", "revision": "r1",
-                      "content_hash": "h", "body_codepoints": 5,
-                      "content_quality": "full",
-                      "attachments_complete": True,
-                      "source_fingerprint": fp},
-           "atoms": [], "chunks": [], "obligations": [],
-           "evidence": [], "facts": [], "relations": [],
-           "coverage": {"category_counts": {},
-                        "open_obligation_ids": ["ob_x"],
-                        "limitations": ["chunks_incomplete"],
-                        "status": "incomplete"}}
+def _seed_incomplete_v2(db, mid, fp, doc, *, retried=False):
+    # Use the actual extractor's incomplete document, including real source
+    # binding and obligation owners; retry metadata does not waive validity.
+    sf.validate_facts_doc(doc)
+    assert doc["coverage"]["status"] == "incomplete"
     meta = {"fingerprint": fp, "schema": "v2",
             "fact_source": "canonical",
             "coverage_status": "incomplete"}
@@ -120,7 +112,7 @@ def test_incomplete_coverage_resumes_once_then_stops(tmp_path):
 
         # parked for review: a doc already carrying the retry marker is
         # never re-extracted; the durable job stops for review.
-        _seed_incomplete_v2(db, 1, fp, retried=True)
+        _seed_incomplete_v2(db, 1, fp, incomplete, retried=True)
         calls.clear()
         db.db.execute(
             "UPDATE fetch_jobs SET state='pending', next_try=0 "

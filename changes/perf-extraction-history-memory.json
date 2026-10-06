@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "抽出キャッシュの履歴読込みを軽量化",
+  "summary": "抽出の分割結果や詳細判定のキャッシュを読む際に、過去の結果全件を一度にメモリへ読み込まず、順番に照合します。最新の有効な世代の選択と、不正な結果の扱いは維持します。",
+  "upgrade": "追加操作は不要です。更新後のキャッシュ参照から適用されます。保存履歴の削除、抽出範囲・モデル・QC・公開条件の変更はありません。",
+  "details": ["分割結果は従来どおり古い順に照合し、最新世代の所有規則を維持する。", "詳細判定は新しい順に照合して有効な一致結果が見つかれば終了する。"],
+  "refs": ["mcs/core/ledger.py", "mcs/extract/v4/extract_llm.py", "mcs/semantic/semantic_extraction.py", "mcs/semantic/semantic_assessment.py"]
+}

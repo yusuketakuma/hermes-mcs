@@ -33,7 +33,7 @@ import _mcs_path  # noqa: F401
 from semantic_policy import JOB_KIND, QC_JOB_KIND  # noqa: E402
 from semantic_drain import SCHED_KIND  # noqa: E402
 
-from mcs_util import HOME  # noqa: E402 — honours MCS_ROOT
+from mcs_util import HOME, loads_dict  # noqa: E402 — honours MCS_ROOT
 DB = os.path.join(HOME, "data", "ledger.db")
 
 
@@ -146,10 +146,7 @@ def _queue_stats(c):
                   "AND project_id=0 AND message_id=0", (SCHED_KIND,))
     sched = {}
     if sched_row:
-        try:
-            sched = json.loads(sched_row[0][0] or "{}")
-        except (json.JSONDecodeError, TypeError):
-            sched = {}
+        sched = loads_dict(sched_row[0][0]) or {}
     if not isinstance(sched, dict):
         sched = {}
     scheduler = {
@@ -191,10 +188,7 @@ def _recent_runs(c, days: int = 14) -> dict:
     phases = {key: [] for key in ("llm_s", "jev_s", "post_s", "queue_wait_s")}
     tokens = []
     for (content,) in rows:
-        try:
-            run = json.loads(content)
-        except (json.JSONDecodeError, TypeError):
-            continue
+        run = loads_dict(content)
         if not isinstance(run, dict):
             continue
         recent["runs"] += 1
@@ -234,10 +228,7 @@ def _extract_recent(c) -> dict:
     recent = {"artifacts": 0}
     values = {key: [] for key in ("calls", "prompt_ms", "predicted_ms", "tokens")}
     for (raw,) in rows:
-        try:
-            meta = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            continue
+        meta = loads_dict(raw)
         integrity = meta.get("integrity") if isinstance(meta, dict) else None
         if not isinstance(integrity, dict):
             continue

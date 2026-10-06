@@ -19,7 +19,7 @@ import math
 import time
 
 from mcs_requests import payload_hash
-from mcs_util import env_value, load_config
+from mcs_util import env_value, load_config, loads_dict
 import semantic_jev as jev
 import semantic_runtime as runtime
 import semantic_v4 as v4
@@ -89,11 +89,8 @@ def _plan_exists(ledger, message_id: int, fp: str,
     for r in ledger.db.execute(
             "SELECT meta FROM artifacts WHERE kind=? AND message_id=?",
             (KIND_PLAN, message_id)):
-        try:
-            m = json.loads(r["meta"] or "{}")
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if isinstance(m, dict) and m.get("fingerprint") == fp \
+        m = loads_dict(r["meta"])
+        if m is not None and m.get("fingerprint") == fp \
                 and m.get("audit_status") == status \
                 and (policy is None or m.get("policy_fingerprint") == policy):
             return True
@@ -196,6 +193,33 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
         from semantic_extraction import extract_facts_v2
         from semantic_projection import project_v2_facts
         prev_v2 = _current(ledger, KIND_FACTS_V2, mid, fp)
+        if prev_v2 is not None:
+            cached = prev_v2["content"]
+            from hashlib import sha256
+            from semantic_facts import ContractError, validate_facts_doc
+            try:
+                cached = {**cached, **validate_facts_doc(cached)}
+            except ContractError:
+                # Preserve malformed history and rebuild through extraction.
+                prev_v2 = None
+            else:
+                source = cached["source"]
+                body = member["body_original"]
+                if (source["message_id"] != str(mid)
+                        or source["revision"] != str(member.get("revision", ""))
+                        or source["content_hash"] != sha256(body.encode("utf-8")).hexdigest()
+                        or source["body_codepoints"] != len(body)
+                        or source["source_fingerprint"] != fp
+                        or source["content_quality"] != (
+                            "full" if member.get("body_state") == "full" else "partial")
+                        or source["attachments_complete"] != bool(
+                            member.get("attachments_complete", True))):
+                    # Artifact metadata alone cannot bind facts to this source.
+                    prev_v2 = None
+                else:
+                    # The contract normalizes supported IDs/text before use.
+                    # Keep the original stored row and any document extensions.
+                    prev_v2["content"] = cached
         # C03: an adjudicated-but-incomplete stored doc must not be
         # reused forever — one bounded re-extraction resumes from the
         # missing chunks; if it still cannot complete, the generation
@@ -548,11 +572,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     pid, root = job["project_id"], job["message_id"]
     token = runtime.JobToken.from_row(job)
     deadline = runtime.job_deadline(scfg, deadline)
-    try:
-        pl = json.loads(job["payload"])
-    except (json.JSONDecodeError, TypeError):
-        return "failed"
-    if not isinstance(pl, dict):
+    pl = loads_dict(job["payload"])
+    if pl is None:
         return "failed"
     targets = pl.get("targets", [root])
     if targets is None:
@@ -1293,11 +1314,7 @@ def _sched_state(ledger) -> dict:
     row = ledger.db.execute(
         "SELECT payload FROM fetch_jobs WHERE kind=? "
         "AND project_id=0 AND message_id=0", (SCHED_KIND,)).fetchone()
-    try:
-        pl = json.loads(row["payload"]) if row else {}
-    except (json.JSONDecodeError, TypeError):
-        pl = {}
-    return pl if isinstance(pl, dict) else {}
+    return (loads_dict(row["payload"]) or {}) if row else {}
 
 
 def _sched_write(ledger, state: dict) -> None:
@@ -1882,11 +1899,8 @@ def revive_failed(ledger, now: float | None = None) -> dict:
     for row in rows:
         if out["revived"] >= REVIVE_MAX:
             break
-        try:
-            pl = json.loads(row["payload"] or "{}")
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(pl, dict):
+        pl = loads_dict(row["payload"] or "{}")
+        if pl is None:
             continue
         n = pl.get("auto_retry")
         n = n if type(n) is int and n >= 0 else 0

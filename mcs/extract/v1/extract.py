@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
 from ledger import Ledger, LedgerReader
-from mcs_util import HOME, acquire_run_lock
+from mcs_util import HOME, acquire_run_lock, loads_dict
 
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "extract_v1"
@@ -499,17 +499,15 @@ def main() -> int:
     events = collections.Counter()
     for a in led.db.execute(
             "SELECT content FROM artifacts WHERE kind=?", (KIND,)):
-        try:
-            d = json.loads(a["content"])
-        except json.JSONDecodeError:
-            continue
+        d = loads_dict(a["content"])
         if not isinstance(d, dict):
             continue
         for k in d:
             if k != "v":
                 keys[k] += 1
-        for e in d.get("events", []):
-            events[e] += 1
+        for e in d.get("events", []) if isinstance(d.get("events"), list) else []:
+            if isinstance(e, str):
+                events[e] += 1
     print(json.dumps({"field_coverage": dict(keys),
                       "events": dict(events)}, ensure_ascii=False, indent=1))
     led.close()

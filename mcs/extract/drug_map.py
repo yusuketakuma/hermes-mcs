@@ -280,7 +280,7 @@ def current_refs(db: sqlite3.Connection, mid: int) -> list[Annotation]:
         return []
     try:
         content, meta = json.loads(row[0]), json.loads(row[1])
-    except (json.JSONDecodeError, TypeError, RecursionError):
+    except (ValueError, TypeError, RecursionError):
         return []
     if (not isinstance(content, dict) or not isinstance(meta, dict)
             or any(meta.get(k) != v for k, v in binding.items())
@@ -296,7 +296,7 @@ def current_refs(db: sqlite3.Connection, mid: int) -> list[Annotation]:
     try:
         meds = json.loads(source[2]).get(
             "medications" if source[1] == "extract_v1" else "meds", [])
-    except RecursionError:
+    except (ValueError, TypeError, RecursionError):
         return []
     if not isinstance(meds, list):
         return []
@@ -357,7 +357,7 @@ def derive(ledger, dictionary: DrugMap | None, *,
             try:
                 meds = json.loads(source[2]).get(
                     "medications" if source[1] == "extract_v1" else "meds", [])
-            except RecursionError:
+            except (ValueError, TypeError, RecursionError):
                 source = None
         if source is not None and dictionary is not None:
             content = {"refs": [dictionary.resolve(med["name"], i)

@@ -3,11 +3,11 @@ thread bundling, fingerprints, current-artifact lookup, and the
 durable Jev daily-usage counter. Policy constants come from semantic_policy (a leaf)."""
 from __future__ import annotations
 
-import json
 import math
 import time
 
 from mcs_requests import payload_hash
+from mcs_util import loads_dict
 import semantic_jev as jev
 from semantic_policy import (KIND_ASSESS, KIND_FACT_PROJ, KIND_USAGE,
                              POLICY_VERSION, SCHEMA_VERSION)
@@ -148,11 +148,8 @@ def _current(ledger, kind: str, message_id: int, fp: str, policy=None):
             "SELECT content,meta FROM artifacts WHERE kind=? "
             "AND message_id=? ORDER BY artifact_id DESC",
             (kind, message_id)):
-        try:
-            meta = json.loads(r["meta"] or "{}")
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(meta, dict):
+        meta = loads_dict(r["meta"])
+        if meta is None:
             continue
         if kind == KIND_ASSESS and meta.get("fact_id") is not None:
             continue
@@ -160,11 +157,8 @@ def _current(ledger, kind: str, message_id: int, fp: str, policy=None):
             continue
         if meta.get("fingerprint") == fp and (
                 policy is None or meta.get("policy_fingerprint") == policy):
-            try:
-                content = json.loads(r["content"])
-            except (json.JSONDecodeError, TypeError):
-                return None
-            if not isinstance(content, dict):
+            content = loads_dict(r["content"])
+            if content is None:
                 return None
             return {"content": content, "meta": meta}
     return None
@@ -186,9 +180,9 @@ def invalidate_projections(ledger, scfg: dict) -> int:
                  AND json_extract(a.meta,'$.invalidated_reason')='fact_source')
              END
     """, (enabled or off,)).fetchall()
-    metas = [json.loads(r["meta"]) for r in rows]
+    metas = [loads_dict(r["meta"]) for r in rows]
     current_ids = set()
-    if enabled and any(meta.get("invalidated") for meta in metas):
+    if enabled and any(meta and meta.get("invalidated") for meta in metas):
         from mcs_queries import current_projection_id, current_v4_id
         # Evaluate the normal reader predicates against a prospective snapshot,
         # without exposing any row before source/policy and PASS checks succeed.
@@ -213,6 +207,10 @@ def invalidate_projections(ledger, scfg: dict) -> int:
     bundles, expired, revived, projects = {}, [], [], set()
     local_model = None
     for row, meta in zip(rows, metas):
+        if meta is None:
+            expired.append(("off" if off else "metadata", row["artifact_id"]))
+            projects.add(row["project_id"])
+            continue
         key = (row["project_id"], row["parent_id"] or row["message_id"])
         # OFF remains a permanent, config-read-free revocation. Unknown
         # historical invalidations are excluded above and never acquire a reason.
@@ -272,10 +270,7 @@ def jev_usage_today(ledger) -> int:
     for r in ledger.db.execute(
             "SELECT meta FROM artifacts WHERE kind=? AND created_at>=?",
             (KIND_USAGE, day)):
-        try:
-            meta = json.loads(r["meta"] or "{}")
-        except (json.JSONDecodeError, TypeError):
-            raise ValueError("semantic_usage_invalid") from None
+        meta = loads_dict(r["meta"])
         count = meta.get("jev_requests") if isinstance(meta, dict) else None
         if type(count) is not int or count < 0:
             # Unknown/corrupt usage cannot replenish a spending budget.

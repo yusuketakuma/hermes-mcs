@@ -172,7 +172,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
     """One extract_qc job -> extract_qc artifact (annotate only).
     The job row transitions to 'done' inside the artifact commit tx —
     a claimed row must never be left re-claimable after its result
-    landed. Returns 'done'|'deferred'|'retry'|'stale'."""
+    landed. Returns 'done'|'deferred'|'retry'|'stale'|'failed'."""
     import extract_llm
     from semantic_drain import _eval_chunked, _jev_failure_class
     if jev_client is None or scfg.get("extract_qc") != "annotate":
@@ -210,11 +210,14 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
         return done()  # the seed pass will queue the new extraction
     try:
         ex = json.loads(art[0] or "{}")
-    except (json.JSONDecodeError, TypeError):
-        return done()
+    except (ValueError, TypeError, RecursionError):
+        return "failed"
     if not isinstance(ex, dict):
         return done()
-    questions, layout, ctx_items = _qc_questions(ex)
+    try:
+        questions, layout, ctx_items = _qc_questions(ex)
+    except (TypeError, ValueError, RecursionError):
+        return "failed"
     state = {"target": {"id": f"m{mid}", "role": "target",
                         "text": msg["body_text"]},
              "context": [{"id": qid, "role": "extracted_item",

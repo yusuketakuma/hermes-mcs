@@ -1235,6 +1235,7 @@ def _merge(outs: list[dict]) -> dict:
     Drop counters are summed."""
     out: dict = {}
     seen_requests: set = set()
+    med_order: dict = {}
     sym_idx: dict = {}
     lab_idx: dict = {}
     for d in outs:
@@ -1242,10 +1243,9 @@ def _merge(outs: list[dict]) -> dict:
             k = (m["name"], m.get("subject"), m.get("action"))
             # Retain the latest occurrence in source order: start -> stop
             # -> start must end at the restart, including its new dose.
-            meds = out.setdefault("meds", [])
-            meds[:] = [old for old in meds
-                       if (old["name"], old.get("subject"), old.get("action")) != k]
-            meds.append(m)
+            out.setdefault("meds", [])
+            med_order.pop(k, None)
+            med_order[k] = m
         for s in d.get("symptoms") or []:
             key = (s["text"], s.get("subject"))
             if key in sym_idx:
@@ -1288,6 +1288,8 @@ def _merge(outs: list[dict]) -> dict:
         for k in ("_items_dropped", "_evidence_dropped"):
             if d.get(k):
                 out[k] = out.get(k, 0) + d[k]
+    if med_order:
+        out["meds"] = list(med_order.values())
     if "urgency" not in out \
             and any(d.get("urgency") == "routine" for d in outs):
         out["urgency"] = "routine"
@@ -1645,9 +1647,10 @@ def _thread_context(ledger, r) -> str | None:
              AND body_text IS NOT NULL
              AND body_text != ''
              AND (body_state IS NULL OR body_state='full')
-           ORDER BY posted_at_ts, message_id""",
+           ORDER BY (message_id=?) DESC,
+                    COALESCE(posted_at_ts,0) DESC, message_id DESC LIMIT 4""",
         (r["project_id"], root, r["message_id"], root, ts, ts,
-         r["message_id"])).fetchall()
+         r["message_id"], root)).fetchall()
     thread = "\n".join(_ctx_lines(rows, root, _CTX_TOTAL_MAX - len(karte)))
     return (karte + thread) or None
 
@@ -1727,7 +1730,7 @@ def revive_failed(ledger, now: float | None = None) -> dict:
             break
         try:
             meta = json.loads(row["meta"])
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             continue
         n = meta.get("auto_retry")
         n = n if type(n) is int and n >= 0 else 0
@@ -2034,7 +2037,7 @@ def _qc_feedback(ledger, src_artifact_id):
         return None
     try:
         c = json.loads(row["content"] or "{}")
-    except (json.JSONDecodeError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return None
     notes = []
     items = c.get("items")
@@ -2217,7 +2220,11 @@ def _saved_chunks(ledger, r, context: str | None = None) -> dict:
     out = {}
     context_hash = _chunk_context(r, context)
     count = len(text_chunks(r["body_text"], _CHUNK_SIZE))
-    for a in ledger.artifacts("extract_llm_chunk", message_id=r["message_id"]):
+    stream = getattr(ledger, "iter_artifacts", None)
+    rows = (stream("extract_llm_chunk", message_id=r["message_id"])
+            if callable(stream) else
+            ledger.artifacts("extract_llm_chunk", message_id=r["message_id"]))
+    for a in rows:
         try:
             meta = json.loads(a["meta"] or "{}")
             content = json.loads(a["content"])
@@ -2702,7 +2709,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 if content is None:
                     deferred += 1
                     return
-                prior = json.loads(content)
+                try:
+                    prior = json.loads(content)
+                except (ValueError, TypeError, RecursionError):
+                    prior = None
                 if not _improves(d, prior):
                     d = prior
             d["_model"] = MODEL
@@ -2731,18 +2741,25 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # drainer/tick makes the conflict-update a no-op, so two workers
     # never pay for the same LLM call (F14)
     claimed = []
-    for index, (r, ctx, saved, hints, qc) in enumerate(jobs):
-        if circuit_s or disk_low:
-            break
-        lease = _claim(ledger, r, max(_EXTRACT_LEASE_S,
-                                      deadline - time.monotonic() + TIMEOUT + 30))
-        if lease is not None:
-            leases[index] = lease
-            # the v3 pass performs the v1/v2 (rule) work simultaneously —
-            # claimed rows mint/refresh their extract_v1 artifact here so
-            # speed-lane readers never wait on the LLM queue
-            _ensure_v1(ledger, r, hints)
-            claimed.append((index, r, ctx, saved, hints, qc, lease))
+    try:
+        for index, (r, ctx, saved, hints, qc) in enumerate(jobs):
+            if circuit_s or disk_low:
+                break
+            lease = _claim(ledger, r, max(_EXTRACT_LEASE_S,
+                                          deadline - time.monotonic() + TIMEOUT + 30))
+            if lease is not None:
+                leases[index] = lease
+                claimed.append((index, r, ctx, saved, hints, qc, lease))
+                # the v3 pass performs the v1/v2 (rule) work simultaneously —
+                # claimed rows mint/refresh their extract_v1 artifact here so
+                # speed-lane readers never wait on the LLM queue
+                _ensure_v1(ledger, r, hints)
+    except BaseException:
+        # Preparation precedes inference's finally; release its committed
+        # claims too when a rule write fails or the worker is interrupted.
+        for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
+            _release(ledger, r, lease)
+        raise
 
     def _exec_batch(tups):
         """One shared call for context-free single-chunk rows ->
@@ -2875,7 +2892,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                              return_when=FIRST_COMPLETED)
                     _flush_checkpoints()
                     for fut in finished:
-                        kind, tups = futs[fut]
+                        kind, tups = futs.pop(fut)
                         if kind == "single":
                             index, r, ctx, saved, hints, qc, lease = \
                                 tups[0]

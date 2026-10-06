@@ -11,9 +11,9 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 import json
 import time
-from contextlib import suppress
 
 from mcs_requests import payload_hash
+from mcs_util import loads_dict
 import semantic_facts as sf
 
 _SECTION_LABEL = {"medication": "薬剤・処方に関する情報",
@@ -268,10 +268,9 @@ def _outbox_has_delivery(ledger, delivery_key: str) -> bool:
             "SELECT payload FROM notify_outbox WHERE kind=? AND state IN "
             "('pending','failed','accepted','suppressed')",
             ("semantic_notice",)):
-        with suppress(json.JSONDecodeError, TypeError, AttributeError):
-            if json.loads(r["payload"]).get("delivery_key") \
-                    == delivery_key:
-                return True
+        payload = loads_dict(r["payload"])
+        if payload is not None and payload.get("delivery_key") == delivery_key:
+            return True
     return False
 
 
