@@ -301,6 +301,8 @@ class Ledger:
             ON requests(source_message_id);
           CREATE INDEX IF NOT EXISTS idx_artifacts_kind_msg
             ON artifacts(kind, message_id);
+          CREATE INDEX IF NOT EXISTS idx_fetch_jobs_pending_due
+            ON fetch_jobs(kind, next_try) WHERE state='pending';
           CREATE UNIQUE INDEX IF NOT EXISTS uq_attachments_msg_file
             ON attachments(message_id, file_id);
         """)
