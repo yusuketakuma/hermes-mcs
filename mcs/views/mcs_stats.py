@@ -33,8 +33,8 @@ from mcs_queries import (CHANGE_ACTIONS, DAY_S, FACT_KINDS_SQL, JST,
                          med_is_patient_current, med_period_artifacts,
                          transition_cooccurrences, thread_reply_pairs)
 from project_metadata_view import get_project_metadata
-from drug_map import current_refs
-DEFINITION_VERSION = "2026-10-05"
+from drug_map import current_refs, _progress as drug_map_progress
+DEFINITION_VERSION = "2026-10-06"
 
 # engineering caps (A-8): detail 20 default / 100 max, top categories
 # 100 max, time buckets 120 — row-count caps bound the response size
@@ -429,20 +429,48 @@ def st_meds(db, scope):
         "by_name_month": _items(
             [{"name": k[0], "month": k[1], "mentions": n}
              for k, n in top], CATEGORY_LIMIT),
-        "by_ingredient_candidate": _med_candidate_breakdown(db, msgs),
+        **_med_candidate_breakdown(db, msgs),
         "notes": ["names are raw surface forms, NOT ingredient-normalized",
                   "ingredient annotations are dictionary candidates, unconfirmed",
                   "mention counts, not deduplicated change events",
                   "'none' = mentioned without a change action"]})
 
 
+class DrugCandidateItem(TypedDict):
+    dict_id: str
+    dict_sha256: str
+    resolver_version: str
+    system: str
+    code: str
+    display: str
+    candidate: bool
+    mentions: int
+    share: dict
+
+
+class DrugCandidateBreakdown(TypedDict):
+    status: str
+    mentions: int
+    by_resolution: dict[str, dict]
+    items: dict
+
+
+class DrugReviewItem(TypedDict):
+    name: str
+    status: str
+    reason: str
+    mentions: int
+    share: dict
+
+
 def _med_candidate_breakdown(db, msgs):
-    """Same mention denominator as ST-007, with unavailable annotations
-    explicit; ``msgs`` is st_meds' materialized _med_messages list."""
+    """One candidate pass supplies three identity kinds and a local review queue."""
     counts = dict.fromkeys(
         ("resolved", "ambiguous", "unresolved", "generic", "unavailable"), 0)
-    ingredients = {}
+    kinds = {"ingredient": {}, "general_name": {}, "product": {}}
+    review = {}
     total = 0
+    progress = drug_map_progress(db)
     for _pid, mid, _ts, meds in msgs:
         refs = {ref["i"]: ref for ref in current_refs(db, mid)}
         for i, med in enumerate(meds):
@@ -453,27 +481,59 @@ def _med_candidate_breakdown(db, msgs):
             status = ref["status"] if ref and ref["name"] == med.get("name") \
                 else "unavailable"
             counts[status] += 1
+            if status in ("unresolved", "ambiguous"):
+                name = (med.get("name") or "").strip() or "(unnamed)"
+                key = (name, status)
+                review[key] = review.get(key, 0) + 1
             if status != "resolved" or ref is None:
                 continue
             for cand in ref["cands"]:
-                if cand["kind"] != "ingredient" or cand["candidate"] is not True:
+                if cand["kind"] not in kinds or cand["candidate"] is not True:
                     continue
                 key = (ref["dict_id"], ref["dict_sha256"],
                        ref["resolver_version"], cand["system"],
                        cand["code"], cand["display"])
-                ingredients[key] = ingredients.get(key, 0) + 1
-    return {
-        "status": "ok" if total > counts["unavailable"] else "unavailable",
-        "mentions": total,
-        "by_resolution": {k: _ratio(n, total, "mention_share")
-                          for k, n in counts.items()},
-        "items": _items([
-            {"dict_id": k[0], "dict_sha256": k[1], "resolver_version": k[2],
-             "system": k[3], "code": k[4], "display": k[5],
+                target = kinds[cand["kind"]]
+                target[key] = target.get(key, 0) + 1
+    status = "ok" if total > counts["unavailable"] else "unavailable"
+    resolution = {key: _ratio(value, total, "mention_share")
+                  for key, value in counts.items()}
+    output = {}
+    for kind, identities in kinds.items():
+        items: list[DrugCandidateItem] = [
+            {"dict_id": key[0], "dict_sha256": key[1], "resolver_version": key[2],
+             "system": key[3], "code": key[4], "display": key[5],
              "candidate": True, "mentions": n,
              "share": _ratio(n, total, "mention_share")}
-            for k, n in sorted(ingredients.items(), key=lambda kv: (-kv[1], kv[0]))
-        ], CATEGORY_LIMIT)}
+            for key, n in sorted(identities.items(), key=lambda kv: (-kv[1], kv[0]))]
+        block: DrugCandidateBreakdown = {"status": status, "mentions": total,
+            "by_resolution": resolution, "items": _items(items, CATEGORY_LIMIT)}
+        output["by_" + kind + "_candidate"] = block
+    reason = None
+    review_status = "ok"
+    if progress is None and status != "ok":
+        review_status, reason = "unconfigured", "dictionary_generation_unrecorded"
+    elif progress is not None and progress.get("invalid"):
+        review_status, reason = "unavailable", "dictionary_generation_invalid"
+    elif progress is not None and progress.get("dictionary") is None:
+        review_status, reason = "unavailable", "dictionary_disabled_or_unavailable"
+    elif progress is not None and progress["dictionary"][2]:
+        review_status, reason = "unavailable", "synthetic_dictionary"
+    elif total and status != "ok":
+        review_status, reason = "unavailable", "current_annotation_unavailable"
+    review_items: list[DrugReviewItem] = [
+        {"name": key[0], "status": key[1], "reason":
+         "no_exact_dictionary_match" if key[1] == "unresolved" else "multiple_identity_candidates",
+         "mentions": n, "share": _ratio(n, total, "mention_share")}
+        for key, n in sorted(review.items(), key=lambda kv: (-kv[1], kv[0]))]
+    output["drug_map_review"] = {"status": review_status, "reason": reason,
+        "mentions": total,
+        "review_mentions": counts["unresolved"] + counts["ambiguous"],
+        "unavailable_mentions": counts["unavailable"],
+        "items": _items(review_items, CATEGORY_LIMIT),
+        "notes": ["raw names are not merged; candidate review is not clinical approval",
+                  "missing current annotations are excluded from the curation queue"]}
+    return output
 
 
 def st_med_mentions(db, scope):
