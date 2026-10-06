@@ -1,4 +1,4 @@
-"""Round-4 stability: preupdate backup retention/disk check, overdue
+"""Preupdate backup retention/disk check, overdue
 housekeeping, batched attachment prune, leftover cleanup, log targets
 and lookup indexes. Temp files and synthetic rows only."""
 import json

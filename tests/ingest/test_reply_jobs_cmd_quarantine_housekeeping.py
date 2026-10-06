@@ -1,4 +1,4 @@
-"""Round-4 stability: burnt-out reply jobs stay failed under thread read,
+"""Burnt-out reply jobs stay failed under thread read,
 torn cmd files are quarantined, and housekeeping runs past the deadline
 once the daily backup is overdue. Synthetic stubs only — no real MCS."""
 import json

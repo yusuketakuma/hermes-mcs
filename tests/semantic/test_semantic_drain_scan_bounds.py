@@ -1,4 +1,4 @@
-"""Round-4 stability regressions for the semantic drain (synthetic only)."""
+"""Regressions for the semantic drain (synthetic only)."""
 import json
 import time
 

@@ -1,4 +1,4 @@
-"""Round-4 stability regressions for the v4 extractor and drug_map (synthetic only)."""
+"""Regressions for the v4 extractor and drug_map (synthetic only)."""
 import time
 
 import drug_map

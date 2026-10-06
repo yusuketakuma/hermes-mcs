@@ -1,4 +1,4 @@
-"""Regressions for the 1.0.15 notify fixes — synthetic temp ledger only."""
+"""Card attachment delivery, live views, health alerts and transport gate — synthetic temp ledger only."""
 from __future__ import annotations
 
 import hashlib
