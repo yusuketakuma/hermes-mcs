@@ -244,6 +244,8 @@ def test_search_query_normalizes():
     assert text.search_query({"query": "  発熱　 咳 "}) == "発熱 咳"
     assert text.search_query({"query": "  "}) is None
     assert [f["id"] for f in text.modal_fields("search")] == ["query"]
+    assert [f["id"] for f in text.modal_fields("drugsearch")] == ["query"]
+    assert set(text.QUERY_FORMS) <= set(text.VIEW_FORMS) <= set(text.MODAL_ACTIONS)
 
 
 def test_list_messages_filters_scope_and_caps():

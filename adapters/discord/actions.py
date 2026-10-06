@@ -462,7 +462,7 @@ class Actions:
                 "フォームを開いたカードと送信元が一致しません。")
             return
         await interaction.response.defer(ephemeral=True)
-        if pending["action"] in ("search", "digest"):
+        if pending["action"] in text.VIEW_FORMS:
             await self._search(interaction, modal_id, pending)
             return
 
@@ -507,7 +507,7 @@ class Actions:
 
     async def _search(self, interaction, modal_id: str,
                       pending: dict) -> None:
-        """🔎/📊 submit: the keyword or scope rides the same card token as
+        """🔎/💊/📊 submit: the keyword or scope rides the same card token as
         a view click — no preview/confirm, the runner answers."""
         fields = self._modal_fields(interaction)
         if pending["action"] == "digest":

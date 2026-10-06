@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 
 import structured_view
+import drug_map
 from drug_map import candidate_note
 from rollup import current_cached_refs
 from ledger import karte_summary_block
@@ -400,3 +401,115 @@ def patient_search_view(db, project_id, query) -> dict:
             "empty": "取得済みの投稿に一致するものはありません。",
             "notes": ["※ 取得済みの投稿だけが対象です。まだ取得していない範囲は"
                       "検索されません。", _coverage_line(db, project_id)]}
+
+
+# ---------- 💊 薬剤を確認 / 薬剤を検索 (DM-1 / DM-2) ---------------------
+
+DRUG_KIND_JA = {"ingredient": "成分", "general_name": "一般名処方",
+                "product": "製品", "class": "総称"}
+DRUG_CAVEAT = ("※ 辞書候補は名称の一致による参考情報です。処方・成分・"
+               "同等性を確定しません。原文で確認してください。")
+_DICTIONARY_STATE = {
+    "unconfigured": "医薬品辞書が設定されていないため、候補は表示できません。",
+    "inactive": "医薬品辞書が有効化されていないか切替中のため、候補は表示できません。",
+    "invalid": "医薬品辞書を読み込めないため、候補は表示できません（管理者が設定を確認してください）。",
+}
+
+
+def drug_search_available(db) -> bool:
+    """The 薬剤を検索 button is minted only while an approved dictionary
+    generation is active — a button that can never answer is worse than none."""
+    progress = drug_map._progress(db)
+    return bool(progress and not progress.get("invalid") and progress.get("dictionary"))
+
+
+def _candidate_line(ref, dictionary_active: bool) -> str:
+    """One mention's dictionary status in plain words. Ambiguous/generic
+    references never name an ingredient (same rule as candidate_note)."""
+    if ref is None:
+        return ("　→ 辞書照合はまだありません（次回の処理で反映）"
+                if dictionary_active else "　→ 辞書候補なし")
+    status, cands = ref.get("status"), ref.get("cands") or []
+    if status == "resolved" and candidate_note(ref):
+        c = cands[0]
+        return (f"　→ 候補: {_inline(c['display'], 60)}"
+                f"（{DRUG_KIND_JA.get(c['kind'], c['kind'])}・{_inline(c['code'], 20)}）")
+    if status == "ambiguous":
+        return f"　→ 複数の候補（{len(cands)}件）: 用量・剤形を原文で確認してください"
+    if status == "generic":
+        return "　→ 総称のため個別の薬剤は特定できません"
+    return "　→ 辞書に一致する候補はありません（似た名前から推定しません）"
+
+
+def meds_view(db, project_id, message_id, *, can_report=False,
+              can_search=False) -> dict:
+    """💊 one post's medication mentions — the card's own 薬剤 selection
+    (structured_view) with each mention's current dictionary candidate.
+    Read-only: nothing here confirms a prescription."""
+    name = _inline(_patient_name(db, project_id), 30) or f"project {project_id}"
+    title = f"💊 {name} — この投稿の薬剤"
+    row = db.execute("SELECT project_id,posted_at,profession FROM messages "
+                     "WHERE message_id=?", (message_id,)).fetchone()
+    if row is None or row["project_id"] != project_id:
+        return {"title": title, "head": [], "items": [], "more": 0,
+                "empty": "この投稿の薬剤情報を確認できません（削除・移動の可能性）。",
+                "notes": []}
+    meds, unverified = structured_view.medication_entries(db, message_id)
+    refs = [ref for _, ref in meds + unverified if ref]
+    active = drug_search_available(db)
+    head = [f"{_mmdd(row['posted_at'])} {_hhmm(row['posted_at'])} "
+            f"{_inline(row['profession'], 20) or '職種不明'}の投稿 — "
+            f"{len(meds) + len(unverified)}件"]
+    if refs:
+        head.append(f"辞書 {refs[0]['dict_id']}@{refs[0]['dict_sha256'][:8]}"
+                    "（候補はすべて未確認）")
+    elif not active:
+        head.append(_DICTIONARY_STATE["inactive"])
+    items = [{"project_id": project_id,
+              "text": f"・{_inline(text, 120)}{label}\n"
+                      f"{_candidate_line(ref, active)}"}
+             for entries, label in ((meds, ""), (unverified, "（ルール抽出・未確認）"))
+             for text, ref in entries]
+    notes = [DRUG_CAVEAT]
+    if can_search:
+        notes.append("候補の名称・別名は「薬剤を検索」で確認できます。")
+    if can_report:
+        notes.append("抽出の誤りは「誤りを報告」→「薬」から報告できます。")
+    return {"title": title, "head": head, "items": items, "more": 0,
+            "empty": "この投稿から抽出された薬剤はありません。", "notes": notes}
+
+
+def drug_search_view(db, cfg, project_id, query) -> dict:
+    """💊 reference search over the active approved dictionary (names,
+    aliases, codes). Never resolves, annotates or changes anything."""
+    shown_query = _inline(query, 40)
+    title = f"💊 薬剤の検索 — 「{shown_query}」"
+    base = {"title": title, "head": [], "items": [], "more": 0,
+            "notes": [DRUG_CAVEAT]}
+    dictionary, state = drug_map.active_dictionary(db, cfg)
+    if dictionary is None:
+        return {**base, "empty": _DICTIONARY_STATE[state]}
+    try:
+        found = dictionary.search(str(query or ""), limit=SEARCH_HITS)
+    except ValueError:
+        return {**base, "empty": "検索する薬名を入力してください。"}
+    items = []
+    for item in found["items"]:
+        text = (f"・{_inline(item['display'], 60)}"
+                f"（{DRUG_KIND_JA.get(item['kind'], item['kind'])}・"
+                f"{_inline(item['id'], 20)}）")
+        aliases = [a for a in item["matching_aliases"] if a != item["display"]]
+        if aliases:
+            rest = item["matching_alias_count"] - min(3, len(aliases)) \
+                - (item["display"] in item["matching_aliases"])
+            text += ("\n　一致した別名: " + "、".join(_inline(a, 40) for a in aliases[:3])
+                     + (f" 他{rest}件" if rest > 0 else ""))
+        items.append({"project_id": project_id, "text": text})
+    return {**base,
+            "head": [f"{found['total']}件（名称・別名・コードの部分一致）",
+                     f"辞書 {found['dictionary']['id']}@"
+                     f"{found['dictionary']['sha256'][:8]}"],
+            "items": items, "more": max(0, found["total"] - len(items)),
+            "empty": "一致する候補はありません。一般名・製品名など別の表記でも試してください。",
+            "notes": ["※ 参照用の検索です。処方・成分を確定せず、投稿の照合結果も変えません。"]}
+

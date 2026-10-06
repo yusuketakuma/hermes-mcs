@@ -173,10 +173,15 @@ TASK_REASON = "通知カードからタスク作成"
 STAFF_OPTIONS = 25
 MODAL_TITLES = {"request": "タスク作成", "dismiss": "候補を却下",
                 "report": "抽出の誤りを報告", "search": "この患者を検索",
-                "digest": "サマリー（絞込み）"}
+                "drugsearch": "薬剤を検索", "digest": "サマリー（絞込み）"}
 # card actions whose click opens a modal (text.modal_fields) instead of
 # answering directly
 MODAL_ACTIONS = tuple(MODAL_TITLES)
+# modal actions whose submit is a view click on the same token — no
+# preview/confirm; the runner answers with the view
+VIEW_FORMS = ("search", "drugsearch", "digest")
+# view forms whose single "query" field is a free-text search term
+QUERY_FORMS = ("search", "drugsearch")
 
 
 def modal_fields(action: str, form: dict | None = None,
@@ -228,6 +233,9 @@ def modal_fields(action: str, form: dict | None = None,
                  "multiline": True, "max": 2000, "default": ""}]
     if action == "search":
         return [{"id": "query", "label": "キーワード（空白区切りで AND）",
+                 "required": True, "max": 100, "default": ""}]
+    if action == "drugsearch":
+        return [{"id": "query", "label": "薬名（一般名・製品名・コードの一部）",
                  "required": True, "max": 100, "default": ""}]
     if action == "digest":
         return [{"id": "query", "required": False, "max": 100,
@@ -306,7 +314,7 @@ def dismiss_attrs(fields: dict):
     return (note, None) if note else "理由の入力が必要です。"
 
 
-SEARCH_EMPTY = "キーワードを入力してください。"
+SEARCH_EMPTY = "検索する語を入力してください。"
 
 
 def search_query(fields: dict) -> str | None:

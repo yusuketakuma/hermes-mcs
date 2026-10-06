@@ -50,7 +50,8 @@ from notify_render import (
     display_text, fit_parts, lineworks_card_split, lineworks_member_names,
     notification_preview, parts_text, plain_notice)
 from notify_views import (
-    my_tasks_view, patient_search_view, patient_summary_text, unacked_view)
+    drug_search_available, drug_search_view, meds_view, my_tasks_view,
+    patient_search_view, patient_summary_text, unacked_view)
 
 RENDER_SCHEMA = "mcs-card-render/v1"
 SLACK_RENDER_SCHEMA = "mcs-card-render/v2"
@@ -272,6 +273,8 @@ _ACTIONS = {
     "request": ("タスク作成", "secondary", "write"),
     "summary": ("患者の記録まとめ", "secondary", "view"),
     "report":  ("誤りを報告", "secondary", "write"),
+    "meds":    ("薬剤を確認", "secondary", "view"),
+    "drugsearch": ("薬剤を検索", "secondary", "view"),
     "dismiss": ("却下", "danger", "write"),
     "prev":    ("◀ 前", "secondary", "view"),
     "next":    ("次 ▶", "secondary", "view"),
@@ -291,7 +294,9 @@ _WRITE_ACTIONS = frozenset(
 # recomputed on every click — a replayed command_id never returns the
 # stored receipt for these
 _LIVE_VIEWS = frozenset({"body", "summary", "request", "dismiss", "report",
-                         "mytasks", "unacked", "search", "digest", "tasks"})
+                         "mytasks", "unacked", "search", "digest", "tasks",
+                         "meds", "drugsearch"})
+MEDS_SCAN = 20                # thread posts checked for 💊 (newest first)
 
 MAX_COMPONENTS = 40           # the worker's per-card component ceiling
                               # (hermes_plugin spec.MAX_COMPONENTS)
@@ -738,6 +743,14 @@ def _action_rows(db, card, content, now, context=None,
     if kind == "signal" and len(keys) == 1 \
             and keys[0] in (context.get("signals") or {}):
         btn("dismiss", {"signal_key": keys[0]})
+    flush()
+    # row 2b — 💊 medication check / dictionary search (read-only views)
+    if positive(pid):
+        meds_mid = _meds_message(db, card, context)
+        if meds_mid is not None:
+            btn("meds", {"message_id": meds_mid})
+        if drug_search_available(db):
+            btn("drugsearch")
     flush()
     # row 3 — paging
     if content["pages"] > 1:
@@ -1629,6 +1642,26 @@ def _render_context(db, card) -> dict:
     return ctx
 
 
+def _meds_message(db, card, context) -> int | None:
+    """The post 💊 薬剤を確認 shows: a signal card's evidence message, or
+    the newest thread post (root or reply) with medication entries — the
+    same selection the card's 薬剤 lines use. None emits no button."""
+    import structured_view
+    mid = context.get("source_message_id")
+    if not positive(mid):
+        return None
+    if card["kind"] == "thread":
+        mids = [r[0] for r in db.execute(
+            "SELECT message_id FROM messages WHERE (message_id=? OR parent_id=?)"
+            " AND project_id=? AND body_state='full'"
+            " ORDER BY posted_at_ts DESC, message_id DESC LIMIT ?",
+            (mid, mid, card["project_id"], MEDS_SCAN))]
+    else:
+        mids = [mid]
+    return next((m for m in mids
+                 if any(structured_view.medication_entries(db, m))), None)
+
+
 def _extract_ref(db, project_id, *, root=None, mid=None) -> dict | None:
     """The extraction a ⚠ report pins: the newest message of the thread
     (or the signal's evidence message) whose current structured result
@@ -2366,9 +2399,10 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
         return _act_page(db, base, card, tok, tok_params, cfg, now, specs)
     if action == "body":
         return _act_body(db, base, card, tok)
-    if action in ("summary", "mytasks", "unacked", "search", "digest"):
+    if action in ("summary", "mytasks", "unacked", "search", "digest",
+                  "meds", "drugsearch"):
         return _act_view(db, base, card, action, req.get("input") or {}, now,
-                         cfg)
+                         cfg, tok_params)
     if action == "tasks":
         # live view — requests anchored to the thread's messages, plus a
         # fresh transition token per reachable status minted in the same
@@ -2408,10 +2442,12 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
 _DIALECT = {"discord": "discord", "slack": "slack"}   # else plain (LINE WORKS)
 
 
-def _act_view(db, base, card, action, inputs, now, cfg=None) -> dict:
-    """🧾 / 📋 / 🗂 / 🔎 / 📊 — live clicker-scoped views (notify_views,
+def _act_view(db, base, card, action, inputs, now, cfg=None,
+              params=None) -> dict:
+    """🧾 / 📋 / 🗂 / 🔎 / 📊 / 💊 — live clicker-scoped views (notify_views,
     notify_digest), recomputed per click; stored receipts drop their
-    text."""
+    text. The 💊 target post comes from the token's render-time params,
+    never from user input."""
     if action == "digest":
         if not inputs.get("query"):
             # the click opens the scope modal; its submit carries input
@@ -2432,7 +2468,7 @@ def _act_view(db, base, card, action, inputs, now, cfg=None) -> dict:
         title, text = patient_summary_text(db, card["project_id"])
         return {**base, "outcome": "applied", "action": "summary",
                 "title": title, "body": text}
-    if action == "search" and not inputs.get("query"):
+    if action in ("search", "drugsearch") and not inputs.get("query"):
         # the click opens the keyword modal; its submit carries input
         return {**base, "outcome": "applied", "action": action,
                 "modal": True, "params": {}}
@@ -2444,6 +2480,18 @@ def _act_view(db, base, card, action, inputs, now, cfg=None) -> dict:
             db, card["transport"], now, inputs.get("projects"),
             member_names=(notify_cfg(cfg).get("lineworks") or {}).get(
                 "user_names"))
+    elif action == "meds":
+        mid = (params or {}).get("message_id")
+        if not positive(mid):
+            return {**base, "outcome": "rejected", "error": "action_not_applicable"}
+        # the ⚠ hint only when ⚠ pins this very post (it may pin another)
+        ref = _render_context(db, card).get("extract_ref") or {}
+        view = meds_view(db, card["project_id"], mid,
+                         can_report=ref.get("message_id") == mid,
+                         can_search=drug_search_available(db))
+    elif action == "drugsearch":
+        view = drug_search_view(db, cfg or {}, card["project_id"],
+                                inputs["query"])
     else:
         view = patient_search_view(db, card["project_id"], inputs["query"])
     return {**base, "outcome": "applied", "action": "list", "list": view}

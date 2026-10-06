@@ -11,7 +11,7 @@ import time
 from hermes_plugin import projects
 from adapters.common import envelopes, paths, registry
 from adapters.common.text import (MODAL_ACTIONS, MODAL_TITLES, SEARCH_EMPTY,
-                                 digest_inputs,
+                                 VIEW_FORMS, digest_inputs,
                                  ja, modal_fields, preview_text,
                                  search_query, split_body, view_answer)
 from .cards import LINK_ACTION, MENU_ACTION, _sections, render_parts
@@ -31,7 +31,7 @@ _LEGACY_FIELDS = {"request": ("title", "reason", "assignee", "due_date"),
 # action_retired and refreshes the posted card
 _KINDS = ("ack", "assign", "defer", "body", "prev", "next", "request",
           "dismiss", "tasks", "task_status", "summary", "report",
-          "mytasks", "unacked", "search", "digest")
+          "mytasks", "unacked", "search", "digest", "meds", "drugsearch")
 SUMMARY_COMMAND = "/mcs-summary"
 MCS_COMMAND = "/mcs"
 RESULT_POLL_S = 0.25
@@ -506,8 +506,8 @@ class Actions:
             picked = got.get("selected_option")
             fields[name] = (picked.get("value") if isinstance(picked, dict)
                             else got.get("value")) or ""
-        if pending["action"] in ("search", "digest"):
-            # 🔎/📊 no preview — the input rides the card token as a view
+        if pending["action"] in VIEW_FORMS:
+            # 🔎/💊/📊 no preview — the input rides the card token as a view
             # click and the answer comes back through the followup sweep
             self._reg.drop_modal(modal_id)
             if pending["action"] == "digest":

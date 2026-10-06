@@ -752,12 +752,14 @@ def test_my_tasks_prefers_users_info_display_name(tmp_path):
     asyncio.run(scenario())
 
 
-def test_search_modal_submits_query_as_view_click(tmp_path):
+@pytest.mark.parametrize("kind,title", [("search", "この患者を検索"),
+                                        ("drugsearch", "薬剤を検索")])
+def test_search_modal_submits_query_as_view_click(tmp_path, kind, title):
     async def scenario():
-        actions, app, reg, dirs = fixture(tmp_path, kind="search")
+        actions, app, reg, dirs = fixture(tmp_path, kind=kind)
         await actions._action(ack, *click())
         view = app.client.views[0]["view"]
-        assert view["title"]["text"] == "この患者を検索"
+        assert view["title"]["text"] == title
         first = command(dirs)
         Path(dirs["cmd_int"], shared_paths.safe_name(first["command_id"])
              + ".json").unlink()

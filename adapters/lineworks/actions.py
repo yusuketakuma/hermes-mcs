@@ -216,13 +216,17 @@ class Actions:
             await self._prompt(user, session)
             return
         self.reg.drop_modal(mid)
-        if session["action"] in ("search", "mytasks", "digest"):
+        if session["action"] in (*text.VIEW_FORMS, "mytasks"):
             if session["action"] == "digest":
                 inputs = {**(projects.view_inputs(self.settings, "digest", "") or {}),
                           **text.digest_inputs(session["fields"])}
+            elif session["action"] in text.QUERY_FORMS:
+                inputs = {"query": text.search_query(session["fields"])}
+                if not inputs["query"]:
+                    await self._say(user, text.SEARCH_EMPTY)
+                    return
             else:
-                inputs = ({"query": text.search_query(session["fields"])} if session["action"] == "search"
-                          else projects.view_inputs(self.settings, "mytasks", session["fields"]["name"]))
+                inputs = projects.view_inputs(self.settings, "mytasks", session["fields"]["name"])
             if inputs and all(inputs.values()):
                 env = envelopes.notification(session["token"], actor, session["origin"], inputs)
                 self.reg.put_followup(env["command_id"], {**session, "kind": "action",
