@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="780" viewBox="0 0 780 780" font-family="Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif">
+<title>通知文の比較 — v1.0.14 と v1.0.15</title>
+<desc>完全に架空の説明図。旧版はMCS確認カードの固定通知文。新版は患者の山田花子、依頼候補の自動要約、発信者の佐藤直子、所属のあおぞら訪問看護、10月6日8時30分の投稿時刻を通知文に含む。実端末の画面ではなく、実際の省略や受信は通知設定に依存する。</desc>
+<rect x="0" y="0" width="780" height="780" rx="0" fill="#f6f4ef"/>
+<text x="30" y="47" font-size="40" fill="#202124" font-weight="bold">患者と内容を通知から確認</text>
+<text x="30" y="85" font-size="24" fill="#66716f">説明用イメージ / 実端末のキャプチャではありません</text>
+<rect x="24" y="109" width="732" height="149" rx="12" fill="#fff" stroke="#dce2dd"/>
+<text x="48" y="149" font-size="29" fill="#202124" font-weight="bold">変更前  v1.0.14 — Slack の通知文</text>
+<text x="48" y="197" font-size="36" fill="#202124" font-weight="bold">MCS 確認カード</text>
+<text x="48" y="234" font-size="26" fill="#66716f">患者・発信者・所属・時刻・内容は含まない</text>
+<rect x="24" y="282" width="732" height="304" rx="12" fill="#fff" stroke="#087f5b"/>
+<text x="48" y="322" font-size="29" fill="#087f5b" font-weight="bold">変更後  v1.0.15 — 同じ投稿から通知文</text>
+<text x="48" y="371" font-size="32" fill="#202124" font-weight="bold">山田 花子: 投稿の自動要約:</text>
+<text x="48" y="415" font-size="32" fill="#202124">依頼候補（未確認）: 朝の薬の変更確認</text>
+<text x="48" y="459" font-size="32" fill="#202124">/ 佐藤 直子（あおぞら訪問看護）</text>
+<text x="48" y="503" font-size="32" fill="#202124">/ 10-06 08:30</text>
+<text x="48" y="550" font-size="26" fill="#087f5b">自動抽出の候補と、人が確定した依頼を区別</text>
+<text x="30" y="629" font-size="32" fill="#202124" font-weight="bold">開く前に対象と内容の見当がつく</text>
+<text x="30" y="672" font-size="27" fill="#202124">端末の通知プレビュー設定を確認してください。</text>
+<text x="30" y="714" font-size="25" fill="#66716f">実際の表示・省略・受信は端末とアプリの設定次第。</text>
+<text x="30" y="754" font-size="25" fill="#66716f">架空の名前・投稿のみ使用 / 実データ・匿名化例なし</text>
+</svg>

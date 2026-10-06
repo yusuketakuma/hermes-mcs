@@ -1,0 +1,29 @@
+{
+  "base_tag": "v1.0.14",
+  "base_sha": "3d9e324bd8fdf493213a4df506d62ccca8edf24a",
+  "target_version": "v1.0.15",
+  "target_source_sha": "713fd658f29bd3cb7b540be1dd57ac1f56e5212f",
+  "kind": "fictional_explanation_not_screenshot",
+  "alt": "通知文の比較。v1.0.14のSlackは固定のMCS確認カード。v1.0.15は架空の患者名、依頼候補の自動要約、発信者、所属、投稿時刻を含みます。実端末の表示や受信は未検証です。",
+  "sources": [
+    "v1.0.14:adapters/slack/cards.py:_FALLBACK",
+    "adapters/slack/cards.py:render",
+    "mcs/notify/notify_render.py:_preview_header,_preview_line,notification_preview",
+    "changes/mobile-notification-preview.json"
+  ],
+  "generator": "python3 docs/releases/v1.0.15/generate_visual.py",
+  "renderer": "macOS qlmanage + sips, existing gallery Screen primitives",
+  "visual_verification": {
+    "full": "1180x1180 checked, no clipping or overlap",
+    "mobile": "390x390 checked, all five metadata fields and candidate label readable"
+  },
+  "limitations": [
+    "完全に架空の説明図。実投稿や匿名化例は使用していない。",
+    "公開URL到達とGitHub Release実画面表示は親エージェントの公開後に別々に検証する。"
+  ],
+  "assets": {
+    "mobile-preview-comparison.png": "2aa5ac59fefc95731a8fb3774254cb9838bb17aa76de4b1797e8370df7cf05f0",
+    "mobile-preview-comparison.svg": "ff92cbee3b954fe63ba77dc76757a4ddea8e5561c327027126c3b459b82d1dac",
+    "mobile-preview-comparison-390.png": "ea90e9dad4613ee85592928a03ebfca39e29d2802810970ecbe6a4bbef174c00"
+  }
+}
