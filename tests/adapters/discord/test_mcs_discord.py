@@ -1540,9 +1540,11 @@ def test_cancel_during_confirm_publish_never_reports_cancelled(
     cid = _drive_to_confirm(world, act, tok, msg)
 
     gate = threading.Event()
+    entered = threading.Event()
     real = envelopes.publish_command
 
     def slow_publish(d, env):
+        entered.set()
         assert gate.wait(5)
         return real(d, env)
     monkeypatch.setattr(envelopes, "publish_command", slow_publish)
@@ -1553,13 +1555,12 @@ def test_cancel_during_confirm_publish_never_reports_cancelled(
 
     async def race():
         first = asyncio.create_task(act.on_interaction(ok))
-        for _ in range(50):
-            await asyncio.sleep(0)
-            if ok.response.is_done():
-                break
-        await act.on_interaction(cancel)
-        await act.on_interaction(again)
-        gate.set()
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            await act.on_interaction(cancel)
+            await act.on_interaction(again)
+        finally:
+            gate.set()
         await first
     monkeypatch.setattr(actions_mod, "HUMAN_WAIT_S", 0.05)
     asyncio.run(race())

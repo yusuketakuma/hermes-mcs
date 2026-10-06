@@ -286,7 +286,9 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
                             AssertionError("no network in integration test")))
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     blob = b"synthetic-upload-bytes"
-    f = tmp_path / "syn.bin"
+    root = tmp_path / "mcs-data"
+    f = root / "attachments" / "syn.bin"
+    f.parent.mkdir(parents=True)
     f.write_bytes(blob)
     replies = []
     seen = []
@@ -340,7 +342,6 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
     scope = {"transport": "slack", "profile": "cco",
              "application_id": "A_SYNTHETIC", "team_id": "T_SYNTHETIC",
              "channel_id": "C_SYNTHETIC"}
-    root = tmp_path / "mcs-data"
     for name in ("slack_render", "flags", "cmd_int", "cmd_results"):
         (root / name).mkdir(parents=True)
     dirs = slack_paths.ensure_dirs(str(root))

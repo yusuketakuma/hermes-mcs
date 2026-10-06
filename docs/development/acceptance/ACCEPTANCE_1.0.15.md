@@ -135,3 +135,12 @@ a61fa6fe381f1267cf7536bd1a27f613d382f11e58c46810bdf66fd6f85a5e8e mcs/ops/mcs_upd
 リリース文書・新規導入・合成取込の追加検証結果は公開前の既存runnerで確認し、最終SHAのCIはタグ前に確認する。公開後の最終SHA・CI run・tag/Release本文一致の実行記録は、公開したReleaseと同タスクの完了報告を参照する。
 
 公開準備の最終ローカル結果: releaseノート/READMEのschema・生成・全参照リンク、static gates10/10・incident mining、両gallery確認が成功。既存隔離runnerのrelease・新規導入（Hermes/standalone）・合成復旧narrativeは105 passed / 26 subtests passed（132.09秒）。変更記録107件をarchiveへ移し、CHANGELOG本文は107見出しと107個別更新条件を保持。実装・SDKの最終全量は公開候補commitのCIで別途確認する。
+
+## 最終CIで見つかった検証資産の修正
+
+候補 `9c8bca967905e7932082e709ccd052c252c0ffa9` のCIは、hygiene・incident-gates・readme-sync・standalone SDK（25 passed）が成功し、Hermesと全量は次の2件で失敗した。タグ・Releaseはまだ作成していない段階の記録。
+
+- Discordの取消競合テストは50回のevent-loop yieldだけでpublish開始を証明していなかった。合成20msのflag-read遅延で同じ失敗を再現し、publishへ入ったEventを待つ同期へ修正。取消・二重確定・一意コマンド・confirmation消費の期待値を保持。確定関連テストと独立10回の隔離反復が成功。製品コードの変更はない。
+- Hermes Slack実SDKの添付fixtureがworker保存先の外にあったため、正しい保存先制限でupload前に拒否された。worker root内のattachmentsへ完全合成ファイルを配置し、upload3段階・bytes・thread・retry・journalの期待値は保持。保存先制限の関連3テスト成功。ローカルに対象SDKが揃わず実SDK再実行は未実施のため、修正後exact SHAの固定CIで確認する。
+
+同候補の[CIログ](https://github.com/yusuketakuma/hermes-mcs/actions/runs/37438142045)は失敗記録として保持し、最終成功へ読み替えない。
