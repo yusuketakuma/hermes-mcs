@@ -451,7 +451,8 @@ class View:
             "out_of_scope": f"投稿時刻が{window_days}日より前または不明のため追加QC対象外の現行抽出件数。過去のQC注記は表示を維持する",
             "coverage": "検査済み・未検査の項目数。判定済みは全項目の確認を意味しない",
             "extract_feedback": "カードの ⚠ 抽出の誤り報告（新しい順、最大20件）。"
-                                "current=1 はまだ再抽出されていない報告",
+                                "current=1 はまだ再抽出されていない報告。"
+                                "field=urgency は緊急度判定の誤り報告",
         }
         from mcs_queries import extract_feedback
         reports = []

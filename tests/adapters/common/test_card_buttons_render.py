@@ -186,6 +186,13 @@ def test_feedback_attrs():
 
 # ---------- 🚫 reason codes / 🔎 / list views ------------------------------
 
+def test_feedback_fields_match_the_runner_vocabulary():
+    import mcs_operations
+    assert tuple(v for v, _ in text.FEEDBACK_FIELDS) \
+        == mcs_operations.EXTRACT_FEEDBACK_FIELDS
+    assert dict(text.FEEDBACK_FIELDS)["urgency"] == "緊急度"
+
+
 def test_dismiss_reasons_match_the_runner_vocabulary():
     import mcs_operations
     assert tuple(v for v, _ in text.DISMISS_REASONS) \

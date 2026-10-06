@@ -654,7 +654,7 @@ def test_report_modal_builds_feedback_command(tmp_path):
         field = view["blocks"][0]["element"]
         assert field["type"] == "static_select"
         assert [o["value"] for o in field["options"]] == [
-            "summary", "meds", "symptoms", "requests", "vitals", "other"]
+            "summary", "urgency", "meds", "symptoms", "requests", "vitals", "other"]
         env = command(dirs)
         body, submitted_view = submitted(view["private_metadata"],
                                          note="用量が違う")

@@ -1,0 +1,16 @@
+{
+  "category": "added",
+  "title": "抽出の誤り報告で「緊急度」を選べるように",
+  "summary": "カードの「誤りを報告」で、誤っている箇所に「緊急度」を選べるようになりました。🚨やAI判定の緊急度が実態と違うときに報告でき、件数は統計で確認できます。報告後の扱い（その投稿の抽出を1回だけ再実行）は他の箇所と同じです。",
+  "upgrade": "追加操作は不要です。Hermes利用時はgatewayの再起動、LINE WORKSは独立アダプターの再起動後に選択肢が表示されます。",
+  "details": [
+    "報告の箇所に urgency（緊急度）を追加。runner側の許可値と通知先の表示ラベルが一致することをテストで固定した。",
+    "統計 data_quality.urgency_rule_outcomes.human_urgency_reports に緊急度の報告件数を出す（件数のみ・IDなし）。",
+    "誤り報告はAI抽出がある投稿だけに出るため、機械照合だけで付いた🚨の誤りは報告できない。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_operations.py",
+    "adapters/common/text.py",
+    "mcs/views/mcs_stats.py"
+  ]
+}

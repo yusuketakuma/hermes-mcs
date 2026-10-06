@@ -25,8 +25,8 @@ import statistics
 from datetime import datetime, timedelta
 from typing import TypedDict
 
-from mcs_queries import (CHANGE_ACTIONS, DAY_S, FACT_KINDS_SQL, JST,
-                         MED_ACTIONS,
+from mcs_queries import (CHANGE_ACTIONS, DAY_S, EXTRACT_FEEDBACK_KIND,
+                         FACT_KINDS_SQL, JST, MED_ACTIONS,
                          current_fact_pred,
                          iter_period_ends, json_or_null,
                          med_capability_evidence,
@@ -34,6 +34,7 @@ from mcs_queries import (CHANGE_ACTIONS, DAY_S, FACT_KINDS_SQL, JST,
                          transition_cooccurrences, thread_reply_pairs)
 from project_metadata_view import get_project_metadata
 from drug_map import current_refs, _progress as drug_map_progress
+import structured_view
 DEFINITION_VERSION = "2026-10-06"
 
 # engineering caps (A-8): detail 20 default / 100 max, top categories
@@ -190,6 +191,7 @@ def st_data_quality(db, scope):
               AND json_extract(a.meta,'$.prefilter') IS NOT NULL{w}""",
         p).fetchone()[0]
     return _result("ok", scope, {
+        "urgency_rule_outcomes": _urgency_rule_outcomes(db, w, p),
         "stages": {
             "fetched": _ratio(fetched, total, "messages"),
             "parsed_current_revision": _ratio(parsed, total, "messages"),
@@ -202,7 +204,48 @@ def st_data_quality(db, scope):
                   "stale_parsed = extraction exists but for an older "
                   "content revision",
                   "extract_prefiltered = marked no-signal without an "
-                  "LLM call"]})
+                  "LLM call",
+                  "urgency_rule_outcomes = what the shared urgency reading "
+                  "did with current lexical-rule highs; llm_routine_"
+                  "suppressed counts 🚨 hidden by an AI routine verdict "
+                  "(not a measured miss rate); human_urgency_reports counts "
+                  "⚠ reports on the urgency field"]})
+
+
+def _urgency_rule_outcomes(db, w, p) -> dict:
+    """Counts only: how current rule-high posts are displayed, so the owner
+    can watch how often an AI 'routine' verdict suppresses the 🚨 net and
+    how often a QC audit disagrees with a displayed AI high."""
+    mids = [r[0] for r in db.execute(
+        f"""SELECT DISTINCT m.message_id FROM artifacts a JOIN messages m
+            ON m.message_id=a.message_id
+            WHERE a.kind='extract_v1'
+              AND json_extract({json_or_null('a.content')},'$.urgency')='high'{w}""",
+        p)]
+    out = {"rule_high": 0, "llm_high": 0, "llm_high_qc_disagreed": 0,
+           "rule_only": 0, "llm_routine_suppressed": 0,
+           # ⚠ 誤り報告（緊急度）: the human labels #19 starts from
+           "human_urgency_reports": db.execute(
+               f"""SELECT COUNT(*) FROM artifacts h JOIN messages m
+                   ON m.message_id=h.message_id
+                   WHERE h.kind='{EXTRACT_FEEDBACK_KIND}'
+                     AND json_extract({json_or_null('h.content')},'$.field')
+                         ='urgency'{w}""", p).fetchone()[0]}
+    for mid in mids:
+        if (structured_view.latest_artifact(db, "extract_v1", mid) or {}).get(
+                "urgency") != "high":
+            continue                     # only the current rule generation
+        out["rule_high"] += 1
+        shown = structured_view.message_urgency(db, mid)
+        if shown == "llm":
+            out["llm_high"] += 1
+            if structured_view.urgency_qc_disagreement(db, mid):
+                out["llm_high_qc_disagreed"] += 1
+        elif shown == "rule":
+            out["rule_only"] += 1
+        else:
+            out["llm_routine_suppressed"] += 1
+    return out
 
 
 # ---------------- T1 ----------------

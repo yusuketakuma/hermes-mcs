@@ -358,6 +358,26 @@ def test_message_urgency_llm_verdict_supersedes_rule(db, llm, llm_meta, expect):
 
 
 
+def test_stats_count_rule_high_suppressed_by_llm_routine(db):
+    import mcs_stats
+
+    db.save_messages([_message(mid=i, body='至急ご確認ください') for i in (1, 2, 3)])
+    for mid, llm in ((1, 'routine'), (2, 'high'), (3, None)):
+        chash = _v1_urgent(db, mid)
+        if llm:
+            db.artifact_add('extract_llm', json.dumps({'urgency': llm}),
+                            project_id=1, message_id=mid,
+                            meta={'hash': chash,
+                                  'extract_version': extract_llm.EXTRACT_VERSION})
+    for field in ('urgency', 'meds'):
+        db.artifact_add('extract_feedback_v1', json.dumps({'field': field}),
+                        project_id=1, message_id=1)
+    st = mcs_stats.run_stats(db.db, time.time() + 86400,
+                             {'stat': 'data_quality', 'limit': 20})
+    assert st['stats']['data_quality']['urgency_rule_outcomes'] == {
+        'rule_high': 3, 'llm_high': 1, 'llm_high_qc_disagreed': 0,
+        'rule_only': 1, 'llm_routine_suppressed': 1, 'human_urgency_reports': 1}
+
 def test_message_urgency_llm_verdict_under_v4_read_model(db):
     from structured_view import message_urgency
 

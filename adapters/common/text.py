@@ -161,10 +161,10 @@ def valid_due(due: str) -> bool:
 
 
 # ⚠ report target parts — values match mcs_operations
-# EXTRACT_FEEDBACK_FIELDS
-FEEDBACK_FIELDS = (("summary", "要約"), ("meds", "薬"), ("symptoms", "症状"),
-                   ("requests", "依頼"), ("vitals", "バイタル"),
-                   ("other", "その他"))
+# EXTRACT_FEEDBACK_FIELDS (pinned by test_feedback_fields_match_the_runner_vocabulary)
+FEEDBACK_FIELDS = (("summary", "要約"), ("urgency", "緊急度"), ("meds", "薬"),
+                   ("symptoms", "症状"), ("requests", "依頼"),
+                   ("vitals", "バイタル"), ("other", "その他"))
 # 🚫 reason codes — values match mcs_operations DISMISS_REASON_CODES
 DISMISS_REASONS = (("false_positive", "誤検知"), ("already_handled", "対応済み"),
                    ("duplicate", "重複"), ("out_of_scope", "対象外"),
