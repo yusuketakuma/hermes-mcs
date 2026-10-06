@@ -18,6 +18,7 @@ import math
 import os
 import sys
 import time
+from threading import Lock
 import urllib.error
 import urllib.parse
 from contextlib import contextmanager, suppress
@@ -130,6 +131,7 @@ def _admission_db_path() -> str:
 
 
 _BROKERS: dict = {}
+_BROKERS_LOCK = Lock()
 
 
 def _broker(path: str | None = None):
@@ -137,10 +139,14 @@ def _broker(path: str | None = None):
     import llm_admission
     p = path or _admission_db_path()
     b = _BROKERS.get(p)
-    if b is None or getattr(b, "_closed", False):
-        b = llm_admission.Broker(p, slots=SLOT_COUNT)
-        _BROKERS[p] = b
-    return b
+    if b is not None and not getattr(b, "_closed", False):
+        return b
+    with _BROKERS_LOCK:
+        b = _BROKERS.get(p)
+        if b is None or getattr(b, "_closed", False):
+            b = llm_admission.Broker(p, slots=SLOT_COUNT)
+            _BROKERS[p] = b
+        return b
 
 
 def admitted_chat(client_route: str, prompt: str, *,
@@ -366,6 +372,7 @@ def _validate_chat_args(prompt, endpoint, timeout, max_tokens,
     if not bounded_http._loopback_endpoint_allowed(endpoint):
         raise ValueError("local_endpoint_not_allowed")
     if isinstance(timeout, bool) or not isinstance(timeout, int | float) \
+            or abs(timeout) > sys.float_info.max \
             or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("timeout_invalid")
     if max_tokens is not None and (type(max_tokens) is not int
@@ -373,6 +380,7 @@ def _validate_chat_args(prompt, endpoint, timeout, max_tokens,
         raise ValueError("max_tokens_invalid")
     if deadline is not None and (
             isinstance(deadline, bool) or not isinstance(deadline, int | float)
+            or abs(deadline) > sys.float_info.max
             or not math.isfinite(deadline)):
         raise ValueError("deadline_invalid")
 
@@ -565,5 +573,5 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
 def _json_obj(text: str):
     try:
         return json.loads(text)
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError, RecursionError):
         return None

@@ -213,8 +213,8 @@ class _WSConn:
 
     def recv_message(self) -> bytes:
         """Reassemble one complete data message; answer pings inline."""
-        parts: list[bytes] = []
-        total = 0
+        message = bytearray()
+        started = False
         while True:
             b0, b1 = self._read_exact(2)
             fin, opcode = b0 & 0x80, b0 & 0x0F
@@ -231,7 +231,7 @@ class _WSConn:
             if opcode in (0x8, 0x9, 0xA):
                 if not fin or ln > 125:
                     raise BootstrapError("cdp_ws_protocol")
-            elif total + ln > self._MAX_MSG:
+            elif len(message) + ln > self._MAX_MSG:
                 raise BootstrapError("cdp_ws_too_large")
             payload = self._read_exact(ln) if ln else b""
             if opcode == 0x9:
@@ -242,14 +242,14 @@ class _WSConn:
             if opcode == 0x8:
                 raise BootstrapError("cdp_ws_closed")
             if opcode in (0x1, 0x2):
-                if parts:
+                if started:
                     raise BootstrapError("cdp_ws_protocol")
-            elif opcode != 0x0 or not parts:
+                started = True
+            elif opcode != 0x0 or not started:
                 raise BootstrapError("cdp_ws_protocol")
-            parts.append(payload)
-            total += ln
+            message.extend(payload)
             if fin:
-                return b"".join(parts)
+                return bytes(message)
 
     def close(self):
         with suppress(OSError):

@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "HTTPの不正な処理時間指定による異常終了を防止",
+  "summary": "表現できないほど大きな処理時間・期限が指定された場合に、数値変換の異常ではなく入力エラーとして拒否します。ローカルモデルと共通HTTP経路で送信前に判定します。",
+  "upgrade": "設定変更は不要です。正しい処理時間・期限と既存の送信先制約は変わりません。",
+  "details": ["浮動小数点の範囲を超える整数はmath.isfiniteより前に拒否し、timeout_invalid/deadline_invalidの既存契約を維持する。"],
+  "refs": ["mcs/core/local_llm.py", "mcs/core/bounded_http.py"]
+}

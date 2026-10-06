@@ -118,6 +118,9 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
               "disk_free_mb": h.get("disk_free_mb")}
     report["status"] = ("stale" if age > deadline_s
                         else OVERALL_STATUS[overall])
+    unread_unknown = "unread_at" in h and not _finite_number(unread_at)
+    if report["status"] == "ok" and unread_unknown:
+        report["status"] = "degraded"
     run = h.get("run")
     if isinstance(run, dict):
         overshoot = run.get("overshoot_s")
@@ -131,6 +134,10 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     reasons = h.get("state_reasons")
     reasons = (reasons if isinstance(reasons, list)
                and all(_is_code(r) for r in reasons) else None)
+    if unread_unknown and report["status"] == "degraded":
+        reasons = list(reasons or [])
+        if "unread_collection_unknown" not in reasons:
+            reasons.append("unread_collection_unknown")
     if report["status"] == "stale":
         # the stale file's codes describe its own run, not the current
         # staleness: keep them labelled as recorded, the cause unknown
@@ -189,6 +196,8 @@ def evaluate(home: str = HOME, now: float | None = None,
     file flips it (either way); stale/missing/corrupt evidence keeps
     the last known value."""
     now = time.time() if now is None else now
+    if not _finite_number(now):
+        raise ValueError("health_now_invalid")
     cfg = load_config() if cfg is None else cfg
     deadline = freshness_deadline(cfg)
     health_path = os.path.join(home, HEALTH_REL)
@@ -254,6 +263,8 @@ def main(argv: list | None = None) -> int:
     ap.add_argument("--config", default=None,
                     help="config.json path (default ~/.mcs/config.json)")
     args = ap.parse_args(argv)
+    if args.now is not None and not _finite_number(args.now):
+        ap.error("now must be a finite number")
     cfg = load_config(args.config) if args.config else None
     report = evaluate(home=args.home, now=args.now, cfg=cfg)
     if report["alert"]:

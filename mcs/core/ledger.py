@@ -193,7 +193,7 @@ class Ledger:
             for side in (path + "-wal", path + "-shm"):
                 if os.path.exists(side):
                     os.chmod(side, 0o600)
-        except Exception:
+        except BaseException:
             self.db.close()
             raise
 
@@ -291,6 +291,8 @@ class Ledger:
         self.db.executescript("""
           CREATE INDEX IF NOT EXISTS idx_messages_project_time
             ON messages(project_id, posted_at_ts);
+          CREATE INDEX IF NOT EXISTS idx_messages_notified
+            ON messages(notified_at) WHERE notified_at IS NOT NULL;
           CREATE INDEX IF NOT EXISTS idx_messages_parent
             ON messages(parent_id);
           CREATE INDEX IF NOT EXISTS idx_messages_thread_time
@@ -301,6 +303,12 @@ class Ledger:
             ON requests(source_message_id);
           CREATE INDEX IF NOT EXISTS idx_artifacts_kind_msg
             ON artifacts(kind, message_id);
+          CREATE INDEX IF NOT EXISTS idx_fetch_jobs_pending_due
+            ON fetch_jobs(kind, next_try) WHERE state='pending';
+          CREATE INDEX IF NOT EXISTS idx_attachments_pending
+            ON attachments(attachment_id) WHERE state='pending';
+          CREATE INDEX IF NOT EXISTS idx_outbox_due_states
+            ON notify_outbox(event_id) WHERE state IN ('pending','failed');
           CREATE UNIQUE INDEX IF NOT EXISTS uq_attachments_msg_file
             ON attachments(message_id, file_id);
         """)
@@ -2493,6 +2501,11 @@ class Ledger:
 
     def artifacts(self, kind: str, project_id: int = None,
                   message_id: int = None) -> list:
+        return list(self.iter_artifacts(kind, project_id, message_id))
+
+    def iter_artifacts(self, kind: str, project_id: int = None,
+                       message_id: int = None, *, descending: bool = False):
+        """Read artifact history incrementally in the requested ID order."""
         q = "SELECT * FROM artifacts WHERE kind=?"
         params: list = [kind]
         if project_id is not None:
@@ -2501,7 +2514,8 @@ class Ledger:
         if message_id is not None:
             q += " AND message_id=?"
             params.append(message_id)
-        return self.db.execute(q + " ORDER BY artifact_id", params).fetchall()
+        order = " DESC" if descending else ""
+        return self.db.execute(q + " ORDER BY artifact_id" + order, params)
 
     def close(self):
         self.db.close()
@@ -2518,11 +2532,15 @@ class LedgerReader(Ledger):
         uri = Path(path).resolve().as_uri() + "?mode=ro"
         self.db = sqlite3.connect(uri, uri=True,
                                   timeout=30)
-        self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA busy_timeout=30000")
-        self._fts = self.db.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' "
-            "AND name='messages_fts'").fetchone() is not None
+        try:
+            self.db.row_factory = sqlite3.Row
+            self.db.execute("PRAGMA busy_timeout=30000")
+            self._fts = self.db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='messages_fts'").fetchone() is not None
+        except BaseException:
+            self.db.close()
+            raise
 
 
 def publish_snapshot(db_path: str, dest_dir: str) -> str | None:

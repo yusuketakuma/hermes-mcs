@@ -182,9 +182,8 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
             if floor and floor <= since:
                 ok, reason = False, "already_floored"
             else:
-                # an in-flight walk should DEEPEN on a newer request rather
-                # than drop it — pages are newest-first so a bigger cutoff
-                # just extends the same walk (page cursor stays valid)
+                # A deeper request must revisit the old cutoff page: rows
+                # below that cutoff were filtered out before persistence.
                 existing = ledger.history_job(req["project_id"])
                 if existing:
                     try:
@@ -196,6 +195,9 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                                         reason_code="invalid_payload")
                         existing = None
                 if existing:
+                    if since < pl["since"]:
+                        pl["page"] = 1
+                        pl["stalls"] = 0
                     pl["since"] = min(since, pl.get("since", since))
                     pl["pages"] = max(pl.get("pages", 10),
                                       req.get("pages", 10))

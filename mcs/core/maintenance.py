@@ -11,7 +11,7 @@ import sqlite3
 import tempfile
 import time
 from pathlib import Path
-from contextlib import suppress
+from contextlib import closing, suppress
 
 from ledger import publish_snapshot as _publish_snapshot, valid_mcs_db
 from mcs_util import HOME, atomic_write, disk_floor_mb, publish_tmp
@@ -61,6 +61,23 @@ def _verified_unchanged(dest: str) -> bool:
     return bool(marker) and marker == _stat_sig(dest)
 
 
+def _publish_backup(db_path: str, tmp: str, dest: str) -> None:
+    """Copy, verify and publish a backup while owning its staging file."""
+    try:
+        with closing(sqlite3.connect(
+                Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as src:
+            with closing(sqlite3.connect(tmp)) as dst:
+                src.backup(dst)
+                dst.execute("PRAGMA journal_mode=DELETE")
+        if not valid_mcs_db(tmp):
+            raise MaintenanceError("backup_verify_failed")
+        publish_tmp(tmp, dest, mode=0o600)
+    except BaseException:
+        with suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
 def daily_backup(db_path: str):
     """One VERIFIED sqlite .backup per day — write to tmp, schema/quick_check,
     then atomic publish. A present-but-broken file must never block a
@@ -82,25 +99,7 @@ def daily_backup(db_path: str):
     tmp = dest + ".tmp"
     with suppress(FileNotFoundError):
         os.unlink(tmp)
-    src = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro",
-                          uri=True)
-    try:
-        dst = sqlite3.connect(tmp)
-        try:
-            src.backup(dst)
-            dst.execute("PRAGMA journal_mode=DELETE")
-        finally:
-            dst.close()
-            src.close()
-        if not valid_mcs_db(tmp):
-            raise MaintenanceError("backup_verify_failed")
-    except BaseException:
-        with suppress(OSError):   # never strand a partial PHI copy
-            os.unlink(tmp)
-        raise
-    # chmod -> fsync -> os.replace -> dir fsync: a power loss never
-    # leaves a torn rollback point at dest
-    publish_tmp(tmp, dest, mode=0o600)
+    _publish_backup(db_path, tmp, dest)
     sig = _stat_sig(dest)
     if sig:
         with suppress(OSError):   # marker is only a fast path
@@ -124,23 +123,7 @@ def preupdate_backup(db_path: str) -> str:
         prefix=f"preupdate-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
     os.close(fd)
     dest = tmp[:-4]
-    src = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro",
-                          uri=True)
-    try:
-        dst = sqlite3.connect(tmp)
-        try:
-            src.backup(dst)
-            dst.execute("PRAGMA journal_mode=DELETE")
-        finally:
-            dst.close()
-            src.close()
-        if not valid_mcs_db(tmp):
-            raise MaintenanceError("backup_verify_failed")
-    except BaseException:
-        with suppress(OSError):   # never strand a partial PHI copy
-            os.unlink(tmp)
-        raise
-    publish_tmp(tmp, dest, mode=0o600)
+    _publish_backup(db_path, tmp, dest)
     return dest
 
 

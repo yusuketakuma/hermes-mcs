@@ -52,6 +52,8 @@ import os
 import sqlite3
 import time
 from contextlib import contextmanager
+from functools import wraps
+from threading import RLock
 
 CLASSES = ("RT", "BACKLOG")
 
@@ -81,11 +83,25 @@ TERMINAL = ("terminal", "fenced")
 
 
 def _connect(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(path, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=delete")
-    conn.execute("PRAGMA busy_timeout=30000")
+    conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=delete")
+        conn.execute("PRAGMA busy_timeout=30000")
+    except BaseException:
+        conn.close()
+        raise
     return conn
+
+
+def _serialized(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        # Cached handles serve transport threads; only broker state work
+        # is serialized, never an inference call or its waiting period.
+        with self._mutex:
+            return method(self, *args, **kwargs)
+    return call
 
 
 class Broker:
@@ -94,6 +110,7 @@ class Broker:
 
     def __init__(self, path: str, routes: dict | None = None,
                  bg_window_s: float = 120.0, slots: int = 2):
+        self._mutex = RLock()
         self.path = path
         self.routes = dict(routes or DEFAULT_ROUTES)
         self.bg_window_s = bg_window_s
@@ -186,11 +203,10 @@ class Broker:
         self.db.execute("BEGIN IMMEDIATE")
         try:
             yield
+            self.db.commit()
         except BaseException:
             self.db.rollback()
             raise
-        else:
-            self.db.commit()
 
     def _recover(self) -> None:
         """Rotate the epoch when the previous process exited with any
@@ -222,6 +238,7 @@ class Broker:
                     " state='closed', rt_waiting=0, rotated_at=?"
                     " WHERE singleton=1", (new_epoch, time.time()))
 
+    @_serialized
     def open_epoch(self, verify_empty) -> bool:
         """Reopen the current epoch after the backend is verified
         empty. ``verify_empty`` is a callable returning True only when
@@ -235,9 +252,11 @@ class Broker:
                 " WHERE singleton=1")
         return True
 
+    @_serialized
     def epoch(self) -> int:
         return self._meta()["epoch"]
 
+    @_serialized
     def is_open(self) -> bool:
         return self._meta()["state"] == "open"
 
@@ -249,6 +268,7 @@ class Broker:
             f"AND state IN ({','.join('?' * len(OCCUPYING))})",
             (epoch, cls, *OCCUPYING)).fetchone()[0]
 
+    @_serialized
     def overlap(self) -> bool:
         """Invariant check: any moment with both classes occupying."""
         row = self._meta()
@@ -256,6 +276,7 @@ class Broker:
         bg = self._occupancy(self.db, row["epoch"], "BACKLOG")
         return rt > 0 and bg > 0
 
+    @_serialized
     def acquire(self, client: str, cls: str, job_gen: str | None = None,
                 request_id: str | None = None) -> dict:
         """Reserve a permit. Returns a verdict dict — denial is data,
@@ -326,11 +347,13 @@ class Broker:
         return {"admitted": True, "permit_id": cur.lastrowid,
                 "epoch": epoch}
 
+    @_serialized
     def _permit(self, permit_id: int) -> sqlite3.Row | None:
         return self.db.execute(
             "SELECT * FROM permits WHERE permit_id=?",
             (permit_id,)).fetchone()
 
+    @_serialized
     def poll(self, permit_id: int) -> dict:
         """Promote a waiting RT permit once backlog fully drained.
         Returns the permit's live view; a stale-epoch permit is fenced
@@ -359,6 +382,7 @@ class Broker:
             return {"state": p["state"], "epoch": p["epoch"],
                     "cls": p["cls"]}
 
+    @_serialized
     def sent(self, permit_id: int, request_id: str | None = None) -> dict:
         """Transition admitted→sent and mint the backend token. Only a
         current-epoch admitted (or just-promoted waiting) permit may
@@ -389,6 +413,7 @@ class Broker:
             return {"sent": True, "token": token,
                     "epoch": meta["epoch"]}
 
+    @_serialized
     def token_valid(self, token: str, cls: str,
                     request_id: str | None = None) -> dict:
         """Backend-side access control: the token must be a live 'sent'
@@ -422,6 +447,7 @@ class Broker:
         return {"ok": True, "permit_id": permit_id, "cls": p["cls"],
                 "epoch": epoch}
 
+    @_serialized
     def terminal(self, permit_id: int, outcome: str,
                  proof: str | None = None) -> dict:
         """Confirmed backend terminal retirement — the ONLY way a
@@ -460,6 +486,7 @@ class Broker:
             return p, {"ok": True, "state": p["state"]}
         return p, None
 
+    @_serialized
     def cancel(self, permit_id: int) -> dict:
         """A cancel verb is NOT an acknowledgement — the permit moves
         to cancel_pending and keeps occupying its class until a
@@ -486,6 +513,7 @@ class Broker:
                 " ('admitted','sent','unknown')", (permit_id,))
             return {"ok": True, "state": "cancel_pending"}
 
+    @_serialized
     def mark_unknown(self, permit_id: int,
                      reason: str | None = None) -> dict:
         """Completion unproven (timeout, socket drop, vanished
@@ -509,6 +537,7 @@ class Broker:
 
     # ---------- observability ----------
 
+    @_serialized
     def status(self) -> dict:
         meta = self._meta()
         occ = {}
@@ -527,6 +556,7 @@ class Broker:
                     max(0.0, time.time() - oldest_bg)
                     if oldest_bg is not None else None)}
 
+    @_serialized
     def close(self) -> None:
         if self._closed:
             return

@@ -355,6 +355,9 @@ def acquire_run_lock(path: str | None = None) -> int | None:
     except BlockingIOError:
         os.close(fd)
         return None
+    except BaseException:
+        os.close(fd)
+        raise
     return fd
 
 
