@@ -2550,7 +2550,8 @@ def test_fallback_ack_seeds_head_walk_on_post_ack_gap(tmp_path, probe):
     job = db.job_pending("history_head", 1)
     assert json.loads(job["payload"]) == {
         "since": db.coverage_ts(1) - run_check.BACKFILL_OVERLAP_S, "page": 1,
-        "pages": run_check.BACKFILL_MAX_PAGES, "trickle": False}
+        "pages": run_check.BACKFILL_MAX_PAGES, "trickle": False,
+        "notify": True}
     db.close()
 
 

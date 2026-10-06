@@ -851,6 +851,11 @@ class Ledger:
         for message in [m, *m.replies]:
             if message.project_id != expected_project:
                 raise ValueError("message_project_mismatch")
+            if message.parent_id and not message.is_unread \
+                    and self._reply_job_unread(message):
+                # acknowledged by thread-read before it was stored: the
+                # job carries the unread evidence the fetch cannot
+                message.is_unread = True
             if self._upsert_message(message):
                 new_ids.append(message.message_id)
             self._save_attachments(message, now)
@@ -921,6 +926,16 @@ class Ledger:
         for ids in changed.values():
             ids.sort()
         return changed
+
+    def _reply_job_unread(self, m) -> bool:
+        """An open reply job flagged {"unread": true} (stage_thread_read
+        acknowledged the reply before it was stored)."""
+        row = self.db.execute(
+            "SELECT payload FROM fetch_jobs WHERE kind='reply' "
+            "AND project_id=? AND message_id=? AND state != 'done'",
+            (m.project_id, m.message_id)).fetchone()
+        return bool(row) and (loads_dict(row["payload"] or "{}")
+                              or {}).get("unread") is True
 
     def _retire_reply_job(self, m, now: float):
         """A terminal body landing in the ledger retires any queued reply
@@ -1929,6 +1944,21 @@ class Ledger:
                                revive_failed=revive_failed)
         self.db.commit()
         return cur.lastrowid
+
+    def job_set_flag(self, kind: str, project_id: int, message_id: int,
+                     key: str) -> None:
+        """Set payload[key]=true on a pending job — job_add keeps a
+        pending row's payload, so a flag must be merged in separately."""
+        row = self.job_pending(kind, project_id, message_id)
+        if row is None:
+            return
+        pl = loads_dict(row["payload"] or "{}")
+        if pl is None or pl.get(key) is True:
+            return
+        pl[key] = True
+        self.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
+                        (json.dumps(pl), row["job_id"]))
+        self.db.commit()
 
     def job_due(self, limit: int = 20, kind: str | None = None,
                 after_job_id: int = 0) -> list:

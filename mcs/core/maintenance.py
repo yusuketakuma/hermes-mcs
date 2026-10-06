@@ -311,12 +311,14 @@ def _unlink_attachment(path: str) -> None:
 
 def prune_leftovers() -> int:
     """Delete day-old download temp files (a hard kill skips the
-    adapter's own cleanup) and quarantined cmd/*.json.invalid files.
-    ctime: a quarantine rename keeps the original mtime."""
+    adapter's own cleanup) and quarantined cmd/ and cmd_int/
+    *.json.invalid files. ctime: a quarantine rename keeps the original
+    mtime."""
     cutoff = time.time() - LEFTOVER_KEEP_S
     removed = 0
     for pattern in (os.path.join(HOME, "data", "attachments", ".download-*.part"),
-                    os.path.join(HOME, "data", "cmd", "*.json.invalid")):
+                    os.path.join(HOME, "data", "cmd", "*.json.invalid"),
+                    os.path.join(HOME, "data", "cmd_int", "*.json.invalid")):
         for path in glob.glob(pattern):
             with suppress(OSError):
                 if os.stat(path).st_ctime < cutoff:

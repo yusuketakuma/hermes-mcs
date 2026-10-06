@@ -84,6 +84,10 @@ def make_discord_factory(ctx):
         interaction listener and the supervised delivery worker. SDK
         imports stay inside so /mcs works without discord.py."""
         settings = _interactive_settings(ctx, native)
+        if settings is None and ctx.get_config("interactive", False) is True:
+            # opted in but unusable: queued cards would wait silently
+            _event_logger("mcs_discord")("worker_disabled",
+                                          reason="config_incomplete")
         if settings is None or _standalone_owned(settings["data_root"]):
             return None
         from .mcs_discord.tasks import Supervisor
@@ -141,6 +145,9 @@ def make_slack_factory(ctx):
     def factory(native, adapter):
         settings = _slack_adapter_settings(ctx)
         if settings is None:
+            if ctx.get_config("slack_adapter_enabled", False) is True:
+                _event_logger("mcs_slack")("worker_disabled",
+                                            reason="config_incomplete")
             return None
         from .mcs_delivery import paths
         flags = paths.read_flags(settings["data_root"])

@@ -3025,17 +3025,35 @@ def legacy_admissions(ledger, cfg) -> set | None:
     to legacy and reopen unrestricted v3 inference."""
     try:
         if not isinstance(cfg, dict):
+            _admission_closed(["config_not_object"])
             return set()
         import semantic_policy
         policy, error = semantic_policy.semantic_config(cfg)
         if error:
+            _admission_closed(error)
             return set()
         if policy.get("fact_source") != "canonical":
             return None
         import semantic_v4
         return semantic_v4.active_legacy_admissions(ledger)
-    except Exception:
+    except Exception as e:
+        _admission_closed([type(e).__name__])
         return set()
+
+
+_admission_closed_last = None
+
+
+def _admission_closed(reasons) -> None:
+    """One stderr event per distinct closure — a closed admission stops
+    ALL legacy extraction, so it must never be silent (nor spam the
+    resident drainer's loop)."""
+    global _admission_closed_last
+    reasons = sorted(str(r) for r in reasons)
+    if reasons != _admission_closed_last:
+        _admission_closed_last = reasons
+        print(json.dumps({"event": "admission_closed", "reasons": reasons}),
+              file=sys.stderr, flush=True)
 
 
 def _background_semantic(ledger, stop=None):
