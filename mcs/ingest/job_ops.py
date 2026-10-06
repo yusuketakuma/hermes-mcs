@@ -32,6 +32,7 @@ from mcs_util import HOME, loads_dict
 import mcs_requests
 
 CMD_DIR = os.path.join(HOME, "data", "cmd")
+CMD_TORN_S = 3600
 
 TRICKLE_PAGES = 3        # timeline pages per patient per run
 TRICKLE_PATIENTS = 3     # patients advanced per run
@@ -123,6 +124,12 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
         except (OSError, ValueError, RecursionError):
             # WatchPaths can fire while a producer is still writing. Never
             # consume a request until it is complete enough to validate.
+            # One still unparsable after CMD_TORN_S is a torn write, not
+            # an in-flight one — quarantine it instead of re-reading forever.
+            with suppress(OSError):
+                if time.time() - os.path.getmtime(path) > CMD_TORN_S:
+                    os.replace(path, path + ".invalid")
+                    result["errors"].append("cmd_invalid: unparsable")
             continue
         if consent_only and (not isinstance(req, dict)
                              or req.get("cmd") != "ops.restore_approve"):

@@ -796,13 +796,17 @@ def stage_thread_read(adapter, ledger, result, deadline):
             missing = server - ledger.stored_reply_ids(parent)
             if missing:
                 # Store full replies before acknowledging the thread.
+                # never revive a burnt-out job: this runs every tick and
+                # would reset its attempts forever (same as save_thread_replies)
                 for rid in sorted(missing):
-                    ledger.job_add("reply", pid, rid, parent_id=parent)
+                    ledger.job_add("reply", pid, rid, parent_id=parent,
+                                   revive_failed=False)
                 continue
             ledger.mark_thread_read(pid, parent, last, "unknown")
             seen = adapter.read_thread(pid, parent)
             for rid in sorted(seen - server):
-                ledger.job_add("reply", pid, rid, parent_id=parent)
+                ledger.job_add("reply", pid, rid, parent_id=parent,
+                               revive_failed=False)
             if not adapter.thread_unread(pid, parent):
                 ledger.mark_thread_read(pid, parent, last, "confirmed")
                 done.append(parent)
@@ -1731,6 +1735,10 @@ def _housekeeping(result):
             result["attachments_pruned"] = pruned
     except Exception as e:
         result["errors"].append(f"prune: {type(e).__name__}")
+    try:
+        maintenance.prune_leftovers()
+    except Exception as e:
+        result["errors"].append(f"prune_leftovers: {type(e).__name__}")
 
 
 def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
@@ -1942,7 +1950,10 @@ def _main() -> int:
         _run_stage(result, "metadata_shadow", deadline, _run_metadata_shadow,
                    adapter, ledger, result, deadline, cfg,
                    manual=args.metadata_shadow)
-        _run_stage(result, "housekeeping", deadline, _housekeeping, result)
+        # optional, but a slow MCS can spend every tick's budget on unread
+        # — once the daily backup is overdue it runs past the deadline
+        _run_stage(result, "housekeeping", deadline, _housekeeping, result,
+                   required=maintenance.backup_overdue())
         status = _run_stage(result, "finish", deadline, _finish_run,
                             ledger, cfg, result, run_id, deadline, required=True)
         assert isinstance(status, str)

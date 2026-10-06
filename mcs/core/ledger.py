@@ -309,6 +309,10 @@ class Ledger:
             ON attachments(attachment_id) WHERE state='pending';
           CREATE INDEX IF NOT EXISTS idx_outbox_due_states
             ON notify_outbox(event_id) WHERE state IN ('pending','failed');
+          CREATE INDEX IF NOT EXISTS idx_outbox_kind_created
+            ON notify_outbox(kind, created_at);
+          CREATE INDEX IF NOT EXISTS idx_fetch_jobs_failed_recent
+            ON fetch_jobs(updated_at, kind) WHERE state='failed';
           CREATE UNIQUE INDEX IF NOT EXISTS uq_attachments_msg_file
             ON attachments(message_id, file_id);
         """)
@@ -1843,12 +1847,14 @@ class Ledger:
 
     def job_add(self, kind: str, project_id: int, message_id: int = 0,
                 parent_id: int | None = None, payload: dict | None = None,
-                next_try: float = 0) -> int | None:
+                next_try: float = 0, revive_failed: bool = True) -> int | None:
         # a done/failed job for the same key must be REVIVED by a new
         # request — plain INSERT OR IGNORE would silently drop re-import
         # requests forever. An in-flight job keeps its progress.
+        # revive_failed=False is for periodic re-discovery (not a request).
         cur = self._job_add_tx(kind, project_id, message_id, parent_id,
-                               payload, next_try)
+                               payload, next_try,
+                               revive_failed=revive_failed)
         self.db.commit()
         return cur.lastrowid
 
@@ -2442,9 +2448,17 @@ class Ledger:
         """, (since, limit)).fetchall()
 
     def stored_reply_ids(self, parent_id: int) -> set:
-        return {r[0] for r in self.db.execute(
-            "SELECT message_id FROM messages WHERE parent_id=? "
-            "AND body_state IN ('full','deleted')", (parent_id,))}
+        """Replies settled for a thread clear: full/deleted bodies, plus
+        stored incomplete ones whose reply job burnt out — waiting on a
+        failed job would block the thread (and a THREAD_READ_MAX slot)
+        until it ages out of the window."""
+        return {r[0] for r in self.db.execute("""
+          SELECT m.message_id FROM messages m
+          WHERE m.parent_id=? AND (m.body_state IN ('full','deleted')
+            OR EXISTS(SELECT 1 FROM fetch_jobs j WHERE j.kind='reply'
+                      AND j.project_id=m.project_id
+                      AND j.message_id=m.message_id AND j.state='failed'))
+        """, (parent_id,))}
 
     def mark_thread_read(self, project_id: int, parent_id: int,
                          last_reply_id: int, status: str) -> None:

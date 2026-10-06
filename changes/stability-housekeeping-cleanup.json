@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "MCSが遅い間も日次の保守処理と一時ファイル掃除が止まらないよう修正",
+  "summary": "MCSの応答が遅く毎回の実行時間を使い切ると、日次バックアップ・ログの切り詰め・添付の期限削除が後回しのまま実行されませんでした。最新の日次バックアップが2日より古い場合は時間超過でも保守処理を実行します。あわせて、強制終了で残ったダウンロード途中ファイルや壊れたコマンドファイルを掃除し、更新・復旧・操作受付・ローカルLLMのログも肥大化しないよう切り詰めます。",
+  "upgrade": "追加操作は不要です。ローカルLLM（ai.mcs.llamaserver）の再起動間隔の変更は、LaunchAgent を再配置して読み込み直したときから適用されます。",
+  "details": [
+    "housekeeping 段は最新の ledger-*.db が2日より古いときだけ必須段として実行する（バックアップが1つもない新規導入時は従来どおり）。",
+    "添付の期限削除は30秒の待機付き接続で100件ずつ確定し、台帳の参照を外してからファイルを削除する。",
+    "data/attachments/.download-*.part と data/cmd/*.json.invalid は1日経過で削除。1時間以上読めない data/cmd/*.json は .invalid へ隔離する。",
+    "ログ切り詰め対象に data/update.log・recovery.log・cmd_int.log・~/.hermes/logs/llamacpp.log を追加（5MB超で1世代を残してその場で切り詰め）。",
+    "ai.mcs.llamaserver.plist に ThrottleInterval 30 を追加し、起動失敗時の10秒間隔の再起動ループを防ぐ。"
+  ],
+  "refs": ["mcs/core/maintenance.py", "mcs/ingest/run_check.py", "mcs/ingest/job_ops.py", "deployment/launchagents/ai.mcs.llamaserver.plist"]
+}
