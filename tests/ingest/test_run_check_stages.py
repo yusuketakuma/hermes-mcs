@@ -1448,43 +1448,71 @@ def test_with_relogin_recovers_and_replays_stage(tmp_path):
 
 
 
-def _outage_health(tmp_path, monkeypatch, last_ok):
+
+def _health_unread_at(tmp_path, monkeypatch, unread_at):
     path = tmp_path / "health.json"
-    path.write_text(json.dumps({"overall": "failed", "last_ok_at": last_ok}))
+    path.write_text(json.dumps({"overall": "failed", "unread_at": unread_at}))
     monkeypatch.setattr(run_check, "HEALTH_FILE", str(path))
 
 
-@pytest.mark.parametrize("outage_s,seeded", [(3 * 3600, True), (600, False)])
-def test_recovery_after_long_outage_seeds_notifying_history_walks(
-        tmp_path, monkeypatch, outage_s, seeded):
-    """Posts read elsewhere during an outage are not unread any more —
-    a recovery after a long outage queues the bounded notifying
-    history_head walk for every active patient from the last ok run."""
+def test_relogin_journals_heal_facts_without_seeding(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    _health_unread_at(tmp_path, monkeypatch, time.time() - 3 * 3600)
+    adapter = SimpleNamespace(auto_login=lambda **kw: "ok", healed_tabs=1,
+                              chrome_restarted=True)
+    result = {"errors": [], "run_id": 9}
+    assert run_check._attempt_relogin(
+        adapter, db, result, "unread", mcs_adapter.SessionExpired(status=403)) == "ok"
+    assert result["relogin_attempts"][0]["healed_tabs"] == 1
+    assert result["relogin_attempts"][0]["chrome_restarted"] is True
+    assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 0
+    db.close()
+
+
+@pytest.mark.parametrize("gap_s,outage", [(3 * 3600, True), (600, False), (None, False)])
+def test_first_collecting_run_after_any_outage_announces_and_seeds(
+        tmp_path, monkeypatch, gap_s, outage):
+    """Any outage (session, sleep, network, stopped scheduler) leaves
+    unread_at behind. The next collecting run's backfill announces every
+    newly stored row — posts read elsewhere are no longer unread — and
+    the notifying head walk is queued for whatever backfill does not reach."""
     db = _ledger(tmp_path)
     now = time.time()
     for pid, archived in ((1, 0), (2, 0), (3, 1)):
         db.db.execute("INSERT INTO patients(project_id,patient_name,is_archived)"
                       " VALUES(?,?,?)", (pid, f"synthetic-{pid}", archived))
     db.db.commit()
-    _outage_health(tmp_path, monkeypatch, now - outage_s)
-    adapter = SimpleNamespace(auto_login=lambda **kw: "ok", healed_tabs=1)
-    result = {"errors": [], "run_id": 9}
-    assert run_check._attempt_relogin(
-        adapter, db, result, "unread", mcs_adapter.SessionExpired(status=403)) == "ok"
-    assert result["relogin_attempts"][0]["healed_tabs"] == 1
+    _health_unread_at(tmp_path, monkeypatch,
+                      None if gap_s is None else now - gap_s)
+    seen = {}
+    monkeypatch.setattr(run_check, "stage_unread", lambda *a, **k: None)
+    monkeypatch.setattr(run_check, "stage_backfill",
+                        lambda *a, **k: seen.update(k))
+    args = SimpleNamespace(jobs_only=False, no_backfill=False)
+    result = {"errors": [], "run_id": 3}
+    run_check._stage_fetch(None, db, args, {"self_posts": False}, result,
+                           time.monotonic() + 300, 3, False, 86400)
+    assert seen["notify_all_new"] is outage
     jobs = {pid: db.job_pending("history_head", pid) for pid in (1, 2, 3)}
-    if not seeded:
-        assert result["outage_catchup"] == 0 and not any(jobs.values())
+    if not outage:
+        assert "outage_since" not in result and not any(jobs.values())
         db.close()
         return
+    assert result["outage_since"] == pytest.approx(now - gap_s)
     assert result["outage_catchup"] == 2 and jobs[3] is None   # archived skipped
     for pid in (1, 2):
         payload = json.loads(jobs[pid]["payload"])
         assert payload["notify"] is True and payload["trickle"] is False
-        assert payload["since"] == int(now - outage_s) - run_check.BACKFILL_OVERLAP_S
-    # a second recovery in the same run does not re-seed
-    run_check._seed_outage_catchup(db, result)
-    assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 2
+    db.close()
+
+
+def test_jobs_only_runs_never_open_an_outage_catchup(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    _health_unread_at(tmp_path, monkeypatch, time.time() - 3 * 3600)
+    result = {"errors": []}
+    run_check._stage_fetch(None, db, SimpleNamespace(jobs_only=True), {}, result,
+                           time.monotonic() + 300, 1, False, None)
+    assert "outage_since" not in result
     db.close()
 
 def test_with_relogin_failed_login_escalates_with_state(tmp_path):

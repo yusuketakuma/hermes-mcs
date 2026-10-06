@@ -982,6 +982,10 @@ class MCSAdapter:
             return
         import subprocess
         self._remaining_timeout(1)
+        # CDP is down: a hung browser, or this profile opened without the
+        # debugging port, would absorb the relaunch (same-profile hand-off)
+        # and CDP would never come up — stop that instance first
+        self._stop_profile_chrome(profile_dir)
         subprocess.Popen([
             chrome_bin,
             f"--remote-debugging-port={urllib.parse.urlparse(self.cdp_url).port}",
@@ -998,6 +1002,55 @@ class MCSAdapter:
             if self._cdp_up():
                 return
         raise BootstrapError("chrome launch timed out")
+
+    def _stop_profile_chrome(self, profile_dir: str) -> bool:
+        """Stop Chrome main processes of exactly this dedicated profile
+        (helpers exit with them): SIGTERM, bounded wait, then SIGKILL.
+        Nothing else is touched; an unparseable listing stops nothing."""
+        import signal
+        import subprocess
+        if not profile_dir or not os.path.isabs(profile_dir):
+            return False
+        flag = re.compile(r"(?:^|\s)--user-data-dir=" + re.escape(profile_dir)
+                          + r"(?:\s|$)")
+        try:
+            listing = subprocess.run(["ps", "-axww", "-o", "pid=,command="],
+                                     capture_output=True, text=True, timeout=10).stdout
+        except (OSError, subprocess.SubprocessError):
+            return False
+        pids = []
+        for line in listing.splitlines():
+            pid, _, command = line.strip().partition(" ")
+            if (pid.isdigit() and int(pid) != os.getpid() and flag.search(command)
+                    and " --type=" not in f" {command}"):
+                pids.append(int(pid))
+        if not pids:
+            return False
+
+        def alive():
+            out = []
+            for pid in pids:
+                try:
+                    os.kill(pid, 0)
+                    out.append(pid)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    out.append(pid)
+            return out
+
+        for sig, wait_s in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
+            for pid in alive():
+                with suppress(ProcessLookupError, PermissionError):
+                    os.kill(pid, sig)
+            for _ in range(wait_s * 2):
+                if not alive():
+                    break
+                self._sleep_bounded(0.5)
+            if not alive():
+                break
+        self.chrome_restarted = True
+        return True
 
     def _mcs_pages(self) -> list:
         return [t for t in self._cdp_json("/json/list")
@@ -1139,6 +1192,8 @@ class MCSAdapter:
         'manual_required:no_form' distinguishes a missing login form
         (page never rendered / app redirected) from a submitted login
         that never validated."""
+        # per-attempt journal facts (run_check records them)
+        self.healed_tabs, self.chrome_restarted = 0, False
         try:
             self._ensure_chrome(profile_dir, chrome_bin)
         except (MCSError, OSError):  # incl. deadline_exceeded
