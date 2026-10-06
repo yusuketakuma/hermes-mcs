@@ -392,3 +392,33 @@ def test_whole_master_entry_cap_holds_instead_of_truncating(tmp_path, monkeypatc
     assert result.payload is None
     assert result.report["entries"] == 2
     assert result.report["held"] == "dictionary_entry_or_alias_bound"
+
+
+def test_numeric_reserved_column_accepts_public_format_decimal_without_price_semantics(tmp_path):
+    rows = []
+    for i in range(99):
+        row = _row(str(900000001 + i))
+        row[24] = "12.75"  # wholly fictional unused reserve; no monetary interpretation
+        rows.append(row)
+    path, pin = _input(tmp_path, rows)
+    result = importer.convert(path, pin)
+    assert result.report["rows"] == 99 and result.report["reasons"]["candidate_rows"] == 99
+    assert result.payload is not None
+    assert "12.75" not in result.payload.decode()
+
+
+@pytest.mark.parametrize("value", ["-1.25", "NaN", "1e2", "+12", "1.", "", "12345678901234"])
+def test_numeric_reserve_rejects_non_numeric_and_overwide_values(tmp_path, value):
+    row = _row()
+    row[24] = value
+    path, pin = _input(tmp_path, [row])
+    with pytest.raises(importer.MasterError):
+        importer.convert(path, pin)
+
+
+def test_decimal_is_still_rejected_in_nonreserve_integer_columns(tmp_path):
+    row = _row()
+    row[20] = "1.25"
+    path, pin = _input(tmp_path, [row])
+    with pytest.raises(importer.MasterError, match="csv_numeric_invalid"):
+        importer.convert(path, pin)

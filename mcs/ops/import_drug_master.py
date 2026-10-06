@@ -161,9 +161,12 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
             for i, value in enumerate(row):
                 if len(value.encode("cp932")) > WIDTHS[i] or any(ord(c) < 32 for c in value):
                     raise MasterError("csv_field_bound")
-                if i not in TEXT_COLUMNS and i != 11 and not re.fullmatch(r"[0-9]+", value):
+                if i not in TEXT_COLUMNS and i not in (11, 24) and not re.fullmatch(r"[0-9]+", value):
                     raise MasterError("csv_numeric_invalid")
-            if (not re.fullmatch(r"[0-9]{1,10}(?:\.[0-9]{1,2})?", row[11])
+            # Field 25 is an unused 13-byte numeric reserve, not a price.
+            # The published master uses decimal text there; keep it opaque.
+            if (not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", row[24])
+                    or not re.fullmatch(r"[0-9]{1,10}(?:\.[0-9]{1,2})?", row[11])
                     or any(not re.fullmatch(r"[A-Za-z0-9]*", row[i]) for i in (31, 36, 38, 39))
                     or any(not 32 <= ord(c) < 127 for c in row[28])
                     or any(not (32 <= ord(c) < 127 or 0xFF61 <= ord(c) <= 0xFF9F) for c in row[6])
