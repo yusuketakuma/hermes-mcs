@@ -1,0 +1,2622 @@
+{
+  "schema_version": 1,
+  "version": "1.0.15",
+  "audit_date": "2026-10-06",
+  "worktree": "/Users/yusuke/.herdr/worktrees/mcs/release-1.0.15-20261006",
+  "branch": "fix/1.0.15-performance",
+  "scope_roots": [
+    "adapters",
+    "hermes_plugin",
+    "mcs_standalone",
+    "lineworks_adapter",
+    "mcs/notify"
+  ],
+  "inventory_count": 60,
+  "inventory_complete": true,
+  "method": "Current source review, caller/contract tracing, synthetic fault injection, existing regression suites. File enumeration/grep/AST inventory alone is not correctness proof; no branch-coverage percentage claimed.",
+  "acceptance": "Every owned runtime .py has a current hash, source checks, behavioral evidence and limits; demonstrated new blockers fixed with regressions; no unresolved demonstrated blocker in owned scope.",
+  "validation": [
+    {
+      "id": "owned_scope_suite",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/adapters/ tests/notify/ tests/plugin/",
+      "python": "3.13.12",
+      "result": {
+        "passed": 1553,
+        "skipped": 3,
+        "seconds": 85.79
+      },
+      "note": "Baseline whole owned suite evidence before mobile change. Post-mobile owned run found old-format test stubs/decoders; corrected by intentional native UI contract migration, focused related175/188 pass. Parent runs final entire adapters/notify/integration suite after source freeze at2026-10-06T02:08UTC; do not treat baseline as proof of final mobile paths."
+    },
+    {
+      "id": "current_cards_hash_suite",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_notify_cards.py tests/notify/test_gc_mixed_parts.py",
+      "result": {
+        "passed": 122,
+        "seconds": 1.86
+      }
+    },
+    {
+      "id": "ruff",
+      "command": "ruff check adapters/ hermes_plugin/ mcs_standalone/ lineworks_adapter/ mcs/notify/ tests/adapters/ tests/notify/ tests/plugin/",
+      "result": "pass"
+    },
+    {
+      "id": "mandatory_gates",
+      "command": "python ci/gates.py",
+      "result": "10/10 pass"
+    },
+    {
+      "id": "mobile_semantic_preview",
+      "result": {
+        "passed": 9,
+        "seconds": 0.2
+      },
+      "command": "isolated Python3.13 runner tests/notify/test_mobile_notification_preview.py"
+    },
+    {
+      "id": "mobile_native_payloads",
+      "result": {
+        "passed": 6
+      },
+      "command": "isolated Python3.13 runner tests/adapters/common/test_mobile_notification_payloads.py"
+    },
+    {
+      "id": "mobile_real_discord_serialization",
+      "result": {
+        "passed": 11
+      },
+      "command": "isolated Python3.13 uv ephemeral pytest9.1.1 discord.py2.7.1 tests/adapters/discord/test_discord_sdk_real.py",
+      "limits": "SDK serialization only; no SDK connection/network"
+    },
+    {
+      "id": "mobile_final_cards_parts",
+      "result": {
+        "passed": 188,
+        "seconds": 4.28
+      },
+      "command": "isolated Python3.13 runner tests/notify/test_card_layout.py tests/notify/test_notify_parts.py tests/notify/test_notify_cards.py tests/notify/test_mobile_notification_preview.py"
+    },
+    {
+      "id": "final_task_reminder_and_five_fields",
+      "command": "MCS_TEST_PYTHON=/Users/yusuke/.mcs/.venv/bin/python scripts/run_tests.sh tests/notify/test_card_buttons.py tests/notify/test_mobile_notification_preview.py",
+      "result": {
+        "passed": 43,
+        "seconds": 0.56
+      },
+      "note": "After final source order fix; whole task-reminder file and all5-field regressions. Parent final broad1517pass8skip is reused for unchanged other behavior; its one legacy text expectation failure corrected here."
+    },
+    {
+      "id": "final_long_preview_boundary",
+      "command": "isolated Python3.13 runner tests/notify/test_card_buttons.py tests/notify/test_mobile_notification_preview.py tests/notify/test_card_layout.py tests/notify/test_notify_parts.py tests/adapters/common/test_mobile_notification_payloads.py",
+      "result": {
+        "passed": 109,
+        "seconds": 1.35
+      },
+      "note": "Final long title/summary and names boundary regression.5fields retained in actual outgoingtext/sealedcaption. Other successful parent suites reused for unchanged behavior."
+    }
+  ],
+  "skipped": [
+    {
+      "path": "tests/adapters/discord/test_discord_sdk_real.py",
+      "reason": "discord SDK not installed; module-level importorskip"
+    },
+    {
+      "path": "tests/adapters/discord/test_discord_runtime_compat.py",
+      "reason": "discord SDK not installed; module-level importorskip"
+    },
+    {
+      "path": "tests/adapters/slack/test_slack_runtime_compat.py",
+      "reason": "aiohttp/slack_bolt not installed; module-level importorskip"
+    }
+  ],
+  "new_fix_records": [
+    "changes/stability-legacy-runtime-cleanup.json",
+    "changes/stability-restart-timestamp.json",
+    "changes/stability-restore-journal-shape.json",
+    "changes/stability-corrupt-notify-progress.json",
+    "changes/stability-pending-part-spec-retention.json",
+    "changes/mobile-notification-preview.json"
+  ],
+  "entries": [
+    {
+      "path": "adapters/__init__.py",
+      "sha256": "8b68bbbbdca7acbd688af3e53dfaf34fcbd29b0aa60600d124329db750e69227",
+      "lines": 1,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [],
+      "checks": [
+        "パッケージ宣言のみ。実行・接続・書込みなし。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/common/__init__.py",
+      "sha256": "dd30c38589a16589d0ad79829cf72146bee90fe21b50d7930e2985fb5211d56b",
+      "lines": 1,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [],
+      "checks": [
+        "共通パッケージ宣言のみ。接続副作用なし。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/common/commands.py",
+      "sha256": "4a1c1011caabba83c9b8b2ccdc51e3f0903c603e1ba2f7928e85b619d659915b",
+      "lines": 38,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "answer"
+      ],
+      "checks": [
+        "native user/channel/route epochを検証して既存preview/confirmへ渡す。例外は固定拒否コードへ隔離。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_native_commands.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/common/envelopes.py",
+      "sha256": "c2a645b0570bb402db6675722fa04e166ba6f400ae90d2cb6bd05db5c09fa885",
+      "lines": 283,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "canonical",
+        "payload_hash",
+        "actor_hash",
+        "publish_command",
+        "transport_begin",
+        "_receipt_env",
+        "transport_receipt",
+        "part_receipt",
+        "part_attempt_id",
+        "thread_receipt",
+        "notification",
+        "refresh",
+        "request_create",
+        "extract_feedback",
+        "signal_dismiss",
+        "human_payload"
+      ],
+      "checks": [
+        "command bytes上限、allow_nan=False、安定したidempotency key、request_id分離、atomic publishを確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/discord/test_mcs_discord.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/common/journal.py",
+      "sha256": "52f88ab61b5b253a35dc323e185bdb7e3f7efa02edc13a8ad35f72dca4e971be",
+      "lines": 357,
+      "status": "fixed_and_verified",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_path",
+        "append",
+        "_scan_file",
+        "_names",
+        "compact",
+        "scan",
+        "scan_checked",
+        "_parse_rows",
+        "_View.__init__",
+        "_View.__getitem__",
+        "_View.__iter__",
+        "_View.__len__",
+        "_View.rows",
+        "all_rows",
+        "ScanCache.__init__",
+        "ScanCache.invalidate",
+        "ScanCache.refresh",
+        "ScanCache._refresh",
+        "unfinished",
+        "unreported"
+      ],
+      "checks": [
+        "append/fsync、tainted行保持、同一attemptの複数file・tail・inode交換、snapshot不変性、compactの証拠保持を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_journal_phase_recovery.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "復元証拠の保持量はbackup horizon/未解決配送に依存。証拠の無断削除や容量上限による切捨ては行わない。"
+      ]
+    },
+    {
+      "path": "adapters/common/paths.py",
+      "sha256": "5d1cff058cfb855406bbc74ffa53dda86df86626850006a53eb538d12ab810bc",
+      "lines": 147,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "data_root",
+        "notify_dirs",
+        "ensure_dirs",
+        "safe_name",
+        "fsync_dir",
+        "atomic_write",
+        "read_result",
+        "read_flags",
+        "restore_marker_present",
+        "read_verified_attachment"
+      ],
+      "checks": [
+        "atomic temp/fd/dir fsync、破損flagのfail-closed、restore marker、bounded resultとsealed attachment読取りを確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_worker_reconcile_integrity.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/common/registry.py",
+      "sha256": "3bee93f668e90807946c605c611c22a82e82595568e55ff34b19c46d19ea82d8",
+      "lines": 460,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "new_worker_id",
+        "scope_key",
+        "new_attempt_id",
+        "new_modal_id",
+        "new_confirm_id",
+        "_default",
+        "_expired",
+        "_locked",
+        "_RegistryBatch.__init__",
+        "_RegistryBatch.__enter__",
+        "_RegistryBatch.__exit__",
+        "Registry.__init__",
+        "Registry.reload",
+        "Registry._restore_legacy_scope",
+        "Registry.batch",
+        "Registry.save",
+        "Registry.claim",
+        "Registry.claimed",
+        "Registry.drop_claim",
+        "Registry.release_claim",
+        "Registry.mark_dead",
+        "Registry.is_dead",
+        "Registry.claims",
+        "Registry.put_tokens",
+        "Registry.prune_card_tokens",
+        "Registry.token",
+        "Registry.retire_card_tokens",
+        "Registry._unexpired",
+        "Registry.put_modal",
+        "Registry.modal",
+        "Registry.drop_modal",
+        "Registry.put_confirm",
+        "Registry.confirm",
+        "Registry.drop_confirm",
+        "Registry.take_confirm",
+        "Registry.end_confirm",
+        "Registry.put_followup",
+        "Registry.followup",
+        "Registry.drop_followup",
+        "Registry.followups",
+        "Registry.capability",
+        "Registry.put_capability",
+        "Registry.parts_done",
+        "Registry.put_parts_done",
+        "Registry.done_parts",
+        "Registry.expire"
+      ],
+      "checks": [
+        "RLock、batch/immediate保存、TTL、in_flight確認競合、legacy scope分離、published spec tombstone保持を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_registry_lock.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/common/spec.py",
+      "sha256": "a0966f9c8c310a9d745f8d567f22d1d2ec284fa988d5764ea45f776cd0c124b4",
+      "lines": 411,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_err",
+        "_text",
+        "_opt_id",
+        "_known_keys",
+        "_validate_head",
+        "_validate_delivery",
+        "_containers_cost",
+        "_footer_cost",
+        "_action_rows_cost",
+        "validate",
+        "_sha_bytes",
+        "_validate_chunks",
+        "_validate_manifest",
+        "_check_part_payloads",
+        "_validate_part_plan",
+        "token_map"
+      ],
+      "checks": [
+        "全head/delivery/display/manifest境界でshape/budget/hashを検証。未知key・不正body identityは拒否。",
+        "Mobile preview reviewed against final patient/sender/organization/local-time/summary requirement; safe platform serialization, complete visible content/tokens and sealed source/part/recovery contracts preserved. See mobile-notification-preview-1.0.15.json for full family and six-target evidence/limits."
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/discord/test_mcs_discord_delivery.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/common/summary.py",
+      "sha256": "922efc6f390011fd588b6e2bbda8538a9080d5a6dcf2cf23903a14961b75da5c",
+      "lines": 88,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "split_name",
+        "_modules",
+        "_config",
+        "answer"
+      ],
+      "checks": [
+        "snapshot mode=ro、scope空の拒否、DB close finally、config破損時の既定値、stale表示を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_deep_local_state.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/common/text.py",
+      "sha256": "2cdb40d2eefa590568991c36e54ac17c25401e9fff7dc32913994c849d83924c",
+      "lines": 417,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "ja",
+        "split_body",
+        "_answer_chunks",
+        "body_messages",
+        "valid_due",
+        "modal_fields",
+        "digest_inputs",
+        "task_attrs",
+        "feedback_attrs",
+        "dismiss_attrs",
+        "search_query",
+        "list_messages",
+        "view_answer",
+        "preview_text",
+        "task_list_text",
+        "task_done_text"
+      ],
+      "checks": [
+        "chunk制限、長文省略表示、modal入力長/日付/理由、project絞込み、viewと人承認payloadの分離を確認。",
+        "Mobile preview reviewed against final patient/sender/organization/local-time/summary requirement; safe platform serialization, complete visible content/tokens and sealed source/part/recovery contracts preserved. See mobile-notification-preview-1.0.15.json for full family and six-target evidence/limits."
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/discord/test_mcs_discord.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/common/worker.py",
+      "sha256": "64d0699b62cea9d3c2dd0e8af26fae7acb6670512f156f4aca4394659c221023",
+      "lines": 1048,
+      "status": "fixed_and_verified",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "err_code",
+        "is_definitive_reject",
+        "_outcome_of",
+        "_card_message_id",
+        "_card_message_ids",
+        "DeliveryWorker.__init__",
+        "DeliveryWorker.scope",
+        "DeliveryWorker.acquire_scope_lock",
+        "DeliveryWorker._ensure_dirs",
+        "DeliveryWorker.release_scope_lock",
+        "DeliveryWorker.wait_scope_lock",
+        "DeliveryWorker._journal",
+        "DeliveryWorker._journal_path",
+        "DeliveryWorker._restore_horizon",
+        "DeliveryWorker._compact_journal",
+        "DeliveryWorker.maintain_journal",
+        "DeliveryWorker.reconcile",
+        "DeliveryWorker._retire_reconciled",
+        "DeliveryWorker._receipt_env",
+        "DeliveryWorker._spec_files",
+        "DeliveryWorker._claim_path",
+        "DeliveryWorker._ours",
+        "DeliveryWorker._claim_spec",
+        "DeliveryWorker._write_marker",
+        "DeliveryWorker._publish_begin",
+        "DeliveryWorker._read_begin_result",
+        "DeliveryWorker._verify_grant",
+        "DeliveryWorker._perform",
+        "DeliveryWorker._deliver_parts",
+        "DeliveryWorker._resume_parts",
+        "DeliveryWorker._drive_parts",
+        "DeliveryWorker._republish_part_receipt",
+        "DeliveryWorker._attempt_part",
+        "DeliveryWorker._perform_part",
+        "DeliveryWorker._step_begin",
+        "DeliveryWorker._send_allowed",
+        "DeliveryWorker._step_claim",
+        "DeliveryWorker._drop_claim",
+        "DeliveryWorker._scan_specs",
+        "DeliveryWorker._validate_spec",
+        "DeliveryWorker._fresh_claim",
+        "DeliveryWorker._resume_dead",
+        "DeliveryWorker._settle_orphan_claims",
+        "DeliveryWorker.tick",
+        "DeliveryWorker._spent_deliveries",
+        "DeliveryWorker._started",
+        "DeliveryWorker.stop"
+      ],
+      "checks": [
+        "claim→durable grant→started→result→receipt、取消/復元/再開/部分配送/孤立claim、invalid timestamp隔離と単一履歴走査を全経路で確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_worker_reconcile_integrity.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/discord/__init__.py",
+      "sha256": "b7060721cd27ed534ef3edf580f29829bb649331542a97fbbfd3bf6118da218c",
+      "lines": 13,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [],
+      "checks": [
+        "説明のみ。SDK importや接続を起動しない。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/discord/actions.py",
+      "sha256": "3fd94028385d67e1ddeb6db9223583ea7c4e5988e53b21d2948322a1866f7d4d",
+      "lines": 793,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_task_view",
+        "_authorizing_channel",
+        "_origin",
+        "_actor",
+        "_role_ids",
+        "_display_name",
+        "_same_origin",
+        "_context_projects",
+        "Actions.__init__",
+        "Actions._authorized",
+        "Actions._allowed_roles",
+        "Actions._interactive",
+        "Actions._deny_reason",
+        "Actions._result_log",
+        "Actions._wait_result",
+        "Actions._dispatch_notification",
+        "Actions.on_interaction",
+        "Actions._on_action",
+        "Actions._open_modal",
+        "Actions._park_followup",
+        "Actions._build_modal",
+        "Actions._on_modal",
+        "Actions._search",
+        "Actions._modal_fields",
+        "Actions._send_preview",
+        "Actions._on_confirm",
+        "Actions._followup_authorized",
+        "Actions.sweep_followups",
+        "Actions._register_tokens",
+        "Actions._send_answer",
+        "Actions._allowed_pid",
+        "Actions._ephemeral",
+        "Actions._followup"
+      ],
+      "checks": [
+        "user/role/chat/project/native originを各段階で検証。preview/confirm競合、遅延followup、取消、失敗応答を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/discord/test_mcs_discord.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "adapters/discord/cards.py",
+      "sha256": "c777144d2005b181cd28fac6acb7e9455b948ba0fe2b3666c3dd582de0751893",
+      "lines": 318,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "escape_md",
+        "_text_chunks",
+        "_zones",
+        "build_view",
+        "no_pings",
+        "send_attachment",
+        "_StatusRecorder.__init__",
+        "_StatusRecorder.__aenter__",
+        "_StatusRecorder.__aexit__",
+        "_guarded",
+        "single_post_ready",
+        "single_post"
+      ],
+      "checks": [
+        "文字/部品budget、no-pings、ContextVarをfinally復元、single committable POST、429以外のSDK再POST抑止を確認。",
+        "Mobile preview reviewed against final patient/sender/organization/local-time/summary requirement; safe platform serialization, complete visible content/tokens and sealed source/part/recovery contracts preserved. See mobile-notification-preview-1.0.15.json for full family and six-target evidence/limits."
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/discord/test_mcs_discord_single_post.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/discord/delivery.py",
+      "sha256": "4fd69dd876e5801409b8654c6ea266f66a98a10f25b14b68e4dfa101b52c7024",
+      "lines": 293,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "DeliveryWorker._channel",
+        "DeliveryWorker._perform",
+        "DeliveryWorker._perform_part",
+        "DeliveryWorker._text_part",
+        "DeliveryWorker._thread_part",
+        "DeliveryWorker._remote_match",
+        "DeliveryWorker._own_prior",
+        "DeliveryWorker._rewrite_prior",
+        "DeliveryWorker._reuse_prior_file"
+      ],
+      "checks": [
+        "create/update/revoke、thread identity、remote authorship、sealed file、unknown時無再送、prior edit/reuseを確認。",
+        "Mobile preview reviewed against final patient/sender/organization/local-time/summary requirement; safe platform serialization, complete visible content/tokens and sealed source/part/recovery contracts preserved. See mobile-notification-preview-1.0.15.json for full family and six-target evidence/limits."
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/discord/test_mcs_discord_delivery.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/discord/runtime_compat.py",
+      "sha256": "9e771efb1eea9efc325760a447d1a82b30a121abe8ce15d4319e95d4d804911e",
+      "lines": 172,
+      "status": "fixed_and_verified",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_client",
+        "command_context",
+        "_mcs_command",
+        "_same_command",
+        "_fit_files",
+        "run",
+        "send"
+      ],
+      "checks": [
+        "互換native identityとsingle-postを保持。Host失敗後もBot/gateway/停止待機taskを終了する回帰を追加。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_compat_cleanup.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "adapters/discord/standalone.py",
+      "sha256": "d51ee1d292ab6dff21b4d3dc425afc2b7038e2f07cda7c9b72c50c13fe21fb46",
+      "lines": 458,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "check_sdk",
+        "_sdk",
+        "_quiet_sdk",
+        "_official_url",
+        "_session_boundary",
+        "_harden",
+        "_bot",
+        "_verify_identity",
+        "_verify_channel",
+        "_native_context",
+        "_Scope.__init__",
+        "_Scope.current",
+        "_Scope.invoke",
+        "_Scope.monitor",
+        "_Scope.close",
+        "_CheckedHost.__init__",
+        "_CheckedHost.get_config",
+        "_Commands.__init__",
+        "_Commands.slash",
+        "_Commands._slash",
+        "_Commands.message",
+        "_Commands._message",
+        "_Commands.error",
+        "_event",
+        "run",
+        "_payload",
+        "send"
+      ],
+      "checks": [
+        "pinned SDK/native admission、scope変化停止、固定endpoint/no-proxy/no-redirect、listener/task ownership、finally全cleanupを確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/discord/test_discord_standalone.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "adapters/discord/tasks.py",
+      "sha256": "9d8097b152441f26d17469351bcf15f09f3358b82e2bcc076f088f08d712da56",
+      "lines": 135,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_bot_closed",
+        "Supervisor.__init__",
+        "Supervisor.start",
+        "Supervisor._stop_listener",
+        "Supervisor.unload",
+        "Supervisor._run"
+      ],
+      "checks": [
+        "closed Bot判定、bounded lock takeover、listenerをready後登録、poll例外隔離、取消時lock/listener解放を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/discord/test_mcs_discord.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "adapters/lineworks/__init__.py",
+      "sha256": "123e9023ad3914863eed4ce305b0d6c9055c32b751b9ba6b47ea46ce82db1ed9",
+      "lines": 11,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [],
+      "checks": [
+        "flat path bootstrapとcanonical exportsのみ。credential/HTTP実行なし。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/lineworks/__main__.py",
+      "sha256": "0859564f6caec2a25cddac56519840ac75718182a73316d646bff4af6fab0b94",
+      "lines": 270,
+      "status": "fixed_and_verified",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_log",
+        "initialize",
+        "check",
+        "serve",
+        "_wait_api_lock",
+        "send",
+        "main"
+      ],
+      "checks": [
+        "CLI stage別not_sent/unknown、sealed file/明示destination、callback定期処理、thread未開始/cleanup例外/partial signal登録の解放を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_shutdown_cleanup.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/lineworks/actions.py",
+      "sha256": "1093ff944ba2260c1ad115a1cf14b0838d1008dd90992c0b0401149648c61656",
+      "lines": 352,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "Actions.__init__",
+        "Actions._allowed",
+        "Actions._pinned",
+        "Actions._say",
+        "Actions._send",
+        "Actions._publish",
+        "Actions.handle",
+        "Actions._more",
+        "Actions._summary",
+        "Actions._prompt",
+        "Actions._input",
+        "Actions._confirm",
+        "Actions.sweep_followups",
+        "Actions._deliver_followup"
+      ],
+      "checks": [
+        "署名済callbackからuser/route/projectを再検証、DMのみ、フォームTTL/confirm競合、unknown DM無再送、sender_busyだけ再試行を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_lineworks_actions_review.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/lineworks/cards.py",
+      "sha256": "f32643573e31fc106e1a97a7a5a48d5dfbc8ee3a7e565c5f2820def93e0a1de0",
+      "lines": 113,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "validate",
+        "logical_message_id",
+        "buttons",
+        "_slot",
+        "secondary",
+        "heading",
+        "action_buttons",
+        "render"
+      ],
+      "checks": [
+        "v3 scope、既存v1 contract、1000字顔/1900字part、overflow consistency、primary/secondary UI、no thread互換を確認。",
+        "Mobile preview reviewed against final patient/sender/organization/local-time/summary requirement; safe platform serialization, complete visible content/tokens and sealed source/part/recovery contracts preserved. See mobile-notification-preview-1.0.15.json for full family and six-target evidence/limits."
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_lineworks_adapter.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/lineworks/client.py",
+      "sha256": "ddc91e6ee562ad15d284ed5f0dc6a5f8f28eb35025eacbda76c3dcb1fe996d15",
+      "lines": 428,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "ClientError.__init__",
+        "_text",
+        "valid_filename",
+        "_validate_content",
+        "_silent_content",
+        "Credentials.__post_init__",
+        "verify_signature",
+        "_runtime_environment",
+        "_sign",
+        "_allowed_url",
+        "_NoRedirect.redirect_request",
+        "_http_worker",
+        "_http_request",
+        "_b64",
+        "_json",
+        "LineWorksClient.__init__",
+        "LineWorksClient._request",
+        "LineWorksClient._access_token",
+        "LineWorksClient.send_message",
+        "LineWorksClient.upload_file"
+      ],
+      "checks": [
+        "explicit Credentials、署名/固定URL/no-proxy/no-redirect、HTTP subprocess絶対期限、bounded body/response、lock/token更新、upload URL/identityを確認。",
+        "Mobile preview reviewed against final patient/sender/organization/local-time/summary requirement; safe platform serialization, complete visible content/tokens and sealed source/part/recovery contracts preserved. See mobile-notification-preview-1.0.15.json for full family and six-target evidence/limits."
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_lineworks_client.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/lineworks/config.py",
+      "sha256": "81d398f6facae4e97660ab4a19515dead988f5a3732072816d8b7fdfd19a8d54",
+      "lines": 67,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "settings",
+        "credentials_path",
+        "load_credentials",
+        "destination"
+      ],
+      "checks": [
+        "scope不完全/interactive違いを拒否、protected credential/key path、固定bot identity、destination一致を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_lineworks_adapter.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/lineworks/delivery.py",
+      "sha256": "54d3f17b8e44a5049387fa779534dce0a115c9bcdf38a7bfaca2fa4fb656525c",
+      "lines": 273,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "notify_dirs",
+        "api_lock",
+        "locked",
+        "failure",
+        "chunk_text",
+        "Sender.__init__",
+        "Sender.send",
+        "Sender.route_current",
+        "Sender.perform",
+        "Sender.attachment",
+        "DeliveryWorker.__init__",
+        "DeliveryWorker.scope",
+        "DeliveryWorker._ours",
+        "DeliveryWorker._validate_spec",
+        "DeliveryWorker._verify_grant",
+        "DeliveryWorker._perform",
+        "DeliveryWorker._perform_part"
+      ],
+      "checks": [
+        "shared api lock/cooldownとroute直前確認、部分送信結果、logical thread、同一payload prior reuse、token退役を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_bugfix_r3_15_part_cooldown.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/lineworks/server.py",
+      "sha256": "c045484906e6003fe946b839062f614491ffca2dee9769e365b266609d6f12f4",
+      "lines": 192,
+      "status": "fixed_and_verified",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "callback_result",
+        "_object",
+        "CallbackInbox.__init__",
+        "CallbackInbox.accept",
+        "CallbackInbox.pending",
+        "CallbackInbox.take",
+        "CallbackInbox.finish",
+        "CallbackInbox.expire",
+        "callback_server"
+      ],
+      "checks": [
+        "容量/署名/発行時刻/user scope/重複hash、durable callback claim、unknown receipt保持、headers/body絶対期限、Timer終了を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_callback_deadline.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/lineworks/service.py",
+      "sha256": "53631613494cbdaa1eb5c65262288425dee43618aff6e9a63f4d7665feddd4fd",
+      "lines": 65,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_systemd_arg",
+        "generate"
+      ],
+      "checks": [
+        "候補生成のみ、protected path/symlink拒否、systemd escapingとvenv executable保持、非対応platform拒否を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_lineworks_adapter.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実機service install/startは未実施。生成候補と合成path検証のみ。"
+      ]
+    },
+    {
+      "path": "adapters/slack/__init__.py",
+      "sha256": "179cbcb2e57b187d300652bbdf60dce120170eb2ee9d986a7db25a1a8bbe551b",
+      "lines": 2,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [],
+      "checks": [
+        "宣言のみ。client/SDK接続の副作用なし。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/slack/actions.py",
+      "sha256": "deeb2d90c79c1ec73ca757c52b1eaeea5f73d4a56418db3e9f580451463bab75",
+      "lines": 731,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_modal_blocks",
+        "_task_text",
+        "_task_blocks",
+        "origin",
+        "_parts_blocks",
+        "_ephemeral_chunks",
+        "Actions.__init__",
+        "Actions.register",
+        "Actions._command",
+        "Actions._summary",
+        "Actions.unload",
+        "Actions._scope",
+        "Actions._interactive",
+        "Actions._client",
+        "Actions._card",
+        "Actions._pinned",
+        "Actions._say",
+        "Actions._clicker_name",
+        "Actions._publish",
+        "Actions._link",
+        "Actions._denied_member",
+        "Actions._wait_result",
+        "Actions._action",
+        "Actions._open_modal",
+        "Actions._queue_followup",
+        "Actions._modal",
+        "Actions._payload",
+        "Actions._preview",
+        "Actions._confirm",
+        "Actions.sweep_followups"
+      ],
+      "checks": [
+        "workspace/app/user/native message pin、project/epoch再検証、modal/confirm/typed views、bounded round-robin followup、ephemeral onlyを確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/slack/test_mcs_slack_actions.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "adapters/slack/cards.py",
+      "sha256": "a7574796feedfd6860bff256eea5001261c197db10d77e953dd4ae2e1c66beec",
+      "lines": 159,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "mention_ids",
+        "_names",
+        "validate",
+        "_sections",
+        "render_parts",
+        "render"
+      ],
+      "checks": [
+        "v2 scope/共通manifest検証、plain textとmention除去、block/button/link budget、private context非送信を確認。",
+        "Mobile preview reviewed against final patient/sender/organization/local-time/summary requirement; safe platform serialization, complete visible content/tokens and sealed source/part/recovery contracts preserved. See mobile-notification-preview-1.0.15.json for full family and six-target evidence/limits."
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/slack/test_mcs_slack_cards.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/slack/delivery.py",
+      "sha256": "3a7588690541b3fe3f80eedc228fa8a0d67c0838ba35fd6b8b37497cbcc10072",
+      "lines": 535,
+      "status": "fixed_and_verified",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_upload_file_id",
+        "_payload",
+        "single_attempt",
+        "_failed",
+        "SlackCardAdapter.__init__",
+        "SlackCardAdapter.display_name",
+        "SlackCardAdapter.bind",
+        "SlackCardAdapter.authored",
+        "SlackCardAdapter.single_attempt",
+        "SlackCardAdapter._owns",
+        "SlackCardAdapter.perform",
+        "SlackCardAdapter.action_origin",
+        "DeliveryWorker.__init__",
+        "DeliveryWorker.scope",
+        "DeliveryWorker._ours",
+        "DeliveryWorker._validate_spec",
+        "DeliveryWorker._verify_grant",
+        "DeliveryWorker._perform",
+        "DeliveryWorker._perform_part",
+        "DeliveryWorker._body_part",
+        "DeliveryWorker._rewrite_prior",
+        "DeliveryWorker._attachment_part",
+        "DeliveryWorker._file_remote_match",
+        "DeliveryWorker._remote_match",
+        "DeliveryWorker._replies"
+      ],
+      "checks": [
+        "bound workspace、single_attempt client copy、LRU name cache、root pin/body/file authorship、incomplete history fail-closedを確認。",
+        "Mobile preview reviewed against final patient/sender/organization/local-time/summary requirement; safe platform serialization, complete visible content/tokens and sealed source/part/recovery contracts preserved. See mobile-notification-preview-1.0.15.json for full family and six-target evidence/limits."
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/slack/test_mcs_slack.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "adapters/slack/paths.py",
+      "sha256": "bffc8204582e5bc00f71c5d37a686287d479c6d936fd6b1cb54e61ab6e1e4486",
+      "lines": 17,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "notify_dirs",
+        "ensure_dirs"
+      ],
+      "checks": [
+        "transport別render/stateのみ差替え、共通cmd/flagsとrunner-owned directory要件を保持。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/slack/test_mcs_slack.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "adapters/slack/runtime_compat.py",
+      "sha256": "c6afce252ecdd02017cddd963f74d8e71526c89e979a2ef2a756f969766eea65",
+      "lines": 134,
+      "status": "fixed_and_verified",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_mrkdwn",
+        "_client",
+        "_app",
+        "run",
+        "send"
+      ],
+      "checks": [
+        "互換mrkdwn literal/no-proxy clientを保持。Socket/Host終了失敗でもwaiter/sessionを終了する回帰を追加。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_compat_cleanup.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "adapters/slack/standalone.py",
+      "sha256": "26f22375a1983798336fd85c4685a6a1db6edd90ba4ddec35528c42923abbd35",
+      "lines": 388,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_url_allowed",
+        "_GuardedSession.__init__",
+        "_GuardedSession._live",
+        "_GuardedSession._verify",
+        "_GuardedSession.request",
+        "_GuardedSession.ws_connect",
+        "_GuardedSession.close",
+        "_logger",
+        "_client",
+        "_identity",
+        "_socket",
+        "_event",
+        "run",
+        "_files",
+        "send"
+      ],
+      "checks": [
+        "guarded API/WebSocket session再生成、response上限、current scope/identity、inflight callback所有、全finally cleanupを確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/slack/test_slack_standalone.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "adapters/slack/tasks.py",
+      "sha256": "05f8eee2d706f9c17a1a2480f8d905d9abb3f1e1615e6f50e289e614600b5b9a",
+      "lines": 106,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "Supervisor.__init__",
+        "Supervisor.start",
+        "Supervisor.unload",
+        "Supervisor._run"
+      ],
+      "checks": [
+        "scope別newest supervisor、旧worker停止/lock handoff、bind後register、poll例外隔離、_LIVEとlock解放を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/slack/test_mcs_slack.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実SDKのserialization/session動作はこの環境では未実施。pinned SDK環境のCIに依存。"
+      ]
+    },
+    {
+      "path": "hermes_plugin/__init__.py",
+      "sha256": "6893322c9d96368a4b6325cbddf963350574d8813fe54c06fe70e481155f5020",
+      "lines": 1089,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_json",
+        "_ok",
+        "_deny",
+        "_id_text",
+        "_validate_context",
+        "_config_ids",
+        "_settings",
+        "_project",
+        "_authorize",
+        "_authorize_system",
+        "_adapter_modules",
+        "_parse",
+        "_view_read",
+        "_source_row",
+        "_current_request",
+        "_actor",
+        "_reason_error",
+        "_loop_input_error",
+        "_current_loop_candidate",
+        "_loop_ref",
+        "_verify_loop_ref",
+        "_command_base",
+        "_new_command",
+        "_project_exists",
+        "_semantic_job",
+        "_summary_comparison",
+        "_new_control",
+        "_control_reference",
+        "_card_resolution",
+        "_confirmation_origin",
+        "_build_preview",
+        "_preview",
+        "_build_control_preview",
+        "_confirmation_parts",
+        "_confirm",
+        "_notification_receipt",
+        "_dispatch",
+        "_dispatch_op",
+        "_make_handler",
+        "register"
+      ],
+      "checks": [
+        "全op routing、native context/allowlist、read-only snapshot close、preview origin+hash、確認時current reference、人承認enqueue、固定例外codeを確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/plugin/test_hermes_plugin_mcs.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "hermes_plugin/card_workers.py",
+      "sha256": "74cf55c0916ddf3aab7a266892a797119c2f91ae2c3bde7d267e0bb8cb55c9ca",
+      "lines": 159,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_interactive_settings",
+        "_standalone_owned",
+        "_event_logger",
+        "make_discord_factory",
+        "_slack_adapter_settings",
+        "make_slack_factory"
+      ],
+      "checks": [
+        "complete opt-in、native Bot identity/role filtering、standalone ownership、Slack published flags/epoch、factory scopeを確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/plugin/test_bugfix_r2_18_slack_card_settings.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "hermes_plugin/mcs_delivery/__init__.py",
+      "sha256": "f0eab407de8f38ce6120e7803f8e230b5692a879ffe30834d532a47badd76a25",
+      "lines": 12,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [],
+      "checks": [
+        "canonical common moduleをsys.modules aliasへ対応。module identityを保持し独立実装を複製しない。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "hermes_plugin/mcs_discord/__init__.py",
+      "sha256": "4ff9611d251c4b922b0151a62110b83300e5a5f6f1add80f2e9b668861328c2e",
+      "lines": 12,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [],
+      "checks": [
+        "canonical Discord module aliases、path bootstrapのみ。SDK起動なし。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "hermes_plugin/mcs_slack/__init__.py",
+      "sha256": "25d006bbb378c48768d38dcfd5be3c3c7d9ee18d45e316f5e72f5b2800717435",
+      "lines": 12,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [],
+      "checks": [
+        "canonical Slack module aliases、path bootstrapのみ。SDK起動なし。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "hermes_plugin/projects.py",
+      "sha256": "8893de2d8093b9ac7759f2a6f4697082042c97e84cdd40507169b163d2e60c59",
+      "lines": 86,
+      "status": "fixed_and_verified",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_snapshot_projects",
+        "static_scope",
+        "summary_scope",
+        "view_inputs",
+        "project_allowed"
+      ],
+      "checks": [
+        "snapshot mode=ro、inode/mtime/size generation、TTL、32-path cap、全project判定/autoと空scopeの分離を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/plugin/test_project_cache_retention.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "lineworks_adapter/__init__.py",
+      "sha256": "969cdc82d7a785516592ddd633fc7b9cdf47ad5e179b8a5623b3aab7a9b01862",
+      "lines": 4,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [],
+      "checks": [
+        "既存public exportsがcanonical adapterを指す互換入口。独自接続なし。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_adapter_layout.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "lineworks_adapter/__main__.py",
+      "sha256": "87231e560c93987bc624d149e605d68b9a430b0ebaec0a74951ea374145ac406",
+      "lines": 11,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [],
+      "checks": [
+        "direct/module CLI入口がcanonical mainへ一度だけ委譲。path bootstrapとSystemExitを確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/lineworks/test_lineworks_adapter.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_cards.py",
+      "sha256": "77322de3d28e1857bc569cd39decbb0dbe9b91cddeea4492f023ec0dfb99b9c4",
+      "lines": 3174,
+      "status": "fixed_and_verified",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_db",
+        "data_root",
+        "notify_dirs",
+        "ensure_dirs",
+        "notify_cfg",
+        "interactive_enabled",
+        "signals_notify",
+        "active_transport",
+        "scope_fields",
+        "stored_scope",
+        "route_epoch",
+        "delivery_scope",
+        "restore_pending",
+        "mark_restored",
+        "restore_awaiting_consent",
+        "clear_restore_pending",
+        "_restore_hold_active",
+        "release_holds",
+        "mark_snapshot_dirty",
+        "snapshot_dirty",
+        "clear_snapshot_dirty",
+        "publish_file",
+        "publish_flags",
+        "_unsettled_attempt",
+        "_find_signal_card",
+        "_card_for",
+        "_card_row",
+        "_mint_token",
+        "_action_rows",
+        "_sha_text",
+        "_split_body_chunks",
+        "_no_blank_chunks",
+        "_plan_attachments",
+        "_announced_ids",
+        "_thread_plan_ids",
+        "_prior_remote_ids",
+        "_prior_body_posts",
+        "_delivered_members",
+        "_body_groups",
+        "_signal_post_key",
+        "_prior_body_sha",
+        "_attachment_captions",
+        "_build_part_manifest",
+        "_lineworks_overflow",
+        "_seed_parts",
+        "_rollup_parts_state",
+        "_update_parts_state",
+        "_render_gates",
+        "_parts_in_flight",
+        "_generation_drift",
+        "_render_needed",
+        "_render_op",
+        "_cancel_render",
+        "_cancel_open_renders",
+        "_build_spec",
+        "_mark_reposted",
+        "_persist_render",
+        "_issue_render",
+        "_thread_name",
+        "_digest_thread_name",
+        "_source_hash",
+        "_render_context",
+        "_extract_ref",
+        "task_form",
+        "assignee_choices",
+        "_publish_specs",
+        "_resend_exhausted",
+        "_complete_intent",
+        "_resolve_targets",
+        "_thread_root",
+        "_reseat",
+        "_notice_spec",
+        "_notice_renders",
+        "_notice_failures",
+        "_notice_unsent",
+        "_close_notice",
+        "_notice_route_moved",
+        "_dispatch_notice",
+        "dispatch_intent",
+        "revert_to_text",
+        "_origin_card",
+        "_scope_match",
+        "apply_notification",
+        "_apply_notification_tx",
+        "_act_view",
+        "_act_page",
+        "_act_body",
+        "_act_task_status",
+        "_act_ack",
+        "_act_assign",
+        "_thread_tasks",
+        "_digest_projects",
+        "apply_refresh",
+        "rerender_message_cards",
+        "task_reminders",
+        "_plain",
+        "revoke_card",
+        "sweep",
+        "gc",
+        "recover",
+        "retired_transports",
+        "health_cards"
+      ],
+      "checks": [
+        "全schema/intent fan-out/immutable render/part plan/token/current actions/receipt/views/reminder/sweep/GC/recover/healthを照合。mixed incomplete+pendingのspec保持と同一bytes再公開を修正。",
+        "Mobile preview reviewed against final patient/sender/organization/local-time/summary requirement; safe platform serialization, complete visible content/tokens and sealed source/part/recovery contracts preserved. See mobile-notification-preview-1.0.15.json for full family and six-target evidence/limits.",
+        "Final task reminder ordering matches patient -> human-approved title/deadline -> source sender(organization)/local time -> assignee. Original once-only, overdue/due/baseline/hours/cap/rearm/ignore-no-due-or-done behavior and mention defusing retained.",
+        "Boundary: long source names and long summary/title retain all5 fields in outgoing reminder text and sealed300-char attachment caption. Summary alone shortened to remaining preview budget; body/chunk bytes/receipt/send count unchanged."
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_gc_mixed_parts.py"
+        },
+        {
+          "kind": "validation",
+          "id": "current_cards_hash_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_card_buttons.py"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_cmds.py",
+      "sha256": "ecc827553c1b8855edfce9a4b1c9f3aed3c89f92f429a2c17039ca37367541b4",
+      "lines": 502,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_text",
+        "_opt_text",
+        "_id_str",
+        "_fields",
+        "_delivery_ids",
+        "_delivery_integrity",
+        "_route_identity",
+        "_guild_id",
+        "_correlation",
+        "_part_identity",
+        "_result_fields",
+        "_origin",
+        "_lineworks_actor",
+        "_input",
+        "validate_int",
+        "_val_notification",
+        "_val_refresh",
+        "_val_transport_begin",
+        "_val_transport_receipt",
+        "_val_part_receipt",
+        "_val_thread_receipt",
+        "dispatch",
+        "_human_cmd_check",
+        "drain_int_commands"
+      ],
+      "checks": [
+        "全version/op/envelope validator、begin→receipt→action依存順、quarantine、durable result後consume、human gate/例外隔離を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_drain_int_sweep.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_digest.py",
+      "sha256": "10b3d593ff7530563e800efb2be7a6722cc1d6ffdbf27357b2f46260d524da31",
+      "lines": 630,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "settings",
+        "parse_scope",
+        "_scope_label",
+        "scope_projects",
+        "_plain",
+        "_ids",
+        "_self_reaction_count",
+        "_ago",
+        "_observed",
+        "_listed",
+        "_recent_posts",
+        "_own_unreacted",
+        "_response_state",
+        "_addressed_unanswered",
+        "_stale_open_unacked",
+        "build",
+        "_daily_since",
+        "daily_parts",
+        "build_text",
+        "view",
+        "maybe_enqueue",
+        "main"
+      ],
+      "checks": [
+        "scope/count privacy、既読/スタンプ非完了判定、日次once-only tx再確認、read-only private summary、bounded displayを確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_notify_digest.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_flush.py",
+      "sha256": "b1d4e0aa7af27ecc9910aab7e7145ef942b99ae9e233a8714efd06158ee67d65",
+      "lines": 1141,
+      "status": "fixed_and_verified",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_config",
+        "_hermes_exe",
+        "_target",
+        "_hermes_free",
+        "_send_argv",
+        "_attachments_map",
+        "_collect_files",
+        "_signal_text",
+        "_signal_unit_text",
+        "_signal_notice_text",
+        "_followup_files",
+        "_format_event",
+        "_msg_rows",
+        "_fmt_row",
+        "_sem_block",
+        "_message_notice",
+        "_semantic_gate",
+        "_semantic_render_state",
+        "_semantic_render_gate",
+        "_semantic_chunks",
+        "_has_sent_progress",
+        "_send_never_began",
+        "_hold_event",
+        "_send_budget",
+        "_media_path",
+        "_defuse_control_syntax",
+        "_compose_body",
+        "_send",
+        "_delivery_fingerprint",
+        "_send_marked",
+        "_progress",
+        "_route",
+        "_dispatch_interactive",
+        "_base_render_gate_ok",
+        "_send_text",
+        "_fail_event",
+        "flush"
+      ],
+      "checks": [
+        "全route/target/file pin/payload/semantic gate/chunk/progress/CLI outcome/failure rescueを照合。deep progressを保留し正常後続通知を継続する回帰を追加。",
+        "Mobile preview reviewed against final patient/sender/organization/local-time/summary requirement; safe platform serialization, complete visible content/tokens and sealed source/part/recovery contracts preserved. See mobile-notification-preview-1.0.15.json for full family and six-target evidence/limits."
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_deep_progress_isolation.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_reconcile.py",
+      "sha256": "d83c1c352f1f0f164d5bfcaa3d42466f3d5829e7eef481dc511fd75d3d5cd4e0",
+      "lines": 559,
+      "status": "fixed_and_verified",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_journal_dirs",
+        "scan_journals",
+        "_read_spec",
+        "_spec_events",
+        "_apply_hold",
+        "_republish_receipt",
+        "_reconcile_part",
+        "_reconcile_attempt",
+        "_hold_rows",
+        "reconcile_after_restore"
+      ],
+      "checks": [
+        "全transport journal比較、restore holds/rebind/part receipt/text hold/marker durabilityを照合。不正phase/未終端tailをtainted、deep specはunreadable扱いへ修正。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_restore_journal_shape.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_render.py",
+      "sha256": "af85049bbbda3fde819e63333f9e363d67db39452785d0ba78dcf240f3f92056",
+      "lines": 1051,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "display_text",
+        "lineworks_card_split",
+        "_text_cost",
+        "fit_parts",
+        "parts_text",
+        "_latest_signals",
+        "_patient_name",
+        "_mmdd",
+        "_hhmm",
+        "_sender_tag",
+        "_blocks_len",
+        "_cap_card_text",
+        "_fit_item",
+        "_pack_pages",
+        "_footer_len",
+        "_add_page_marker",
+        "_card_created",
+        "_signal_tier",
+        "_thread_context",
+        "_structured_block",
+        "_summary_block",
+        "_extraction_failed",
+        "signal_label",
+        "signal_state",
+        "_honorific",
+        "patient_heading",
+        "_source_fp",
+        "_anchor_keys",
+        "_page",
+        "_signal_evidence",
+        "_signal_compact",
+        "_message_post",
+        "_signal_body",
+        "_card_body_text",
+        "_card_content",
+        "_current_generation",
+        "lineworks_member_names",
+        "actor_label",
+        "current_ackers",
+        "open_tasks",
+        "card_reactions",
+        "card_reaction_lines",
+        "today_jst",
+        "feedback_pending",
+        "plain_notice",
+        "_inline",
+        "_footer",
+        "_content_fp"
+      ],
+      "checks": [
+        "全read-only display/source fingerprint/paging/body/summary/actors/stamps/task/ack/footerを照合。source identityとbounded visible textを保持。",
+        "Mobile preview reviewed against final patient/sender/organization/local-time/summary requirement; safe platform serialization, complete visible content/tokens and sealed source/part/recovery contracts preserved. See mobile-notification-preview-1.0.15.json for full family and six-target evidence/limits.",
+        "Boundary: long source names and long summary/title retain all5 fields in outgoing reminder text and sealed300-char attachment caption. Summary alone shortened to remaining preview budget; body/chunk bytes/receipt/send count unchanged."
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_notify_render.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_transport.py",
+      "sha256": "197221ac6fae558767183b7014ca24ba61392a29b252543c22c329b8cf50e54e",
+      "lines": 947,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_not_sent_state",
+        "_settle_attempt",
+        "apply_transport_begin",
+        "_denial_is_final",
+        "_unlink_spec",
+        "_begin_check",
+        "_begin_result",
+        "apply_transport_receipt",
+        "_render_for",
+        "_sealed_echo",
+        "_receipt_check",
+        "apply_part_receipt",
+        "_part_receipt_check",
+        "apply_thread_receipt",
+        "validate_card_resolve",
+        "apply_card_resolve",
+        "_rebind_check",
+        "_rebind_apply",
+        "_resolve_check",
+        "_journal_contradiction",
+        "_card_projects"
+      ],
+      "checks": [
+        "全begin/settlement/part/thread/operator resolveを照合。echo/scope/correlation/grant exclusivity、unknown無再送、journal contradictionとidempotencyを保持。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_notify_reconcile.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_urgent.py",
+      "sha256": "137bb708ff662bee530c649231797c05dfc02ff0dea178c14fb66347613c346f",
+      "lines": 368,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "settings",
+        "_time",
+        "_current",
+        "capture_initial",
+        "_initial",
+        "_base",
+        "_confirmed",
+        "_engagement",
+        "_history",
+        "_stage",
+        "_quota",
+        "_eligible",
+        "maybe_enqueue",
+        "check_delivery",
+        "render_text"
+      ],
+      "checks": [
+        "explicit on/shadow、current LLM高・initial proven delivery・engagement/quota、enqueue txとsend直前再検証を確認。",
+        "Mobile preview reviewed against final patient/sender/organization/local-time/summary requirement; safe platform serialization, complete visible content/tokens and sealed source/part/recovery contracts preserved. See mobile-notification-preview-1.0.15.json for full family and six-target evidence/limits."
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_notify_urgent.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/common/test_mobile_notification_payloads.py"
+        },
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_mobile_notification_preview.py"
+        },
+        {
+          "kind": "contract_and_limits",
+          "path": "docs/development/mobile-notification-preview-1.0.15.json"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "No real iOS/Android push/device/settings/services verification. Legacy Discord V2 and LINE WORKS native files have provider format constraints recorded in matrix."
+      ]
+    },
+    {
+      "path": "mcs/notify/notify_views.py",
+      "sha256": "d4eeb6d947ba9601d1a31ce8e0665ca564d996d5551008355e8d2df4f3c521d7",
+      "lines": 382,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "patient_summary_text",
+        "_request_reply_lines",
+        "_karte_summary_from_artifact",
+        "_karte_summary_line",
+        "_coverage_line",
+        "_norm_name",
+        "assignee_matches",
+        "_limit",
+        "_in_scope",
+        "my_tasks_view",
+        "_discord_link",
+        "unacked_view",
+        "_snippet",
+        "patient_search_view"
+      ],
+      "checks": [
+        "readonly patient summary/task/search/unacked、scope counts、coverage/未対応非断定、reactedとack分離を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/notify/test_card_extras.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/__init__.py",
+      "sha256": "8f3f40b4b6cde6a7687dcc4ca1bc80659d7f1b8b2fa7c16ebada1ab604217556",
+      "lines": 9,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [],
+      "checks": [
+        "repo/mcs import rootとflat bootstrapのみ。worker/serviceを起動しない。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_standalone_runtime.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/__main__.py",
+      "sha256": "5da74575426ce3442b2022ddb01c39313aa76a5420348aba9629b16b38b282e9",
+      "lines": 275,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "_runtime",
+        "_serve",
+        "run",
+        "_payload",
+        "send",
+        "_coded",
+        "initialize",
+        "_pinned",
+        "_sdk_problem",
+        "check",
+        "main"
+      ],
+      "checks": [
+        "local-only check、protected init、SDK pin、payload/path bounds、stage-aware exit 2/75/unknown、proxy環境除去を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_standalone_error_codes.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/config.py",
+      "sha256": "4bc32cc402abb34f27705845dafbdeced3b416d37a9de7d365aa13caa86ffac6",
+      "lines": 240,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "load",
+        "interactive",
+        "channel",
+        "settings",
+        "transports",
+        "connector_settings",
+        "credentials_path",
+        "validate_credentials",
+        "_private_bytes",
+        "_env_tokens",
+        "tokens",
+        "load_credentials"
+      ],
+      "checks": [
+        "standalone ownership、scope/grants/current channel、O_NOFOLLOW/private size/owner gate、ambient secret非取得を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_standalone_runtime.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/discord_runtime.py",
+      "sha256": "a1565406c01e079c1940205a87bb405fc2e8ddf7766c6eb3f1bb7d267f7de70b",
+      "lines": 6,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [],
+      "checks": [
+        "module identityごとcanonical runtime_compatへalias。private helpers/monkeypatch互換を保持。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_standalone_runtime.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/host.py",
+      "sha256": "ba9bde1682ef25410e9ca3e73f4a2b799eb7a7af6be37c35de0ee2c608baf802",
+      "lines": 79,
+      "status": "fixed_and_verified",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "Host.__init__",
+        "Host.get_config",
+        "Host.spawn_task",
+        "Host.on_unload",
+        "Host.close",
+        "raise_ended",
+        "log"
+      ],
+      "checks": [
+        "task done callback、closing admission、unload callback例外/取消の後も所有task終了、元取消の伝達を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_shutdown_stability.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/runtime.py",
+      "sha256": "53d6dcfb384ac6e37528bf5b209aaa818f2282c00ab972c1c783670749b7f6c6",
+      "lines": 205,
+      "status": "fixed_and_verified",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "Runtime.__init__",
+        "Runtime.start",
+        "Runtime._restart_requested",
+        "Runtime.tick",
+        "serve"
+      ],
+      "checks": [
+        "全scheduled/background/command child ownership、backoff、restart generation、drain/escalation、status failure cleanupと巨大timestamp拒否を確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_runtime.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/service.py",
+      "sha256": "9575bab334e3de3bf9b0a39fe4cd5c9e4dd70b2ad8203f6a6de16331a03b8915",
+      "lines": 90,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [
+        "pid_exists",
+        "status",
+        "request_restart",
+        "render"
+      ],
+      "checks": [
+        "status freshness/pid/generation/private read、restart receipt、systemd/launchd候補のescaping、実サービス起動なしを確認。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_standalone_runtime.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。",
+        "実機service install/startは未実施。生成候補と合成path検証のみ。"
+      ]
+    },
+    {
+      "path": "mcs_standalone/slack_runtime.py",
+      "sha256": "40c6d34e50942ed1246247acd3947de1e8c2c51cdaa291f5a4c5cc706a977a84",
+      "lines": 6,
+      "status": "reviewed_no_additional_blocker",
+      "source_review": "module-level effects and all declared function/class responsibilities reviewed in current task",
+      "declarations": [],
+      "checks": [
+        "module identityごとcanonical runtime_compatへalias。private helpers/monkeypatch互換を保持。"
+      ],
+      "evidence": [
+        {
+          "kind": "synthetic_behavior_suite",
+          "path": "tests/adapters/standalone/test_standalone_runtime.py"
+        },
+        {
+          "kind": "validation",
+          "id": "owned_scope_suite"
+        }
+      ],
+      "limits": [
+        "実接続・実データ・実認証情報は未使用。合成DB/スタブによる検証。"
+      ]
+    }
+  ],
+  "mobile_matrix": "docs/development/mobile-notification-preview-1.0.15.json",
+  "source_freeze": "2026-10-06T02:20:00Z"
+}

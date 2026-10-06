@@ -1,0 +1,950 @@
+{
+  "schema_version": 1,
+  "release": "1.0.15",
+  "date": "2026-10-06",
+  "scope": "Every mcs/ops/*.py except parent-owned mcs_update.py, mcs_restore.py and c1_records.py. Prior operations/deployment dossier remains separate.",
+  "inventory_count": 16,
+  "source_lines": 13017,
+  "unexamined_source_files": [],
+  "method": "Complete source AST and caller/resource inventory, focused manual trust-boundary inspection, broad synthetic operations suites, and concrete failed-before/passed-after regressions. No speculative broad refactors.",
+  "findings": [
+    {
+      "id": "repair-result-publication",
+      "status": "fixed",
+      "source": "mcs/ops/mcs_repair.py",
+      "evidence": "Serialization and OSError/KeyboardInterrupt fsync failures previously poisoned exclusive final destination; now no output/temp remains, rerun succeeds and prior result is not overwritten."
+    },
+    {
+      "id": "target-plan-json",
+      "status": "fixed",
+      "source": "mcs/ops/mcs_cli.py",
+      "evidence": "Four non-object target JSON shapes previously raised AttributeError; now return 1; deep JSON also returns 1 via same failure contract."
+    },
+    {
+      "id": "refstat-time-and-number",
+      "status": "fixed",
+      "source": "mcs/ops/mcs_refstats.py",
+      "evidence": "Infinite as_of previously escaped OverflowError. Large integer vs float mismatch 2**53+1 vs float(2**53) was falsely equal; 10**1000 vs 1.0 overflowed. Fixed corrupt classification and exact large-number differences; small rounding tolerance retained."
+    },
+    {
+      "id": "signal-aggregate-text",
+      "status": "fixed",
+      "source": "mcs/ops/mcs_signals.py",
+      "evidence": "Synthetic arbitrary string/list/dict type contents were exposed as count-only aggregate keys; known DETECTORS types or unknown now only emitted, total counts preserved."
+    },
+    {
+      "id": "refstat-growing-claim",
+      "status": "fixed",
+      "source": "mcs/ops/mcs_operations.py",
+      "evidence": "Claimed source continued returning bytes until fixture emergency stop. Now initial length+1 then 1-byte growth probe rejects refstat_hash_mismatch; pending and prior approved bytes restored, no temp survives."
+    }
+  ],
+  "validation": {
+    "python": "3.13.12 isolated runner",
+    "broad": "1897 tests/ops cases passed excluding parent-owned test_mcs_update.py/test_mcs_restore.py/test_c1_records.py collections; collected before added growth and large-integer cases.",
+    "refresh": "75 result/repair/CLI/lifecycle checks; 95 refreshed promotion/operations/refstats/feedback/aggregate/result checks; 36 final numeric/refstats/as_of checks and 8 final CLI/publication checks passed. Unchanged successes reused; parent integrated whole suite remains final authority.",
+    "test_guard": "tests/conftest.py socket/process/endpoint barriers retained",
+    "diff": "git diff --check passed"
+  },
+  "limitations": [
+    "No actual provisioning, key material, backup to shared storage, restore of real data, external receiver delivery, gateway/native service mutation or push/commit.",
+    "Parent performs final shared-doc regeneration and full integrated checks after all source changes; this dossier records assigned source coverage and local synthetic evidence."
+  ],
+  "files": [
+    {
+      "path": "mcs/ops/brain_export.py",
+      "sha256": "573c643aa74d3cb629934609725d3065a48162346a8347aede45cc6cd9791ed1",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Snapshot reader closes in finally; render validation precedes output/pruning; dir-fd private/symlink checks and atomic per-file publication; dated retention scope preserved."
+      ],
+      "functions": [
+        "_check_directory",
+        "_directory_fd",
+        "_write",
+        "_fm",
+        "_jst",
+        "_banner",
+        "_meta_md",
+        "_count",
+        "_num",
+        "_cell",
+        "_health_md",
+        "_metrics",
+        "_facts_block",
+        "_stats_md",
+        "_signals_md",
+        "_patient_md",
+        "_records_jsonl",
+        "_sweep_exports",
+        "run",
+        "main",
+        "rec"
+      ],
+      "callers": [],
+      "evidence": [
+        "tests/ops/test_brain_export.py",
+        "tests/ops/test_ext_contract.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/c1_contract.py",
+      "sha256": "7bf70b5a580d189ab6560e837be544bc0b75ab18b922c21963167d25b07308f3",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Canonical JSON finite/safe integers, typed closed record/profile fields, allowed capabilities and reserved semantics audited against fixtures."
+      ],
+      "functions": [
+        "_number",
+        "_integer",
+        "_object",
+        "_canonical",
+        "canonical_json",
+        "validate_profile",
+        "validate_record",
+        "__init__"
+      ],
+      "callers": [
+        "mcs/ops/c1_receiver.py",
+        "mcs/ops/c1_records.py",
+        "mcs/ops/c1_envelopes.py",
+        "mcs/ops/ext_contract.py"
+      ],
+      "evidence": [
+        "tests/ops/test_c1_contract.py",
+        "tests/ops/test_ext_contract_c0.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/c1_envelopes.py",
+      "sha256": "ef3202f79104d0959680749d006b2e7b839fbc70566bf977b5d95547b1f45b05",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Envelope integrity, strict IDs, expiry/part completeness, bounded withdrawal and records invariants examined with collection cases."
+      ],
+      "functions": [
+        "_wire",
+        "_hash",
+        "_hex",
+        "_time",
+        "_message_key",
+        "_part",
+        "_group_records",
+        "_envelope_id",
+        "_seal",
+        "build_envelopes",
+        "validate_envelope",
+        "parse_envelope",
+        "encode_envelope",
+        "intent_hash",
+        "encode_withdrawal",
+        "parse_withdrawal",
+        "validate_collection",
+        "size"
+      ],
+      "callers": [
+        "mcs/ops/c1_receiver.py",
+        "mcs/ops/ext_contract.py"
+      ],
+      "evidence": [
+        "tests/ops/test_c1_envelopes.py",
+        "tests/ops/test_c1_cli.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/c1_receiver.py",
+      "sha256": "df7844bacd994e854bcf8cfa71c7f3acff0f20b12801e48bc31d00129a7c0163",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Private storage, typed persistent state, receipt idempotency, staged acceptance/deletion/selection and read-only inspection paths examined."
+      ],
+      "functions": [
+        "_hash",
+        "_now",
+        "_id",
+        "_normalize",
+        "_payload_hash",
+        "_cohort",
+        "_set_id",
+        "_active",
+        "_envelope",
+        "_bundles",
+        "__init__",
+        "_directories",
+        "_locked",
+        "_load",
+        "_validate_state",
+        "_save",
+        "_items",
+        "withdraw_wire",
+        "receive",
+        "receive_wire",
+        "ack",
+        "has",
+        "matches",
+        "withdraw",
+        "expire",
+        "_collections",
+        "collections",
+        "_view",
+        "view",
+        "diagnostics"
+      ],
+      "callers": [
+        "mcs/ops/ext_contract.py"
+      ],
+      "evidence": [
+        "tests/ops/test_c1_receiver.py",
+        "tests/ops/test_c1_cli.py",
+        "tests/ops/test_ext_contract_c0.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/export_schema.py",
+      "sha256": "31ef4203ec6da3198de3d23c2a097ca7659e7009c25d9f91d515df14a17d9053",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Aggregate projection allows fixed fields/type validators; unsupported or untrusted content excluded; finite conversion remains fail-closed."
+      ],
+      "functions": [
+        "finite_number",
+        "_integer",
+        "_token",
+        "_date",
+        "_enum",
+        "_counts",
+        "_items",
+        "_boolean",
+        "_windows",
+        "_select",
+        "project_record",
+        "validate_record"
+      ],
+      "callers": [
+        "mcs/ops/brain_export.py",
+        "mcs/ops/c1_contract.py",
+        "mcs/ops/c1_records.py",
+        "mcs/ops/ext_contract.py"
+      ],
+      "evidence": [
+        "tests/ops/test_ext_contract.py",
+        "tests/ops/test_ext_contract_c0.py",
+        "tests/ops/test_c1_contract.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/ext_contract.py",
+      "sha256": "3358ff42764f66ba5c0f0e32cde53a422da0e868468063e420e930b7bc1e5f86",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Authorization schema/expiry, envelope/receipt binding, journal+audit lifecycle, held/unknown delivery and withdrawal, C0/C1/local/handoff caller routes checked."
+      ],
+      "functions": [
+        "_canonical",
+        "_sha",
+        "_write_json",
+        "load_authorization",
+        "_validate_authorization",
+        "_check_record_keys",
+        "build_envelope",
+        "_envelope_id",
+        "_intent_hash",
+        "_check_id",
+        "parse_receipt",
+        "_validate_envelope",
+        "_read_health_json",
+        "_journal_paths",
+        "health",
+        "_write_new_receipts",
+        "_receive",
+        "_read_records",
+        "main",
+        "__init__",
+        "receive",
+        "receive_wire",
+        "delete",
+        "has",
+        "ack",
+        "matches",
+        "__init__",
+        "receive",
+        "delete",
+        "discard",
+        "stage_withdrawal",
+        "__init__",
+        "_locked",
+        "_audit",
+        "_journal",
+        "_set_journal",
+        "deliver",
+        "_deliver",
+        "_valid_ack",
+        "_valid_rejection",
+        "import_receipts",
+        "reconcile",
+        "_reconcile",
+        "withdraw",
+        "withdraw_generation",
+        "_withdraw",
+        "_delete_ack",
+        "audit_entries"
+      ],
+      "callers": [],
+      "evidence": [
+        "tests/ops/test_ext_contract.py",
+        "tests/ops/test_ext_contract_cli.py",
+        "tests/ops/test_ext_contract_c0.py",
+        "tests/ops/test_c1_cli.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/import_drug_master.py",
+      "sha256": "6cba602366975a25fe441048378d168f62e7f618f325549224e86ec5a64f16a6",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Explicit source/pin, bounded bytes/archive/CSV shapes; private validated staging and exclusive destination publication; real master data not used."
+      ],
+      "functions": [
+        "_read",
+        "_iso",
+        "convert",
+        "write_private",
+        "main",
+        "__init__"
+      ],
+      "callers": [],
+      "evidence": [
+        "tests/ops/test_import_drug_master.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_backup.py",
+      "sha256": "b40e6eaa90e37d1400ef5d82fc7c4282b9b946ca6c0bb5f25f7439b5ccc5f50a",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Bounded inventory/copy/crypto budgets, explicit owner policy/escrow, private roots, cipher/MAC validation, new-destination restore and mandatory consent hold preserved."
+      ],
+      "functions": [
+        "_finite_number",
+        "_records",
+        "_record_lock",
+        "_keychain_read",
+        "_keychain_store",
+        "keygen",
+        "_fsync_directory",
+        "_state",
+        "status",
+        "_record_success",
+        "_private_directory",
+        "load_policy",
+        "_key",
+        "_fresh",
+        "_bounded_inventory_schema",
+        "_inventory_connection",
+        "_inventory",
+        "_openssl",
+        "_mac_key",
+        "_canonical",
+        "_copy_private",
+        "offsite",
+        "_decode",
+        "verify",
+        "restore",
+        "_latest_snapshot",
+        "_inspection_hash",
+        "_inspection_signature",
+        "_snapshot_info",
+        "plan",
+        "main",
+        "__call__",
+        "check",
+        "load",
+        "write",
+        "validate",
+        "progress"
+      ],
+      "callers": [
+        "deployment/scripts/mcs_offsite.sh",
+        "mcs/ingest/run_check.py",
+        "mcs/ops/mcs_restore.py"
+      ],
+      "evidence": [
+        "tests/ops/test_mcs_backup.py",
+        "tests/ops/test_backup_preflight.py",
+        "tests/ops/test_backup_integration.py",
+        "tests/ops/test_backup_reply_gap.py",
+        "tests/ops/test_backup_scheduler.py",
+        "tests/ops/test_backup_restore_consent.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_cli.py",
+      "sha256": "0cade0b756b1ce6a5cf8296ce52661e22c42e5c294ee41e90fe46901059ccc16",
+      "status": "fixed_and_verified",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Install/setup/doctor/update forwarding keeps pinned runtime and existing argument contracts; malformed target plan now safely fails."
+      ],
+      "functions": [
+        "main"
+      ],
+      "callers": [
+        "install.sh",
+        "scripts/mcs"
+      ],
+      "evidence": [
+        "tests/ops/test_mcs_cli.py",
+        "tests/ops/test_lifecycle_standalone.py",
+        "tests/ops/test_ops_publication_stability.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_operations.py",
+      "sha256": "df8e1f8e539386803fb8a82e12f9563d6e3056dd4f8ccf08acc8a974258cd1f9",
+      "status": "fixed_and_verified",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Human control validation, receipt transaction boundaries, source/revision/approval/hash binding and rollback promotion examined; growing claimed reference copy now bounded by initial inode size."
+      ],
+      "functions": [
+        "_bounded_int",
+        "retry_error",
+        "_v_scan",
+        "_v_retry",
+        "_v_pause_resume",
+        "_v_adopt_summary",
+        "_v_signal_dismiss",
+        "_v_extract_feedback",
+        "_v_signal_policy",
+        "_v_refstat_approve",
+        "_v_restore_approve",
+        "_v_update",
+        "validate_ops",
+        "_history_payload",
+        "_project_exists",
+        "_apply_scan_tx",
+        "_apply_retry_tx",
+        "_apply_control_tx",
+        "_apply_adopt_summary_tx",
+        "_apply_signal_dismiss_tx",
+        "_apply_extract_feedback_tx",
+        "_apply_signal_policy_tx",
+        "_refstat_promotion",
+        "_apply_refstat_approve_tx",
+        "prepare_update_pins",
+        "_apply_update_op_tx",
+        "_apply_restore_op_tx",
+        "apply_tx",
+        "paused"
+      ],
+      "callers": [
+        "mcs/views/summary_review.py",
+        "mcs/views/mcs_view.py",
+        "hermes_plugin/__init__.py",
+        "mcs/ops/mcs_signals.py",
+        "mcs/ops/mcs_requests.py",
+        "mcs/semantic/semantic_runtime.py",
+        "mcs/semantic/semantic_render.py",
+        "mcs/semantic/semantic_send_gate.py",
+        "mcs/semantic/semantic_drain.py",
+        "mcs/semantic/semantic.py"
+      ],
+      "evidence": [
+        "tests/ops/test_mcs_operations.py",
+        "tests/ops/test_mcs_operation_cli.py",
+        "tests/ops/test_refstat_promotion_growth.py",
+        "tests/ops/test_receipt_contract.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_refstats.py",
+      "sha256": "d2b353fe04709a01ae6f026e523814467ecc6cb239e47a31a37b2fa528eec9df",
+      "status": "fixed_and_verified",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Captured as_of pin, file/hash+receipt approval binding, unverified/superseded/match/drift/regression paths preserved; nonfinite time and integer/float diff faults corrected."
+      ],
+      "functions": [
+        "refstats_dir",
+        "_name_ok",
+        "_ref_path",
+        "_diff",
+        "_load_view",
+        "_receipt_applied",
+        "_approvals_in_db",
+        "cmd_capture",
+        "_fold_as_of",
+        "cmd_pending",
+        "cmd_verify",
+        "cmd_list",
+        "main"
+      ],
+      "callers": [],
+      "evidence": [
+        "tests/ops/test_mcs_refstats.py",
+        "tests/ops/test_bugfix_r2_12_refstats_asof.py",
+        "tests/ops/test_ops_aggregate_stability.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_repair.py",
+      "sha256": "a4cc9a01c5d4e36cd86e0ce6d3d15f38cade678539df5ad89183ab4aa3782088",
+      "status": "fixed_and_verified",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Bounded query-only static snapshot plan, private exclusive result and append-chain audit, human confirmation/source/hash/device binding examined; interrupted result now unpublished and retryable."
+      ],
+      "functions": [
+        "_hash_file",
+        "_digest",
+        "_stages",
+        "plan",
+        "_validate_plan",
+        "_private_parent",
+        "save_new",
+        "_read_json",
+        "_entries",
+        "_log",
+        "_backup_proof",
+        "record",
+        "finalize",
+        "main",
+        "error",
+        "progress",
+        "supported",
+        "count",
+        "group"
+      ],
+      "callers": [
+        "mcs/ops/mcs_backup.py"
+      ],
+      "evidence": [
+        "tests/ops/test_mcs_repair.py",
+        "tests/ops/test_ops_publication_stability.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_requests.py",
+      "sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Strict command size/duplicate/nonfinite fields, nofollow regular reads, explicit human/reason/UUID/source revision contracts, receipt+enqueue atomicity checked."
+      ],
+      "functions": [
+        "canonical",
+        "payload_hash",
+        "parse_command",
+        "read_command",
+        "positive",
+        "valid_hash",
+        "valid_uuid",
+        "_text",
+        "_fields",
+        "_request_extras",
+        "validate",
+        "apply_command",
+        "_apply_request_tx",
+        "enqueue",
+        "candidates",
+        "pairs",
+        "constant"
+      ],
+      "callers": [
+        "hermes_plugin/__init__.py",
+        "mcs/views/mcs_view.py",
+        "mcs/views/summary_review.py",
+        "mcs/views/response_observation_view.py",
+        "mcs/ops/mcs_repair.py",
+        "mcs/ops/mcs_restore.py",
+        "mcs/ops/mcs_operations.py",
+        "mcs/semantic/semantic_render.py",
+        "mcs/semantic/semantic_blind.py",
+        "mcs/semantic/semantic_loops.py",
+        "mcs/semantic/semantic_relations.py",
+        "mcs/ops/request_loops.py",
+        "mcs/semantic/semantic_facts.py",
+        "mcs/semantic/semantic_store.py",
+        "mcs/semantic/semantic_evaluation.py",
+        "mcs/semantic/semantic_runtime.py",
+        "mcs/semantic/semantic_v4.py",
+        "mcs/semantic/semantic_policy.py",
+        "mcs/semantic/semantic_drain.py",
+        "mcs/notify/notify_urgent.py",
+        "mcs/ingest/job_ops.py",
+        "mcs/notify/notify_render.py",
+        "mcs/notify/notify_transport.py",
+        "mcs/notify/notify_cards.py",
+        "mcs/notify/notify_cmds.py",
+        "mcs/core/ledger.py",
+        "mcs/notify/notify_flush.py"
+      ],
+      "evidence": [
+        "tests/ops/test_mcs_features.py",
+        "tests/ops/test_mcs_request_reason.py",
+        "tests/ops/test_receipt_contract.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_setup.py",
+      "sha256": "091edddfd84cf98ba38f58d5130e3703a288ff7ca9089ece22cd85fe2c3f5da3",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Validator/wizard/runtime selection, bounded subprocess and secret stdin, readonly doctor/counts vs explicit probes, CLI setup/services ownership and atomic rendered artifacts checked with synthetic host/config fixtures."
+      ],
+      "functions": [
+        "_nonempty_str",
+        "_bool",
+        "_int_range",
+        "_num",
+        "_bot_profile",
+        "_dict",
+        "_drug_map_config",
+        "_backup_config",
+        "_recovery_python_problem",
+        "_urgency_escalation",
+        "_validate_standalone",
+        "_validate_llm",
+        "_validate_notify",
+        "_validate_update",
+        "_validate_health",
+        "validate_config",
+        "_validate_standalone_scope",
+        "_hermes_exe",
+        "_hermes_ok",
+        "_run",
+        "_hermes_cli",
+        "_hermes_config_get",
+        "_plugin_newer_than_gateway",
+        "_hermes_config_set",
+        "check_environment",
+        "_env_write",
+        "_keychain_store",
+        "_csv_list",
+        "_discord_on",
+        "_slack_on",
+        "_transport_on",
+        "_lineworks_on",
+        "_cards_on",
+        "_signals_on",
+        "_digest_on",
+        "_semantic_on",
+        "_get_key",
+        "_has_key",
+        "_set_key",
+        "_fmt",
+        "_parse_answer",
+        "_ask",
+        "_wizard",
+        "_csv_yaml",
+        "_project_ids_yaml",
+        "_apply_plugin_integration",
+        "_config_problem",
+        "_guard_config",
+        "_init_recovery_problem",
+        "cmd_init",
+        "_shipped_g6_criteria",
+        "cmd_fact_source",
+        "cmd_jev_value",
+        "_semantic_queue_warnings",
+        "_extract_queue_warnings",
+        "_fact_pipeline_warnings",
+        "_queue_warnings",
+        "cmd_check",
+        "_doctor_check",
+        "_check_llm",
+        "sqlite_wal_safe",
+        "_runtime_probe",
+        "_runtime_problem",
+        "_recovery_python",
+        "_recovery_executable",
+        "_recovery_runtime",
+        "_recovery_owned",
+        "runtime_gate_errors",
+        "recovery_repair_pending",
+        "_update_parent_holds_locks",
+        "_sync_recovery",
+        "cmd_doctor",
+        "configured_cron_jobs",
+        "_services_py",
+        "_hermes_py_problem",
+        "_py_problem",
+        "_cron_label",
+        "_calendar",
+        "_cron_plist",
+        "_agent_labels",
+        "_owned_label",
+        "_install_fix",
+        "_standalone_py_problem",
+        "check_runtime",
+        "_render_template",
+        "_write_atomic",
+        "_sha256",
+        "_cron_list",
+        "_norm_sched",
+        "_agent_loaded",
+        "_agent_reconcile",
+        "_load_manifest",
+        "_save_manifest",
+        "_service_subs",
+        "_scripts_dir",
+        "_rendered_scripts",
+        "_script_drift",
+        "_sync_scripts",
+        "_desired_agents",
+        "_sync_agents",
+        "_retire_agents",
+        "_cron_converged",
+        "_verify_cron_after",
+        "_sync_cron",
+        "_sync_gateway",
+        "_standalone_service_path",
+        "_standalone_loaded",
+        "_retire_previous_runtime",
+        "_sync_standalone_service",
+        "_record_llm_slots",
+        "cmd_services",
+        "main",
+        "f",
+        "_q",
+        "_store",
+        "pick",
+        "expand",
+        "note"
+      ],
+      "callers": [
+        "install.sh",
+        "mcs_standalone/runtime.py",
+        "deployment/launchagents/README.md",
+        "hermes_plugin/README.md",
+        "adapters/lineworks/config.py",
+        "scripts/keychain_to_env.py",
+        "mcs_standalone/config.py",
+        "deployment/README.md",
+        "deployment/recovery/mcs_recover.py",
+        "mcs/ops/mcs_update.py",
+        "mcs/ops/mcs_cli.py",
+        "mcs/ops/mcs_backup.py",
+        "mcs/ops/ext_contract.py",
+        "mcs/ingest/run_check.py"
+      ],
+      "evidence": [
+        "tests/ops/test_mcs_setup.py",
+        "tests/ops/test_mcs_setup_standalone.py",
+        "tests/ops/test_mcs_cli.py",
+        "tests/ops/test_lifecycle_standalone.py",
+        "tests/meta/test_install_sh.py",
+        "tests/meta/test_install_sh_standalone.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_signals.py",
+      "sha256": "adad7d18a0c4dc9abe0dead96a10d6b81e5eded3df5ec32aaab1fff9eb579b11",
+      "status": "fixed_and_verified",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Existing detector policy, latest lifecycle/tombstone behavior, local-only feedback, known aggregate type labels and scope limits checked; corrupted arbitrary type text cannot leave count-only output.",
+        "Closed legacy med_followup label retained after 4 affected QC regressions; arbitrary unknown content still mapped to unknown."
+      ],
+      "functions": [
+        "_approved_policy",
+        "_thresholds",
+        "_key",
+        "normalize_sender_id",
+        "_latest_self_profile",
+        "record_self_profile",
+        "latest_station_staff",
+        "record_station_staff",
+        "_station_self_id",
+        "own_sender_ids",
+        "is_own_station_message",
+        "self_sender_id",
+        "is_self_message",
+        "_self_sets",
+        "_med_excludes",
+        "_member_sql",
+        "_self_author_pred",
+        "_self_post_exists",
+        "_request_registered",
+        "_self_reaction_response",
+        "_med_followup_note",
+        "_med_followup",
+        "_comm_concentration",
+        "_request_overdue",
+        "_request_aging",
+        "_archived_pids",
+        "_rx_period_expiry",
+        "_rx_period_lapsed",
+        "_transition_reconciliation",
+        "_pharmacist_request",
+        "_rx_request_visibility",
+        "_adherence_phrases",
+        "_adherence_concern",
+        "_discharge_notice",
+        "_symptom_after_med",
+        "_insert",
+        "_signal_content",
+        "_latest_signal_states",
+        "signal_message_ids",
+        "_resolution",
+        "evaluate",
+        "evidence_fp",
+        "signal_notice_text",
+        "med_followup_group_notice",
+        "med_group_key",
+        "sig_units",
+        "_urgency_high",
+        "_digest_text",
+        "open_signal_rows",
+        "rescue_digest_members",
+        "_digest_add",
+        "_notify_opened",
+        "_notify_suppressed",
+        "_notify",
+        "dismiss_reason_counts",
+        "current_open",
+        "_lst"
+      ],
+      "callers": [
+        "scripts/development/update_readme.py",
+        "mcs/views/mcs_stats.py",
+        "mcs/views/mcs_view.py",
+        "mcs/views/response_observation_view.py",
+        "mcs/views/message_metadata.py",
+        "mcs/core/ledger.py",
+        "mcs/extract/rollup.py",
+        "mcs/ops/mcs_operations.py",
+        "mcs/ops/ext_contract.py",
+        "mcs/ops/c1_records.py",
+        "mcs/notify/notify_urgent.py",
+        "mcs/ops/brain_export.py",
+        "mcs/ingest/run_check.py",
+        "mcs/notify/notify_cards.py",
+        "mcs/notify/notify_digest.py",
+        "mcs/notify/notify_render.py",
+        "mcs/notify/notify_flush.py"
+      ],
+      "evidence": [
+        "tests/ops/test_mcs_signals.py",
+        "tests/ops/test_mcs_signal_feedback.py",
+        "tests/views/test_mcs_stats_signal_feedback.py",
+        "tests/ops/test_ops_aggregate_stability.py",
+        "tests/ops/test_signal_history_perf.py",
+        "tests/views/test_qc_view.py (12 cases, refreshed)"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    },
+    {
+      "path": "mcs/ops/request_loops.py",
+      "sha256": "a8c4b701c8e038ad0824edc70704594f63cc20fceb1f634635a0406695462e68",
+      "status": "reviewed_no_fix_needed",
+      "checks": [
+        "Complete Python 3.13 source AST parsed and callable/resource/JSON/process paths inventoried",
+        "Cross-module references searched and authoritative source/test paths compared",
+        "Current candidate extraction/version/hash/source/policy identity and loop evidence are checked before promotion; no automatic human action."
+      ],
+      "functions": [
+        "validate_loop_ref",
+        "_decode",
+        "valid_origin_evidence",
+        "current_candidate"
+      ],
+      "callers": [
+        "mcs/views/mcs_view.py",
+        "hermes_plugin/__init__.py",
+        "mcs/ops/mcs_requests.py"
+      ],
+      "evidence": [
+        "tests/ops/test_mcs_request_loops.py",
+        "tests/ops/test_mcs_features.py"
+      ],
+      "limitations": [
+        "Synthetic private files/DBs, local test Git and stubs only; no original ledger, actual credentials, real MCS/LLM/Jev, platform service changes or publication.",
+        "Native OS/actual SDK/real receiver interoperability not asserted from synthetic success."
+      ]
+    }
+  ]
+}

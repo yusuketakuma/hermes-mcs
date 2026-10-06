@@ -1,0 +1,459 @@
+{
+  "version": "1.0.15",
+  "scope": "9 core modules, bootstrap, and 3 parent-owned operations modules",
+  "inventory_count": 13,
+  "entries": [
+    {
+      "path": "mcs/core/bounded_http.py",
+      "sha256": "8dc988802995762c06b8fc26ca3c131c01c5a6201878ac34766653f6be9ad529",
+      "status": "reviewed_no_change",
+      "checks": [
+        "Stdin-only credentials and bounded response; stripped worker environment; no proxy/redirect; absolute deadline kill/reap including interruption; worker protocol fixed diagnostics"
+      ],
+      "source_symbols": [
+        "_loopback_endpoint_allowed",
+        "_worker_endpoint_allowed",
+        "_worker_headers",
+        "_http_worker_main",
+        "_worker_environment",
+        "NotSentTimeout",
+        "bounded_http_request"
+      ],
+      "evidence": [
+        "tests/core/test_local_llm_deadline.py",
+        "tests/core/test_bugfix_r1_cross_not_sent_timeout.py"
+      ],
+      "limitations": [
+        "Synthetic offline verification; no production data or service mutation."
+      ]
+    },
+    {
+      "path": "mcs/core/ledger.py",
+      "sha256": "2eafc107e8e7c5aaacee1b512b3dd4fc43b188711691cda983a9c7a684042200",
+      "status": "fixed",
+      "checks": [
+        "Writer migration and rollback transactions; guarded artifact/reply recovery; queue indexes and bounded claim; snapshot publication cleanup; reader failure closes connection"
+      ],
+      "source_symbols": [
+        "job_reason_code",
+        "job_reason_class",
+        "MigrationError",
+        "_posted_epoch",
+        "karte_summary_block",
+        "_enqueue_attachment_followup_tx",
+        "enqueue_ready_attachment_followups_tx",
+        "Ledger",
+        "LedgerReader",
+        "publish_snapshot",
+        "reaction_actor_summary",
+        "valid_mcs_db"
+      ],
+      "evidence": [
+        "tests/core/test_reader_init_cleanup.py",
+        "tests/core/test_ledger_guards.py",
+        "tests/core/test_supported_schema_upgrade.py"
+      ],
+      "limitations": [
+        "Synthetic offline verification; no production data or service mutation."
+      ]
+    },
+    {
+      "path": "mcs/core/ledger_audit.py",
+      "sha256": "5d7e2dcb0632d12b1880cb2e7fa5b6591cbfa10e97ba46c42ee88124f4e948df",
+      "status": "reviewed_no_change",
+      "checks": [
+        "Readonly static DELETE ledger only; shared progress budget; unknown versus violation; count-only diagnostics; scoped relation guards"
+      ],
+      "source_symbols": [
+        "AuditCheck",
+        "AuditReport",
+        "GuardRelation",
+        "GuardReport",
+        "guard_status",
+        "audit_db",
+        "main"
+      ],
+      "evidence": [
+        "tests/core/test_ledger_audit.py"
+      ],
+      "limitations": [
+        "Synthetic offline verification; no production data or service mutation."
+      ]
+    },
+    {
+      "path": "mcs/core/llm_admission.py",
+      "sha256": "74390904ed453f85381868a85c02db32353cd85666a3ae4b81675af75a9286a9",
+      "status": "fixed",
+      "checks": [
+        "Serialized cross-thread broker connection; initialization close and transaction rollback; lane reservations, expiries and ownership; deadline accounting"
+      ],
+      "source_symbols": [
+        "_connect",
+        "_serialized",
+        "Broker"
+      ],
+      "evidence": [
+        "tests/core/test_admission_threads.py",
+        "tests/core/test_llm_admission.py"
+      ],
+      "limitations": [
+        "Synthetic offline verification; no production data or service mutation."
+      ]
+    },
+    {
+      "path": "mcs/core/local_llm.py",
+      "sha256": "d40be7a1b64d6565bfc766435eab92c31062faba6876469025872385456ad1c8",
+      "status": "fixed",
+      "checks": [
+        "Broker creation serialization; loopback endpoint checks; absolute deadline transport; model response usage shape; nested model JSON probe fallback"
+      ],
+      "source_symbols": [
+        "resolve",
+        "probe_urls",
+        "request_slot",
+        "pinned_slot",
+        "admission_enabled",
+        "_admission_db_path",
+        "_broker",
+        "admitted_chat",
+        "admitted_probe_format",
+        "bounded_request",
+        "_default_request",
+        "_usage_dict",
+        "_timings_dict",
+        "_validate_chat_args",
+        "chat",
+        "_malformed",
+        "acceptance_error",
+        "probe_format",
+        "_json_obj"
+      ],
+      "evidence": [
+        "tests/core/test_probe_json_recursion.py",
+        "tests/core/test_local_llm.py",
+        "tests/core/test_local_llm_deadline.py"
+      ],
+      "limitations": [
+        "Synthetic offline verification; no production data or service mutation."
+      ]
+    },
+    {
+      "path": "mcs/core/maintenance.py",
+      "sha256": "ea1c8583d0771175ea1049e5619e1a5e06339fd3ae674151072894a16908db18",
+      "status": "fixed",
+      "checks": [
+        "Readonly source backup connection close; verified atomic publication and free-space floor; actionable rollback retention; pending companion attachment retention"
+      ],
+      "source_symbols": [
+        "MaintenanceError",
+        "atomic_publish_text",
+        "_stat_sig",
+        "_verified_unchanged",
+        "daily_backup",
+        "preupdate_backup",
+        "prune_preupdate_backups",
+        "rotate_log",
+        "prune_attachments",
+        "publish_snapshot"
+      ],
+      "evidence": [
+        "tests/core/test_backup_connection_cleanup.py",
+        "tests/core/test_maintenance_root.py"
+      ],
+      "limitations": [
+        "Synthetic offline verification; no production data or service mutation."
+      ]
+    },
+    {
+      "path": "mcs/core/mcs_queries.py",
+      "sha256": "7a6c84fc645b990d77f6838bc978559b73291e38dd5bb0d2884cb088e366fa7c",
+      "status": "reviewed_no_change",
+      "checks": [
+        "Shared hash/project/generation/QC binding; malformed JSON guards inside SQL operands; Python and SQL patient-current filters; reply coverage bounds"
+      ],
+      "source_symbols": [
+        "json_or_null",
+        "json_object_or_null",
+        "current_extract_pred",
+        "qc_source_id",
+        "current_qc_pred",
+        "_projection_pred",
+        "current_projection_pred",
+        "current_projection_id",
+        "current_v4_pred",
+        "current_v4_id",
+        "qc_v4_source_id",
+        "current_fact_pred",
+        "med_period_artifacts",
+        "med_is_patient_current",
+        "med_capability_evidence",
+        "item_unverified",
+        "iter_period_ends",
+        "transition_cooccurrences",
+        "staff_directory",
+        "feedback_current",
+        "extract_feedback",
+        "incomplete_reply_roots",
+        "thread_reply_pairs",
+        "coverage_gaps",
+        "resolve_staff"
+      ],
+      "evidence": [
+        "tests/core/test_artifact_json_guards.py",
+        "tests/core/test_thread_reply_pairs.py"
+      ],
+      "limitations": [
+        "Synthetic offline verification; no production data or service mutation."
+      ]
+    },
+    {
+      "path": "mcs/core/mcs_runtime.py",
+      "sha256": "79df8cf48f3fe5da4ee4fa0dd68a41778dcc888252d15f3ff68b349cb3dc4c60",
+      "status": "reviewed_no_change",
+      "checks": [
+        "Explicit mode enum; standalone root paths versus Hermes paths; no connection or service side effects"
+      ],
+      "source_symbols": [
+        "mode",
+        "standalone",
+        "runtime_home",
+        "python_executable",
+        "scripts_dir"
+      ],
+      "evidence": [
+        "tests/ops/test_runtime_compatibility.py"
+      ],
+      "limitations": [
+        "Synthetic offline verification; no production data or service mutation."
+      ]
+    },
+    {
+      "path": "mcs/core/mcs_util.py",
+      "sha256": "8c8ebdf1d7c329424f8d9438f29935698dacea34d6ca442f351533342e1b59b1",
+      "status": "fixed",
+      "checks": [
+        "Atomic publish and temporary cleanup; configuration parsing; no-proxy/no-redirect; run-lock descriptor lifetime; transport outside transactions; disk/circuit failure behavior"
+      ],
+      "source_symbols": [
+        "load_config",
+        "env_value",
+        "publish_tmp",
+        "atomic_write",
+        "_db_file",
+        "circuit_state_path",
+        "_circuit_state",
+        "circuit_open_s",
+        "circuit_success",
+        "circuit_failure",
+        "disk_free_mb",
+        "disk_floor_mb",
+        "file_sha256",
+        "loads_dict",
+        "json_object",
+        "html_to_text",
+        "locate_quote_span",
+        "text_chunks",
+        "NoRedirect",
+        "no_proxy_opener",
+        "acquire_run_lock",
+        "unlocked_transport",
+        "launchd_bootstrap"
+      ],
+      "evidence": [
+        "tests/core/test_mcs_util.py",
+        "tests/core/test_run_lock_error_cleanup.py"
+      ],
+      "limitations": [
+        "Synthetic offline verification; no production data or service mutation."
+      ]
+    },
+    {
+      "path": "mcs/_mcs_path.py",
+      "sha256": "fef8b54e47ddddac29482372ff04f188c9127fafceb77d858bc6d5b04a6328f2",
+      "status": "reviewed_no_change",
+      "checks": [
+        "Flat import roots at any depth; deterministic directories; excluded dot/private directories; existing sys.path duplicates avoided"
+      ],
+      "source_symbols": [
+        "_import_roots"
+      ],
+      "evidence": [
+        "tests/meta/test_ci_scripts.py"
+      ],
+      "limitations": [
+        "Synthetic offline verification; no production data or service mutation."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_update.py",
+      "sha256": "41290a5162dae98a44add507d42784ec1350bcffa3fd823a88082c46ab542d34",
+      "status": "fixed",
+      "checks": [
+        "Apply locks and child reaping; manifest membership shape before service calls; subprocess budgets; backup/check/rollback gate; untrusted Git stderr excluded from user errors"
+      ],
+      "source_symbols": [
+        "UpdateError",
+        "RestoreConsentPending",
+        "_default_state",
+        "_valid_state",
+        "load_state",
+        "save_state",
+        "journal",
+        "acquire_update_lock",
+        "_acquire_run_lock_wait",
+        "_git",
+        "_git_out",
+        "_head_sha",
+        "_tree_clean",
+        "remote_tag_sha",
+        "_ver_key",
+        "detect_latest",
+        "current_version",
+        "defuse_mentions",
+        "fetch_notes",
+        "impact_summary",
+        "precheck_local",
+        "_norm",
+        "_safe_relpath",
+        "_ls_tree_paths",
+        "precheck_tag",
+        "_plugin_changed",
+        "upgrade_notes",
+        "plan",
+        "_plan",
+        "_recovery_notes",
+        "_standalone_target_supported",
+        "_uid",
+        "_run",
+        "_agent_pid",
+        "_write_marker",
+        "_awaiting_consent_marker",
+        "_remove_marker",
+        "_stray_drainer_pids",
+        "_standalone_status",
+        "_standalone_drainer_problems",
+        "quiesce",
+        "_bootstrap_agent",
+        "restart_agents",
+        "restart_gateway",
+        "_clean_stale_git_locks",
+        "scan_pending_approvals",
+        "wrapper_path",
+        "spawn_detached",
+        "_enqueue_notice",
+        "_record_attempt",
+        "_services_reconcile",
+        "_postcheck",
+        "_reinstall",
+        "_post_merge",
+        "_update_mode",
+        "_consent_hold_record",
+        "_consent_hold",
+        "_rollback_applying",
+        "_hold_rollback_for_consent",
+        "_run_post_merge",
+        "apply",
+        "_baseline_check",
+        "_gateway_restart_if_needed",
+        "_reconcile_membership",
+        "_rollback_tree",
+        "rollback",
+        "_db_version",
+        "_table_count",
+        "_restore_content_digest",
+        "_restore_loss_report",
+        "_restore_consent",
+        "_reconcile_restored",
+        "_replace_database",
+        "_restore_db",
+        "reinstall_done",
+        "recover_interrupted",
+        "_finish_recovery",
+        "_report",
+        "_alert_key",
+        "_alert_due",
+        "_last_report",
+        "_drainers_key",
+        "cmd_check",
+        "cmd_status",
+        "main"
+      ],
+      "evidence": [
+        "tests/ops/test_update_membership_shape.py",
+        "tests/ops/test_update_error_output.py",
+        "tests/ops/test_update_child_reaping.py",
+        "tests/ops/test_mcs_update.py"
+      ],
+      "limitations": [
+        "Synthetic offline verification; no production data or service mutation."
+      ]
+    },
+    {
+      "path": "mcs/ops/mcs_restore.py",
+      "sha256": "f8bf3534f3434ba558b91e5ebe0617c4edf2b15bf81bfc5a5c2e288f3263077a",
+      "status": "fixed",
+      "checks": [
+        "Private directory/file identity and no-follow binding; finite persisted times; exact approval receipt and plan hashes; human consent and hold-all delivery preserved"
+      ],
+      "source_symbols": [
+        "Binding",
+        "Plan",
+        "ApprovalResult",
+        "ResumeResult",
+        "RestoreConsentError",
+        "_identity",
+        "_stamp",
+        "_directory",
+        "_same_directory",
+        "_private_file",
+        "_read",
+        "_binding",
+        "plan",
+        "_human",
+        "_publish",
+        "approve",
+        "_receipt",
+        "resume",
+        "writers_resumed",
+        "main"
+      ],
+      "evidence": [
+        "tests/ops/test_persisted_timestamp_overflow.py",
+        "tests/ops/test_backup_restore_consent.py"
+      ],
+      "limitations": [
+        "Synthetic offline verification; no production data or service mutation."
+      ]
+    },
+    {
+      "path": "mcs/ops/c1_records.py",
+      "sha256": "1ac9b014c78c1f5d4f630c013b11acb7f2be859a10d86029b2a15e11c540a56a",
+      "status": "fixed",
+      "checks": [
+        "Sender type/scope policy; finite timestamps; bounded records and selection; snapshot freshness and authorization binding"
+      ],
+      "source_symbols": [
+        "SnapshotRecords",
+        "Selection",
+        "SnapshotError",
+        "_timestamp",
+        "SenderPolicy",
+        "classify_sender",
+        "assemble_records",
+        "select_records"
+      ],
+      "evidence": [
+        "tests/ops/test_c1_records.py",
+        "tests/ops/test_c1_authorization.py",
+        "tests/ops/test_persisted_timestamp_overflow.py"
+      ],
+      "limitations": [
+        "Synthetic offline verification; no production data or service mutation."
+      ]
+    }
+  ],
+  "verification": {
+    "core_and_parent_operations": "Final broad isolated Python 3.13 partition passed except generated-document drift, fixed and exact test rerun passed; unchanged results reused. See aggregate audit for detailed counts.",
+    "latest_git_and_gate": "Updater and lazy-card Embed gate regressions passed; generated-document drift was regenerated and direct --check subsequently passed."
+  }
+}
