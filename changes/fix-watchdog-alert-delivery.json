@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "監視の警報が通知先に届かず、ログにだけ残っていた問題を修正",
+  "summary": "health.jsonの更新停止（stale）・欠落・破損・チェック失敗・状態低下（degraded）・ディスク残量低下の警報は、定期実行の標準出力として書かれるだけで、Hermesのcron（--deliver local）でも独立実行でもログファイルにしか残っていませんでした。health_watch.pyが警報を出すとき、同じ内容をnotify_system_target（未設定ならnotify_target）へ直接送るようにしました。状態低下の途中で新しい原因（例: 収集未完了）が加わった場合も、1時間の再通知を待たずに知らせます。",
+  "upgrade": "追加操作は不要です。Hermesではgateway、独立実行では常駐プロセスの更新・再起動後、次の監視（5分ごと）から適用されます。警報はnotify_system_targetが設定されていればその通知先、無ければnotify_targetへ送られます。どちらも未設定なら従来どおりログだけに残ります。",
+  "details": [
+    "送信には通知処理（notify_flush）と同じ送信経路を使います。outbox経由にしないのは、収集処理そのものが止まっている場合にも届けるためです。送信に失敗しても監視は止まらず、標準出力と状態ファイルは従来どおり残ります。",
+    "警報の重複抑止は従来どおりです。加えて、状態低下が続く間に初めて現れた原因コードだけを1回知らせ、消えて再び現れた原因では再通知しません。状態が変わると原因の記録はリセットされます。",
+    "mcs_check.shの標準出力行（run_check異常終了・収集未完了）はログ用のままで、人への通知はhealth_watch.pyの警報（failed・stale・collection_incomplete）が担います。",
+    "警報本文は状態コードと数値だけで、患者情報を含みません。"
+  ],
+  "refs": ["mcs/ingest/health_watch.py", "deployment/scripts/mcs_check.sh", "docs/specs/lifecycle-spec.md", "tests/ingest/test_health_watch.py"]
+}

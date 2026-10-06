@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "独立実行で子プロセスの異常終了の繰り返しが見えなかった問題を修正",
+  "summary": "独立実行（runtime_mode=standalone）の常駐プロセスは、抽出処理などの子プロセスが終了したことだけを記録し、終了コードを残していませんでした。異常終了と再起動を繰り返していても正常に動いているように見えていたため、ログに終了コードを、standalone-status.jsonに各ジョブの最後の終了コード・終了時刻・連続失敗回数を記録します。",
+  "upgrade": "独立実行の常駐プロセスの更新・再起動で適用されます。設定変更は不要です。Hermesモードには影響しません。",
+  "details": [
+    "child_endedログにcode（終了コード）とfailures（連続失敗回数）を追加。",
+    "standalone-status.jsonにexits（ジョブ名ごとのlast_exit・ended_at・failures）を追加。行数は設定済みジョブ数で上限があり、0で終了すると連続失敗回数は0に戻ります。既存のpid・children等の項目は変わりません。"
+  ],
+  "refs": ["mcs_standalone/runtime.py", "tests/adapters/standalone/test_runtime.py"]
+}

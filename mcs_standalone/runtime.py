@@ -36,6 +36,9 @@ class Runtime:
         self.generation = uuid.uuid4().hex
         self.children = {}
         self.retry_at = {}
+        # job -> last exit code/time and consecutive failed exits (one row
+        # per configured job, so bounded): a crash loop is visible in status
+        self.exits = {}
         # Command inbox names drained by the last successful run; None after a failure.
         self.drained = {}
         self.last_minute = None
@@ -105,7 +108,11 @@ class Runtime:
                 backoff = 10 if job == "cmd_int" and code == 0 else 30
                 self.retry_at[job] = now if updating else now + backoff
                 self.drained[job] = row.get("pending") if code == 0 else None
-                log("child_ended", job=job)
+                prev = self.exits.get(job) or {}
+                self.exits[job] = {"last_exit": code, "ended_at": now,
+                                   "failures": prev.get("failures", 0) + 1 if code else 0}
+                log("child_ended", job=job, code=code,
+                    failures=self.exits[job]["failures"])
             elif (updating or self.restarting) and row["kind"] == "background":
                 if row["stopping_at"] is None:
                     child.terminate()
@@ -142,7 +149,8 @@ class Runtime:
         snapshot = {"pid": os.getpid(), "generation": self.generation, "updated_at": now,
                     "update_in_progress": updating,
                     "children": {job: {"pid": row["process"].pid, "kind": row["kind"]}
-                                 for job, row in self.children.items()}}
+                                 for job, row in self.children.items()},
+                    "exits": self.exits}
         atomic_write(str(self.data / service.STATUS_FILE),
                      lambda stream: json.dump(snapshot, stream), mode=0o600)
         return self.restarting and not self.children

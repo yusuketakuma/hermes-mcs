@@ -13,7 +13,8 @@ Freshness deadline comes from config (health.tick_interval_s, default
 
 Output contract: alert content is status codes/counters only — never
 patient data. stdout carries one alert line on alert transitions
-(watchdog convention); data/health_watch_status.json is the durable
+(watchdog convention) and the same lines go to notify_system_target
+(else notify_target); data/health_watch_status.json is the durable
 machine-readable status, published atomically.
 """
 import argparse
@@ -188,7 +189,8 @@ def evaluate(home: str = HOME, now: float | None = None,
     a healthy producer keeping cadence is not an event. Alerts fire
     on: first non-ok observation, every transition INTO a non-ok
     status, one bad->ok recovery, and an unchanged non-ok state
-    re-alerted after REALERT_S. 'ok' is only produced by a fresh
+    re-alerted after REALERT_S, plus a fresh non-ok verdict that gains
+    a state reason not yet alerted in the current episode. 'ok' is only produced by a fresh
     in-deadline file — recovery can never be assumed. State files
     that predate evidence_at are read via health_at.
 
@@ -215,6 +217,22 @@ def evaluate(home: str = HOME, now: float | None = None,
                 else None)
     prior_known = bool(last)
     transition = key != last_key
+    # a fresh non-ok verdict whose producer codes gain a reason not yet
+    # alerted in this episode is news (e.g. degraded by notifications,
+    # then also by collection) — a reason that drops and returns stays
+    # silent until the episode ends, so flapping codes cannot spam
+    reasons = obs.get("state_reasons") or []
+    seen = state.get("alerted_reasons")
+    if transition:
+        seen = set()
+    elif seen is None:
+        seen = set(reasons)     # state from before this field: no news
+    else:
+        seen = (set(seen) if isinstance(seen, list)
+                and all(isinstance(r, str) for r in seen) else set())
+    new_reason = (prior_known and not transition
+                  and obs["status"] not in ("ok", "stale")
+                  and not set(reasons) <= seen)
     alerted_at = state.get("alerted_at")
     invalid_alert_at = not _finite_number(alerted_at) \
         or alerted_at > now
@@ -229,7 +247,7 @@ def evaluate(home: str = HOME, now: float | None = None,
         # transition into a non-ok status carry an alert
         alert = transition and (obs["status"] != "ok"
                                 or last.get("status") != "ok")
-    alert = alert or realert
+    alert = alert or realert or new_reason
     disk_prev = state.get("disk_low") is True
     disk_low = (obs["disk_low"] if obs["status"] in OVERALL_STATUS
                 else disk_prev)
@@ -245,6 +263,8 @@ def evaluate(home: str = HOME, now: float | None = None,
                      "evidence_at": _dedup_stamp(obs)}
     if alert:
         state["alerted_at"] = now
+    state["alerted_reasons"] = sorted(seen | set(reasons) if alert
+                                      else seen)
     try:
         maintenance.atomic_publish_text(
             state_path, json.dumps(state, ensure_ascii=False))
@@ -253,6 +273,26 @@ def evaluate(home: str = HOME, now: float | None = None,
     except OSError:
         pass    # persistence failure must not crash the watcher
     return report
+
+
+def deliver_alert(cfg: dict, text: str) -> bool:
+    """Best-effort copy of an alert line to the system notification
+    target. cron/launchd stdout only reaches a log file, and the
+    outbox drains inside run_check — the very producer a stale verdict
+    says is down — so this uses notify_flush's sender directly. The
+    watcher's own dedup already bounds the rate; a failed send stays
+    silent (stdout line and status file remain)."""
+    try:
+        import notify_flush
+        target = notify_flush._target(cfg, "run_failed")
+        if not target:
+            return False
+        notify_flush._send(notify_flush._send_argv(cfg, target),
+                           "[MCS] 監視警報\n" + text,
+                           deadline=time.monotonic() + 60)
+        return True
+    except Exception:
+        return False
 
 
 def main(argv: list | None = None) -> int:
@@ -265,26 +305,32 @@ def main(argv: list | None = None) -> int:
     args = ap.parse_args(argv)
     if args.now is not None and not _finite_number(args.now):
         ap.error("now must be a finite number")
-    cfg = load_config(args.config) if args.config else None
+    cfg = load_config(args.config) if args.config else load_config()
     report = evaluate(home=args.home, now=args.now, cfg=cfg)
+    lines = []
     if report["alert"]:
         age = report.get("age_s")
         reasons = report.get("state_reasons")
-        print("mcs health: {status} (overall={overall} "
-              "health_at={health_at} age_s={age} deadline_s={dl} "
-              "reasons={reasons} last_ok_at={last_ok})".format(
-                  status=report["status"],
-                  overall=report.get("overall"),
-                  health_at=report.get("health_at"),
-                  age=age, dl=report["deadline_s"],
-                  reasons=(",".join(reasons) or "none")
-                  if reasons is not None else "unknown",
-                  last_ok=report.get("last_ok_at")
-                  if report.get("last_ok_at") is not None else "unknown"))
+        lines.append("mcs health: {status} (overall={overall} "
+                     "health_at={health_at} age_s={age} deadline_s={dl} "
+                     "reasons={reasons} last_ok_at={last_ok})".format(
+                         status=report["status"],
+                         overall=report.get("overall"),
+                         health_at=report.get("health_at"),
+                         age=age, dl=report["deadline_s"],
+                         reasons=(",".join(reasons) or "none")
+                         if reasons is not None else "unknown",
+                         last_ok=report.get("last_ok_at")
+                         if report.get("last_ok_at") is not None
+                         else "unknown"))
     if report["disk_alert"]:
-        print("mcs disk: {} (free_mb={})".format(
+        lines.append("mcs disk: {} (free_mb={})".format(
             "low" if report["disk_low"] else "recovered",
             report.get("disk_free_mb")))
+    for line in lines:
+        print(line)
+    if lines:
+        deliver_alert(cfg, "\n".join(lines))
     return 0
 
 
