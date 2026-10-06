@@ -26,7 +26,12 @@ Design contract:
 - **Fail closed** — transport timeout, socket drop, expired lease and
   ``/slots`` idle samples are NEVER proof of backend retirement.
   Unknown completions hold admission closed until reconciled with
-  backend evidence.
+  backend evidence. The one exception is a hard-killed owner: a permit
+  whose lease (``LEASE_S``, well past any client deadline) expired AND
+  whose recording process no longer exists (its socket closed with it)
+  is fenced as ``owner_dead`` during acquisition, so a SIGKILL'd
+  request cannot hold its class while other handles keep the store
+  open. A live owner's permit is never reclaimed.
 - **Admission token** — each admitted→sent permit mints a single-use
   ``epoch:permit:nonce`` token. The backend access control (in
   production: the backend reachable only through the broker; in the
@@ -80,6 +85,26 @@ DEFAULT_ROUTES = {
 OCCUPYING = ("reserved", "admitted", "sent", "unknown",
              "cancel_pending")
 TERMINAL = ("terminal", "fenced")
+# Occupancy lease: 3x the longest client timeout (semantic LLM_TIMEOUT
+# 600s). Only combined with a dead owner process is expiry acted on.
+LEASE_S = 1800.0
+# Terminal rows older than this are pruned, a bounded batch per acquire.
+RETENTION_S = 7 * 86400.0
+PRUNE_BATCH = 100
+RECLAIM_BATCH = 20
+
+
+def _pid_alive(pid) -> bool:
+    """False only when no process with ``pid`` exists (ESRCH)."""
+    if not isinstance(pid, int) or pid <= 0:
+        return True     # unrecorded owner: never provably dead
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True     # EPERM: exists under another user
+    return True
 
 
 def _connect(path: str) -> sqlite3.Connection:
@@ -169,9 +194,14 @@ class Broker:
             sent_at REAL,
             terminal_at REAL,
             outcome TEXT,
-            proof TEXT)""")
+            proof TEXT,
+            owner_pid INTEGER)""")
         cols = {r[1] for r in self.db.execute(
             "PRAGMA table_info(permits)")}
+        if "owner_pid" not in cols:
+            # pre-existing rows keep NULL: their owner is unprovable
+            self.db.execute(
+                "ALTER TABLE permits ADD COLUMN owner_pid INTEGER")
         if "admitted_at" not in cols:
             self.db.execute(
                 "ALTER TABLE permits ADD COLUMN admitted_at REAL")
@@ -290,6 +320,7 @@ class Broker:
             return {"admitted": False, "reason": "class_not_bound",
                     "bound_class": bound}
         with self._write_tx():
+            self._reclaim_and_prune()
             meta = self._meta()
             if meta["state"] != "open":
                 return {"admitted": False, "reason": "epoch_closed",
@@ -319,10 +350,10 @@ class Broker:
                         "rt_waiting+1 WHERE singleton=1")
                     cur = self.db.execute(
                         "INSERT INTO permits(epoch,client,cls,job_gen,"
-                        "request_id,state,created_at)"
-                        " VALUES(?,?,?,?,?,'waiting',?)",
+                        "request_id,state,created_at,owner_pid)"
+                        " VALUES(?,?,?,?,?,'waiting',?,?)",
                         (epoch, client, cls, job_gen, request_id,
-                         time.time()))
+                         time.time(), os.getpid()))
                     return {"admitted": False, "reason": "waiting",
                             "permit_id": cur.lastrowid,
                             "epoch": epoch}
@@ -335,15 +366,50 @@ class Broker:
                                    request_id)
             return self._admit(epoch, client, cls, job_gen, request_id)
 
+    def _reclaim_and_prune(self) -> None:
+        """Inside the acquire write tx: fence lease-expired permits of
+        dead owners, then delete a bounded batch of old terminal rows."""
+        now = time.time()
+        epoch = self._meta()["epoch"]
+        stale = self.db.execute(
+            "SELECT permit_id,cls,state,owner_pid FROM permits"
+            " WHERE epoch=? AND state IN"
+            " ('reserved','admitted','sent','unknown','cancel_pending',"
+            "'waiting') AND owner_pid IS NOT NULL"
+            " AND COALESCE(sent_at,admitted_at,created_at)<?"
+            " ORDER BY permit_id LIMIT ?",
+            (epoch, now - LEASE_S, RECLAIM_BATCH)).fetchall()
+        # ponytail: pid reuse can make a dead owner look alive (the
+        # permit stays until the epoch fence); it never frees a live one.
+        for p in stale:
+            if _pid_alive(p["owner_pid"]):
+                continue
+            self.db.execute(
+                "UPDATE permits SET state='fenced', outcome='owner_dead',"
+                " terminal_at=? WHERE permit_id=?", (now, p["permit_id"]))
+            if p["cls"] == "RT" and p["state"] == "waiting":
+                self.db.execute(
+                    "UPDATE admission_meta SET rt_waiting="
+                    "MAX(rt_waiting-1,0) WHERE singleton=1")
+        # oldest rows by rowid only — the scan is bounded even when
+        # nothing is due
+        self.db.execute(
+            "DELETE FROM permits WHERE permit_id IN (SELECT permit_id"
+            " FROM permits ORDER BY permit_id LIMIT ?) AND state IN"
+            f" ({','.join('?' * len(TERMINAL))})"
+            " AND COALESCE(terminal_at,created_at)<?",
+            (PRUNE_BATCH, *TERMINAL, now - RETENTION_S))
+
     def _admit(self, epoch, client, cls, job_gen, request_id) -> dict:
         """Insert an 'admitted' permit — created_at == admitted_at since
         the permit never waited."""
         now = time.time()
         cur = self.db.execute(
             "INSERT INTO permits(epoch,client,cls,job_gen,"
-            "request_id,state,created_at,admitted_at)"
-            " VALUES(?,?,?,?,?,'admitted',?,?)",
-            (epoch, client, cls, job_gen, request_id, now, now))
+            "request_id,state,created_at,admitted_at,owner_pid)"
+            " VALUES(?,?,?,?,?,'admitted',?,?,?)",
+            (epoch, client, cls, job_gen, request_id, now, now,
+             os.getpid()))
         return {"admitted": True, "permit_id": cur.lastrowid,
                 "epoch": epoch}
 
