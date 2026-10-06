@@ -57,9 +57,16 @@ def append(state_dir: str, worker_id: str, record: dict, *,
                       separators=(",", ":")) + "\n"
     created = not os.path.exists(path)
     # 0600 like every other state file — never the umask default
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+    data = line.encode("utf-8")
+    size = os.fstat(fd).st_size
+    if size and os.pread(fd, 1, size - 1) != b"\n":
+        # A torn tail (ENOSPC, power loss) stays its own unparsable line —
+        # the scan still reports it incomplete — instead of swallowing
+        # this good row into one unreadable concatenation.
+        data = b"\n" + data
     with os.fdopen(fd, "ab") as handle:
-        handle.write(line.encode("utf-8"))
+        handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())
     if created:

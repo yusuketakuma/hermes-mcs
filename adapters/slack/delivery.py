@@ -5,13 +5,14 @@ import asyncio
 from collections import OrderedDict
 import copy
 from html import escape
+import math
 import re
 import time
 from collections.abc import Mapping
 
 from adapters.common.paths import read_verified_attachment
 from adapters.common.spec import token_map
-from adapters.common.worker import DeliveryWorker as _BaseWorker
+from adapters.common.worker import WorkspaceDeliveryWorker as _BaseWorker
 
 from .actions import origin as parse_action_origin
 from .cards import mention_ids, render, validate
@@ -57,6 +58,43 @@ def single_attempt(client):
     sender = copy.copy(client)
     sender.retry_handlers = []
     return sender
+
+
+RATE_WAIT_MAX_S = 60.0   # cap on one Retry-After wait (LINE WORKS uses 60 s too)
+
+
+def _rate_wait(exc) -> float | None:
+    """Seconds to wait before the single retry a Slack 429 earns, else
+    None. A rate-limit rejection proves nothing was written, so one
+    resend cannot duplicate; any other failure is never retried here."""
+    response = getattr(exc, "response", None)
+    if getattr(response, "status_code", None) != 429 \
+            and _payload(response).get("error") != "ratelimited":
+        return None
+    headers = getattr(response, "headers", None)
+    raw = (headers.get("Retry-After", headers.get("retry-after"))
+           if isinstance(headers, Mapping) else None)
+    try:
+        wait = float(raw)
+    except (TypeError, ValueError):
+        wait = 1.0
+    return min(max(wait, 0.0), RATE_WAIT_MAX_S) if math.isfinite(wait) \
+        else RATE_WAIT_MAX_S
+
+
+async def _call(fn, **kwargs):
+    """One Slack write; a 429 waits out Retry-After and resends once.
+    A second failure propagates for _failed() to classify as before."""
+    try:
+        return await fn(**kwargs)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        wait = _rate_wait(exc)
+        if wait is None:
+            raise
+    await asyncio.sleep(wait)
+    return await fn(**kwargs)
 
 
 # chat.update rejections that prove the prior reply cannot be edited
@@ -186,15 +224,15 @@ class SlackCardAdapter:
         message_id = delivery.get("message_id")
         try:
             if op == "revoke":
-                response = await sender.chat_delete(
+                response = await _call(sender.chat_delete,
                     channel=self._channel_id, ts=message_id)
             elif op == "update":
-                response = await sender.chat_update(
-                    channel=self._channel_id, ts=message_id,
+                response = await _call(
+                    sender.chat_update, channel=self._channel_id, ts=message_id,
                     text=text, blocks=blocks, parse="none", link_names=False)
             else:
-                response = await sender.chat_postMessage(
-                    channel=self._channel_id, text=text, blocks=blocks,
+                response = await _call(
+                    sender.chat_postMessage, channel=self._channel_id, text=text, blocks=blocks,
                     parse="none", link_names=False,
                     unfurl_links=False, unfurl_media=False)
         except asyncio.CancelledError:
@@ -233,22 +271,8 @@ class DeliveryWorker(_BaseWorker):
                          reg=reg, worker_id=worker_id, log=log)
         self._sender = sender
 
-    def scope(self):
-        return {key: self._settings[key] for key in
-                ("transport", "profile", "application_id",
-                 "team_id", "channel_id")}
-
-    def _ours(self, delivery):
-        return all(delivery.get(key) == value
-                   for key, value in self.scope().items())
-
     def _validate_spec(self, spec):
         validate(spec)
-
-    def _verify_grant(self, claim, result):
-        return (super()._verify_grant(claim, result)
-                and result.get("transport") == "slack"
-                and result.get("team_id") == self._settings["team_id"])
 
     async def _perform(self, claim):
         outcome = await self._sender.perform(claim["spec"])
@@ -325,7 +349,8 @@ class DeliveryWorker(_BaseWorker):
             return {"result": "not_sent",
                     "error_code": "retry_policy_unknown"}
         try:
-            response = await sender.chat_postMessage(
+            response = await _call(
+                sender.chat_postMessage,
                 channel=self._settings["channel_id"],
                 thread_ts=thread_ts, text=text, link_names=False,
                 mrkdwn=False, unfurl_links=False, unfurl_media=False)
@@ -365,7 +390,8 @@ class DeliveryWorker(_BaseWorker):
         if not self._sender.authored(target) or sender is None:
             return None
         try:
-            response = await sender.chat_update(
+            response = await _call(
+                sender.chat_update,
                 channel=self._settings["channel_id"], ts=prior, text=text,
                 link_names=False, mrkdwn=False)
         except asyncio.CancelledError:
@@ -434,7 +460,8 @@ class DeliveryWorker(_BaseWorker):
             # the file's visible line: 📎 name — patient/post
             extra["initial_comment"] = escape(part["caption"], quote=False)
         try:
-            response = await upload(
+            response = await _call(
+                upload,
                 channel=self._settings["channel_id"],
                 thread_ts=thread_ts, file=blob,
                 filename=name, title=name, **extra)

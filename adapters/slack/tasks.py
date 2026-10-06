@@ -14,7 +14,7 @@ import asyncio
 
 from adapters.common import paths as shared_paths
 from adapters.common import registry
-from adapters.common.worker import POLL_S
+from adapters.common.worker import POLL_S, retry_startup
 
 from . import paths
 from .actions import Actions
@@ -76,15 +76,24 @@ class Supervisor:
             if not await self._worker.wait_scope_lock(
                     LOCK_WAIT_S, lambda: self._stopping):
                 return
-            self._reg.reload()
-            with self._reg.batch():
-                stats = await self._worker.reconcile()
-            if any(stats.values()):
-                self._log("reconciled", **stats)
-            if not await self._sender.bind():
+            reconciled = False
+
+            async def ready():
+                nonlocal reconciled
+                if not reconciled:
+                    self._reg.reload()
+                    with self._reg.batch():
+                        stats = await self._worker.reconcile()
+                    if any(stats.values()):
+                        self._log("reconciled", **stats)
+                    reconciled = True
+                if await self._sender.bind():
+                    return True
                 self._log("workspace_bind_failed")
-                return
-            if self._stopping:
+                return False
+
+            if not await retry_startup(ready, lambda: self._stopping,
+                                       self._log) or self._stopping:
                 return
             self._actions.register()
             while not self._stopping:
@@ -97,6 +106,9 @@ class Supervisor:
                     self._log("tick_error", error=type(exc).__name__)
                 await asyncio.sleep(POLL_S)
         except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._log("worker_exit", error=type(exc).__name__)
             raise
         finally:
             self._actions.unload()

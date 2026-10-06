@@ -43,6 +43,7 @@ JOURNAL_SEGMENT_BYTES = 8 << 20  # rotate the live journal segment past this
 EXPIRE_EVERY_S = 300.0         # registry TTL sweep cadence (TTLs are
                                # >= 10 min; modal/confirm/followup reads
                                # check expiry on access anyway)
+STARTUP_RETRY_MAX_S = 300.0    # cap on the supervisor start-up retry backoff
 RESTORE_MARGIN_S = 86400.0     # journal rows this much older than the oldest
                                # restorable backup are no longer restore evidence
 
@@ -77,6 +78,25 @@ async def _outcome_of(awaitable):
         if is_definitive_reject(exc):
             return {"result": "not_sent", "error_code": err_code(exc)}
         return {"result": "unknown", "error_code": err_code(exc)}
+
+
+async def retry_startup(step, stopping, log) -> bool:
+    """Run a supervisor's start-up ``step`` (reconcile, workspace bind)
+    until it returns True, with capped backoff. A transient network or
+    disk blip at gateway start must not stop delivery until the next
+    gateway restart. False only once ``stopping()`` turns true."""
+    wait = POLL_S
+    while not stopping():
+        try:
+            if await step():
+                return True
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log("startup_retry", error=type(exc).__name__)
+        await asyncio.sleep(wait)
+        wait = min(wait * 2, STARTUP_RETRY_MAX_S)
+    return False
 
 
 def _card_message_id(records: dict, delivery_id: str) -> str | None:
@@ -1057,3 +1077,24 @@ class DeliveryWorker:
 
     def stop(self) -> None:
         self._stopping = True
+
+
+class WorkspaceDeliveryWorker(DeliveryWorker):
+    """Slack / LINE WORKS: one workspace (``team_id``) pins the whole
+    delivery scope, compared exactly; a grant must echo this transport
+    and workspace. Discord keeps the guild-aware defaults above."""
+
+    SCOPE_KEYS = ("transport", "profile", "application_id",
+                  "team_id", "channel_id")
+
+    def scope(self) -> dict:
+        return {key: self._settings[key] for key in self.SCOPE_KEYS}
+
+    def _ours(self, delivery: dict) -> bool:
+        return all(delivery.get(key) == value
+                   for key, value in self.scope().items())
+
+    def _verify_grant(self, claim: dict, result: dict) -> bool:
+        return (super()._verify_grant(claim, result)
+                and result.get("transport") == self.transport
+                and result.get("team_id") == self._settings["team_id"])

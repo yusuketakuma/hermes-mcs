@@ -24,6 +24,29 @@ REVOKE_GONE_STATUS = frozenset({404, 410})
 CAPABILITY_REJECT = frozenset({401, 403})
 
 
+class PrefetchFailed(Exception):
+    """A read before any write failed ambiguously — nothing was sent."""
+
+
+async def _read(awaitable):
+    """A GET before this attempt's first write. A definitive reject keeps
+    its own meaning (404 = message gone, revoke achieved); any other
+    failure (5xx, timeout) proves only that nothing was written yet, so
+    it settles not_sent instead of an unknown that would hold the card
+    and its parts for manual reconcile."""
+    try:
+        return await awaitable
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if worker.is_definitive_reject(exc):
+            raise
+        raise PrefetchFailed(worker.err_code(exc)) from exc
+
+
+_PREFETCH_FAILED = {"result": "not_sent", "error_code": "prefetch_failed"}
+
+
 class DeliveryWorker(worker.DeliveryWorker):
     """The neutral worker driving the bound discord.py client."""
 
@@ -34,10 +57,16 @@ class DeliveryWorker(worker.DeliveryWorker):
     async def _channel(self, channel_id: str):
         ch = self._bot.get_channel(int(channel_id))
         if ch is None:
-            ch = await self._bot.fetch_channel(int(channel_id))
+            ch = await _read(self._bot.fetch_channel(int(channel_id)))
         return ch
 
     async def _perform(self, claim: dict) -> dict:
+        try:
+            return await self._perform_card(claim)
+        except PrefetchFailed:
+            return dict(_PREFETCH_FAILED)
+
+    async def _perform_card(self, claim: dict) -> dict:
         """One HTTP attempt. Returns {result, message_id?, error_code?}.
         Only a definitive rejection maps to not_sent; anything that can
         have committed is unknown (§4)."""
@@ -55,7 +84,7 @@ class DeliveryWorker(worker.DeliveryWorker):
                 return {"result": "not_sent",
                         "error_code": "no_target"}
             try:
-                msg = await channel.fetch_message(int(mid))
+                msg = await _read(channel.fetch_message(int(mid)))
                 await msg.delete()
             except Exception as exc:
                 status = getattr(exc, "status", None)
@@ -68,7 +97,7 @@ class DeliveryWorker(worker.DeliveryWorker):
             mid = delivery.get("message_id")
             if not mid:
                 return {"result": "not_sent", "error_code": "no_target"}
-            msg = await channel.fetch_message(int(mid))
+            msg = await _read(channel.fetch_message(int(mid)))
             legacy_v2 = getattr(getattr(msg, "flags", None), "is_components_v2", False)
             await msg.edit(**cards.message_payload(spec, components_v2=legacy_v2),
                            allowed_mentions=cards.no_pings())
@@ -83,6 +112,12 @@ class DeliveryWorker(worker.DeliveryWorker):
 
     async def _perform_part(self, claim: dict, part: dict,
                             ctx: dict) -> dict:
+        try:
+            return await self._part(claim, part, ctx)
+        except PrefetchFailed:
+            return dict(_PREFETCH_FAILED)
+
+    async def _part(self, claim: dict, part: dict, ctx: dict) -> dict:
         """One manifest part's wire call — thread create/verify, a body
         chunk, or an attachment upload, each returning its remote id."""
         spec = claim["spec"]
@@ -189,7 +224,7 @@ class DeliveryWorker(worker.DeliveryWorker):
                     "error_code": "thread_capability_blocked"}
         try:
             channel = await self._channel(delivery["channel_id"])
-            msg = await channel.fetch_message(int(ctx["card_message_id"]))
+            msg = await _read(channel.fetch_message(int(ctx["card_message_id"])))
             try:
                 thread = await cards.single_post(self._bot, partial(
                     msg.create_thread, name=part["name"]))

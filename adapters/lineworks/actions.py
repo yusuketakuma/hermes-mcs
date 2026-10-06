@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 import re
 
@@ -10,13 +11,13 @@ from adapters.common import envelopes, paths, registry, text
 
 from .cards import buttons
 from .client import ClientError
+from .delivery import locked
 
 ACTION = re.compile(r"mcs:a:([0-9a-f]{32})\Z")
 CONFIRM = re.compile(r"mcs:c:([0-9a-f]{16})(:cancel)?\Z")
 
 
 SUMMARY_WORD = "サマリー"
-SENDER_BUSY_TRIES, SENDER_BUSY_WAIT = 10, 0.5
 
 
 class Actions:
@@ -64,17 +65,11 @@ class Actions:
             await self._send(content, user)
 
     async def _send(self, content, user):
-        # sender_busy is a local lock preflight (nothing sent), so a bounded retry
-        # cannot duplicate a DM; every other error stays at most once.
-        for attempt in range(SENDER_BUSY_TRIES):
-            try:
-                sent = await asyncio.to_thread(self.sender.send, content, user_id=user)
-                self._sent += 1
-                return sent
-            except ClientError as exc:
-                if exc.error_code != "sender_busy" or attempt == SENDER_BUSY_TRIES - 1:
-                    raise
-            await asyncio.sleep(SENDER_BUSY_WAIT)
+        # sender_busy is a local lock preflight (nothing sent), so delivery.locked's
+        # bounded retry cannot duplicate a DM; every other error stays at most once.
+        sent = await locked(functools.partial(self.sender.send, content, user_id=user))
+        self._sent += 1
+        return sent
 
     async def _publish(self, payload):
         await asyncio.to_thread(envelopes.publish_command, self.dirs["cmd_int"], payload)
@@ -321,9 +316,12 @@ class Actions:
             try:
                 await self._deliver_followup(user, rec, result)
             except ClientError as exc:
-                # sender_busy outlasting the retry budget is a pre-send refusal; when no
-                # chunk of this followup went out, restore it so the next sweep retries.
-                if exc.error_code == "sender_busy" and self._sent == sent:
+                # sender_busy outlasting the retry budget and a 429 (api_lock stamps
+                # ``until`` on both the cooldown preflight and a wire rejection) are
+                # pre-commit refusals; when no chunk of this followup went out,
+                # restore it so the next sweep retries.
+                if (exc.error_code == "sender_busy" or getattr(exc, "until", None) is not None) \
+                        and self._sent == sent:
                     self.reg.put_followup(cid, rec)
                 raise
 

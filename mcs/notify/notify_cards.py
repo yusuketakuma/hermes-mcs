@@ -1707,10 +1707,21 @@ def _publish_specs(db, dirs, specs, now) -> list:
     return published
 
 
+# A not_sent that is a begin denial (denied_*) or a rate-limit rejection
+# (Slack ratelimited, LINE WORKS rate_limited, HTTP 429) proves the
+# transport is healthy and nothing was written — it never spends the
+# MAX_RESEND budget, or a burst of 429s would park a never-delivered
+# card as update_failed for good.
+_REAL_FAILURE = ("(a.error_code IS NULL OR (a.error_code NOT LIKE 'denied_%'"
+                 " AND a.error_code NOT IN"
+                 " ('ratelimited','rate_limited','http_429')))")
+
+
 def _resend_exhausted(db, card_id: int) -> bool:
     """MAX_RESEND consecutive real not_sents on a card suspends auto-retry —
     denied begins (error_code 'denied_*') are not send failures and never
-    count. Drift, a route_epoch bump, or an operator resolve re-opens."""
+    count, nor do rate-limit rejections (_REAL_FAILURE). Drift, a
+    route_epoch bump, or an operator resolve re-opens."""
     return db.execute(
         """SELECT COUNT(*) c FROM notification_delivery_attempts a
            JOIN notification_renders r ON r.delivery_id=a.delivery_id
@@ -1720,8 +1731,7 @@ def _resend_exhausted(db, card_id: int) -> bool:
                JOIN notification_delivery_attempts sent
                  ON sent.delivery_id=done.delivery_id
                WHERE done.card_id=r.card_id AND sent.state='delivered'), 0)
-             AND (a.error_code IS NULL
-                  OR a.error_code NOT LIKE 'denied_%')""",
+             AND """ + _REAL_FAILURE,
         (card_id,)).fetchone()["c"] >= MAX_RESEND
 
 
@@ -1885,7 +1895,7 @@ def _notice_failures(db, event_id) -> int:
            JOIN notification_renders r ON r.delivery_id=a.delivery_id
            WHERE r.card_id IS NULL AND r.intent_event_id=?
              AND a.state='not_sent'
-             AND (a.error_code IS NULL OR a.error_code NOT LIKE 'denied_%')""",
+             AND """ + _REAL_FAILURE,
         (event_id,)).fetchone()[0]
 
 

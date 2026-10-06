@@ -1986,3 +1986,34 @@ def test_unavailable_attachment_posts_its_caption_once(tmp_path):
         _part_ctx(thread)))
     assert again == {"result": "delivered", "remote_id": "6001"}
     assert len(thread.sent) == 1
+
+
+@pytest.mark.parametrize("op", ["update", "revoke"])
+def test_ambiguous_prefetch_before_card_write_is_not_sent(tmp_path, op):
+    """Regression: a 5xx/timeout on the GET before the edit/delete was
+    'unknown' — manual reconcile and held bodies though nothing was sent."""
+    w, reg, bot = _mkworker(tmp_path)
+    ch = bot.channels[42]
+
+    async def flaky_fetch(_mid):
+        raise FakeHTTP(503)
+
+    ch.fetch_message = flaky_fetch
+    spec = _spec([], op=op)
+    spec["delivery"]["message_id"] = "9001"
+    out = asyncio.run(w._perform(_claim(spec)))
+    assert out == {"result": "not_sent", "error_code": "prefetch_failed"}
+
+
+def test_ambiguous_channel_fetch_before_thread_create_is_not_sent(tmp_path):
+    w, reg, bot = _mkworker(tmp_path)
+    channel = bot.channels.pop(42)
+
+    async def timeout(_cid):
+        raise TimeoutError("synthetic")
+
+    bot.fetch_channel = timeout
+    asyncio.run(w._deliver_parts(_claim(_spec(_chunks(1))), "9001"))
+    row = _sent_parts(_state(tmp_path))["thread"]
+    assert row["result"] == "not_sent" and row["error_code"] == "prefetch_failed"
+    assert channel.threads == []

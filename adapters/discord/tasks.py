@@ -20,7 +20,7 @@ import asyncio
 from typing import Any
 
 from adapters.common import paths, registry
-from adapters.common.worker import POLL_S
+from adapters.common.worker import POLL_S, retry_startup
 from . import actions, delivery
 from contextlib import suppress
 
@@ -103,12 +103,19 @@ class Supervisor:
                     LOCK_WAIT_S,
                     lambda: self._stopping or _bot_closed(self._bot)):
                 return
-            self._reg.reload()
-            with self._reg.batch():
-                stats = await self._worker.reconcile()
-            if any(stats.values()):
-                self._log("reconciled", **stats)
-            if self._stopping or _bot_closed(self._bot):
+            async def reconcile():
+                self._reg.reload()
+                with self._reg.batch():
+                    stats = await self._worker.reconcile()
+                if any(stats.values()):
+                    self._log("reconciled", **stats)
+                return True
+
+            if not await retry_startup(
+                    reconcile,
+                    lambda: self._stopping or _bot_closed(self._bot),
+                    self._log) \
+                    or self._stopping or _bot_closed(self._bot):
                 return
             self._bot.add_listener(
                 self._actions.on_interaction, "on_interaction")
@@ -127,6 +134,9 @@ class Supervisor:
                     self._log("tick_error", error=type(e).__name__)
                 await asyncio.sleep(POLL_S)
         except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self._log("worker_exit", error=type(e).__name__)
             raise
         finally:
             # released only when the task is truly done — in-flight

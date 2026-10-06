@@ -545,7 +545,8 @@ class FakeSlackError(Exception):
     def __init__(self, status, error):
         super().__init__(error)
         self.response = SimpleNamespace(status_code=status,
-                                        data={"ok": False, "error": error})
+                                        data={"ok": False, "error": error},
+                                        headers={"Retry-After": "0"})
 
 
 def _big_body(led, chars=4200):

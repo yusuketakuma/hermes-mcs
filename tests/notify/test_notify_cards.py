@@ -1460,6 +1460,29 @@ def test_resend_budget_suspends_until_epoch_bump(led, tmp_path):
     assert nxt["render_rev"] == notify_cards.MAX_RESEND + 1
 
 
+@pytest.mark.parametrize("code", ["ratelimited", "rate_limited", "http_429"])
+def test_rate_limited_not_sents_do_not_burn_retry_budget(led, tmp_path, code):
+    """A 429 proves nothing was written — a burst of them must not park a
+    never-delivered card as update_failed, or it is never sent again."""
+    _deliverable(led, tmp_path)
+    for i in range(1, notify_cards.MAX_RESEND + 2):
+        r = _latest_render(led)
+        assert r["state"] == "queued"
+        _begin(led, r, n=10 + i)
+        req = {"version": 1, "op": "transport_receipt",
+               "command_id": _uuid(20 + i),
+               "attempt_id": f"{10 + i:016x}",
+               "delivery_id": r["delivery_id"],
+               "render_rev": r["render_rev"],
+               "payload_hash": r["payload_hash"], "route_epoch": 1,
+               "correlation": r["correlation"], **SCOPE,
+               "result": "not_sent", "error_code": code}
+        assert notify_transport.apply_transport_receipt(
+            led, req, CFG, now=NOW)["applied"]
+    assert _card(led)["delivery_state"] == "pending"
+    assert _latest_render(led)["render_rev"] == notify_cards.MAX_RESEND + 2
+
+
 def test_denied_begins_do_not_burn_retry_budget(led, tmp_path):
     """denied_* begins are authorization outcomes, not send failures —
     they must never count toward MAX_RESEND."""

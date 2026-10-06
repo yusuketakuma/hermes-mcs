@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "起動直後の一時的な通信・ディスク障害で通知配送が止まる問題を修正",
+  "summary": "Hermes連携のSlack・Discord配送は、起動時のワークスペース確認や送信記録の照合が一時的に失敗しても、待機して再試行します。これまではゲートウェイを再起動するまで配送が止まっていました。",
+  "upgrade": "反映にはHermesゲートウェイの再起動が必要です。設定変更は不要です。",
+  "details": [
+    "起動処理（送信記録の照合、Slackのauth.test）を2秒から最大5分の間隔で、停止指示まで再試行します。失敗ごとにstartup_retryまたはworkspace_bind_failedを記録します。",
+    "配送ループが想定外の例外で終了する場合はworker_exitを記録します。"
+  ],
+  "refs": ["adapters/common/worker.py", "adapters/slack/tasks.py", "adapters/discord/tasks.py"]
+}
