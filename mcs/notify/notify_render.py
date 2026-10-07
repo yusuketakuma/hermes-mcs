@@ -754,6 +754,7 @@ def _card_content(db, card, *, cfg=None) -> dict:
     kind = card["kind"]
     ui = card["ui_state"]
     progress_by_mid = None
+    urgent = False
     if kind == "thread":
         msgs = [dict(m) for m in db.execute(
             """SELECT message_id,sender_id,sender_name,profession,organization,
@@ -770,6 +771,7 @@ def _card_content(db, card, *, cfg=None) -> dict:
         urgency = {structured_view.message_urgency(db, m["message_id"])
                    for m in msgs if m["body_state"] != "deleted"}
         tag = next((URGENCY_TAG[u] for u in ("llm", "rule") if u in urgency), "")
+        urgent = bool(tag)
         containers = [{"type": "heading", "text":
                        f"💬 {patient_heading(db, card['project_id'])}"
                        f" · 起点 {_mmdd(first.get('posted_at'))}"
@@ -870,9 +872,10 @@ def _card_content(db, card, *, cfg=None) -> dict:
             "page": page, "pages": pages,
             "source_fp": source_fp, "toggles": toggles,
             "actor_fp": actor_fp,
-            # outside _content_fp: a presentation hint (accent colour)
-            "urgent": any(tag in (c.get("text") or "")
-                          for c in containers for tag in URGENCY_TAG.values())}
+            # outside _content_fp: a presentation hint (accent colour),
+            # from the computed urgency verdict — never from text, which
+            # may quote a staff-typed 🚨
+            "urgent": urgent}
     if "transport" in card.keys() and card["transport"] in ("slack", "discord"):
         content["thread_layout"] = "native-body-without-summary/v1"
     if isinstance(cfg, dict):

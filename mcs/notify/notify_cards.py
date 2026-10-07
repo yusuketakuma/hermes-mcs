@@ -1495,10 +1495,14 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
                                       content["footer"], op, cfg)
     # per-post 💊 buttons outrank the optional list buttons: reserve
     # their component slots (section + accessory) before row 4 fills up
+    # Discord answers a card-face click in the channel, so where the
+    # thread body carries the 💊 buttons (THREAD_DRUG_ACTIONS) the card
+    # face gets none — drug details stay inside the thread (owner rule)
     post_mids = (_post_action_targets(db, card, content)
                  if present.POST_ACTIONS and card["kind"] == "thread"
                  and card["delivery_state"] != "revoked"
                  and (in_thread_body or not present.DRUG_ROW_NEEDS_THREAD)
+                 and not (present.THREAD_DRUG_ACTIONS and in_thread_body)
                  else [])
     spec["parts"] = {
         "containers": containers,
