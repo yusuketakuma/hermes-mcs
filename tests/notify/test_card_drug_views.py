@@ -71,10 +71,11 @@ def test_meds_view_lists_the_posts_medication_without_dictionary(led):
     assert (r["outcome"], r["action"]) == ("applied", "list")
     view = r["list"]
     assert view["title"].startswith("💊 ") and view["title"].endswith("選択した投稿の薬剤")
-    assert view["head"][0] == "薬剤記載のある投稿 1/1（新しい順）"
-    assert view["head"][1].startswith("2026-09-24 ")
-    assert view["head"][1].endswith("の投稿 — 1件")
-    assert "有効化されていない" in view["head"][2]
+    # one post, one page: no navigation or page lines
+    assert view["head"][0].startswith("2026-09-24 ")
+    assert view["head"][0].endswith("の投稿 — 1件")
+    assert "有効化されていない" in view["head"][1]
+    assert len(view["head"]) == 2
     assert view["page"] == 0 and view["pages"] == 1
     assert view["items"] == [{"project_id": 1,
                               "text": "・キラナ 5mg[開始]\n　→ 辞書候補なし"}]
@@ -97,7 +98,8 @@ def test_meds_view_shows_the_active_candidate_and_offers_search(led, tmp_path):
     spec = _spec(led)
     assert {"meds", "drugsearch"} <= set(_ids(spec))
     view = _click(led, spec, "meds", cfg=cfg)["list"]
-    assert view["head"][2].startswith("辞書 fictional-v1@")
+    assert view["head"][-1] == "辞書の候補はすべて未確認です"
+    assert any(n.startswith("辞書 fictional-v1@") for n in view["notes"])
     texts = [i["text"] for i in view["items"]]
     # family mention stays out — same rule as the card's 薬剤 line
     assert texts == ["・キラナ 5mg[開始]\n　→ 候補: 架空成分甲（成分・fiction-i1）",
@@ -322,5 +324,5 @@ def test_drug_post_before_twenty_medication_free_replies_remains_available(led):
     spec = _spec(led)
     assert "meds" in _ids(spec)
     result = _click(led, spec, "meds")
-    assert result["list"]["head"][0] == "薬剤記載のある投稿 1/1（新しい順）"
+    assert not result["list"]["head"][0].startswith("薬剤記載のある投稿")
     assert "キラナ" in result["list"]["items"][0]["text"]

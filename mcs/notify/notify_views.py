@@ -563,8 +563,7 @@ def meds_view(db, project_id, message_id, *, can_report=False,
             f"{_inline(row['profession'], 20) or '職種不明'}の投稿 — "
             f"{len(meds) + len(unverified)}件"]
     if refs:
-        head.append(f"辞書 {refs[0]['dict_id']}@{refs[0]['dict_sha256'][:8]}"
-                    "（候補はすべて未確認）")
+        head.append("辞書の候補はすべて未確認です")
     elif not active:
         head.append(_DICTIONARY_STATE["inactive"])
     items = [{"project_id": project_id,
@@ -573,13 +572,16 @@ def meds_view(db, project_id, message_id, *, can_report=False,
              for entries, label in ((meds, ""), (unverified, "（ルール抽出・未確認）"))
              for text, ref in entries]
     notes = [DRUG_CAVEAT]
+    if refs:
+        notes.append(f"辞書 {refs[0]['dict_id']}@{refs[0]['dict_sha256'][:8]}")
     if can_search:
         notes.append("候補の名称・別名は「薬剤を検索」で確認できます。")
     if can_report:
         notes.append("抽出の誤りは「誤りを報告」→「薬」から報告できます。")
     pages = max(1, (len(items) + MEDS_PAGE_SIZE - 1) // MEDS_PAGE_SIZE)
     page = min(max(page, 0), pages - 1)
-    head.append(f"薬剤 {page + 1}/{pages}ページ（全{len(items)}件・1ページ最大{MEDS_PAGE_SIZE}件）")
+    if pages > 1:
+        head.append(f"薬剤 {page + 1}/{pages}ページ（全{len(items)}件）")
     return {"title": title, "head": head,
             "items": items[page * MEDS_PAGE_SIZE:(page + 1) * MEDS_PAGE_SIZE],
             "more": 0, "page": page, "pages": pages,

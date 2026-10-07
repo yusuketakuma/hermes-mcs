@@ -73,7 +73,7 @@ def summary_lines(db, project_id, *, cfg=None):
     line = (f"抽出の処理状況（{scope}）: 処理中{progress['processing']}・"
             f"完了{progress['complete']}・要確認{progress['attention']}")
     if progress["total"]:
-        line += f"（完了区間{progress['completed']}/{progress['total']}）"
+        line += f"（{progress['total']}区間中{progress['completed']}区間完了）"
     caveat = "完了は抽出処理のみ。記録や臨床情報の完全性は保証しません。"
     if progress["limited"]:
         caveat = "以前の投稿は表示対象外。" + caveat

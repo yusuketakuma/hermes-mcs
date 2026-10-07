@@ -454,7 +454,7 @@ def _progress_label(progress):
         return ""
     label = "解析更新中" if progress["state"] == "processing" else "解析要確認"
     if progress["total"]:
-        label += f" (完了区間 {progress['completed']}/{progress['total']})"
+        label += f"（{progress['total']}区間中{progress['completed']}区間完了）"
     return label
 
 

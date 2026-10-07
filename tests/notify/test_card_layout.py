@@ -40,7 +40,7 @@ def test_context_line_counts_posts_missing_replies_files_and_mention(led):
     rules = [c for c in _spec(led)["parts"]["containers"] if c.get("rule")]
     summary = notify_render._summary_block(led.db, 100, cfg=CFG)["text"]
     assert len(rules) == 2 and texts.count(summary) == 2
-    assert summary == "📋 要約 処理待ち\n解析更新中 (完了区間 0/1)"
+    assert summary == "📋 要約 処理待ち\n解析更新中（1区間中0区間完了）"
 
 
 def test_new_replies_since_the_card_was_posted(led):
@@ -66,7 +66,7 @@ def test_failed_extraction_is_named_on_the_post(led):
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
     summary = notify_render._summary_block(led.db, 100, cfg=CFG)["text"]
     assert summary in _texts(_spec(led))
-    assert summary == "📋 要約 作成失敗\n解析要確認 (完了区間 0/1)"
+    assert summary == "📋 要約 作成失敗\n解析要確認（1区間中0区間完了）"
 
 
 def test_footer_is_one_state_item_and_revoked_card_has_no_buttons(led):

@@ -16,11 +16,14 @@ def test_grounded_reason_and_separate_post_observation_times(led):
     parts = alert_view.render_parts(checked, led.db)
     text = alert_view.render_text(checked, led.db)
     assert "患者本人" in text and "引用: 本人は息苦しいと話しています。" in text
-    assert "投稿日 " in text and "AI判定観測 " in text
-    assert "未対応・業務完了の判定ではありません" in text
+    assert "投稿 " in text and "AI判定 " in text
+    assert "記録がないことは未対応・業務完了を意味しません" in text
+    # reason before sender/time; the patient name appears once
+    assert text.index("引用: ") < text.index("投稿 ")
+    assert parts["preview_text"].startswith("🚨緊急度高 ")
     assert "MCSで開く" in text and "投稿 #100" in text
     assert len(text) < 600
-    assert "⚠" in notify_render.parts_text(parts, "discord")
+    assert "🚨" in notify_render.parts_text(parts, "discord")
     from adapters.slack.cards import render_parts
     blocks = render_parts(parts, silent=True)
     assert blocks[0]["type"] == "header"
@@ -72,7 +75,7 @@ def test_long_reason_never_truncates_negation_or_subject_tail(led):
 @pytest.mark.parametrize("timestamp", [True, float("nan"), -1, 1e30, None])
 def test_unknown_observation_time_is_explicit(timestamp):
     text = alert_view.render_text({"project_id": 1, "message_id": 100, "observed_at": timestamp})
-    assert "AI判定観測 不明" in text
+    assert "AI判定 不明" in text
 
 
 def test_source_preview_fields_come_from_same_patient_message_not_checked_overrides(led):
@@ -84,6 +87,7 @@ def test_source_preview_fields_come_from_same_patient_message_not_checked_overri
         "subject": "patient", "reasons": ["本人の息苦しさを確認します。"],
         "source_sender": "UNTRUSTED-SENDER", "source_date": "UNTRUSTED-DATE"}, led.db)
     assert "合成発信者（合成所属） / 10-06 08:30" in parts["preview_text"]
+    assert "合成発信者（合成所属） · 投稿 " in notify_render.parts_text(parts)
     assert "本人の息苦しさを確認します。" in parts["preview_text"]
     assert "UNTRUSTED" not in notify_render.parts_text(parts)
     assert "PRIVATE-SYNTHETIC-TAIL" not in parts["preview_text"]

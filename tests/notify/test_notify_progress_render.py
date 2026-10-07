@@ -22,9 +22,9 @@ def test_processing_complete_attention_updates_both_face_and_body(led, monkeypat
     original = notify_render._card_content(led.db, card)
     assert "解析更新中" not in notify_render.display_text(original)
     processing = notify_render._card_content(led.db, card, cfg={})
-    assert "解析更新中 (完了区間 1/3)" in notify_render.display_text(processing)
+    assert "解析更新中（3区間中1区間完了）" in notify_render.display_text(processing)
     body = notify_render._card_body_text(led.db, card, {"shown": json.dumps([100])}, cfg={})[1]
-    assert "解析更新中 (完了区間 1/3)" in body
+    assert "解析更新中（3区間中1区間完了）" in body
     assert processing["source_fp"] == original["source_fp"]
     assert processing["source_fp"] == card["source_fp"]
     drift = notify_cards._generation_drift(card, processing)
@@ -35,7 +35,7 @@ def test_processing_complete_attention_updates_both_face_and_body(led, monkeypat
     assert notify_render._content_fp(complete) != notify_render._content_fp(processing)
     progress.update(state="attention", completed=1)
     attention = notify_render._card_content(led.db, card, cfg={})
-    assert "解析要確認 (完了区間 1/3)" in notify_render.display_text(attention)
+    assert "解析要確認（3区間中1区間完了）" in notify_render.display_text(attention)
     assert "解析更新中" not in notify_render.display_text(attention)
 
 
@@ -89,10 +89,10 @@ def test_real_current_checkpoint_updates_shared_summary_without_partial_facts(le
     extract_llm._persist_chunks(led, row, {0: {}}, context)
     led.db.execute("PRAGMA query_only=ON")
     block = notify_render._summary_block(led.db, 100, cfg={"local_llm": {"model": model}})
-    assert f"解析更新中 (完了区間 1/{len(roots)})" in block["text"]
+    assert f"解析更新中（{len(roots)}区間中1区間完了）" in block["text"]
     assert "SOURCE-CANARY" not in block["text"]
     changed_model = notify_render._summary_block(led.db, 100, cfg={"local_llm": {"model": "different-synthetic"}})
-    assert f"完了区間 0/{len(roots)}" in changed_model["text"]
+    assert f"{len(roots)}区間中0区間完了" in changed_model["text"]
 
 
 def test_card_reads_each_current_message_once_and_reuses_even_unknown_progress(led, monkeypatch):
@@ -111,7 +111,7 @@ def test_card_reads_each_current_message_once_and_reuses_even_unknown_progress(l
     led.db.execute("PRAGMA query_only=ON")
     content = notify_render._card_content(led.db, card, cfg={})
     assert calls == [100, 101]
-    assert "解析更新中 (完了区間 1/3)" in notify_render.display_text(content)
+    assert "解析更新中（3区間中1区間完了）" in notify_render.display_text(content)
     assert content["progress_fp"] == notify_render.payload_hash([
         (100, {"state": "processing", "completed": 1, "total": 3}), (101, None)])
     calls.clear()
@@ -142,7 +142,7 @@ def test_thread_body_and_attachment_caption_keep_source_without_duplicate_summar
     spec = json.loads(_latest_render(led)["spec_json"])
     face = notify_render.display_text(spec["parts"])
     assert "GENERATED-SUMMARY-CANARY" in face
-    assert "解析更新中 (完了区間 1/3)" in face
+    assert "解析更新中（3区間中1区間完了）" in face
     body = "".join(spec["parts"]["thread_body_parts"])
     assert raw in body and "📄 本文" in body
     caption = next(part["caption"] for part in spec["parts"]["manifest"] if part["kind"] == "attachment_part")
