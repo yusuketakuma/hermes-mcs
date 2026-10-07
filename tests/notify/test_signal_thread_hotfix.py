@@ -96,11 +96,20 @@ def test_unproven_signal_target_holds_without_channel_spec(led, fault):
     assert row["state"] == "pending" and json.loads(row["progress"])["thread_hold"] == "source_thread_not_ready"
 
 
-def test_changed_thread_denies_already_sealed_signal(led):
+@pytest.mark.parametrize("op", ["create", "update"])
+def test_changed_thread_denies_already_sealed_signal(led, op):
     _seed_thread(led)
     delivered_source(led)
     _, card = _signal(led)
     render = _latest_render(led, card["card_id"])
+    if op == "update":
+        assert _begin(led, render, n=8210)["granted"]
+        assert _receipt(led, render, f"{8210:016x}", message_id="signal-reply", n=8211)["applied"]
+        _settle_bodies(led, render)
+        with led.db:
+            notify_cards._issue_render(led.db, card["card_id"], CFG, NOW + 1, [], force=True)
+        render = _latest_render(led, card["card_id"])
+        assert render["op"] == "update"
     with led.db:
         led.db.execute("UPDATE notification_cards SET thread_id='changed-thread' WHERE kind='thread'")
     result = _begin(led, render, n=8200)
@@ -132,3 +141,59 @@ def test_lineworks_signal_is_explicitly_held_without_retry_or_fallback(led):
     assert row["state"] == "failed" and row["next_try"] is None
     assert json.loads(row["progress"])["hold_reason"] == "lineworks_thread_unsupported"
     assert led.db.execute("SELECT count(*) FROM notification_renders").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("fault", ["unchanged", "message_deleted", "thread_deleted", "thread_changed", "evidence_unknown"])
+def test_delivered_signal_revoke_uses_sealed_remote_binding_after_source_changes(led, fault):
+    _seed_thread(led)
+    delivered_source(led)
+    _, card = _signal(led)
+    created = _latest_render(led, card["card_id"])
+    assert _begin(led, created, n=9100)["granted"]
+    assert _receipt(led, created, f"{9100:016x}", message_id="signal-reply", n=9101)["applied"]
+    _settle_bodies(led, created)
+    specs = []
+    with led.db:
+        if fault == "message_deleted":
+            led.db.execute("UPDATE messages SET body_state='deleted',body_text='' WHERE message_id=101")
+        elif fault == "thread_deleted":
+            led.db.execute("UPDATE notification_cards SET thread_state='deleted' WHERE kind='thread'")
+        elif fault == "thread_changed":
+            led.db.execute("UPDATE notification_cards SET thread_id='changed-thread' WHERE kind='thread'")
+        elif fault == "evidence_unknown":
+            led.db.execute("UPDATE artifacts SET content='{}' WHERE kind='signal_v1'")
+        notify_cards.revoke_card(led.db, card["card_id"], NOW + 1)
+        notify_cards._issue_render(led.db, card["card_id"], CFG, NOW + 1, specs, force=True)
+    assert specs[0]["op"] == "revoke"
+    assert specs[0]["delivery"]["message_id"] == "signal-reply"
+    assert specs[0]["delivery"]["thread_id"] == "original-thread"
+    assert [p["kind"] for p in specs[0]["parts"]["manifest"]] == ["card"]
+    revoked = _latest_render(led, card["card_id"])
+    assert _begin(led, revoked, n=9200)["granted"]
+    assert _receipt(led, revoked, f"{9200:016x}", message_id="signal-reply", n=9201)["applied"]
+    assert led.db.execute("SELECT state FROM notification_renders WHERE delivery_id=?", (revoked["delivery_id"],)).fetchone()[0] == "delivered"
+
+
+@pytest.mark.parametrize("fault,error", [("channel_id", "scope_mismatch"), ("payload_hash", "hash_mismatch"), ("render_rev", "rev_mismatch"), ("route_epoch", "epoch_mismatch")])
+def test_signal_revoke_keeps_sealed_identity_and_scope_gates(led, fault, error):
+    from notify_testkit import SCOPE, _uuid
+    _seed_thread(led)
+    delivered_source(led)
+    _, card = _signal(led)
+    created = _latest_render(led, card["card_id"])
+    assert _begin(led, created, n=9300)["granted"]
+    assert _receipt(led, created, f"{9300:016x}", message_id="signal-reply", n=9301)["applied"]
+    _settle_bodies(led, created)
+    specs = []
+    with led.db:
+        notify_cards.revoke_card(led.db, card["card_id"], NOW + 1)
+        notify_cards._issue_render(led.db, card["card_id"], CFG, NOW + 1, specs, force=True)
+    render = _latest_render(led, card["card_id"])
+    request = {"version": 1, "op": "transport_begin", "command_id": _uuid(9400),
+               "attempt_id": f"{9400:016x}", "worker_id": "bb" * 8,
+               "delivery_id": render["delivery_id"], "render_rev": render["render_rev"],
+               "payload_hash": render["payload_hash"], "route_epoch": 1, **SCOPE}
+    request[fault] = {"channel_id": "unrelated", "payload_hash": "0" * 64,
+                      "render_rev": render["render_rev"] + 1, "route_epoch": 2}[fault]
+    result = notify_transport.apply_transport_begin(led, request, CFG, now=NOW + 1)
+    assert not result["granted"] and result["error"] == "denied_" + error

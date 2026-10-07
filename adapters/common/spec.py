@@ -71,7 +71,7 @@ PARTS_KEYS = frozenset({
     "mentions", "preview_text", "thread_drug_actions", "drug_view_navigation", "thread_notice", "source_thread"})
 PART_ENTRY_KEYS = frozenset({
     "part_id", "kind", "index", "sha256", "bytes", "name",
-    "attachment_id", "path", "unavailable", "prior_remote_id", "caption"})
+    "attachment_id", "path", "unavailable", "prior_remote_id", "caption", "edit_only"})
 MAX_CAPTION = 300
 
 # Buttons a card keeps as buttons on every transport; every other
@@ -314,7 +314,7 @@ def _validate_chunks(parts: dict):
     return chunks
 
 
-def _validate_manifest(manifest) -> None:
+def _validate_manifest(manifest, *, spec=None) -> None:
     """Per-part shape: ordered unique ids, kind-specific requirements."""
     if not isinstance(manifest, list) or not manifest \
             or len(manifest) > MAX_PARTS:
@@ -337,6 +337,13 @@ def _validate_manifest(manifest) -> None:
                 and not _HEX64.fullmatch(str(p["sha256"])):
             _err("bad_part_sha256")
         kind = p["kind"]
+        if "edit_only" in p:
+            if (type(p["edit_only"]) is not bool or kind not in ("body_part", "attachment_part")
+                    or not p.get("prior_remote_id") or spec is None or spec.get("op") != "update"
+                    or spec.get("delivery", {}).get("transport", "discord") not in ("slack", "discord")
+                    or not spec.get("delivery", {}).get("thread_id")
+                    or (kind == "attachment_part" and not p.get("caption"))):
+                _err("bad_edit_only")
         if "prior_remote_id" in p and (
                 kind not in ("body_part", "attachment_part")
                 or not _text(p["prior_remote_id"], 64)):
@@ -409,7 +416,7 @@ def _validate_part_plan(spec: dict) -> None:
     manifest = parts.get("manifest")
     if manifest is None:
         return
-    _validate_manifest(manifest)
+    _validate_manifest(manifest, spec=spec)
     _check_part_payloads(parts, manifest, chunks)
 
 

@@ -9,7 +9,7 @@ from semantic_quantities import _number
 from mcs_util import locate_quote_span, fold_map
 
 
-def patient_item_scope(item, body, *, patient_name=None, surface=None):
+def patient_item_scope(item, body, *, patient_name=None, surface=None, default="patient"):
     """Resolve one stored item's original span before using it as patient current data."""
     import extract
     if not isinstance(item, dict) or not isinstance(body, str):
@@ -23,7 +23,7 @@ def patient_item_scope(item, body, *, patient_name=None, surface=None):
         # that contract only when the source has no explicit other-person
         # or noncurrent scope; a mixed source cannot prove an unlocated item.
         scopes = [extract.patient_source_scope(body, max(0, m.start() - 1), m.start(),
-                                               patient_name=patient_name)
+                                               patient_name=patient_name, default=default)
                   for m in re.finditer(r"[。！？!?;；、,\n]|$", body) if m.start() > 0]
         return "patient" if scopes and all(scope == "patient" for scope in scopes) else "unknown"
     # A full-sentence quote may start before its explicit subject. Locate the
@@ -33,7 +33,7 @@ def patient_item_scope(item, body, *, patient_name=None, surface=None):
         if inner is not None:
             span = (span[0] + inner[0], span[0] + inner[1])
             break
-    return extract.patient_source_scope(body, *span, patient_name=patient_name)
+    return extract.patient_source_scope(body, *span, patient_name=patient_name, default=default)
 
 
 def patient_current_vitals(values, body, *, patient_name=None):
@@ -131,7 +131,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                   evidence: str | None, *, unverified: bool = False,
                   flag: str | None = None, subject: str | None = None,
                   status: str | None = None, measured_on: str | None = None,
-                  condition: str | None = None) -> LabCandidate:
+                  condition: str | None = None, patient_name: str | None = None) -> LabCandidate:
     """Keep unknown/mismatched values separate; quote support is not human approval."""
     label = fold_surface(name)
     analyte = next((key for key, names in _LAB_NAMES.items() if label in names), None)
@@ -183,7 +183,8 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
         import extract
         _, starts, ends = fold_map(evidence, casefold=True)
         reading = readings[0]
-        if extract.patient_source_scope(evidence, starts[reading.start()], ends[reading.end() - 1]) \
+        if extract.patient_source_scope(evidence, starts[reading.start()], ends[reading.end() - 1],
+                                        patient_name=patient_name) \
                 not in ("patient", "past"):
             supported = False
     if flag:

@@ -305,9 +305,10 @@ def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
                                  ("スタンプ 🙆2 👍1 · 自分 🙆 · ",
                                   "スタンプ 未取得")):
         lines = post.split("\n")
-        assert lines[1:4] == ["📋 要約", f"・要約{mid}", notify_render.SECTION_RULE]
-        assert lines[4].startswith(stamps)        # one merged stamp line
-        assert lines[5] == notify_render.SECTION_RULE
+        assert lines[1:3] == ["📋 要約", f"・要約{mid}"]
+        assert lines[3].startswith(stamps)        # one merged stamp line
+        assert lines[4:6] == [notify_render.SECTION_RULE, "📄 本文"]
+        assert post.count(notify_render.SECTION_RULE) == 1
         assert lines[6] == led.db.execute(
             "SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone()[0]
 
@@ -316,7 +317,7 @@ def test_long_post_keeps_summary_and_stamps_with_its_body():
     """Regression: a long body started its own chunk, leaving the
     header / summary / stamp lines as a post of their own."""
     import notify_cards
-    head = "10-03 08:00 職員\n📋 要約\n・要約\nスタンプ 👀9 🙏1 · 観測 10-03 08:05\n"
+    head = "10-03 08:00 職員\n📋 要約\n・要約\nスタンプ 👀9 🙏1 · 観測 10-03 08:05\n" + notify_render.SECTION_RULE + "\n📄 本文\n"
     for body in ("本" * 1852, "本" * 3000, ("行\n" * 1200)):
         chunks = notify_cards._split_body_chunks(head + body)
         assert "".join(chunks) == head + body
@@ -473,6 +474,12 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
     for mid in (100, 101):
         post = "".join(posts[mid])
         assert "<@" not in post and "@everyone" not in post
+        assert post.count(notify_render.SECTION_RULE) == 1
+        front, body = post.split(notify_render.SECTION_RULE, 1)
+        assert ("📋 要約" in front) is (platform == "lineworks")
+        if platform != "lineworks":
+            assert "解析更新中" not in post
+        assert body.startswith("\n📄 本文\n")
         if platform == "lineworks":
             # LINE WORKS cannot edit a post: no stamp line at all, so a
             # stamp change never re-posts the body
@@ -628,3 +635,59 @@ def test_stamp_actor_refresh_keeps_human_confirmation_and_source_identity(led, m
     assert after["presentation_generation"] == before["presentation_generation"] + 1
     assert "✅ 確認: <@1001>" in "\n".join(item.get("text", "") for item in specs[0]["parts"]["footer"])
     assert led.db.execute("SELECT count(*) FROM notification_acknowledgements WHERE withdrawn_at IS NULL").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("platform", ["slack", "discord", "lineworks"])
+@pytest.mark.parametrize("ready", [True, False])
+def test_legacy_text_notice_has_summary_stamps_then_one_body_section(led, monkeypatch, platform, ready):
+    import notify_flush
+    _patient(led)
+    _self_known(led)
+    _post(led, 100, OTHER, ts=NOW - 100)
+    _meta(led, 100, reactions=[_r("viewed", 2)])
+    with led.db:
+        led.db.execute("UPDATE messages SET body_html='<p>完全合成の本文です。</p>' WHERE message_id=100")
+    cfg = {**CFG, "notify_target": platform + ":synthetic"}
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+    monkeypatch.setattr(notify_flush.structured_view, "structured_lines", lambda db, mid: ["合成の要約"] if ready else [])
+    event = {"kind": "new_messages", "project_id": 1, "payload": '{"message_ids":[100]}'}
+    text, files = notify_flush._format_event(led, event)
+    assert text.count(notify_render.SECTION_RULE) == 1 and files == []
+    front, body = text.split(notify_render.SECTION_RULE, 1)
+    assert "📋 要約" in front
+    assert ("合成の要約" if ready else "処理待ち") in front
+    assert ("スタンプ 👀2" in front) is (platform != "lineworks")
+    assert body == "\n📄 本文\n完全合成の本文です。"
+
+
+def test_legacy_text_audited_supplement_stays_in_summary_section(led, monkeypatch):
+    import notify_flush
+    _patient(led)
+    _post(led, 100, OTHER, ts=NOW - 100)
+    with led.db:
+        led.db.execute("UPDATE messages SET body_html='<p>完全合成の本文です。</p>' WHERE message_id=100")
+    monkeypatch.setattr(notify_flush, "_config", lambda: CFG)
+    monkeypatch.setattr(notify_flush, "_sem_block", lambda *_args: "\n監査済みの合成要約")
+    text, _files = notify_flush._format_event(led, {"kind": "new_messages", "project_id": 1, "payload": '{"message_ids":[100]}'})
+    front, body = text.split(notify_render.SECTION_RULE, 1)
+    assert "監査済みの合成要約" in front and "監査済み" not in body
+
+
+def test_legacy_text_empty_summary_keeps_current_failure_state(led, monkeypatch):
+    import notify_flush
+    _patient(led)
+    _post(led, 100, OTHER, ts=NOW - 100)
+    with led.db:
+        led.db.execute("UPDATE messages SET body_html='<p>完全合成の本文です。</p>' WHERE message_id=100")
+        content_hash = led.db.execute("SELECT content_hash FROM messages WHERE message_id=100").fetchone()[0]
+        led.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) VALUES('extract_llm',1,100,'{}',?,?)",
+                       (json.dumps({"hash": content_hash, "error": 1, "attempts": 5}), NOW))
+    monkeypatch.setattr(notify_flush, "_config", lambda: CFG)
+    text, _files = notify_flush._format_event(led, {"kind": "new_messages", "project_id": 1, "payload": '{"message_ids":[100]}'})
+    front, body = text.split(notify_render.SECTION_RULE, 1)
+    assert "📋 要約 作成失敗" in front and "処理待ち" not in front
+    assert body == "\n📄 本文\n完全合成の本文です。"
+    with led.db:
+        led.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=100")
+    with pytest.raises(notify_flush._StaleSend, match="messages_unavailable"):
+        notify_flush._format_event(led, {"kind": "new_messages", "project_id": 1, "payload": '{"message_ids":[100]}'})

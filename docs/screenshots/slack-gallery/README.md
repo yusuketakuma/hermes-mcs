@@ -13,7 +13,7 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 
 | 画面 | 根拠 |
 |---|---|
-| `01-overview` | `docs/guides/USER_GUIDE.md`、`adapters/slack/delivery.py`（カード・本文・添付の配送）、`mcs/notify/notify_render.py`の`_message_post`（スレッド投稿は`↳`見出し・📋 要約・スタンプ行・本文を区切り線で並べる）、`mcs/notify/notify_cards.py`（添付の`📎`行） |
+| `01-overview` | `docs/guides/USER_GUIDE.md`、`adapters/slack/delivery.py`（カード・本文・添付の配送）、`mcs/notify/notify_render.py`の`_message_post`（nativeスレッドは`↳`見出し・スタンプ・区切り線・📄 本文。要約は親カードに表示）、`mcs/notify/notify_cards.py`（添付の`📎`行と要約を含まない見出し） |
 | `02-notification` | `mcs/notify/notify_render.py`の`_card_content`・`_thread_context`・`_footer`（概要・投稿ごとの要約・状態の区画）、`adapters/slack/cards.py`（区画間の区切り線、`確認する`・`担当する`・`タスク作成`のボタンと「操作を選ぶ…」、`MCSで開く`のテキストリンク）、`mcs/notify/notify_cards.py`の`_ACTIONS`、`mcs/views/message_metadata.py`（スタンプ件数と自分の投稿数） |
 | `03-actions` | 同カード実装（ボタン以外の操作を選択メニューへ。表示項目は状態・設定に依存） |
 | `04-task-form` | `adapters/common/text.py`の`modal_fields`、`adapters/slack/actions.py`の`_open_modal` |

@@ -234,3 +234,16 @@ def test_family_reporter_and_mixed_source_do_not_discard_patient_lab():
     for quote in ("娘からの報告。本人はCr 0.9 mg/dL。",
                   "母は発熱。本人はCr 0.9 mg/dL。"):
         assert lab_candidate("Cr", 0.9, "mg/dL", quote)["confirmation"] == "quote_supported"
+
+
+def test_registered_patient_name_is_required_to_confirm_named_lab_quote():
+    quote = "架空花子さんはCr 0.9mg/dLです。"
+    assert clinical_values.lab_candidate("Cr", 0.9, "mg/dL", quote)["confirmation"] == "unverified"
+    assert clinical_values.lab_candidate("Cr", 0.9, "mg/dL", quote, patient_name="架空花子")["confirmation"] == "quote_supported"
+    assert clinical_values.lab_candidate("Cr", 0.9, "mg/dL", quote, patient_name="別の架空患者")["confirmation"] == "unverified"
+
+
+def test_item_scope_group_default_is_unknown_without_explicit_patient_source():
+    item = {"evidence": "Cr 0.9mg/dL"}
+    assert clinical_values.patient_item_scope(item, "Cr 0.9mg/dL", default="unknown") == "unknown"
+    assert clinical_values.patient_item_scope(item, "本人はCr 0.9mg/dL", default="unknown") == "patient"

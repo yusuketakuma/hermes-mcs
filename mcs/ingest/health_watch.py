@@ -192,14 +192,15 @@ def evaluate(home: str = HOME, now: float | None = None,
     never re-alerts. ok->ok never alerts even when the file is fresh —
     a healthy producer keeping cadence is not an event. Alerts fire
     on: first non-ok observation, every transition INTO a non-ok
-    status, one bad->ok recovery, and an unchanged non-ok state
+    status, and an unchanged non-ok state
     re-alerted after REALERT_S, plus a fresh non-ok verdict that gains
     a state reason not yet alerted in the current episode. 'ok' is only produced by a fresh
     in-deadline file — recovery can never be assumed. State files
     that predate evidence_at are read via health_at.
 
+    Healthy observations and recovery are internal observations only.
     disk_low has its own dedup: disk_alert fires only when a fresh
-    file flips it (either way); stale/missing/corrupt evidence keeps
+    file turns low; stale/missing/corrupt evidence keeps
     the last known value."""
     now = time.time() if now is None else now
     if not _finite_number(now):
@@ -243,19 +244,11 @@ def evaluate(home: str = HOME, now: float | None = None,
     realert = (obs["status"] != "ok"
                and (invalid_alert_at
                     or now - alerted_at >= REALERT_S))
-    if not prior_known:
-        alert = obs["status"] != "ok"
-    else:
-        # a fresh 'ok' replacing an 'ok' is a producer keeping its
-        # cadence, not an event — only bad->ok recovery and any
-        # transition into a non-ok status carry an alert
-        alert = transition and (obs["status"] != "ok"
-                                or last.get("status") != "ok")
-    alert = alert or realert or new_reason
+    alert = obs["status"] != "ok" and (transition or realert or new_reason)
     disk_prev = state.get("disk_low") is True
     disk_low = (obs["disk_low"] if obs["status"] in OVERALL_STATUS
                 else disk_prev)
-    disk_alert = disk_low != disk_prev
+    disk_alert = disk_low and not disk_prev
     state["disk_low"] = disk_low
 
     report = dict(obs)
@@ -271,11 +264,28 @@ def evaluate(home: str = HOME, now: float | None = None,
                                       else seen)
     delivery = state.get("delivery")
     delivery = delivery if isinstance(delivery, dict) else {}
+    current_alert = bool(delivery.get("alert") and obs["status"] != "ok")
+    current_disk_alert = bool(delivery.get("disk_alert") and disk_low)
+    if delivery.get("outcome") == "unknown" and not (current_alert or current_disk_alert):
+        # Recovery resolves the incident, not its uncertain send outcome.
+        # Retain the witness as unknown; do not manufacture a successful send.
+        held = state.get("unknown_deliveries")
+        held = held if isinstance(held, list) else []
+        state["unknown_deliveries"] = [*held, dict(delivery)][-UNKNOWN_HISTORY:]
+        state.pop("delivery", None)
+        delivery = {}
+    elif delivery.get("outcome") in ("pending", "not_sent"):
+        # Old provably-unsent alerts may not be retried with a healthy
+        # current report. Keep any still-active low-disk component.
+        delivery.update(alert=current_alert, disk_alert=current_disk_alert)
+        if not (current_alert or current_disk_alert):
+            delivery.update(outcome="superseded", superseded_at=now)
     delivery_key = [*key, disk_low, state["alerted_reasons"]]
-    if alert or disk_alert:
+    if (alert or disk_alert) and not (delivery.get("outcome") == "unknown"
+                                     and not (transition or new_reason or disk_alert)):
         # An uncertain send stays held, including hourly observations
         # of the same incident. A new verdict/reason is a different alert.
-        if delivery.get("key") != delivery_key or delivery.get("outcome") == "delivered":
+        if delivery.get("key") != delivery_key or delivery.get("outcome") in ("delivered", "superseded"):
             if delivery.get("outcome") == "unknown":
                 # Unresolved history is evidence, but the state file must
                 # stay bounded: keep the newest UNKNOWN_HISTORY records.
@@ -331,7 +341,7 @@ def deliver_alert(cfg: dict, text: str) -> bool | None:
 
 def _alert_lines(report: dict) -> list[str]:
     lines = []
-    if report["alert"]:
+    if report["alert"] and report["status"] != "ok":
         age = report.get("age_s")
         reasons = report.get("state_reasons")
         lines.append("mcs health: {status} (overall={overall} "
@@ -346,10 +356,8 @@ def _alert_lines(report: dict) -> list[str]:
                          last_ok=report.get("last_ok_at")
                          if report.get("last_ok_at") is not None
                          else "unknown"))
-    if report["disk_alert"]:
-        lines.append("mcs disk: {} (free_mb={})".format(
-            "low" if report["disk_low"] else "recovered",
-            report.get("disk_free_mb")))
+    if report["disk_alert"] and report["disk_low"]:
+        lines.append("mcs disk: low (free_mb={})".format(report.get("disk_free_mb")))
     return lines
 
 

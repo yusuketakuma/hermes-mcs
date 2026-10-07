@@ -662,27 +662,29 @@ def _signal_compact(db, pid, contents: list) -> list:
 SECTION_RULE = "─" * 12
 
 
-def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None) -> str:
+def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None, include_summary=True) -> str:
     """One MCS post as a thread message, always in the owner's order
     (2026-10-03): header, 📋 summary, MCS stamps, then the posted body,
-    with SECTION_RULE between summary, stamps and body. ``stamps=False``
-    leaves the stamp line out (LINE WORKS posts cannot be edited, so a
-    stamp change must not force a re-post)."""
+    with one SECTION_RULE before the 📄 body.
+    Native thread delivery omits the optional summary; private body views
+    retain it. ``stamps=False`` leaves the stamp line out (LINE WORKS
+    posts cannot be edited, so a stamp change must not force a re-post)."""
     title = f"{head}{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} {sender}"
     if m["body_state"] == "deleted":
         return f"{title}（削除済み）"
-    out = [title, _summary_block(db, mid, cfg=cfg)["text"]]
+    out = [title]
+    if include_summary:
+        out.append(_summary_block(db, mid, cfg=cfg)["text"])
     if stamps:
         meta = get_message_metadata(db, mid)
         sid = m["sender_id"] if "sender_id" in m.keys() else None
         meta["own_post"] = is_self_sender(db, sid)
-        out += [SECTION_RULE,
-                thread_stamp_line(meta, reaction_actor_summary(db, mid))]
-    out += [SECTION_RULE, m["body_text"] or ""]
+        out.append(thread_stamp_line(meta, reaction_actor_summary(db, mid)))
+    out += [SECTION_RULE, "📄 本文", m["body_text"] or ""]
     return "\n".join(out)
 
 
-def _signal_body(db, sig: dict, stamps=True, *, cfg=None) -> str:
+def _signal_body(db, sig: dict, stamps=True, *, cfg=None, include_summary=True) -> str:
     """Full-text view of one signal — the thread post and 'body'
     action surface: 【種別】note / state, then the evidence post."""
     lines = [f"{signal_label(sig)}{sig.get('note') or ''} / 状態: {signal_state(sig)}"]
@@ -691,12 +693,12 @@ def _signal_body(db, sig: dict, stamps=True, *, cfg=None) -> str:
         lines.append(_message_post(
             db, mid, m, _sender_tag(m, db),
             head=f"↳ {patient_heading(db, sig.get('project_id'))} · ",
-            stamps=stamps, cfg=cfg))
+            stamps=stamps, cfg=cfg, include_summary=include_summary))
     return "\n".join(lines)
 
 
 def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
-                    stamps=True, *, cfg=None) -> tuple:
+                    stamps=True, *, cfg=None, include_summary=True) -> tuple:
     """Full text of the shown set frozen into the click's manifest —
     'body' answers what the button rendered, never the card's *current*
     page, so a concurrent nav cannot swap the view under the click.
@@ -722,14 +724,14 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
             if m is None:
                 continue
             lines.append(_message_post(db, mid, m, _sender_tag(m, db),
-                                       head=head, stamps=stamps, cfg=cfg))
+                                       head=head, stamps=stamps, cfg=cfg, include_summary=include_summary))
         title = f"💬 {patient_heading(db, card['project_id'])} — 本文"
         text = "\n\n".join(lines)
     else:
         shown = [k for k in shown if isinstance(k, str)]
         sigs = _latest_signals(db, shown, card["project_id"])
         text = "\n\n— — —\n\n".join(
-            _signal_body(db, sigs[k]["content"], stamps, cfg=cfg) for k in shown
+            _signal_body(db, sigs[k]["content"], stamps, cfg=cfg, include_summary=include_summary) for k in shown
             if k in sigs)
         title = ("アラート — 本文" if card["kind"] == "digest"
                  else "シグナル — 本文")
@@ -861,6 +863,8 @@ def _card_content(db, card, *, cfg=None) -> dict:
             "page": page, "pages": pages,
             "source_fp": source_fp, "toggles": toggles,
             "actor_fp": actor_fp}
+    if "transport" in card.keys() and card["transport"] in ("slack", "discord"):
+        content["thread_layout"] = "native-body-without-summary/v1"
     if isinstance(cfg, dict):
         content["progress_fp"] = payload_hash([
             (mid, progress_by_mid[mid]) for mid in sorted(progress_by_mid)])
@@ -1112,4 +1116,6 @@ def _content_fp(content: dict) -> str:
                 "a": content.get("actor_fp")}
     if "progress_fp" in content:
         value["progress"] = content["progress_fp"]
+    if "thread_layout" in content:
+        value["thread_layout"] = content["thread_layout"]
     return payload_hash(value)

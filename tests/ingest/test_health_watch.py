@@ -10,6 +10,7 @@ health write, never the watcher's own assumption.
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -157,7 +158,7 @@ def test_well_formed_empty_reasons_mean_none(tmp_path):
     assert r["state_reasons"] == [] and r["held_reasons"] == {}
 
 
-@pytest.mark.parametrize("now,printed", [(1000, "reasons=none"),
+@pytest.mark.parametrize("now,printed", [(1000, ""),
                                          (5000, "reasons=unknown")])
 def test_stale_never_shows_recorded_none_as_cause(tmp_path, capsys, now,
                                                   printed):
@@ -175,7 +176,8 @@ def test_stale_never_shows_recorded_none_as_cause(tmp_path, capsys, now,
         json.dumps({"last": {"status": "failed", "health_at": 1}}))
     assert health_watch.main(["--home", str(tmp_path), "--now", str(now),
                               "--config", str(tmp_path / "none.json")]) == 0
-    assert printed in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert (printed in output) if printed else output == ""
 
 
 def test_out_of_range_counts_and_last_ok_stay_unknown(tmp_path):
@@ -277,7 +279,7 @@ def test_recovery_requires_fresh_observation(tmp_path):
     # a fresh health write after the failure -> recovery transition
     _health_file(tmp_path, {"overall": "ok", "at": 1190})
     r = _eval(tmp_path, 1250.0)
-    assert r["status"] == "ok" and r["alert"]    # recovery is reported once
+    assert r["status"] == "ok" and not r["alert"]  # recovery is observed internally
     assert not _eval(tmp_path, 1300.0)["alert"]
 
 
@@ -313,7 +315,7 @@ def test_disk_low_alerts_on_transitions_only(tmp_path, capsys):
     assert stale["status"] == "stale" and stale["disk_low"]
     assert not stale["disk_alert"]
     r = tick(5100, False)
-    assert r["disk_alert"] and not r["disk_low"]    # recovery once
+    assert not r["disk_alert"] and not r["disk_low"]  # recovery is silent
     assert not tick(5400, False)["disk_alert"]
     capsys.readouterr()
     _health_file(tmp_path, {"overall": "ok", "at": 5690, "disk_low": True,
@@ -336,11 +338,11 @@ def test_continuous_ok_updates_stay_silent(tmp_path):
     assert r["status"] == "ok" and not r["alert"]
 
 
-def test_recovery_once_then_further_ok_is_silent(tmp_path):
+def test_recovery_and_further_ok_are_silent(tmp_path):
     _health_file(tmp_path, {"overall": "ok", "at": 50})
     assert _eval(tmp_path, 1000.0)["alert"]        # stale alert
     _health_file(tmp_path, {"overall": "ok", "at": 1190})
-    assert _eval(tmp_path, 1250.0)["alert"]        # recovery: once
+    assert not _eval(tmp_path, 1250.0)["alert"]    # recovery: internal observation
     # keep writing healthy files — none of them is an event
     _health_file(tmp_path, {"overall": "ok", "at": 1290})
     assert not _eval(tmp_path, 1300.0)["alert"]
@@ -600,10 +602,15 @@ def test_unknown_alert_is_held_until_a_different_verdict(tmp_path, monkeypatch, 
     assert json.loads((tmp_path / health_watch.STATE_REL).read_text())["delivery"]["outcome"] == "unknown"
     _health_file(tmp_path, {"overall": "ok", "at": 5000})
     health_watch.main(args + ["--now", "5001"])
-    assert len(sent) == 2                    # recovery is a distinct alert
+    assert len(sent) == 1                    # recovery never crosses the wire
     state = json.loads((tmp_path / health_watch.STATE_REL).read_text())
     assert len(state["unknown_deliveries"]) == 1
     assert state["unknown_deliveries"][0]["outcome"] == "unknown"
+    assert "delivery" not in state
+    # A later real bad episode is a new alert, not a blind retry of the old send.
+    _health_file(tmp_path, {"overall": "failed", "at": 5060})
+    health_watch.main(args + ["--now", "5061"])
+    assert len(sent) == 2
 
 
 
@@ -628,6 +635,64 @@ def test_unknown_delivery_history_is_bounded(tmp_path, monkeypatch):
     held = json.loads(path.read_text())["unknown_deliveries"]
     assert len(held) == health_watch.UNKNOWN_HISTORY
     assert held[-1]["outcome"] == "unknown" and "n" not in held[-1]   # newest kept
+
+
+@pytest.mark.parametrize("outcome", ["pending", "not_sent"])
+@pytest.mark.parametrize("disk_only", [False, True])
+def test_healthy_recovery_supersedes_unsent_alert_without_stdout_or_send(
+        tmp_path, monkeypatch, capsys, outcome, disk_only):
+    calls = []
+    monkeypatch.setattr(health_watch, "deliver_alert", lambda cfg, text: calls.append(text) or False)
+    _health_file(tmp_path, {"overall": "ok" if disk_only else "failed", "at": 990,
+                            "disk_low": disk_only})
+    previous = health_watch.evaluate(str(tmp_path), 1000, cfg={})
+    path = tmp_path / health_watch.STATE_REL
+    state = json.loads(path.read_text())
+    state["delivery"].update(outcome=outcome, attempted_at=1000)
+    path.write_text(json.dumps(state))
+    _health_file(tmp_path, {"overall": "ok", "at": 1060, "disk_low": False,
+                            "state_reasons": ["notification_pending"]})
+    assert health_watch._watch(SimpleNamespace(home=str(tmp_path), now=1061), {}) == 0
+    assert calls == [] and capsys.readouterr().out == ""
+    state = json.loads(path.read_text())
+    status = json.loads((tmp_path / health_watch.STATUS_REL).read_text())
+    assert state["delivery"]["outcome"] == "superseded"
+    assert state["delivery"]["key"] == previous["delivery"]["key"]
+    assert state["last"]["status"] == status["status"] == "ok"
+    assert status["state_reasons"] == ["notification_pending"]
+    assert not status["alert"] and not status["disk_alert"]
+
+
+def test_healthy_status_cannot_be_rendered_as_legacy_alert_but_low_disk_remains():
+    report = {"status": "ok", "alert": True, "disk_alert": True, "disk_low": False}
+    assert health_watch._alert_lines(report) == []
+    assert health_watch._alert_lines({**report, "disk_low": True, "disk_free_mb": 123}) == [
+        "mcs disk: low (free_mb=123)"]
+
+
+def test_unsent_combined_alert_retries_only_still_low_disk_after_health_recovers(
+        tmp_path, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(health_watch, "deliver_alert", lambda cfg, text: calls.append(text) or True)
+    _health_file(tmp_path, {"overall": "failed", "at": 990, "disk_low": True})
+    health_watch.evaluate(str(tmp_path), 1000, cfg={})
+    _health_file(tmp_path, {"overall": "ok", "at": 1060, "disk_low": True, "disk_free_mb": 123})
+    assert health_watch._watch(SimpleNamespace(home=str(tmp_path), now=1061), {}) == 0
+    assert calls == ["mcs disk: low (free_mb=123)"]
+    assert capsys.readouterr().out == ""
+
+
+def test_unknown_combined_alert_is_not_retried_when_only_disk_recovers(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(health_watch, "deliver_alert", lambda cfg, text: calls.append(text))
+    _health_file(tmp_path, {"overall": "failed", "at": 990, "disk_low": True})
+    assert health_watch._watch(SimpleNamespace(home=str(tmp_path), now=1000), {}) == 0
+    path = tmp_path / health_watch.STATE_REL
+    witness = json.loads(path.read_text())["delivery"]
+    _health_file(tmp_path, {"overall": "failed", "at": 5000, "disk_low": False})
+    assert health_watch._watch(SimpleNamespace(home=str(tmp_path), now=5001), {}) == 0
+    assert len(calls) == 1
+    assert json.loads(path.read_text())["delivery"] == witness
 
 def test_alert_witness_write_failure_prevents_send(tmp_path, monkeypatch):
     sent = []

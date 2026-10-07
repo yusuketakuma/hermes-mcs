@@ -37,22 +37,17 @@
   <text x="476" y="104" font-size="11" fill="#fff" font-weight="bold">MCSボット</text>
   <text x="540" y="104" font-size="9" fill="#b5bac1">今日 10:02</text>
   <text x="476" y="126" font-size="10" fill="#dbdee1" font-weight="bold">↳ 山田 花子 · 10-01 09:40 佐藤さん（訪問看護・あおぞら）</text>
-  <text x="476" y="141" font-size="10" fill="#7fc8a9" font-weight="bold">📋 要約</text>
-  <text x="476" y="156" font-size="10" fill="#dbdee1">・次回訪問時に残薬を確認してほしいとの連絡</text>
-  <text x="476" y="171" font-size="10" fill="#dbdee1">・要点: 残薬の確認 / 服薬カレンダーを共有</text>
-  <text x="476" y="186" font-size="10" fill="#dbdee1">・区分: 依頼・添付</text>
-  <text x="476" y="201" font-size="10" fill="#dbdee1">・依頼: 確認依頼:次回訪問時に残薬を確認(期限:次回訪問時)</text>
-  <text x="476" y="216" font-size="10" fill="#b5bac1">────────────</text>
-  <text x="476" y="231" font-size="10" fill="#7fc8a9">スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 10:00時点</text>
-  <text x="476" y="246" font-size="10" fill="#b5bac1">────────────</text>
-  <text x="476" y="261" font-size="10" fill="#dbdee1">次回訪問時に残薬を確認してください。</text>
-  <text x="476" y="276" font-size="10" fill="#dbdee1">服薬カレンダーの写真を共有します。</text>
-  <circle cx="456" cy="300" r="12" fill="#5865f2"/>
-  <text x="456" y="304" font-size="10" fill="#fff" text-anchor="middle">M</text>
-  <text x="476" y="302" font-size="11" fill="#fff" font-weight="bold">MCSボット</text>
-  <text x="476" y="322" font-size="10" fill="#dbdee1">📎 服薬カレンダー.jpg — 山田 花子 10-01 09:40 佐藤さん</text>
-  <rect x="476" y="334" width="180" height="96" rx="6" fill="#0d1117" stroke="#30363d"/>
-  <rect x="484" y="342" width="164" height="62" rx="4" fill="#e8e4d8"/>
-  <text x="566" y="378" font-size="9" fill="#5a5240" text-anchor="middle">服薬カレンダー（写真）</text>
-  <text x="484" y="422" font-size="9" fill="#b5bac1">🖼 服薬カレンダー.jpg</text>
+  <text x="476" y="145" font-size="10" fill="#7fc8a9">スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 10:00時点</text>
+  <text x="476" y="161" font-size="10" fill="#b5bac1">────────────</text>
+  <text x="476" y="174" font-size="10" fill="#7fc8a9" font-weight="bold">📄 本文</text>
+  <text x="476" y="190" font-size="10" fill="#dbdee1">次回訪問時に残薬を確認してください。</text>
+  <text x="476" y="206" font-size="10" fill="#dbdee1">服薬カレンダーの写真を共有します。</text>
+  <circle cx="456" cy="230" r="12" fill="#5865f2"/>
+  <text x="456" y="234" font-size="10" fill="#fff" text-anchor="middle">M</text>
+  <text x="476" y="232" font-size="11" fill="#fff" font-weight="bold">MCSボット</text>
+  <text x="476" y="252" font-size="10" fill="#dbdee1">📎 服薬カレンダー.jpg — 山田 花子 10-01 09:40 佐藤さん</text>
+  <rect x="476" y="264" width="180" height="96" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <rect x="484" y="272" width="164" height="62" rx="4" fill="#e8e4d8"/>
+  <text x="566" y="308" font-size="9" fill="#5a5240" text-anchor="middle">服薬カレンダー（写真）</text>
+  <text x="484" y="352" font-size="9" fill="#b5bac1">🖼 服薬カレンダー.jpg</text>
 </svg>

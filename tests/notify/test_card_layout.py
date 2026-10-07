@@ -128,8 +128,10 @@ def test_attachment_parts_carry_a_caption(led):
     _dispatch(led, _intent(led))
     att = next(p for p in _spec(led)["parts"]["manifest"]
                if p["kind"] == "attachment_part")
-    assert "患者A:" in att["caption"] and "職員（所属未取得） / 09-24 08:40" in att["caption"]
-    assert "要約処理待ち" in att["caption"] and "📎 a.jpg" in att["caption"]
+    assert att["caption"].startswith("患者A / ") and "職員（所属未取得） / 09-24 08:40" in att["caption"]
+    assert "要約処理待ち" not in att["caption"] and "📋 要約" not in att["caption"]
+    assert "📎 a.jpg" in att["caption"]
+    assert "要約処理待ち" in _spec(led)["parts"]["preview_text"]
 
 
 def test_lineworks_card_member_names_repost_marker_and_more(led):

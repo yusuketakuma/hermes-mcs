@@ -1,0 +1,23 @@
+{
+  "category": "changed",
+  "title": "スレッド本文から重複する自動要約を除去",
+  "summary": "Slack・Discordのスレッドには元投稿の発信者・日時、MCSスタンプ、本文と添付を表示し、自動要約や解析進捗は親カードで確認できるようにします。スレッドの添付説明も発信者・所属・日時を中心に表示し、要約を重ねません。",
+  "upgrade": "追加設定は不要です。Hermes gatewayまたは独立接続hostのworkerへ新コードを反映してください。Slack・Discordの既存カードは通常の巡回で表示を一度更新し、同じスレッド内で配送済みと確認できる余剰区間と添付説明を更新します。更新区間が投稿上限に収まらない場合は thread_cleanup_budget_exceeded として保留し、更新完了とは扱いません。旧形式の凍結投稿や過去の全投稿を一括変更・削除しません。本人向け本文表示、LINE WORKS、従来のテキスト通知は既存の要約表示を維持します。 配送証明付きの変更された本文更新は同じ投稿IDだけを編集し、対象投稿が消えている場合は本文を再投稿しません。",
+  "details": [
+    "nativeスレッド本文生成だけ内部include_summaryを無効にし、親カードの要約・処理中表示と薬剤情報の本人向け操作を維持する。",
+    "元投稿に含まれる『要約』という語や原文は加工・削除しない。長文の分割と投稿上限を維持する。",
+    "緊急通知の臨床根拠・対象・状態は保持する。",
+    "表示レイアウトの固定版だけを表示fingerprintへ反映し、投稿内容の世代と人の確認は維持する。",
+    "余剰named区間と旧添付captionは同じ送信先・スレッドの配送証明付きremoteIDだけをedit_onlyで更新し、新規投稿・再アップロードへ代替しない。",
+    "既存のheldとupdate_failedを使い、容量不足・結果不明を完了や再送と判断しない。",
+    "変更されたnamed本文もexact priorIDへ編集し、別の同文投稿との照合で旧要約を残さない。"
+  ],
+  "refs": [
+    "mcs/notify/notify_render.py",
+    "mcs/notify/notify_cards.py",
+    "adapters/common/spec.py",
+    "adapters/slack/delivery.py",
+    "adapters/discord/delivery.py",
+    "tests/notify/test_notify_progress_render.py"
+  ]
+}

@@ -1,6 +1,8 @@
 """共有通知の処理中表示は本文を公開せず表示世代のみを更新する。"""
 import json
 
+import pytest
+
 import extraction_progress
 import notify_cards
 import notify_render
@@ -115,3 +117,44 @@ def test_card_reads_each_current_message_once_and_reuses_even_unknown_progress(l
     calls.clear()
     notify_render._card_content(led.db, card)
     assert calls == []  # cfg-unknown path keeps its prior display and reader boundary
+
+
+@pytest.mark.parametrize("platform", ["slack", "discord", "lineworks"])
+def test_thread_body_and_attachment_caption_keep_source_without_duplicate_summary(led, tmp_path, monkeypatch, platform):
+    import hashlib
+    from notify_testkit import CFG, _latest_render
+    from slack_testkit import SLACK
+    from test_notify_lineworks import LINEWORKS
+    from test_notify_parts import _attach
+    _seed_thread(led, mids=(100,))
+    raw = "原文の要約という単語を削除しません。"
+    with led.db:
+        led.db.execute("UPDATE messages SET body_text=?,organization='合成所属' WHERE message_id=100", (raw,))
+    monkeypatch.setattr(notify_render, "_structured_block", lambda *_args: {
+        "type": "text", "text": "📋 要約\nGENERATED-SUMMARY-CANARY"})
+    monkeypatch.setattr(notify_render, "_progress_state", lambda *_args: {
+        "state": "processing", "completed": 1, "total": 3})
+    file = tmp_path / "synthetic.pdf"
+    file.write_bytes(b"synthetic attachment")
+    _attach(led, 100, local_path=str(file), sha256=hashlib.sha256(file.read_bytes()).hexdigest(), nbytes=file.stat().st_size)
+    cfg = {"slack": SLACK, "discord": CFG, "lineworks": LINEWORKS}[platform]
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}), cfg)
+    spec = json.loads(_latest_render(led)["spec_json"])
+    face = notify_render.display_text(spec["parts"])
+    assert "GENERATED-SUMMARY-CANARY" in face
+    assert "解析更新中 (完了区間 1/3)" in face
+    body = "".join(spec["parts"]["thread_body_parts"])
+    assert raw in body and "📄 本文" in body
+    caption = next(part["caption"] for part in spec["parts"]["manifest"] if part["kind"] == "attachment_part")
+    assert "合成所属" in caption
+    if platform == "lineworks":
+        assert "GENERATED-SUMMARY-CANARY" in body and "解析更新中" in body
+        assert "GENERATED-SUMMARY-CANARY" in caption
+    else:
+        assert "GENERATED-SUMMARY-CANARY" not in body and "解析更新中" not in body
+        assert "📋 要約" not in body
+        assert "スタンプ 未取得" in body
+        assert "GENERATED-SUMMARY-CANARY" not in caption and "解析更新中" not in caption
+        assert raw not in caption
+    private = notify_render._card_body_text(led.db, _card(led), {"shown": "[100]"}, cfg=cfg)[1]
+    assert "GENERATED-SUMMARY-CANARY" in private and "解析更新中" in private

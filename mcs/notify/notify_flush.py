@@ -38,7 +38,7 @@ import semantic_send_gate
 import structured_view
 from mcs_util import CONF_PATH, html_to_text, load_config
 from mcs_requests import positive
-from notify_render import _signal_evidence
+from notify_render import SECTION_RULE, _extraction_failed, _signal_evidence
 # Re-exported send-gate verdicts — the canonical definitions live in
 # semantic_send_gate (the send-time semantic policy layer); the legacy
 # private names stay so existing tests and flush() catches are stable.
@@ -421,7 +421,7 @@ def _msg_rows(ledger, payload: dict, project_id) -> list:
 
 
 def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
-             skipped: dict) -> str:
+             skipped: dict, *, stamps=True, summary_suffix="") -> str:
     s_lines = structured_view.structured_lines(
         ledger.db, r["message_id"])
     urg = structured_view.message_urgency(ledger.db, r["message_id"])
@@ -451,12 +451,18 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
             marks.append(nm)
         more = f"、他{len(marks) - 5}件" if len(marks) > 5 else ""
         att_line = f"\n{indent}📎 {'、'.join(marks[:5])}{more}"
-    if s_lines:
-        struct = "\n".join(f"{indent}・{ln}" for ln in s_lines)
-        return (f"{head}\n{indent}📋 要約\n{struct}\n"
-                f"{indent}───── 原文 ─────\n"
-                f"{indent}{body or '(本文なし)'}{att_line}")
-    return f"{head}\n{indent}{body or '(本文なし)'}{att_line}"
+    empty = "作成失敗" if not s_lines and _extraction_failed(ledger.db, r["message_id"]) else "処理待ち"
+    summary = ([f"{indent}📋 要約"] + [f"{indent}・{ln}" for ln in s_lines]
+               if s_lines else [f"{indent}📋 要約 {empty}"])
+    if stamps:
+        from ledger import reaction_actor_summary
+        from message_metadata import get_message_metadata, is_self_sender, thread_stamp_line
+        metadata = get_message_metadata(ledger.db, r["message_id"])
+        metadata["own_post"] = is_self_sender(ledger.db, r["sender_id"])
+        summary.append(indent + thread_stamp_line(metadata, reaction_actor_summary(ledger.db, r["message_id"])))
+    return (head + "\n" + "\n".join(summary) + summary_suffix + "\n"
+            + indent + SECTION_RULE + "\n" + indent + "📄 本文\n"
+            + indent + (body or "(本文なし)") + att_line)
 
 
 def _sem_block(ledger, r) -> str:
@@ -493,8 +499,9 @@ def _message_notice(ledger, ev, payload: dict):
     skipped: dict = {}
     files = _collect_files(att_map, [r["message_id"] for r, _ in seq],
                            skipped)
-    out = [_fmt_row(ledger, ev, att_map, r, indent, skipped)
-           + ("" if indent else _sem_block(ledger, r))
+    stamps = not (_target(_config(), ev["kind"]) or "").startswith("lineworks:")
+    out = [_fmt_row(ledger, ev, att_map, r, indent, skipped, stamps=stamps,
+                    summary_suffix="" if indent else _sem_block(ledger, r))
            for r, indent in seq]
     head = f"[MCS {src}] 新着 {len(rows)} 件"
     return (head + "\n\n" + "\n\n".join(out), files)

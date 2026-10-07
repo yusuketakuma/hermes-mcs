@@ -2366,6 +2366,11 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         # fixture's own monkeypatch actions (shared instance)
         monkeypatch.setattr(FakeThread, "send", original)
         thread = sent[0].threads[0][1]
+        # A real discord.Thread carries these ownership fields; the
+        # exact-edit path must prove them rather than infer its parent.
+        thread.parent_id = 42
+        thread.guild = SimpleNamespace(id=7)
+        original_thread_id = thread.id
         assert not thread.sent
         assert {r["state"] for r in world.led.db.execute(
             "SELECT state FROM notification_render_parts WHERE kind='body_part'")}
@@ -2380,7 +2385,14 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         await _deliver(world, worker)
         world.drain()
         assert thread.sent                   # backfilled
-        assert "本文" in "\n".join(thread.sent)
+        body = "\n".join(thread.sent)
+        assert "📄 本文" in body and "追記あり" in body and "スタンプ 未取得" in body
+        assert "📋 要約" not in body and "処理待ち" not in body and "解析更新中" not in body
+        _, current_spec = world.spec()
+        assert current_spec["delivery"]["thread_id"] == str(original_thread_id)
+        assert "📋 要約" in notify_cards._card_body_text(world.led.db, dict(world.led.db.execute("SELECT * FROM notification_cards WHERE card_id=1").fetchone()), {"shown": "[100,101]"})[1]
+        assert "📋 要約" in "\n".join(item.get("text", "") for item in current_spec["parts"]["containers"])
+
         n = len(thread.sent)
         # re-running the same delivery posts nothing — the journal
         # already proves every part of this spec

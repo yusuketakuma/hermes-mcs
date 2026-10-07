@@ -925,13 +925,24 @@ def test_off_mode_parks_queued_notice(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(notify_flush, "_send",
                         lambda *a, **k: calls.append(a) or None)
+    base = db.db.execute("SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
+    expected, files = notify_flush._format_event(db, base)
+    frozen = [json.loads(row["payload"])["text"] for row in db.db.execute(
+        "SELECT payload FROM notify_outbox WHERE kind='semantic_notice'").fetchall()]
+    assert len(frozen) == 2 and all("要約：自動検査完了" in text for text in frozen)
     notify_flush.flush(db)
-    # the base new_messages notice sends; the semantic_notice must not
-    assert not any("要約" in str(c[1]) for c in calls)
-    row = db.db.execute(
-        "SELECT state FROM notify_outbox WHERE kind='semantic_notice'"
-    ).fetchone()
-    assert row["state"] == "pending"   # parked, not destroyed
+    # Exactly the current base notification is emitted; the ordinary 📋
+    # summary heading does not imply an audited semantic notice was sent.
+    assert [call[1] for call in calls] == [notify_flush._compose_body(expected, files)]
+    assert calls[0][1].startswith("[MCS unread] 新着 2 件")
+    assert all(text not in calls[0][1] for text in frozen)
+    assert "要約：自動検査完了" not in calls[0][1]
+    assert "カロナールを300mg×3回に変更する記載がある" not in calls[0][1]
+    rows = db.db.execute(
+        "SELECT state FROM notify_outbox WHERE kind='semantic_notice' ORDER BY event_id"
+    ).fetchall()
+    assert [row["state"] for row in rows] == ["pending", "pending"]
+    assert db.db.execute("SELECT state FROM notify_outbox WHERE event_id=?", (base["event_id"],)).fetchone()[0] == "accepted"
     db.close()
 
 
@@ -954,12 +965,22 @@ def test_stale_generation_notice_suppressed(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(notify_flush, "_send",
                         lambda *a, **k: calls.append(a) or None)
+    base = db.db.execute("SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
+    expected, files = notify_flush._format_event(db, base)
+    frozen = [json.loads(row["payload"])["text"] for row in db.db.execute(
+        "SELECT payload FROM notify_outbox WHERE kind='semantic_notice'").fetchall()]
+    assert len(frozen) == 2 and all("要約：自動検査完了" in text for text in frozen)
     notify_flush.flush(db)
-    assert not any("要約" in str(c[1]) for c in calls)
-    row = db.db.execute(
-        "SELECT state FROM notify_outbox WHERE kind='semantic_notice'"
-    ).fetchone()
-    assert row["state"] == "suppressed"
+    assert [call[1] for call in calls] == [notify_flush._compose_body(expected, files)]
+    assert calls[0][1].startswith("[MCS unread] 新着 2 件")
+    assert all(text not in calls[0][1] for text in frozen)
+    assert "要約：自動検査完了" not in calls[0][1]
+    assert "カロナールを300mg×3回に変更する記載がある" not in calls[0][1]
+    rows = db.db.execute(
+        "SELECT state FROM notify_outbox WHERE kind='semantic_notice' ORDER BY event_id"
+    ).fetchall()
+    assert [row["state"] for row in rows] == ["suppressed", "suppressed"]
+    assert db.db.execute("SELECT state FROM notify_outbox WHERE event_id=?", (base["event_id"],)).fetchone()[0] == "accepted"
     db.close()
 
 

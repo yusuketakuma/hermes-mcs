@@ -800,7 +800,7 @@ def _split_body_chunks(text: str, limit: int = THREAD_PART_LIMIT) -> list:
                 chunks.append(cur)
                 cur = ""
             else:
-                # a short head (header / 📋 summary / stamp line) never
+                # a short head (header / 📋 summary / stamps / 📄 label) never
                 # becomes a post of its own — fill it with the body start
                 take = limit - len(cur)
                 chunks.append(cur + seg[:take])
@@ -1084,7 +1084,7 @@ def _attachment_captions(db, card, attachments) -> dict:
     ids = [a["attachment_id"] for a in attachments]
     ph = ",".join("?" * len(ids))
     rows = db.execute(
-        f"""SELECT a.attachment_id, a.message_id, m.posted_at, m.sender_name, m.project_id
+        f"""SELECT a.attachment_id, a.message_id, m.posted_at, m.sender_name, m.organization, m.project_id
             FROM attachments a JOIN messages m ON m.message_id=a.message_id
             WHERE a.attachment_id IN ({ph})""", ids).fetchall()
     where = {r["attachment_id"]: r for r in rows}
@@ -1093,6 +1093,8 @@ def _attachment_captions(db, card, attachments) -> dict:
         r = where.get(a["attachment_id"])
         if a.get("unavailable"):
             tail = "取得失敗"
+        elif r is not None and card["transport"] in ("slack", "discord"):
+            tail = _preview_header(db, r["project_id"], r)
         elif r is not None:
             tail = notification_preview(
                 db, {"kind": "thread", "project_id": r["project_id"]},
@@ -1110,6 +1112,38 @@ def _attachment_captions(db, card, attachments) -> dict:
                 else f"📎 {a['name']}" + (f" — {tail}" if tail else ""))
         out[a["attachment_id"]] = text[:300]
     return out
+
+
+
+_THREAD_BODY_COLLECTED = "（この区画の内容は更新済みの本文に集約しました）"
+
+
+def _same_thread_delivered_parts(db, card):
+    """Earlier delivered parts with this card's current scope and thread receipt."""
+    body, attachments = {}, {}
+    if card["transport"] not in ("slack", "discord") or not card["thread_id"]:
+        return body, attachments
+    rows = db.execute("""SELECT p.kind,p.part_id,p.name,p.remote_id,p.payload_sha256,r.*
+        FROM notification_render_parts p JOIN notification_renders r ON r.delivery_id=p.delivery_id
+        WHERE r.card_id=? AND r.state='delivered' AND p.kind IN ('body_part','attachment_part')
+          AND p.state='delivered' AND p.remote_id IS NOT NULL
+          AND EXISTS(SELECT 1 FROM notification_render_parts t WHERE t.delivery_id=r.delivery_id
+                     AND t.kind='thread' AND t.state='delivered' AND t.remote_id=?)
+        ORDER BY r.render_rev,p.idx""", (card["card_id"], card["thread_id"])).fetchall()
+    for row in rows:
+        if not _scope_match(row, stored_scope(card)):
+            continue
+        if row["kind"] == "body_part" and row["name"] is not None:
+            body[row["name"]] = (str(row["remote_id"]), row["payload_sha256"])
+        elif row["kind"] == "attachment_part":
+            try:
+                old = json.loads(row["spec_json"])
+                caption = next((part.get("caption") for part in old["parts"]["manifest"]
+                                if part["part_id"] == row["part_id"]), None)
+            except (ValueError, TypeError, KeyError, AttributeError):
+                caption = None
+            attachments[row["part_id"]] = (str(row["remote_id"]), row["payload_sha256"], caption)
+    return body, attachments
 
 
 def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -> None:
@@ -1140,6 +1174,8 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -
     update = spec["op"] == "update"
     posts = _prior_body_posts(db, card) if update else {}
     keyed = []                             # (post key, chunk)
+    cleanup = []
+    verified_body, verified_attachments = _same_thread_delivered_parts(db, card) if update else ({}, {})
     lineworks = card["transport"] == "lineworks"
     if lineworks:
         keyed.extend(_lineworks_overflow(parts))
@@ -1148,10 +1184,18 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -
         # LINE WORKS cannot edit a post: no stamp line, so only a change
         # of the original text or its extraction re-posts it
         body = _card_body_text(db, card, man, max_chars=None,
-                               stamps=not lineworks, cfg=cfg)[1]
+                               stamps=not lineworks, cfg=cfg,
+                               include_summary=lineworks)[1]
         # lossless — no chunk dropped
-        keyed += [(f"{key}#{k}", c)
-                  for k, c in enumerate(_split_body_chunks(body), 1)]
+        chunks = _split_body_chunks(body)
+        keyed += [(f"{key}#{k}", c) for k, c in enumerate(chunks, 1)]
+        if not lineworks:
+            for old_key, (remote_id, sha) in verified_body.items():
+                prefix, separator, number = old_key.rpartition("#")
+                if (separator and prefix == key and number.isascii() and number.isdecimal() and int(number) > len(chunks)
+                        and sha != _sha_text(_THREAD_BODY_COLLECTED)):
+                    cleanup.append((old_key, _THREAD_BODY_COLLECTED))
+                    posts[old_key] = remote_id
     attachments = _plan_attachments(db, planned)
     if len(keyed) + len(attachments) > MAX_PARTS - 2:
         # One shared budget includes card, thread and an explicit omission
@@ -1160,6 +1204,13 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -
         keyed = keyed[:MAX_PARTS - 3]
         attachments = attachments[:MAX_PARTS - 3 - len(keyed)]
         keyed.append(("truncated#1", _TRUNCATED_PART))
+    if len(keyed) + len(attachments) + len(cleanup) > MAX_PARTS - 2:
+        # Keep the resource bound and withhold this whole render: never
+        # report success while a proven old summary chunk remains untouched.
+        card["_cleanup_budget_hold"] = True
+    else:
+        keyed += cleanup
+    cleanup_keys = {key for key, _text in cleanup}
     parts["thread_body_parts"] = [c for _k, c in keyed]
     prior = _prior_remote_ids(db, card) if update else {}
     same = _prior_body_sha(db, card) if update and lineworks else {}
@@ -1174,6 +1225,14 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -
             # skips a byte-identical post (it cannot edit, so any other
             # change is posted anew)
             entry["prior_remote_id"] = posts[key]
+            proven = verified_body.get(key)
+            if key in cleanup_keys:
+                entry["edit_only"] = True
+            elif proven and valid_hash(proven[1]) and proven[1] != entry["sha256"]:
+                # A changed post must rewrite its exact delivered target;
+                # another same-text post can never stand in for it.
+                entry["prior_remote_id"] = proven[0]
+                entry["edit_only"] = True
         manifest.append(entry)
         idx += 1
     captions = _attachment_captions(db, card, attachments)
@@ -1190,6 +1249,10 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -
             # the same bytes are already in the thread — reuse, never
             # upload a second copy on every update render
             entry["prior_remote_id"] = rid
+            proven = verified_attachments.get(entry["part_id"])
+            if (proven and proven[0] == rid and proven[1] == sha
+                    and entry.get("caption") and entry["caption"] != proven[2]):
+                entry["edit_only"] = True
         manifest.append(entry)
         idx += 1
     parts["manifest"] = manifest
@@ -1569,6 +1632,11 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
     _cancel_open_renders(db, card_id, now)
     spec = _build_spec(db, card, content, gens, op, rev, cfg, now)
     _persist_render(db, card, spec, op, rev, now)
+    if card.get("_cleanup_budget_hold"):
+        db.execute("UPDATE notification_renders SET state='held',parts_state='held' WHERE delivery_id=?", (spec["delivery_id"],))
+        db.execute("UPDATE notification_render_parts SET state='held',error_code='thread_cleanup_budget_exceeded' WHERE delivery_id=?", (spec["delivery_id"],))
+        db.execute("UPDATE notification_cards SET delivery_state='update_failed' WHERE card_id=?", (card_id,))
+        return None
     specs.append(spec)
     return spec["delivery_id"]
 
@@ -1760,11 +1828,19 @@ def assignee_choices(db, limit=STAFF_CHOICES) -> list:
     return out
 
 
+
+def _cleanup_budget_held(db, delivery_id):
+    return db.execute("SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND state='held' "
+                      "AND error_code='thread_cleanup_budget_exceeded' LIMIT 1", (delivery_id,)).fetchone() is not None
+
+
 def _publish_specs(db, dirs, specs, now) -> list:
     """Atomic file publication AFTER the render commit. A crash between
     leaves spec_published=0; recovery republishes identical bytes."""
     published = []
     for spec in specs:
+        if _cleanup_budget_held(db, spec["delivery_id"]):
+            continue
         transport = spec["delivery"].get("transport", "discord")
         path = publish_file(dirs[transport + "_render"],
                             spec["delivery_id"] + ".json",
@@ -3348,6 +3424,8 @@ def recover(ledger, cfg, result) -> dict:
                 "WHERE state IN ('queued','held') OR (state='delivered' "
                 "AND EXISTS (SELECT 1 FROM notification_render_parts p "
                 "WHERE p.delivery_id=r.delivery_id AND p.state='pending'))").fetchall():
+            if _cleanup_budget_held(db, r["delivery_id"]):
+                continue
             path = os.path.join(dirs[r["transport"] + "_render"],
                                 r["delivery_id"] + ".json")
             if os.path.isfile(path):

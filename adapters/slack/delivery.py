@@ -210,6 +210,29 @@ class SlackCardAdapter:
         delivery = spec.get("delivery") if isinstance(spec, dict) else None
         if not isinstance(delivery, dict) or not self._owns(delivery):
             return {"result": "not_sent", "error_code": "scope_mismatch"}
+        # The granted revoke names a previously delivered post. Deleting
+        # needs only that scope/ID, never a current source or text rendering.
+        if spec.get("op") == "revoke":
+            try:
+                validate(spec)
+            except ValueError:
+                return {"result": "not_sent", "error_code": "bad_render"}
+            message_id = delivery.get("message_id")
+            if not isinstance(message_id, str) or not _TS.fullmatch(message_id):
+                return {"result": "not_sent", "error_code": "no_target"}
+            sender = single_attempt(self._client)
+            if sender is None:
+                return {"result": "not_sent", "error_code": "retry_policy_unknown"}
+            try:
+                response = await _call(sender.chat_delete, channel=self._channel_id, ts=message_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return _failed(exc, "revoke", message_id)
+            data = _payload(response)
+            if data.get("ok") is True or data.get("error") == "message_not_found":
+                return {"result": "delivered", "message_id": message_id}
+            return {"result": "unknown", "error_code": "bad_slack_response"}
         try:
             uids = sorted(mention_ids(spec))[:16]
         except (AttributeError, TypeError):
@@ -250,15 +273,10 @@ class SlackCardAdapter:
                 if op == "update":
                     response = await _call(sender.chat_update, channel=self._channel_id, ts=message_id,
                         text=text, blocks=blocks, parse="none", link_names=False)
-                elif op == "revoke":
-                    response = await _call(sender.chat_delete, channel=self._channel_id, ts=message_id)
                 else:
                     response = await _call(sender.chat_postMessage, channel=self._channel_id,
                         thread_ts=thread_ts, text=text, blocks=blocks, parse="none", link_names=False,
                         unfurl_links=False, unfurl_media=False)
-            elif op == "revoke":
-                response = await _call(sender.chat_delete,
-                    channel=self._channel_id, ts=message_id)
             elif op == "update":
                 response = await _call(
                     sender.chat_update, channel=self._channel_id, ts=message_id,
@@ -275,8 +293,6 @@ class SlackCardAdapter:
         data = _payload(response)
         if data.get("ok") is not True:
             return {"result": "unknown", "error_code": "bad_slack_response"}
-        if op == "revoke":
-            return {"result": "delivered", "message_id": message_id}
         ts = data.get("ts")
         if data.get("channel") != self._channel_id \
                 or not isinstance(ts, str) or not _TS.fullmatch(ts):
@@ -401,6 +417,8 @@ class DeliveryWorker(_BaseWorker):
         # Use the same escaped wire text for both sends and remote verification.
         # mrkdwn=False: user-authored *bold*/_x_/~y~ stay literal text.
         text = escape(text, quote=False)
+        if part and part.get("edit_only") is True:
+            return await self._edit_only_prior(spec, part, text, ctx)
         if spec["op"] == "update" or spec["delivery"].get("thread_id"):
             # writing into an existing thread — an identical reply
             # authored by this bot binds the part to its real ts
@@ -437,6 +455,64 @@ class DeliveryWorker(_BaseWorker):
             return {"result": "unknown",
                     "error_code": "bad_slack_response"}
         return {"result": "delivered", "remote_id": ts}
+
+    async def _edit_only_prior(self, spec, part, text, ctx, *, attachment=False):
+        """Edit one exact owned reply; no text dedupe, upload or fresh-post fallback."""
+        thread_ts, prior = ctx.get("thread_id"), part.get("prior_remote_id")
+        if (spec.get("op") != "update" or not isinstance(thread_ts, str) or thread_ts != spec["delivery"].get("thread_id")
+                or spec["delivery"].get("channel_id") != self._settings["channel_id"]
+                or not isinstance(prior, str) or prior in ctx["consumed"]):
+            return {"result": "unknown", "error_code": "edit_target_unverified"}
+        if ctx.get("history") is None:
+            try:
+                ctx["history"] = await self._replies(thread_ts)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                return {"result": "unknown", "error_code": "edit_history_unverified"}
+        targets = []
+        for message in ctx["history"]:
+            if message.get("ts") == thread_ts or not self._sender.authored(message):
+                continue
+            if message.get("thread_ts", thread_ts) != thread_ts:
+                continue
+            if attachment:
+                for file in message.get("files") or []:
+                    if (not isinstance(file, dict) or file.get("id") != prior
+                            or file.get("name") != part.get("name") or file.get("size") != part.get("bytes")):
+                        continue
+                    immutable = (file.get("mode") == "hosted" and file.get("is_external") is False
+                                 and file.get("editable") is False)
+                    if file.get("sha256") == part.get("sha256") or (file.get("sha256") is None and immutable):
+                        targets.append(message)
+                        break
+            elif message.get("ts") == prior:
+                targets.append(message)
+        sender = self._sender.single_attempt()
+        if len(targets) != 1 or sender is None:
+            return {"result": "unknown", "error_code": "edit_target_unverified"}
+        target = targets[0]
+        ts = target.get("ts")
+        if not isinstance(ts, str) or not _TS.fullmatch(ts):
+            return {"result": "unknown", "error_code": "edit_target_unverified"}
+        try:
+            response = await _call(sender.chat_update, channel=self._settings["channel_id"],
+                                   ts=ts, text=text, link_names=False, mrkdwn=False)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if (getattr(getattr(exc, "response", None), "status_code", None) in (404, 410)
+                    or _payload(getattr(exc, "response", None)).get("error") == "message_not_found"):
+                return {"result": "delivered", "remote_id": prior}
+            return _failed(exc, "body_part", thread_ts)
+        data = _payload(response)
+        if data.get("ok") is False and data.get("error") == "message_not_found":
+            return {"result": "delivered", "remote_id": prior}
+        if (data.get("ok") is not True or data.get("ts") != ts
+                or data.get("channel") not in (None, self._settings["channel_id"])):
+            return {"result": "unknown", "error_code": "bad_slack_response"}
+        ctx["consumed"].add(prior)
+        return {"result": "delivered", "remote_id": prior}
 
     async def _rewrite_prior(self, thread_ts: str, prior, text: str,
                              ctx: dict):
@@ -490,6 +566,9 @@ class DeliveryWorker(_BaseWorker):
         the SDK lacks the upload edge the part stays explicitly
         not_sent(sdk_capability_missing): visible incompleteness,
         never a faked completion."""
+        if part.get("edit_only") is True:
+            return await self._edit_only_prior(spec, part, escape(part["caption"], quote=False), ctx,
+                                               attachment=not part.get("unavailable"))
         if part.get("unavailable"):
             # no file to send — its caption ("📎 name — 取得失敗") is the
             # visible line, posted and deduped like a body chunk

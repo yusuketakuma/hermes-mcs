@@ -74,3 +74,53 @@ def test_slack_thread_root_is_verified_with_bounded_channel_history():
                           "latest": root, "inclusive": True, "limit": 1}]
         assert client.thread_posts[0]["thread_ts"] == root
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("gone", [False, True])
+def test_signal_revoke_deletes_only_sealed_reply_without_reading_or_resending_source(gone):
+    async def scenario():
+        client = FakeClient()
+        sender = SlackCardAdapter(SimpleNamespace(client=client),
+            team_id=SCOPE["team_id"], application_id=SCOPE["application_id"],
+            channel_id=SCOPE["channel_id"], profile="cco", allowed_user_ids={"U_SYNTHETIC"})
+        assert await sender.bind()
+        calls = []
+        async def denied_read(**kwargs):
+            pytest.fail("revoke must not read a deleted original or resolve mentions")
+        async def delete(**kwargs):
+            calls.append(kwargs)
+            return {"ok": False, "error": "message_not_found"} if gone else {"ok": True}
+        client.conversations_history = denied_read
+        client.conversations_replies = denied_read
+        client.users_info = denied_read
+        client.chat_delete = delete
+        spec = _spec(text="PRIVATE-SYNTHETIC-OLD-CONTENT <@U_SYNTHETIC>")
+        spec.update(op="revoke", kind="signal")
+        spec["parts"]["source_thread"] = True
+        spec["delivery"].update(message_id="1790000000.000123", thread_id="1790000000.000001")
+        assert (await sender.perform(spec))["result"] == "delivered"
+        assert calls == [{"channel": SCOPE["channel_id"], "ts": "1790000000.000123"}]
+        assert not client.thread_posts
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("fault", ["unsupported", "malformed"])
+def test_signal_revoke_rejects_bad_spec_before_delete(fault):
+    async def scenario():
+        client = FakeClient()
+        sender = SlackCardAdapter(SimpleNamespace(client=client),
+            team_id=SCOPE["team_id"], application_id=SCOPE["application_id"],
+            channel_id=SCOPE["channel_id"], profile="cco", allowed_user_ids={"U_SYNTHETIC"})
+        assert await sender.bind()
+        spec = _spec()
+        spec.update(op="revoke", kind="signal")
+        spec["parts"]["source_thread"] = True
+        spec["delivery"].update(message_id="1790000000.000123", thread_id="1790000000.000001")
+        if fault == "unsupported":
+            spec["parts"]["unsupported_future_feature"] = True
+        else:
+            spec["parts"]["containers"] = [{"type": "text", "text": 123}]
+        outcome = await sender.perform(spec)
+        assert outcome["result"] == "not_sent" and outcome["error_code"] == "bad_render"
+        assert not any(method == "delete" for method, _kwargs in client.calls)
+    asyncio.run(scenario())

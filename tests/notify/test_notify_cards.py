@@ -618,8 +618,8 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
     # header -> (summary) -> stamps -> posted body, in that order
     rule = notify_render.SECTION_RULE
     assert (f"↳ 患者A · 09-24 08:40 職員（薬剤師・薬局Y）\n📋 要約 処理待ち\n"
-            f"{rule}\nスタンプ 未取得\n{rule}\n本文") in text
-    assert f"08:41 職員\n📋 要約 処理待ち\n{rule}\nスタンプ 未取得\n{rule}\n本文" in text
+            f"スタンプ 未取得\n{rule}\n📄 本文\n本文") in text
+    assert f"08:41 職員\n📋 要約 処理待ち\nスタンプ 未取得\n{rule}\n📄 本文\n本文" in text
 
 
 def test_signal_quote_shows_sender_metadata(led, tmp_path):

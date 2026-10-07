@@ -103,12 +103,22 @@ def test_long_attachment_caption_keeps_five_fields_within_wire_limit(led, monkey
     spec = json.loads(_latest_render(led)["spec_json"])
     part = next(item for item in spec["parts"]["manifest"] if item["kind"] == "attachment_part")
     caption = part["caption"]
-    assert "患" * 30 in caption and "主要確認事項" in caption[:80]
+    assert "患" * 30 in caption and "主要確認事項" not in caption
+    assert "📋 要約" not in caption and "解析更新中" not in caption
+    assert "主要確認事項" in spec["parts"]["preview_text"]
+    assert "患" * 30 in spec["parts"]["preview_text"]
     assert "発" * 24 in caption and "所" * 24 in caption and "10-06 08:30" in caption
     assert len(caption) <= 300
     if len(filename) < 100:
         assert filename in caption and part["name"] == filename
     else:
-        assert "架空資料" in caption and caption.endswith("….png")
+        assert "架空資料" in caption and caption.endswith(".png")
         assert part["name"].endswith(".png") and len(part["name"]) <= 200
+        header, separator, visible_name = caption.rpartition(" / 📎 ")
+        assert separator
+        remaining = 300 - len(header) - len(separator)
+        if len(part["name"]) <= remaining:
+            assert visible_name == part["name"]
+        else:
+            assert len(visible_name) <= remaining and visible_name.endswith("….png")
     contract.validate(spec)

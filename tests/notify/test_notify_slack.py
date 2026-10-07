@@ -157,6 +157,7 @@ def test_slack_signal_body_matches_discord_card_and_thread(led, kind):
     # click-gated ephemeral answer — no 📄 token is minted at all
     chunks = spec["parts"]["thread_body_parts"]
     assert private_body in "".join(chunks)
+    assert "📋 要約" not in "".join(chunks) and "解析更新中" not in "".join(chunks)
     kinds = [p["kind"] for p in spec["parts"]["manifest"]]
     assert kinds[0] == "card" and "thread" in kinds
     assert kinds.count("body_part") == len(chunks)

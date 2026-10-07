@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "要約とスタンプをまとめ、本文との2区画に整理",
+  "summary": "本人向けの本文表示、LINE WORKSの連続投稿、従来のテキスト通知では、前半に要約とMCSスタンプをまとめ、1本の区切り線の後に「📄 本文」を表示します。Slack・Discordのスレッドは本文・スタンプ・添付を表示し、要約は親カードへまとめます。",
+  "upgrade": "追加設定は不要です。新しい配送と既存投稿の更新から表示を反映します。Hermes gatewayまたは独立接続hostのworkerへ新コードを反映してください。LINE WORKSは編集不可による重複投稿を避けるため、本文内のスタンプ省略を維持します。",
+  "details": [
+    "長文分割・投稿上限・既存の原文取得状態と送信安全条件を維持する。",
+    "監査済みの要約補足は本文後尾ではなく要約の区画へ表示する。",
+    "テキスト通知でも要約の処理待ちと作成失敗、スタンプ未取得を明示する。"
+  ],
+  "refs": ["mcs/notify/notify_render.py", "mcs/notify/notify_flush.py", "tests/notify/test_stamps_display.py"]
+}

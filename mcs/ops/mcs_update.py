@@ -1264,6 +1264,22 @@ def _postcheck(state: dict, expect_sha: str) -> list[str]:
     return errors
 
 
+def _stop_update_child(child) -> None:
+    """Stop and reap an owned session without obscuring the caller's failure."""
+    # A reaped leader's PID may already have been reused. An unreaped child
+    # retains its PID, so its own-session process group is safe to target.
+    if child.returncode is None:
+        with suppress(BaseException):
+            os.killpg(child.pid, 9)
+    with suppress(BaseException):
+        child.communicate(timeout=5)
+    if child.returncode is None:
+        # A second interruption or pipe decoding failure must still allow
+        # reaping; bound this fallback if process-group termination failed.
+        with suppress(BaseException):
+            child.wait(timeout=5)
+
+
 def _reinstall(applying: dict) -> None:
     """Operator-requested install.sh re-run (scripts/mcs_upgrade.py
     --reinstall) on the merged tree, before services. Its own session so
@@ -1283,10 +1299,11 @@ def _reinstall(applying: dict) -> None:
     try:
         out, _ = child.communicate(timeout=T_INSTALL)
     except subprocess.TimeoutExpired:
-        with suppress(OSError):
-            os.killpg(child.pid, 9)
-        child.communicate()
+        _stop_update_child(child)
         raise UpdateError("install_failed: timeout") from None
+    except BaseException:
+        _stop_update_child(child)
+        raise
     if child.returncode != 0:
         raise UpdateError("install_failed: " + (out or "").strip()[-200:])
     applying["reinstall_done"] = True
@@ -1420,11 +1437,12 @@ def _run_post_merge(sha: str) -> None:
             timeout=T_POST_MERGE + (T_INSTALL if (load_state().get(
                 "applying") or {}).get("reinstall") else 0))
     except subprocess.TimeoutExpired:
-        with suppress(OSError):
-            os.killpg(child.pid, 9)
-        child.communicate()
+        _stop_update_child(child)
         cout, cerr = "", "post_merge_timeout"
         child.returncode = -9
+    except BaseException:
+        _stop_update_child(child)
+        raise
     if child.returncode != 0:
         state = load_state()
         stages = [s.get("stage") for s in state.get("stages", [])]
