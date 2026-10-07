@@ -121,7 +121,11 @@ def test_signal_detector_errors_reach_run_errors(tmp_path, monkeypatch):
 def test_failed_alert_enqueue_is_visible():
     def boom(*a, **k):
         raise OSError("disk")
-    ledger = SimpleNamespace(finish_run=lambda *a: None, outbox_add=boom)
+    ledger = SimpleNamespace(
+        finish_run=lambda *a: None, outbox_add=boom,
+        db=SimpleNamespace(
+            execute=lambda *a: SimpleNamespace(
+                fetchone=lambda: {"t": None})))
     result = {"errors": []}
     run_check._fail_run(ledger, SimpleNamespace(no_notify=True), result, 1,
                         "failed", "crash:X", time.monotonic() + 10, "run")

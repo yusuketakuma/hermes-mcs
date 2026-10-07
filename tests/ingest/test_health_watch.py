@@ -443,7 +443,14 @@ def test_jobs_only_refresh_does_not_realert_stale_unread(tmp_path):
                             "unread_at": unread_at})
     third = _eval(tmp_path, t + 3600)
     assert third["status"] == "stale"
-    assert third["alert"] is True
+    assert third["alert"] is False
+
+    _health_file(tmp_path, {"overall": "ok",
+                            "at": t + health_watch.REALERT_S,
+                            "unread_at": unread_at})
+    fourth = _eval(tmp_path, t + health_watch.REALERT_S)
+    assert fourth["status"] == "stale"
+    assert fourth["alert"] is True
     assert first["evidence_at"] == unread_at
     assert second["evidence_at"] == unread_at
     assert third["evidence_at"] == unread_at

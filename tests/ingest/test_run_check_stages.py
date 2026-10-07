@@ -450,7 +450,7 @@ def test_session_expired_alert_throttled(tmp_path):
     db.db.execute(
         "UPDATE notify_outbox SET created_at=?"
         " WHERE kind='session_expired'",
-        (time.time() - run_check.SESSION_ALERT_MIN_INTERVAL_S - 1,))
+        (time.time() - run_check.ALERT_MIN_INTERVAL_S - 1,))
     db.db.commit()
     assert run_check._alert_session_expired(db, 3, "d") is True
     n = db.db.execute(
@@ -894,6 +894,29 @@ def test_health_explains_failures_without_changing_overall(tmp_path, monkeypatch
         assert healthy["overall"] == "ok"
         assert healthy["last_ok_at"] == 1000.0
         assert healthy["state_reasons"] == []
+    finally:
+        db.close()
+
+
+def test_health_code_changed_does_not_degrade(tmp_path, monkeypatch):
+    """A mid-tick mcs/ tree change is a deploy guard, not a fault: the
+    run row still records it, but health stays ok and only reports the
+    informational reason."""
+    db = _ledger(tmp_path)
+    monkeypatch.setattr(run_check, "_prev_health", lambda: {"last_ok_at": 100.0})
+    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(run_check.time, "time", lambda: 1000.0)
+    try:
+        health = run_check._health(db, {"errors": ["code_changed"],
+                                        "notify": {}}, "partial")
+        assert health["overall"] == "ok"
+        assert health["last_ok_at"] == 1000.0
+        assert health["state_reasons"] == ["code_changed"]
+        real = run_check._health(
+            db, {"errors": ["code_changed", "synthetic stage error"],
+                 "notify": {}}, "partial")
+        assert real["overall"] == "degraded"
+        assert real["state_reasons"][:2] == ["stage_errors", "code_changed"]
     finally:
         db.close()
 

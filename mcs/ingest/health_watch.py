@@ -40,7 +40,7 @@ STATUS_REL = os.path.join("data", "health_watch_status.json")
 DEFAULT_TICK_S = 600        # deployed cron cadence: */10 * * * *
 DEFAULT_MAX_MISSED = 2      # miss two whole ticks before 'stale'
 RUN_GRACE_S = 480           # run_check's whole-run deadline
-REALERT_S = 3600            # unchanged bad state re-alerts hourly
+REALERT_S = 4 * 3600        # unchanged bad state re-alerts every 4h
 DELIVERY_RETRY_S = 60       # only provably unsent alerts may retry
 UNKNOWN_HISTORY = 50        # retained uncertain-delivery records
 

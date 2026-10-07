@@ -381,9 +381,15 @@ def _health(ledger, result: dict, status: str,
                   else [])
     except Exception as e:
         stalls = [f"stall_check_failed:{type(e).__name__}"]
+    errors = result.get("errors") or []
+    # A mid-tick mcs/ change is a deploy guard, not a fault: skipped
+    # stages rerun next tick on the new code. The run row keeps
+    # 'partial' + code_changed for audit, but it must not degrade
+    # health or fire a monitoring alert by itself.
+    real_errors = [e for e in errors if e != "code_changed"]
     overall = ("failed" if status in ("failed", "session_expired")
                else "degraded"
-               if (result.get("errors") or coll["collection"] != "ok"
+               if (real_errors or coll["collection"] != "ok"
                    or notify_state == "incomplete" or stalls)
                else "ok")
     shadow = result.get("metadata_shadow") or {"mode": "off", "reason": "not_run"}
@@ -417,7 +423,8 @@ def _health(ledger, result: dict, status: str,
         code for code, present in (
             ("run_failed", status == "failed"),
             ("session_expired", status == "session_expired"),
-            ("stage_errors", bool(result.get("errors"))),
+            ("stage_errors", bool(real_errors)),
+            ("code_changed", "code_changed" in errors),
             ("run_deadline_exceeded", run_overdue),
             ("ledger_relation_violations", guard_violations),
             ("backup_not_verified", backup_bad),
@@ -524,7 +531,7 @@ def _wait_run_lock(wait_s: float) -> int | None:
     return None
 
 
-SESSION_ALERT_MIN_INTERVAL_S = 3600
+ALERT_MIN_INTERVAL_S = 6 * 3600
 # a flapping session must not drive auto_login in a loop — each wrapped
 # stage allows one attempt, and _attempt_relogin (the single entry point
 # for every caller, run boundary included) bounds the per-run total
@@ -538,21 +545,22 @@ OUTAGE_CATCHUP_S = 1200
 
 def _alert_throttled(ledger, kind: str, run_id: int, detail: str) -> bool:
     """Enqueue a system alert — throttled so a persistent condition does
-    not re-alert on every tick: one per kind per hour keeps it visible
-    without flooding the channel. The run row and health file still
-    record every occurrence; only the notification is gated."""
+    not re-alert on every tick: one per kind per ALERT_MIN_INTERVAL_S
+    keeps it visible without flooding the channel. The run row and
+    health file still record every occurrence; only the notification
+    is gated."""
     last = ledger.db.execute(
         "SELECT MAX(created_at) t FROM notify_outbox"
         " WHERE kind=?", (kind,)).fetchone()["t"]
     if last is not None \
-            and time.time() - float(last) < SESSION_ALERT_MIN_INTERVAL_S:
+            and time.time() - float(last) < ALERT_MIN_INTERVAL_S:
         return False
     ledger.outbox_add(kind, None, {"run_id": run_id, "detail": detail})
     return True
 
 
 def _alert_session_expired(ledger, run_id: int, detail: str) -> bool:
-    """Enqueue the session_expired alert (one per hour max)."""
+    """Enqueue the session_expired alert (throttled per kind)."""
     return _alert_throttled(ledger, "session_expired", run_id, detail)
 
 
@@ -1907,8 +1915,8 @@ def _fail_run(ledger, args, result, run_id, status, detail,
         if alert == "session":
             _alert_session_expired(ledger, run_id, detail)
         elif alert:
-            ledger.outbox_add("run_failed", None,
-                              {"run_id": run_id, "detail": detail})
+            # an unthrottled run_failed could alert every 10-minute tick
+            _alert_throttled(ledger, "run_failed", run_id, detail)
         # alert=None: the session_recovered notice was already queued by
         # the relogin attempt — the flush below still delivers it
         if not args.no_notify:  # --no-notify suppresses ALL sends;
