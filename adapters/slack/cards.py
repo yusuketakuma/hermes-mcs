@@ -66,9 +66,11 @@ def _sections(text):
     ]
 
 
-def render_parts(parts, names=None, silent=False) -> list:
+def render_parts(parts, names=None, silent=False, card_kind=None) -> list:
     """Visible containers/footer of the shared display model as Block
-    Kit — used for cards and the clicker-only 📊 answer."""
+    Kit — used for cards and the clicker-only 📊 answer. On a thread
+    card each post's time/sender line (a ``rule`` text) is a context
+    line, so the summary under it reads as the post's main content."""
     blocks = []
     for item in parts["containers"]:
         kind = item["type"]
@@ -76,6 +78,14 @@ def render_parts(parts, names=None, silent=False) -> list:
             continue
         if item.get("rule") and blocks:
             blocks.append(dict(_DIVIDER))
+        if card_kind == "thread" and item.get("rule") and kind == "text":
+            text = item["text"]
+            blocks.extend(
+                {"type": "context",
+                 "elements": [{"type": "plain_text",
+                               "text": text[i:i + _CONTEXT_MAX]}]}
+                for i in range(0, len(text), _CONTEXT_MAX))
+            continue
         if kind == "heading" and len(item["text"]) <= _HEADER_MAX:
             blocks.append({
                 "type": "header",
@@ -106,7 +116,8 @@ def render(spec, names=None):
     """Render visible containers/footer without serializing private context."""
     validate(spec)
     blocks = render_parts(spec["parts"], names,
-                          spec["parts"].get("mentions") == "silent")
+                          spec["parts"].get("mentions") == "silent",
+                          card_kind=spec.get("kind"))
     quick, menu, links = [], [], []
     for row in spec["parts"].get("action_rows") or []:
         for button in row:

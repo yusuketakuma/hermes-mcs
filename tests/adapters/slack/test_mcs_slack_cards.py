@@ -155,8 +155,12 @@ def test_rules_and_footer_get_dividers_and_body_sections_expand():
         {"type": "text", "text": "📋 要約\n・合成"}]
     _, blocks = render(spec)
     kinds = [b["type"] for b in blocks]
-    assert kinds == ["header", "section", "divider", "section", "section",
+    # a thread card's post time/sender line is a context line above
+    # its summary section
+    assert kinds == ["header", "section", "divider", "context", "section",
                      "divider", "context", "divider", "actions"]
+    assert blocks[3]["elements"][0] == {"type": "plain_text",
+                                        "text": "10-01 09:40 合成さん"}
     assert all(b.get("expand") is True for b in blocks
                if b["type"] == "section")
 
@@ -167,3 +171,16 @@ def test_no_footer_means_no_footer_divider():
     _, blocks = render(spec)
     assert [b["type"] for b in blocks] == ["header", "section", "divider",
                                            "actions"]
+
+
+def test_signal_rule_line_keeps_patient_heading_as_section():
+    # on a signal card the rule line is the patient heading — identity
+    # stays a full section, never demoted to small context text
+    spec = _spec()
+    spec["kind"] = "signal"
+    spec["parts"]["containers"] = [
+        {"type": "heading", "text": "合成アラート"},
+        {"type": "text", "text": "合成 患者", "rule": True},
+        {"type": "text", "text": "・合成"}]
+    _, blocks = render(spec)
+    assert [b["type"] for b in blocks][:4] == ["header", "divider", "section", "section"]

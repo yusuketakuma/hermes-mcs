@@ -95,6 +95,10 @@ def _zones(spec: dict, esc) -> tuple:
         if c.get("rule") and cur:
             zones.append(cur)
             cur = []
+        if spec.get("kind") == "thread" and c.get("rule") and t == "text":
+            # a post's time/sender line is subtext above its summary
+            cur.extend(f"-# {esc(ln)}" for ln in c["text"].splitlines())
+            continue
         if t == "heading":
             cur.append(f"## {esc(c['text'])}")
         elif t == "field":

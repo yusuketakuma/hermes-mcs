@@ -3348,3 +3348,16 @@ def test_private_medication_navigation_pages_posts_and_rejects_other_origin(worl
                for message in interaction.followup.sent)
     assert thread.sent == shared_body and len(bot.channels[42].sent) == 1
     assert reg.token(controls["次の5件"][len("mcs:a:"):]) is not None
+
+
+def test_thread_post_line_is_subtext_but_signal_patient_heading_is_not():
+    from adapters.discord.cards import _zones, escape_md
+    containers = [{"type": "heading", "text": "合成"},
+                  {"type": "text", "text": "10-01 09:40 合成さん", "rule": True},
+                  {"type": "text", "text": "📋 要約"}]
+    thread = {"kind": "thread", "parts": {"containers": containers, "footer": []}}
+    zones, _ = _zones(thread, escape_md)
+    assert zones[1] == ["-# 10-01 09:40 合成さん", "📋 要約"]
+    signal = {"kind": "signal", "parts": {"containers": containers, "footer": []}}
+    zones, _ = _zones(signal, escape_md)
+    assert zones[1][0] == "10-01 09:40 合成さん"
