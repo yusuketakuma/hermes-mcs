@@ -336,7 +336,8 @@ def _begin_check(db, req, cfg) -> str | None:
     card = cards._card_row(db, render["card_id"]) \
         if render["card_id"] is not None else None
     if card is not None:
-        if card["kind"] == "signal" and render["op"] != "revoke":
+        if card["kind"] == "signal" and render["op"] != "revoke" \
+                and card["transport"] in ("slack", "discord"):
             target = cards.signal_thread_target(db, card, cfg)
             spec = json.loads(render["spec_json"])
             if (target is None or spec["parts"].get("source_thread") is not True

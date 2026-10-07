@@ -673,8 +673,9 @@ def test_urgency_badge_names_its_source(led):
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101, 102]}))
     texts = [c["text"] for c in _spec(led)["parts"]["containers"]
              if c["type"] == "text"]
-    assert any("・緊急度: 高（AI抽出）" in t for t in texts)
-    assert any("・🚨" in t for t in texts)
+    lines = [ln for t in texts for ln in t.split("\n")]
+    assert any(ln.startswith("・🚨 緊急度: 高（AI抽出）") for ln in lines)
+    assert "・🚨" in lines
 
 
 def test_urgency_reads_the_same_artifact_as_the_body(led):

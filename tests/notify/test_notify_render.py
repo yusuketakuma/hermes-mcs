@@ -37,17 +37,6 @@ def test_latest_invalid_signal_never_revives_old_display_or_actions(
     _signal_row(led, key, mids=[100])
     event = _intent(led, "signal", payload={"signal_keys": [key], "project_id": 1})
     _dispatch(led, event, cfg)
-    if transport == "lineworks":
-        # Native source-thread replies are unsupported, so nothing is posted.
-        held = led.db.execute("SELECT state,progress,next_try FROM notify_outbox WHERE event_id=?",
-                              (event["event_id"],)).fetchone()
-        assert held["state"] == "failed" and held["next_try"] is None
-        assert json.loads(held["progress"])["hold_reason"] == "lineworks_thread_unsupported"
-        assert led.db.execute("SELECT COUNT(*) FROM notification_renders").fetchone()[0] == 0
-        # Independently exercise the shared pure display model for this dialect.
-        with led.db:
-            target = notify_cards._resolve_targets(led.db, event, json.loads(event["payload"]))[0]
-            notify_cards._card_for(led.db, target, notify_cards.delivery_scope(cfg), NOW)
     card = _card(led)
     old_fp = notify_render._source_fp(led.db, card)
     _signal_row(led, key, state="resolved", mids=[100])

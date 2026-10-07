@@ -129,18 +129,19 @@ def test_held_signal_resumes_same_event_after_original_thread_receipt(led):
     assert led.db.execute("SELECT count(*) FROM notification_renders WHERE card_id=?", (card["card_id"],)).fetchone()[0] == 1
 
 
-def test_lineworks_signal_is_explicitly_held_without_retry_or_fallback(led):
+def test_lineworks_signal_keeps_channel_route(led):
+    # LINE WORKS has no native thread: a held signal would silently drop
+    # the card and its dismiss/ack controls, so it keeps the channel route.
     _seed_thread(led)
     _signal_row(led, "synthetic-key", mids=[100])
     event = _intent(led, "signal", payload={"signal_keys": ["synthetic-key"], "project_id": 1})
     cfg = {"notify": {"interactive": "lineworks", "lineworks": {
         "profile": "synthetic", "application_id": "1", "team_id": "2", "channel_id": "3"}},
         "signals": {"notify": True}}
-    assert _dispatch(led, event, cfg)["held"] == "lineworks_thread_unsupported"
-    row = led.db.execute("SELECT * FROM notify_outbox WHERE event_id=?", (event["event_id"],)).fetchone()
-    assert row["state"] == "failed" and row["next_try"] is None
-    assert json.loads(row["progress"])["hold_reason"] == "lineworks_thread_unsupported"
-    assert led.db.execute("SELECT count(*) FROM notification_renders").fetchone()[0] == 0
+    assert _dispatch(led, event, cfg)["dispatched"]
+    render = led.db.execute("SELECT spec_json FROM notification_renders").fetchone()
+    spec = json.loads(render["spec_json"])
+    assert "source_thread" not in spec["parts"] and "thread_id" not in spec["delivery"]
 
 
 @pytest.mark.parametrize("fault", ["unchanged", "message_deleted", "thread_deleted", "thread_changed", "evidence_unknown"])

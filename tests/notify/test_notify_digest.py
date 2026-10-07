@@ -135,6 +135,20 @@ def test_patient_names_only_when_opted_in(led):
         assert secret not in text
 
 
+
+def test_ai_urgency_row_is_marked_at_least_as_strongly_as_rule(led, monkeypatch):
+    import structured_view
+    _patient(led, 1, name="患者A")
+    _seen(led, 100, T - 3600)
+    _seen(led, 101, T - 60)
+    monkeypatch.setattr(structured_view, "message_urgency",
+                        lambda db, m: {100: "llm", 101: "rule"}.get(m))
+    monkeypatch.setattr(structured_view, "urgency_qc_suffix", lambda db, m: "")
+    notify_digest.maybe_enqueue(led, ON, now=T)
+    text = _text(led)
+    assert "・project 1 / message 100 🚨［AI判定］" in text
+    assert "・project 1 / message 101 🚨" in text
+
 def _summary_at(led, pid, at, comment="連携の秘密本文", empty=False):
     led.karte_summary_store(pid, pid * 10, None if empty else
                             {"comment": comment, "updated_at": "2026-10-01",

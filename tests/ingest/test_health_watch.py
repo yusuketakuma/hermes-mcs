@@ -621,6 +621,29 @@ def test_unknown_alert_is_held_until_a_different_verdict(tmp_path, monkeypatch, 
 
 
 
+def test_unknown_alert_realerts_after_interval(tmp_path, monkeypatch):
+    import notify_flush
+    sent = []
+
+    def send(*args, **kwargs):
+        sent.append(args)
+        raise notify_flush._SendUncertain("synthetic timeout")
+
+    monkeypatch.setattr(notify_flush, "_send", send)
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"notify_target": "slack:#ops"}))
+    args = ["--home", str(tmp_path), "--config", str(cfg)]
+    later = 1000 + health_watch.REALERT_S + 1
+    for now in (1000, 1060, later, later + 60):
+        _health_file(tmp_path, {"overall": "failed", "at": now - 1})
+        health_watch.main(args + ["--now", str(now)])
+    # A lost send must not silence a persisting incident: the periodic
+    # re-alert is a new alert, and still only one per interval.
+    assert len(sent) == 2
+    state = json.loads((tmp_path / health_watch.STATE_REL).read_text())
+    assert len(state["unknown_deliveries"]) == 1
+
+
 def test_unknown_delivery_history_is_bounded(tmp_path, monkeypatch):
     import notify_flush
 

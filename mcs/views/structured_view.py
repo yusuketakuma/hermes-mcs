@@ -240,8 +240,8 @@ def _canonical_finding_lines(llm: dict, *, context=(None, None, "patient")) -> l
 
 
 # Where high urgency came from: a lexical rule match is only the 🚨 icon —
-# not a clinical assessment — while the AI verdict keeps its wording.
-URGENCY_LABEL = {"llm": "緊急度: 高（AI抽出）",
+# not a clinical assessment — while the AI verdict adds its wording.
+URGENCY_LABEL = {"llm": "🚨 緊急度: 高（AI抽出）",
                  "rule": "🚨"}
 
 

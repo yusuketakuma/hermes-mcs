@@ -264,7 +264,7 @@ def evaluate(home: str = HOME, now: float | None = None,
                                       else seen)
     delivery = _reconcile_delivery(state, obs["status"], key, alert,
                                    disk_low, disk_alert, transition,
-                                   new_reason, now)
+                                   new_reason or realert, now)
     if delivery:
         state["delivery"] = delivery
         report["delivery"] = dict(delivery)
@@ -297,7 +297,9 @@ def _reconcile_delivery(state: dict, status: str, key: tuple,
 
     pending/not_sent deliveries survive only while their component is
     still active; an unknown outcome is held verbatim — it can neither
-    be retried nor manufactured into a success."""
+    be retried nor manufactured into a success. A REALERT_S re-alert
+    arrives as new_reason: it is a fresh alert, not a retry, so a lost
+    send cannot silence a persisting incident forever."""
     delivery = state.get("delivery")
     delivery = delivery if isinstance(delivery, dict) else {}
     current_alert = bool(delivery.get("alert") and status != "ok")
@@ -319,7 +321,8 @@ def _reconcile_delivery(state: dict, status: str, key: tuple,
                                      and not (transition or new_reason or disk_alert)):
         # An uncertain send stays held, including hourly observations
         # of the same incident. A new verdict/reason is a different alert.
-        if delivery.get("key") != delivery_key or delivery.get("outcome") in ("delivered", "superseded"):
+        if delivery.get("key") != delivery_key or delivery.get("outcome") in ("delivered", "superseded") \
+                or (new_reason and delivery.get("outcome") == "unknown"):
             if delivery.get("outcome") == "unknown":
                 _archive_unknown(state, delivery)
             delivery = {"key": delivery_key, "outcome": "pending",

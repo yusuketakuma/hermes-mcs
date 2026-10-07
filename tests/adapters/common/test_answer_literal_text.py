@@ -66,3 +66,9 @@ def test_attachment_confined_to_data_root(tmp_path):
     assert paths.read_verified_attachment(str(link), part, root=str(data)) is None
     dotted = str(data / "attachments" / ".." / ".." / "secret.bin")
     assert paths.read_verified_attachment(dotted, part, root=str(data)) is None
+
+
+def test_card_rejections_are_explained_in_japanese():
+    for code in ("action_not_applicable", "actor_mismatch", "origin_mismatch"):
+        msg = text.ja({"outcome": "rejected", "error": code})
+        assert code not in msg and not msg.startswith("拒否されました")

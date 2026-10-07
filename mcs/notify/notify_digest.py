@@ -409,7 +409,8 @@ def build(db, cfg, since: float, until: float, flt=None, *,
 
     section(f"緊急度高 {len(urgent)}件", [
         f"・{room(p)} / message {m}" + (
-            structured_view.urgency_qc_suffix(db, m) if u == "llm" else " 🚨")
+            " 🚨［AI判定］" + structured_view.urgency_qc_suffix(db, m)
+            if u == "llm" else " 🚨")
         for p, m, u in urgent], fold=True)
     todo = []
     for label, pids in (("期限切れタスク", late), ("本日期限タスク", due)):

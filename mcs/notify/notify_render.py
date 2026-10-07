@@ -502,7 +502,9 @@ SIGNAL_TYPE_LABEL = {
 }
 SIGNAL_STATE_LABEL = {"open": "未確認", "resolved": "解消",
                       "dismissed": "却下"}
-URGENCY_TAG = {"llm": "［緊急度高・AI判定］", "rule": "🚨"}
+# The AI verdict carries 🚨 plus words so it never reads weaker than the
+# icon-only lexical rule match.
+URGENCY_TAG = {"llm": "🚨［緊急度高・AI判定］", "rule": "🚨"}
 
 
 def signal_label(sig: dict) -> str:

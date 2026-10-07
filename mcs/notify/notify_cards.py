@@ -1519,7 +1519,7 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
         "context": context,
         "preview_text": content["preview_text"],
     }
-    if card["kind"] == "signal":
+    if card["kind"] == "signal" and card["transport"] in ("slack", "discord"):
         spec["parts"]["source_thread"] = True
     if any("<@" in (f.get("text") or "") for f in footer):
         # the footer names members as <@id> mentions — a worker must
@@ -1606,7 +1606,10 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
         # delivery_id instead
         _cancel_open_renders(db, card_id, now)
         return None
-    if card["kind"] == "signal" and card["delivery_state"] != "revoked":
+    # LINE WORKS has no native thread to bind: its signal cards keep
+    # the channel route they had before source-thread delivery.
+    if card["kind"] == "signal" and card["delivery_state"] != "revoked" \
+            and card["transport"] in ("slack", "discord"):
         changed = _bind_signal_thread(db, card, cfg, now)
         if changed is None:
             _cancel_open_renders(db, card_id, now)
@@ -2384,10 +2387,6 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
         batch = db.execute(
             "SELECT * FROM notification_intent_batches "
             "WHERE event_id=?", (event_id,)).fetchone()
-        if row["kind"] == "signal" and active_transport(cfg) == "lineworks" and signals_notify(cfg):
-            db.execute("UPDATE notify_outbox SET state='failed',next_try=NULL," + HOLD_PROGRESS_SET +
-                       ",updated_at=? WHERE event_id=?", ("lineworks_thread_unsupported", now, event_id))
-            return {"held": "lineworks_thread_unsupported"}
         if row["kind"] == "signal" and not signals_notify(cfg):
             if batch is None:
                 db.execute(
