@@ -642,8 +642,10 @@ def candidate_note(ref: Annotation | None) -> str:
     if not ref:
         return ""
     status = ref.get("status")
-    label = {"ambiguous": "複数候補", "generic": "総称",
-             "unresolved": "不明"}.get(status)
+    # an unmatched or ambiguous name says so plainly — never reads as an
+    # ingredient called 不明
+    label = {"ambiguous": "複数あり", "generic": "総称・個別薬剤は特定不可",
+             "unresolved": "一致なし"}.get(status)
     if status == "resolved":
         cands = ref.get("cands", [])
         if (len(cands) != 1 or cands[0].get("kind") not in ("ingredient", "general_name", "product")
@@ -653,10 +655,12 @@ def candidate_note(ref: Annotation | None) -> str:
     if not label:
         return ""
     kinds = {c.get("kind") for c in ref.get("cands", [])}
-    prefix = ("製品候補" if kinds == {"product"} else "一般名処方候補" if kinds == {"general_name"}
+    prefix = ("辞書候補" if status != "resolved"
+              else "製品候補" if kinds == {"product"} else "一般名処方候補" if kinds == {"general_name"}
               else "薬剤候補" if kinds & {"product", "general_name"} else "成分候補")
-    return (f"{prefix}: {label}（辞書 {ref['dict_id']}@"
-            f"{ref['dict_sha256'][:8]}・未確認）")
+    # ［］ so the note never nests round brackets inside a med line's （）
+    return (f"{prefix}: {label}［未確認・辞書 {ref['dict_id']}@"
+            f"{ref['dict_sha256'][:8]}］")
 
 
 IMPACT_TRANSITIONS = ("unchanged", "newly_matched", "lost_match", "became_ambiguous",
