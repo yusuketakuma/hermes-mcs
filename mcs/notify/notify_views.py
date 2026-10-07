@@ -42,6 +42,7 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
     lines = [SUMMARY_CAVEAT, _coverage_line(db, project_id)]
     from extraction_progress import summary_lines
     lines.extend(summary_lines(db, project_id, cfg=cfg))
+    lines.extend(_open_task_lines(db, project_id))
     row = db.execute(
         "SELECT content,meta FROM artifacts WHERE kind='patient_rollup' "
         "AND project_id=? AND json_valid(content) "
@@ -86,18 +87,27 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
     # (updated or emptied summary) supersedes
     lines.append(_karte_summary_line(
         _karte_summary_from_artifact(db, project_id)))
+    return title, "\n".join(lines)
+
+
+def _open_task_lines(db, project_id) -> list[str]:
+    """■ 未完了タスク — what needs action comes first in the summary;
+    an overdue due date is marked."""
     tasks = db.execute(
         "SELECT request_id,title,assignee,due_date FROM requests "
         "WHERE project_id=? AND status IN ('open','in_progress') "
         "ORDER BY due_date IS NULL, due_date, request_id LIMIT 10",
         (project_id,)).fetchall()
-    lines.append("■ 未完了タスク" + ("" if tasks else ": なし"))
+    today = today_jst()
+    lines = ["■ 未完了タスク" + ("" if tasks else ": なし")]
     lines.extend(f"・#{t['request_id']} {_inline(t['title'], 60)}"
                  + (f" — 担当 {_inline(t['assignee'], 40)}"
                     if t["assignee"] else "")
-                 + (f" — 期限 {t['due_date']}" if t["due_date"] else "")
+                 + (f" — 期限 {t['due_date']}"
+                    + (" ⚠期限切れ" if t["due_date"] < today else "")
+                    if t["due_date"] else "")
                  for t in tasks)
-    return title, "\n".join(lines)
+    return lines
 
 
 def _patient_context_lines(db, project_id, roll) -> list[str]:
