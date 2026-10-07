@@ -187,7 +187,7 @@ def test_deleted_signal_evidence_differs_between_card_and_body(led):
     body = notify_render._signal_body(led.db, sig)
 
     assert "消された本文" not in json.dumps(face, ensure_ascii=False)
-    assert "（削除済み）" in body and "消された本文" not in body
+    assert "（削除された投稿）" in body and "消された本文" not in body
 
 
 @pytest.mark.parametrize("change", ["edit", "delete"])

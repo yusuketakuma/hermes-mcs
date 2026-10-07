@@ -283,6 +283,15 @@ def _mmdd(posted_at) -> str:
     return "??-??"
 
 
+def _deleted_line(posted_at, sender: str) -> str:
+    """A deleted post's line: its time and sender when known, never a
+    row of ??-?? placeholders."""
+    when = f"{_mmdd(posted_at)} {_hhmm(posted_at)}"
+    known = [x for x in (when if "?" not in when else "",
+                         sender if sender not in ("", "?") else "") if x]
+    return " ".join(known + ["（削除された投稿）"])
+
+
 def _hhmm(posted_at) -> str:
     if isinstance(posted_at, str) and len(posted_at) >= 16:
         return posted_at[11:16]
@@ -671,9 +680,9 @@ def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None, include
     Native thread delivery omits the optional summary; private body views
     retain it. ``stamps=False`` leaves the stamp line out (LINE WORKS
     posts cannot be edited, so a stamp change must not force a re-post)."""
-    title = f"{head}{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} {sender}"
     if m["body_state"] == "deleted":
-        return f"{title}（削除済み）"
+        return head + _deleted_line(m["posted_at"], sender)
+    title = f"{head}{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} {sender}"
     out = [title]
     if include_summary:
         out.append(_summary_block(db, mid, cfg=cfg)["text"])
@@ -681,7 +690,9 @@ def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None, include
         meta = get_message_metadata(db, mid)
         sid = m["sender_id"] if "sender_id" in m.keys() else None
         meta["own_post"] = is_self_sender(db, sid)
-        out.append(thread_stamp_line(meta, reaction_actor_summary(db, mid)))
+        line = thread_stamp_line(meta, reaction_actor_summary(db, mid))
+        if line != "スタンプ なし":       # an observed zero needs no row
+            out.append(line)
     out += [SECTION_RULE, "📄 本文", m["body_text"] or ""]
     return "\n".join(out)
 
@@ -714,7 +725,9 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
         shown = []
     if card["kind"] == "thread":
         lines = []
-        head = f"↳ {patient_heading(db, card['project_id'])} · "
+        native = "transport" in card.keys() and card["transport"] in ("slack", "discord")
+        head = ("↳ " if native
+                else f"↳ {patient_heading(db, card['project_id'])} · ")
         for mid in shown:
             if not positive(mid):
                 continue
@@ -779,10 +792,10 @@ def _card_content(db, card, *, cfg=None) -> dict:
         # per post: sender line + its full 📋 要約 (or its empty state)
         rendered = []
         for m in msgs:
-            line = (f"{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} "
-                    f"{_sender_tag(m, db)}"
-                    + ("（削除済み）" if m["body_state"] == "deleted"
-                       else ""))
+            line = (_deleted_line(m["posted_at"], _sender_tag(m, db))
+                    if m["body_state"] == "deleted" else
+                    f"{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} "
+                    f"{_sender_tag(m, db)}")
             blocks = [{"type": "text", "rule": True, "text": line}]
             if m["body_state"] != "deleted":
                 blocks.append(_summary_block(db, m["message_id"], cfg=cfg,
@@ -1010,16 +1023,17 @@ def card_reaction_lines(reactions) -> list:
         for e, n in counts.items():
             totals[e] = totals.get(e, 0) + n
         mine += bool(self_stamps(meta))
-    parts = [" ".join(f"{e}{n}" for e, n in totals.items())
-             or ("なし" if not mine and unfetched < len(reactions)
-                 else "")]
+    # an observed zero is not shown (owner 2026-10-07): the row exists
+    # only for counts, own stamps, or an explicit unfetched/failed state
+    parts = [" ".join(f"{e}{n}" for e, n in totals.items())]
     if mine:
         parts.append(f"自分 {mine}投稿")
     if unfetched:
         parts.append(f"未取得 {unfetched}投稿")
     if any(meta["last_error"] for _mid, meta in reactions):
         parts.append("再取得失敗")
-    return ["スタンプ " + " · ".join(p for p in parts if p)]
+    shown = [p for p in parts if p]
+    return ["スタンプ " + " · ".join(shown)] if shown else []
 
 
 def today_jst(now=None) -> str:

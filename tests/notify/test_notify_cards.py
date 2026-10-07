@@ -582,7 +582,7 @@ def test_card_deleted_message_hides_structured_data(led, tmp_path):
     card["ui_state"] = json.dumps({"page": 0})
     c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
-    assert "（削除済み）" in joined
+    assert "（削除された投稿）" in joined
     # only the live reply carries a 📋 line; the deleted post none
     assert joined.count("📋 要約") == 1 and "疼痛" not in joined
 
@@ -617,7 +617,7 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
     assert "09-24 08:" in text
     # header -> (summary) -> stamps -> posted body, in that order
     rule = notify_render.SECTION_RULE
-    assert (f"↳ 患者A · 09-24 08:40 職員（薬剤師・薬局Y）\n📋 要約 処理待ち\n"
+    assert (f"↳ 09-24 08:40 職員（薬剤師・薬局Y）\n📋 要約 処理待ち\n"
             f"スタンプ 未取得\n{rule}\n📄 本文\n本文") in text
     assert f"08:41 職員\n📋 要約 処理待ち\nスタンプ 未取得\n{rule}\n📄 本文\n本文" in text
 
@@ -1798,7 +1798,7 @@ def test_sweep_detects_source_delete(led):
     r = _latest_render(led)
     assert r["render_rev"] == r0["render_rev"] + 1
     assert r["op"] == "update"
-    assert "（削除済み）" in json.dumps(r["spec_json"],
+    assert "（削除された投稿）" in json.dumps(r["spec_json"],
                                      ensure_ascii=False)
 
 
@@ -2254,7 +2254,7 @@ def test_body_replay_uses_live_source_and_revocation(led, tmp_path):
     led.db.execute("UPDATE messages SET body_state='deleted' WHERE project_id=1")
     led.db.commit()
     second = notify_cards.apply_notification(led, req, CFG, now=NOW + 1)
-    assert '（削除済み）' in second['body']
+    assert '（削除された投稿）' in second['body']
     assert ': 本文' not in second['body']
     notify_cards.revoke_card(led.db, card['card_id'], NOW + 2)
     led.db.commit()

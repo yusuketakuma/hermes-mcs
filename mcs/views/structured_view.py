@@ -629,8 +629,8 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
                 prefix + to + action + suffix)
     # rule fallback only when the selected facts carry no request at all
     if _empty_field(llm, "requests"):
-        reqs.extend(f"{_label(REQ_LABEL, r.get('kind')) or '依頼'}:"
-                    f"{r['ctx']}"
+        reqs.extend(("" if (_label(REQ_LABEL, r.get("kind")) or "依頼") == "依頼"
+                     else f"{_label(REQ_LABEL, r.get('kind'))}:") + r["ctx"]
                     for r in _items(v1, "requests")
                     if isinstance(r, dict) and isinstance(r.get("ctx"), str)
                     and r["ctx"])

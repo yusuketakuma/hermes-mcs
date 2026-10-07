@@ -360,7 +360,7 @@ def test_malformed_rule_collections_and_contexts_do_not_stop_display(db):
         "rx_actions": [{"action": ["start"], "ctx": "合成文脈"},
                        {"action": "start", "ctx": 7}],
         "requests": [{"kind": ["confirm"], "ctx": "合成依頼"}, {"ctx": 7}]})
-    assert joined == "区分: 添付\n依頼: 依頼:合成依頼"
+    assert joined == "区分: 添付\n依頼: 合成依頼"
 
 
 def test_empty_selected_collections_keep_supported_rule_fallback(db):

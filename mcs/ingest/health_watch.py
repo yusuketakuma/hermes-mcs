@@ -244,7 +244,21 @@ def evaluate(home: str = HOME, now: float | None = None,
     realert = (obs["status"] != "ok"
                and (invalid_alert_at
                     or now - alerted_at >= REALERT_S))
-    alert = obs["status"] != "ok" and (transition or realert or new_reason)
+    # Flapping back into the same degraded episode (degraded -> ok ->
+    # degraded with no new reason) inside REALERT_S is not news; severe
+    # states (failed/stale/missing/corrupt) always alert on entry.
+    episode = state.get("alerted_episode")
+    episode = episode if isinstance(episode, dict) else {}
+    episode_reasons = episode.get("reasons")
+    episode_reasons = (set(episode_reasons) if isinstance(episode_reasons, list)
+                       and all(isinstance(r, str) for r in episode_reasons) else None)
+    reflap = (transition and obs["status"] == "degraded"
+              and episode.get("status") == "degraded" and not realert
+              and episode_reasons is not None and set(reasons) <= episode_reasons)
+    if reflap:
+        seen = set(episode_reasons)
+    alert = obs["status"] != "ok" and (
+        (transition and not reflap) or realert or new_reason)
     disk_prev = state.get("disk_low") is True
     disk_low = (obs["disk_low"] if obs["status"] in OVERALL_STATUS
                 else disk_prev)
@@ -260,6 +274,11 @@ def evaluate(home: str = HOME, now: float | None = None,
                      "evidence_at": _dedup_stamp(obs)}
     if alert:
         state["detected_at"] = now
+        state["alerted_episode"] = {"status": obs["status"],
+                                    "reasons": sorted(set(reasons) | (
+                                        episode_reasons or set()
+                                        if episode.get("status") == obs["status"]
+                                        else set()))}
     state["alerted_reasons"] = sorted(seen | set(reasons) if alert
                                       else seen)
     delivery = _reconcile_delivery(state, obs["status"], key, alert,
@@ -359,25 +378,51 @@ def deliver_alert(cfg: dict, text: str) -> bool | None:
         return None                    # includes _SendUncertain
 
 
+_STATUS_JA = {"degraded": "一部異常", "failed": "停止・失敗",
+              "stale": "更新が途絶", "missing": "記録なし", "corrupt": "記録破損"}
+_REASON_JA = {
+    "run_failed": "収集の実行失敗", "session_expired": "MCSログイン切れ",
+    "stage_errors": "処理段階のエラー", "code_changed": "処理中のコード更新",
+    "run_deadline_exceeded": "実行時間の超過",
+    "ledger_relation_violations": "保存データの整合性違反",
+    "backup_not_verified": "バックアップ未確認",
+    "collection_incomplete": "収集が不完全", "notification_failed": "通知の送信失敗",
+    "notification_deferred": "通知の先送り", "notification_parked": "通知の待機",
+    "notification_held": "通知の保留", "notification_pending": "通知の送信待ち",
+    "disk_low": "空き容量不足", "card_delivery_stalled": "カード配送の停滞",
+    "extract_backlog_stalled": "解析待ちの停滞",
+    "semantic_backlog_stalled": "意味解析待ちの停滞",
+    "unread_collection_unknown": "未読収集の状況不明",
+}
+
+
+def _jst(ts) -> str:
+    if not _finite_number(ts):
+        return "不明"
+    return time.strftime("%m-%d %H:%M", time.gmtime(ts + 9 * 3600))
+
+
 def _alert_lines(report: dict) -> list[str]:
+    """Staff-readable alert text: Japanese status/reasons and JST times,
+    with the raw codes kept on one line for operators to search."""
     lines = []
     if report["alert"] and report["status"] != "ok":
-        age = report.get("age_s")
+        status = report["status"]
         reasons = report.get("state_reasons")
-        lines.append("mcs health: {status} (overall={overall} "
-                     "health_at={health_at} age_s={age} deadline_s={dl} "
-                     "reasons={reasons} last_ok_at={last_ok})".format(
-                         status=report["status"],
-                         overall=report.get("overall"),
-                         health_at=report.get("health_at"),
-                         age=age, dl=report["deadline_s"],
-                         reasons=(",".join(reasons) or "none")
-                         if reasons is not None else "unknown",
-                         last_ok=report.get("last_ok_at")
-                         if report.get("last_ok_at") is not None
-                         else "unknown"))
+        lines.append(f"MCS監視: {_STATUS_JA.get(status, status)}（{status}）")
+        if reasons:
+            lines.append("理由: " + "、".join(
+                _REASON_JA.get(r.split(":")[0], r) for r in reasons))
+        elif reasons is None:
+            lines.append("理由: 不明")
+        lines.append(f"最終正常: {_jst(report.get('last_ok_at'))}"
+                     f" / 最新記録: {_jst(report.get('health_at'))}（JST）")
+        lines.append("コード: " + (",".join(reasons) if reasons else
+                                    "none" if reasons is not None else "unknown"))
     if report["disk_alert"] and report["disk_low"]:
-        lines.append("mcs disk: low (free_mb={})".format(report.get("disk_free_mb")))
+        free = report.get("disk_free_mb")
+        lines.append(f"空き容量不足: 残り {free} MB" if _finite_number(free)
+                     else "空き容量不足: 残り 不明")
     return lines
 
 
