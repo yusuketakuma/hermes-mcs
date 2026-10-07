@@ -72,6 +72,90 @@ def _llm_reply_kind(blob):
     return kind if isinstance(kind, str) else None
 
 
+def _message_artifacts(db, project_id: int):
+    """(arts, ref_mids) — current extraction blobs per message, and the
+    message ids that carry a med_ref row.
+
+    current_refs needs a med_ref row on the exact message: look it up
+    only for those instead of two queries per message (superset filter;
+    current_refs keeps its own project/binding checks)."""
+    arts = {}
+    for a in db.execute(f"""
+      SELECT a.message_id, a.kind, a.content FROM artifacts a
+      JOIN messages m ON m.message_id=a.message_id
+      WHERE m.project_id=? AND a.kind IN
+          ('extract_v1','extract_llm','canonical_projection',
+           'semantic_facts_v4')
+        {current_extract_pred()}
+        AND (a.kind IN ('extract_v1','extract_llm')
+             OR (1=1 {current_fact_pred()}))
+      ORDER BY a.artifact_id
+    """, (project_id,)):
+        arts.setdefault(a["message_id"], {})[a["kind"]] = a["content"]
+    ref_mids = {r[0] for r in db.execute(
+        "SELECT DISTINCT a.message_id FROM artifacts a JOIN messages m "
+        "ON m.message_id=a.message_id WHERE a.kind=? AND m.project_id=?",
+        (REF_KIND, project_id))}
+    return arts, ref_mids
+
+
+def _decode_blobs(blobs: dict):
+    """(v1, lm, llm, has_fact_source) for one message's current artifacts.
+
+    semantic_facts_v4 (T18) shadows canonical_projection, which shadows
+    extract_llm for the same message (a hash-current extract_llm row is
+    kept in blobs only so its reply can be read below)."""
+    llm_blob = blobs.get("extract_llm")
+    has_fact_source = False
+    llm = None
+    try:
+        v1 = json.loads(blobs["extract_v1"]) \
+            if "extract_v1" in blobs else {}
+        lm_blob = blobs.get("semantic_facts_v4") \
+            or blobs.get("canonical_projection") \
+            or llm_blob
+        lm = json.loads(lm_blob) if lm_blob else {}
+        has_fact_source = (lm_blob is not None and isinstance(lm, dict)
+                           and not lm.get("_error"))
+        if lm_blob is not None and lm_blob is llm_blob:
+            llm = lm    # one decode per unshadowed extract_llm row
+    except (ValueError, TypeError, RecursionError):
+        v1 = lm = {}
+    if not isinstance(v1, dict):
+        v1 = {}
+    if not isinstance(lm, dict):
+        lm = {}
+    if lm.get("_error"):
+        lm = {}
+    if not isinstance(llm, dict):
+        llm = loads_dict(llm_blob) or {}
+    return v1, lm, llm, has_fact_source
+
+
+def _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread):
+    """Append one message's v1/llm request rows to the rollup lists."""
+    requests.extend({"kind": rq.get("kind"), "ctx": rq.get("ctx"),
+                     "at": m["posted_at"], "mid": m["message_id"]}
+                    for rq in _dicts(v1.get("requests")))
+    # negated/speculative/ungrounded requests stay flagged for the
+    # readers; any flag other than a literal False fails closed
+    for rq in _dicts(lm.get("requests")):
+        row = {"kind": rq.get("to"), "ctx": rq.get("action"),
+               "at": m["posted_at"], "mid": m["message_id"],
+               "unverified": item_unverified(rq)}
+        # #20 request kind/condition/due_text under NEW keys — "kind"
+        # already means the addressee for mcs-read-model/1 readers
+        for src, dst in (("kind", "req_kind"), ("condition", "condition"),
+                         ("due_text", "due_text")):
+            if isinstance(rq.get(src), str) and rq[src]:
+                row[dst] = rq[src]
+        requests.append(row)
+        # Only the first 15 requests reach the read model; discarded
+        # rows need no reply scan, but all replies remain evidence.
+        if len(requests) <= 15:
+            req_thread.append((row, root, ts, sender_id))
+
+
 def build_rollup(ledger, project_id: int) -> dict:
     db = ledger.db
     patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
@@ -106,26 +190,7 @@ def build_rollup(ledger, project_id: int) -> dict:
     out["last_activity"] = newest["posted_at"]
     out["last_activity_ts"] = newest["posted_at_ts"]
 
-    arts = {}
-    for a in db.execute(f"""
-      SELECT a.message_id, a.kind, a.content FROM artifacts a
-      JOIN messages m ON m.message_id=a.message_id
-      WHERE m.project_id=? AND a.kind IN
-          ('extract_v1','extract_llm','canonical_projection',
-           'semantic_facts_v4')
-        {current_extract_pred()}
-        AND (a.kind IN ('extract_v1','extract_llm')
-             OR (1=1 {current_fact_pred()}))
-      ORDER BY a.artifact_id
-    """, (project_id,)):
-        arts.setdefault(a["message_id"], {})[a["kind"]] = a["content"]
-    # current_refs needs a med_ref row on the exact message: look it up
-    # only for those instead of two queries per message (superset filter;
-    # current_refs keeps its own project/binding checks).
-    ref_mids = {r[0] for r in db.execute(
-        "SELECT DISTINCT a.message_id FROM artifacts a JOIN messages m "
-        "ON m.message_id=a.message_id WHERE a.kind=? AND m.project_id=?",
-        (REF_KIND, project_id))}
+    arts, ref_mids = _message_artifacts(db, project_id)
 
     latest_vitals = None
     latest_labs = {}
@@ -160,38 +225,11 @@ def build_rollup(ledger, project_id: int) -> dict:
         senders[m["sender_name"] or "?"] = \
             senders.get(m["sender_name"] or "?", 0) + 1
         blobs = arts.get(m["message_id"], {})
-        llm_blob = blobs.get("extract_llm")
-        llm = llm_blob   # parsed below when it is the row lm came from
-        has_fact_source = False
-        try:
-            v1 = json.loads(blobs["extract_v1"]) \
-                if "extract_v1" in blobs else {}
-            # semantic_facts_v4 (T18) shadows canonical_projection,
-            # which shadows extract_llm for the same message (a
-            # hash-current extract_llm row is kept in blobs only so
-            # its reply can be read below).
-            lm_blob = blobs.get("semantic_facts_v4") \
-                or blobs.get("canonical_projection") \
-                or llm_blob
-            lm = json.loads(lm_blob) if lm_blob else {}
-            has_fact_source = (lm_blob is not None and isinstance(lm, dict)
-                               and not lm.get("_error"))
-            if lm_blob is not None and lm_blob is llm_blob:
-                llm = lm    # one decode per unshadowed extract_llm row
-        except (ValueError, TypeError, RecursionError):
-            v1 = lm = {}
-        if not isinstance(v1, dict):
-            v1 = {}
-        if not isinstance(lm, dict):
-            lm = {}
-        if lm.get("_error"):
-            lm = {}
+        v1, lm, llm, has_fact_source = _decode_blobs(blobs)
         # Context is additive to canonical facts, never a diagnosis or a
         # confirmed current state. Keep every item from the newest report
         # per category; the detail read model retains all prior reports.
-        raw_llm = llm if isinstance(llm, dict) else loads_dict(llm_blob) or {}
-        llm = raw_llm
-        context_doc = {"patient_context": merged_context(raw_llm, lm, m["body_text"] or "")}
+        context_doc = {"patient_context": merged_context(llm, lm, m["body_text"] or "")}
         message_context = {}
         for item in merged_context(v1, context_doc, m["body_text"] or "") \
                 if m["body_state"] in (None, "full") else ():
@@ -240,27 +278,8 @@ def build_rollup(ledger, project_id: int) -> dict:
                 meds[i] = {**meds[i], "ref": ref}
         _med_states(m, v1, lm, med_state, patient_name=patient_name)
         _symptom_ts(m, v1, lm, ts, sym_pos, sym_neg, patient_name=patient_name)
-        requests.extend({"kind": rq.get("kind"), "ctx": rq.get("ctx"),
-                         "at": m["posted_at"], "mid": m["message_id"]}
-                        for rq in _dicts(v1.get("requests")))
-        # negated/speculative/ungrounded requests stay flagged for the
-        # readers; any flag other than a literal False fails closed
         root = m["parent_id"] or m["message_id"]
-        for rq in _dicts(lm.get("requests")):
-            row = {"kind": rq.get("to"), "ctx": rq.get("action"),
-                   "at": m["posted_at"], "mid": m["message_id"],
-                   "unverified": item_unverified(rq)}
-            # #20 request kind/condition/due_text under NEW keys — "kind"
-            # already means the addressee for mcs-read-model/1 readers
-            for src, dst in (("kind", "req_kind"), ("condition", "condition"),
-                             ("due_text", "due_text")):
-                if isinstance(rq.get(src), str) and rq[src]:
-                    row[dst] = rq[src]
-            requests.append(row)
-            # Only the first 15 requests reach the read model; discarded
-            # rows need no reply scan, but all replies remain evidence.
-            if len(requests) <= 15:
-                req_thread.append((row, root, ts, sender_id))
+        _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread)
         # reply lives only in extract_llm; read it there even when a
         # canonical_projection / semantic_facts_v4 blob shadows lm
         kind = _llm_reply_kind(llm)

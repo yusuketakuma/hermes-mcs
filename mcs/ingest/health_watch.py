@@ -262,16 +262,50 @@ def evaluate(home: str = HOME, now: float | None = None,
         state["detected_at"] = now
     state["alerted_reasons"] = sorted(seen | set(reasons) if alert
                                       else seen)
+    delivery = _reconcile_delivery(state, obs["status"], key, alert,
+                                   disk_low, disk_alert, transition,
+                                   new_reason, now)
+    if delivery:
+        state["delivery"] = delivery
+        report["delivery"] = dict(delivery)
+    try:
+        maintenance.atomic_publish_text(
+            state_path, json.dumps(state, ensure_ascii=False))
+    except OSError:
+        report["delivery_error"] = "state_persist_failed"
+    try:
+        maintenance.atomic_publish_text(
+            status_path, json.dumps(report, ensure_ascii=False))
+    except OSError:
+        report["delivery_error"] = "status_persist_failed"
+    return report
+
+
+def _archive_unknown(state: dict, delivery: dict) -> None:
+    """Unresolved history is evidence, but the state file must stay
+    bounded: keep the newest UNKNOWN_HISTORY records."""
+    held = state.get("unknown_deliveries")
+    held = held if isinstance(held, list) else []
+    state["unknown_deliveries"] = [*held, dict(delivery)][-UNKNOWN_HISTORY:]
+
+
+def _reconcile_delivery(state: dict, status: str, key: tuple,
+                        alert: bool, disk_low: bool, disk_alert: bool,
+                        transition: bool, new_reason: bool,
+                        now: float) -> dict:
+    """Carry over or replace the durable send record for this verdict.
+
+    pending/not_sent deliveries survive only while their component is
+    still active; an unknown outcome is held verbatim — it can neither
+    be retried nor manufactured into a success."""
     delivery = state.get("delivery")
     delivery = delivery if isinstance(delivery, dict) else {}
-    current_alert = bool(delivery.get("alert") and obs["status"] != "ok")
+    current_alert = bool(delivery.get("alert") and status != "ok")
     current_disk_alert = bool(delivery.get("disk_alert") and disk_low)
     if delivery.get("outcome") == "unknown" and not (current_alert or current_disk_alert):
         # Recovery resolves the incident, not its uncertain send outcome.
         # Retain the witness as unknown; do not manufacture a successful send.
-        held = state.get("unknown_deliveries")
-        held = held if isinstance(held, list) else []
-        state["unknown_deliveries"] = [*held, dict(delivery)][-UNKNOWN_HISTORY:]
+        _archive_unknown(state, delivery)
         state.pop("delivery", None)
         delivery = {}
     elif delivery.get("outcome") in ("pending", "not_sent"):
@@ -287,30 +321,13 @@ def evaluate(home: str = HOME, now: float | None = None,
         # of the same incident. A new verdict/reason is a different alert.
         if delivery.get("key") != delivery_key or delivery.get("outcome") in ("delivered", "superseded"):
             if delivery.get("outcome") == "unknown":
-                # Unresolved history is evidence, but the state file must
-                # stay bounded: keep the newest UNKNOWN_HISTORY records.
-                held = state.get("unknown_deliveries")
-                held = held if isinstance(held, list) else []
-                state["unknown_deliveries"] = [*held, dict(delivery)][-UNKNOWN_HISTORY:]
+                _archive_unknown(state, delivery)
             delivery = {"key": delivery_key, "outcome": "pending",
                         "alert": bool(alert), "disk_alert": disk_alert}
         elif delivery.get("outcome") != "unknown":
             delivery.update(alert=bool(alert or delivery.get("alert")),
                             disk_alert=bool(disk_alert or delivery.get("disk_alert")))
-    if delivery:
-        state["delivery"] = delivery
-        report["delivery"] = dict(delivery)
-    try:
-        maintenance.atomic_publish_text(
-            state_path, json.dumps(state, ensure_ascii=False))
-    except OSError:
-        report["delivery_error"] = "state_persist_failed"
-    try:
-        maintenance.atomic_publish_text(
-            status_path, json.dumps(report, ensure_ascii=False))
-    except OSError:
-        report["delivery_error"] = "status_persist_failed"
-    return report
+    return delivery
 
 
 def deliver_alert(cfg: dict, text: str) -> bool | None:

@@ -63,6 +63,38 @@ class _ClinicalHold(Exception):
     """A run boundary, not evidence that a clinical fetch failed."""
 
 
+def _staged_resume(dataset: str, resume: dict, per_page: int,
+                   item_id: int | None):
+    """Validate a staged observation_values slice; any defect is a hold.
+
+    Returns (items, start_page, total, total_pages) for resumption."""
+    try:
+        valid = (dataset == "observation_values" and isinstance(resume, dict)
+                 and resume.get("sha256") == _stage_hash(resume)
+                 and resume.get("contract") == "clinical-values-staging/1"
+                 and resume.get("per_page") == per_page
+                 and resume.get("capacity") == MAX_VALUE_ROWS
+                 and type(resume.get("next_page")) is int
+                 and 2 <= resume["next_page"] <= MAX_VALUE_ROWS // per_page + 1
+                 and _valid_id(resume.get("timestamp"))
+                 and type(resume.get("count")) is int
+                 and resume["count"] == len(resume["rows"])
+                 and 0 < resume["count"] <= MAX_VALUE_ROWS
+                 and all(value is None or (type(value) is int and value >= 0)
+                         for value in (resume.get("total"), resume.get("total_pages"))))
+        if not valid or normalize_rows(dataset, resume["rows"]) != resume["rows"]:
+            raise ValueError
+        definition = resume.get("definition")
+        if definition is not None and (
+                normalize_rows("observation_items", [definition])[0] != definition
+                or definition["lab_test_item"]["id"] != item_id):
+            raise ValueError
+        return (resume["rows"][:], resume["next_page"],
+                resume.get("total"), resume.get("total_pages"))
+    except (KeyError, TypeError, ValueError, MCSError):
+        raise _ClinicalHold("staging_invalid") from None
+
+
 REFERENCE_FIELDS = tuple(
     f"{edge}_reference_limit_{component}"
     for edge in ("upper", "lower")
@@ -190,33 +222,10 @@ def fetch_metadata(get, dataset: str, entity_id: int, *, item_id: int | None = N
     total, total_pages = None, None
     start_page = 1
     if _resume is not None:
-        try:
-            valid = (dataset == "observation_values" and isinstance(_resume, dict)
-                     and _resume.get("sha256") == _stage_hash(_resume)
-                     and _resume.get("contract") == "clinical-values-staging/1"
-                     and _resume.get("per_page") == per_page
-                     and _resume.get("capacity") == MAX_VALUE_ROWS
-                     and type(_resume.get("next_page")) is int
-                     and 2 <= _resume["next_page"] <= MAX_VALUE_ROWS // per_page + 1
-                     and _valid_id(_resume.get("timestamp"))
-                     and type(_resume.get("count")) is int
-                     and _resume["count"] == len(_resume["rows"])
-                     and 0 < _resume["count"] <= MAX_VALUE_ROWS
-                     and all(value is None or (type(value) is int and value >= 0)
-                             for value in (_resume.get("total"), _resume.get("total_pages"))))
-            if not valid or normalize_rows(dataset, _resume["rows"]) != _resume["rows"]:
-                raise ValueError
-            definition = _resume.get("definition")
-            if definition is not None and (
-                    normalize_rows("observation_items", [definition])[0] != definition
-                    or definition["lab_test_item"]["id"] != item_id):
-                raise ValueError
-            items = _resume["rows"][:]
-            start_page = _resume["next_page"]
-            total, total_pages = _resume.get("total"), _resume.get("total_pages")
-            result.update(timestamp=_resume["timestamp"], definition=_resume.get("definition"))
-        except (KeyError, TypeError, ValueError, MCSError):
-            raise _ClinicalHold("staging_invalid") from None
+        items, start_page, total, total_pages = _staged_resume(
+            dataset, _resume, per_page, item_id)
+        result.update(timestamp=_resume["timestamp"],
+                      definition=_resume.get("definition"))
     if _checkpoint is not None and dataset != "observation_values":
         raise ValueError("only automatic observation values can stage")
     try:

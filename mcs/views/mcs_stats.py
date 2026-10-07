@@ -953,12 +953,13 @@ def _feedback_ratio(num, den, unit):
     return ratio
 
 
-def st_signal_feedback(db, scope):
-    """ST-T2: local signal lifecycle measurement, never clinical completion."""
-    from mcs_signals import (ARTIFACT_KIND, DETECTORS, FEEDBACK_KIND,
-                             _signal_content, dismiss_reason_counts,
+def _feedback_episodes(db, scope, types):
+    """Signal-artifact scan -> (episodes, invalid_rows, legacy_rows).
+
+    An invalid/terminal row without an observed opening has no
+    denominator and voids any open episode under the same key."""
+    from mcs_signals import (ARTIFACT_KIND, _signal_content,
                              signal_message_ids)
-    types = {name for name, _ in DETECTORS}
     episodes: list[_FeedbackEpisode] = []
     latest: dict[str, _FeedbackLatest] = {}
     ep: _FeedbackEpisode
@@ -1034,10 +1035,11 @@ def st_signal_feedback(db, scope):
             invalid += 1
             continue
         latest[key] = {"state": c["state"], "episode": ep}
+    return episodes, invalid, legacy
 
-    selected = [ep for ep in episodes
-                if (scope["since"] is None or ep["start"] >= scope["since"])
-                and (scope["until"] is None or ep["start"] < scope["until"])]
+
+def _feedback_evidence(db, scope, selected) -> None:
+    """Fold delivery/ack/request evidence into each selected episode."""
     # Bucketed by patient / shown key so each episode only scans its own
     # candidates instead of every request and manifest (was O(episodes x rows)).
     requests: dict = {}
@@ -1083,9 +1085,10 @@ def st_signal_feedback(db, scope):
                     if delivered <= at <= ep["end"])
         ep["action_times"].extend(ep["ack_times"] + ep["adoption_times"])
 
-    dismissals = dismiss_reason_counts(
-        db, scope["project_id"], since=scope["since"], until=scope["until"],
-        as_of=scope["as_of"])
+
+def _feedback_suppression(db, scope, types):
+    """Daily suppression rows -> (suppression, suppression_since, straddled)."""
+    from mcs_signals import FEEDBACK_KIND
     suppression = {name: [0, 0] for name in types}
     suppression_since = {}
     straddled = {}
@@ -1122,7 +1125,12 @@ def st_signal_feedback(db, scope):
         suppression[c["type"]][0] += den
         suppression[c["type"]][1] += num
         suppression_since[c["type"]] = min(at, suppression_since.get(c["type"], at))
+    return suppression, suppression_since, straddled
 
+
+def _feedback_by_type(scope, types, selected, dismissals,
+                      suppression, suppression_since, straddled):
+    """Aggregate selected episodes and suppression counts per detector."""
     # Enum allowlist: corrupt/legacy cause strings must not leak free text.
     causes = {"request_missing", "request_status_changed", "request_due_changed",
               "request_age_changed", "project_missing", "project_archived",
@@ -1180,6 +1188,25 @@ def st_signal_feedback(db, scope):
                 "median": statistics.median(durations) if len(durations) >= SIGNAL_FEEDBACK_MIN_N else None,
                 "p90": durations[math.ceil(len(durations) * .9) - 1] if len(durations) >= SIGNAL_FEEDBACK_MIN_N else None,
                 "reason": None if len(durations) >= SIGNAL_FEEDBACK_MIN_N else "insufficient_n"}}
+    return by_type
+
+
+def st_signal_feedback(db, scope):
+    """ST-T2: local signal lifecycle measurement, never clinical completion."""
+    from mcs_signals import DETECTORS, dismiss_reason_counts
+    types = {name for name, _ in DETECTORS}
+    episodes, invalid, legacy = _feedback_episodes(db, scope, types)
+    selected = [ep for ep in episodes
+                if (scope["since"] is None or ep["start"] >= scope["since"])
+                and (scope["until"] is None or ep["start"] < scope["until"])]
+    _feedback_evidence(db, scope, selected)
+    dismissals = dismiss_reason_counts(
+        db, scope["project_id"], since=scope["since"], until=scope["until"],
+        as_of=scope["as_of"])
+    suppression, suppression_since, straddled = \
+        _feedback_suppression(db, scope, types)
+    by_type = _feedback_by_type(scope, types, selected, dismissals,
+                                suppression, suppression_since, straddled)
     return _result("partial" if invalid or straddled else "ok", scope, {
         "by_type": by_type, "invalid_or_orphan_rows": invalid, "legacy_rows": legacy,
         "minimum_rate_samples": SIGNAL_FEEDBACK_MIN_N,

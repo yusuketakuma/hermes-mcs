@@ -560,10 +560,15 @@ def _archived_pids(db):
         "SELECT project_id FROM patients WHERE COALESCE(is_archived,0)=1")}
 
 
+def _patient_source(db, pid, mid):
+    """(body_text, patient_name) of one message for scope checks, else None."""
+    return db.execute("SELECT m.body_text,p.patient_name FROM messages m "
+                      "JOIN patients p ON p.project_id=m.project_id "
+                      "WHERE m.project_id=? AND m.message_id=?", (pid, mid)).fetchone()
+
+
 def _patient_period(db, pid, mid, period):
-    source = db.execute("SELECT m.body_text,p.patient_name FROM messages m "
-                        "JOIN patients p ON p.project_id=m.project_id "
-                        "WHERE m.project_id=? AND m.message_id=?", (pid, mid)).fetchone()
+    source = _patient_source(db, pid, mid)
     return source is not None and patient_item_scope(
         period, source[0], patient_name=source[1], surface=period.get("raw")) == "patient"
 
@@ -633,9 +638,7 @@ def _rx_period_lapsed(db, now, th, sig_cfg):
 
 
 def _patient_transition(db, pid, mid):
-    source = db.execute("SELECT m.body_text,p.patient_name FROM messages m "
-                        "JOIN patients p ON p.project_id=m.project_id "
-                        "WHERE m.project_id=? AND m.message_id=?", (pid, mid)).fetchone()
+    source = _patient_source(db, pid, mid)
     if source is None:
         return False
     matches = list(re.finditer(r"退院|転院|退所", source[0] or ""))
