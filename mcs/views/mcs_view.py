@@ -20,7 +20,7 @@ from project_metadata_view import physician_viewed_status
 from mcs_queries import incomplete_reply_roots
 from mcs_signals import is_own_station_message
 from mcs_util import loads_dict, register_search_fold, search_fold
-from read_model import _snapshot_meta
+from read_model import _snapshot_meta, message_patient_context
 from message_metadata import (
     flag_lines, get_message_metadata, get_metadata_shadow_status, is_self_sender)
 import mcs_requests as requests
@@ -148,6 +148,7 @@ class View:
         row["metadata_flags"] = flag_lines(self.db, row["message_metadata"])
         row["metadata_shadow"] = get_metadata_shadow_status(
             self.db, mid, as_of=self.meta["generated_at"])
+        row["patient_context"] = message_patient_context(self.db, row)
         # 22-F: actor counts by profession × type for own posts only, no
         # names or actor IDs (#22-D2); 'stale'/'failed' are past sets
         row["reaction_actors"] = (reaction_actor_summary(

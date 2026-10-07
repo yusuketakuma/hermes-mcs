@@ -461,6 +461,8 @@ def _gateway_restart_report(data, status, **facts):
 def _gateway_restart_run(data, agents, uid):
     """Resolve the owned gateway, then verify a changed PID in a detached child."""
     import plistlib
+    import shlex
+    import shutil
 
     label = "ai.hermes.gateway"
     expected = os.path.realpath(os.path.join(agents, label + ".plist"))
@@ -477,18 +479,109 @@ def _gateway_restart_run(data, agents, uid):
         pid = re.search(r"^\s*pid = (\d+)$", text, re.M)
         return int(pid.group(1)) if pid else 0
 
+    home = Path(agents).resolve().parent.parent
+    install = home / ".hermes/hermes-agent"
+    installs = {install}
+    launchers = {str(home / ".local/bin/hermes"), str(install / "venv/bin/hermes"),
+                 str(install / ".hermes/bin/hermes")}
+    logs = home / ".hermes/logs"
+
+    def owned_command(argv, plist):
+        if not argv:
+            return False
+        program = argv[0]
+        if program == "hermes":
+            environment = plist.get("EnvironmentVariables") or {}
+            if not isinstance(environment, dict) or not isinstance(environment.get("PATH", os.defpath), str):
+                return False
+            program = shutil.which("hermes", path=environment.get("PATH", os.defpath)) or ""
+        if (program in launchers and os.path.realpath(program) in launchers
+                and os.path.isfile(program) and os.access(program, os.X_OK)):
+            tail = argv[1:]
+        elif (os.path.isabs(program) and re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(program).name)
+              and (any(Path(program).parent == root / "venv/bin" for root in installs)
+                   or os.path.realpath(program) == os.path.realpath(sys.executable))):
+            if argv[1:3] == ["-m", "hermes_cli.main"]:
+                tail = argv[3:]
+            elif argv[1:3] == ["-I", "-c"] and len(argv) > 3:
+                # Exact isolated bootstrap emitted by hermes_cli._launchers.
+                modules = {}
+                for root in installs:
+                    prefix = ("import os, sys, runpy; "
+                              "os.environ.pop('PYTHONHOME', None); os.environ.pop('PYTHONPATH', None); "
+                              "os.environ.pop('VIRTUAL_ENV', None); "
+                              "sys.path.insert(0, " + repr(str(root)) + "); "
+                              "os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or "
+                              "str(__import__('hermes_constants').get_default_hermes_root()); "
+                              "import hermes_bootstrap; ")
+                    modules.update({prefix + "runpy.run_module(" + repr(module)
+                                    + ", run_name='__main__', alter_sys=True)": module
+                                    for module in ("hermes_cli.main", "hermes_cli.stderr_timestamp")})
+                module = modules.get(argv[3])
+                if module is None:
+                    return False
+                tail = argv[4:]
+                if module == "hermes_cli.stderr_timestamp":
+                    tail = ["--run-module", module, *tail]
+            else:
+                return False
+        else:
+            return False
+        if tail[:2] == ["--run-module", "hermes_cli.stderr_timestamp"]:
+            if (len(tail) < 6 or tail[2] != "--error-log" or tail[4] != "--"
+                    or Path(tail[3]) != logs / "gateway.error.log"):
+                return False
+            return owned_command(tail[5:], plist)
+        return tail[:2] == ["gateway", "run"] and all(
+            arg in ("--external-supervisor", "--replace") for arg in tail[2:])
+
+    def owned_jxa(argv, plist):
+        if argv[:3] != ["/usr/bin/osascript", "-l", "JavaScript"]:
+            return False
+        script = argv[4] if len(argv) == 5 and argv[3] == "-e" else argv[3] if len(argv) == 4 else ""
+        quoted = r'("(?:[^"\\]|\\.)*")'
+        terminal = re.fullmatch(r'Application\("Terminal"\)\.doScript\(' + quoted + r'\);?', script)
+        system = re.fullmatch(
+            r'ObjC\.import\("stdlib"\); const status=\$\.system\(' + quoted + r'\); '
+            r'const signal=status & 127; '
+            r'\$\.exit\(status === -1 \? 1 : signal === 0 \? \(status >> 8\) & 255 : 128 \+ signal\);',
+            script)
+        match = terminal or system
+        if match is None:
+            return False
+        shell = shlex.split(json.loads(match[1]))
+        if system:
+            if (not shell or shell[0] != "exec" or len(shell) < 6
+                    or shell[-4:] != [">>", str(logs / "gateway.log"),
+                                      "2>>", str(logs / "gateway.error.log")]):
+                return False
+            shell = shell[1:-4]
+        return owned_command(shell, plist)
+
     issued = False
     try:
         with open(expected, "rb") as stream:
             plist = plistlib.load(stream)
         args = plist.get("ProgramArguments")
-        if plist.get("Label") != label or not isinstance(args, list) \
-                or not all(isinstance(arg, str) for arg in args):
+        if plist.get("Label") != label or not isinstance(args, list) or not args \
+                or not all(isinstance(arg, str) for arg in args) \
+                or plist.get("Program", args[0]) != args[0]:
             raise ValueError("gateway_service_not_owned")
-        native = "gateway" in args
-        jxa = args[:3] == ["/usr/bin/osascript", "-l", "JavaScript"] and any(
-            "hermes" in arg and re.search(r"\bgateway\b", arg) for arg in args[3:])
-        if not (native or jxa):
+        environment = plist.get("EnvironmentVariables") or {}
+        if not isinstance(environment, dict):
+            raise ValueError("gateway_service_not_owned")
+        hermes_home = environment.get("HERMES_HOME", str(home / ".hermes"))
+        if not isinstance(hermes_home, str) or not os.path.isabs(hermes_home):
+            raise ValueError("gateway_service_not_owned")
+        logs = Path(hermes_home) / "logs"
+        cwd = plist.get("WorkingDirectory")
+        if "HERMES_HOME" in environment and cwd in (hermes_home, str(Path(hermes_home) / "hermes-agent")):
+            custom = Path(hermes_home) / "hermes-agent"
+            installs.add(custom)
+            launchers.update({str(custom / "venv/bin/hermes"), str(custom / ".hermes/bin/hermes")})
+        if cwd is not None and cwd not in ({str(root) for root in installs} | {hermes_home}):
+            raise ValueError("gateway_service_not_owned")
+        if not (owned_command(args, plist) or owned_jxa(args, plist)):
             raise ValueError("gateway_service_not_owned")
         found = []
         for domain in ("user", "gui"):
@@ -1104,18 +1197,20 @@ def _restore_db(backup_path, on_hold=None):
                        report_id=report["report_id"])
     except OSError as e:
         return f"restore_marker_failed: {e}"
+    if on_hold is not None:
+        # Persist the freeze even for an already approved restore: the swap
+        # can still fail after its 'restored' marker has been written.
+        on_hold(report)
     if _consent_for(report) is None:
-        if on_hold is not None:
-            # a failed journal write propagates (as mcs_update's
-            # _consent_hold): an escalate here would restart drainers
-            # on the unrestored newer-schema DB
-            on_hold(report)
         return "restore_consent_pending:" + report["report_id"]
     try:
         _replace_database(backup_path, report["backup_sha256"],
                           lambda: _mark_restored(
                               backup_path, report_id=report["report_id"]))
     except OSError as e:
+        with suppress(OSError):
+            _mark_restored(backup_path, phase="awaiting_consent",
+                           report_id=report["report_id"])
         return f"restore_failed: {e}"
     if _db_version(LEDGER) != back:
         return "restore_verify_failed"
@@ -1133,11 +1228,6 @@ def recover(if_stale=False):
     if not applying and not stages \
             and not os.path.exists(MARKER_PATH):
         return 0
-    if if_stale and (applying or stages):
-        last = max([s.get("at", 0) for s in state.get("stages", [])]
-                   + [(applying or {}).get("at", 0)])
-        if last and time.time() - last < STALE_S:
-            return 0                        # fresh — leave it alone
     upd_fd = _try_lock(UPDATE_LOCK)
     if upd_fd is None:
         return 0                            # an apply is alive
@@ -1152,6 +1242,11 @@ def recover(if_stale=False):
             return 2
         applying = state.get("applying")
         stages = [s.get("stage") for s in state.get("stages", [])]
+        if if_stale and (applying or stages):
+            last = max([s.get("at", 0) for s in state.get("stages", [])]
+                       + [(applying or {}).get("at", 0)])
+            if last and time.time() - last < STALE_S:
+                return 0                    # newest locked journal is still fresh
         if not applying and not stages:
             _remove_marker()                # orphan — writer is dead
             return 0
@@ -1249,8 +1344,7 @@ def recover(if_stale=False):
             if (not r or r.returncode != 0) or _head() != prev:
                 return escalate("merge --abort failed or HEAD "
                                 f"{_head()[:12]} != prev {str(prev)[:12]}")
-            _finish(state, "merge_aborted", removed)
-            return 0
+            return _finish(state, "merge_aborted", removed)
         if "done" in stages and not applying:
             applied = state.get("applied") or []
             cid = (applied[-1] or {}).get("command_id") \
@@ -1268,8 +1362,7 @@ def recover(if_stale=False):
             return 0
         if not applying:
             # pre-'applying' remnant: nothing was ever mutated
-            _finish(state, "interrupted_pre_merge", removed)
-            return 0
+            return _finish(state, "interrupted_pre_merge", removed)
 
         head = _head()
         if not head:
@@ -1360,10 +1453,8 @@ def recover(if_stale=False):
                 _git_out(["reset", "--hard", prev])
                 if _head() != prev or _clean() is not True:
                     return escalate("prev tree could not be cleaned")
-                _finish(state, "mixed_tree_reset", removed)
-                return 0
-            _finish(state, "interrupted_pre_merge", removed)
-            return 0
+                return _finish(state, "mixed_tree_reset", removed)
+            return _finish(state, "interrupted_pre_merge", removed)
         return escalate("unclassifiable repo state — no destructive "
                         f"action taken (HEAD={head[:12]})")
     finally:
@@ -1372,6 +1463,17 @@ def recover(if_stale=False):
 
 
 def _finish(state, result, removed):
+    # Keep the interrupted journal until its stopped workers are verified live.
+    _remove_marker()
+    dkey = _drainers_key(state, _head())
+    if _last_report().get("drainers_key") == dkey:
+        problems = _restart_drainers(bounce=False)
+    else:
+        problems = _restart_drainers()
+    if problems:
+        _report("recovery_incomplete", "restart:" + ",".join(problems),
+                drainers_key=dkey)
+        return 1
     applying = state.get("applying") or {}
     cid = applying.get("command_id")
     if cid:
@@ -1386,13 +1488,11 @@ def _finish(state, result, removed):
     state["stages"] = []
     state.pop("restore_consent", None)
     _save_state(state)
-    _remove_marker()
-    problems = _restart_drainers()
-    _report(result, "removed locks: " + ",".join(removed)
-            + (" restart:" + ",".join(problems) if problems else ""))
+    _report(result, "removed locks: " + ",".join(removed))
     _notify(f"[MCS] 更新が中断され復旧しました: {result}")
     if _runtime_mode() == "standalone":
         _restart_gateway()
+    return 0
 
 
 def _remove_marker():

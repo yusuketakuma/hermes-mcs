@@ -16,7 +16,7 @@ def led(tmp_path):
 
 
 def test_rx_period_expiry_high_urgency_escalates(led):
-    _msg(led.db, 1)
+    _msg(led.db, 1, body="本人の内服期間9/1-9/24。急変につき至急ご連絡ください。")
     led.db.execute(
         "INSERT INTO artifacts(kind,message_id,content,meta) "
         "VALUES ('extract_v1',1,?,?)",

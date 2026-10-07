@@ -12,6 +12,7 @@ from notify_testkit import (
     _latest_render, _msg, _notif, _patient, _receipt, _seed_thread,
     _signal_row, _token_for, led,
 )
+from test_signal_thread_hotfix import delivered_source
 
 __all__ = ["led"]  # shared isolated-ledger fixture
 
@@ -34,8 +35,19 @@ def test_latest_invalid_signal_never_revives_old_display_or_actions(
     _msg(led, 100)
     key = "synthetic-invalid-latest"
     _signal_row(led, key, mids=[100])
-    _dispatch(led, _intent(led, "signal", payload={
-        "signal_keys": [key], "project_id": 1}), cfg)
+    event = _intent(led, "signal", payload={"signal_keys": [key], "project_id": 1})
+    _dispatch(led, event, cfg)
+    if transport == "lineworks":
+        # Native source-thread replies are unsupported, so nothing is posted.
+        held = led.db.execute("SELECT state,progress,next_try FROM notify_outbox WHERE event_id=?",
+                              (event["event_id"],)).fetchone()
+        assert held["state"] == "failed" and held["next_try"] is None
+        assert json.loads(held["progress"])["hold_reason"] == "lineworks_thread_unsupported"
+        assert led.db.execute("SELECT COUNT(*) FROM notification_renders").fetchone()[0] == 0
+        # Independently exercise the shared pure display model for this dialect.
+        with led.db:
+            target = notify_cards._resolve_targets(led.db, event, json.loads(event["payload"]))[0]
+            notify_cards._card_for(led.db, target, notify_cards.delivery_scope(cfg), NOW)
     card = _card(led)
     old_fp = notify_render._source_fp(led.db, card)
     _signal_row(led, key, state="resolved", mids=[100])
@@ -197,6 +209,8 @@ def test_signal_evidence_change_invalidates_old_action(led, change):
     _dispatch(led, _intent(led, "signal", payload={
         "signal_keys": ["synthetic-signal"], "project_id": 1,
         "type": "med_followup"}))
+    delivered_source(led, card_id=2, mids=(100,))
+    notify_cards.sweep(led, CFG, now=NOW)
     render = _latest_render(led)
     spec = json.loads(render["spec_json"])
     attempt = _begin(led, render)

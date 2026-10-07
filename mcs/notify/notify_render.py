@@ -426,12 +426,13 @@ def _thread_context(db, card, msgs) -> str:
 
 
 def _structured_block(db, mid) -> dict | None:
-    """Per-message 📋 要約 block — the same lines the text notify_flush
-    shows, via the shared extractor view. Artifact freshness and the
+    """Per-message 📋 要約 block with dictionary details kept on demand.
+
+    Raw medication facts use the shared extractor view. Artifact freshness and the
     deleted-message gate live in structured_view's SQL; a build failure
     must never sink the card."""
     try:
-        lines = structured_view.structured_lines(db, mid)
+        lines = structured_view.structured_lines(db, mid, drug_candidates=False)
     except Exception:
         return None
     if not lines:
@@ -440,15 +441,36 @@ def _structured_block(db, mid) -> dict | None:
             "text": "📋 要約\n" + "\n".join("・" + ln for ln in lines)}
 
 
-def _summary_block(db, mid) -> dict:
+def _progress_state(db, mid, cfg):
+    if not isinstance(cfg, dict):
+        return None
+    import extraction_progress
+    row = db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone()
+    return extraction_progress.message_progress(db, row, cfg=cfg) if row is not None else None
+
+
+def _progress_label(progress):
+    if not progress or progress["state"] == "complete":
+        return ""
+    label = "解析更新中" if progress["state"] == "processing" else "解析要確認"
+    if progress["total"]:
+        label += f" (完了区間 {progress['completed']}/{progress['total']})"
+    return label
+
+
+def _summary_block(db, mid, *, cfg=None, progress_by_mid=None) -> dict:
     """📋 要約 of one post, or its visible empty state — a post with no
     usable extraction says whether it is still queued or exhausted its
     retries instead of silently showing nothing."""
     block = _structured_block(db, mid)
-    if block:
-        return block
-    return {"type": "text", "text": "📋 要約 " + (
-        "作成失敗" if _extraction_failed(db, mid) else "処理待ち")}
+    if not block:
+        block = {"type": "text", "text": "📋 要約 " + (
+            "作成失敗" if _extraction_failed(db, mid) else "処理待ち")}
+    progress = _progress_label(progress_by_mid.get(mid) if progress_by_mid is not None
+                               else _progress_state(db, mid, cfg))
+    if progress:
+        block["text"] += "\n" + progress
+    return block
 
 
 def _extraction_failed(db, mid) -> bool:
@@ -515,6 +537,7 @@ def patient_heading(db, pid) -> str:
 def _source_fp(db, card) -> str:
     """Fingerprint of the source material a card renders — a change here
     bumps source_generation."""
+    card = dict(card)
     kind = card["kind"]
     if kind == "thread":
         msgs = db.execute(
@@ -530,7 +553,10 @@ def _source_fp(db, card) -> str:
             (m["message_id"], m["content_hash"], m["body_state"],
              ready.get(m["message_id"], {}))
             for m in msgs],
-            "name": _patient_name(db, card["project_id"])})
+            "name": _patient_name(db, card["project_id"]),
+            "drug_dictionary": structured_view.generation_signature(db), "drug_view_version": 2,
+            "drug_thread_unavailable": card.get("transport") == "slack"
+            and card.get("thread_state") in ("failed", "deleted")})
     keys = _anchor_keys(card)
     sigs = _latest_signals(db, keys, card["project_id"])
     names = sorted({_patient_name(db, s["content"].get("project_id"))
@@ -560,7 +586,10 @@ def _source_fp(db, card) -> str:
     return payload_hash({"k": kind, "m": [
         (k, sigs[k]["artifact_id"], sigs[k]["content"].get("state"))
         for k in keys if k in sigs], "names": names,
-        "evidence": evidence_state})
+        "evidence": evidence_state,
+        "drug_dictionary": structured_view.generation_signature(db), "drug_view_version": 2,
+        "drug_thread_unavailable": card.get("transport") == "slack"
+        and card.get("thread_state") in ("failed", "deleted")})
 
 
 def _anchor_keys(card) -> list:
@@ -633,7 +662,7 @@ def _signal_compact(db, pid, contents: list) -> list:
 SECTION_RULE = "─" * 12
 
 
-def _message_post(db, mid, m, sender, head="", stamps=True) -> str:
+def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None) -> str:
     """One MCS post as a thread message, always in the owner's order
     (2026-10-03): header, 📋 summary, MCS stamps, then the posted body,
     with SECTION_RULE between summary, stamps and body. ``stamps=False``
@@ -642,7 +671,7 @@ def _message_post(db, mid, m, sender, head="", stamps=True) -> str:
     title = f"{head}{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} {sender}"
     if m["body_state"] == "deleted":
         return f"{title}（削除済み）"
-    out = [title, _summary_block(db, mid)["text"]]
+    out = [title, _summary_block(db, mid, cfg=cfg)["text"]]
     if stamps:
         meta = get_message_metadata(db, mid)
         sid = m["sender_id"] if "sender_id" in m.keys() else None
@@ -653,7 +682,7 @@ def _message_post(db, mid, m, sender, head="", stamps=True) -> str:
     return "\n".join(out)
 
 
-def _signal_body(db, sig: dict, stamps=True) -> str:
+def _signal_body(db, sig: dict, stamps=True, *, cfg=None) -> str:
     """Full-text view of one signal — the thread post and 'body'
     action surface: 【種別】note / state, then the evidence post."""
     lines = [f"{signal_label(sig)}{sig.get('note') or ''} / 状態: {signal_state(sig)}"]
@@ -662,12 +691,12 @@ def _signal_body(db, sig: dict, stamps=True) -> str:
         lines.append(_message_post(
             db, mid, m, _sender_tag(m, db),
             head=f"↳ {patient_heading(db, sig.get('project_id'))} · ",
-            stamps=stamps))
+            stamps=stamps, cfg=cfg))
     return "\n".join(lines)
 
 
 def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
-                    stamps=True) -> tuple:
+                    stamps=True, *, cfg=None) -> tuple:
     """Full text of the shown set frozen into the click's manifest —
     'body' answers what the button rendered, never the card's *current*
     page, so a concurrent nav cannot swap the view under the click.
@@ -693,14 +722,14 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
             if m is None:
                 continue
             lines.append(_message_post(db, mid, m, _sender_tag(m, db),
-                                       head=head, stamps=stamps))
+                                       head=head, stamps=stamps, cfg=cfg))
         title = f"💬 {patient_heading(db, card['project_id'])} — 本文"
         text = "\n\n".join(lines)
     else:
         shown = [k for k in shown if isinstance(k, str)]
         sigs = _latest_signals(db, shown, card["project_id"])
         text = "\n\n— — —\n\n".join(
-            _signal_body(db, sigs[k]["content"], stamps) for k in shown
+            _signal_body(db, sigs[k]["content"], stamps, cfg=cfg) for k in shown
             if k in sigs)
         title = ("アラート — 本文" if card["kind"] == "digest"
                  else "シグナル — 本文")
@@ -709,12 +738,13 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
     return title, text or "（表示できる本文がありません）"
 
 
-def _card_content(db, card) -> dict:
+def _card_content(db, card, *, cfg=None) -> dict:
     """The deterministic display model for a card at its current page:
     containers + footer + shown-set + pages. Tokens/buttons are added
     per-render and are NOT part of the content fingerprint."""
     kind = card["kind"]
     ui = card["ui_state"]
+    progress_by_mid = None
     if kind == "thread":
         msgs = [dict(m) for m in db.execute(
             """SELECT message_id,sender_id,sender_name,profession,organization,
@@ -724,6 +754,9 @@ def _card_content(db, card) -> dict:
                ORDER BY message_id<>?, posted_at_ts, message_id""",
             (card["root_message_id"], card["root_message_id"],
              card["project_id"], card["root_message_id"]))]
+        if isinstance(cfg, dict):
+            progress_by_mid = {m["message_id"]: _progress_state(db, m["message_id"], cfg)
+                               for m in msgs if m["body_state"] != "deleted"}
         first = msgs[0] if msgs else {}
         urgency = {structured_view.message_urgency(db, m["message_id"])
                    for m in msgs if m["body_state"] != "deleted"}
@@ -748,7 +781,8 @@ def _card_content(db, card) -> dict:
                        else ""))
             blocks = [{"type": "text", "rule": True, "text": line}]
             if m["body_state"] != "deleted":
-                blocks.append(_summary_block(db, m["message_id"]))
+                blocks.append(_summary_block(db, m["message_id"], cfg=cfg,
+                                             progress_by_mid=progress_by_mid))
             rendered.append(_fit_item(blocks))
         item_shown = [[m["message_id"]] for m in msgs]
         max_count = PAGE_THREAD
@@ -757,6 +791,10 @@ def _card_content(db, card) -> dict:
         keys = _anchor_keys(card)
         sigs = _latest_signals(db, keys, card["project_id"])
         ordered = [k for k in keys if k in sigs]
+        if isinstance(cfg, dict):
+            progress_ids = {mid for k in ordered for mid, message in [
+                _signal_evidence(db, sigs[k]["content"])] if message is not None}
+            progress_by_mid = {mid: _progress_state(db, mid, cfg) for mid in sorted(progress_ids)}
         # one face item per patient — the card stays at key points;
         # the evidence quote and 📋要約 ride the companion thread
         # (or the 本文表示 action when no thread carries them)
@@ -823,6 +861,9 @@ def _card_content(db, card) -> dict:
             "page": page, "pages": pages,
             "source_fp": source_fp, "toggles": toggles,
             "actor_fp": actor_fp}
+    if isinstance(cfg, dict):
+        content["progress_fp"] = payload_hash([
+            (mid, progress_by_mid[mid]) for mid in sorted(progress_by_mid)])
     content["preview_text"] = notification_preview(db, card, content)
     return content
 
@@ -1066,6 +1107,9 @@ def _footer(db, card, shown, generation) -> tuple:
 def _content_fp(content: dict) -> str:
     # preview_text is derived from shown/containers; keeping it out keeps
     # fingerprints stored by earlier versions stable (no mass re-render).
-    return payload_hash({"c": content["containers"], "f": content["footer"],
+    value = {"c": content["containers"], "f": content["footer"],
                 "s": content["shown"], "p": content["page"],
-                "a": content.get("actor_fp")})
+                "a": content.get("actor_fp")}
+    if "progress_fp" in content:
+        value["progress"] = content["progress_fp"]
+    return payload_hash(value)

@@ -178,7 +178,10 @@ class _HistMsg:
         type(self)._next += 1
         self.id = type(self)._next
 
-    async def edit(self, content=None, allowed_mentions=None):
+    async def edit(self, content=MISSING, allowed_mentions=None, view=MISSING):
+        if content is MISSING:
+            content = self.content
+        self.view = view if view is not MISSING else getattr(self, "view", MISSING)
         self.content = content
         self.allowed_mentions = allowed_mentions
         self.thread.sent[self.index] = content
@@ -192,8 +195,9 @@ class FakeThread:
         self.sent = []
         self.messages = []
 
-    async def send(self, content, allowed_mentions=None):
+    async def send(self, content, allowed_mentions=None, view=MISSING):
         message = _HistMsg(content, self)
+        message.view = view
         self.sent.append(content)
         self.messages.append(message)
         self.allowed_mentions = allowed_mentions

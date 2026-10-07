@@ -700,6 +700,7 @@ def test_replace_current_rerenders_card_once_written(tmp_path, monkeypatch):
     """A newly current extraction re-renders its thread card at once; a
     refused write does nothing and a render failure never undoes it."""
     import notify_cards
+    monkeypatch.setattr(extract_llm, "load_config", lambda: {"notify": {"interactive": "slack"}})
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     pid, chash = db.db.execute(

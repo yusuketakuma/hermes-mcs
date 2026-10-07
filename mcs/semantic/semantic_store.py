@@ -43,6 +43,7 @@ def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL,
     so it never opens host configuration implicitly."""
     import semantic
     import semantic_llm
+    from clinical_chunking import PLAN_VERSION
     if local_model is None:
         local_model = semantic.llm_model()
     return payload_hash({
@@ -58,6 +59,7 @@ def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL,
         "registry": jev.REGISTRY_VERSION,
         "schema": SCHEMA_VERSION,
         "policy": POLICY_VERSION,
+        "chunk_plan": PLAN_VERSION,
     })
 
 

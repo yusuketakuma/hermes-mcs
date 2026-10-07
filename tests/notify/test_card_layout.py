@@ -6,11 +6,12 @@ import json
 import notify_cards
 import notify_render
 from notify_testkit import (
-    NOW, _add_request, _card, _deliver, _dispatch, _intent,
+    CFG, NOW, _add_request, _card, _deliver, _dispatch, _intent,
     _latest_render, _msg, _patient, _seed_thread, _signal_row, _spec,
     led as led,
 )
 from test_notify_lineworks import LINEWORKS, _deliver as _lw_deliver, _render as _lw_render
+from test_signal_thread_hotfix import delivered_source
 
 
 def _texts(spec):
@@ -37,7 +38,9 @@ def test_context_line_counts_posts_missing_replies_files_and_mention(led):
     assert texts[1] == "2投稿 · 返信未取得 2件 · 📎 1"
     # each post is its own zone: rule before it, its 要約 state after it
     rules = [c for c in _spec(led)["parts"]["containers"] if c.get("rule")]
-    assert len(rules) == 2 and texts.count("📋 要約 処理待ち") == 2
+    summary = notify_render._summary_block(led.db, 100, cfg=CFG)["text"]
+    assert len(rules) == 2 and texts.count(summary) == 2
+    assert summary == "📋 要約 処理待ち\n解析更新中 (完了区間 0/1)"
 
 
 def test_new_replies_since_the_card_was_posted(led):
@@ -61,7 +64,9 @@ def test_failed_extraction_is_named_on_the_post(led):
         (json.dumps({"error": 1, "attempts": 5, "hash": f"{100:064x}"}), NOW))
     led.db.commit()
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
-    assert "📋 要約 作成失敗" in _texts(_spec(led))
+    summary = notify_render._summary_block(led.db, 100, cfg=CFG)["text"]
+    assert summary in _texts(_spec(led))
+    assert summary == "📋 要約 作成失敗\n解析要確認 (完了区間 0/1)"
 
 
 def test_footer_is_one_state_item_and_revoked_card_has_no_buttons(led):
@@ -87,6 +92,8 @@ def test_signal_face_labels_type_and_state_in_japanese(led):
     _signal_row(led, "s2", stype="discharge_notice", mids=[100])
     _dispatch(led, _intent(led, "signal", payload={
         "signal_keys": ["s1", "s2"], "project_id": 1}))
+    delivered_source(led, card_id=2, mids=(100,))
+    notify_cards.sweep(led, CFG, now=NOW)
     texts = _texts(_spec(led))
     assert texts[0] == "💬 アラート ［要確認］"           # discharge is immediate
     assert "・【期限超過】note s1（解消）" in texts[-1]
@@ -101,6 +108,8 @@ def test_signal_thread_posts_are_keyed_per_signal(led):
     _signal_row(led, "s2", mids=[100])
     _dispatch(led, _intent(led, "signal", payload={
         "signal_keys": ["s1", "s2"], "project_id": 1}))
+    delivered_source(led, card_id=2, mids=(100,))
+    notify_cards.sweep(led, CFG, now=NOW)
     names = [p["name"] for p in _spec(led)["parts"]["manifest"]
              if p["kind"] == "body_part"]
     assert len(names) == 2 and all(n.startswith("s:") for n in names)

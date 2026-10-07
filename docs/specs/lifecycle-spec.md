@@ -323,3 +323,9 @@ ops コマンド経由の apply/rollback 指示、破壊的 DB 復元
 4. 📋 P3: `update.mode` 既定値決定・auto 有効化判断（猶予期間含む）
 5. 🔶 tag 署名 + `require_signed_tag`・リリース manifest（スキーマ
    互換の明示宣言）・カードへの更新ボタン
+
+## 中断復旧の完了条件（1.0.16）
+
+復旧時に抽出処理の起動確認が失敗した場合、`recovery_incomplete` と非0を返し、中断journalと未完の承認receiptを保持する。起動確認に成功した場合だけ完了記録・通知を保存する。同じjournal・HEADの再試行は起動済み処理を停止し直さない。独立watchdogの鮮度判定はロック取得後の最新journalを使う。
+
+DB復元は既存の人承認を維持し、承認済みでも置換前に停止状態を永続化する。置換失敗時は送信と処理の停止を保持し、復旧で同じ復元を再検証する。更新起動役は明示した `refs/tags/<tag>` のblobだけを展開し、symlink・gitlinkを拒否する。

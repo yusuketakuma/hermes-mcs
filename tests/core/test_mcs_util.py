@@ -3,8 +3,11 @@ import json
 import math
 
 import pytest
-
 import mcs_util as util
+
+
+def test_sentence_boundary_keeps_complete_quote_in_prior_chunk():
+    assert util.text_chunks("前文。次文。末尾", 3) == ["前文。", "次文。", "末尾"]
 
 
 def test_atomic_write_basename_and_failure_preserve_destination(tmp_path, monkeypatch):

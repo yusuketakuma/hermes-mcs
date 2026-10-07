@@ -114,6 +114,7 @@ merge 後の `services` が置き換える。`reinstall` 経路では `--install
 | `standalone_external_apply` | 独立モードは host 経由で更新する（[STANDALONE.md](STANDALONE.md#更新復旧)）。`reinstall` がある場合は同書の再導入手順 |
 | `legacy_source_manual` | v1.0.0〜1.0.2 からの更新。§8 の手動経路へ |
 | `reinstall_incomplete` | 前回の再導入が install.sh の途中で中断した。`status` を示し **【ユーザー確認】** の上で `cd "$REPO" && ./install.sh <前回と同じ opt-out> --no-services` → `"$PY" mcs/ops/mcs_setup.py services` → `"$PY" mcs/ops/mcs_update.py reinstall-done`（HEAD が再導入した版のときだけ完了を記録し、残りの後処理を復旧処理で完了）→ `check`。復旧処理は install.sh を無人で再実行しない |
+| `recovery_incomplete`（復旧レポート） | 抽出処理の起動確認が未完了。中断記録を保持するため、起動失敗の原因を修復して `recover` を再実行する。同じ復旧の再試行では起動済み処理を停止し直さない |
 | `update_state_corrupt` | `data/update_state.json` が読めない。内容を変えずに報告し、ユーザー判断を待つ |
 | `tag_not_fetched` | `git fetch --tags origin` が失敗している。ネットワーク・タグ名を確認 |
 | `validate_config_failed` / `preflight_failed: …` | 現在 / 移行先コードで設定検証が実行できない。出力を報告 |

@@ -127,7 +127,7 @@ def notify_render_body(led):
         "SELECT * FROM notification_view_manifests ORDER BY manifest_id "
         "DESC LIMIT 1").fetchone()
     return notify_render._card_body_text(
-        led.db, card, man, max_chars=None)[1]
+        led.db, card, man, max_chars=None, cfg=CFG)[1]
 
 
 def test_many_facts_long_thread_parts(led):

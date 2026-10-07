@@ -78,6 +78,19 @@ class DeliveryWorker(worker.DeliveryWorker):
             return {"result": "not_sent",
                     "error_code": "retry_policy_unknown"}
         channel = await self._channel(delivery["channel_id"])
+        if spec["parts"].get("thread_notice") is True or spec["parts"].get("source_thread") is True:
+            notice = spec["parts"].get("thread_notice") is True
+            if notice and op != "notice":
+                return {"result": "not_sent", "error_code": "thread_scope_mismatch"}
+            thread = await self._channel(delivery["thread_id"])
+            parent = getattr(thread, "parent_id", getattr(getattr(thread, "parent", None), "id", None))
+            guild = getattr(getattr(thread, "guild", None), "id", None)
+            if (str(thread.id) != delivery["thread_id"]
+                    or (notice and str(thread.id) != delivery.get("message_id"))
+                    or str(parent) != delivery["channel_id"] or str(guild) != delivery.get("guild_id")
+                    or getattr(thread, "archived", False) or getattr(thread, "locked", False)):
+                return {"result": "not_sent", "error_code": "thread_scope_mismatch"}
+            channel = thread
         if op == "revoke":
             mid = delivery.get("message_id")
             if not mid:
@@ -149,7 +162,10 @@ class DeliveryWorker(worker.DeliveryWorker):
             # the escaped text is also what remote matching compares
             body = cards.escape_md(
                 spec["parts"]["thread_body_parts"][i])
-            return await self._text_part(spec, thread, part, body, ctx)
+            update_view = i == 0 and spec["parts"].get("thread_drug_actions") is True
+            view = cards.thread_drug_view(spec) if update_view else None
+            return await self._text_part(spec, thread, part, body, ctx,
+                                         view=view, update_view=update_view)
         if part["kind"] == "attachment_part":
             mid = await self._reuse_prior_file(
                 thread, part.get("prior_remote_id"), ctx)
@@ -176,14 +192,15 @@ class DeliveryWorker(worker.DeliveryWorker):
         return {"result": "not_sent", "error_code": "unsupported_part"}
 
     async def _text_part(self, spec: dict, thread, part: dict, body: str,
-                         ctx: dict) -> dict:
+                         ctx: dict, *, view=None, update_view=False) -> dict:
         """Post one text message into the thread — deduped against this
         bot's history and rewritten in place when its text changed."""
         if spec["op"] == "update" or spec["delivery"].get("thread_id"):
             # writing into a pre-existing thread — a chunk whose
             # text is already remote binds to that message id
             # instead of posting a duplicate (remote-verified)
-            mid = await self._remote_match(thread, body, ctx)
+            mid = await self._remote_match(
+                thread, body, ctx, view=view, update_view=update_view)
             if mid is not None:
                 return {"result": "delivered",
                         "remote_id": str(mid)}
@@ -191,13 +208,15 @@ class DeliveryWorker(worker.DeliveryWorker):
             # (the extraction arrived, a reply joined): rewrite that
             # post so the thread keeps one post per chunk
             mid = await self._rewrite_prior(
-                thread, part.get("prior_remote_id"), body, ctx)
+                thread, part.get("prior_remote_id"), body, ctx,
+                view=view, update_view=update_view)
             if mid is not None:
                 return {"result": "delivered",
                         "remote_id": str(mid)}
         sent = await cards.single_post(
             self._bot, partial(thread.send, body,
-                               allowed_mentions=cards.no_pings()))
+                               allowed_mentions=cards.no_pings(),
+                               **({"view": view} if view is not None else {})))
         rid = getattr(sent, "id", None)
         if not rid:
             # the wire call completed but carries no provable
@@ -249,7 +268,8 @@ class DeliveryWorker(worker.DeliveryWorker):
         ctx["thread"] = thread
         return {"result": "delivered", "remote_id": str(thread.id)}
 
-    async def _remote_match(self, thread, text: str, ctx: dict):
+    async def _remote_match(self, thread, text: str, ctx: dict, *,
+                            view=None, update_view=False):
         """Bounded history scan — a content match binds the part to the
         real remote message id (remote-verified delivery); a miss means
         send. Only messages authored by this bot may bind: historical or
@@ -267,6 +287,14 @@ class DeliveryWorker(worker.DeliveryWorker):
                 continue                # not ours — never binds a part
             if m.id in ctx["consumed"] or m.content != text:
                 continue
+            if update_view or view is not None:
+                # Text equality cannot prove current runner tokens are installed.
+                try:
+                    await m.edit(view=view, allowed_mentions=cards.no_pings())
+                except Exception as exc:
+                    if worker.is_definitive_reject(exc):
+                        return None     # rejected edit: verify prior or post afresh
+                    raise
             ctx["consumed"].add(m.id)
             return m.id
         return None
@@ -294,7 +322,8 @@ class DeliveryWorker(worker.DeliveryWorker):
             return None
         return msg
 
-    async def _rewrite_prior(self, thread, prior, text: str, ctx: dict):
+    async def _rewrite_prior(self, thread, prior, text: str, ctx: dict, *,
+                             view=None, update_view=False):
         """Edit this bot's earlier post of the same chunk in place and
         return its id. Only a message this bot authored in this thread
         can be rewritten — a missing, foreign or already-bound target,
@@ -307,7 +336,8 @@ class DeliveryWorker(worker.DeliveryWorker):
         if msg is None:
             return None
         try:
-            await msg.edit(content=text, allowed_mentions=cards.no_pings())
+            await msg.edit(content=text, allowed_mentions=cards.no_pings(),
+                           **({"view": view} if update_view or view is not None else {}))
         except Exception as exc:
             if worker.is_definitive_reject(exc):
                 return None       # the edit did not commit — post afresh

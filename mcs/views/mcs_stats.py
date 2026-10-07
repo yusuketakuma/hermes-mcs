@@ -224,6 +224,7 @@ def _urgency_rule_outcomes(db, w, p) -> dict:
         p)]
     out = {"rule_high": 0, "llm_high": 0, "llm_high_qc_disagreed": 0,
            "rule_only": 0, "llm_routine_suppressed": 0,
+           "request_only": 0, "scope_or_evidence_held": 0,
            # ⚠ 誤り報告（緊急度）: the human labels #19 starts from
            "human_urgency_reports": db.execute(
                f"""SELECT COUNT(*) FROM artifacts h JOIN messages m
@@ -236,15 +237,20 @@ def _urgency_rule_outcomes(db, w, p) -> dict:
                 "urgency") != "high":
             continue                     # only the current rule generation
         out["rule_high"] += 1
-        shown = structured_view.message_urgency(db, mid)
+        details = structured_view.message_urgency_details(db, mid)
+        shown = details["source"]
         if shown == "llm":
             out["llm_high"] += 1
             if structured_view.urgency_qc_disagreement(db, mid):
                 out["llm_high_qc_disagreed"] += 1
         elif shown == "rule":
             out["rule_only"] += 1
-        else:
+        elif details["kind"] == "request":
+            out["request_only"] += 1
+        elif details["raw_verdict"] == "routine":
             out["llm_routine_suppressed"] += 1
+        else:
+            out["scope_or_evidence_held"] += 1
     return out
 
 

@@ -1512,7 +1512,9 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                     command_id or entry.get("command_id"))
                 journal(state, "rollback")
             try:
-                _rollback_tree(entry)
+                _rollback_tree(entry, lambda report: _consent_hold(
+                    state, RestoreConsentPending(report), entry["backup_path"]))
+                state.pop("restore_consent", None)
                 reason += " (rolled back)"
             except RestoreConsentPending as e:
                 # the post-merge child may already have restarted the
@@ -1532,6 +1534,15 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                           f"{type(qe).__name__}: {qe}"[:200])
                 return rc
             except Exception as e:
+                if _awaiting_consent_marker() or load_state().get("restore_consent"):
+                    consent_hold = True
+                    _report("restore_consent_blocked", str(e))
+                    try:
+                        quiesce()
+                    except Exception as qe:
+                        _report("restore_consent_blocked",
+                                f"{e}; quiesce failed: {type(qe).__name__}")
+                    return 2
                 rollback_failed = True
                 reason += f" (rollback failed: {e} — escalate)"
         if not rollback_failed:
@@ -1822,7 +1833,7 @@ def _rollback_backup_error(entry: dict) -> str | None:
     return "backup_invalid: " + entry["backup_path"]
 
 
-def _rollback_tree(entry: dict) -> None:
+def _rollback_tree(entry: dict, on_hold=None) -> None:
     """Restore tracked files to prev_sha — shared by rollback() and the
     post-merge failure path. Caller holds both locks and drainers are
     already quiesced. Do not additionally delete untracked paths just
@@ -1834,7 +1845,7 @@ def _rollback_tree(entry: dict) -> None:
     if _head_sha() != prev or not _tree_clean():
         raise UpdateError("rollback_verify_failed")
     if entry.get("schema_bump") and entry.get("backup_path"):
-        _restore_db(entry["backup_path"])
+        _restore_db(entry["backup_path"], on_hold=on_hold)
     _cancel_unsent_notices()
     problems = _reconcile_membership(
         entry.get("manifest_snapshot")
@@ -1940,7 +1951,8 @@ def rollback(command_id: str | None = None) -> int:
             quiesce()
             rb_error = None
             try:
-                _rollback_tree(entry)
+                _rollback_tree(entry, lambda report: _consent_hold(
+                    state, RestoreConsentPending(report), entry["backup_path"]))
             except RestoreConsentPending as e:
                 # HOLD, don't unwind: drainers stay stopped, senders
                 # stay denied (awaiting_consent marker + update marker),
@@ -1953,6 +1965,10 @@ def rollback(command_id: str | None = None) -> int:
                 consent_hold = True
                 return 2
             except Exception as e:
+                if _awaiting_consent_marker() or load_state().get("restore_consent"):
+                    consent_hold = True
+                    _report("restore_consent_blocked", str(e))
+                    return 2
                 # not just UpdateError — any failure here must still
                 # reach restart_agents() below (drainers are quiesced)
                 rb_error = e
@@ -2217,7 +2233,7 @@ def _replace_database(backup_path, expected_sha, before_replace):
             pass
 
 
-def _restore_db(backup_path: str) -> None:
+def _restore_db(backup_path: str, on_hold=None) -> None:
     """Verified restore — validate the backup before touching the live
     DB. Skips when the live schema already matches the backup (a failed
     apply may never have migrated). Stages the private copy, verifies its
@@ -2269,6 +2285,8 @@ def _restore_db(backup_path: str) -> None:
                                    report_id=report["report_id"])
     except OSError as e:
         raise UpdateError(f"restore_marker_failed: {e}") from e
+    if on_hold is not None:
+        on_hold(report)  # Persist the freeze before even an approved swap can fail.
     if _restore_consent(report) is None:
         raise RestoreConsentPending(report)
     # Mark BEFORE the file swap: a crash after the replace but before
@@ -2281,9 +2299,15 @@ def _restore_db(backup_path: str) -> None:
                               DATA, backup_path=backup_path, by="mcs_update",
                               report_id=report["report_id"]))
     except OSError as e:
-        # callers catch UpdateError (apply bail / recover escalate /
-        # rollback rb_error); a raw OSError would slip past them and
-        # leave quiesced drainers down
+        # A failed swap after the restored marker was written must still
+        # hold writers on the live newer schema. Callers honor this marker.
+        try:
+            notify_cards.mark_restored(
+                DATA, backup_path=backup_path, by="mcs_update",
+                phase="awaiting_consent", report_id=report["report_id"])
+        except OSError as marker_error:
+            _consent_hold(load_state(), RestoreConsentPending(report), backup_path)
+            raise UpdateError(f"restore_marker_failed: {marker_error}") from e
         raise UpdateError(f"restore_failed: {e}") from e
     if not ledger.valid_mcs_db(LEDGER):
         raise UpdateError("restore_verify_failed")
@@ -2463,8 +2487,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
             r = _git(["merge", "--abort"])
             if r.returncode != 0 or _head_sha() != prev:
                 return escalate("merge --abort failed")
-            _finish_recovery(state, "merge_aborted", removed)
-            return 0
+            return _finish_recovery(state, "merge_aborted", removed)
         if "done" in stages and not applying:
             # child wrote 'done' then died before the parent finished
             # bookkeeping — complete it
@@ -2483,8 +2506,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
         if not applying:
             # pre-'applying' remnant: nothing was ever mutated — safe
             # to clean (previously wedged all updates, F10)
-            _finish_recovery(state, "interrupted_pre_merge", removed)
-            return 0
+            return _finish_recovery(state, "interrupted_pre_merge", removed)
 
         head = _head_sha()
         clean = _tree_clean()
@@ -2497,7 +2519,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     return escalate("target tree could not be cleaned")
             if applying.get("rollback") and applying.get("backup_path"):
                 try:
-                    _restore_db(applying["backup_path"])
+                    _restore_db(applying["backup_path"], lambda report: _consent_hold(
+                        state, RestoreConsentPending(report), applying["backup_path"]))
                 except RestoreConsentPending as e:
                     # held, not escalated: drainers stay stopped, both
                     # markers stay up, the receipt and 'applying' stay —
@@ -2568,10 +2591,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 _git_out(["reset", "--hard", prev])
                 if _head_sha() != prev or not _tree_clean():
                     return escalate("prev tree could not be cleaned")
-                _finish_recovery(state, "mixed_tree_reset", removed)
-                return 0
-            _finish_recovery(state, "interrupted_pre_merge", removed)
-            return 0
+                return _finish_recovery(state, "mixed_tree_reset", removed)
+            return _finish_recovery(state, "interrupted_pre_merge", removed)
         return escalate("unclassifiable repo state — "
                         f"HEAD={head[:12]} prev={str(prev)[:12]} "
                         f"target={str(target)[:12]} clean={clean}")
@@ -2586,7 +2607,19 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 os.close(fd)
 
 
-def _finish_recovery(state: dict, result: str, removed: list) -> None:
+def _finish_recovery(state: dict, result: str, removed: list) -> int:
+    # Keep the journal until workers are verified live; retry healthy workers
+    # without bouncing them again for the same journal and checkout.
+    _remove_marker()
+    dkey = _drainers_key(state, _head_sha())
+    if _last_report().get("drainers_key") == dkey:
+        problems = restart_agents(bounce=False)
+    else:
+        problems = restart_agents()
+    if problems:
+        _report("recovery_incomplete", "restart:" + ",".join(problems),
+                drainers_key=dkey)
+        return 1
     applying = state.get("applying") or {}
     cid = applying.get("command_id")
     if cid:
@@ -2601,11 +2634,9 @@ def _finish_recovery(state: dict, result: str, removed: list) -> None:
     state["stages"] = []
     state.pop("restore_consent", None)
     save_state(state)
-    _remove_marker()
-    problems = restart_agents()
-    _report(result, "removed locks: " + ",".join(removed)
-            + (" restart:" + ",".join(problems) if problems else ""))
+    _report(result, "removed locks: " + ",".join(removed))
     _enqueue_notice(f"[MCS] 更新が中断され復旧しました: {result}")
+    return 0
 
 
 def _report(result: str, detail: str, **extra) -> None:

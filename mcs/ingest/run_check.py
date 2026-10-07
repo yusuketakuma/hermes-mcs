@@ -74,7 +74,7 @@ COVERAGE_STALL_S = 24 * 3600
 # attachments (up to 64 MiB x 30 per tick) defer below floor + this
 ATTACH_DISK_MARGIN_MB = 2048
 KARTE_SUMMARY_TICK_CAP = 12   # 連携サマリー GETs per run; the rest carry over
-KARTE_SUMMARY_FILL = 10       # never-fetched projects filled per deep run
+KARTE_SUMMARY_FILL = 10       # missing/stale summaries filled per deep run
 KARTE_SUMMARY_MARGIN_S = 60   # keep the tail of the deadline for semantic/finish
 
 
@@ -1159,10 +1159,12 @@ def stage_karte_summary(adapter, ledger, result, deadline,
     new chat (unread root, reply job or self-probe import); a deferred
     (cap/margin) or retryably failed GET keeps it, a non-retryable one
     (4xx, schema, or a per-karte expiry while the session probe is
-    fine) clears it until the next new message, and any failure keeps
+    fine) clears the immediate due flag; deep refresh can retry after backoff.
+    Any failure keeps
     the project out of selection for 6 h (KARTE_SUMMARY_BACKOFF_S), so
     a dead karte cannot starve the cap — and on deep runs up to KARTE_SUMMARY_FILL
-    never-fetched live projects (oldest first). At most
+    live projects, prioritizing never-fetched summaries then summaries last
+    fetched at least 24 h ago (oldest first). At most
     KARTE_SUMMARY_TICK_CAP GETs per run, stopping KARTE_SUMMARY_MARGIN_S
     before the deadline; runs after notify. Per-project MCSErrors are
     recorded under result["karte_summary"] and never make the run
@@ -1172,7 +1174,8 @@ def stage_karte_summary(adapter, ledger, result, deadline,
     result["karte_summary"] = stats
     targets = ledger.karte_summary_due()
     if jobs_only:
-        targets += ledger.karte_summary_missing(KARTE_SUMMARY_FILL)
+        missing = ledger.karte_summary_missing(KARTE_SUMMARY_FILL)
+        targets += missing + ledger.karte_summary_stale(KARTE_SUMMARY_FILL - len(missing))
     gets = 0
     for pid in dict.fromkeys(targets):
         karte_id = ledger.karte_id(pid)
@@ -2063,6 +2066,10 @@ def _main() -> int:
         _run_stage(result, "metadata_shadow", deadline, _run_metadata_shadow,
                    adapter, ledger, result, deadline, cfg,
                    manual=args.metadata_shadow)
+        if args.jobs_only and cfg.get("clinical_metadata") is True and not _code_changed(result):
+            import project_metadata
+            result["clinical_metadata"] = project_metadata.sync_clinical_metadata(
+                ledger, adapter, enabled=True, deadline=deadline)
         # optional, but a slow MCS can spend every tick's budget on unread
         # — once the daily backup is overdue it runs past the deadline
         _run_stage(result, "housekeeping", deadline, _housekeeping, result,

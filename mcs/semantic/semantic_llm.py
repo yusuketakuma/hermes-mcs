@@ -32,6 +32,7 @@ _FACT_PROMPT = """あなたは在宅医療チャット記録の事実候補抽�
 記載されている事実候補をJSONのみで列挙してください。推測や外部知識は禁止です。
 引用は本文から一字一句そのままコピーしてください。
 薬剤・対象・事象・時点ごとに候補を分け、別薬剤の変更なしと増量を混ぜないでください。
+同一事実の重複説明と任意欄のnullは省略する。statement/kind/status/polarity/evidence_quoteは省略しない。
 
 各候補のキー:
 - "statement": 対象・値・否定・時制を省略せず簡潔に（報告としての表現）
@@ -74,6 +75,17 @@ _FACT_V2_PROMPT = """あなたは在宅医療チャット記録の原子事実�
 - "quantity": 数量表現またはnull
 - "importance": T0（緊急）|T1（重要）|T2（通常）|T3（参考）|unknown
 - "evidence_quote": 根拠となる本文の完全一致引用（必要な範囲を省略しない）
+- "patient_context": 任意。患者背景・服薬実態・副作用・観測・支援・転帰や次回確認を
+  {"category":カテゴリ,"text":根拠引用中の原文,"details":[{"key":属性,"value":原文値,"evidence":属性の完全一致引用}]}で保持。
+  category: demographics|diagnoses|history|course|adl|living|care_level|care_services|care_team|contacts|allergies|devices|preferences|medication_management|nutrition|cognition|adverse_events|observations|followup。
+  details.key: drug_name|medication_kind|prescriber|actual_dose|actual_frequency|residual_quantity|missed_doses|symptom|onset|response|outcome|certainty|observation_name|value|unit|measured_on|condition|swallowing|self_management|supporter|support_method|followup|assignee|due_text|observed_on|last_confirmed_on|confirmed_by。
+  他院処方・OTC・サプリ、実際の服用量/頻度、残薬/飲み忘れ、副作用の被疑薬・症状・発生日・対応・転帰、
+  測定値/単位/測定時期/条件、服薬支援・次回担当/期限/確認者も省略しない。
+  全て同じ事実のevidence_quote内の原文に限定し、測定日を投稿日で補完せず、否定・家族・予定・過去・条件を残す。
+  現在の確定値・処方の同等性・薬剤との因果関係や支援効果を推測しない。
+
+同一事実の重複説明・任意欄のnull/空配列は省略する。statement/kind/subject_role/polarity/
+epistemic/workflow_status/evidence_quote/category_presenceは省略せず、不明は指定のunknown/nullで示す。
 
 "category_presence": 本文に各カテゴリの事実が存在するかの判定。
 medication|allergy_intolerance|adverse_drug_event|adherence_administration|

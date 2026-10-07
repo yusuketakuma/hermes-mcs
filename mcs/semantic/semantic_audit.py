@@ -268,6 +268,10 @@ def _fact_audit_target(fact: dict) -> str:
               f"subject:{fact.get('subject')}"]
     if fact.get("kind") == "medication_event":
         fields.append(f"action:{fact.get('action')}")
+    if "patient_context" in fact:
+        from semantic_facts import validate_patient_context
+        fields.append("patient_context:" + json.dumps(
+            validate_patient_context(fact), ensure_ascii=False, sort_keys=True))
     return f"{fact.get('statement')} [{' '.join(fields)}]"
 
 
@@ -323,12 +327,20 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
                         "text": ev["quote"]})
             ctx.append({"id": f"{ref}_ctx", "role": "evidence_context",
                         "text": source_text})
+        if "patient_context" in fact:
+            from semantic_facts import ContractError, validate_patient_context
+            try:
+                validate_patient_context(fact, [item["text"] for item in ctx
+                                                if item["role"] == "evidence_quote"])
+            except ContractError:
+                findings.append({"code": "fact_patient_context_invalid", "fact": fid})
+                continue
         question = jev.choice_question(
             "Does the claim in state.target.text follow from the "
             "evidence_quote entries within the evidence_context source "
             "text? The target ends with structured fields in brackets "
             "(kind/polarity/epistemic/workflow/event_time/subject[/"
-            "action]) — judge statement AND fields together: a quote "
+            "action]/optional patient_context category/text/details) — judge statement AND fields together: a quote "
             "negated, attributed to another subject, or placed at a "
             "different time does NOT support the claim.",
             FACT_SUPPORT_OPTIONS)

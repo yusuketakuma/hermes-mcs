@@ -45,6 +45,8 @@ class Actions:
             return None
         if not actor.startswith("lineworks:" + self.settings["team_id"] + ":"):
             return None
+        if context.get("actor") is not None and context["actor"] != actor:
+            return None
         if context.get("project_id") is not None:
             if not projects.project_allowed(self.settings, context["project_id"]):
                 return None
@@ -98,7 +100,9 @@ class Actions:
                     await self._more(user, context)
                     return
             elif not (context.get("action") == "task_status"
-                      or (source.get("channelId") is None and context.get("via_more"))):
+                      or (source.get("channelId") is None and (
+                          context.get("via_more") or (context.get("action") == "meds"
+                                                     and context.get("ephemeral") is True)))):
                 return
             origin = {key: self.settings[key] for key in
                       ("transport", "profile", "application_id", "team_id", "channel_id")}
@@ -343,9 +347,18 @@ class Actions:
             return
         token_ctx = result.get("token_ctx") or {}
         self.reg.put_tokens({token: {**ctx, **rec["origin"], "route_epoch": self.settings["route_epoch"]}
-                             for token, ctx in token_ctx.items()})
-        for message, tasks in answer:
-            await self._say(user, message)
+                             for token, ctx in token_ctx.items()}, durable=True)
+        navigation = [{"type": "message", "label": item["label"],
+                       "postback": "mcs:a:" + item["token"]}
+                      for item in result.get("navigation") or []]
+        for index, (message, tasks) in enumerate(answer):
+            if index == 0 and navigation:
+                chunks = text.split_body(message, limit=1000, max_chunks=None)
+                await self._say(user, chunks[0], navigation)
+                for chunk in chunks[1:]:
+                    await self._say(user, chunk)
+            else:
+                await self._say(user, message)
             if tasks:
                 actions = [{"type": "message", "label": f"{tr['label']} #{task['request_id']}"[:20],
                             "postback": "mcs:a:" + tr["token"]}

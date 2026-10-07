@@ -11,6 +11,7 @@ import time
 from collections.abc import Mapping
 
 from adapters.common.paths import read_verified_attachment
+from adapters.common import envelopes
 from adapters.common.spec import token_map
 from adapters.common.worker import WorkspaceDeliveryWorker as _BaseWorker
 
@@ -224,7 +225,38 @@ class SlackCardAdapter:
         op = spec["op"]
         message_id = delivery.get("message_id")
         try:
-            if op == "revoke":
+            if spec["parts"].get("thread_notice") is True or spec["parts"].get("source_thread") is True:
+                thread_ts = delivery.get("thread_id")
+                notice = spec["parts"].get("thread_notice") is True
+                if ((notice and (op != "notice" or thread_ts != message_id))
+                        or not isinstance(thread_ts, str) or not _TS.fullmatch(thread_ts)):
+                    return {"result": "not_sent", "error_code": "thread_scope_mismatch"}
+                try:
+                    history_call = getattr(sender, "conversations_history", None)
+                    if history_call is not None:
+                        history = _payload(await history_call(channel=self._channel_id,
+                            oldest=thread_ts, latest=thread_ts, inclusive=True, limit=1))
+                    else:
+                        history = _payload(await sender.conversations_replies(
+                            channel=self._channel_id, ts=thread_ts, limit=1))
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    return {"result": "not_sent", "error_code": "thread_prefetch_failed"}
+                roots = history.get("messages")
+                if (history.get("ok") is not True or not isinstance(roots, list) or not roots
+                        or roots[0].get("ts") != thread_ts or not self.authored(roots[0])):
+                    return {"result": "not_sent", "error_code": "thread_root_unverified"}
+                if op == "update":
+                    response = await _call(sender.chat_update, channel=self._channel_id, ts=message_id,
+                        text=text, blocks=blocks, parse="none", link_names=False)
+                elif op == "revoke":
+                    response = await _call(sender.chat_delete, channel=self._channel_id, ts=message_id)
+                else:
+                    response = await _call(sender.chat_postMessage, channel=self._channel_id,
+                        thread_ts=thread_ts, text=text, blocks=blocks, parse="none", link_names=False,
+                        unfurl_links=False, unfurl_media=False)
+            elif op == "revoke":
                 response = await _call(sender.chat_delete,
                     channel=self._channel_id, ts=message_id)
             elif op == "update":
@@ -288,6 +320,47 @@ class DeliveryWorker(_BaseWorker):
         return outcome
 
     # -- durable render parts (T9) ----------------------------------------
+
+    def _pin_active_thread(self, claim, ctx, records):
+        """Pin private drug answers only after a delivered body reply."""
+        spec = claim["spec"]
+        root = ctx.get("card_message_id")
+        if not isinstance(root, str) or not _TS.fullmatch(root):
+            return
+        for part in spec["parts"].get("manifest") or []:
+            if part.get("kind") != "body_part":
+                continue
+            rows = records.get(envelopes.part_attempt_id(
+                spec["delivery_id"], part["part_id"]), [])
+            if any(row.get("phase") == "result"
+                   and row.get("result") == "delivered"
+                   and isinstance(row.get("remote_id"), str)
+                   and _TS.fullmatch(row["remote_id"])
+                   and row["remote_id"] != root for row in rows):
+                pins = {}
+                for token in token_map(spec):
+                    current = self._reg.token(token)
+                    if (current and current.get("action") in ("meds", "drugsearch")
+                            and current.get("message_id") == root
+                            and current.get("team_id") == self._settings["team_id"]
+                            and current.get("channel_id") == self._settings["channel_id"]):
+                        pins[token] = {key: value for key, value in current.items()
+                                       if key != "at"}
+                        pins[token]["verified_thread_id"] = root
+                if pins:
+                    self._reg.put_tokens(pins, durable=True)
+                return
+
+    async def _drive_parts(self, claim, manifest, ctx, records):
+        # Settled replies bypass _perform_part on crash-resume.
+        self._pin_active_thread(claim, ctx, records)
+        await super()._drive_parts(claim, manifest, ctx, records)
+
+    async def _attempt_part(self, claim, part, ctx):
+        await super()._attempt_part(claim, part, ctx)
+        if part["kind"] == "body_part":
+            records = await asyncio.to_thread(self._jview.refresh)
+            self._pin_active_thread(claim, ctx, records)
 
     async def _perform_part(self, claim: dict, part: dict,
                             ctx: dict) -> dict:

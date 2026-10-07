@@ -23,7 +23,7 @@ from typing import Any
 
 from hermes_plugin import projects
 from adapters.common import envelopes, paths, registry, text
-from .cards import MENU_ID, no_pings
+from .cards import MENU_ID, no_pings, thread_drug_view
 
 ACTION_PREFIX = "mcs:a:"
 MODAL_PREFIX = "mcs:m:"
@@ -55,6 +55,15 @@ def _task_view(items: list):
                 custom_id=f"{ACTION_PREFIX}{tr['token']}"))
             count += 1
     return view if count else None
+
+
+def _answer_view(tasks, result: dict, index: int):
+    """Task controls or first-chunk private medication navigation."""
+    if tasks:
+        return _task_view(tasks)
+    if index == 0 and result.get("navigation"):
+        return thread_drug_view({"parts": {"action_rows": [result["navigation"]]}})
+    return None
 
 
 def _authorizing_channel(interaction) -> tuple[str, str | None]:
@@ -736,12 +745,12 @@ class Actions:
                     continue
                 # a view answer that outlived the wait window still owes
                 # its text (generic text.ja would only say 反映しました),
-                # and 📋 transition tokens must land before their buttons
+                # and private control tokens must land before their buttons
                 await self._register_tokens(result)
-                for msg, tasks in answer:
+                for index, (msg, tasks) in enumerate(answer):
                     # an all-done list has no buttons: _task_view → None,
                     # and an explicit view=None is a TypeError
-                    view = _task_view(tasks) if tasks else None
+                    view = _answer_view(tasks, result, index)
                     await send(msg, ephemeral=True, **(
                         {"view": view} if view is not None else {}))
             except Exception as e:
@@ -750,8 +759,7 @@ class Actions:
     # -- response helpers --------------------------------------------------
 
     async def _register_tokens(self, result: dict) -> None:
-        """A 📋 task list carries runner-minted transition tokens whose
-        ctx must land in the registry before the buttons are clickable."""
+        """Register runner-issued private-control tokens before their buttons."""
         token_ctx = result.get("token_ctx") or {}
         if token_ctx:
             await asyncio.to_thread(self._reg.put_tokens, token_ctx)
@@ -760,11 +768,11 @@ class Actions:
                            result: dict) -> None:
         """A view answer (text.view_answer) as ephemeral followups —
         text stays ephemeral (unlike a file attachment, whose CDN URL is
-        reachable by link alone); a task list carries its buttons."""
+        reachable by link alone); private task/medication controls ride their text."""
         await self._register_tokens(result)
-        for msg, tasks in answer:
+        for index, (msg, tasks) in enumerate(answer):
             await self._followup(interaction, msg,
-                                 view=_task_view(tasks) if tasks else None)
+                                 view=_answer_view(tasks, result, index))
 
     def _allowed_pid(self, project_id) -> bool:
         return projects.project_allowed(self._settings, project_id)

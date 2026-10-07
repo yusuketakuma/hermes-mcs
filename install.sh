@@ -307,8 +307,12 @@ bootstrap_agent() {  # <label> <plist>
 # <tmp> <dst>: publish tmp over dst (rename) only when the content
 # differs; returns 0 when dst changed
 publish() {
-    if [ -f "$2" ] && cmp -s "$1" "$2"; then rm -f "$1"; return 1; fi
-    mv -f "$1" "$2"
+    if [ -f "$2" ] && cmp -s "$1" "$2"; then
+        rm -f "$1" || die "cannot remove temporary file $1 — repair permissions, then re-run install.sh"
+        return 1
+    fi
+    # Called in an if: POSIX shells disable errexit throughout this function.
+    mv -f "$1" "$2" || die "cannot publish $2 — repair permissions or disk space, then re-run install.sh"
 }
 # the checkout an existing install points at, when it is not $REPO
 # (a recorded checkout that no longer exists is not a conflict)
@@ -390,7 +394,7 @@ preflight() {
     if _py="$(find_py)"; then pf_ok "Python 3.11–3.13: $_py"
     elif [ "$_brew_fills" -eq 1 ]; then pf_info "no Python 3.11–3.13 yet — stage 1 installs python@3.13"
     else pf_ng "no Python 3.11–3.13 on PATH" "brew install python@3.13"; fi
-    if [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0 ]; then
+    if [ -n "$RECOVERY_OPTION" ] || { [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0 ]; }; then
         if [ -n "$_py" ] && RECOVERY_PYTHON="$(recovery_runtime_ok "$_py")"; then
             pf_ok "recovery template interpreter: Python >=3.9 and safe SQLite"
         elif [ -z "$_py" ] && [ -z "$RECOVERY_OPTION" ] && [ "$_brew_fills" -eq 1 ]; then

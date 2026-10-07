@@ -38,10 +38,13 @@ def test_chat_and_text_summaries_show_candidates_preserving_raw_dose_action_plan
     monkeypatch.setattr(drug_map, 'load', lambda *a, **k: pytest.fail('dictionary file access'))
     store.db.execute('PRAGMA query_only=ON')
     for text in ('\n'.join(structured_view.structured_lines(store.db, 1)),
-                 _text_notice(store), notify_render._structured_block(store.db, 1)['text']):
+                 _text_notice(store)):
         assert 'キラナ 5mg[開始][予定](内服・1日1回・頓服)' in text
         assert '成分候補: 架空成分甲' in text and '・未確認' in text
         assert 'キラナ' in text  # the ingredient never replaces the surface-name row
+    card = notify_render._structured_block(store.db, 1)['text']
+    assert 'キラナ 5mg[開始][予定](内服・1日1回・頓服)' in card
+    assert '架空成分甲' not in card and '成分候補:' not in card
 
 
 @pytest.mark.parametrize('excluded', [{'negated': True}, {'subject': 'family'}, {'status': 'past'}])
@@ -80,7 +83,8 @@ def test_render_currency_hides_stale_candidates_and_changes_source_fingerprint(s
     dictionary = _dictionary(tmp_path)
     drug_map.derive(store, dictionary)
     before = _source_fp(store)
-    assert '架空成分甲' in notify_render._structured_block(store.db, 1)['text']
+    assert '架空成分甲' in _text_notice(store)
+    assert '架空成分甲' not in notify_render._structured_block(store.db, 1)['text']
     if mode == 'switch':
         document = deepcopy(DOCUMENT)
         document['dict_id'] = 'fictional-next'

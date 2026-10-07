@@ -194,7 +194,9 @@ def test_restore_marker_holds_content_but_allows_existing_alerts(text_world, mon
     # gated content was deferred out of the due window; it resumes after
     monkeypatch.setattr(notify_flush.time, "time",
                         lambda: 1_790_000_000.0 + notify_flush.RERENDER_RETRY_S)
-    assert notify_flush.flush(w.led, limit=20)["sent"] == 5
+    # Patient signal stays private-thread pending; the four other synthetic
+    # content kinds retain their existing text route.
+    assert notify_flush.flush(w.led, limit=20)["sent"] == 4
 
 
 def test_reconcile_retains_unverifiable_text_after_marker_clears(text_world):

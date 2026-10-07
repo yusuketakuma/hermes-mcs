@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "患者背景の詳細属性と登録済み検査・薬剤を取得元別に確認",
+  "summary": "既存の患者情報読取りで、実際の服薬状況・副作用・観測時期・支援や確認事項の属性を原文の根拠とともに確認できます。任意収集済みの登録薬剤・検査項目・観測値は、チャットや連携サマリーと分けて取得状態・最終成功・最終試行・単位定義を表示します。家族の値・予定・条件付きの値を患者本人の現在の検査値としてまとめません。",
+  "upgrade": "追加設定は不要です。新しい抽出属性は対応する投稿の再抽出後に表示します。登録データの取得は既存の任意収集設定に従い、この読取り機能だけでは通信・取得・設定変更を行いません。自動取得の観測値で項目定義世代が変わった場合は旧値の表示を保留し、新世代の再取得を待ちます。世代pinのない従来の手動取得は既存の取得時定義を保持します。",
+  "details": [
+    "read_model detail・evidence等では検証済みdetailsの値と原文引用を保持し、aggregateはカテゴリ・属性key・件数だけに限定する。取得日時と具体的な観測日時は区別し、公開aggregateへ観測日・具体値・単位・確認者名を含めない。",
+    "registered_dataは既存project_metadata_viewの検証・取得状態・鮮度判定を再利用する。相談group・現karte mapping不一致を除外し、登録データを臨床上の現在値やチャットとの一致として解釈しない。",
+    "観測値のdefinition_source_artifact_idがある場合は同患者・同karteの最新成功項目世代と照合し、変更時はdefinition_mapping_changedを返して旧値を除外する。pin無しの旧手動取得はlegacy_unpinnedとして区別する。",
+    "全体record数と各登録rowsのtotal/truncatedを個別に表示し、明示limitによる省略を黙って完全な結果にしない。labsの対象・時制・原文測定時期・条件を保持し、family/other/planned/条件値は未確認候補欄へ表示する。"
+  ],
+  "refs": ["mcs/views/read_model.py", "mcs/views/project_metadata_view.py", "mcs/views/structured_view.py", "tests/views/test_registered_clinical_read_model.py"]
+}

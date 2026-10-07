@@ -54,6 +54,10 @@ cd hermes-mcs
 ./install.sh               # 3. 本導入。途中で止まっても直して再実行すれば続きから進む
 ```
 
+LLM・復旧設定のファイル配置や一時ファイルの削除に失敗した場合も、`install.sh` は非0で停止する。
+権限・空き容量を修復して再実行する。`--recovery-python` を明示した場合は、
+`--no-recovery` と併用した事前チェックでも指定を検証する。
+
 `install.sh` の最後に `Installed. Summary:` と、次に実行するコマンドが
 **フルパスで**表示される。それをそのままコピーして実行する（下はその形。
 `python` は install.sh が作った venv のインタプリタで、macOS 標準の

@@ -68,7 +68,7 @@ PARTS_KEYS = frozenset({
     "page", "pages", "thread_name", "thread_body_parts", "manifest",
     # "silent": footer text carries <@id> member mentions — Discord sends
     # them with allowed_mentions=none; Slack replaces them with names
-    "mentions", "preview_text"})
+    "mentions", "preview_text", "thread_drug_actions", "drug_view_navigation", "thread_notice", "source_thread"})
 PART_ENTRY_KEYS = frozenset({
     "part_id", "kind", "index", "sha256", "bytes", "name",
     "attachment_id", "path", "unavailable", "prior_remote_id", "caption"})
@@ -273,6 +273,28 @@ def validate(spec) -> dict:
     if name is not None and not _text(name, MAX_THREAD_NAME):
         _err("bad_thread_name")
     _validate_part_plan(spec)
+    if "thread_notice" in parts and (
+            parts["thread_notice"] is not True or spec["op"] != "notice"
+            or spec["delivery"].get("transport", "discord") not in ("slack", "discord")
+            or not spec["delivery"].get("thread_id") or not spec["delivery"].get("message_id")):
+        _err("bad_thread_notice")
+    if "source_thread" in parts and (
+            parts["source_thread"] is not True or spec.get("kind") != "signal"
+            or spec["op"] == "notice" or not spec["delivery"].get("thread_id")
+            or spec["delivery"].get("transport", "discord") not in ("slack", "discord")):
+        _err("bad_source_thread")
+    if "drug_view_navigation" in parts and (
+            parts["drug_view_navigation"] is not True
+            or not any(b.get("id") == "meds"
+                       for row in parts["action_rows"] for b in row)):
+        _err("bad_drug_view_navigation")
+    if "thread_drug_actions" in parts and (
+            parts["thread_drug_actions"] is not True
+            or spec["delivery"].get("transport", "discord") != "discord"
+            or spec["op"] == "revoke"
+            or not parts.get("manifest") or not parts.get("thread_body_parts")
+            or not any(p["kind"] == "thread" for p in parts["manifest"])):
+        _err("bad_thread_drug_actions")
     return spec
 
 

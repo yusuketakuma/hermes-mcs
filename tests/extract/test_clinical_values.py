@@ -227,3 +227,10 @@ def test_sampling_date_comes_from_the_clause_holding_the_matched_reading():
     quote = "Cr上昇の既往あり、2026年10月1日採血でCr 1.2mg/dL"
     lab = lab_candidate("Cr", "1.2", "mg/dL", quote)
     assert lab["measured_on"] == "2026-10-01"
+
+
+def test_family_reporter_and_mixed_source_do_not_discard_patient_lab():
+    from clinical_values import lab_candidate
+    for quote in ("娘からの報告。本人はCr 0.9 mg/dL。",
+                  "母は発熱。本人はCr 0.9 mg/dL。"):
+        assert lab_candidate("Cr", 0.9, "mg/dL", quote)["confirmation"] == "quote_supported"

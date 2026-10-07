@@ -212,18 +212,66 @@ def message_urgency(db, mid: int) -> str | None:
     urgency reading for cards, text notices and signal escalation.
     canonical_projection / semantic_facts_v4 rows carry no urgency, so the
     newest hash-current extract_llm row supplies the verdict behind them."""
-    verdict = (latest_fact_artifact(db, mid) or {}).get("urgency")
+    return message_urgency_details(db, mid)["source"]
+
+
+def message_urgency_details(db, mid: int) -> dict:
+    """Report guarded urgency separately from the model's raw verdict and preserve review holds."""
+    from extract import (clinical_urgency_quote, patient_clinical_quotes, patient_rule_urgency_quotes,
+                         patient_urgency_quotes, urgent_request_quote)
+
+    document = latest_fact_artifact(db, mid) or {}
+    verdict = document.get("urgency")
     if verdict not in ("high", "routine", "unclear"):
-        verdict = (latest_artifact(db, "extract_llm", mid) or {}).get("urgency")
+        document = latest_artifact(db, "extract_llm", mid) or {}
+        verdict = document.get("urgency")
+    result = {"source": None, "subject": "unknown", "reasons": [], "raw_verdict": verdict,
+              "verdict": verdict, "held": False, "kind": "clinical"}
+    rule = latest_artifact(db, "extract_v1", mid) or {}
+    if verdict not in ("high", "routine", "unclear") and rule.get("urgency") != "high":
+        return result
+    if db is None:
+        if verdict == "high":
+            result.update(verdict="unclear", held=True, scopes=["unknown"])
+        return result
+    columns = {column[1] for column in db.execute("PRAGMA table_info(patients)")}
+    name = "p.patient_name" if "patient_name" in columns else "NULL"
+    kind = "p.project_type" if "project_type" in columns else "NULL"
+    row = db.execute(f"SELECT m.body_text,m.body_state,{name} patient_name,{kind} project_type FROM messages m "
+                     "LEFT JOIN patients p ON p.project_id=m.project_id WHERE m.message_id=?", (mid,)).fetchone()
+    if row is None or row["body_state"] not in (None, "full") or not isinstance(row["body_text"], str):
+        return result
+    body = row["body_text"]
+    default = "unknown" if row["project_type"] == "group" else "patient"
+    if default == "unknown":
+        if verdict == "high":
+            result.update(verdict="unclear", held=True, scopes=["unknown"])
+        return result
     if verdict == "high":
-        return "llm"
+        quotes = document.get("urgency_evidence")
+        reasons, scopes = patient_urgency_quotes(
+            body, quotes if isinstance(quotes, list) else [], patient_name=row["patient_name"], default=default)
+        clinical = [quote for quote in reasons if clinical_urgency_quote(quote)]
+        if clinical:
+            return {**result, "source": "llm", "subject": "patient", "reasons": clinical[:2]}
+        if reasons and any(urgent_request_quote(quote) for quote in reasons):
+            result.update(kind="request", reasons=reasons[:2])
+        result.update(verdict="unclear", held=True, scopes=scopes or ["unknown"])
     if verdict == "routine":
-        return None
+        return result
     # "unclear" is an abstention, not a clearance — it falls through to
     # the lexical net exactly like a missing verdict does.
-    if (latest_artifact(db, "extract_v1", mid) or {}).get("urgency") == "high":
-        return "rule"
-    return None
+    if rule.get("urgency") == "high":
+        reasons = patient_rule_urgency_quotes(body)
+        scoped, _ = patient_urgency_quotes(body, reasons, patient_name=row["patient_name"], default=default)
+        clinical = [quote for quote in scoped if clinical_urgency_quote(quote)]
+        if not clinical and any(urgent_request_quote(quote) for quote in scoped):
+            clinical = patient_clinical_quotes(body, patient_name=row["patient_name"])
+        if clinical and default == "patient":
+            result.update(source="rule", subject="patient", reasons=clinical[:2])
+        elif reasons:
+            result.update(kind="request", reasons=reasons[:2])
+    return result
 
 
 def urgency_qc_disagreement(db, mid: int) -> dict | None:
@@ -294,7 +342,7 @@ def _head_lines(llm: dict | None, v1: dict, urgency: str | None = None,
     return lines
 
 
-def _vital_line(llm: dict | None, v1: dict):
+def _vital_line(llm: dict | None, v1: dict, body=None):
     selected = llm is not None
     llm = llm or {}
     lv = llm.get("vitals") if isinstance(llm.get("vitals"), dict) else {}
@@ -302,6 +350,9 @@ def _vital_line(llm: dict | None, v1: dict):
     # A missing LLM key may be an intentional subject/time exclusion.
     # Keep a reading intact; never construct a BP pair across sources.
     vit = lv if selected else vv
+    if body is not None:
+        from extract import patient_vitals
+        vit = patient_vitals(vit, body)
     if not vit:
         return None
     parts = []
@@ -334,11 +385,13 @@ def _lab_lines(llm: dict, body: str | None = None) -> list[str]:
         evidence = lb.get("evidence")
         located = (isinstance(evidence, str) and body is not None
                    and locate_quote_span(body, evidence) is not None)
+        contextual = (lb.get("subject") in ("family", "other")
+                      or lb.get("status") == "planned" or bool(lb.get("condition")))
         normalized = lab_candidate(
             lb["name"], lb["value"],
             lb.get("unit") if isinstance(lb.get("unit"), str) else None,
             evidence if located else None,
-            unverified=item_unverified(lb),
+            unverified=item_unverified(lb) or contextual,
             flag=lb.get("flag") if lb.get("flag") in ("high", "low") else None)
         d = f"{lb['name']} {lb.get('value')}"
         if isinstance(lb.get("unit"), str) and lb["unit"]:
@@ -347,6 +400,15 @@ def _lab_lines(llm: dict, body: str | None = None) -> list[str]:
             d += f"({flag})"
         if normalized["measured_on"]:
             d += f"(測定日:{normalized['measured_on']})"
+        elif (located and isinstance(lb.get("measured_on"), str)
+              and lb["measured_on"] and lb["measured_on"] in evidence):
+            d += f"(測定時期:{lb['measured_on']})"
+        if lb.get("subject") in ("family", "other"):
+            d += "(対象:" + ("家族" if lb["subject"] == "family" else "本人以外") + ")"
+        if lb.get("status") in ("past", "planned"):
+            d += "(過去の報告)" if lb["status"] == "past" else "(予定)"
+        if isinstance(lb.get("condition"), str) and lb["condition"]:
+            d += f"(条件:{lb['condition']})"
         (candidates if normalized["confirmation"] == "unverified"
          else confirmed).append(d)
         if len(confirmed) + len(candidates) == 6:
@@ -523,7 +585,7 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
     return lines
 
 
-def structured_lines(db, mid: int) -> list[str]:
+def structured_lines(db, mid: int, *, drug_candidates: bool = True) -> list[str]:
     """Compact structured summary from extract_v1 + the current fact
     artifact (canonical_projection shadows extract_llm).  Returns []
     when nothing usable exists (caller falls back to raw only)."""
@@ -532,7 +594,8 @@ def structured_lines(db, mid: int) -> list[str]:
     llm = selected or {}
     if not v1 and not llm:
         return []
-    urgency = message_urgency(db, mid)
+    details = message_urgency_details(db, mid)
+    urgency = details["source"]
     # Fact artifacts (canonical projections) carry no urgency fields —
     # the extract_llm row behind them holds evidence and vital_flags.
     ext = (latest_artifact(db, "extract_llm", mid) or {}) \
@@ -545,22 +608,27 @@ def structured_lines(db, mid: int) -> list[str]:
             suffix = f" — 根拠:「{str(ev[0])[:40]}」"
         suffix += urgency_qc_suffix(db, mid)
     lines: list[str] = _head_lines(selected, v1, urgency, suffix)
-    if (line := _vital_line(selected, v1)) is not None:
+    if details["held"]:
+        lines.append("急ぎの確認依頼（本人の緊急状態とは別）" if details["kind"] == "request" else
+                     "緊急度: 要確認（対象人物・時点の根拠を確認。元のAI判定は高）")
+    elif details["kind"] == "request":
+        lines.append("急ぎの確認依頼（本人の緊急状態とは別）")
+    source = db.execute("SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone() if db is not None else None
+    body = source["body_text"] if source else ""
+    if (line := _vital_line(selected, v1, body)) is not None:
         lines.append(line)
     flags = [_VFLAG_LABEL.get(f["key"], f["key"]) + f" {f['value']:g}"
              for f in (llm.get("vital_flags") or ext.get("vital_flags")
                        or [])
              if isinstance(f, dict) and f.get("key") in _VFLAG_LABEL
              and type(f.get("value")) in (int, float)]
-    if flags:
+    if flags and body:
         lines.append("閾値超過の測定値: " + "、".join(flags))
     if _items(llm, "labs"):
-        lab_source = db.execute(
-            "SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone()
-        lines.extend(_lab_lines(llm, lab_source["body_text"] if lab_source else None))
+        lines.extend(_lab_lines(llm, body))
     if (line := _symptom_line(llm, v1)) is not None:
         lines.append(line)
-    lines.extend(_med_lines(llm, v1, _drug_refs(db, mid)))
+    lines.extend(_med_lines(llm, v1, _drug_refs(db, mid) if drug_candidates else ()))
     lines.extend(_request_lines(llm, v1))
     periods = _items(v1, "med_periods")
     if periods:

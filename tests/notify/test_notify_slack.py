@@ -12,7 +12,7 @@ import notify_transport as transport
 from hermes_plugin.mcs_slack import cards as slack_cards
 from mcs_requests import canonical
 from notify_testkit import (
-    CFG, NOW, _begin, _card, _dispatch, _intent, _latest_render,
+    CFG, NOW, _begin, _card, _dispatch as _raw_dispatch, _intent, _latest_render,
     _seed_thread, _signal_row, _token_for, _uuid,
 )
 from slack_testkit import SCOPE, SLACK
@@ -24,6 +24,14 @@ SLACK_FLAT = {"notify": {"interactive": "slack", "route_epoch": 1,
                                    if k != "transport"}},
               "signals": {"notify": True}}
 ACTOR = "slack:T_SYNTHETIC:U_SYNTHETIC"
+
+
+def _dispatch(led, ev, cfg=CFG, now=NOW):
+    if ev["kind"] == "signal" and not json.loads(ev["payload"]).get("digest"):
+        from test_signal_thread_hotfix import delivered_source
+        _raw_dispatch(led, ev, cfg, now)
+        delivered_source(led, card_id=led.db.execute("SELECT COALESCE(MAX(card_id),0)+1 FROM notification_cards").fetchone()[0], cfg={**cfg, "notify": {**cfg["notify"], "card_thread": True}})
+    return _raw_dispatch(led, ev, cfg, now)
 
 
 @pytest.fixture(autouse=True)
@@ -225,7 +233,7 @@ def test_slack_flush_grant_receipt_action_and_recovery(led, tmp_path, monkeypatc
     assert (root / "slack_state").is_dir()
     assert render["guild_id"] is None
     assert render["team_id"] == SCOPE["team_id"]
-    assert cards._card_content(led.db, _card(led))["containers"] == spec["parts"]["containers"]
+    assert cards._card_content(led.db, _card(led), cfg=SLACK)["containers"] == spec["parts"]["containers"]
     path.unlink()
     assert cards.recover(led, SLACK, {})["republished"] == 1
     assert path.read_bytes() == raw
@@ -341,14 +349,14 @@ def test_slack_scope_switch_seals_new_cards_without_retargeting(led):
 
 def test_signal_membership_is_transport_and_slack_scope_local(led):
     _seed_thread(led)
-    _signal_row(led, "synthetic-signal")
+    _signal_row(led, "synthetic-signal", mids=[100])
     payload = {"signal_key": "synthetic-signal", "project_id": 1}
     sig_on = {"signals": {"notify": True}}
     for cfg in ({**CFG, **sig_on}, SLACK, {"notify": {**SLACK["notify"], "slack": {
             **SLACK["notify"]["slack"], "profile": "other-profile"}},
             **sig_on}):
         assert _dispatch(led, _intent(led, "signal", payload=payload), cfg)["dispatched"]
-    rows = led.db.execute("SELECT card_key,transport FROM notification_cards").fetchall()
+    rows = led.db.execute("SELECT card_key,transport FROM notification_cards WHERE kind='signal'").fetchall()
     assert len(rows) == 3
     assert len({r["card_key"] for r in rows}) == 3
     assert [r["transport"] for r in rows] == ["discord", "slack", "slack"]

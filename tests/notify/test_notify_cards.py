@@ -22,6 +22,8 @@ from notify_testkit import (
     _signal_row, _token_for, _uuid, led,
 )
 
+from test_signal_thread_hotfix import delivered_source
+
 __all__ = ["led"]  # shared isolated-ledger fixture
 
 NO_THREAD_CFG = {"notify": {k: v for k, v in CFG["notify"].items()
@@ -697,6 +699,8 @@ def test_body_action_signal_full_evidence(led, tmp_path):
                  payload={"signal_keys": ["sig-body"], "project_id": 1,
                           "type": "med_followup"})
     _dispatch(led, ev, cfg=NO_THREAD_CFG)
+    delivered_source(led, card_id=2, mids=(100,))
+    _dispatch(led, ev, cfg=NO_THREAD_CFG)
     render = _latest_render(led)
     _begin(led, render)
     _receipt(led, render, "0" * 15 + "1", message_id="m-9")
@@ -864,8 +868,8 @@ def test_sweep_skips_content_for_settled_revoked_cards(
     calls = []
     real = notify_cards._card_content
     monkeypatch.setattr(notify_cards, "_card_content",
-                        lambda db, card: calls.append(card["card_id"])
-                        or real(db, card))
+                        lambda db, card, **kwargs: calls.append(card["card_id"])
+                        or real(db, card, **kwargs))
     # (1) revoked before delivery: no message_id -> op None
     _seed_thread(led)
     _dispatch(led, _intent(led))
@@ -892,8 +896,8 @@ def test_sweep_skips_content_after_revoke_delivered(
     calls = []
     real = notify_cards._card_content
     monkeypatch.setattr(notify_cards, "_card_content",
-                        lambda db, card: calls.append(card["card_id"])
-                        or real(db, card))
+                        lambda db, card, **kwargs: calls.append(card["card_id"])
+                        or real(db, card, **kwargs))
     _msg(led, 105, 1, parent=100)            # drift is irrelevant now
     notify_cards.sweep(led, CFG)
     assert calls == []
@@ -1521,7 +1525,11 @@ def test_request_and_dismiss_tokens_authorize_modal(led, tmp_path):
                  payload={"signal_keys": ["sig-modal"], "project_id": 1,
                           "type": "med_followup"})
     _dispatch(led, ev)
+    delivered_source(led, card_id=2, mids=(100,))
+    _dispatch(led, ev)
     render = _latest_render(led)
+    assert _begin(led, render)["granted"]
+    assert _receipt(led, render, f"{1:016x}", message_id="signal-reply")["applied"]
     spec = json.loads(
         (tmp_path / "data" / "discord_render"
          / (render["delivery_id"] + ".json")).read_text())
@@ -1536,7 +1544,8 @@ def test_request_and_dismiss_tokens_authorize_modal(led, tmp_path):
         tok = _token_for(spec, action)
         r = notify_cards.apply_notification(
             led, {**_notif(tok, n=70 + i),
-                  "command_id": f"{tok}:{(70 + i):016x}"},
+                  "command_id": f"{tok}:{(70 + i):016x}",
+                  "origin": dict(ORIGIN, message_id="signal-reply", thread_id="original-thread")},
             CFG, now=NOW)
         assert r["outcome"] == "applied", (action, r)
         assert r["action"] == action and r["modal"] is True
@@ -1546,23 +1555,21 @@ def test_request_and_dismiss_tokens_authorize_modal(led, tmp_path):
         "SELECT COUNT(*) c FROM requests").fetchone()["c"] == 0
 
 
-def test_signal_without_source_suppresses_request(led, tmp_path):
-    """A signal whose evidence cannot pin a source message gets no
-    request button — a permanently-failing button is worse than none."""
+def test_signal_without_source_holds_before_publishing_actions(led, tmp_path):
+    """A source-less signal is held: no channel post or unusable modal token."""
     _patient(led, 1)
-    _signal_row(led, "sig-nosrc")          # evidence.message_ids empty
+    _signal_row(led, "sig-nosrc")
     ev = _intent(led, kind="signal", pid=1,
                  payload={"signal_keys": ["sig-nosrc"], "project_id": 1,
                           "type": "med_followup"})
     _dispatch(led, ev)
-    render = _latest_render(led)
-    spec = json.loads(
-        (tmp_path / "data" / "discord_render"
-         / (render["delivery_id"] + ".json")).read_text())
-    actions = {b["id"] for row in spec["parts"]["action_rows"]
-               for b in row}
-    assert "request" not in actions
-    assert "dismiss" in actions           # signal artifact pinnable
+    assert _latest_render(led) is None
+    held = led.db.execute("SELECT state,progress FROM notify_outbox WHERE event_id=?",
+                          (ev["event_id"],)).fetchone()
+    assert held["state"] == "pending"
+    assert json.loads(held["progress"])["thread_hold"] == "source_thread_not_ready"
+    assert led.db.execute("SELECT COUNT(*) FROM notification_action_tokens").fetchone()[0] == 0
+    assert not list((tmp_path / "data" / "discord_render").glob("*.json"))
 
 
 def test_gc_deletes_expired_tokens_and_old_specs(led, tmp_path):
@@ -1798,11 +1805,14 @@ def test_sweep_detects_source_delete(led):
 def test_sweep_detects_signal_lifecycle(led):
     """RC19 — resolve / dismiss / supersede transitions on a rendered
     signal re-render its card without a new intent."""
-    _patient(led)
-    _signal_row(led, "sig-1")
-    _dispatch(led, _intent(led, kind="signal",
+    _seed_thread(led)
+    _signal_row(led, "sig-1", mids=[100])
+    event = _intent(led, kind="signal",
                            payload={"signal_keys": ["sig-1"],
-                                    "project_id": 1}))
+                                    "project_id": 1})
+    _dispatch(led, event)
+    delivered_source(led, card_id=2)
+    _dispatch(led, event)
     r0 = _latest_render(led)
     assert _card(led)["kind"] == "signal"
     _begin(led, r0)
@@ -1810,7 +1820,7 @@ def test_sweep_detects_signal_lifecycle(led):
     _settle_bodies(led, r0)
 
     # resolved — the evaluator's terminal transition
-    _signal_row(led, "sig-1", state="resolved")
+    _signal_row(led, "sig-1", state="resolved", mids=[100])
     led.db.commit()
     notify_cards.sweep(led, CFG, now=NOW + 1)
     r = _latest_render(led)
@@ -1825,7 +1835,7 @@ def test_sweep_detects_signal_lifecycle(led):
     assert r["render_rev"] == r0["render_rev"] + 2
 
     # dismissed — a human-gated transition row
-    _signal_row(led, "sig-1", state="dismissed")
+    _signal_row(led, "sig-1", state="dismissed", mids=[100])
     led.db.commit()
     notify_cards.sweep(led, CFG, now=NOW + 3)
     r = _latest_render(led)
@@ -1837,11 +1847,14 @@ def test_signals_notify_off_cancels_queued_signal_render(led):
     unbound instead of sitting live forever (begin denies it with a
     non-final signal_notify_off), no new render is issued while off, and
     re-enabling issues a fresh render with a new delivery_id."""
-    _patient(led)
-    _signal_row(led, "sig-off")
-    _dispatch(led, _intent(led, kind="signal",
+    _seed_thread(led)
+    _signal_row(led, "sig-off", mids=[100])
+    event = _intent(led, kind="signal",
                            payload={"signal_keys": ["sig-off"],
-                                    "project_id": 1}))
+                                    "project_id": 1})
+    _dispatch(led, event)
+    delivered_source(led, card_id=2)
+    _dispatch(led, event)
     r0 = _latest_render(led)
     assert r0["state"] == "queued"
     off = {"notify": CFG["notify"], "signals": {"notify": False}}
@@ -1852,10 +1865,10 @@ def test_signals_notify_off_cancels_queued_signal_render(led):
     assert r["state"] == "cancelled"
     assert led.db.execute(
         "SELECT COUNT(*) c FROM notification_intent_cards "
-        "WHERE delivery_id IS NOT NULL").fetchone()["c"] == 0
+        "WHERE card_id=1 AND delivery_id IS NOT NULL").fetchone()["c"] == 0
 
     # drift while off still issues nothing
-    _signal_row(led, "sig-off", state="resolved")
+    _signal_row(led, "sig-off", state="resolved", mids=[100])
     led.db.commit()
     notify_cards.sweep(led, off, now=NOW + 2)
     assert _latest_render(led)["delivery_id"] == r0["delivery_id"]
@@ -2583,6 +2596,8 @@ def test_tasks_button_only_on_thread_cards(led, tmp_path):
     ev = _intent(led, kind="signal", pid=2,
                  payload={"signal_keys": ["sig-nt"], "project_id": 2,
                           "type": "med_followup"})
+    _dispatch(led, ev)
+    delivered_source(led, card_id=3, mids=(200,))
     _dispatch(led, ev)
     render = _latest_render(led, 2)
     spec2 = json.loads(

@@ -33,6 +33,8 @@ import json
 import math
 from contextlib import suppress
 
+from patient_context import context_items, extract_context, merged_context
+
 CONTRACT = "mcs-read-model/1"
 SCOPES = ("aggregate", "detail")
 EXTRACTION_KINDS = ("extract_v1", "extract_llm", "canonical_projection",
@@ -267,6 +269,63 @@ def _fact_relations(by_kind: dict, art_rows, scope: str):
     return facts, relations
 
 
+def message_patient_context(db, message, scope="detail", *, by_kind=None, art_rows=None):
+    """Read source-bound context independently of canonical extraction precedence."""
+    if message.get("body_state") not in (None, "full"):
+        return []
+    if art_rows is None:
+        art_rows = db.execute(
+            "SELECT artifact_id,kind,content,meta FROM artifacts "
+            "WHERE project_id=? AND message_id=? AND kind IN "
+            "('extract_v1','extract_llm','canonical_projection','semantic_facts_v4') "
+            "ORDER BY artifact_id DESC", (message["project_id"], message["message_id"])).fetchall()
+    if by_kind is None:
+        by_kind = _kind_map(art_rows, message["content_hash"])
+    body = message.get("body_text")
+    if body is None:
+        row = db.execute("SELECT body_text FROM messages WHERE project_id=? AND message_id=?",
+                         (message["project_id"], message["message_id"])).fetchone()
+        body = row[0] if row else None
+    if not isinstance(body, str) or not body:
+        return []
+    documents = []
+    for kind in ("extract_v1", "extract_llm"):
+        artifact_id = by_kind[kind]["artifact_id"]
+        row = next((r for r in art_rows if r["artifact_id"] == artifact_id), None)
+        documents.append(json.loads(row["content"]) if row is not None else None)
+    items = merged_context(*documents, body)
+    # A v4 worker fences legacy LLM writes; read its audited additive context.
+    for kind in ("semantic_facts_v4", "canonical_projection"):
+        entry = by_kind.get(kind, {})
+        if entry.get("state") == "current":
+            row = next((r for r in art_rows if r["artifact_id"] == entry["artifact_id"]), None)
+            if row is not None:
+                items = merged_context({"patient_context": items}, json.loads(row["content"]), body)
+            break
+    source = {key: message.get(key) for key in
+              ("project_id", "message_id", "content_hash", "posted_at_ts")}
+    return _context_projection(items, scope, source)
+
+
+def _context_projection(items, scope, source):
+    """Preserve grounded attribute values in detail and count only their keys in aggregate."""
+    if scope == "detail":
+        return [{**{key: item[key] for key in ("category", "text", "evidence", "subject")},
+                 **({"origin": item["origin"]} if item.get("origin") == "explicit_heading" else {}),
+                 **({"details": item["details"]} if item.get("details") else {}),
+                 "source": dict(source)} for item in items]
+    counts = {}
+    attributes = {}
+    for item in items:
+        counts[item["category"]] = counts.get(item["category"], 0) + 1
+        for detail in item.get("details") or []:
+            category = attributes.setdefault(item["category"], {})
+            category[detail["key"]] = category.get(detail["key"], 0) + 1
+    return [{"category": key, "count": value,
+             **({"details": [{"key": name, "count": count} for name, count in sorted(attributes[key].items())]}
+                if key in attributes else {})} for key, value in sorted(counts.items())]
+
+
 def _attachments(db, scope: str, project_id=None):
     """The attachment manifest — ids/state always, file names only in
     detail scope (a name is user-authored content)."""
@@ -288,6 +347,55 @@ def _attachments(db, scope: str, project_id=None):
             item["name"] = r["name"]
         out.append(item)
     return out
+
+
+def _project_metadata(db, scope, project_id, limit):
+    """Expose fetched memo context only in detail, retaining explicit unknown/empty states."""
+    if not _table_exists(db, "patients"):
+        return None
+    karte_column = "p.karte_id" if any(row[1] == "karte_id" for row in db.execute(
+        "PRAGMA table_info(patients)")) else "NULL"
+    where, params = (" WHERE p.project_id=?", [project_id]) if project_id is not None else ("", [])
+    total = db.execute("SELECT COUNT(*) FROM patients p" + where, params).fetchone()[0]
+    sql = (f"SELECT p.project_id,{karte_column} AS karte_id,a.artifact_id,a.content,a.meta "
+           "FROM patients p LEFT JOIN artifacts a ON a.artifact_id=("
+           "SELECT MAX(artifact_id) FROM artifacts WHERE kind='karte_summary' "
+           "AND project_id=p.project_id)" + where + " ORDER BY p.project_id")
+    if limit is not None:
+        sql += " LIMIT ?"
+        params = [*params, limit]
+    records = []
+    for row in db.execute(sql, params):
+        record = {"project_id": row["project_id"], "state": "not_fetched", "patient_context": []}
+        if row["artifact_id"] is not None:
+            record["state"] = "unknown"
+            try:
+                content, meta = json.loads(row["content"]), json.loads(row["meta"])
+            except (ValueError, TypeError, RecursionError):
+                content = meta = None
+            fetched_at = meta.get("fetched_at") if isinstance(meta, dict) else None
+            try:
+                valid_time = type(fetched_at) in (int, float) and math.isfinite(fetched_at) and fetched_at >= 0
+            except OverflowError:
+                valid_time = False
+            if (isinstance(content, dict) and isinstance(meta, dict)
+                    and type(meta.get("karte_id")) is int and meta["karte_id"] == row["karte_id"]
+                    and isinstance(content.get("empty"), bool)
+                    and valid_time
+                    and (content.get("updated_at") is None or isinstance(content["updated_at"], str))
+                    and (content["empty"] and content.get("comment") is None
+                         or not content["empty"] and isinstance(content.get("comment"), str))):
+                record["state"] = "fetched_empty" if content["empty"] else "reported"
+                comment = content.get("comment") or ""
+                items = context_items({"patient_context": extract_context(comment)}, comment)
+                if scope == "detail":
+                    record["comment"] = comment
+                    record["unclassified_text"] = bool(comment) and not items
+                source = {"artifact_id": row["artifact_id"], "project_id": row["project_id"],
+                          "fetched_at": meta["fetched_at"], "updated_at": content.get("updated_at")}
+                record["patient_context"] = _context_projection(items, scope, source)
+        records.append(record)
+    return {"records": records, "total": total, "truncated": limit is not None and total > limit}
 
 
 def _coverage(db, records, attachments, project_id=None) -> dict:
@@ -321,6 +429,79 @@ def _coverage(db, records, attachments, project_id=None) -> dict:
             "attachments": att_counts}
 
 
+def _field_counts(rows):
+    """Count allowlisted registration fields without exporting their values."""
+    counts = {}
+
+    def visit(value, path):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                visit(item, path + "." + key if path else key)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item, path)
+        elif value is not None:
+            counts[path] = counts.get(path, 0) + 1
+
+    for row in rows:
+        visit(row, "")
+    return [{"key": key, "count": count} for key, count in sorted(counts.items())]
+
+
+def _registered_data(db, scope, project_id, limit):
+    """Read optional registered clinical data separately from chat and memo reports."""
+    if not _table_exists(db, "patients") or not {"project_type", "karte_id"} <= {
+            row[1] for row in db.execute("PRAGMA table_info(patients)")}:
+        return None
+    from project_metadata_view import get_project_metadata
+
+    params = [project_id] if project_id is not None else []
+    sql = """WITH clinical AS (
+        SELECT project_id,karte_id FROM patients WHERE project_type='medical'
+        AND typeof(karte_id)='integer' AND karte_id>0""" + (
+        " AND project_id=?" if project_id is not None else "") + """
+        ), targets AS (
+        SELECT project_id,'medication_periods' AS dataset,NULL AS item_id FROM clinical
+        UNION ALL SELECT project_id,'observation_items',NULL FROM clinical
+        UNION ALL SELECT DISTINCT p.project_id,'observation_values',json_extract(a.content,'$.item_id')
+        FROM clinical p JOIN artifacts a ON a.project_id=p.project_id
+        WHERE a.kind='project_metadata_v1' AND CASE WHEN json_valid(a.content) THEN
+          json_extract(a.content,'$.dataset')='observation_values'
+          AND json_extract(a.content,'$.entity_id')=p.karte_id
+          AND json_type(a.content,'$.item_id')='integer'
+          AND typeof(json_extract(a.content,'$.item_id'))='integer'
+          AND json_extract(a.content,'$.item_id')>0 ELSE 0 END
+        ) """
+    total = db.execute(sql + "SELECT COUNT(*) FROM targets", params).fetchone()[0]
+    query = sql + "SELECT * FROM targets ORDER BY project_id,dataset,item_id"
+    if limit is not None:
+        query += " LIMIT ?"
+        params = [*params, limit]
+    now = _snapshot_meta(db)["generated_at"]
+    records = []
+    for target in db.execute(query, params):
+        result = get_project_metadata(db, target["project_id"], target["dataset"],
+                                      item_id=target["item_id"], now=now)
+        record = {"project_id": target["project_id"], "dataset": target["dataset"],
+                  "source": "mcs_structured", "state": result["state"],
+                  "rows_total": len(result["rows"]),
+                  "rows_truncated": limit is not None and len(result["rows"]) > limit}
+        if scope == "detail":
+            record.update({key: result[key] for key in (
+                "reason", "scope", "last_complete_at", "attempted_at", "age_s", "current_known",
+                "historical", "stale", "definition", "http_status", "chat_comparison",
+                "definition_binding", "definition_source_artifact_id", "definition_source",
+                "attempt_reason") if key in result})
+            record["item_id"] = target["item_id"]
+            record["rows"] = result["rows"] if limit is None else result["rows"][:limit]
+        else:
+            record["fields"] = _field_counts(result["rows"])
+            record["definition_fields"] = _field_counts([result["definition"]] if result["definition"] else [])
+        records.append(record)
+    return {"records": records, "total": total, "truncated": limit is not None and total > limit,
+            "absence_confirmed": False, "clinical_state": "not_inferred"}
+
+
 def read_model(db, scope: str = "aggregate", project_id=None,
                limit=None) -> dict:
     """The complete machine read for one opened connection.
@@ -342,6 +523,8 @@ def read_model(db, scope: str = "aggregate", project_id=None,
             if limit is None or len(records) < limit:
                 rec["facts"], rec["relations"] = _fact_relations(
                     by_kind, art_rows, scope)
+                rec["patient_context"] = message_patient_context(
+                    db, rec, scope, by_kind=by_kind, art_rows=art_rows)
                 records.append(rec)
             yield rec
 
@@ -354,6 +537,8 @@ def read_model(db, scope: str = "aggregate", project_id=None,
         "scope": scope,
         "coverage": coverage,
         "attachments": attachments,
+        "project_metadata": _project_metadata(db, scope, project_id, limit),
+        "registered_data": _registered_data(db, scope, project_id, limit),
         "records": records,
         "total": total,
         "truncated": limit is not None and total > limit,

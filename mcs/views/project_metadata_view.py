@@ -7,7 +7,8 @@ import math
 import time
 
 from mcs_adapter import SchemaError
-from project_metadata import ARTIFACT_KIND, JSON, MAX_ROWS, metadata_target, normalize_rows
+from project_metadata import (ARTIFACT_KIND, JSON, MAX_ROWS, clinical_definition_fingerprint,
+                              metadata_target, normalize_rows)
 
 _CLINICAL = ("medication_periods", "observation_items", "observation_values")
 
@@ -23,7 +24,7 @@ def _chat_item(item, *, medication: bool, rule: bool) -> dict[str, JSON] | None:
     if not isinstance(item, dict) or not _text(item.get("name")):
         return None
     fields = (("dose", "action", "status", "subject", "route", "freq") if medication
-              else ("unit", "flag"))
+              else ("unit", "flag", "subject", "status", "condition", "measured_on"))
     if any(item.get(key) is not None and not _text(item[key]) for key in fields):
         return None
     if medication:
@@ -45,11 +46,18 @@ def _chat_item(item, *, medication: bool, rule: bool) -> dict[str, JSON] | None:
             numeric = False
         if not (numeric or _text(value)) or item.get("flag") not in (None, "high", "low"):
             return None
+        if (item.get("subject") not in (None, "patient", "family", "other", "unspecified")
+                or item.get("status") not in (None, "current", "past", "planned")):
+            return None
         keys = ("name", "value", *fields)
     row: dict[str, JSON] = {key: item.get(key) for key in keys}
     row.update(kind="medication" if medication else "lab", candidate=True,
                confirmation="unconfirmed", source_unverified=rule or item_unverified(item))
     if not medication:
+        row["source_unverified"] = row["source_unverified"] or (
+            item.get("subject") in ("family", "other") or item.get("status") == "planned"
+            or bool(item.get("condition")))
+        row["reported_time"] = item.get("measured_on")
         # The extraction's persisted date is not the message posting date.
         # Keep its label separate; do not run a new normalizer or infer units.
         normalized = item.get("normalized")
@@ -223,8 +231,8 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
                 or attempt.get("reason") not in {
                     None, "schema_error", "http_error", "forbidden", "session_expired",
                     "network_error", "deadline_exceeded", "fetch_error",
-                    "snapshot_missing", "page_limit"} | (
-                        {"scope_changed"} if dataset == "consultations" else set())
+                    "snapshot_missing", "page_limit", "capacity_limit"} | (
+                        {"scope_changed"} if dataset == "consultations" or dataset in _CLINICAL else set())
                 or (attempt.get("http_status") is not None
                     and (type(attempt["http_status"]) is not int
                          or not 100 <= attempt["http_status"] <= 599))):
@@ -264,6 +272,54 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
                         for row in rows]
             result["rows"] = normalize_rows(dataset, rows,
                 retain_names=show_names and payload.get("names_retained") is True)
+            if dataset == "observation_values":
+                result["definition_binding"] = "unknown" if "definition_source_artifact_id" in payload else "legacy_unpinned"
+                if "definition_source_artifact_id" in payload:
+                    pin = payload["definition_source_artifact_id"]
+                    if not _valid_id(pin):
+                        raise SchemaError("metadata view: definition generation invalid")
+                    latest_definition = db.execute(
+                        "SELECT artifact_id FROM artifacts WHERE kind=? AND project_id=? "
+                        "AND CASE WHEN json_valid(content) THEN json_extract(content,'$.dataset')='observation_items' "
+                        "AND json_extract(content,'$.entity_id')=? "
+                        "AND json_extract(content,'$.complete')=1 ELSE 0 END "
+                        "ORDER BY artifact_id DESC LIMIT 1", (ARTIFACT_KIND, project_id, target["entity_id"])).fetchone()
+                    definition = get_project_metadata(db, project_id, "observation_items", now=now,
+                                                      max_age_s=max_age_s)
+                    mapped = (latest_definition is not None and latest_definition["artifact_id"] == pin
+                              and any(row["lab_test_item"]["id"] == item_id for row in definition["rows"]))
+                    if "definition_fingerprint" in payload:
+                        # A successful re-fetch is not a changed clinical definition.
+                        # Prove the original pin and latest normalized definitions equal.
+                        pin_row = db.execute(
+                            "SELECT content FROM artifacts WHERE artifact_id=? AND kind=? AND project_id=?",
+                            (pin, ARTIFACT_KIND, project_id)).fetchone()
+                        old = json.loads(pin_row["content"]) if pin_row else None
+                        if (not isinstance(old, dict) or old.get("contract") != "project-metadata/1"
+                                or old.get("dataset") != "observation_items" or old.get("scope") != target["scope"]
+                                or old.get("entity_id") != target["entity_id"] or old.get("complete") is not True
+                                or old.get("reason") is not None or old.get("http_status") is not None):
+                            raise SchemaError("metadata view: definition source invalid")
+                        old_rows = normalize_rows("observation_items", old["rows"])
+                        old_items = {row["lab_test_item"]["id"]: row for row in old_rows}
+                        new_items = {row["lab_test_item"]["id"]: row for row in definition["rows"]}
+                        if len(old_items) != len(old_rows) or len(new_items) != len(definition["rows"]):
+                            raise SchemaError("metadata view: duplicate definition")
+                        fingerprint = payload["definition_fingerprint"]
+                        mapped = (isinstance(fingerprint, str) and item_id in old_items and item_id in new_items
+                                  and clinical_definition_fingerprint(target["entity_id"], old_items) == fingerprint
+                                  and clinical_definition_fingerprint(target["entity_id"], new_items) == fingerprint)
+                    result["definition_source_artifact_id"] = pin
+                    result["definition_binding"] = "current" if mapped else "mapping_changed"
+                    if not mapped:
+                        age = (time.time() if now is None else now) - fetched_at
+                        result.update(state="stale", reason="definition_mapping_changed",
+                                      attempt_reason=attempt["reason"], rows=[], definition=None,
+                                      last_complete_at=fetched_at, age_s=max(0, age),
+                                      current_known=False, historical=False, stale=True)
+                        return result
+                if payload.get("definition_source") in ("observation_items", "observation_values"):
+                    result["definition_source"] = payload["definition_source"]
             if dataset == "observation_values" and payload.get("definition") is not None:
                 definition = normalize_rows("observation_items", [payload["definition"]])[0]
                 lab = definition.get("lab_test_item")

@@ -17,13 +17,23 @@ from discord_testkit import _fake_discord
 from ledger import publish_snapshot
 from mcs_signals import record_station_staff
 from notify_testkit import (
-    CFG, NOW, _add_request, _card, _click, _deliver, _dispatch, _extract, _intent,
+    CFG, NOW, _add_request, _card, _click, _deliver, _dispatch as _raw_dispatch, _extract, _intent,
     _latest_render, _msg, _patient, _seed_thread, _signal_row, _spec, led, pinned_clock,
 )
 from test_summary_review import _setup
 
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")
+CLINICAL_BODY = "本人が急変し至急確認が必要です。"
+CLINICAL_HIGH = {"urgency": "high", "urgency_evidence": [CLINICAL_BODY]}
+
+
+def _dispatch(led, event, cfg=CFG, now=NOW):
+    if event["kind"] == "signal":
+        from test_signal_thread_hotfix import delivered_source
+        _raw_dispatch(led, event, cfg, now)
+        delivered_source(led, card_id=2, mids=(100,), cfg=cfg)
+    return _raw_dispatch(led, event, cfg, now)
 
 
 def _render(parts, transport, monkeypatch) -> str:
@@ -146,6 +156,8 @@ def test_digest_uses_snapshot_bounded_response_observation(led, reply_at, error)
 def test_late_urgency_updates_delivered_card_without_new_intent(led, kind):
     # Given: an already delivered ordinary card.
     _seed_thread(led, mids=(100,))
+    with led.db:
+        led.db.execute("UPDATE messages SET body_text=? WHERE message_id=100", (CLINICAL_BODY,))
     if kind == "signal":
         _signal_row(led, "s", mids=[100])
         event = _intent(led, "signal", payload={"signal_keys": ["s"], "project_id": 1})
@@ -156,7 +168,7 @@ def test_late_urgency_updates_delivered_card_without_new_intent(led, kind):
     before = _latest_render(led)
     count = led.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0]
     # When: current AI high urgency lands after the first card was delivered.
-    _extract(led, 100, {"urgency": "high"}, kind="extract_llm")
+    _extract(led, 100, CLINICAL_HIGH, kind="extract_llm")
     notify_cards.sweep(led, CFG, now=NOW + 1)
     # Then: an update of the existing card exposes the source; it is not a new alert.
     after = _latest_render(led)
@@ -176,8 +188,8 @@ def test_signal_card_and_message_notice_follow_same_current_urgency_source(
         led, monkeypatch, kind, stale, level, expected):
     # Given: a synthetic signal and a generation-bound extraction.
     _patient(led)
-    _msg(led, 100)
-    _extract(led, 100, {"urgency": level}, kind=kind, stale=stale)
+    _msg(led, 100, body=CLINICAL_BODY)
+    _extract(led, 100, {"urgency": level, "urgency_evidence": [CLINICAL_BODY]}, kind=kind, stale=stale)
     _signal_row(led, "s", mids=[100])
     event = _intent(led, "signal", payload={"signal_keys": ["s"], "project_id": 1})
     monkeypatch.setattr(notify_flush, "_config", lambda: CFG)
@@ -264,8 +276,8 @@ def test_page_confirmation_does_not_confirm_hidden_items_or_complete_requests(le
 def test_long_signal_explanation_cannot_hide_current_urgency_badge(led, source):
     # Given: a high-urgency signal whose explanation exceeds a physical card page.
     _patient(led)
-    _msg(led, 100)
-    _extract(led, 100, {"urgency": "high"}, kind=source)
+    _msg(led, 100, body=CLINICAL_BODY)
+    _extract(led, 100, CLINICAL_HIGH, kind=source)
     _signal_row(led, "s", mids=[100])
     row = led.db.execute("SELECT artifact_id,content FROM artifacts "
                          "WHERE kind='signal_v1'").fetchone()

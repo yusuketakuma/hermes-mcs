@@ -757,6 +757,8 @@ def test_my_tasks_prefers_users_info_display_name(tmp_path):
 def test_search_modal_submits_query_as_view_click(tmp_path, kind, title):
     async def scenario():
         actions, app, reg, dirs = fixture(tmp_path, kind=kind)
+        if kind == "drugsearch":
+            reg.put_tokens({TOKEN: {**reg.token(TOKEN), "verified_thread_id": TS}})
         await actions._action(ack, *click())
         view = app.client.views[0]["view"]
         assert view["title"]["text"] == title
@@ -775,7 +777,128 @@ def test_search_modal_submits_query_as_view_click(tmp_path, kind, title):
                    [{"project_id": 123, "text": "・09-24 看護師: 発熱あり"}]))
         await actions.sweep_followups()
         assert "発熱あり" in app.client.messages[-1]["text"]
+        if kind == "drugsearch":
+            assert app.client.messages[-1]["thread_ts"] == TS
         assert reg.modal(view["private_metadata"]) is None
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("kind", ["meds", "drugsearch"])
+@pytest.mark.parametrize("thread", [TS, None, "1790000000.999999"])
+def test_drug_answers_use_only_verified_card_thread(tmp_path, kind, thread):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind=kind)
+        if thread is not None:
+            reg.put_tokens({TOKEN: {**reg.token(TOKEN),
+                                    "verified_thread_id": thread}})
+        env = {"command_id": "synthetic-drug", "request_id": "synthetic-drug"}
+        await actions._queue_followup(env, {**SCOPE, "message_id": TS},
+                                      "slack:T_SYNTHETIC:U_OPERATOR", TOKEN,
+                                      "U_OPERATOR")
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", action="list", thread_id="1790000000.999999",
+               list=_list_result([{"project_id": 123,
+                                   "text": "合成薬剤詳細 <@U_SYNTHETIC> " * 400}]))
+        await actions.sweep_followups()
+        assert app.client.messages
+        assert all(m["user"] == "U_OPERATOR" and m["link_names"] is False
+                   for m in app.client.messages)
+        if thread == TS:
+            assert all(m["thread_ts"] == TS for m in app.client.messages)
+            assert "合成薬剤詳細" in "".join(m["text"] for m in app.client.messages)
+            assert all("<@" not in m["text"] for m in app.client.messages)
+        else:
+            assert len(app.client.messages) == 1
+            assert "thread_ts" not in app.client.messages[0]
+            assert "合成薬剤詳細" not in app.client.messages[0]["text"]
+        assert not reg.followups()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("invalidate", ["retired", "expired"])
+def test_private_meds_navigation_preserves_card_thread_and_actor(tmp_path, invalidate):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="meds")
+        pin = {**reg.token(TOKEN), "card_key": "synthetic-card", "kind": "thread",
+               "verified_thread_id": TS}
+        reg.put_tokens({TOKEN: pin})
+        await actions._action(ack, *click())
+        env = command(dirs)
+        nav_token = "e" * 32
+        nav_ctx = {key: pin[key] for key in (
+            "card_key", "kind", "project_id", "channel_id", "team_id", "message_id")}
+        nav_ctx.update(action="meds", actor="slack:T_SYNTHETIC:U_OPERATOR",
+                       ephemeral=True, verified_thread_id="1790000000.999999")
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", action="body", body="合成薬剤詳細 " * 700,
+               token_ctx={nav_token: nav_ctx}, navigation=[{
+                   "id": "meds", "ui": "button", "label": "古い投稿へ",
+                   "token": nav_token, "style": "secondary"}])
+        await actions.sweep_followups()
+        assert len(app.client.messages) > 1
+        assert all(m["thread_ts"] == TS for m in app.client.messages)
+        assert "blocks" in app.client.messages[0]
+        assert all("blocks" not in m for m in app.client.messages[1:])
+        assert reg.token(nav_token)["verified_thread_id"] == TS
+        assert registry.Registry(dirs["state"], scope=SCOPE).token(
+            nav_token)["verified_thread_id"] == TS
+        assert app.client.messages[0]["blocks"][-1]["elements"][0]["value"] == nav_token
+        for file in Path(dirs["cmd_int"]).glob("*.json"):
+            file.unlink()
+        body, _ = click()
+        body.pop("message")
+        body["container"] = {"type": "message", "is_ephemeral": True,
+                             "channel_id": SCOPE["channel_id"],
+                             "message_ts": "1790000000.000999"}
+        nav_action = {"action_id": "mcs:a:" + nav_token, "value": nav_token}
+        await actions._action(ack, body, nav_action)
+        next_env = command(dirs)
+        assert next_env["token"] == nav_token
+        result(dirs, next_env["request_id"], request_id=next_env["request_id"],
+               outcome="applied", action="body", body="合成の古い薬剤投稿")
+        await actions.sweep_followups()
+        assert app.client.messages[-1]["thread_ts"] == TS
+        assert "古い薬剤投稿" in app.client.messages[-1]["text"]
+        origin = {**SCOPE, "message_id": "1790000000.000999",
+                  "actor": "slack:T_SYNTHETIC:U_OPERATOR"}
+        assert actions._pinned(nav_token, origin, origin["actor"])
+        for bad in ({"actor": "slack:T_SYNTHETIC:U_OTHER"},
+                    {"team_id": "T_FOREIGN"}, {"channel_id": "C_FOREIGN"}):
+            changed = {**origin, **bad}
+            assert actions._pinned(nav_token, changed, changed["actor"]) is None
+        if invalidate == "retired":
+            reg.retire_card_tokens("synthetic-card")
+        else:
+            reg._data["tokens"][nav_token]["at"] = 0
+            reg.expire()
+        assert actions._pinned(nav_token, origin, origin["actor"]) is None
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("changed", [
+    {"actor": "slack:T_SYNTHETIC:U_OTHER"}, {"message_id": "1790000000.999999"},
+    {"channel_id": "C_FOREIGN"}, {"project_id": 999}, {"ephemeral": False},
+])
+def test_private_meds_navigation_rejects_mismatched_context(tmp_path, changed):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="meds")
+        pin = {**reg.token(TOKEN), "card_key": "synthetic-card", "kind": "thread",
+               "verified_thread_id": TS}
+        reg.put_tokens({TOKEN: pin})
+        await actions._action(ack, *click())
+        env = command(dirs)
+        token = "e" * 32
+        ctx = {**pin, "action": "meds", "ephemeral": True,
+               "actor": "slack:T_SYNTHETIC:U_OPERATOR", **changed}
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", action="body", body="合成薬剤詳細",
+               token_ctx={token: ctx}, navigation=[{
+                   "id": "meds", "ui": "button", "label": "次の5件",
+                   "token": token, "style": "secondary"}])
+        await actions.sweep_followups()
+        assert reg.token(token) is None
+        assert app.client.messages
+        assert all("blocks" not in m for m in app.client.messages)
     asyncio.run(scenario())
 
 

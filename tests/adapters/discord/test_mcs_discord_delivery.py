@@ -52,10 +52,11 @@ class _HistMsg:
         self.edits = 0
         self.edit_fail = None       # exception to raise on edit
 
-    async def edit(self, content=None, **_kw):
+    async def edit(self, **_kw):
         if self.edit_fail is not None:
             raise self.edit_fail
-        self.content = content
+        self.content = _kw.get("content", self.content)
+        self.view = _kw.get("view", getattr(self, "view", None))
         self.edits += 1
 
 
@@ -75,6 +76,7 @@ class FakeThread:
         self._next += 1
         files = [kw["file"]] if kw.get("file") is not None else []
         self.sent.append(_HistMsg(self._next, content, attachments=files))
+        self.sent[-1].view = kw.get("view")
         return self.sent[-1]
 
     async def history(self, limit=None):
@@ -2023,3 +2025,125 @@ def test_ambiguous_channel_fetch_before_thread_create_is_not_sent(tmp_path):
     row = _sent_parts(_state(tmp_path))["thread"]
     assert row["result"] == "not_sent" and row["error_code"] == "prefetch_failed"
     assert channel.threads == []
+
+
+def test_thread_drug_actions_install_and_refresh_only_first_body(tmp_path, monkeypatch):
+    from discord_testkit import _fake_discord
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    w, _, bot = _mkworker(tmp_path)
+    spec = _spec(["synthetic first", "synthetic second"])
+    spec["parts"]["thread_drug_actions"] = True
+    spec["parts"]["action_rows"] = [[
+        {"id": action, "label": action, "token": "old-" + action}
+        for action in ("meds", "drugsearch", "ack")]]
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    thread = bot.channels[42].threads[0]
+    first, second = thread.sent
+    assert [b.custom_id for b in first.view.items] == [
+        "mcs:a:old-meds", "mcs:a:old-drugsearch"]
+    assert first.view.stopped and second.view is None
+    assert _sent_parts(_state(tmp_path))["body:0001"]["remote_id"] == str(first.id)
+    # Journal replay never adds messages or edits already settled parts.
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    assert len(thread.sent) == 2 and first.edits == 0
+    spec["op"] = "update"
+    spec["delivery"]["thread_id"] = str(thread.id)
+    for row in spec["parts"]["action_rows"]:
+        for button in row:
+            button["token"] = "fresh-" + button["id"]
+    part = spec["parts"]["manifest"][2]
+    ctx = {"thread": thread, "consumed": set()}
+    result = asyncio.run(w._perform_part(_claim(spec), part, ctx))
+    assert result == {"result": "delivered", "remote_id": str(first.id)}
+    assert len(thread.sent) == 2 and first.content == "synthetic first"
+    assert [b.custom_id for b in first.view.items] == [
+        "mcs:a:fresh-meds", "mcs:a:fresh-drugsearch"]
+    assert first.edits == 1 and second.edits == 0
+    spec["parts"]["thread_body_parts"][0] = "synthetic changed"
+    part["prior_remote_id"] = str(first.id)
+    result = asyncio.run(w._perform_part(_claim(spec), part,
+                                        {"thread": thread, "consumed": set()}))
+    assert result["remote_id"] == str(first.id)
+    assert len(thread.sent) == 2 and first.content == "synthetic changed"
+    assert first.edits == 2
+    # The flagged current empty action set must clear stale medication controls.
+    spec["parts"]["action_rows"] = []
+    result = asyncio.run(w._perform_part(_claim(spec), part,
+                                        {"thread": thread, "consumed": set()}))
+    assert result["remote_id"] == str(first.id)
+    assert first.view is None and first.edits == 3 and len(thread.sent) == 2
+
+
+def test_same_text_drug_view_edit_unknown_never_posts_duplicate(tmp_path, monkeypatch):
+    from discord_testkit import _fake_discord
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    w, _, bot = _mkworker(tmp_path)
+    thread = FakeThread(7700)
+    bot.channels[42].threads.append(thread)
+    first = _HistMsg(6001, "synthetic first")
+    first.edit_fail = FakeHTTP(500)
+    thread.sent.append(first)
+    spec = _spec([first.content], op="update", thread_id="7700")
+    spec["parts"]["thread_drug_actions"] = True
+    spec["parts"]["action_rows"] = [[
+        {"id": "meds", "label": "薬剤", "token": "synthetic-token"}]]
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    assert _sent_parts(_state(tmp_path))["body:0001"]["result"] == "unknown"
+    # A recorded ambiguous edit is held on replay, even after HTTP recovers.
+    first.edit_fail = None
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    assert len(thread.sent) == 1 and first.edits == 0
+
+
+@pytest.mark.parametrize("components_v2", [False, True])
+def test_parent_card_drug_actions_only_appear_in_companion_thread(tmp_path, monkeypatch,
+                                                                components_v2):
+    from discord_testkit import _fake_discord
+    from hermes_plugin.mcs_discord import cards
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    spec = _spec(["synthetic first"])
+    spec["parts"]["action_rows"] = [[
+        {"id": action, "label": action, "token": "synthetic-" + action}
+        for action in ("meds", "drugsearch", "ack")]]
+
+    def tokens(item):
+        out = [item.custom_id] if getattr(item, "custom_id", "").startswith("mcs:a:") else []
+        out.extend(option.value for option in getattr(item, "options", []))
+        for child in getattr(item, "items", []) + getattr(item, "children", []):
+            out.extend(tokens(child))
+        return out
+
+    # Legacy/card_thread-off card behavior retains its drug action entries.
+    legacy = cards.message_payload(spec, components_v2=components_v2)["view"]
+    assert {"synthetic-meds", "synthetic-drugsearch"} <= set(tokens(legacy))
+    spec["parts"]["thread_drug_actions"] = True
+    parent = cards.message_payload(spec, components_v2=components_v2)["view"]
+    assert tokens(parent) == ["mcs:a:synthetic-ack"]
+    assert tokens(cards.thread_drug_view(spec)) == [
+        "mcs:a:synthetic-meds", "mcs:a:synthetic-drugsearch"]
+
+
+@pytest.mark.parametrize("status", [400, 403, 404])
+def test_same_text_drug_view_rejected_edit_posts_verified_replacement(tmp_path, monkeypatch,
+                                                                    status):
+    from discord_testkit import _fake_discord
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    w, _, bot = _mkworker(tmp_path)
+    thread = FakeThread(7700)
+    bot.channels[42].threads.append(thread)
+    old = _HistMsg(5999, "synthetic first")
+    old.edit_fail = FakeHTTP(status)
+    thread.sent.append(old)
+    spec = _spec([old.content], op="update", thread_id="7700",
+                 prior={"body:0001": str(old.id)})
+    spec["parts"]["thread_drug_actions"] = True
+    spec["parts"]["action_rows"] = [[
+        {"id": "meds", "label": "薬剤", "token": "a" * 32}]]
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    record = _sent_parts(_state(tmp_path))["body:0001"]
+    assert record["result"] == "delivered"
+    assert record["remote_id"] == str(thread.sent[-1].id)
+    assert len(thread.sent) == 2 and old.edits == 0
+    assert thread.sent[-1].view.items[0].custom_id == "mcs:a:" + "a" * 32
+    asyncio.run(w._deliver_parts(_claim(spec), "9001"))
+    assert len(thread.sent) == 2

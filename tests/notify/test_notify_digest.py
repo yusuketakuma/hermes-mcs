@@ -91,7 +91,8 @@ def test_body_is_built_outside_the_write_lock(led, monkeypatch):
 def test_counts_ids_and_no_patient_content(led):
     _patient(led, 1, name="患者A")
     _patient(led, 2, name="患者B", archived=1)
-    _seen(led, 100, T - 3600)
+    clinical = "本人が急変。至急連絡してください。秘密の本文"
+    _seen(led, 100, T - 3600, body=clinical)
     _seen(led, 101, T - 60, prof="医師")
     _seen(led, 102, T - 60, prof="")
     _seen(led, 103, T - 2 * 86400)                   # before the window
@@ -100,7 +101,7 @@ def test_counts_ids_and_no_patient_content(led):
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES('extract_v1',1,100,?,'rules',?,?)",
-        (json.dumps({"urgency": "high"}), json.dumps({"hash": f"{100:064x}"}),
+        (json.dumps({"urgency": "high", "urgency_evidence": ["本人が急変"]}), json.dumps({"hash": f"{100:064x}"}),
          T))
     led.db.commit()
     cfg = {**ON, "notify_max_age_h": 48}
@@ -109,7 +110,7 @@ def test_counts_ids_and_no_patient_content(led):
     assert "新着 3件・緊急度高 1件・未完了タスク 0件（期限切れ 0・本日期限 0）" in text
     assert "■ 新着（患者別 1人）\n・project 1 3件（看護師 1・医師 1・職種不明 1）" in text
     assert "■ 緊急度高 1件\n・project 1 / message 100 🚨" in text
-    for secret in ("秘密の本文", "患者A", "患者B", "職員"):
+    for secret in ("秘密の本文", "本人が急変", "患者A", "患者B", "職員"):
         assert secret not in text
     assert "記録が見つからないことは対応がなかったことを意味せず" in text
     assert "欠落なしの保証ではありません" in text
@@ -119,18 +120,18 @@ def test_patient_names_only_when_opted_in(led):
     """include_names adds the patient name next to each listed project;
     bodies and staff names never appear either way."""
     _patient(led, 1, name="患者A")
-    _seen(led, 100, T - 3600)
+    _seen(led, 100, T - 3600, body="本人が急変。至急連絡してください。秘密の本文")
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES('extract_v1',1,100,?,'rules',?,?)",
-        (json.dumps({"urgency": "high"}), json.dumps({"hash": f"{100:064x}"}),
+        (json.dumps({"urgency": "high", "urgency_evidence": ["本人が急変"]}), json.dumps({"hash": f"{100:064x}"}),
          T))
     led.db.commit()
     cfg = {**ON, "daily_digest": {**ON["daily_digest"], "include_names": True}}
     notify_digest.maybe_enqueue(led, cfg, now=T)
     text = _text(led)
     assert "■ 緊急度高 1件\n・project 1 患者A / message 100 🚨" in text
-    for secret in ("秘密の本文", "職員"):
+    for secret in ("秘密の本文", "本人が急変", "職員"):
         assert secret not in text
 
 

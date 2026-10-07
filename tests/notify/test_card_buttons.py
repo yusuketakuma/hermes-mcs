@@ -417,7 +417,7 @@ def test_summary_karte_summary_line(led, ks, line):
     body = notify_views.patient_summary_text(led.db, 1)[1]
     assert "古い要約" not in body
     assert f"{line}\n" in body or body.endswith(line)   # nothing after it
-    assert body.count("連携サマリー") == 1
+    assert body.count("\n連携サマリー（MCS") == 1
     if isinstance(ks, dict):
         assert ks["comment"][:80] not in body      # cut, not the raw text
 
@@ -658,7 +658,9 @@ def test_worst_case_footer_stays_under_the_text_budget(led, tmp_path,
 def test_urgency_badge_names_its_source(led):
     import structured_view
     _seed_thread(led, mids=(100, 101, 102))
-    _llm_extract(led, 100, {"urgency": "high", "summary": "至急"})
+    led.db.execute("UPDATE messages SET body_text='本人が急変につき至急ご連絡ください。' WHERE message_id IN (100,101)")
+    _llm_extract(led, 100, {"urgency": "high", "summary": "至急",
+                            "urgency_evidence": ["本人が急変につき至急ご連絡ください。"]})
     h = f"{101:064x}"
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
@@ -681,7 +683,9 @@ def test_urgency_reads_the_same_artifact_as_the_body(led):
     urgency recorded on the v4 row itself still wins."""
     import structured_view
     _seed_thread(led, mids=(100,))
-    _llm_extract(led, 100, {"urgency": "high", "summary": "旧"})
+    led.db.execute("UPDATE messages SET body_text='本人が急変につき至急ご連絡ください。' WHERE message_id=100")
+    _llm_extract(led, 100, {"urgency": "high", "summary": "旧",
+                            "urgency_evidence": ["本人が急変につき至急ご連絡ください。"]})
     v4 = led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES('semantic_facts_v4',1,100,?,'v4',?,?)",
@@ -692,7 +696,7 @@ def test_urgency_reads_the_same_artifact_as_the_body(led):
         == "新"
     assert structured_view.message_urgency(led.db, 100) == "llm"
     led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
-                   (json.dumps({"urgency": "high"}), v4.lastrowid))
+                   (json.dumps({"urgency": "high", "urgency_evidence": ["本人が急変につき至急ご連絡ください。"]}), v4.lastrowid))
     led.db.commit()
     assert structured_view.message_urgency(led.db, 100) == "llm"
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 # canonical document: writers store it in the row meta and reuse an
 # existing projection only when the version matches, so a reprocessed
 # message never keeps serving an older projection's clinical semantics.
-PROJECTION_VERSION = 2
+PROJECTION_VERSION = 3
 
 
 def projection_current(meta: dict, doc_hash: str) -> bool:
@@ -187,6 +187,38 @@ def _v2_med_status(fact: dict) -> str:
     return "current"
 
 
+_CONTEXT_CATEGORY = {
+    "medication_event": "medication_management", "medication_exposure": "medication_management",
+    "adherence_administration": "medication_management", "allergy_intolerance": "allergies",
+    "adverse_drug_event": "adverse_events", "vital_lab": "observations",
+    "symptom_state": "course", "care_event": "course", "request_pending": "followup",
+    "preference": "preferences", "other_observation": "observations",
+}
+
+
+def _project_patient_context(fact, quotes):
+    """Keep verified raw reports, including legacy facts without optional attributes."""
+    from patient_context import context_items, extract_context
+    from semantic_facts import ContractError, context_subject, validate_patient_context
+
+    if "patient_context" in fact:
+        try:
+            return [validate_patient_context(fact, quotes)]
+        except ContractError:
+            return []  # An invalid new attribute cannot revive as a legacy inferred category.
+    result = []
+    for quote in quotes:
+        subject = context_subject(fact.get("subject"))
+        items = extract_context(quote)
+        if not items and fact.get("kind") in _CONTEXT_CATEGORY:
+            items = [{"category": _CONTEXT_CATEGORY[fact["kind"]], "text": quote,
+                      "evidence": quote, "subject": subject}]
+        for item in items:
+            item["subject"] = subject
+        result.extend(context_items({"patient_context": items}, quote))
+    return result
+
+
 def project_v2_doc_legacy(doc: dict, *, request_details: bool = False) -> dict:
     """Project an audited semantic-facts/v2 document into the
     extract_llm content shape consumed by the read side.  Only
@@ -217,6 +249,11 @@ def project_v2_doc_legacy(doc: dict, *, request_details: bool = False) -> dict:
             continue
         kind = fact.get("kind")
         quote = quote_of(fact)
+        for context in _project_patient_context(fact, [
+                evidence_by_id[ref]["quote"] for ref in fact.get("evidence_ids", [])
+                if ref in evidence_by_id]):
+            if context not in out.setdefault("patient_context", []):
+                out["patient_context"].append(context)
         negated = fact.get("polarity") == "negated"
         uncertain = (fact.get("polarity") not in ("affirmed", "negated")
                      or fact.get("epistemic") not in ("asserted", "reported")

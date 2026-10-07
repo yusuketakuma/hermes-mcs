@@ -1,7 +1,7 @@
 # Slackの画面例ギャラリー
 
 READMEの推奨通知先はSlack。先頭の全体像と、確認・担当、操作メニュー、
-タスク入力、タスク確定、タスク一覧、患者の記録まとめの7画面を用意する。
+タスク入力、タスク確定、タスク一覧、患者の記録まとめ、再確認通知の8画面を用意する。
 架空の名前・投稿・数値を使った説明図で、実画面のキャプチャではない。
 実データ・実投稿の匿名化例は使用しない。
 
@@ -19,7 +19,8 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 | `04-task-form` | `adapters/common/text.py`の`modal_fields`、`adapters/slack/actions.py`の`_open_modal` |
 | `05-task-preview` | 同`preview_text`と`_preview`（本人向け、確定する／取消） |
 | `06-task-list` | `adapters/slack/actions.py`の`_task_blocks`・`_task_text`（本人向けの一覧。各タスクの直後にその状態操作） |
-| `07-patient-summary` | `mcs/notify/notify_views.py`の`patient_summary_text`（患者の記録まとめ。暫定集約・取得範囲・原本確認） |
+| `07-patient-summary` | `mcs/notify/notify_views.py`の`patient_summary_text`（患者の記録まとめ。暫定集約・取得範囲・原本確認・背景／療養情報の本人向け抜粋）、`mcs/views/extraction_progress.py`（現在のsource/model/prompt/layoutへ束縛した処理中・完了・要確認と完了区間数。最新20投稿まで、履歴や臨床情報の完全性とは区別） |
+| `08-urgent-notice` | `mcs/notify/alert_view.py`の`render_parts`を完全合成のメモリDBで実行（患者本人／対象未確認、同投稿の一意な原文引用、投稿日とAI判定観測時刻、原本確認、業務未対応を断定しない注記）。`notify_urgent.py`の配送前検証と既存通知スレッドへの追加配送は別の安全条件。 |
 
 表示例では絵文字や一部の長い行を読みやすく簡略化する。
 ダッシュボードや患者管理画面は描かない。Slackの`/mcs`コマンドは本文と導入ガイドで説明し、このカード操作の画面例には含めない。
@@ -36,7 +37,7 @@ python3 scripts/development/readme_release.py --check
 今回はmacOS標準Quick Lookで一時的に正方形へ拡張したSVGを描画し、
 既存ImageMagickで上端から元の比率へ切り出した。公開SVGのサイズは変更していない。
 `scripts/development/generate_slack_gallery.py`の説明用の例とレイアウトを修正し、SVGとPNGを一緒に更新する。
-7画面の文字切れ・重なり・説明・本人向け表示・人承認条件を確認する。
+8画面の文字切れ・重なり・説明・本人向け表示・人承認条件を確認する。
 PNGは生成時に一時ファイルのCRC・全チャンク・画像データを検査してから置き換える。
 `assets.json`は対応するSVG/PNGのSHA-256記録。手で更新せず、生成器の`asset_hashes()`から更新する（`--png`でも更新される）。
 CIはSVGの生成結果、PNGの完結性・サイズ・画像データ、両方のハッシュを検査する。

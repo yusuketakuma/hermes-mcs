@@ -116,22 +116,41 @@ def _zones(spec: dict, esc) -> tuple:
     return zones, footer
 
 
-def _button_items(spec):
+def _button_items(spec, primary_actions=PRIMARY_ACTIONS):
     """The same durable primary/link buttons and secondary menu in both formats."""
     import discord
     primary, menu, links = [], [], []
     for row in spec["parts"].get("action_rows") or []:
         for button in row:
+            if spec["parts"].get("thread_drug_actions") is True \
+                    and button.get("id") in {"meds", "drugsearch"}:
+                continue
             if button.get("ui") == "link":
                 links.append(discord.ui.Button(style=discord.ButtonStyle.link,
                                                label=button["label"], url=button["url"]))
-            elif button.get("id") in PRIMARY_ACTIONS:
+            elif button.get("id") in primary_actions:
                 primary.append(discord.ui.Button(
                     style=getattr(discord.ButtonStyle, button.get("style", "secondary")),
                     label=button["label"], custom_id=f"mcs:a:{button['token']}"))
             else:
                 menu.append(discord.SelectOption(label=button["label"], value=button["token"]))
     return primary + links, menu
+
+
+def thread_drug_view(spec):
+    """Runner-issued medication actions on the first companion-thread body."""
+    import discord
+    drug_actions = {"meds", "drugsearch"}
+    rows = [[button for row in spec["parts"].get("action_rows") or []
+             for button in row if button.get("id") in drug_actions]]
+    buttons, _ = _button_items({"parts": {"action_rows": rows}}, drug_actions)
+    if not buttons:
+        return None
+    view = discord.ui.View(timeout=None)
+    for button in buttons:
+        view.add_item(button)
+    view.stop()
+    return view
 
 
 def message_payload(spec, *, components_v2=False):

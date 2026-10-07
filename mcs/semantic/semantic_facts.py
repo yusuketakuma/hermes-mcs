@@ -433,7 +433,40 @@ def validate_fact(fact: dict) -> dict:
         _enum(fact.get("action", UNKNOWN), "fact_action", MED_ACTIONS)
         out["action"] = fact.get("action", UNKNOWN)
     out.update(request_details(fact))
+    context = validate_patient_context(fact)
+    if context is not None:
+        out["patient_context"] = context
     return out
+
+
+def context_subject(subject):
+    """Map canonical identities to reported context without guessing unknown patients."""
+    if isinstance(subject, str) and subject.startswith("patient:"):
+        return "patient"
+    return "family" if subject == "role:family" else "unspecified" if subject == UNKNOWN else "other"
+
+
+def validate_patient_context(fact, evidence_quotes=None):
+    """Recheck optional clinical attributes inside this fact's own evidence quotes."""
+    if "patient_context" not in fact:
+        return None
+    from patient_context import context_items
+
+    context = fact["patient_context"]
+    if (not isinstance(context, dict)
+            or set(context) - {"category", "text", "evidence", "subject", "details"}
+            or context.get("subject") != context_subject(fact.get("subject"))
+            or not isinstance(context.get("evidence"), str)):
+        _fail("fact_patient_context_invalid")
+    quotes = [context["evidence"]] if evidence_quotes is None else evidence_quotes
+    for quote in quotes:
+        if not isinstance(quote, str) or context["evidence"] not in quote:
+            continue
+        clean = context_items({"patient_context": [context]}, quote)
+        if clean and ("details" not in context or isinstance(context["details"], list)
+                      and len(clean[0]["details"]) == len(context["details"])):
+            return clean[0]
+    _fail("fact_patient_context_ungrounded")
 
 
 def validate_relation(relation: dict) -> dict:
@@ -577,6 +610,10 @@ def validate_facts_doc(doc: dict) -> dict:
             _fail("doc_verified_without_evidence")
         f.update(request_details(f, [
             evidence_by_id[ref]["quote"] for ref in f["evidence_ids"]]))
+        context = validate_patient_context(f, [
+            evidence_by_id[ref]["quote"] for ref in f["evidence_ids"]])
+        if context is not None:
+            f["patient_context"] = context
     for o in obligations:
         if o["owner_id"] not in atom_ids and o["owner_id"] not in chunk_ids:
             _fail("doc_obligation_owner_unknown")

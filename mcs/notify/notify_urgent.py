@@ -12,7 +12,8 @@ import mcs_signals
 import notify_cards
 import notify_render
 import structured_view
-from mcs_queries import FACT_KINDS_SQL, JST, current_fact_pred, json_or_null
+from mcs_queries import (FACT_KINDS_SQL, JST, current_extract_pred,
+                         current_fact_pred, json_or_null)
 from mcs_requests import positive, valid_hash
 
 
@@ -74,20 +75,23 @@ def _time(value):
 
 
 def _current(db: sqlite3.Connection, mid: int) -> sqlite3.Row | None:
-    # The exact shared predicate/order is also used by the card's urgency badge.
-    # canonical_projection / semantic_facts_v4 rows carry no urgency, so
-    # the urgency-bearing row (extract_llm) must win the ordering — the
-    # same fallback the badge's message_urgency performs.
-    return db.execute(f"""
+    # Keep the verdict AND its artifact/time aligned with message_urgency.
+    query = """
         SELECT m.message_id,m.project_id,m.content_hash,m.posted_at_ts,
                a.artifact_id,a.created_at,a.kind,
                json_extract(a.content,'$.urgency') urgency
         FROM messages m JOIN patients p ON p.project_id=m.project_id
         JOIN artifacts a ON a.message_id=m.message_id
         WHERE m.message_id=? AND m.body_state='full' AND COALESCE(p.is_archived,0)=0
-          AND a.kind IN ({FACT_KINDS_SQL}) {current_fact_pred("a", "m")}
-        ORDER BY json_extract(a.content,'$.urgency') IS NULL,
-                 a.artifact_id DESC LIMIT 1""", (mid,)).fetchone()
+          AND {predicate}
+        ORDER BY a.artifact_id DESC LIMIT 1"""
+    row = db.execute(query.format(predicate=(
+        f"a.kind IN ({FACT_KINDS_SQL}) {current_fact_pred('a', 'm')}")), (mid,)).fetchone()
+    if row is not None and row["urgency"] in ("high", "routine", "unclear"):
+        return row
+    # A published projection shadows legacy facts, but may carry no verdict.
+    return db.execute(query.format(predicate=(
+        "a.kind='extract_llm'" + current_extract_pred('a', 'm'))), (mid,)).fetchone()
 
 
 def capture_initial(ledger, cfg, event, *, now=None):
@@ -260,6 +264,8 @@ def _eligible(
     row = _current(ledger.db, mid)
     if row is None or row["kind"] == "extract_v1" or row["urgency"] != "high":
         return None, "current_llm_high_absent"
+    if structured_view.message_urgency(ledger.db, mid) != "llm":
+        return None, "patient_urgency_unverified"
     # The newest QC audit pinned to THIS artifact may veto escalation:
     # a Jev 'routine'/'unclear' on the current extraction holds the
     # re-ask. A missing/stale QC row suppresses nothing (fail-open).
@@ -303,7 +309,8 @@ def maybe_enqueue(ledger, cfg, *, now=None) -> _EnqueueResult:
         mids = ledger.db.execute(f"""
             SELECT DISTINCT m.message_id FROM messages m
             JOIN artifacts a ON a.message_id=m.message_id
-            WHERE a.kind IN ({FACT_KINDS_SQL}) {current_fact_pred("a", "m")}
+            WHERE a.kind IN ({FACT_KINDS_SQL}) {current_extract_pred("a", "m")}
+              AND (a.kind='extract_llm' OR (1=1 {current_fact_pred("a", "m")}))
               AND json_extract({json_or_null('a.content')},'$.urgency')='high' ORDER BY m.message_id""").fetchall()
         restoring = mids and notify_cards.restore_pending(
             notify_cards.data_root(ledger)) is not None
@@ -325,7 +332,7 @@ def maybe_enqueue(ledger, cfg, *, now=None) -> _EnqueueResult:
                        "urgency_artifact_id": row["artifact_id"],
                        "shadow": opts["mode"] == "shadow"}
             event_id = ledger.outbox_add_tx("urgent_notice", row["project_id"], payload,
-                                           next_try=now, route="text")
+                                           next_try=now, route="interactive")
             ledger.db.execute("UPDATE notify_outbox SET created_at=?,updated_at=? "
                               "WHERE event_id=?", (now, now, event_id))
             if payload["shadow"]:
@@ -359,20 +366,14 @@ def check_delivery(ledger, cfg, event, *, now=None):
             or candidate["base"]["event_id"] != payload.get("base_event_id")
             or candidate["stage"] != payload.get("stage")):
         return {"ok": False, "reason": "urgent_source_changed"}
+    detail = structured_view.message_urgency_details(ledger.db, payload["message_id"])
     return {"ok": True, "message_id": payload["message_id"],
             "project_id": event["project_id"], "stage": payload["stage"],
-            "observed_at": candidate["row"]["created_at"]}
+            "observed_at": candidate["row"]["created_at"],
+            "subject": detail["subject"], "reasons": detail["reasons"]}
 
 
 def render_text(checked, db=None):
     """元投稿の表示と業務完了を区別した、独立した再確認候補を示す。"""
-    source = (notify_render.notification_preview(
-        db, {"kind": "thread", "project_id": checked["project_id"]},
-        {"shown": [checked["message_id"]]}) + "\n") if db is not None else ""
-    return (
-        source +
-        f"[MCS] 緊急度の再確認候補（AI抽出・{checked['stage']}）\n"
-        f"project {checked['project_id']} / message {checked['message_id']}\n"
-        "現在のLLM抽出で緊急度が高いと観測されています。\n"
-        "現在の表示世代の通知確認と、投稿後の自施設投稿・依頼登録を観測していません。\n"
-        "記録が見つからない≠対応がなかった。業務完了・未対応の判定ではありません。")
+    import alert_view
+    return alert_view.render_text(checked, db)

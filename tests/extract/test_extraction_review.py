@@ -99,7 +99,8 @@ def test_chunk_survives_later_exception_and_all_leases_release(db, monkeypatch, 
     monkeypatch.setattr(extract_llm, "_probe_format", lambda **kw: "plain")
 
     def infer(prompt, **kwargs):
-        if "い" * 100 in prompt:
+        core = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
+        if "い" * 100 in core:
             raise RuntimeError("synthetic interruption")
         return {"summary": "完了チャンク"}
 
@@ -316,7 +317,9 @@ def test_urgency_revision_replaces_old_rule_and_shared_display(db):
                     project_id=1, message_id=1,
                     meta={'hash': content_hash,
                           'rule_version': extract.RULE_VERSION - 1})
-    assert message_urgency(db.db, 1) == 'rule'
+    # Cached high is not displayed when the current original explicitly denies urgency.
+    assert message_urgency(db.db, 1) is None
+    assert json.loads(db.artifacts('extract_v1')[0]['content'])['urgency'] == 'high'
     assert extract.run_pending(db)['done'] == 1
     assert message_urgency(db.db, 1) is None
     artifacts = db.artifacts('extract_v1')
@@ -347,12 +350,13 @@ def _v1_urgent(db, mid=1):
 def test_message_urgency_llm_verdict_supersedes_rule(db, llm, llm_meta, expect):
     from structured_view import message_urgency
 
-    db.save_messages([_message(body='至急ご確認ください')])
+    body = '本人が急変、至急ご確認ください'
+    db.save_messages([_message(body=body)])
     chash = _v1_urgent(db)
     if llm is not None:
         meta = {'hash': chash, 'extract_version': extract_llm.EXTRACT_VERSION}
         meta.update(llm_meta)
-        db.artifact_add('extract_llm', json.dumps({'urgency': llm}),
+        db.artifact_add('extract_llm', json.dumps({'urgency': llm, 'urgency_evidence': [body]}),
                         project_id=1, message_id=1, meta=meta)
     assert message_urgency(db.db, 1) == expect
 
@@ -361,11 +365,12 @@ def test_message_urgency_llm_verdict_supersedes_rule(db, llm, llm_meta, expect):
 def test_stats_count_rule_high_suppressed_by_llm_routine(db):
     import mcs_stats
 
-    db.save_messages([_message(mid=i, body='至急ご確認ください') for i in (1, 2, 3)])
+    body = '本人が急変、至急ご確認ください'
+    db.save_messages([_message(mid=i, body=body) for i in (1, 2, 3)])
     for mid, llm in ((1, 'routine'), (2, 'high'), (3, None)):
         chash = _v1_urgent(db, mid)
         if llm:
-            db.artifact_add('extract_llm', json.dumps({'urgency': llm}),
+            db.artifact_add('extract_llm', json.dumps({'urgency': llm, 'urgency_evidence': [body]}),
                             project_id=1, message_id=mid,
                             meta={'hash': chash,
                                   'extract_version': extract_llm.EXTRACT_VERSION})
@@ -376,7 +381,8 @@ def test_stats_count_rule_high_suppressed_by_llm_routine(db):
                              {'stat': 'data_quality', 'limit': 20})
     assert st['stats']['data_quality']['urgency_rule_outcomes'] == {
         'rule_high': 3, 'llm_high': 1, 'llm_high_qc_disagreed': 0,
-        'rule_only': 1, 'llm_routine_suppressed': 1, 'human_urgency_reports': 1}
+        'rule_only': 1, 'llm_routine_suppressed': 1, 'human_urgency_reports': 1,
+        'request_only': 0, 'scope_or_evidence_held': 0}
 
 def test_message_urgency_llm_verdict_under_v4_read_model(db):
     from structured_view import message_urgency

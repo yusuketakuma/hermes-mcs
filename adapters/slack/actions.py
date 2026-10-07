@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from html import escape
+from html import escape, unescape
 import os
 import re
 import time
@@ -298,10 +298,14 @@ class Actions:
         ctx = self._reg.token(token)
         if not ctx or actor != origin.get("actor"):
             return None
+        private_meds = ctx.get("ephemeral") is True and ctx.get("action") == "meds"
+        if private_meds and ctx.get("actor") != actor:
+            return None
         if ctx.get("action") != "task_status" and (
                 ctx.get("team_id") != origin["team_id"]
                 or ctx.get("channel_id") != origin["channel_id"]
-                or ctx.get("message_id") != origin["message_id"]):
+                or (not private_meds
+                    and ctx.get("message_id") != origin["message_id"])):
             return None
         return ctx
 
@@ -328,7 +332,8 @@ class Actions:
                 return None
         return ctx
 
-    async def _say(self, channel, user, text, *, blocks=None):
+    async def _say(self, channel, user, text, *, blocks=None, thread_ts=None,
+                   navigation=None):
         client = self._client()
         if client is None:
             self._log("followup_failed", error="retry_policy_unknown")
@@ -339,8 +344,13 @@ class Actions:
                     return
                 kwargs = {"channel": channel, "user": user,
                           "text": chunk, "link_names": False}
+                if thread_ts:
+                    kwargs["thread_ts"] = thread_ts
                 if blocks and index == 0:
                     kwargs["blocks"] = blocks
+                elif navigation and index == 0:
+                    kwargs["blocks"] = _sections(unescape(chunk)) + [
+                        {"type": "actions", "elements": navigation}]
                 await client.chat_postEphemeral(**kwargs)
         except Exception as exc:
             self._log("followup_failed", error=type(exc).__name__)
@@ -714,17 +724,57 @@ class Actions:
                 result, lambda pid: projects.project_allowed(
                     self._settings, pid), markdown=False, plain=True)
             if answer is not None:
+                pin = self._pinned(rec["token"],
+                                   {**origin, "actor": rec["actor"]}, rec["actor"])
+                thread_ts = None
+                if pin and pin.get("action") in ("meds", "drugsearch"):
+                    thread_ts = pin.get("verified_thread_id")
+                    if (not isinstance(thread_ts, str)
+                            or not _TS.fullmatch(thread_ts)
+                            or thread_ts != pin.get("message_id")):
+                        await self._say(origin["channel_id"], rec["user"],
+                                        "薬剤詳細を表示するスレッドの本文配信が確認できません。"
+                                        "配信完了を待つか、管理者にスレッド配信の状態確認を依頼してください。")
+                        continue
                 # 📋 transition tokens must land before their buttons
                 token_ctx = result.get("token_ctx") or {}
+                navigation = []
+                if thread_ts:
+                    token_ctx = {
+                        token: {**context, "verified_thread_id": thread_ts}
+                        for token, context in token_ctx.items()
+                        if isinstance(token, str) and _TOKEN.fullmatch(token)
+                        and isinstance(context, dict)
+                        and context.get("action") == "meds"
+                        and context.get("ephemeral") is True
+                        and context.get("actor") == rec["actor"]
+                        and all(context.get(key) == pin.get(key)
+                                for key in ("card_key", "kind", "project_id",
+                                            "channel_id", "team_id", "message_id"))}
+                    for button in result.get("navigation") or []:
+                        if (isinstance(button, dict) and button.get("id") == "meds"
+                                and button.get("ui") == "button"
+                                and isinstance(button.get("token"), str)
+                                and button.get("token") in token_ctx
+                                and isinstance(button.get("label"), str)
+                                and 0 < len(button["label"]) <= 75):
+                            navigation.append({"type": "button", "text": {
+                                "type": "plain_text", "text": button["label"]},
+                                "action_id": "mcs:a:" + button["token"],
+                                "value": button["token"]})
+                    navigation = navigation[:5]
                 if token_ctx:
-                    await asyncio.to_thread(self._reg.put_tokens, token_ctx)
+                    await asyncio.to_thread(self._reg.put_tokens, token_ctx,
+                                            durable=bool(thread_ts))
                 cards = _parts_blocks(result)
                 if cards:
                     # 📊: one Block Kit card; the text is the fallback
                     answer = answer[:1]
-                for message, tasks in answer:
+                for index, (message, tasks) in enumerate(answer):
                     await self._say(origin["channel_id"], rec["user"],
                                     message, blocks=cards or (
-                                        _task_blocks(tasks) if tasks else None))
+                                        _task_blocks(tasks) if tasks else None),
+                                    thread_ts=thread_ts,
+                                    navigation=navigation if index == 0 else None)
             elif rec["kind"] == "human" or result.get("outcome") != "applied":
                 await self._say(origin["channel_id"], rec["user"], ja(result))

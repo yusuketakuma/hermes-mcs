@@ -388,6 +388,10 @@ def _section_valid(section) -> bool:
         d = lab.get("measured_on")
         if d is not None and not _iso_date(d):
             return False
+    if "labs" in section and isinstance(section["labs"], list):
+        # The gold-label date pins normalized output, rather than an input quote.
+        section["labs"] = [{key: value for key, value in lab.items() if key != "measured_on"}
+                           if isinstance(lab, dict) else lab for lab in section["labs"]]
     v = extract_llm._validate(section)
     return isinstance(v, dict) and not v.get("_items_dropped")
 

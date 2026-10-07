@@ -17,6 +17,7 @@ import drug_map
 from drug_map import candidate_note
 from rollup import current_cached_refs
 from ledger import karte_summary_block
+from patient_context import LABELS, context_items, extract_context
 from mcs_adapter import project_url
 from mcs_queries import JST, incomplete_reply_roots
 from mcs_util import fold_map, register_search_fold, search_fold
@@ -30,7 +31,7 @@ SUMMARY_CAVEAT = ("※ 取得済み投稿から自動作成した暫定集約で
                   "代わりにはなりません。原本で確認してください。")
 
 
-def patient_summary_text(db, project_id) -> tuple:
+def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
     """🧾 answer: current meds (with the dated period), latest vitals,
     next planned item from the stored patient_rollup, plus the open
     tasks from the requests ledger. Missing material is said plainly —
@@ -38,6 +39,8 @@ def patient_summary_text(db, project_id) -> tuple:
     name = _patient_name(db, project_id) or f"project {project_id}"
     title = f"{name} — 患者の記録まとめ（暫定集約）"
     lines = [SUMMARY_CAVEAT, _coverage_line(db, project_id)]
+    from extraction_progress import summary_lines
+    lines.extend(summary_lines(db, project_id, cfg=cfg))
     row = db.execute(
         "SELECT content,meta FROM artifacts WHERE kind='patient_rollup' "
         "AND project_id=? AND json_valid(content) "
@@ -75,6 +78,8 @@ def patient_summary_text(db, project_id) -> tuple:
         if isinstance(roll.get("next_planned"), str) and roll["next_planned"]:
             lines.append(f"■ 次回予定（抽出表現）: {roll['next_planned']}")
         lines.extend(_request_reply_lines(db, project_id, roll))
+    lines.extend(_patient_context_lines(db, project_id, roll))
+    lines.extend(_registered_clinical_lines(db, project_id))
     # the 連携サマリー line always reads the newest artifact: the rollup
     # holds a copy frozen at its last rebuild, which a newer fetch
     # (updated or emptied summary) supersedes
@@ -92,6 +97,103 @@ def patient_summary_text(db, project_id) -> tuple:
                  + (f" — 期限 {t['due_date']}" if t["due_date"] else "")
                  for t in tasks)
     return title, "\n".join(lines)
+
+
+def _patient_context_lines(db, project_id, roll) -> list[str]:
+    """Private summary excerpts from current source-bound context; identifiers stay in detail reads."""
+    context = roll.get("patient_context")
+    chat = context.get("chat") if isinstance(context, dict) else None
+    chat = chat if isinstance(chat, dict) else {}
+    summary = _karte_summary_from_artifact(db, project_id)
+    comment = summary.get("comment") if isinstance(summary, dict) else None
+    memo = {}
+    if isinstance(comment, str):
+        for item in context_items({"patient_context": extract_context(comment)}, comment):
+            memo.setdefault(item["category"], []).append(item)
+    lines = ["■ 背景・療養情報（原記録の抜粋。現在の確定情報ではありません）"]
+    sources = {}
+    for category, labels in LABELS.items():
+        if category in ("demographics", "contacts"):
+            continue
+        for item in memo.get(category, [])[:1]:
+            lines.append(f"・{labels[0]}（連携サマリー）: {_inline(item['text'], 80)}")
+        if len(memo.get(category, [])) > 1:
+            lines.append(f"  この分類は他{len(memo[category]) - 1}項目（原記録で全文確認）")
+        items = chat.get(category)
+        if not isinstance(items, list):
+            continue
+        valid = []
+        for item in items:
+            if not isinstance(item, dict) or type(item.get("message_id")) is not int:
+                continue
+            mid = item["message_id"]
+            if mid not in sources:
+                sources[mid] = db.execute(
+                    "SELECT body_text,body_state,content_hash FROM messages "
+                    "WHERE project_id=? AND message_id=?", (project_id, mid)).fetchone()
+            source = sources[mid]
+            if (not source or source["body_state"] not in (None, "full")
+                    or source["content_hash"] != item.get("content_hash")
+                    or not context_items({"patient_context": [item]}, source["body_text"] or "")):
+                continue
+            valid.append(item)
+        for item in valid[:1]:
+            mid = item["message_id"]
+            subject = "・家族の記載" if item.get("subject") == "family" else \
+                "・他者の記載" if item.get("subject") == "other" else ""
+            lines.append(f"・{labels[0]}（投稿#{mid}{subject}）: {_inline(item['text'], 80)}")
+        if len(valid) > 1:
+            lines.append(f"  この分類は他{len(valid) - 1}項目（原記録で全文確認）")
+    if len(lines) == 1:
+        lines.append("・構造化された背景情報なし（記載なし・未取得・未抽出の可能性）")
+    else:
+        lines.append("※ 背景情報は抜粋です。詳しい内容や以前の記載は原記録をご確認ください。")
+    return lines
+
+
+def _registered_clinical_lines(db, project_id) -> list[str]:
+    """Private fetch-state summary, kept separate from reported chat facts."""
+    from read_model import _registered_data
+    registered = _registered_data(db, "detail", project_id, 8)
+    if registered is None or not registered["total"]:
+        return []
+    names = {"medication_periods": "薬剤登録", "observation_items": "観測項目", "observation_values": "観測値"}
+    states = {"complete": "取得済み", "empty": "登録行なし", "unknown": "未取得・未確認",
+              "failed": "取得失敗", "stale": "古い・定義変更あり"}
+    lines = ["■ MCS登録情報（チャットとは別の記録・抜粋。現在の状態を断定しません）"]
+    for dataset, name in names.items():
+        records = [r for r in registered["records"] if r["dataset"] == dataset]
+        if not records:
+            continue
+        counts = {}
+        for record in records:
+            counts[record["state"]] = counts.get(record["state"], 0) + 1
+        if dataset != "observation_values":
+            record = records[0]
+            suffix = (f"（{record['rows_total']}{'処方期間' if dataset == 'medication_periods' else '項目'}）"
+                      if record.get("last_complete_at") is not None else "")
+            lines.append(f"・{name}: {states.get(record['state'], '未確認')}{suffix}")
+        else:
+            lines.append(f"・{name}: " + "、".join(
+                f"{states.get(state, '未確認')} {count}項目" for state, count in sorted(counts.items())))
+        if dataset == "observation_values":
+            for record in records[:3]:
+                definition = record.get("definition") or {}
+                lab = definition.get("lab_test_item") or {}
+                rows = record.get("rows") or []
+                if not rows:
+                    continue
+                row = rows[0]
+                values = " / ".join(str(row[key]) for key in ("scalar", "max", "min", "left", "right")
+                                    if row.get(key) is not None)
+                if values:
+                    previous = "・以前取得した情報" if record.get("historical") else ""
+                    lines.append(f"  {_inline(lab.get('name'), 35) or '観測項目'}: {values} "
+                                 f"{_inline(lab.get('unit'), 20)}（記録日 "
+                                 f"{_inline(row.get('observation_issued_at'), 35) or '不明'}{previous}）")
+    if registered["truncated"] or any(r["rows_truncated"] for r in registered["records"]):
+        lines.append("※ 登録情報は一部の抜粋です。全項目と履歴はMCSの原記録で確認してください。")
+    return lines
 
 
 REPLY_LABELS = {"ack": "了解", "intent": "対応予定", "progress": "対応中",
@@ -409,6 +511,7 @@ DRUG_KIND_JA = {"ingredient": "成分", "general_name": "一般名処方",
                 "product": "製品", "class": "総称"}
 DRUG_CAVEAT = ("※ 辞書候補は名称の一致による参考情報です。処方・成分・"
                "同等性を確定しません。原文で確認してください。")
+MEDS_PAGE_SIZE = 5
 _DICTIONARY_STATE = {
     "unconfigured": "医薬品辞書が設定されていないため、候補は表示できません。",
     "inactive": "医薬品辞書が有効化されていないか切替中のため、候補は表示できません。",
@@ -442,12 +545,12 @@ def _candidate_line(ref, dictionary_active: bool) -> str:
 
 
 def meds_view(db, project_id, message_id, *, can_report=False,
-              can_search=False) -> dict:
+              can_search=False, page=0) -> dict:
     """💊 one post's medication mentions — the card's own 薬剤 selection
     (structured_view) with each mention's current dictionary candidate.
     Read-only: nothing here confirms a prescription."""
     name = _inline(_patient_name(db, project_id), 30) or f"project {project_id}"
-    title = f"💊 {name} — この投稿の薬剤"
+    title = f"💊 {name} — 選択した投稿の薬剤"
     row = db.execute("SELECT project_id,posted_at,profession FROM messages "
                      "WHERE message_id=?", (message_id,)).fetchone()
     if row is None or row["project_id"] != project_id:
@@ -457,7 +560,11 @@ def meds_view(db, project_id, message_id, *, can_report=False,
     meds, unverified = structured_view.medication_entries(db, message_id)
     refs = [ref for _, ref in meds + unverified if ref]
     active = drug_search_available(db)
-    head = [f"{_mmdd(row['posted_at'])} {_hhmm(row['posted_at'])} "
+    try:
+        posted_day = datetime.fromisoformat(row["posted_at"]).date().isoformat()
+    except (ValueError, TypeError):
+        posted_day = "日付不明"
+    head = [f"{posted_day} {_hhmm(row['posted_at'])} "
             f"{_inline(row['profession'], 20) or '職種不明'}の投稿 — "
             f"{len(meds) + len(unverified)}件"]
     if refs:
@@ -475,7 +582,12 @@ def meds_view(db, project_id, message_id, *, can_report=False,
         notes.append("候補の名称・別名は「薬剤を検索」で確認できます。")
     if can_report:
         notes.append("抽出の誤りは「誤りを報告」→「薬」から報告できます。")
-    return {"title": title, "head": head, "items": items, "more": 0,
+    pages = max(1, (len(items) + MEDS_PAGE_SIZE - 1) // MEDS_PAGE_SIZE)
+    page = min(max(page, 0), pages - 1)
+    head.append(f"薬剤 {page + 1}/{pages}ページ（全{len(items)}件・1ページ最大{MEDS_PAGE_SIZE}件）")
+    return {"title": title, "head": head,
+            "items": items[page * MEDS_PAGE_SIZE:(page + 1) * MEDS_PAGE_SIZE],
+            "more": 0, "page": page, "pages": pages,
             "empty": "この投稿から抽出された薬剤はありません。", "notes": notes}
 
 
@@ -512,4 +624,3 @@ def drug_search_view(db, cfg, project_id, query) -> dict:
             "items": items, "more": max(0, found["total"] - len(items)),
             "empty": "一致する候補はありません。一般名・製品名など別の表記でも試してください。",
             "notes": ["※ 参照用の検索です。処方・成分を確定せず、投稿の照合結果も変えません。"]}
-

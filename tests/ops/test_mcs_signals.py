@@ -1417,8 +1417,9 @@ def test_adherence_body_phrases(led):
 def test_urgency_high_escalates_to_immediate(led, monkeypatch):
     """urgency:high on the source mention promotes a digest-tier
     signal to an immediate intent carrying the urgent flag."""
-    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _msg(led.db, 1, ts=NOW - 30 * DAY, body="本人の薬Aを中止。急変につき至急ご連絡ください。")
     _extract_doc(led.db, 1, "h1", urgency="high",
+                 urgency_evidence=["急変につき至急ご連絡ください。"],
                  meds=[{"name": "薬A", "action": "stop"}])
     res = _ev(led, cfg={"signals": {"notify": True}})
     assert res["notify_enqueued"] == 1 and res["notify_digest_merged"] == 0
@@ -1703,7 +1704,7 @@ def test_task_like_to_not_pharmacist_addressed(led):
 def test_urgency_high_from_extract_v1_escalates(led):
     """extract_v1 (rule extractor) carries urgency too — a message
     the LLM never processed still escalates its signal."""
-    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _msg(led.db, 1, ts=NOW - 30 * DAY, body="本人の薬Aを中止。急変につき至急ご連絡ください。")
     _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
     led.db.execute(
         "INSERT INTO artifacts(kind,message_id,content,meta) "

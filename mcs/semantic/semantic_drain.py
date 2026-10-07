@@ -1172,10 +1172,13 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                 and jev_client.requests_made > requests_before)
 
     try:
-        return _process_job_inner(
+        status = _process_job_inner(
             ledger, scfg, job, jev_client, tracked_llm, deadline,
             cfg_path=cfg_path, config_generation=config_generation,
             reserve_fn=reserve_fn)
+        from extraction_refresh import refresh_extraction_cards
+        refresh_extraction_cards(ledger, job["project_id"], job["message_id"])
+        return status
     except (runtime.RuntimeStale, runtime.RuntimeOff):
         return "stale"
     except runtime.LLMNotSent:

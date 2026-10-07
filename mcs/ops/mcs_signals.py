@@ -37,6 +37,8 @@ from mcs_queries import (CHANGE_ACTIONS, CHANGE_ACTIONS_SQL, DAY_S,
                          med_is_patient_current, med_period_artifacts,
                          item_unverified, transition_cooccurrences)
 from structured_view import message_urgency
+from clinical_values import patient_item_scope
+from extract import patient_source_scope
 
 ARTIFACT_KIND = "signal_v1"
 FEEDBACK_KIND = "signal_feedback_v1"
@@ -378,6 +380,22 @@ def _med_followup_note(meds, days):
             "でした（記録上の確認であり、対応の有無を示すものではありません）")
 
 
+def _patient_fact_keys(db, key, horizon):
+    """Source-bound item identities for SQL detectors, before latest-episode grouping."""
+    valid = []
+    for aid, index, raw, body, name in db.execute(
+            f"SELECT a.artifact_id,je.key,je.value,m.body_text,p.patient_name "
+            "FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
+            "JOIN patients p ON p.project_id=m.project_id "
+            f"JOIN json_each({json_or_null('a.content')},?) je "
+            f"WHERE a.kind IN ({FACT_KINDS_SQL}) {current_fact_pred()} "
+            "AND m.posted_at_ts>=? AND je.type='object'", ("$." + key, horizon)):
+        item = json.loads(raw)
+        if patient_item_scope(item, body, patient_name=name, surface=item.get("name")) == "patient":
+            valid.append(f"{aid}:{index}")
+    return json.dumps(valid)
+
+
 def _med_followup(db, now, th, sig_cfg):
     """Per (room, med surface form) episodes: flag when the LATEST
     change-action mention of a med in a non-archived room has passed the
@@ -412,6 +430,7 @@ def _med_followup(db, now, th, sig_cfg):
                 JOIN json_each({json_or_null('a.content')},'$.meds') je
                 WHERE a.kind IN ({FACT_KINDS_SQL})
                   {current_fact_pred()}
+                  AND (a.artifact_id || ':' || je.key) IN (SELECT value FROM json_each(?))
                   AND m.posted_at_ts IS NOT NULL
                   AND m.posted_at_ts >= ?
                   AND COALESCE(p.is_archived,0)=0
@@ -451,7 +470,8 @@ def _med_followup(db, now, th, sig_cfg):
                                 AND m3.posted_at_ts > lm.ts
                                 AND m3.posted_at_ts <= lm.ts + ?)
             ORDER BY mm.pid, mm.med, mm.mid""",
-        (now - th["followup_max_age_d"] * DAY_S, *self_params,
+        (_patient_fact_keys(db, "meds", now - th["followup_max_age_d"] * DAY_S),
+         now - th["followup_max_age_d"] * DAY_S, *self_params,
          now - th["followup_days"] * DAY_S,
          th["followup_days"] * DAY_S,
          now - th["followup_days"] * DAY_S,
@@ -540,6 +560,14 @@ def _archived_pids(db):
         "SELECT project_id FROM patients WHERE COALESCE(is_archived,0)=1")}
 
 
+def _patient_period(db, pid, mid, period):
+    source = db.execute("SELECT m.body_text,p.patient_name FROM messages m "
+                        "JOIN patients p ON p.project_id=m.project_id "
+                        "WHERE m.project_id=? AND m.message_id=?", (pid, mid)).fetchone()
+    return source is not None and patient_item_scope(
+        period, source[0], patient_name=source[1], surface=period.get("raw")) == "patient"
+
+
 def _rx_period_expiry(db, now, th, sig_cfg):
     """extract_v1 med_periods whose end date lands within the horizon.
     These are parsed surface expressions (e.g. '4/8-4/21'), not
@@ -552,6 +580,8 @@ def _rx_period_expiry(db, now, th, sig_cfg):
         if pid in archived:
             continue
         for p, end_d in iter_period_ends(content):
+            if not _patient_period(db, pid, mid, p):
+                continue
             days = (end_d - today).days
             if not (0 <= days <= th["expiry_ahead_days"]):
                 continue
@@ -582,6 +612,8 @@ def _rx_period_lapsed(db, now, th, sig_cfg):
         if pid in archived:
             continue
         for p, end_d in iter_period_ends(content):
+            if not _patient_period(db, pid, mid, p):
+                continue
             cur = latest.get(pid)
             if cur is None or (end_d, mid) > (cur[0], cur[1]):
                 latest[pid] = (end_d, mid, p.get("raw"))
@@ -598,6 +630,32 @@ def _rx_period_lapsed(db, now, th, sig_cfg):
                     "新しい期間表現の記録はありません（抽出された表現"
                     "であり、処方の継続・切れは原記録で確認してくださ"
                     "い）"}
+
+
+def _patient_transition(db, pid, mid):
+    source = db.execute("SELECT m.body_text,p.patient_name FROM messages m "
+                        "JOIN patients p ON p.project_id=m.project_id "
+                        "WHERE m.project_id=? AND m.message_id=?", (pid, mid)).fetchone()
+    if source is None:
+        return False
+    matches = list(re.finditer(r"退院|転院|退所", source[0] or ""))
+    return any(patient_source_scope(source[0], m.start(), m.end(), patient_name=source[1]) == "patient"
+               for m in matches) if matches else patient_item_scope({}, source[0], patient_name=source[1]) == "patient"
+
+
+def _patient_change_message(db, pid, mid):
+    for raw, body, name in db.execute(
+            f"SELECT je.value,m.body_text,p.patient_name FROM artifacts a "
+            "JOIN messages m ON m.message_id=a.message_id "
+            "JOIN patients p ON p.project_id=m.project_id "
+            f"JOIN json_each({json_or_null('a.content')},'$.meds') je "
+            f"WHERE a.kind IN ({FACT_KINDS_SQL}) {current_fact_pred()} "
+            "AND m.project_id=? AND m.message_id=? AND je.type='object'", (pid, mid)):
+        item = json.loads(raw)
+        if (item.get("action") in CHANGE_ACTIONS and med_is_patient_current(item)
+                and patient_item_scope(item, body, patient_name=name, surface=item.get("name")) == "patient"):
+            return True
+    return False
 
 
 def _transition_reconciliation(db, now, th, sig_cfg):
@@ -619,7 +677,9 @@ def _transition_reconciliation(db, now, th, sig_cfg):
                     + self_pred,
         params=(lookback, now, *self_params), exclude_archived=True)
     for dmid, (pid, mids) in grouped.items():
-        change_ids = sorted(mids)
+        if not _patient_transition(db, pid, dmid):
+            continue
+        change_ids = sorted(mid for mid in mids if _patient_change_message(db, pid, mid))
         if change_ids:
             yield _key("transition_reconciliation", pid, dmid), {
                 "type": "transition_reconciliation", "project_id": pid,
@@ -781,13 +841,19 @@ _NEGATE_RE = re.compile(
     r"^[はがも、。\s]*(?:してい|てい|て)?(ない|なし|ありません|なく|ません)")
 
 
-def _adherence_phrases(text):
-    hits = [p for p in ADHERENCE_TERMINAL if p in text]
+def _adherence_phrases(text, *, patient_name=None):
+    hits = []
+    for pat in ADHERENCE_TERMINAL:
+        for match in re.finditer(re.escape(pat), text):
+            if patient_source_scope(text, match.start(), match.end(), patient_name=patient_name) == "patient":
+                hits.append(pat)
+                break
     for pat in ADHERENCE_PATTERNS:
         i = text.find(pat)
         while i >= 0:
             tail = text[i + len(pat): i + len(pat) + 10]
-            if not _NEGATE_RE.match(tail):
+            if not _NEGATE_RE.match(tail) and patient_source_scope(
+                    text, i, i + len(pat), patient_name=patient_name) == "patient":
                 hits.append(pat)
                 break
             i = text.find(pat, i + 1)
@@ -814,6 +880,7 @@ def _adherence_concern(db, now, th, sig_cfg):
             JOIN json_each({json_or_null('a.content')},'$.meds') je
             WHERE a.kind IN ({FACT_KINDS_SQL})
               {current_fact_pred()}
+              AND (a.artifact_id || ':' || je.key) IN (SELECT value FROM json_each(?))
               AND m.posted_at_ts IS NOT NULL
               AND m.posted_at_ts >= ?
               AND COALESCE(p.is_archived,0)=0
@@ -828,7 +895,7 @@ def _adherence_concern(db, now, th, sig_cfg):
               AND (json_extract({JSON_OBJECT_SQL},'$.negated') IS 1
                    OR NOT ({MED_NOT_CAPABILITY_SQL}))
             ORDER BY m.project_id, m.message_id""",
-        (horizon, *self_params)).fetchall()
+        (_patient_fact_keys(db, "meds", horizon), horizon, *self_params)).fetchall()
     for pid, mid, ts, med in rows:
         groups.setdefault((pid, mid, ts), []).append(med)
     # SQL-side prefilter narrows the Python phrase scan to rows that
@@ -838,7 +905,7 @@ def _adherence_concern(db, now, th, sig_cfg):
                                 + len(ADHERENCE_TERMINAL)))
     phrase_rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
-                   m.body_text
+                   m.body_text, p.patient_name
             FROM messages m
             JOIN patients p ON p.project_id=m.project_id
             WHERE m.posted_at_ts IS NOT NULL AND m.posted_at_ts >= ?
@@ -849,8 +916,8 @@ def _adherence_concern(db, now, th, sig_cfg):
         (horizon,
          *(f"%{p}%" for p in ADHERENCE_PATTERNS + ADHERENCE_TERMINAL),
          *self_params)).fetchall()
-    for pid, mid, ts, body in phrase_rows:
-        hits = _adherence_phrases(body or "")
+    for pid, mid, ts, body, name in phrase_rows:
+        hits = _adherence_phrases(body or "", patient_name=name)
         if hits:
             groups.setdefault((pid, mid, ts), []).extend(hits)
     for (pid, mid, ts), found in groups.items():
@@ -882,7 +949,9 @@ def _discharge_notice(db, now, th, sig_cfg):
         db, win_s=win,
         extra_where="AND d.posted_at_ts >= ? AND d.posted_at_ts <= ?",
         params=(lookback, now), exclude_archived=True)
-    covered = set(grouped)
+    covered = {mid for mid, (pid, mids) in grouped.items()
+               if _patient_transition(db, pid, mid)
+               and any(_patient_change_message(db, pid, item) for item in mids)}
     rows = db.execute(
         f"""SELECT DISTINCT d.project_id, d.message_id, d.posted_at_ts
             FROM messages d
@@ -898,6 +967,8 @@ def _discharge_notice(db, now, th, sig_cfg):
             ORDER BY d.project_id, d.message_id""",
         (lookback, *self_params)).fetchall()
     for pid, mid, ts in rows:
+        if not _patient_transition(db, pid, mid):
+            continue
         if mid in covered:
             continue                    # transition_reconciliation owns it
         if _request_registered(db, mid):
@@ -920,7 +991,8 @@ def _symptom_after_med(db, now, th, sig_cfg):
     orgs, profs, _ = _self_sets(sig_cfg, db)
     self_pred, self_params = _self_author_pred(orgs)
     rows = db.execute(
-        f"""SELECT m.project_id, m.message_id, m.posted_at_ts, a.content
+        f"""SELECT m.project_id, m.message_id, m.posted_at_ts, a.content,
+                   m.body_text, p.patient_name
             FROM artifacts a
             JOIN messages m ON m.message_id=a.message_id
             JOIN patients p ON p.project_id=m.project_id
@@ -932,7 +1004,7 @@ def _symptom_after_med(db, now, th, sig_cfg):
               {self_pred}
             ORDER BY m.project_id, m.message_id""",
         (now - th["fyi_max_age_d"] * DAY_S, *self_params)).fetchall()
-    for pid, mid, ts, content_s in rows:
+    for pid, mid, ts, content_s, body, name in rows:
         try:
             content = json.loads(content_s)
         except (json.JSONDecodeError, TypeError):
@@ -947,6 +1019,7 @@ def _symptom_after_med(db, now, th, sig_cfg):
                 if isinstance(m2, dict)
                 and m2.get("action") in CHANGE_ACTIONS
                 and med_is_patient_current(m2)
+                and patient_item_scope(m2, body, patient_name=name, surface=m2.get("name")) == "patient"
                 and not med_capability_evidence(m2.get("evidence"))
                 and isinstance(m2.get("name"), str) and m2["name"].strip()]
         if not meds:
@@ -956,6 +1029,7 @@ def _symptom_after_med(db, now, th, sig_cfg):
                  and not item_unverified(s)
                  and s.get("status") in ("new", "ongoing")
                  and s.get("subject", "patient") in ("patient", None)
+                 and patient_item_scope(s, body, patient_name=name, surface=s.get("text")) == "patient"
                  and isinstance(s.get("text"), str) and s["text"].strip()]
         if not symps:
             continue

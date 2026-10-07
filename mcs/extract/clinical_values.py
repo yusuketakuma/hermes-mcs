@@ -6,6 +6,43 @@ import unicodedata
 from typing import Literal, TypedDict
 
 from semantic_quantities import _number
+from mcs_util import locate_quote_span, fold_map
+
+
+def patient_item_scope(item, body, *, patient_name=None, surface=None):
+    """Resolve one stored item's original span before using it as patient current data."""
+    import extract
+    if not isinstance(item, dict) or not isinstance(body, str):
+        return "unknown"
+    quote = item.get("evidence")
+    if not isinstance(quote, str) or not quote.strip():
+        quote = surface
+    span = locate_quote_span(body, quote) if isinstance(quote, str) and quote.strip() else None
+    if span is None:
+        # Older parsed artifacts did not require a literal quote. Preserve
+        # that contract only when the source has no explicit other-person
+        # or noncurrent scope; a mixed source cannot prove an unlocated item.
+        scopes = [extract.patient_source_scope(body, max(0, m.start() - 1), m.start(),
+                                               patient_name=patient_name)
+                  for m in re.finditer(r"[。！？!?;；、,\n]|$", body) if m.start() > 0]
+        return "patient" if scopes and all(scope == "patient" for scope in scopes) else "unknown"
+    # A full-sentence quote may start before its explicit subject. Locate the
+    # item's own surface inside that quote, while retaining surrounding scope.
+    for anchor in (surface, item.get("value")):
+        inner = locate_quote_span(body[span[0]:span[1]], str(anchor)) if anchor is not None else None
+        if inner is not None:
+            span = (span[0] + inner[0], span[0] + inner[1])
+            break
+    return extract.patient_source_scope(body, *span, patient_name=patient_name)
+
+
+def patient_current_vitals(values, body, *, patient_name=None):
+    """Keep grounded patient values, with the existing unscoped parsed-output compatibility."""
+    import extract
+    kept = extract.patient_vitals(values, body, patient_name=patient_name)
+    if isinstance(values, dict) and patient_item_scope({}, body, patient_name=patient_name) == "patient":
+        return dict(values)
+    return kept
 
 
 def fold_surface(text: str) -> str:
@@ -59,16 +96,27 @@ _LAB_NAMES = {
     "alt": ("alt", "gpt"),
     "bnp": ("bnp",),
     "bun": ("bun",),
+    "weight": ("体重", "weight"),
+    "height": ("身長", "height"),
+    "blood_glucose": ("血糖", "血糖値", "bs", "glu", "glucose"),
 }
 _LAB_UNITS = {
     "mg/dl": "mg/dL", "mmol/l": "mmol/L", "μmol/l": "μmol/L",
     "g/dl": "g/dL", "%": "%", "u/l": "U/L", "meq/l": "mEq/L",
+    "kg": "kg", "g": "g", "cm": "cm", "m": "m",
     "pg/ml": "pg/mL", "ml/min/1.73m2": "mL/min/1.73m2",
 }
 _DATE = re.compile(r"(?<!\d)(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?!\d)")
 
 
-class LabCandidate(TypedDict):
+class LabDetails(TypedDict, total=False):
+    reported_measured_on: str
+    condition: str
+    subject: str
+    status: str
+
+
+class LabCandidate(LabDetails):
     analyte: str | None
     measurement_type: str
     value: str
@@ -81,7 +129,9 @@ class LabCandidate(TypedDict):
 
 def lab_candidate(name: str, value: str | int | float, unit: str | None,
                   evidence: str | None, *, unverified: bool = False,
-                  flag: str | None = None) -> LabCandidate:
+                  flag: str | None = None, subject: str | None = None,
+                  status: str | None = None, measured_on: str | None = None,
+                  condition: str | None = None) -> LabCandidate:
     """Keep unknown/mismatched values separate; quote support is not human approval."""
     label = fold_surface(name)
     analyte = next((key for key, names in _LAB_NAMES.items() if label in names), None)
@@ -127,8 +177,15 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
             supported = False
     # Subject, plans, comparators and reference intervals do not establish
     # a patient measurement. Ambiguous quotes remain candidates.
-    if re.search(r"家族|娘|息子|(?<![丈工])夫|妻|母|父|予定|検査依頼|目標|基準|参考", quote):
+    if re.search(r"予定|検査依頼|目標|基準|参考", quote):
         supported = False
+    if readings and isinstance(evidence, str):
+        import extract
+        _, starts, ends = fold_map(evidence, casefold=True)
+        reading = readings[0]
+        if extract.patient_source_scope(evidence, starts[reading.start()], ends[reading.end() - 1]) \
+                not in ("patient", "past"):
+            supported = False
     if flag:
         cues = r"高|↑|high" if flag == "high" else r"低|↓|low"
         tail = quote[readings[0].end():] if readings else ""
@@ -136,6 +193,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
         suffix = tail[value_token.end():] if value_token else ""
         if not re.match(r"(?:ト|デ|ガ|[,、:（(])*(" + cues + ")", suffix):
             supported = False
+    reported = measured_on
     measured_on = None
     # Do not mistake another sentence's date or a posting date for sampling.
     clause = ""
@@ -151,11 +209,28 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
             measured_on = date(*(int(n) for n in dates[0].groups())).isoformat()
         except ValueError:
             pass
-    return {"analyte": analyte,
+    details = {}
+    for key, value in (("reported_measured_on", reported), ("condition", condition)):
+        if value is not None:
+            if isinstance(value, str) and value.strip() and isinstance(evidence, str) and value in evidence:
+                details[key] = value
+            else:
+                supported = False
+    if subject is not None:
+        if subject in ("patient", "family", "other"):
+            details["subject"] = subject
+        if subject != "patient":
+            supported = False
+    if status is not None:
+        if status in ("current", "past", "planned"):
+            details["status"] = status
+        if status not in ("current", "past"):
+            supported = False
+    return {**details, "analyte": analyte,
             "measurement_type": analyte if analyte in
-            {"egfr", "creatinine", "ast", "alt"} else "other",
+            {"egfr", "creatinine", "ast", "alt", "weight", "height"} else "other",
             "value": normalized_value,
             "value_kind": "decimal" if number is not None else "text",
-            "unit": normalized_unit, "measured_on": measured_on,
+            "unit": normalized_unit, "measured_on": measured_on if supported else None,
             "evidence": evidence,
             "confirmation": "quote_supported" if supported else "unverified"}

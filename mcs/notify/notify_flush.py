@@ -844,12 +844,16 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
     sealed = ledger.db.execute(
         "SELECT 1 FROM notification_intent_batches "
         "WHERE event_id=?", (ev["event_id"],)).fetchone()
-    if not sealed and not notify_cards.interactive_enabled(cfg):
+    if not sealed and ev["kind"] not in ("urgent_notice", "signal") and not notify_cards.interactive_enabled(cfg):
         notify_cards.revert_to_text(ledger, ev["event_id"])
         return False
     try:
         outcome = notify_cards.dispatch_intent(ledger, ev, cfg)
-        if outcome.get("error") in ("payload_invalid", "resend_exhausted"):
+        if outcome.get("parked"):
+            res["parked"] += 1
+        elif outcome.get("held"):
+            res["failed"] += 1
+        elif outcome.get("error") in ("payload_invalid", "resend_exhausted"):
             # dispatch already quarantined it — a malformed frozen
             # payload cannot heal, so never re-arm an hourly retry
             ledger.outbox_hold(ev["event_id"], outcome["error"])
@@ -1096,7 +1100,7 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
     exe = _hermes_exe(cfg)
     exe_ok = os.path.isfile(exe) and os.access(exe, os.X_OK)
     if not exe_ok and not any(
-            _route(e) == "interactive"
+            _route(e) == "interactive" or e["kind"] in ("urgent_notice", "signal")
             or _hermes_free(cfg, _target(cfg, e["kind"])) for e in due):
         res["skipped"] = len(due)
         return res
@@ -1126,7 +1130,31 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             ledger.outbox_suppress(ev["event_id"])
             res["suppressed"] += 1
             continue
-        if _route(ev) == "interactive" \
+        # A missing text destination is a pre-send configuration error;
+        # no SQLite/restore lookup or native delivery can be attempted here.
+        if (exe_ok and _route(ev) == "text"
+                and ev["kind"] not in ("urgent_notice", "signal")
+                and not _target(cfg, ev["kind"])):
+            ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
+            res["failed"] += 1
+            continue
+        if ev["kind"] not in _ALERT_KINDS:
+            import notify_cards
+            if notify_cards.restore_pending(notify_cards.data_root(ledger)) is not None:
+                # move it out of the ORDER BY event_id window so held
+                # content can never starve a later alert (no attempt used)
+                ledger.outbox_defer(ev["event_id"], RERENDER_RETRY_S)
+                res["skipped"] += 1
+                res["restore_pending"] = res.get("restore_pending", 0) + 1
+                continue
+        if ev["kind"] in ("urgent_notice", "signal") and _route(ev) != "interactive":
+            if not _send_never_began(ev):
+                _hold_event(ledger, ev, cfg, reason=("send_outcome_unknown" if ev["kind"] == "signal" else "thread_route_after_partial"), rescue=False)
+                res["failed"] += 1
+                continue
+            ledger.db.execute("UPDATE notify_outbox SET route='interactive' WHERE event_id=?", (ev["event_id"],))
+            ledger.db.commit()
+        if (_route(ev) == "interactive" or ev["kind"] in ("urgent_notice", "signal")) \
                 and _dispatch_interactive(ledger, ev, cfg, res):
             continue
         if not exe_ok and not _hermes_free(cfg, _target(cfg, ev["kind"])):
@@ -1140,15 +1168,6 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
             res["failed"] += 1
             continue
-        if ev["kind"] not in _ALERT_KINDS:
-            import notify_cards
-            if notify_cards.restore_pending(notify_cards.data_root(ledger)) is not None:
-                # move it out of the ORDER BY event_id window so held
-                # content can never starve a later alert (no attempt used)
-                ledger.outbox_defer(ev["event_id"], RERENDER_RETRY_S)
-                res["skipped"] += 1
-                res["restore_pending"] = res.get("restore_pending", 0) + 1
-                continue
         argv = _send_argv(cfg, target)
         try:
             _send_text(ledger, ev, cfg, argv, target, res, deadline)
