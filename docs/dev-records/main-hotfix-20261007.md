@@ -37,3 +37,17 @@ main 496c58bへの統合後、抽出worker再起動を検証し、gateway restar
 ## API確認と制約
 
 Slackの既存Bot投稿の上書きは[chat.update](https://docs.slack.dev/reference/methods/chat.update/)、元threadへの追加は[chat.postMessage](https://docs.slack.dev/reference/methods/chat.postmessage)の既存ID経路を利用する。Bot自身が所有する投稿とscope/receiptが前提。LINE WORKSの現[Bot API](https://developers.worksmobile.com/jp/docs/bot-api/?lang=ja)と[トークルーム送信](https://developers.worksmobile.com/jp/docs/bot-channel-message-send?lang=ja)では当該native thread/既存message更新契約を確認できず、未実装として保留する（非対応を推測で補完しない）。実Slackへの試験投稿を追加して成功を装う操作は行っていない。
+
+## 追加修正の本番適用とローカル履歴整理
+
+同日、ユーザーの「本番環境に適用」と「マージ済みの不要なブランチ・ワークツリーを削除」の明示指示により、後続のレビュー修正・スレッド表示・正常監視通知の抑制を適用した。
+
+- 修正ソースをmainの`e4b2bf1`へcommit。ローカル111ブランチを照合し、96件はmainの祖先、残る15件・44コミットはすべて既適用の同等パッチで、非等価パッチや独自merge commitは無かった。15件の履歴を`cc5e779`へ統合し、ソースtreeが`e4b2bf1`から変わっていないことを検証した。
+- `data/backups/production-followup-20261007-210258/`へGit履歴bundle、未commitのソース差分と新規ファイル、設定とSQLite backupを保管。bundle検証・DB integrity_check=ok・schema 9一致・私有権限を確認した。不要worktreeの未分類ignoredファイル1件もbyte一致を検証して保全した。原本DB・設定・保存履歴を消去していない。
+- 既存update/run lockとquiesce/resume手順を利用。Gatewayは所有検証付きの再起動報告`supervisor_restart_verified`、実gatewayの生存・`hermes_home`一致・ソース更新後の起動を確認。両抽出workerは別PIDへ置換し、コマンドwatcherと復旧watchdogのロードも確認した。設定のbytesは適用前と一致。
+- 余分なworktreeの実機plist・plugin・cron/wrapper・復旧先への参照が無く、追跡変更・未追跡ファイルも無いことを確認して2件削除。全local headsがmainの祖先になったことを再検証し、main以外110件を削除した。現在はmainの1ブランチ・1worktree。リモートrefs・tag・GitHub公開は変更していない。詳細な削除対象と復元先は私有backup内の`cleanup.json`に記録した。
+- 本番`mcs_setup check`はreturncode 0。LLMのモデル・slot probe再確認はerrors/warningsとも0、既存LLM serviceも稼働。新しい監視観測はstatus=ok・alert=false・disk_alert=falseで、送信待ちの補足だけから正常警報を出していないことを確認した。実患者の内容・原文・秘密値は出力していない。
+
+今回の修正後の合成統合は2,105 passed/8 skipped、CI gates10/10、ruff・文書・SVG/PNG整合が成功。本番Python3.11.15と導入SDKの版は確認し、同runtimeの隔離されたedit-only/guard試験34件は成功した。Gateway SDK統合2経路は隔離HOMEでHermes bootstrapが再execした先にpytestが無く未完了のため、実API受理やGateway統合成功とは扱わない。導入済みPython/SDKの確認前後の版は一致しており、依存追加・変更は適用操作として実施していない。
+
+正常・正常復帰の監視警報を抑え、異常とディスク低容量の警報は維持する。Slack/Discordの自動要約・解析進捗は親カードへ集約し、スレッド本文と添付見出しは要約を重ねない。既存named区画の更新は同一スレッドの配送証明付き投稿IDに限定し、結果不明・容量不足は保留する。旧形式の凍結投稿とLINE WORKSの編集制約は保持し、過去の全投稿を一括削除していない。
