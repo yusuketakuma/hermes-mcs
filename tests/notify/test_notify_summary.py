@@ -75,7 +75,7 @@ def test_view_lists_only_scoped_patients_with_names(led):
     assert "患者A" in out and "患者B" not in out
     assert "対象: 施設 みどり 1人・直近3日" in out
     assert "未完了タスク 1件（期限切れ 1" in out
-    assert "記録が見つからないことは対応がなかったことを意味せず" in out
+    assert "記録が見つからないことは対応がなかったことを意味せず" not in out
     got = notify_digest.view(led.db, {}, "all", allowed=[2], now=NOW)
     assert "患者A" not in notify_render.parts_text(got["parts"])
     assert "error" in notify_digest.view(led.db, {}, "days:9", now=NOW)

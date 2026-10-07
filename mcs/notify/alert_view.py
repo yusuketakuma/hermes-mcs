@@ -27,7 +27,7 @@ def render_parts(checked, db=None):
     subject = "患者本人" if checked.get("subject") == "patient" else "対象人物は未確認"
     name = notify_render.patient_heading(db, pid) if db is not None and positive(pid) else "患者記録"
     parts = {"containers": [
-        {"type": "heading", "text": "🚨 緊急度高・再確認候補（AI判定）"},
+        {"type": "heading", "text": "🚨 緊急度高・再確認候補"},
         {"type": "text", "text": f"{name} · {subject}"}], "footer": []}
     reasons = checked.get("reasons")
     seen = set()
@@ -42,19 +42,17 @@ def render_parts(checked, db=None):
             if len(seen) == 2:
                 break
     if not seen:
-        parts["containers"].append({"type": "text", "text": "緊急理由の引用は未取得。原本で確認してください。"})
+        parts["containers"].append({"type": "text", "text": "緊急理由の引用は未取得"})
     sender = (notify_render._inline(message["sender_name"], 24) if message else "") or "発信者未取得"
     organization = (notify_render._inline(message["organization"], 24) if message else "") or "所属未取得"
     # the same stored post time the preview header shows
     posted = (f"{notify_render._mmdd(message['posted_at'])} {notify_render._hhmm(message['posted_at'])}"
               if message is not None and message["posted_at"] else "不明")
     parts["containers"].append({"type": "text", "text":
-        f"{sender}（{organization}） · 投稿 {posted} · AI判定 {_when(checked.get('observed_at'))}"})
+        f"{sender}（{organization}） · 投稿 {posted} · 判定 {_when(checked.get('observed_at'))}"})
     if message is not None and message["body_state"] == "full" and notify_render._structured_block(db, mid) is None:
         pending = "要約作成失敗" if notify_render._extraction_failed(db, mid) else "要約処理待ち"
         parts["containers"].append({"type": "text", "text": pending})
-    parts["footer"].append({"type": "text", "text":
-        "確認・依頼登録の記録は見つかっていません。記録がないことは未対応・業務完了を意味しません。"})
     if positive(pid):
         parts["footer"].append({"type": "text", "text":
             f"原本確認: MCSで開く {project_url(pid)} · 投稿 #{mid}"})
@@ -63,7 +61,7 @@ def render_parts(checked, db=None):
     # the push/notification line: urgency first, so a lock screen tells
     # it apart from a routine request
     parts["preview_text"] = "🚨緊急度高 " + notify_render._preview_line(
-        header, f"再確認候補（AI判定・{subject}）: {main}", limit=393)
+        header, f"再確認候補（{subject}）: {main}", limit=393)
     return parts
 
 

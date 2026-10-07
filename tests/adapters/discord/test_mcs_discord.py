@@ -2933,7 +2933,7 @@ def test_summary_click_answers_ephemeral(world):
                          message_id=msg.id)
     asyncio.run(world.interact(act, ix))
     sent = "\n".join(m["content"] for m in ix.followup.sent)
-    assert "患者の記録まとめ（暫定集約）" in sent and "集約資料がまだありません" in sent
+    assert "患者の記録まとめ" in sent and "暫定集約" not in sent and "集約資料がまだありません" in sent
     assert all(m["ephemeral"] for m in ix.followup.sent)
 
 
@@ -3026,7 +3026,7 @@ def test_unacked_list_links_the_card(world):
     out = "\n".join(m["content"] for m in ix.followup.sent)
     assert "■ 患者A" in out and "未確認" in out
     assert f"https://discord.com/channels/7/42/{msg.id}" in out
-    assert "作業が済んだかどうかは表しません" in out
+    assert "作業が済んだかどうかは表しません" not in out
 
 
 def test_search_modal_answers_hits_ephemeral(world):

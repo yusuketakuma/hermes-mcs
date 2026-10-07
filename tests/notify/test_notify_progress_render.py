@@ -130,7 +130,7 @@ def test_thread_body_and_attachment_caption_keep_source_without_duplicate_summar
     raw = "原文の要約という単語を削除しません。"
     with led.db:
         led.db.execute("UPDATE messages SET body_text=?,organization='合成所属' WHERE message_id=100", (raw,))
-    monkeypatch.setattr(notify_render, "_structured_block", lambda *_args: {
+    monkeypatch.setattr(notify_render, "_structured_block", lambda *_args, **_kw: {
         "type": "text", "text": "📋 要約\nGENERATED-SUMMARY-CANARY"})
     monkeypatch.setattr(notify_render, "_progress_state", lambda *_args: {
         "state": "processing", "completed": 1, "total": 3})

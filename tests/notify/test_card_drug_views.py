@@ -79,7 +79,7 @@ def test_meds_view_lists_the_posts_medication_without_dictionary(led):
     assert view["page"] == 0 and view["pages"] == 1
     assert view["items"] == [{"project_id": 1,
                               "text": "・キラナ 5mg[開始]\n　→ 辞書候補なし"}]
-    assert view["notes"][0].startswith("※ 辞書候補は名称の一致による参考情報")
+    assert "参考情報" not in "".join(view["notes"])
     # ⚠ pins this same post, so the report hint is offered
     assert "抽出の誤りは「誤りを報告」→「薬」から報告できます。" in view["notes"]
     # the view reaches the clicker live — the receipt never stores it

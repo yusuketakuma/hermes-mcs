@@ -27,19 +27,14 @@ from notify_render import (
     actor_label, card_reaction_lines,
     card_reactions, today_jst)
 
-SUMMARY_CAVEAT = ("※ 取得済み投稿から自動作成した暫定集約です。未取得・未抽出・"
-                  "訂正前の記録があり得るため、確定した処方一覧や依頼台帳の"
-                  "代わりにはなりません。原本で確認してください。")
-
-
 def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
     """🧾 answer: current meds (with the dated period), latest vitals,
     next planned item from the stored patient_rollup, plus the open
     tasks from the requests ledger. Missing material is said plainly —
     the text never implies completeness."""
     name = _patient_name(db, project_id) or f"project {project_id}"
-    title = f"{name} — 患者の記録まとめ（暫定集約）"
-    lines = [SUMMARY_CAVEAT, _coverage_line(db, project_id)]
+    title = f"{name} — 患者の記録まとめ"
+    lines = [_coverage_line(db, project_id)]
     from extraction_progress import summary_lines
     lines.extend(summary_lines(db, project_id, cfg=cfg))
     lines.extend(_open_task_lines(db, project_id))
@@ -60,7 +55,7 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
         period = roll.get("current_med_period")
         meds = [m for m in roll.get("medications") or []
                 if isinstance(m, dict) and m.get("name")]
-        lines.append("■ 薬（投稿から抽出。確定した処方ではありません）")
+        lines.append("■ 薬")
         if isinstance(period, dict) and period.get("start"):
             lines.append(f"処方期間（抽出表現）: {period.get('start')}"
                          f"〜{period.get('end') or '?'}")
@@ -71,7 +66,7 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
                      + (" — " + note if (note := candidate_note(m.get("ref"))) else "")
                      for m in meds[:15])
         if not meds:
-            lines.append("・抽出された服用中の薬はありません（記録が無い≠服用無し）")
+            lines.append("・抽出された薬なし")
         vit = roll.get("latest_vitals")
         vline = (structured_view._vital_line({"vitals": vit}, {})
                  if isinstance(vit, dict) else None)
@@ -121,7 +116,7 @@ def _patient_context_lines(db, project_id, roll) -> list[str]:
     if isinstance(comment, str):
         for item in context_items({"patient_context": extract_context(comment)}, comment):
             memo.setdefault(item["category"], []).append(item)
-    lines = ["■ 背景・療養情報（原記録の抜粋。現在の確定情報ではありません）"]
+    lines = ["■ 背景・療養情報"]
     sources = {}
     for category, labels in LABELS.items():
         if category in ("demographics", "contacts"):
@@ -234,8 +229,6 @@ def _request_reply_lines(db, project_id, roll) -> list:
                 "LIMIT 1", (project_id, mid)).fetchone():
             line += "・Loop候補（semantic shadow）あり"
         lines.append(line)
-    if reqs:
-        lines.append("※ 返信記録が見つからないことは対応がなかったことを意味しません。")
     return lines
 
 
@@ -291,8 +284,7 @@ def _coverage_line(db, project_id) -> str:
     n = incomplete_reply_roots(db, project_id)
     if n:
         parts.append(f"返信の取得未完了{n}件")
-    return ("履歴取得: " + "／".join(parts)
-            + "（取れていない記録は「無い」ではありません。欠落なしの保証ではありません）")
+    return "履歴取得: " + "／".join(parts)
 
 
 
@@ -303,8 +295,6 @@ def _coverage_line(db, project_id) -> str:
 
 LIST_FETCH = 60            # items handed to the plugin; the rest -> more
 SEARCH_HITS = 10
-_NOT_DONE_NOTE = ("※ 表示は記録された状態です。記録が見つからないことは"
-                  "対応がなかったことを意味しません。")
 
 
 def _norm_name(text) -> str:
@@ -338,9 +328,7 @@ def my_tasks_view(db, name, now=None, projects=None) -> dict:
     display name — overdue first, then by due date, undated last.
     ``projects`` limits rows (and counts) to the plugin's scope."""
     today = today_jst(now)
-    notes = ["※ 担当者欄が表示名（またはスタッフ一覧の「氏名（事業所）」）と"
-             "一致するタスクだけを表示します。手入力の別表記・略称のタスクは"
-             "含まれません。", _NOT_DONE_NOTE]
+    notes = ["※ 担当者欄が表示名（またはスタッフ一覧の「氏名（事業所）」）と一致するタスク"]
     out = {"title": f"自分のタスク（担当: {_inline(name, 40) or '不明'}）",
            "head": [], "items": [], "more": 0, "notes": notes,
            "empty": "該当するタスクはありません。"}
@@ -452,11 +440,9 @@ def unacked_view(db, transport, now=None, projects=None,
     assigned = sum(1 for r in rows if r["owner"])
     out = {"title": "🗂 未確認一覧（直近7日に更新されたカード）",
            "head": [f"未確認 {len(rows)}件（うち担当者あり {assigned}件）",
-                    f"MCSで本人反応あり {self_reacted}件（確認状態は変えません）"],
+                    f"MCSで本人反応あり {self_reacted}件"],
            "empty": "未確認のカードはありません。",
-           "notes": ["※「確認」ボタンの記録の有無です。作業が済んだかどうかは"
-                     "表しません。MCSスタンプも承認・作業完了を保証せず、"
-                     "本人反応があるカードは同患者内の末尾に表示します。", _NOT_DONE_NOTE]}
+           "notes": ["※ 本人反応があるカードは同患者内の末尾に表示します。"]}
     out["items"], out["more"] = _limit(items)
     return out
 
@@ -514,8 +500,6 @@ def patient_search_view(db, project_id, query) -> dict:
 
 DRUG_KIND_JA = {"ingredient": "成分", "general_name": "一般名処方",
                 "product": "製品", "class": "総称"}
-DRUG_CAVEAT = ("※ 辞書候補は名称の一致による参考情報です。処方・成分・"
-               "同等性を確定しません。原文で確認してください。")
 MEDS_PAGE_SIZE = 5
 _DICTIONARY_STATE = {
     "unconfigured": "医薬品辞書が設定されていないため、候補は表示できません。",
@@ -581,7 +565,7 @@ def meds_view(db, project_id, message_id, *, can_report=False,
                       f"{_candidate_line(ref, active)}"}
              for entries, label in ((meds, ""), (unverified, "（ルール抽出・未確認）"))
              for text, ref in entries]
-    notes = [DRUG_CAVEAT]
+    notes = []
     if refs:
         notes.append(f"辞書 {refs[0]['dict_id']}@{refs[0]['dict_sha256'][:8]}")
     if can_search:
@@ -604,7 +588,7 @@ def drug_search_view(db, cfg, project_id, query) -> dict:
     shown_query = _inline(query, 40)
     title = f"💊 薬剤の検索 — 「{shown_query}」"
     base = {"title": title, "head": [], "items": [], "more": 0,
-            "notes": [DRUG_CAVEAT]}
+            "notes": []}
     dictionary, state = drug_map.active_dictionary(db, cfg)
     if dictionary is None:
         return {**base, "empty": _DICTIONARY_STATE[state]}

@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "チャット表示から「AI判定」表記と但し書きを削除",
+  "summary": "緊急度は「🚨 緊急度高」「🚨 緊急度: 高」と表示し、「AI判定」「AI抽出」の表記をなくしました（機械照合だけの場合は従来どおり🚨のみ）。日次サマリー・患者の記録まとめ・自分のタスク・未確認一覧・薬剤表示・緊急度の再確認通知・アラートの説明文から、「記録がないことは未対応を意味しません」「確定した処方ではありません」「自動判定ではありません」などの但し書きを削除しました。表示は記録された事実だけを短く示し、「未対応」とは断定しません。",
+  "upgrade": "追加設定は不要です。通知・本人限定の表示・日次サマリーは反映後すぐ、カードは新しく作られるカード（レイアウト2）から適用されます。既存カードと既存のアラート説明文は変わりません（新しく検知されたアラートから適用）。",
+  "details": [
+    "structured_view.URGENCY_LABEL_PLAIN と notify_render.URGENCY_PLAIN を追加し、レイアウト2のカード・テキスト通知・プレビュー・日次サマリー・再確認通知で使う。旧表記はレイアウト1のカードだけに残す。",
+    "notify_views・notify_digest・alert_view・mcs_signals の但し書き定数と括弧書きを削除する。CLI・監査出力（mcs_view・metadata_report・brain_export・辞書差分）は対象外。",
+    "AGENTS.md: チャット表示に但し書き・出所ラベルを付けない方針を追記。"
+  ],
+  "refs": ["mcs/views/structured_view.py", "mcs/notify/notify_render.py", "mcs/notify/notify_views.py", "mcs/notify/notify_digest.py", "mcs/notify/alert_view.py", "mcs/notify/notify_flush.py", "mcs/ops/mcs_signals.py", "AGENTS.md"]
+}

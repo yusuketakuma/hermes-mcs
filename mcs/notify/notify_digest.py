@@ -43,8 +43,6 @@ NOTICE_BUDGET = 1900     # relayed text notice (one chat message)
 # candidate count's (design #13: 期限・予定・依頼は含めない)
 EXCLUDED_SIGNALS = frozenset({"request_overdue", "request_aging",
                               "rx_period_expiry", "rx_period_lapsed"})
-NOTE = ("※ 取得済みの記録から数えた件数です。記録が見つからないことは対応が"
-        "なかったことを意味せず、取得完了の記録は欠落なしの保証ではありません。")
 SCOPE_HELP = "all / mine / station:名前 / project:ID,ID / days:1-7（空白区切りで組合せ）"
 
 
@@ -163,9 +161,6 @@ def _self_reaction_count(db, since, until, keep=None) -> tuple:
 
 
 OWN_POST_DAYS = 7
-NOT_RESPONSE_NOTE = ("※ 記録が見つからない≠対応がなかった。メンションだけでは"
-                     "応答済みにも未対応にもしません。")
-
 
 def _ago(seconds) -> str:
     return (f"{int(seconds // DAY_S)}日経過" if seconds >= DAY_S
@@ -276,7 +271,7 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
     if not rows and not station:
         return []
     return [f"{len(rows)}件（直近{OWN_POST_DAYS}日のメンションと薬剤師宛依頼シグナル）",
-            *notes, *_listed(rows), NOT_RESPONSE_NOTE]
+            *notes, *_listed(rows)]
 
 
 def _stale_open_unacked(db, now: float) -> list:
@@ -394,11 +389,9 @@ def build(db, cfg, since: float, until: float, flt=None, *,
                                "text": "\n".join([f"■ {head}", *lines])})
 
     reacted, reaction_counts = _self_reaction_count(db, since, until, keep)
-    section(f"MCS 本人スタンプ観測: {reacted}投稿", [
+    section(f"MCS 本人スタンプ: {reacted}投稿", [
         "・" + "・".join(f"{label} {count}" for label, count in
-                        sorted(reaction_counts.items())) if reaction_counts else "・本人反応の観測なし",
-        "・対象期間に観測した現在の保存状態です。未取得を除き、"
-        "押下時刻・操作件数・業務完了を表しません。"])
+                        sorted(reaction_counts.items())) if reaction_counts else "・本人反応の観測なし"])
 
     self_id = mcs_signals.self_sender_id(db)
     if cfg.get("metadata_refresh_publish") is True:
@@ -409,7 +402,7 @@ def build(db, cfg, since: float, until: float, flt=None, *,
 
     section(f"緊急度高 {len(urgent)}件", [
         f"・{room(p)} / message {m}" + (
-            " 🚨［AI判定］" + structured_view.urgency_qc_suffix(db, m)
+            " 🚨 緊急度高" + structured_view.urgency_qc_suffix(db, m)
             if u == "llm" else " 🚨")
         for p, m, u in urgent], fold=True)
     todo = []
@@ -468,8 +461,7 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         cov.append(f"・取得未完了のルーム {len(incomplete)}: " + _ids(
             incomplete, lambda r: f"{room(r[0])}（{_plain(r[1])}）"))
     else:
-        cov.append("・未完了として記録されたルーム: なし"
-                   "（完全性の保証ではありません）")
+        cov.append("・未完了として記録されたルーム: なし")
     scoped = "（全体）" if keep is not None else ""
     if gaps["jobs"]:
         cov.append(f"・取得待ち/失敗ジョブ{scoped}: " + "・".join(
@@ -489,10 +481,9 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         cov.append(f"・送信保留の通知（全体）: {held}件")
     containers.append({"type": "text",
                        "text": "\n".join(["■ 取得状況（記録ベース）", *cov])})
-    footer = [NOTE]
+    footer = []
     if flt["mine"]:
-        footer.insert(0, "※ 担当は担当者欄が表示名と一致する未完了タスクの記録です。"
-                         "正式な担当割当ではありません。")
+        footer.append("※ 担当: 担当者欄が表示名と一致する未完了タスク")
     return fit_parts({"containers": containers,
                       "footer": [{"type": "text", "text": t} for t in footer]})
 

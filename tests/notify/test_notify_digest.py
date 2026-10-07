@@ -112,8 +112,8 @@ def test_counts_ids_and_no_patient_content(led):
     assert "■ 緊急度高 1件\n・project 1 / message 100 🚨" in text
     for secret in ("秘密の本文", "本人が急変", "患者A", "患者B", "職員"):
         assert secret not in text
-    assert "記録が見つからないことは対応がなかったことを意味せず" in text
-    assert "欠落なしの保証ではありません" in text
+    assert "記録が見つからないことは対応がなかったことを意味せず" not in text
+    assert "欠落なしの保証ではありません" not in text
 
 
 def test_patient_names_only_when_opted_in(led):
@@ -146,7 +146,7 @@ def test_ai_urgency_row_is_marked_at_least_as_strongly_as_rule(led, monkeypatch)
     monkeypatch.setattr(structured_view, "urgency_qc_suffix", lambda db, m: "")
     notify_digest.maybe_enqueue(led, ON, now=T)
     text = _text(led)
-    assert "・project 1 / message 100 🚨［AI判定］" in text
+    assert "・project 1 / message 100 🚨 緊急度高" in text
     assert "・project 1 / message 101 🚨" in text
 
 def _summary_at(led, pid, at, comment="連携の秘密本文", empty=False):
@@ -208,7 +208,7 @@ def test_coverage_block_always_present(led):
     notify_digest.maybe_enqueue(led, ON, now=T)
     text = _text(led)
     assert "■ 取得状況（記録ベース）" in text
-    assert "未完了として記録されたルーム: なし（完全性の保証ではありません）" in text
+    assert "未完了として記録されたルーム: なし" in text and "保証" not in text
 
     _patient(led, 1)
     _patient(led, 2, name="患者B")

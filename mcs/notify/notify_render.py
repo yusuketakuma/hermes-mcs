@@ -82,17 +82,16 @@ def notification_preview(db, card, content, *, limit=600) -> str:
                 return _preview_line(header, "表示対象の投稿は削除済みです。", limit)
             if message["body_state"] != "full" or not valid_hash(message["content_hash"]):
                 return _preview_line(header, "投稿本文が未取得か確認できない状態です。", limit)
-            block = _structured_block(db, mid)
+            block = _structured_block(db, mid, plain=True)
             if block:
                 facts = [line.removeprefix("・") for line in block["text"].splitlines()[1:]]
                 main = next((line for line in facts if any(
                     word in line for word in ("依頼", "予定", "症状", "注意"))), facts[0] if facts else "要約内容を確認できません")
-                main = "投稿の自動要約: " + main
             else:
                 state = "要約作成失敗" if _extraction_failed(db, mid) else "要約処理待ち"
                 main = f"投稿（{state}・原文）: " + (_preview_post(message["body_text"]) or "本文なし")
             urgency = structured_view.message_urgency(db, mid)
-            badge = URGENCY_TAG.get(urgency, "")
+            badge = URGENCY_PLAIN.get(urgency, "")
             if urgency == "llm":
                 badge += structured_view.urgency_qc_suffix(db, mid)
             return _preview_line(header, badge + _inline(main, 260), limit)
@@ -425,14 +424,15 @@ def _thread_context(db, card, msgs) -> str:
     return " · ".join(parts)
 
 
-def _structured_block(db, mid) -> dict | None:
+def _structured_block(db, mid, plain=False) -> dict | None:
     """Per-message 📋 要約 block with dictionary details kept on demand.
 
     Raw medication facts use the shared extractor view. Artifact freshness and the
     deleted-message gate live in structured_view's SQL; a build failure
     must never sink the card."""
     try:
-        lines = structured_view.structured_lines(db, mid, drug_candidates=False)
+        lines = structured_view.structured_lines(db, mid, drug_candidates=False,
+                                                 plain=plain)
     except Exception:
         return None
     if not lines:
@@ -462,7 +462,7 @@ def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True) -> di
     """📋 要約 of one post, or its visible empty state — a post with no
     usable extraction says whether it is still queued or exhausted its
     retries instead of silently showing nothing."""
-    block = _structured_block(db, mid)
+    block = _structured_block(db, mid, plain=not label)
     if block and not label:
         # layout 2: the post line above already heads the summary
         block = dict(block, text=block["text"].removeprefix("📋 要約\n"))
@@ -508,8 +508,9 @@ SIGNAL_STATE_LABEL = {"open": "未確認", "resolved": "解消",
 # The AI verdict carries 🚨 plus words so it never reads weaker than the
 # icon-only lexical rule match.
 URGENCY_TAG = {"llm": "🚨［緊急度高・AI判定］", "rule": "🚨"}
-# layout 2 puts urgency on its own meta line: plain words, no brackets
-LAYOUT2_URGENCY = {"llm": "🚨 緊急度高（AI判定）", "rule": "🚨"}
+# layout 2 / previews / notices: plain words, no source qualifier
+URGENCY_PLAIN = {"llm": "🚨 緊急度高", "rule": "🚨"}
+LAYOUT2_URGENCY = URGENCY_PLAIN
 
 
 def signal_label(sig: dict) -> str:
@@ -642,7 +643,7 @@ def _signal_evidence(db, sig) -> tuple[int | None, sqlite3.Row | None]:
     return mid, message
 
 
-def _signal_compact(db, pid, contents: list) -> list:
+def _signal_compact(db, pid, contents: list, plain: bool = False) -> list:
     """Card-face item for one patient's candidate signals — the
     patient line plus each signal's 【種別】note（状態）. The evidence
     quote and 📋要約 stay on the companion thread (or behind the 本文表示
@@ -655,7 +656,7 @@ def _signal_compact(db, pid, contents: list) -> list:
                    if message is not None and mid is not None and s.get("project_id") == pid
                    else None)
         if urgency:
-            line += URGENCY_TAG[urgency]
+            line += (URGENCY_PLAIN[urgency] + " ") if plain else URGENCY_TAG[urgency]
             if urgency == "llm":
                 line += structured_view.urgency_qc_suffix(db, mid)
         lines.append(f"・{line}{s.get('note') or ''}（{signal_state(s)}）")
@@ -835,7 +836,7 @@ def _card_content(db, card, *, cfg=None) -> dict:
                 groups.append((pid, []))
             groups[gidx[pid]][1].append(k)
         rendered = [_signal_compact(
-            db, pid, [sigs[k]["content"] for k in ks])
+            db, pid, [sigs[k]["content"] for k in ks], plain=layout >= 2)
             for pid, ks in groups]
         urgent = any(_signal_tier(sigs[k]["content"]) == "immediate"
                      for k in ordered)

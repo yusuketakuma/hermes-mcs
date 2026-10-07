@@ -25,12 +25,11 @@
 <text x="298" y="243" font-size="11" fill="#66716f">APP</text>
 <text x="343" y="244" font-size="14" fill="#66716f">10:02</text>
 <text x="240" y="283" font-size="17" fill="#66716f">↳ 元の通知スレッドへの追加投稿</text>
-<text x="240" y="326" font-size="23" fill="#202124" font-weight="bold">🚨 緊急度高・再確認候補（AI判定）</text>
+<text x="240" y="326" font-size="23" fill="#202124" font-weight="bold">🚨 緊急度高・再確認候補</text>
 <text x="240" y="379.8" font-size="20" fill="#202124">山田 花子（あおぞら） · 患者本人</text>
 <text x="240" y="428.8" font-size="20" fill="#202124">引用: 本人は息苦しいと話しています。</text>
-<text x="240" y="477.8" font-size="20" fill="#202124">佐藤さん（あおぞら） · 投稿 10-01 09:40 · AI判定 10-01 10:00</text>
+<text x="240" y="477.8" font-size="20" fill="#202124">佐藤さん（あおぞら） · 投稿 10-01 09:40 · 判定 10-01 10:00</text>
 <text x="240" y="526.8" font-size="20" fill="#202124">要約処理待ち</text>
-<text x="240" y="575.8" font-size="17" fill="#66716f">確認・依頼登録の記録は見つかっていません。記録がないことは未対応・業務完了を意味しません。</text>
-<text x="240" y="615.0" font-size="17" fill="#66716f">原本確認: MCSで開く https://www.medical-care.net/projects/medical/1 · 投稿</text>
-<text x="240" y="642.2" font-size="17" fill="#66716f"> #701</text>
+<text x="240" y="575.8" font-size="17" fill="#66716f">原本確認: MCSで開く https://www.medical-care.net/projects/medical/1 · 投稿</text>
+<text x="240" y="603.0" font-size="17" fill="#66716f"> #701</text>
 </svg>

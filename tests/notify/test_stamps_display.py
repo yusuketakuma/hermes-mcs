@@ -166,7 +166,7 @@ def test_addressed_to_me_requires_same_thread_reply_or_self_stamp(led):
     assert "message 180 本人宛メンション・1時間経過・自分の返信観測なし・本人スタンプ未取得" in sec
     assert "施設宛（自局判定なし）: 1投稿" in sec
     assert "メンション不明（未取得・取得不正）" in sec
-    assert "記録が見つからない≠対応がなかった" in sec
+    assert "記録が見つからない≠対応がなかった" not in sec
     assert "合成同名" not in sec and "本文" not in sec
     # 同じ表示は publish 設定に依らない（capture の値を読むだけ）
     assert _section(_digest(led, CFG), "自分宛で応答未観測") == sec
@@ -262,7 +262,7 @@ def test_patient_summary_request_reply_states(led):
     assert "・09-30 残薬確認 — 返信: 完了（完了後に取消の記録あり）" in sec
     assert "・09-29 処方変更 — 返信: 記録なし・Loop候補（semantic shadow）あり" in sec
     assert sec.count("\n・") == 5
-    assert "返信記録が見つからないことは対応がなかったことを意味しません" in sec
+    assert "返信記録が見つからないことは対応がなかったことを意味しません" not in sec
 
 
 def test_evidence_shows_actor_counts_for_own_posts_only(led, tmp_path):
@@ -296,7 +296,7 @@ def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
     _post(led, 100, OTHER, ts=NOW - 100)
     _post(led, 101, SELF, ts=NOW - 50, parent=100)
     _meta(led, 100, reactions=[_r("accepted", 2, True), _r("good", 1)])
-    monkeypatch.setattr(notify_render, "_structured_block", lambda db, mid: {
+    monkeypatch.setattr(notify_render, "_structured_block", lambda db, mid, **_kw: {
         "type": "text", "text": f"📋 要約\n・要約{mid}"})
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
     body = notify_render._card_body_text(
@@ -649,7 +649,7 @@ def test_legacy_text_notice_has_summary_stamps_then_one_body_section(led, monkey
         led.db.execute("UPDATE messages SET body_html='<p>完全合成の本文です。</p>' WHERE message_id=100")
     cfg = {**CFG, "notify_target": platform + ":synthetic"}
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
-    monkeypatch.setattr(notify_flush.structured_view, "structured_lines", lambda db, mid: ["合成の要約"] if ready else [])
+    monkeypatch.setattr(notify_flush.structured_view, "structured_lines", lambda db, mid, **_kw: ["合成の要約"] if ready else [])
     event = {"kind": "new_messages", "project_id": 1, "payload": '{"message_ids":[100]}'}
     text, files = notify_flush._format_event(led, event)
     assert text.count(notify_render.SECTION_RULE) == 1 and files == []

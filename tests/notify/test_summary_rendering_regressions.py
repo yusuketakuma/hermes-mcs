@@ -73,7 +73,7 @@ def _render(parts, transport, monkeypatch) -> str:
 def test_empty_and_long_scoped_summary_keeps_disclosures_on_every_renderer(
         led, tmp_path, monkeypatch, transport):
     # Given: many allowed rooms, partial acquisition, and one excluded patient.
-    for pid in range(1, 45):
+    for pid in range(1, 80):
         _patient(led, pid, name=f"Synthetic patient {pid} " + "名" * 40)
         _msg(led, 100 + pid, pid=pid, ts=int(NOW - 100), body="BODY-CANARY")
         led.db.execute("UPDATE messages SET first_seen=?", (NOW - 10,))
@@ -85,7 +85,7 @@ def test_empty_and_long_scoped_summary_keeps_disclosures_on_every_renderer(
     snapshot = publish_snapshot(str(tmp_path / "data" / "ledger.db"), str(tmp_path / "snapshot"))
     assert snapshot is not None
     # When: the actual command helper reads a scoped snapshot and each renderer consumes parts.
-    answer = summary.answer(snapshot, "days:7", allowed=list(range(1, 45)),
+    answer = summary.answer(snapshot, "days:7", allowed=list(range(1, 80)),
                             now=NOW, dialect="plain")
     rendered = _render(answer["parts"], transport, monkeypatch)
     empty = _render(notify_digest.view(led.db, {}, "", allowed=[], now=NOW)["parts"],
@@ -95,9 +95,9 @@ def test_empty_and_long_scoped_summary_keeps_disclosures_on_every_renderer(
     assert "project 99" not in rendered
     assert "他" in rendered
     assert "取得状況" in rendered and "network_error" in rendered
-    assert "欠落なしの保証ではありません" in rendered
+    assert "欠落なしの保証ではありません" not in rendered
     assert "取得状況" in empty and "新着 0件" in empty
-    assert "対応がなかったことを意味せず" in empty
+    assert "対応がなかったことを意味せず" not in empty
 
 
 def test_archived_patients_do_not_leak_tasks_signals_or_summary_updates(led):
@@ -149,7 +149,7 @@ def test_digest_uses_snapshot_bounded_response_observation(led, reply_at, error)
     out = notify_render.parts_text(parts)
     assert "自分宛で応答未観測" in out and "message 1 " in out
     assert "自分の返信観測なし" in out
-    assert "記録が見つからない≠対応がなかった" in out
+    assert "記録が見つからない≠対応がなかった" not in out
 
 
 @pytest.mark.parametrize("kind", ["thread", "signal"])
@@ -174,7 +174,7 @@ def test_late_urgency_updates_delivered_card_without_new_intent(led, kind):
     after = _latest_render(led)
     assert after["op"] == "update" and after["render_rev"] == before["render_rev"] + 1
     # a thread card (layout 2) shows the meta-line label; a signal card its tag
-    assert ("🚨 緊急度高（AI判定）" if kind == "thread" else "［緊急度高・AI判定］") in notify_render.display_text(
+    assert "🚨 緊急度高" in notify_render.display_text(
         json.loads(after["spec_json"])["parts"])
     assert led.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0] == count
 
@@ -207,8 +207,9 @@ def test_signal_card_and_message_notice_follow_same_current_urgency_source(
             and "🚨" not in text
     else:
         # the card tag and the text notice each keep the source distinct
-        assert notify_render.URGENCY_TAG[expected] in face
-        assert ("AI抽出" if expected == "llm" else "🚨") in text
+        assert notify_render.URGENCY_PLAIN[expected] in face
+        assert ("緊急度: 高" if expected == "llm" else "🚨") in text
+        assert "AI" not in face and "AI" not in text
 
 
 @pytest.mark.parametrize("field", ["content", "meta"])
@@ -292,6 +293,6 @@ def test_long_signal_explanation_cannot_hide_current_urgency_badge(led, source):
     spec = _spec(led)
     # Then: source-labeled urgency stays visible even after physical truncation.
     face = notify_render.display_text(spec["parts"])
-    assert notify_render.URGENCY_TAG[
+    assert notify_render.URGENCY_PLAIN[
         "llm" if source == "extract_llm" else "rule"] in face
     assert notify_render._text_cost(spec["parts"]) <= notify_render.CARD_TEXT_BUDGET

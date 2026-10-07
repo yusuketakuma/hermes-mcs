@@ -62,8 +62,8 @@ def test_my_tasks_matches_display_name_overdue_first(led):
         f"・#{later} 来週の確認 — 期限 2026-12-01 — 患者A",
         f"・#{undated} 期限なし — ⏳対応中 — 患者A"]
     assert all(i["project_id"] == 1 for i in view["items"])
-    assert any("手入力の別表記" in n for n in view["notes"])
-    assert any("対応がなかったことを意味しません" in n for n in view["notes"])
+    assert view["notes"][0].startswith("※ 担当者欄が表示名")
+    assert not any("対応がなかったことを意味しません" in n for n in view["notes"])
     # a different name is a different command — never a conflict
     other = _click(led, spec, "mytasks", {"name": "佐藤"})
     assert other["list"]["items"] == []
@@ -111,7 +111,7 @@ def test_unacked_lists_until_acknowledged(led):
     assert (item["project_id"], item["group"]) == (1, "患者A")
     assert "https://www.medical-care.net/projects/medical/1" in item["text"]
     assert "https://discord.com/channels/g1/ch1/m-9" in item["text"]
-    assert any("作業が済んだかどうかは表しません" in n for n in view["notes"])
+    assert not any("作業が済んだかどうかは表しません" in n for n in view["notes"])
 
     _click(led, spec, "assign")
     _deliver(led)
