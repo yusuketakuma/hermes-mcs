@@ -74,3 +74,6 @@ def owner_label(owner: str, member_names) -> str:
     """No silent mentions: configured member names replace <@id>."""
     import notify_render
     return notify_render.lineworks_member_names(owner, member_names)
+
+POST_ACTIONS = False          # one text bubble: no per-post controls
+ACCENT_URGENT = False

@@ -66,13 +66,25 @@ def _sections(text):
     ]
 
 
+def _post_buttons(parts) -> dict:
+    """container index -> Block Kit button for runner-minted per-post
+    actions (parts["slack"]["post_actions"], validated by spec)."""
+    own = parts.get("slack") or {}
+    return {a["at"]: {"type": "button",
+                      "text": {"type": "plain_text", "text": a["button"]["label"]},
+                      "action_id": "mcs:a:" + a["button"]["token"],
+                      "value": a["button"]["token"]}
+            for a in own.get("post_actions") or []}
+
+
 def render_parts(parts, names=None, silent=False, card_kind=None) -> list:
     """Visible containers/footer of the shared display model as Block
     Kit — used for cards and the clicker-only 📊 answer. On a thread
     card each post's time/sender line (a ``rule`` text) is a context
     line, so the summary under it reads as the post's main content."""
     blocks = []
-    for item in parts["containers"]:
+    accessories = _post_buttons(parts)
+    for index, item in enumerate(parts["containers"]):
         kind = item["type"]
         if kind == "meta":
             continue
@@ -96,7 +108,12 @@ def render_parts(parts, names=None, silent=False, card_kind=None) -> list:
                 if kind == "field" else item["text"])
         if kind == "quote":
             text = f"引用: {text}"
-        blocks.extend(_sections(text))
+        sections = _sections(text)
+        if index - 1 in accessories and parts["containers"][index - 1].get("rule"):
+            # the post's 💊 sits beside its summary; the post line above
+            # stays a context line like every other post
+            sections[0]["accessory"] = accessories[index - 1]
+        blocks.extend(sections)
 
     footer = [i for i in parts.get("footer") or [] if i["type"] == "text"]
     if footer and blocks:

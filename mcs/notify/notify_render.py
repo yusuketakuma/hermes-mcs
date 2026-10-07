@@ -869,7 +869,10 @@ def _card_content(db, card, *, cfg=None) -> dict:
             "shown": shown, "shown_kind": shown_kind,
             "page": page, "pages": pages,
             "source_fp": source_fp, "toggles": toggles,
-            "actor_fp": actor_fp}
+            "actor_fp": actor_fp,
+            # outside _content_fp: a presentation hint (accent colour)
+            "urgent": any(tag in (c.get("text") or "")
+                          for c in containers for tag in URGENCY_TAG.values())}
     if "transport" in card.keys() and card["transport"] in ("slack", "discord"):
         content["thread_layout"] = "native-body-without-summary/v1"
     if isinstance(cfg, dict):

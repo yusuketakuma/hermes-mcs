@@ -297,6 +297,7 @@ _LIVE_VIEWS = frozenset({"body", "summary", "request", "dismiss", "report",
                          "meds", "drugsearch"})
 
 MAX_COMPONENTS = 40           # the worker's per-card component ceiling
+MAX_POST_ACTIONS = 5          # adapters/common/spec.MAX_POST_ACTIONS
                               # (hermes_plugin spec.MAX_COMPONENTS)
 TASK_HINT_MAX = 300           # 📝 prefill — the modal field holds 1000
 STAFF_CHOICES = 25            # Discord/Slack select option ceiling
@@ -675,7 +676,7 @@ def _mint_token(db, card_id, action, params, need, now) -> str:
 
 
 def _action_rows(db, card, content, now, context=None,
-                 in_thread_body=False):
+                 in_thread_body=False, reserve=0):
     """Button rows for a render; every button carries a fresh token.
     Buttons whose modal flow cannot pin a source (no context) are not
     emitted — a button that can never succeed is worse than none."""
@@ -767,7 +768,7 @@ def _action_rows(db, card, content, now, context=None,
             + sum(f["type"] == "text" for f in content["footer"])
             + sum(len(r) + 1 for r in rows))
     extras = ["digest", "mytasks", "unacked"] + (["search"] if positive(pid) else [])
-    for action in extras[:max(0, MAX_COMPONENTS - used - 1)]:
+    for action in extras[:max(0, MAX_COMPONENTS - used - 1 - reserve)]:
         btn(action)
     flush()
     return rows
@@ -1492,10 +1493,18 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
         or card["thread_state"] not in ("failed", "deleted"))
     containers, footer = present.face(content["containers"],
                                       content["footer"], op, cfg)
+    # per-post 💊 buttons outrank the optional list buttons: reserve
+    # their component slots (section + accessory) before row 4 fills up
+    post_mids = (_post_action_targets(db, card, content)
+                 if present.POST_ACTIONS and card["kind"] == "thread"
+                 and card["delivery_state"] != "revoked"
+                 and (in_thread_body or not present.DRUG_ROW_NEEDS_THREAD)
+                 else [])
     spec["parts"] = {
         "containers": containers,
         "action_rows": _action_rows(db, card, content, now, context,
-                                    in_thread_body=in_thread_body),
+                                    in_thread_body=in_thread_body,
+                                    reserve=2 * len(post_mids)),
         "footer": footer
                   + [{"type": "meta", "correlation": correlation}],
         "manifest_id": content["manifest_id"],
@@ -1522,7 +1531,49 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
         spec["parts"]["drug_view_navigation"] = True
     if present.THREAD_DRUG_ACTIONS and spec["parts"].get("thread_body_parts"):
         spec["parts"]["thread_drug_actions"] = True
+    own = {}
+    if post_mids:
+        own["post_actions"] = _post_actions(db, card, content, post_mids, now)
+    if present.ACCENT_URGENT and content.get("urgent"):
+        own["accent"] = "urgent"
+    if own:
+        # an older worker holds a spec carrying this key until restarted
+        spec["parts"][card["transport"]] = own
     return spec
+
+
+def _post_action_targets(db, card, content) -> list:
+    """[(container index, message id)] of the shown medication posts that
+    get a 💊 beside their own post line, page order, at most
+    MAX_POST_ACTIONS and only while the component budget leaves room."""
+    import structured_view
+    if not positive(card["project_id"]):
+        return []
+    rules = [i for i, c in enumerate(content["containers"])
+             if c.get("rule") and c.get("type") == "text"]
+    room = (MAX_COMPONENTS - sum(c["type"] != "meta" for c in content["containers"])
+            - sum(f["type"] == "text" for f in content["footer"]) - 20) // 2
+    out = []
+    for at, mid in zip(rules, content["shown"]):
+        if len(out) >= min(MAX_POST_ACTIONS, max(0, room)):
+            break
+        if positive(mid) and any(structured_view.medication_entries(db, mid)):
+            out.append((at, mid))
+    return out
+
+
+def _post_actions(db, card, content, targets, now) -> list:
+    """Mint each target's read-only 💊 token the same way as the card's
+    buttons (same source/manifest/ui binding)."""
+    need = {"source_gen": card["source_generation"],
+            "manifest_id": content["manifest_id"],
+            "ui_rev": card["ui_revision"]}
+    return [{"at": at, "button": {
+                "id": "meds", "ui": "button", "style": "secondary",
+                "label": "💊 薬剤",
+                "token": _mint_token(db, card["card_id"], "meds",
+                                     {"message_id": mid}, need, now)}}
+            for at, mid in targets]
 
 
 def _mark_reposted(containers) -> list:

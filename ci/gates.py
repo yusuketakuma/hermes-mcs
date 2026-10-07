@@ -57,7 +57,7 @@ _SDK_MEMBERS = {
     "ui.LayoutView", "ui.TextDisplay", "ui.ActionRow", "ui.Button",
     "ui.Modal", "ui.TextInput", "ui.View", "ui.Container",
     "ui.Label", "ui.Select", "SelectOption",
-    "ui.Separator", "SeparatorSpacing.small",
+    "ui.Separator", "SeparatorSpacing.small", "ui.Section",
     "File", "AllowedMentions.none",
     "ButtonStyle", "ButtonStyle.success", "ButtonStyle.secondary",
     "ButtonStyle.primary", "ButtonStyle.link",

@@ -35,3 +35,6 @@ def card_link(card) -> str | None:
 
 def owner_label(owner: str, member_names) -> str:
     return owner
+
+POST_ACTIONS = True           # 💊 button beside each medication post
+ACCENT_URGENT = False

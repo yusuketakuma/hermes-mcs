@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "投稿ごとの「💊 薬剤」ボタンとDiscordの緊急カードの赤い縁",
+  "summary": "Slack・Discordのスレッドカードで、薬剤の記載がある投稿の横に「💊 薬剤」ボタンを表示します。押した本人だけにその投稿の薬剤一覧が開きます（従来の操作メニューからも引き続き開けます）。Discordでは緊急度が高いカードの縁が赤になります。LINE WORKSの表示は変わりません。",
+  "upgrade": "Hermes gatewayまたは独立接続hostの再起動とrunnerへの反映を同時に行ってください。新しいrunnerが出す送信先別の表示情報を古いworkerは受け付けず、該当カードは再起動まで保留されます。表示の指紋は変わらないため既存カードは一斉に再描画されず、新しいカードと、内容が変わって更新されるカードから順に適用されます。1カードの投稿ボタンは最大5件で、部品数の上限に近いカードではボタンを出さず従来のメニューで代替します。",
+  "details": [
+    "spec: parts.slack / parts.discord / parts.lineworks の送信先別領域を追加。自分の送信先の領域だけを許可し、post_actions は thread カードの投稿行を指す読取り専用操作（meds）に限定、token_map にも登録する。",
+    "runner: present_slack・present_discord・present_lineworks の POST_ACTIONS / ACCENT_URGENT で出力を決め、投稿ボタンの部品数をカード下部の一覧ボタンより優先して確保する。",
+    "Slack: 投稿行はcontextのまま、要約sectionのaccessoryにボタンを置く。Discord: 投稿行をSectionにしてaccessoryボタンを置き、部品数を超える場合はテキストへ戻す。実discord.py 2.7.1でSection・accessory・accent_colorの生成を確認。"
+  ],
+  "refs": ["adapters/common/spec.py", "adapters/slack/cards.py", "adapters/discord/cards.py", "mcs/notify/notify_cards.py", "mcs/notify/notify_render.py", "mcs/notify/present_slack.py", "mcs/notify/present_discord.py", "mcs/notify/present_lineworks.py"]
+}

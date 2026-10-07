@@ -141,7 +141,11 @@ def _fake_discord():
                 {"content": content, "ephemeral": ephemeral,
                  "view": view, "allowed_mentions": allowed_mentions})
 
-    mod.ui = SimpleNamespace(LayoutView=LayoutView, View=View,
+    class Section:
+        def __init__(self, *children, accessory=None):
+            self.children, self.accessory = list(children), accessory
+
+    mod.ui = SimpleNamespace(LayoutView=LayoutView, View=View, Section=Section,
                              TextDisplay=TextDisplay, ActionRow=ActionRow,
                              Container=Container,
                              Button=Button, Modal=Modal,

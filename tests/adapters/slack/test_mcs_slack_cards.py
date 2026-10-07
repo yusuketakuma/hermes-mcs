@@ -184,3 +184,19 @@ def test_signal_rule_line_keeps_patient_heading_as_section():
         {"type": "text", "text": "・合成"}]
     _, blocks = render(spec)
     assert [b["type"] for b in blocks][:4] == ["header", "divider", "section", "section"]
+
+
+def test_slack_renders_post_action_as_section_accessory():
+    spec = _spec()
+    spec["parts"]["containers"] = [
+        {"type": "heading", "text": "合成"},
+        {"type": "text", "text": "10-01 09:40 合成さん", "rule": True},
+        {"type": "text", "text": "📋 要約"}]
+    spec["parts"]["slack"] = {"post_actions": [{"at": 1, "button": {
+        "id": "meds", "ui": "button", "label": "💊 薬剤", "token": "d" * 32}}]}
+    _, blocks = render(spec)
+    post = next(b for b in blocks if b.get("accessory"))
+    # the button sits beside the post's summary; its line stays context
+    assert post["text"]["text"] == "📋 要約"
+    assert blocks[blocks.index(post) - 1]["type"] == "context"
+    assert post["accessory"]["action_id"] == "mcs:a:" + "d" * 32
