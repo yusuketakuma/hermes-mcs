@@ -173,7 +173,8 @@ def test_late_urgency_updates_delivered_card_without_new_intent(led, kind):
     # Then: an update of the existing card exposes the source; it is not a new alert.
     after = _latest_render(led)
     assert after["op"] == "update" and after["render_rev"] == before["render_rev"] + 1
-    assert "［緊急度高・AI判定］" in notify_render.display_text(
+    # a thread card (layout 2) shows the meta-line label; a signal card its tag
+    assert ("🚨 緊急度高（AI判定）" if kind == "thread" else "［緊急度高・AI判定］") in notify_render.display_text(
         json.loads(after["spec_json"])["parts"])
     assert led.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0] == count
 

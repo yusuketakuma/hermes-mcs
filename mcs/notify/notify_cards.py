@@ -116,7 +116,8 @@ CREATE TABLE IF NOT EXISTS notification_cards(
                              'delivery_unknown','message_deleted','revoked')),
   last_delivery_error TEXT,
   revoked_at REAL,
-  created_at REAL NOT NULL, updated_at REAL NOT NULL);
+  created_at REAL NOT NULL, updated_at REAL NOT NULL,
+  layout INTEGER NOT NULL DEFAULT 1);
 CREATE INDEX IF NOT EXISTS idx_ncards_state
   ON notification_cards(delivery_state);
 CREATE TABLE IF NOT EXISTS notification_intent_batches(
@@ -298,6 +299,10 @@ _LIVE_VIEWS = frozenset({"body", "summary", "request", "dismiss", "report",
 
 MAX_COMPONENTS = 40           # the worker's per-card component ceiling
 MAX_POST_ACTIONS = 5          # adapters/common/spec.MAX_POST_ACTIONS
+# Card face layout stamped at creation: existing cards keep layout 1 (no
+# fingerprint change, no mass re-render / LINE WORKS re-post); cards
+# created from now on use the current one (owner decision 2026-10-08)
+CARD_LAYOUT = 2
                               # (hermes_plugin spec.MAX_COMPONENTS)
 TASK_HINT_MAX = 300           # 📝 prefill — the modal field holds 1000
 STAFF_CHOICES = 25            # Discord/Slack select option ceiling
@@ -638,8 +643,8 @@ def _card_for(db, target, scope, now) -> int:
              card_key,kind,project_id,root_message_id,anchor_key,
              profile,application_id,guild_id,channel_id,
              transport,team_id,
-             ui_state,created_at,updated_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+             ui_state,created_at,updated_at,layout)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (key, target["kind"], target.get("project_id"),
          target.get("root_message_id"),
          json.dumps(target["anchor"], ensure_ascii=False,
@@ -647,7 +652,7 @@ def _card_for(db, target, scope, now) -> int:
          scope.get("profile"), scope.get("application_id"),
          scope.get("guild_id"), scope.get("channel_id"),
          scope.get("transport", "discord"), scope.get("team_id"),
-         "{}", now, now))
+         "{}", now, now, CARD_LAYOUT))
     return cur.lastrowid
 
 

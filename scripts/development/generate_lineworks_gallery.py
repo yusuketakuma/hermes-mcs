@@ -12,7 +12,7 @@ import sys
 import tempfile
 import zlib
 
-from generate_slack_gallery import (BODY, FONT, HEADING, INK, MUTED, POSTS, RULE,
+from generate_slack_gallery import (BODY, FONT, HEADING, INK, META, MUTED, POSTS, RULE,
                                     SENDER, Screen, verify_png)
 
 
@@ -81,8 +81,8 @@ def delivery():
     s.bot(44, 245)
     sender, bullets = POSTS[0]
     summary = [("📋 要約", GREEN, True), *(("・" + b, INK, False) for b in bullets)]
-    y = s.block(66, 286, [(HEADING, INK, True), ("1投稿 · 📎 1 · @自分宛て", MUTED, False),
-                          (RULE, MUTED, False), (sender, INK, True), *summary,
+    y = s.block(66, 286, [(HEADING, INK, True), (META.format(n=1), MUTED, False),
+                          (RULE, MUTED, False), (sender, MUTED, False), *summary[1:],
                           (RULE, MUTED, False), ("👤 担当: 田中 · ✅ 確認: 田中", INK, False),
                           ("📝 タスク 1件 · スタンプ 👀2 🙆1 · 自分 1投稿", INK, False)])
     s.template(66, y, ["確認する", "担当する", "タスク作成", "MCSで開く", "その他の操作"])

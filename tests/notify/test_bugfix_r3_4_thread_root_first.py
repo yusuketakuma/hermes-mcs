@@ -18,5 +18,5 @@ def test_null_ts_reply_does_not_become_thread_root(led):
     content = notify_render._card_content(led.db, _card(led))
     assert content["shown"][0] == 100
     text = notify_render.display_text(content)
-    assert "起点 09-24" in text
+    assert "09-24〜" in text
     assert "返信未取得 4件" in text

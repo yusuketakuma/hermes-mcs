@@ -458,13 +458,16 @@ def _progress_label(progress):
     return label
 
 
-def _summary_block(db, mid, *, cfg=None, progress_by_mid=None) -> dict:
+def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True) -> dict:
     """📋 要約 of one post, or its visible empty state — a post with no
     usable extraction says whether it is still queued or exhausted its
     retries instead of silently showing nothing."""
     block = _structured_block(db, mid)
+    if block and not label:
+        # layout 2: the post line above already heads the summary
+        block = dict(block, text=block["text"].removeprefix("📋 要約\n"))
     if not block:
-        block = {"type": "text", "text": "📋 要約 " + (
+        block = {"type": "text", "text": ("📋 要約 " if label else "要約 ") + (
             "作成失敗" if _extraction_failed(db, mid) else "処理待ち")}
     progress = _progress_label(progress_by_mid.get(mid) if progress_by_mid is not None
                                else _progress_state(db, mid, cfg))
@@ -505,6 +508,8 @@ SIGNAL_STATE_LABEL = {"open": "未確認", "resolved": "解消",
 # The AI verdict carries 🚨 plus words so it never reads weaker than the
 # icon-only lexical rule match.
 URGENCY_TAG = {"llm": "🚨［緊急度高・AI判定］", "rule": "🚨"}
+# layout 2 puts urgency on its own meta line: plain words, no brackets
+LAYOUT2_URGENCY = {"llm": "🚨 緊急度高（AI判定）", "rule": "🚨"}
 
 
 def signal_label(sig: dict) -> str:
@@ -755,6 +760,7 @@ def _card_content(db, card, *, cfg=None) -> dict:
     ui = card["ui_state"]
     progress_by_mid = None
     urgent = False
+    layout = card["layout"] if "layout" in card.keys() else 1
     if kind == "thread":
         msgs = [dict(m) for m in db.execute(
             """SELECT message_id,sender_id,sender_name,profession,organization,
@@ -772,13 +778,24 @@ def _card_content(db, card, *, cfg=None) -> dict:
                    for m in msgs if m["body_state"] != "deleted"}
         tag = next((URGENCY_TAG[u] for u in ("llm", "rule") if u in urgency), "")
         urgent = bool(tag)
-        containers = [{"type": "heading", "text":
-                       f"💬 {patient_heading(db, card['project_id'])}"
-                       f" · 起点 {_mmdd(first.get('posted_at'))}"
-                       + (f" {tag}" if tag else "")}]
         context = _thread_context(db, card, msgs)
-        if context:
-            containers.append({"type": "text", "text": context})
+        if layout >= 2:
+            # the title is the patient alone (never cut on a phone); the
+            # urgency leads the line under it, then start date and counts
+            containers = [{"type": "heading", "text":
+                           f"💬 {patient_heading(db, card['project_id'])}"}]
+            meta = [LAYOUT2_URGENCY[u] for u in ("llm", "rule") if u in urgency][:1]
+            meta.append(f"{_mmdd(first.get('posted_at'))}〜")
+            if context:
+                meta.append(context)
+            containers.append({"type": "text", "text": " · ".join(meta)})
+        else:
+            containers = [{"type": "heading", "text":
+                           f"💬 {patient_heading(db, card['project_id'])}"
+                           f" · 起点 {_mmdd(first.get('posted_at'))}"
+                           + (f" {tag}" if tag else "")}]
+            if context:
+                containers.append({"type": "text", "text": context})
         new = sum(1 for m in msgs[1:] if (m.get("first_seen") or 0)
                   > (_card_created(card) or float("inf")))
         if new:
@@ -793,7 +810,8 @@ def _card_content(db, card, *, cfg=None) -> dict:
             blocks = [{"type": "text", "rule": True, "text": line}]
             if m["body_state"] != "deleted":
                 blocks.append(_summary_block(db, m["message_id"], cfg=cfg,
-                                             progress_by_mid=progress_by_mid))
+                                             progress_by_mid=progress_by_mid,
+                                             label=layout < 2))
             rendered.append(_fit_item(blocks))
         item_shown = [[m["message_id"]] for m in msgs]
         max_count = PAGE_THREAD
@@ -878,6 +896,8 @@ def _card_content(db, card, *, cfg=None) -> dict:
             "urgent": urgent}
     if "transport" in card.keys() and card["transport"] in ("slack", "discord"):
         content["thread_layout"] = "native-body-without-summary/v1"
+    if layout >= 2:
+        content["layout"] = layout
     if isinstance(cfg, dict):
         content["progress_fp"] = payload_hash([
             (mid, progress_by_mid[mid]) for mid in sorted(progress_by_mid)])
@@ -1132,4 +1152,6 @@ def _content_fp(content: dict) -> str:
         value["progress"] = content["progress_fp"]
     if "thread_layout" in content:
         value["thread_layout"] = content["thread_layout"]
+    if "layout" in content:
+        value["layout"] = content["layout"]
     return payload_hash(value)

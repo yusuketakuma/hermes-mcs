@@ -474,7 +474,7 @@ def test_card_page_indicator_shows_position(led, tmp_path):
     assert c["pages"] > 1
     # the context line under the heading: post count, then the page
     ctx = c["containers"][1]["text"]
-    assert ctx.startswith("14投稿") and f"1/{c['pages']}ページ" in ctx
+    assert "14投稿" in ctx and f"1/{c['pages']}ページ" in ctx
     # last page shows its position
     card["ui_state"] = json.dumps({"page": c["pages"] - 1})
     c = notify_render._card_content(led.db, card)
@@ -519,7 +519,8 @@ def test_card_thread_shows_structured_lines(led, tmp_path):
     card["ui_state"] = json.dumps({"page": 0})
     c = notify_render._card_content(led.db, card)
     texts = [b.get("text") or "" for b in c["containers"]]
-    struct = [t for t in texts if t.startswith("📋 要約")]
+    # layout 2: the post line heads the summary, no 📋 label on the face
+    struct = [t for t in texts if t.startswith("・")]
     assert struct and "症状" in struct[0] and "疼痛" in struct[0]
     # the header line remains alongside the structured block; the raw
     # body itself stays off the card (📄本文表示 serves it)
@@ -561,7 +562,7 @@ def test_card_stale_and_bad_extraction_not_shown(led, tmp_path):
     c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     # no current extraction: each post says so instead of a stale block
-    assert joined.count("📋 要約 処理待ち") == 2 and "疼痛" not in joined
+    assert joined.count("要約 処理待ち") == 2 and "疼痛" not in joined
     # the card still renders the message headers (bodies stay off-card)
     assert "職員" in joined and "本文" not in joined
 
@@ -583,8 +584,8 @@ def test_card_deleted_message_hides_structured_data(led, tmp_path):
     c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     assert "（削除された投稿）" in joined
-    # only the live reply carries a 📋 line; the deleted post none
-    assert joined.count("📋 要約") == 1 and "疼痛" not in joined
+    # only the live reply carries a summary line; the deleted post none
+    assert joined.count("要約 処理待ち") == 1 and "疼痛" not in joined
 
 
 def test_card_sender_tag_shows_time_profession_org(led, tmp_path):

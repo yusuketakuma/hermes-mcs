@@ -720,6 +720,11 @@ class Ledger:
             column = "scope_json" if table == "notification_intent_batches" else "team_id"
             if column not in cols(table):
                 self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+        # Card face layout: rows from before it keep layout 1 forever
+        if "layout" not in cols("notification_cards"):
+            self.db.execute(
+                "ALTER TABLE notification_cards ADD COLUMN layout INTEGER "
+                "NOT NULL DEFAULT 1")
         # Durable per-part rollup (T7): 'none' marks renders planned
         # before the part ledger existed.
         if "parts_state" not in cols("notification_renders"):

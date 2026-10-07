@@ -24,7 +24,8 @@ def test_heading_names_patient_station_and_same_name_suffix(led):
     _patient(led, 2345, name="患者A")              # a same-name room
     _dispatch(led, _intent(led))
     head = _texts(_spec(led))[0]
-    assert head == "💬 患者A（あおぞら） #1 · 起点 09-24"
+    # layout 2: the title is the patient alone; start date moves below
+    assert head == "💬 患者A（あおぞら） #1"
 
 
 def test_context_line_counts_posts_missing_replies_files_and_mention(led):
@@ -35,12 +36,12 @@ def test_context_line_counts_posts_missing_replies_files_and_mention(led):
     led.db.commit()
     _dispatch(led, _intent(led))
     texts = _texts(_spec(led))
-    assert texts[1] == "2投稿 · 返信未取得 2件 · 📎 1"
+    assert texts[1] == "09-24〜 · 2投稿 · 返信未取得 2件 · 📎 1"
     # each post is its own zone: rule before it, its 要約 state after it
     rules = [c for c in _spec(led)["parts"]["containers"] if c.get("rule")]
-    summary = notify_render._summary_block(led.db, 100, cfg=CFG)["text"]
+    summary = notify_render._summary_block(led.db, 100, cfg=CFG, label=False)["text"]
     assert len(rules) == 2 and texts.count(summary) == 2
-    assert summary == "📋 要約 処理待ち\n解析更新中（1区間中0区間完了）"
+    assert summary == "要約 処理待ち\n解析更新中（1区間中0区間完了）"
 
 
 def test_new_replies_since_the_card_was_posted(led):
@@ -64,9 +65,9 @@ def test_failed_extraction_is_named_on_the_post(led):
         (json.dumps({"error": 1, "attempts": 5, "hash": f"{100:064x}"}), NOW))
     led.db.commit()
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
-    summary = notify_render._summary_block(led.db, 100, cfg=CFG)["text"]
+    summary = notify_render._summary_block(led.db, 100, cfg=CFG, label=False)["text"]
     assert summary in _texts(_spec(led))
-    assert summary == "📋 要約 作成失敗\n解析要確認（1区間中0区間完了）"
+    assert summary == "要約 作成失敗\n解析要確認（1区間中0区間完了）"
 
 
 def test_footer_is_one_state_item_and_revoked_card_has_no_buttons(led):

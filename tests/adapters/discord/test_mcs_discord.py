@@ -2391,7 +2391,7 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         _, current_spec = world.spec()
         assert current_spec["delivery"]["thread_id"] == str(original_thread_id)
         assert "📋 要約" in notify_cards._card_body_text(world.led.db, dict(world.led.db.execute("SELECT * FROM notification_cards WHERE card_id=1").fetchone()), {"shown": "[100,101]"})[1]
-        assert "📋 要約" in "\n".join(item.get("text", "") for item in current_spec["parts"]["containers"])
+        assert "要約 処理待ち" in "\n".join(item.get("text", "") for item in current_spec["parts"]["containers"])
 
         n = len(thread.sent)
         # re-running the same delivery posts nothing — the journal
