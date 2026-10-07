@@ -21,6 +21,11 @@ from message_metadata import (get_message_metadata, is_self_sender,
                               mentions_self, self_stamps, stamp_counts,
                               thread_stamp_line, actor_line)
 import structured_view
+# LINE WORKS' card split lives with its presenter; re-exported for the
+# worker (adapters/lineworks/cards.py) and notify_cards
+from present_lineworks import CARD_LIMIT as LINEWORKS_CARD_LIMIT  # noqa: F401
+from present_lineworks import MORE as LINEWORKS_MORE  # noqa: F401
+from present_lineworks import card_split as lineworks_card_split  # noqa: F401
 
 PAGE_DIGEST = 5           # digest candidates per page (count cap)
 PAGE_THREAD = 8           # messages per page on a thread card (count cap)
@@ -125,23 +130,6 @@ def display_text(parts: dict) -> str:
     return re.sub(r"<@[^>\n]+>", "メンバー", "\n".join(lines))
 
 
-LINEWORKS_CARD_LIMIT = 1000   # button_template contentText ceiling
-LINEWORKS_MORE = "\n↓ 続き"
-
-
-def lineworks_card_split(text: str) -> tuple[str, str]:
-    """(card text, remainder) for LINE WORKS' 1000-character card: cut
-    at the last line break that leaves room for the ``↓ 続き`` marker,
-    hard-cutting only a single overlong line."""
-    if len(text) <= LINEWORKS_CARD_LIMIT:
-        return text, ""
-    room = LINEWORKS_CARD_LIMIT - len(LINEWORKS_MORE)
-    cut = text.rfind("\n", 0, room + 1)
-    if cut <= 0:
-        return text[:room] + LINEWORKS_MORE, text[room:]
-    return text[:cut] + LINEWORKS_MORE, text[cut + 1:]
-
-
 # the shared display model's text budget (adapters/common/spec.py
 # MAX_TOTAL_TEXT — the tightest transport, Discord Components V2)
 PARTS_TEXT_BUDGET = 4000
@@ -198,30 +186,24 @@ def fit_parts(parts: dict, limit: int = PARTS_TEXT_BUDGET) -> dict:
     return out
 
 
-# Twin of adapters.discord.cards.escape_md (mcs/ never imports adapters;
-# tests pin the two equal): same-length look-alikes for Discord markup.
-_MD_KEEP = re.compile(r"(<@[!&]?\w+>|https?://\S+)")
-_MD_INLINE = str.maketrans("*_~|`[]<\\", "＊＿～｜｀［］＜＼")
-_MD_LINE = re.compile(r"^([ \t]*)(?:(\d+)\.|([#>+-]))", re.M)
-_MD_LEAD = str.maketrans("#>+-", "＃＞＋－")
+def presenter(transport: str):
+    """The per-transport presentation module (present_slack /
+    present_discord / present_lineworks) for a validated transport."""
+    import importlib
+    if transport not in ("slack", "discord", "lineworks"):
+        raise ValueError("bad_transport")
+    return importlib.import_module("present_" + transport)
 
 
 def _discord_literal(text: str) -> str:
-    text = "".join(part if i % 2 else part.translate(_MD_INLINE)
-                   for i, part in enumerate(_MD_KEEP.split(text)))
-    return _MD_LINE.sub(
-        lambda m: m.group(1) + (f"{m.group(2)}．" if m.group(2)
-                                else m.group(3).translate(_MD_LEAD)), text)
+    return presenter("discord").literal(text)
 
 
-def parts_text(parts: dict, dialect: str = "plain") -> str:
-    """The display model as one chat's text: ``discord`` (markdown
-    heading, ``-#`` subtext footer), ``slack`` (mrkdwn bold heading) or
-    ``plain`` (LINE WORKS, CLI, relayed notices — ``【】`` heading).
-    Body text is never formatted; on Discord it is escaped to literal
-    text (same length) so staff text cannot render as markup."""
-    head = {"discord": "## {}", "slack": "*{}*"}.get(dialect, "【{}】")
-    lit = _discord_literal if dialect == "discord" else str
+def render_text(parts: dict, head: str = "【{}】", lit=str,
+                footer: str = "{}") -> str:
+    """Shared mechanics of a display model as one chat's text; each
+    transport's present_* module picks the heading, literal escaping
+    and footer marker."""
     lines = []
     for item in parts["containers"]:
         kind = item["type"]
@@ -236,12 +218,21 @@ def parts_text(parts: dict, dialect: str = "plain") -> str:
         else:
             lines.append(f"引用: {lit(item['text'])}" if kind == "quote"
                          else lit(item["text"]))
-    footer = [lit(ln) for item in parts.get("footer") or []
-              if item["type"] == "text" for ln in item["text"].splitlines()]
-    if footer and lines:
+    foot = [lit(ln) for item in parts.get("footer") or []
+            if item["type"] == "text" for ln in item["text"].splitlines()]
+    if foot and lines:
         lines.append(SECTION_RULE)
-    lines.extend(f"-# {ln}" if dialect == "discord" else ln for ln in footer)
+    lines.extend(footer.format(ln) for ln in foot)
     return re.sub(r"<@[^>\n]+>", "メンバー", "\n".join(lines))
+
+
+def parts_text(parts: dict, dialect: str = "plain") -> str:
+    """The display model as one chat's text in ``dialect``: a transport
+    (``discord``/``slack``/``lineworks``) uses its present_* module;
+    ``plain`` (CLI, relayed notices) is the LINE WORKS-style text."""
+    if dialect in ("discord", "slack", "lineworks"):
+        return presenter(dialect).parts_text(parts)
+    return render_text(parts)
 
 
 def _latest_signals(db, keys: list, project_id=None) -> dict:
@@ -725,8 +716,9 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
         shown = []
     if card["kind"] == "thread":
         lines = []
-        native = "transport" in card.keys() and card["transport"] in ("slack", "discord")
-        head = ("↳ " if native
+        bare = ("transport" in card.keys()
+                and not presenter(card["transport"]).THREAD_HEAD_PATIENT)
+        head = ("↳ " if bare
                 else f"↳ {patient_heading(db, card['project_id'])} · ")
         for mid in shown:
             if not positive(mid):

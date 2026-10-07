@@ -47,8 +47,8 @@ from mcs_requests import canonical, payload_hash, positive, valid_hash
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
     _latest_signals, _mmdd, _patient_name, _preview_header, _preview_line, _signal_evidence, _source_fp,
-    display_text, fit_parts, lineworks_card_split, lineworks_member_names,
-    notification_preview, parts_text, plain_notice)
+    fit_parts, notification_preview, parts_text,
+    plain_notice, presenter)
 from notify_views import (
     drug_search_available, drug_search_view, meds_view, my_tasks_view,
     patient_search_view, patient_summary_text, unacked_view)
@@ -65,7 +65,6 @@ INTERACTIVE_KINDS = frozenset({"new_messages", "signal", "daily_digest", "urgent
 # kinds delivered as one card-less ``op=notice`` render (no card row,
 # manifest, tokens or thread) — see _dispatch_notice
 NOTICE_KINDS = frozenset({"daily_digest"})
-LINEWORKS_DISPLAY = 1000          # button-template text bound
 
 # renders whose spec file must be available to a claiming worker
 LIVE_RENDER = ("queued", "sending", "unknown", "held")
@@ -721,7 +720,7 @@ def _action_rows(db, card, content, now, context=None,
         # a plain link: no token, no runner round-trip
         row.append({"id": "link", "ui": "link", "label": "MCSで開く",
                     "url": project_url(pid)})
-    if card["transport"] == "lineworks":
+    if presenter(card["transport"]).MORE_BUTTON:
         btn("more")
     flush()
     # row 2 — secondary (a select / the LINE WORKS 1:1 menu)
@@ -744,7 +743,8 @@ def _action_rows(db, card, content, now, context=None,
         btn("dismiss", {"signal_key": keys[0]})
     flush()
     # row 2b — 💊 medication check / dictionary search (read-only views)
-    if positive(pid) and (card["transport"] != "slack" or in_thread_body):
+    if positive(pid) and (in_thread_body
+                          or not presenter(card["transport"]).DRUG_ROW_NEEDS_THREAD):
         meds_mid = _meds_message(db, card, context)
         if meds_mid is not None:
             btn("meds", {"message_id": meds_mid})
@@ -1093,7 +1093,7 @@ def _attachment_captions(db, card, attachments) -> dict:
         r = where.get(a["attachment_id"])
         if a.get("unavailable"):
             tail = "取得失敗"
-        elif r is not None and card["transport"] in ("slack", "discord"):
+        elif r is not None and presenter(card["transport"]).CAPTION == "header":
             tail = _preview_header(db, r["project_id"], r)
         elif r is not None:
             tail = notification_preview(
@@ -1176,20 +1176,21 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -
     keyed = []                             # (post key, chunk)
     cleanup = []
     verified_body, verified_attachments = _same_thread_delivered_parts(db, card) if update else ({}, {})
-    lineworks = card["transport"] == "lineworks"
-    if lineworks:
-        keyed.extend(_lineworks_overflow(parts))
+    present = presenter(card["transport"])
+    editable = present.EDITABLE
+    if hasattr(present, "overflow"):
+        keyed.extend(present.overflow(parts, _split_body_chunks))
     for key, mids in _body_groups(db, card, planned, posts):
         man = {"shown": json.dumps(mids, ensure_ascii=False)}
-        # LINE WORKS cannot edit a post: no stamp line, so only a change
-        # of the original text or its extraction re-posts it
+        # a transport that cannot edit a post gets no stamp line, so
+        # only a change of the original text or its extraction re-posts
         body = _card_body_text(db, card, man, max_chars=None,
-                               stamps=not lineworks, cfg=cfg,
-                               include_summary=lineworks)[1]
+                               stamps=editable, cfg=cfg,
+                               include_summary=not editable)[1]
         # lossless — no chunk dropped
         chunks = _split_body_chunks(body)
         keyed += [(f"{key}#{k}", c) for k, c in enumerate(chunks, 1)]
-        if not lineworks:
+        if editable:
             for old_key, (remote_id, sha) in verified_body.items():
                 prefix, separator, number = old_key.rpartition("#")
                 if (separator and prefix == key and number.isascii() and number.isdecimal() and int(number) > len(chunks)
@@ -1213,13 +1214,13 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -
     cleanup_keys = {key for key, _text in cleanup}
     parts["thread_body_parts"] = [c for _k, c in keyed]
     prior = _prior_remote_ids(db, card) if update else {}
-    same = _prior_body_sha(db, card) if update and lineworks else {}
+    same = _prior_body_sha(db, card) if update and not editable else {}
     for i, (key, chunk) in enumerate(keyed):
         entry = {"part_id": f"body:{i + 1:04d}",
                  "kind": "body_part", "index": idx, "name": key,
                  "sha256": _sha_text(chunk),
                  "bytes": len(chunk.encode("utf-8"))}
-        if key in posts and (not lineworks
+        if key in posts and (editable
                              or same.get(key) == entry["sha256"]):
             # Slack/Discord rewrite the post in place; LINE WORKS only
             # skips a byte-identical post (it cannot edit, so any other
@@ -1256,17 +1257,6 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -
         manifest.append(entry)
         idx += 1
     parts["manifest"] = manifest
-
-
-def _lineworks_overflow(parts) -> list:
-    """[(name, chunk)] — LINE WORKS button-template text is bounded at
-    1000 characters. The card text breaks at a line ending with ↓ 続き;
-    the remainder rides as durable body parts, never truncated
-    (lineworks/cards.validate). Buttons beyond the card's primary ones
-    live behind その他の操作 in the 1:1 talk, not in extra room posts."""
-    rest = lineworks_card_split(display_text(parts))[1]
-    return [(f"display#{i}", chunk)
-            for i, chunk in enumerate(_split_body_chunks(rest), 1)]
 
 
 def _seed_parts(db, spec, now) -> None:
@@ -1444,7 +1434,7 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
     delivery scope, minted action tokens and the journaled parts
     manifest — a worker never needs a registry/snapshot lookup to aim."""
     card.update(gens)
-    if card["transport"] == "lineworks":
+    if not presenter(card["transport"]).EDITABLE:
         # Older cards cannot be edited or deleted remotely. Retire their
         # buttons locally before minting any replacement render tokens.
         db.execute("UPDATE notification_action_tokens SET expires_at=? "
@@ -1492,22 +1482,16 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
     # the same card_thread switch: its posted ts is the thread root, so
     # the body lands as channel-visible replies (T9), not an ephemeral
     # answer only the clicker can see.
+    present = presenter(card["transport"])
     thread_on = (notify_cfg(cfg).get("card_thread") is True
-                 or card["transport"] == "lineworks")
-    # LINE WORKS has no real thread (a logical grouping only), so a
-    # failed thread part never stops its body/overflow parts
+                 or present.ALWAYS_THREAD)
+    # a logical-grouping "thread" (LINE WORKS) has no failed state, so
+    # a failed thread part never stops its body/overflow parts
     in_thread_body = thread_on and (
-        card["transport"] == "lineworks"
+        present.ALWAYS_THREAD
         or card["thread_state"] not in ("failed", "deleted"))
-    containers, footer = content["containers"], content["footer"]
-    if card["transport"] == "lineworks":
-        # no silent mentions on LINE WORKS: configured names go in now
-        names = (notify_cfg(cfg).get("lineworks") or {}).get("user_names")
-        footer = [dict(f, text=lineworks_member_names(f["text"], names))
-                  if f.get("type") == "text" else f for f in footer]
-        if op == "update":
-            # a LINE WORKS update is a new post; older cards stay as-is
-            containers = _mark_reposted(containers)
+    containers, footer = present.face(content["containers"],
+                                      content["footer"], op, cfg)
     spec["parts"] = {
         "containers": containers,
         "action_rows": _action_rows(db, card, content, now, context,
@@ -1519,7 +1503,7 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
         "context": context,
         "preview_text": content["preview_text"],
     }
-    if card["kind"] == "signal" and card["transport"] in ("slack", "discord"):
+    if card["kind"] == "signal" and present.SOURCE_THREAD:
         spec["parts"]["source_thread"] = True
     if any("<@" in (f.get("text") or "") for f in footer):
         # the footer names members as <@id> mentions — a worker must
@@ -1536,7 +1520,7 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
     _build_part_manifest(db, card, spec, content, in_thread_body, cfg=cfg)
     if any(b["id"] == "meds" for row in spec["parts"]["action_rows"] for b in row):
         spec["parts"]["drug_view_navigation"] = True
-    if card["transport"] == "discord" and spec["parts"].get("thread_body_parts"):
+    if present.THREAD_DRUG_ACTIONS and spec["parts"].get("thread_body_parts"):
         spec["parts"]["thread_drug_actions"] = True
     return spec
 
@@ -1996,8 +1980,9 @@ def _notice_spec(event_id, parts, cfg, scope, rev, transport) -> dict:
     overflow body parts behind a thread part)."""
     correlation = secrets.token_hex(16)
     key = f"v1|notice|{event_id}"
-    if transport == "lineworks":
-        parts = fit_parts(parts, LINEWORKS_DISPLAY)
+    present = presenter(transport)
+    if hasattr(present, "overflow"):
+        parts = fit_parts(parts, present.CARD_LIMIT)
     body = {"containers": parts["containers"], "action_rows": [],
             "footer": [f for f in parts["footer"] if f.get("type") == "text"]
                       + [{"type": "meta", "correlation": correlation}]}
@@ -2019,7 +2004,8 @@ def _notice_spec(event_id, parts, cfg, scope, rev, transport) -> dict:
     manifest = [{"part_id": "card", "kind": "card", "index": 0,
                  "sha256": hashlib.sha256(payload).hexdigest(),
                  "bytes": len(payload)}]
-    keyed = _lineworks_overflow(body) if transport == "lineworks" else []
+    keyed = (present.overflow(body, _split_body_chunks)
+             if hasattr(present, "overflow") else [])
     if keyed:
         manifest.append({"part_id": "thread", "kind": "thread", "index": 1,
                          "name": key, "sha256": _sha_text(key)})
@@ -2719,7 +2705,6 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
             "error": "action_not_applicable"}
 
 
-_DIALECT = {"discord": "discord", "slack": "slack"}   # else plain (LINE WORKS)
 
 
 def _act_view(db, base, card, action, inputs, now, cfg=None,
@@ -2743,7 +2728,7 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
         return {**base, "outcome": "applied", "action": "digest",
                 "parts": got["parts"],
                 "text": parts_text(got["parts"],
-                                   _DIALECT.get(card["transport"], "plain"))}
+                                   card["transport"])}
     if action == "summary":
         title, text = patient_summary_text(db, card["project_id"], cfg=cfg)
         return {**base, "outcome": "applied", "action": "summary",

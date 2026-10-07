@@ -21,10 +21,11 @@ from patient_context import LABELS, context_items, extract_context
 from mcs_adapter import project_url
 from mcs_queries import JST, incomplete_reply_roots
 from mcs_util import fold_map, register_search_fold, search_fold
+import notify_render
 from notify_render import (
     _current_generation, _hhmm, _inline, _mmdd, _patient_name, _source_fp,
     actor_label, card_reaction_lines,
-    card_reactions, lineworks_member_names, today_jst)
+    card_reactions, today_jst)
 
 SUMMARY_CAVEAT = ("※ 取得済み投稿から自動作成した暫定集約です。未取得・未抽出・"
                   "訂正前の記録があり得るため、確定した処方一覧や依頼台帳の"
@@ -369,13 +370,8 @@ def my_tasks_view(db, name, now=None, projects=None) -> dict:
     return out
 
 
-def _discord_link(card) -> str | None:
-    if card["transport"] != "discord" or not card["message_id"] \
-            or not card["channel_id"]:
-        return None
-    return ("https://discord.com/channels/"
-            f"{card['guild_id'] or '@me'}/{card['channel_id']}/"
-            f"{card['message_id']}")
+def _card_link(card) -> str | None:
+    return notify_render.presenter(card["transport"]).card_link(card)
 
 
 UNACKED_WINDOW_S = 7 * 86400
@@ -433,14 +429,13 @@ def unacked_view(db, transport, now=None, projects=None,
             kind = "🧵 投稿" if c["kind"] == "thread" else "🔔 アラート"
             line = f"・{kind} {at:%m-%d %H:%M}〜 未確認"
             if c["owner"]:
-                owner = actor_label(c['owner'])
-                if transport == "lineworks":
-                    owner = lineworks_member_names(owner, member_names)
+                owner = notify_render.presenter(transport).owner_label(
+                    actor_label(c['owner']), member_names)
                 line += f"（担当中: {owner}）"
             for reaction in card_reaction_lines(reactions):
                 line += "\n  " + reaction
             line += f"\n  MCS: {project_url(pid)}"
-            link = _discord_link(c)
+            link = _card_link(c)
             if link:
                 line += f"\n  カード: {link}"
             items.append({"project_id": pid, "group": group, "text": line})
