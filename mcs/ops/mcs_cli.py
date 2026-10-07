@@ -89,7 +89,13 @@ def main(argv: list[str] | None = None) -> int:
                 cmd.append("--reinstall")
             cmd += [f"--install-arg={value}" for value in opts.install_arg]
             if opts.phase == "plan":
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                try:
+                    result = subprocess.run(cmd, capture_output=True, text=True,
+                                            timeout=600)
+                except subprocess.TimeoutExpired:
+                    print("Update plan timed out; check network and retry.",
+                          file=sys.stderr)
+                    return 1
                 print(result.stdout, end="")
                 print(result.stderr, end="", file=sys.stderr)
                 if result.returncode:
