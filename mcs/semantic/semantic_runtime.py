@@ -234,7 +234,7 @@ _CIRCUIT_FAILURE_LIMIT = 3
 _CIRCUIT_COOLDOWN_SECONDS = 300.0
 _CIRCUIT_RETRYABLE_KINDS = frozenset({"rate_limited", "transport", "timeout"})
 _CIRCUIT_FAILURE_CLASSES = _CIRCUIT_RETRYABLE_KINDS | {
-    "http_429", "http_529", "http_5xx"
+    "http_402", "http_429", "http_529", "http_5xx"
 }
 
 
