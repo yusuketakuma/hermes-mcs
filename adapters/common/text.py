@@ -28,6 +28,9 @@ ERR_JA = {
     "reason_required": "理由の入力が必要です。",
     "action_retired": "保留ボタンは廃止されました。カードを最新の表示に更新します。",
     "extraction_changed": "抽出結果が更新されたため報告できません。最新のカードでやり直してください。",
+    "action_not_applicable": "この投稿では利用できない操作です。最新のカードでやり直してください。",
+    "actor_mismatch": "この表示は操作した本人だけが使えます。元のカードから開き直してください。",
+    "origin_mismatch": "このカードのボタンではありません。最新のカードから操作してください。",
 }
 
 
@@ -161,10 +164,10 @@ def valid_due(due: str) -> bool:
 
 
 # ⚠ report target parts — values match mcs_operations
-# EXTRACT_FEEDBACK_FIELDS
-FEEDBACK_FIELDS = (("summary", "要約"), ("meds", "薬"), ("symptoms", "症状"),
-                   ("requests", "依頼"), ("vitals", "バイタル"),
-                   ("other", "その他"))
+# EXTRACT_FEEDBACK_FIELDS (pinned by test_feedback_fields_match_the_runner_vocabulary)
+FEEDBACK_FIELDS = (("summary", "要約"), ("urgency", "緊急度"), ("meds", "薬"),
+                   ("symptoms", "症状"), ("requests", "依頼"),
+                   ("vitals", "バイタル"), ("other", "その他"))
 # 🚫 reason codes — values match mcs_operations DISMISS_REASON_CODES
 DISMISS_REASONS = (("false_positive", "誤検知"), ("already_handled", "対応済み"),
                    ("duplicate", "重複"), ("out_of_scope", "対象外"),
@@ -173,10 +176,15 @@ TASK_REASON = "通知カードからタスク作成"
 STAFF_OPTIONS = 25
 MODAL_TITLES = {"request": "タスク作成", "dismiss": "候補を却下",
                 "report": "抽出の誤りを報告", "search": "この患者を検索",
-                "digest": "サマリー（絞込み）"}
+                "drugsearch": "薬剤を検索", "digest": "サマリー（絞込み）"}
 # card actions whose click opens a modal (text.modal_fields) instead of
 # answering directly
 MODAL_ACTIONS = tuple(MODAL_TITLES)
+# modal actions whose submit is a view click on the same token — no
+# preview/confirm; the runner answers with the view
+VIEW_FORMS = ("search", "drugsearch", "digest")
+# view forms whose single "query" field is a free-text search term
+QUERY_FORMS = ("search", "drugsearch")
 
 
 def modal_fields(action: str, form: dict | None = None,
@@ -228,6 +236,9 @@ def modal_fields(action: str, form: dict | None = None,
                  "multiline": True, "max": 2000, "default": ""}]
     if action == "search":
         return [{"id": "query", "label": "キーワード（空白区切りで AND）",
+                 "required": True, "max": 100, "default": ""}]
+    if action == "drugsearch":
+        return [{"id": "query", "label": "薬名（一般名・製品名・コードの一部）",
                  "required": True, "max": 100, "default": ""}]
     if action == "digest":
         return [{"id": "query", "required": False, "max": 100,
@@ -306,7 +317,7 @@ def dismiss_attrs(fields: dict):
     return (note, None) if note else "理由の入力が必要です。"
 
 
-SEARCH_EMPTY = "キーワードを入力してください。"
+SEARCH_EMPTY = "検索する語を入力してください。"
 
 
 def search_query(fields: dict) -> str | None:
@@ -374,6 +385,8 @@ def view_answer(result: dict | None, allowed,
         return [(m, None) for m in body_messages(result, plain=plain)]
     if action == "tasks":
         items = result.get("tasks") or []
+        if items and not plain:
+            return _task_answers(items)
         return ([(task_list_text(items, plain=plain), items)] if items
                 else [(NO_TASKS_TEXT, None)])
     if action == "list":
@@ -407,6 +420,25 @@ def preview_text(action: str, payload: dict, markdown: bool) -> str:
     if payload.get("due_date"):
         out += f"\n期限: {payload['due_date']}"
     return out + f"\n理由: {payload['reason'][:400]}"
+
+
+def _task_answers(items: list) -> list:
+    """Bound Discord task text and keep each group's controls on its final chunk."""
+    answer, group = [], []
+
+    def flush(tasks):
+        chunks = split_body(task_list_text(tasks), max_chunks=None)
+        answer.extend((chunk, tasks if i == len(chunks) - 1 else None)
+                      for i, chunk in enumerate(chunks))
+
+    for item in items:
+        if group and len(task_list_text([*group, item])) > BODY_CHUNK:
+            flush(group)
+            group = []
+        group.append(item)
+    if group:
+        flush(group)
+    return answer
 
 
 def task_list_text(items: list, *, plain: bool = False) -> str:

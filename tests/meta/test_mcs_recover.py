@@ -69,7 +69,7 @@ def gateway_restarts(rec, monkeypatch):
     original_popen = subprocess.Popen
 
     def local_popen(args, **kwargs):
-        if args[:3] == ["launchctl", "kickstart", "-k"]:
+        if len(args) > 2 and args[1:4] == ["-I", "-c", rec._GATEWAY_RESTART_PROGRAM]:
             calls.append(args)
             return None
         return original_popen(args, **kwargs)

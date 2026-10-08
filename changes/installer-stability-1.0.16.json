@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "導入ファイルの配置失敗を確実に検出",
+  "summary": "LLM・復旧watchdogの設定や復旧対象の記録を配置できなかった場合、導入完了と表示せずその場で停止します。明示した復旧Pythonは、復旧watchdogを省く事前チェックや実行計画でも本導入と同じ条件で検証します。",
+  "upgrade": "更新チェックでinstall_sh_changedが出る場合は、従来の再導入手順に従いinstall.shの再実行を明示指定してください。配置に失敗した導入は権限や空き容量を修復して再実行してください。依存・モデル・通知・既読化・承認条件・既定値は変更しません。",
+  "details": [
+    "条件式から呼ばれるpublish内でも、renameや一時ファイル削除の失敗を明示的に停止する。",
+    "--no-recoveryと併用した--recovery-pythonも、--preflightと--dry-runで検証する。"
+  ],
+  "refs": ["install.sh", "tests/meta/test_install_sh_stability.py"]
+}

@@ -1,0 +1,21 @@
+{
+  "category": "fixed",
+  "title": "患者アラートを元投稿のスレッドへ配送",
+  "summary": "緊急度の再確認通知と患者別アラート候補を、元投稿を配送したSlack・Discordのスレッドへ送ります。配送記録と現在の送信先が一致するスレッドだけを使い、未確定・削除済み・別送信先の場合はチャンネルへ代替投稿しません。確認・担当・却下・依頼の操作を維持します。",
+  "upgrade": "新コードをmainへ反映した後、Hermes gatewayまたは独立接続hostへ新workerを反映してください。元投稿のスレッドが未確定な通知は配送完了後に再開します。LINE WORKSの現行接続には検証済みnativeスレッド参照がないため、対象通知を保留・要確認として記録します。再確認通知の既定無効・人承認・既読化条件は維持します。",
+  "details": [
+    "既存cardless noticeのtransport_begin/grant/receiptとunknown非再送を再利用する。",
+    "原通知のdelivery coverage・patient/source/root・現在のworkspace/channel/profile・thread receiptを照合する。",
+    "grant直前に緊急度と現在のthread bindingを再検査し、旧text routeの未送信分だけを移行する。結果不明・部分送信済みを重複させない。",
+    "患者の元投稿を持たない運用・更新等のsystem alertは既存のsystem targetを維持する。",
+    "患者別signalは最新の厳密なevidence投稿の配送coverageと原threadを照合し、sealed通知もthread作成後に再開する。旧channel投稿は削除せず旧操作tokenを失効してスレッド内へ更新版を作成する。",
+    "複数患者の日次一覧daily_digestは既存の指定先を維持し、患者個別threadへ混在させない。"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_flush.py",
+    "mcs/notify/notify_transport.py",
+    "adapters/slack/delivery.py",
+    "adapters/discord/delivery.py"
+  ]
+}

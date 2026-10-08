@@ -1,0 +1,22 @@
+{
+  "category": "added",
+  "title": "全患者の詳細情報を根拠付きで構造化",
+  "summary": "新規患者に限らず、病歴・生活・介護・支援者・療養意向などを19分類で既存の抽出結果へ保存します。複数行の明示見出しは全文、文章中の情報は根拠引用付きで保存し、本人限定の患者まとめに背景情報の抜粋を追加します。全文と以前の記載は既存の患者別詳細読取りから確認できます。",
+  "upgrade": "更新後は既存の収集・抽出workerへ反映する再起動が必要です。ルール世代12・LLM世代6へ進め、保管済み本文は通常workerで順次再抽出します。既定1600tokensは維持します。住所・連絡先の分類は背景抜粋へ追加せず、detail読取りだけに保持します。人承認・既読化・通知先・モデル・依存・DB schemaは変更しません。",
+  "details": [
+    "extract_v1／extract_llmの既存artifactへpatient_contextを追加し、hash・患者scope・原文引用を検証する。",
+    "長文分割と修復の統合で背景情報を保持し、片方のchunkの緊急度が欠けた場合は通常と確定しない。",
+    "連携サマリーとチャットの情報を混ぜず、過去・否定・未確認を原文のまま保持する。",
+    "read_model detail／evidence／timelineは根拠付きの全文を返し、aggregateでは分類・件数のみ公開する。",
+    "本人限定患者まとめの完全合成説明図を更新し、Slack／LINE WORKSのSVG・PNGを生成元と同期する。"
+  ],
+  "refs": [
+    "mcs/extract/patient_context.py",
+    "mcs/extract/v1/extract.py",
+    "mcs/extract/v4/extract_llm.py",
+    "mcs/extract/rollup.py",
+    "mcs/notify/notify_views.py",
+    "mcs/views/read_model.py",
+    "mcs/views/mcs_view.py"
+  ]
+}

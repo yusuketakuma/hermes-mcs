@@ -726,3 +726,13 @@ def test_unverified_only_requests_never_in_confirmed_table(env):
     assert "open-looking requests" not in text
     assert _table_rows(text, "依頼候補（未確認）") == [
         "| 2026-09-19 | 確認 | SYNTH 候補のみ |"]
+
+
+def test_legacy_snapshot_with_family_source_never_exports_patient_current_values(env):
+    snap, out = env
+    with sqlite3.connect(snap) as db:
+        db.execute("UPDATE messages SET body_text='母の状態：体温38.5℃。' WHERE message_id=100")
+    brain_export.run(out, snap)
+    text = (out / "patients" / "p1.md").read_text()
+    assert "SYNTH summary v1" in text
+    assert "120/80" not in text and "SYNTH-med" not in text

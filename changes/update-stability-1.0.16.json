@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "更新と復旧の中断後に安全に再試行",
+  "summary": "更新起動役は取得済みの指定タグだけを使用し、不完全な実行ファイルの展開を拒否します。復旧時に抽出処理の起動確認が失敗しても中断記録を保持し、起動済みの処理を停止し直さず再試行します。承認済みDB復元の置換失敗時も処理と送信の停止を維持します。",
+  "upgrade": "導入スクリプトの変更を適用する更新では従来の明示再導入手順が必要です。起動失敗はrecovery_report.jsonのrecovery_incompleteを確認し、原因を修復してrecoverを再実行してください。DB復元の人承認条件・取得範囲・通知・既読化・モデル・依存・既定値は変更しません。独立復旧ツールの反映はinstall.shの再実行が必要です。",
+  "details": [
+    "refs/tagsに限定して更新本体を展開し、symlink・gitlinkを拒否する。",
+    "完了記録と完了通知は抽出処理の起動確認後に保存する。",
+    "DB置換前に停止状態を永続化し、置換失敗時もawaiting_consent markerを維持する。"
+  ],
+  "refs": [
+    "scripts/mcs_upgrade.py",
+    "mcs/ops/mcs_update.py",
+    "tests/ops/test_update_recovery_stability.py"
+  ]
+}

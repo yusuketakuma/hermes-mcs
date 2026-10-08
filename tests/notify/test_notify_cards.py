@@ -22,6 +22,8 @@ from notify_testkit import (
     _signal_row, _token_for, _uuid, led,
 )
 
+from test_signal_thread_hotfix import delivered_source
+
 __all__ = ["led"]  # shared isolated-ledger fixture
 
 NO_THREAD_CFG = {"notify": {k: v for k, v in CFG["notify"].items()
@@ -472,7 +474,7 @@ def test_card_page_indicator_shows_position(led, tmp_path):
     assert c["pages"] > 1
     # the context line under the heading: post count, then the page
     ctx = c["containers"][1]["text"]
-    assert ctx.startswith("14投稿") and f"1/{c['pages']}ページ" in ctx
+    assert "14投稿" in ctx and f"1/{c['pages']}ページ" in ctx
     # last page shows its position
     card["ui_state"] = json.dumps({"page": c["pages"] - 1})
     c = notify_render._card_content(led.db, card)
@@ -517,7 +519,8 @@ def test_card_thread_shows_structured_lines(led, tmp_path):
     card["ui_state"] = json.dumps({"page": 0})
     c = notify_render._card_content(led.db, card)
     texts = [b.get("text") or "" for b in c["containers"]]
-    struct = [t for t in texts if t.startswith("📋 要約")]
+    # layout 2: the post line heads the summary, no 📋 label on the face
+    struct = [t for t in texts if t.startswith("・")]
     assert struct and "症状" in struct[0] and "疼痛" in struct[0]
     # the header line remains alongside the structured block; the raw
     # body itself stays off the card (📄本文表示 serves it)
@@ -559,7 +562,7 @@ def test_card_stale_and_bad_extraction_not_shown(led, tmp_path):
     c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     # no current extraction: each post says so instead of a stale block
-    assert joined.count("📋 要約 処理待ち") == 2 and "疼痛" not in joined
+    assert joined.count("要約 処理待ち") == 2 and "疼痛" not in joined
     # the card still renders the message headers (bodies stay off-card)
     assert "職員" in joined and "本文" not in joined
 
@@ -580,9 +583,9 @@ def test_card_deleted_message_hides_structured_data(led, tmp_path):
     card["ui_state"] = json.dumps({"page": 0})
     c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
-    assert "（削除済み）" in joined
-    # only the live reply carries a 📋 line; the deleted post none
-    assert joined.count("📋 要約") == 1 and "疼痛" not in joined
+    assert "（削除された投稿）" in joined
+    # only the live reply carries a summary line; the deleted post none
+    assert joined.count("要約 処理待ち") == 1 and "疼痛" not in joined
 
 
 def test_card_sender_tag_shows_time_profession_org(led, tmp_path):
@@ -613,11 +616,11 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
     title, text = notify_render._card_body_text(
         led.db, card, {"shown": "[100, 101]"})
     assert "09-24 08:" in text
-    # header -> (summary) -> stamps -> posted body, in that order
+    # layout 2: header -> (summary) -> body -> stamps as a trailer
     rule = notify_render.SECTION_RULE
-    assert (f"↳ 患者A 様 · 09-24 08:40 職員（薬剤師・薬局Y）\n📋 要約 処理待ち\n"
-            f"{rule}\nスタンプ 未取得\n{rule}\n本文") in text
-    assert f"08:41 職員\n📋 要約 処理待ち\n{rule}\nスタンプ 未取得\n{rule}\n本文" in text
+    assert (f"↳ 09-24 08:40 職員（薬剤師・薬局Y）\n要約 処理待ち\n{rule}\n"
+            f"本文\n{rule}\nスタンプ 未取得") in text
+    assert f"08:41 職員\n要約 処理待ち\n{rule}\n本文\n{rule}\nスタンプ 未取得" in text
 
 
 def test_signal_quote_shows_sender_metadata(led, tmp_path):
@@ -660,7 +663,7 @@ def test_card_signal_structured_evidence(led, tmp_path):
     assert "📋 要約" not in joined and "退院後フォローの記録" not in joined
     _, body = notify_render._card_body_text(
         led.db, card, {"shown": json.dumps(c["shown"])})
-    assert "📋 要約\n・状態安定\n・要点: 経過観察" in body
+    assert "職員\n・状態安定\n・要点: 経過観察\n" in body
     assert "退院後フォローの記録" in body        # raw body still there
 
 
@@ -682,8 +685,8 @@ def test_digest_face_groups_signals_per_patient(led):
     c = notify_render._card_content(led.db, card)
     texts = [b.get("text") or "" for b in c["containers"]
              if b["type"] == "text"]
-    assert texts.count("患者A 様") == 1 and texts.count("患者B 様") == 1
-    a_block = texts[texts.index("患者A 様") + 1]
+    assert texts.count("患者A") == 1 and texts.count("患者B") == 1
+    a_block = texts[texts.index("患者A") + 1]
     assert "note sig-a1" in a_block and "note sig-a2" in a_block
     assert c["shown"] == ["sig-a1", "sig-a2", "sig-b1"]
 
@@ -696,6 +699,8 @@ def test_body_action_signal_full_evidence(led, tmp_path):
     ev = _intent(led, kind="signal", pid=1,
                  payload={"signal_keys": ["sig-body"], "project_id": 1,
                           "type": "med_followup"})
+    _dispatch(led, ev, cfg=NO_THREAD_CFG)
+    delivered_source(led, card_id=2, mids=(100,))
     _dispatch(led, ev, cfg=NO_THREAD_CFG)
     render = _latest_render(led)
     _begin(led, render)
@@ -864,8 +869,8 @@ def test_sweep_skips_content_for_settled_revoked_cards(
     calls = []
     real = notify_cards._card_content
     monkeypatch.setattr(notify_cards, "_card_content",
-                        lambda db, card: calls.append(card["card_id"])
-                        or real(db, card))
+                        lambda db, card, **kwargs: calls.append(card["card_id"])
+                        or real(db, card, **kwargs))
     # (1) revoked before delivery: no message_id -> op None
     _seed_thread(led)
     _dispatch(led, _intent(led))
@@ -892,8 +897,8 @@ def test_sweep_skips_content_after_revoke_delivered(
     calls = []
     real = notify_cards._card_content
     monkeypatch.setattr(notify_cards, "_card_content",
-                        lambda db, card: calls.append(card["card_id"])
-                        or real(db, card))
+                        lambda db, card, **kwargs: calls.append(card["card_id"])
+                        or real(db, card, **kwargs))
     _msg(led, 105, 1, parent=100)            # drift is irrelevant now
     notify_cards.sweep(led, CFG)
     assert calls == []
@@ -1078,7 +1083,9 @@ def test_drain_int_two_pass_and_results(led, tmp_path):
     res_dir = root / "cmd_results"
     results = sorted(p.name for p in res_dir.iterdir())
     assert results == [_uuid(1) + ".json", _uuid(2) + ".json"]
-    assert not list(int_dir.iterdir())
+    assert not list(int_dir.glob("*.json"))
+    assert {p.name for p in int_dir.iterdir()} == {notify_cmds._DRAIN_CURSOR}
+    assert set(json.loads((int_dir / notify_cmds._DRAIN_CURSOR).read_text())) == {"after"}
     row = led.db.execute(
         "SELECT state,message_id FROM notification_delivery_attempts "
         "WHERE attempt_id=?", ("0" * 15 + "7",)).fetchone()
@@ -1521,7 +1528,11 @@ def test_request_and_dismiss_tokens_authorize_modal(led, tmp_path):
                  payload={"signal_keys": ["sig-modal"], "project_id": 1,
                           "type": "med_followup"})
     _dispatch(led, ev)
+    delivered_source(led, card_id=2, mids=(100,))
+    _dispatch(led, ev)
     render = _latest_render(led)
+    assert _begin(led, render)["granted"]
+    assert _receipt(led, render, f"{1:016x}", message_id="signal-reply")["applied"]
     spec = json.loads(
         (tmp_path / "data" / "discord_render"
          / (render["delivery_id"] + ".json")).read_text())
@@ -1536,7 +1547,8 @@ def test_request_and_dismiss_tokens_authorize_modal(led, tmp_path):
         tok = _token_for(spec, action)
         r = notify_cards.apply_notification(
             led, {**_notif(tok, n=70 + i),
-                  "command_id": f"{tok}:{(70 + i):016x}"},
+                  "command_id": f"{tok}:{(70 + i):016x}",
+                  "origin": dict(ORIGIN, message_id="signal-reply", thread_id="original-thread")},
             CFG, now=NOW)
         assert r["outcome"] == "applied", (action, r)
         assert r["action"] == action and r["modal"] is True
@@ -1546,23 +1558,21 @@ def test_request_and_dismiss_tokens_authorize_modal(led, tmp_path):
         "SELECT COUNT(*) c FROM requests").fetchone()["c"] == 0
 
 
-def test_signal_without_source_suppresses_request(led, tmp_path):
-    """A signal whose evidence cannot pin a source message gets no
-    request button — a permanently-failing button is worse than none."""
+def test_signal_without_source_holds_before_publishing_actions(led, tmp_path):
+    """A source-less signal is held: no channel post or unusable modal token."""
     _patient(led, 1)
-    _signal_row(led, "sig-nosrc")          # evidence.message_ids empty
+    _signal_row(led, "sig-nosrc")
     ev = _intent(led, kind="signal", pid=1,
                  payload={"signal_keys": ["sig-nosrc"], "project_id": 1,
                           "type": "med_followup"})
     _dispatch(led, ev)
-    render = _latest_render(led)
-    spec = json.loads(
-        (tmp_path / "data" / "discord_render"
-         / (render["delivery_id"] + ".json")).read_text())
-    actions = {b["id"] for row in spec["parts"]["action_rows"]
-               for b in row}
-    assert "request" not in actions
-    assert "dismiss" in actions           # signal artifact pinnable
+    assert _latest_render(led) is None
+    held = led.db.execute("SELECT state,progress FROM notify_outbox WHERE event_id=?",
+                          (ev["event_id"],)).fetchone()
+    assert held["state"] == "pending"
+    assert json.loads(held["progress"])["thread_hold"] == "source_thread_not_ready"
+    assert led.db.execute("SELECT COUNT(*) FROM notification_action_tokens").fetchone()[0] == 0
+    assert not list((tmp_path / "data" / "discord_render").glob("*.json"))
 
 
 def test_gc_deletes_expired_tokens_and_old_specs(led, tmp_path):
@@ -1791,18 +1801,21 @@ def test_sweep_detects_source_delete(led):
     r = _latest_render(led)
     assert r["render_rev"] == r0["render_rev"] + 1
     assert r["op"] == "update"
-    assert "（削除済み）" in json.dumps(r["spec_json"],
+    assert "（削除された投稿）" in json.dumps(r["spec_json"],
                                      ensure_ascii=False)
 
 
 def test_sweep_detects_signal_lifecycle(led):
     """RC19 — resolve / dismiss / supersede transitions on a rendered
     signal re-render its card without a new intent."""
-    _patient(led)
-    _signal_row(led, "sig-1")
-    _dispatch(led, _intent(led, kind="signal",
+    _seed_thread(led)
+    _signal_row(led, "sig-1", mids=[100])
+    event = _intent(led, kind="signal",
                            payload={"signal_keys": ["sig-1"],
-                                    "project_id": 1}))
+                                    "project_id": 1})
+    _dispatch(led, event)
+    delivered_source(led, card_id=2)
+    _dispatch(led, event)
     r0 = _latest_render(led)
     assert _card(led)["kind"] == "signal"
     _begin(led, r0)
@@ -1810,7 +1823,7 @@ def test_sweep_detects_signal_lifecycle(led):
     _settle_bodies(led, r0)
 
     # resolved — the evaluator's terminal transition
-    _signal_row(led, "sig-1", state="resolved")
+    _signal_row(led, "sig-1", state="resolved", mids=[100])
     led.db.commit()
     notify_cards.sweep(led, CFG, now=NOW + 1)
     r = _latest_render(led)
@@ -1825,7 +1838,7 @@ def test_sweep_detects_signal_lifecycle(led):
     assert r["render_rev"] == r0["render_rev"] + 2
 
     # dismissed — a human-gated transition row
-    _signal_row(led, "sig-1", state="dismissed")
+    _signal_row(led, "sig-1", state="dismissed", mids=[100])
     led.db.commit()
     notify_cards.sweep(led, CFG, now=NOW + 3)
     r = _latest_render(led)
@@ -1837,11 +1850,14 @@ def test_signals_notify_off_cancels_queued_signal_render(led):
     unbound instead of sitting live forever (begin denies it with a
     non-final signal_notify_off), no new render is issued while off, and
     re-enabling issues a fresh render with a new delivery_id."""
-    _patient(led)
-    _signal_row(led, "sig-off")
-    _dispatch(led, _intent(led, kind="signal",
+    _seed_thread(led)
+    _signal_row(led, "sig-off", mids=[100])
+    event = _intent(led, kind="signal",
                            payload={"signal_keys": ["sig-off"],
-                                    "project_id": 1}))
+                                    "project_id": 1})
+    _dispatch(led, event)
+    delivered_source(led, card_id=2)
+    _dispatch(led, event)
     r0 = _latest_render(led)
     assert r0["state"] == "queued"
     off = {"notify": CFG["notify"], "signals": {"notify": False}}
@@ -1852,10 +1868,10 @@ def test_signals_notify_off_cancels_queued_signal_render(led):
     assert r["state"] == "cancelled"
     assert led.db.execute(
         "SELECT COUNT(*) c FROM notification_intent_cards "
-        "WHERE delivery_id IS NOT NULL").fetchone()["c"] == 0
+        "WHERE card_id=1 AND delivery_id IS NOT NULL").fetchone()["c"] == 0
 
     # drift while off still issues nothing
-    _signal_row(led, "sig-off", state="resolved")
+    _signal_row(led, "sig-off", state="resolved", mids=[100])
     led.db.commit()
     notify_cards.sweep(led, off, now=NOW + 2)
     assert _latest_render(led)["delivery_id"] == r0["delivery_id"]
@@ -2241,7 +2257,7 @@ def test_body_replay_uses_live_source_and_revocation(led, tmp_path):
     led.db.execute("UPDATE messages SET body_state='deleted' WHERE project_id=1")
     led.db.commit()
     second = notify_cards.apply_notification(led, req, CFG, now=NOW + 1)
-    assert '（削除済み）' in second['body']
+    assert '（削除された投稿）' in second['body']
     assert ': 本文' not in second['body']
     notify_cards.revoke_card(led.db, card['card_id'], NOW + 2)
     led.db.commit()
@@ -2583,6 +2599,8 @@ def test_tasks_button_only_on_thread_cards(led, tmp_path):
     ev = _intent(led, kind="signal", pid=2,
                  payload={"signal_keys": ["sig-nt"], "project_id": 2,
                           "type": "med_followup"})
+    _dispatch(led, ev)
+    delivered_source(led, card_id=3, mids=(200,))
     _dispatch(led, ev)
     render = _latest_render(led, 2)
     spec2 = json.loads(

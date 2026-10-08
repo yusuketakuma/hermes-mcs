@@ -5,6 +5,7 @@ import pytest
 
 import ledger
 import structured_view
+from semantic_projection import PROJECTION_VERSION
 
 
 @pytest.fixture
@@ -146,7 +147,7 @@ def test_rule_fallback_skipped_when_llm_excluded_medication(db):
 
 def _fact_artifact(db, kind, content, chash="synthetic-hash"):
     db.artifact_add(kind, json.dumps(content), project_id=1, message_id=1,
-                    meta={"hash": chash})
+                    meta={"hash": chash, "projection_version": PROJECTION_VERSION})
 
 
 def test_current_projection_shadows_extract_llm(db):
@@ -253,7 +254,8 @@ def test_projected_findings_keep_qualifiers_before_full_text(db, kind, attrs, ma
         chunks=[{"chunk_id": "chunk-a", "core_atom_ids": ["atom-a"], "status": "done"}]))
     content = project_v2_doc_legacy(doc)
     db.artifact_add(kind, json.dumps(content), project_id=1, message_id=1,
-                    meta={"hash": "synthetic-hash", "engine_version": 4})
+                    meta={"hash": "synthetic-hash", "engine_version": 4,
+                          "projection_version": PROJECTION_VERSION})
     text = "\n".join(structured_view.structured_lines(db.db, 1))
     assert marker in text and text.index(marker) < text.index(statement[:60])
     # owner rule 2026-10-05: the statement and its evidence are never cut
@@ -288,7 +290,8 @@ def test_foreign_project_artifact_cannot_supply_structured_facts(db, kind):
     db.artifact_add(kind, json.dumps({"summary": "別患者の合成情報",
                                      "medications": [{"name": "別患者薬"}]}),
                     project_id=2, message_id=1,
-                    meta={"hash": "synthetic-hash", "engine_version": 4})
+                    meta={"hash": "synthetic-hash", "engine_version": 4,
+                          "projection_version": PROJECTION_VERSION})
     assert structured_view.structured_lines(db.db, 1) == []
 
 
@@ -360,7 +363,7 @@ def test_malformed_rule_collections_and_contexts_do_not_stop_display(db):
         "rx_actions": [{"action": ["start"], "ctx": "合成文脈"},
                        {"action": "start", "ctx": 7}],
         "requests": [{"kind": ["confirm"], "ctx": "合成依頼"}, {"ctx": 7}]})
-    assert joined == "区分: 添付\n依頼: 依頼:合成依頼"
+    assert joined == "区分: 添付\n依頼: 合成依頼"
 
 
 def test_empty_selected_collections_keep_supported_rule_fallback(db):
@@ -419,7 +422,8 @@ def test_empty_current_facts_do_not_restore_rule_events_or_vitals(db, kind):
                                               "vitals": {"spo2": 10}}),
                     project_id=1, message_id=1, meta={"hash": "synthetic-hash"})
     db.artifact_add(kind, "{}", project_id=1, message_id=1,
-                    meta={"hash": "synthetic-hash", "engine_version": 4})
+                    meta={"hash": "synthetic-hash", "engine_version": 4,
+                          "projection_version": PROJECTION_VERSION})
     assert structured_view.structured_lines(db.db, 1) == ["区分: 添付"]
 
 
@@ -430,5 +434,18 @@ def test_absent_or_stale_facts_keep_rule_events_and_vitals(db, kind):
                     project_id=1, message_id=1, meta={"hash": "synthetic-hash"})
     if kind is not None:
         db.artifact_add(kind, "{}", project_id=1, message_id=1,
-                        meta={"hash": "synthetic-stale", "engine_version": 4})
+                        meta={"hash": "synthetic-stale", "engine_version": 4,
+                              "projection_version": PROJECTION_VERSION})
     assert structured_view.structured_lines(db.db, 1) == ["区分: 訪問", "バイタル: HR 72"]
+
+
+def test_plain_summary_uses_one_fixed_order():
+    import structured_view
+    lines = ["区分: 依頼", "🚨 緊急度: 高", "合成の概要", "症状: 合成症状",
+             "薬剤: 合成薬 5mg[開始]", "要点: 合成の要点", "次回予定: 合成日",
+             "依頼: 医師へ合成確認", "バイタル: BT 37.0"]
+    ordered = sorted(lines, key=structured_view._summary_rank)
+    assert ordered == ["🚨 緊急度: 高", "合成の概要", "要点: 合成の要点",
+                       "依頼: 医師へ合成確認", "薬剤: 合成薬 5mg[開始]",
+                       "症状: 合成症状", "バイタル: BT 37.0", "次回予定: 合成日",
+                       "区分: 依頼"]

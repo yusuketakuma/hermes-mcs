@@ -76,13 +76,11 @@ def _iso(value: JSON) -> date:
         raise MasterError("pin_date_invalid") from None
 
 
-def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
-    """Read only local pinned bytes; unknown terms/status policy holds output.
+def _check_pin(pin: dict[str, JSON]):
+    """Validate the operator pin and decode its declared policy values.
 
-    The PDF defines layout, not change/zero/sentinel semantics. status_policy
-    is therefore an explicit operator declaration, never an invented official
-    interpretation. A new supported edition requires review, not auto-detection.
-    """
+    Returns (expected_sha256, as_of, status_policy, change_values,
+    absent_date_values, selected_codes_or_None)."""
     if (pin.get("schema") != PIN_SCHEMA or pin.get("layout") != LAYOUT
             or pin.get("edition") != EDITION
             or set(pin) - {"schema", "layout", "edition", "sha256", "member", "as_of",
@@ -95,13 +93,6 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
     as_of = _iso(pin.get("as_of"))
     if as_of < date(2026, 9, 30) or pin.get("member") != f"y_{EDITION}.csv":
         raise MasterError("pin_edition_or_member")
-    terms = pin.get("terms_checked_on")
-    terms_record = pin.get("terms_record")
-    if terms is not None and (_iso(terms) > as_of or not drug_map._text(terms_record)):
-        raise MasterError("terms_metadata_invalid")
-    approval = pin.get("approved_by")
-    if approval is not None and (not drug_map._text(approval) or terms is None):
-        raise MasterError("approval_metadata_invalid")
     policy = pin.get("status_policy", {})
     if not isinstance(policy, dict) or set(policy) - {
             "candidate_change_values", "absent_date_values", "confirmed_by"}:
@@ -123,16 +114,17 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
         raise MasterError("selection_invalid")
     if selected is not None:
         selected = frozenset(selected)   # O(1) membership per master row
-    raw = _read(path, MAX_INPUT_BYTES)
-    source_hash = hashlib.sha256(raw).hexdigest()
-    if source_hash != expected:
-        raise MasterError("source_hash_mismatch")
+    return expected, as_of, policy, changes, absent, selected
+
+
+def _master_csv(path: Path, member: str, raw: bytes) -> bytes:
+    """Return the pinned member's CSV bytes from a local csv or single-member zip."""
     csv_bytes = raw
     if path.suffix.lower() == ".zip":
         try:
             with zipfile.ZipFile(io.BytesIO(raw)) as archive:
                 members = archive.infolist()
-                if (len(members) != 1 or members[0].filename != pin["member"]
+                if (len(members) != 1 or members[0].filename != member
                         or members[0].is_dir() or members[0].flag_bits & 1
                         or stat.S_ISLNK(members[0].external_attr >> 16)
                         or members[0].file_size > MAX_CSV_BYTES
@@ -142,10 +134,55 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
                     csv_bytes = stream.read(MAX_CSV_BYTES + 1)
         except (zipfile.BadZipFile, RuntimeError, NotImplementedError):
             raise MasterError("zip_invalid") from None
-    elif path.suffix.lower() != ".csv" or path.name != pin["member"]:
+    elif path.suffix.lower() != ".csv" or path.name != member:
         raise MasterError("csv_member_invalid")
     if len(csv_bytes) > MAX_CSV_BYTES:
         raise MasterError("csv_size")
+    return csv_bytes
+
+
+def _check_master_row(row: list[str]) -> None:
+    """Layout, field-bound and value checks of one master CSV record."""
+    if len(row) != 42 or row[1] != "Y":
+        raise MasterError("csv_layout_invalid")
+    for i, value in enumerate(row):
+        if len(value.encode("cp932")) > WIDTHS[i] or any(ord(c) < 32 for c in value):
+            raise MasterError("csv_field_bound")
+        if i not in TEXT_COLUMNS and i not in (11, 24) and not re.fullmatch(r"[0-9]+", value):
+            raise MasterError("csv_numeric_invalid")
+    # Field 25 is an unused 13-byte numeric reserve, not a price.
+    # The published master uses decimal text there; keep it opaque.
+    if (not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", row[24])
+            or not re.fullmatch(r"[0-9]{1,10}(?:\.[0-9]{1,2})?", row[11])
+            or any(not re.fullmatch(r"[A-Za-z0-9]*", row[i]) for i in (31, 36, 38, 39))
+            or any(not 32 <= ord(c) < 127 for c in row[28])
+            or any(not (32 <= ord(c) < 127 or 0xFF61 <= ord(c) <= 0xFF9F) for c in row[6])
+            or any(int(row[n]) != len(row[s]) for n, s in ((3, 4), (5, 6), (8, 9)))
+            or int(row[3]) > 32 or int(row[5]) > 20 or int(row[8]) > 6
+            or len(row[34]) > 100 or len(row[37]) > 100):
+        raise MasterError("csv_value_invalid")
+
+
+def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
+    """Read only local pinned bytes; unknown terms/status policy holds output.
+
+    The PDF defines layout, not change/zero/sentinel semantics. status_policy
+    is therefore an explicit operator declaration, never an invented official
+    interpretation. A new supported edition requires review, not auto-detection.
+    """
+    expected, as_of, policy, changes, absent, selected = _check_pin(pin)
+    terms = pin.get("terms_checked_on")
+    terms_record = pin.get("terms_record")
+    if terms is not None and (_iso(terms) > as_of or not drug_map._text(terms_record)):
+        raise MasterError("terms_metadata_invalid")
+    approval = pin.get("approved_by")
+    if approval is not None and (not drug_map._text(approval) or terms is None):
+        raise MasterError("approval_metadata_invalid")
+    raw = _read(path, MAX_INPUT_BYTES)
+    source_hash = hashlib.sha256(raw).hexdigest()
+    if source_hash != expected:
+        raise MasterError("source_hash_mismatch")
+    csv_bytes = _master_csv(path, pin["member"], raw)
     try:
         text = csv_bytes.decode("cp932", errors="strict")
     except UnicodeDecodeError:
@@ -156,21 +193,7 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
             count += 1
             if count > MAX_ROWS:
                 raise MasterError("row_bound")
-            if len(row) != 42 or row[1] != "Y":
-                raise MasterError("csv_layout_invalid")
-            for i, value in enumerate(row):
-                if len(value.encode("cp932")) > WIDTHS[i] or any(ord(c) < 32 for c in value):
-                    raise MasterError("csv_field_bound")
-                if i not in TEXT_COLUMNS and i != 11 and not re.fullmatch(r"[0-9]+", value):
-                    raise MasterError("csv_numeric_invalid")
-            if (not re.fullmatch(r"[0-9]{1,10}(?:\.[0-9]{1,2})?", row[11])
-                    or any(not re.fullmatch(r"[A-Za-z0-9]*", row[i]) for i in (31, 36, 38, 39))
-                    or any(not 32 <= ord(c) < 127 for c in row[28])
-                    or any(not (32 <= ord(c) < 127 or 0xFF61 <= ord(c) <= 0xFF9F) for c in row[6])
-                    or any(int(row[n]) != len(row[s]) for n, s in ((3, 4), (5, 6), (8, 9)))
-                    or int(row[3]) > 32 or int(row[5]) > 20 or int(row[8]) > 6
-                    or len(row[34]) > 100 or len(row[37]) > 100):
-                raise MasterError("csv_value_invalid")
+            _check_master_row(row)
             medicine = row[2]
             if medicine in seen:
                 raise MasterError("duplicate_medicine_code")
@@ -242,7 +265,12 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
               "source": {"url": SOURCE_URL, "spec": SPEC_URL,
                          "terms_checked_on": terms, "approval_recorded": approval is not None,
                          "status_policy_confirmed": bool(changes and absent)},
-              "activation": False, "output_sha256": None}
+              "activation": False, "output_sha256": None,
+              "dictionary_limits": {"entries": drug_map.MAX_ENTRIES,
+                                    "bytes": drug_map.MAX_BYTES,
+                                    "aliases_per_entry": drug_map.MAX_ALIASES},
+              "selection": "explicit_subset" if selected is not None else "whole_master",
+              "payload_bytes": None}
     payload = None
     if terms is None:
         report["held"] = "terms_unconfirmed"
@@ -263,6 +291,7 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
                     "source": source, "entries": entries}
         payload = json.dumps(document, ensure_ascii=False, sort_keys=True,
                              separators=(",", ":"), allow_nan=False).encode("utf-8")
+        report["payload_bytes"] = len(payload)
         if len(payload) > drug_map.MAX_BYTES:
             payload = None
             report["held"] = "dictionary_byte_bound"

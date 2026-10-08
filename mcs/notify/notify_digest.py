@@ -28,7 +28,7 @@ from mcs_queries import JST, coverage_gaps  # noqa: E402
 from message_metadata import (get_message_metadata, mentions_self,  # noqa: E402
                               others_reaction_count, reaction_label,
                               STAMP_EMOJI)
-from notify_render import (_patient_name, fit_parts, parts_text,  # noqa: E402
+from notify_render import (SIGNAL_TYPE_LABEL, _patient_name, fit_parts, parts_text,  # noqa: E402
                            plain_notice)
 from notify_views import assignee_matches  # noqa: E402
 
@@ -43,8 +43,6 @@ NOTICE_BUDGET = 1900     # relayed text notice (one chat message)
 # candidate count's (design #13: 期限・予定・依頼は含めない)
 EXCLUDED_SIGNALS = frozenset({"request_overdue", "request_aging",
                               "rx_period_expiry", "rx_period_lapsed"})
-NOTE = ("※ 取得済みの記録から数えた件数です。記録が見つからないことは対応が"
-        "なかったことを意味せず、取得完了の記録は欠落なしの保証ではありません。")
 SCOPE_HELP = "all / mine / station:名前 / project:ID,ID / days:1-7（空白区切りで組合せ）"
 
 
@@ -163,9 +161,6 @@ def _self_reaction_count(db, since, until, keep=None) -> tuple:
 
 
 OWN_POST_DAYS = 7
-NOT_RESPONSE_NOTE = ("※ 記録が見つからない≠対応がなかった。メンションだけでは"
-                     "応答済みにも未対応にもしません。")
-
 
 def _ago(seconds) -> str:
     return (f"{int(seconds // DAY_S)}日経過" if seconds >= DAY_S
@@ -209,11 +204,11 @@ def _own_unreacted(db, until, ok, room, self_id) -> list:
             invalid += meta["reactions_status"] == "invalid"
             unfetched += meta["reactions_status"] != "invalid"
         elif others == 0:
-            rows.append(f"・{room(r['project_id'])} / message {r['message_id']} "
+            rows.append(f"・{room(r['project_id'])} "
                         f"{_ago(until - r['posted_at_ts'])}・{_observed(meta)}")
-    head = [f"他者反応0件 {len(rows)}投稿（直近{OWN_POST_DAYS}日・本人のroot投稿）"]
+    head = [f"反応なし {len(rows)}投稿（直近{OWN_POST_DAYS}日）"]
     if unfetched or invalid:
-        head.append(f"スタンプ未取得 {unfetched}投稿・取得不正 {invalid}（0件に含めません）")
+        head.append(f"スタンプ未取得 {unfetched}投稿・取得不正 {invalid}")
     return head + _listed(rows)
 
 
@@ -248,8 +243,8 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
                              (mids[0], c["project_id"])).fetchone()
             state = (_response_state(db, msg, self_id, until)[2]
                      if msg and self_id else "本人ID不明")
-            rows.append(f"・{room(c['project_id'])} / message {mids[0]} "
-                        f"薬剤師宛依頼の応答未確認（シグナル）・{state}")
+            rows.append(f"・{room(c['project_id'])} "
+                        f"薬剤師宛の依頼に返信の記録なし・{state}")
     unknown, station = 0, 0
     if self_id is not None:
         for r in _recent_posts(db, until, ok, ""):
@@ -265,18 +260,18 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
                 continue
             replied, mine, state = _response_state(db, r, self_id, until)
             if not replied and not mine:
-                rows.append(f"・{room(r['project_id'])} / message {r['message_id']} "
-                            f"本人宛メンション・{_ago(until - r['posted_at_ts'])}・{state}")
+                rows.append(f"・{room(r['project_id'])} "
+                            f"自分宛・{_ago(until - r['posted_at_ts'])}・{state}")
     notes = [] if self_id is not None else [
         "本人の送信者IDが不明のためメンションは判定していません。"]
     if station:
-        notes.append(f"施設宛（自局判定なし）: {station}投稿")
+        notes.append(f"施設宛: {station}投稿")
     if unknown:
-        notes.append(f"メンション不明（未取得・取得不正）: {unknown}投稿")
+        notes.append(f"宛先不明: {unknown}投稿")
     if not rows and not station:
         return []
-    return [f"{len(rows)}件（直近{OWN_POST_DAYS}日のメンションと薬剤師宛依頼シグナル）",
-            *notes, *_listed(rows), NOT_RESPONSE_NOTE]
+    return [f"{len(rows)}件（直近{OWN_POST_DAYS}日）",
+            *notes, *_listed(rows)]
 
 
 def _stale_open_unacked(db, now: float) -> list:
@@ -329,7 +324,9 @@ def build(db, cfg, since: float, until: float, flt=None, *,
 
     def room(pid) -> str:
         name_ = _plain(_patient_name(db, pid)) if names else ""
-        return f"project {pid}" + (f" {name_}" if name_ else "")
+        # staff read names; the internal id only identifies a room when
+        # names are off or missing
+        return name_ or f"project {pid}"
 
     start = datetime.fromtimestamp(since, JST)
     end = datetime.fromtimestamp(until, JST)
@@ -393,23 +390,7 @@ def build(db, cfg, since: float, until: float, flt=None, *,
             containers.append({"type": "text", "fold": fold,
                                "text": "\n".join([f"■ {head}", *lines])})
 
-    reacted, reaction_counts = _self_reaction_count(db, since, until, keep)
-    section(f"MCS 本人スタンプ観測: {reacted}投稿", [
-        "・" + "・".join(f"{label} {count}" for label, count in
-                        sorted(reaction_counts.items())) if reaction_counts else "・本人反応の観測なし",
-        "・対象期間に観測した現在の保存状態です。未取得を除き、"
-        "押下時刻・操作件数・業務完了を表しません。"])
-
     self_id = mcs_signals.self_sender_id(db)
-    if cfg.get("metadata_refresh_publish") is True:
-        section("反応が観測されていない自分の投稿",
-                _own_unreacted(db, until, ok, room, self_id), fold=True)
-    section("自分宛で応答未観測",
-            _addressed_unanswered(db, until, ok, room, self_id, signals_on), fold=True)
-
-    section(f"緊急度高 {len(urgent)}件", [
-        f"・{room(p)} / message {m}" + ("" if u == "llm" else "（機械照合）")
-        for p, m, u in urgent], fold=True)
     todo = []
     for label, pids in (("期限切れタスク", late), ("本日期限タスク", due)):
         if pids:
@@ -418,8 +399,15 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     if stale_by:
         todo.append(f"・滞留アラート（{STALE_ALERT_D}日超・未確認）"
                     f"{sum(stale_by.values())}件: " + "・".join(
-                        f"{_plain(k)} {n}" for k, n in sorted(stale_by.items())))
+                        f"{_signal_ja(k)} {n}" for k, n in sorted(stale_by.items())))
     section("要対応", todo)
+    section(f"緊急度高 {len(urgent)}件", [
+        f"・{room(p)} {_posted_hhmm(db, m)}" + (
+            " 🚨 緊急度高" + structured_view.urgency_qc_suffix(db, m)
+            if u == "llm" else " 🚨")
+        for p, m, u in urgent], fold=True)
+    section("自分宛で返信の記録なし",
+            _addressed_unanswered(db, until, ok, room, self_id, signals_on), fold=True)
 
     per: dict = {}
     for r in rows:
@@ -433,8 +421,16 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         + "）" for pid, p in ranked], fold=True)
 
     if by_type:
-        section("アラート（open）", ["・" + "・".join(
-            f"{_plain(k)} {n}" for k, n in sorted(by_type.items()))])
+        section("確認待ちのアラート", ["・" + "・".join(
+            f"{_signal_ja(k)} {n}" for k, n in sorted(by_type.items()))])
+
+    reacted, reaction_counts = _self_reaction_count(db, since, until, keep)
+    section(f"MCS 本人スタンプ: {reacted}投稿", [
+        "・" + "・".join(f"{label} {count}" for label, count in
+                        sorted(reaction_counts.items())) if reaction_counts else "・本人反応なし"])
+    if cfg.get("metadata_refresh_publish") is True:
+        section("反応がない自分の投稿",
+                _own_unreacted(db, until, ok, room, self_id), fold=True)
 
     # 連携サマリー (#21): artifacts stored in the window that change an
     # earlier stored summary (a room's first fetch/backfill is not an
@@ -463,15 +459,15 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     cov = []
     incomplete = [r for r in gaps["incomplete_rooms"] if ok(r[0])]
     if incomplete:
-        cov.append(f"・取得未完了のルーム {len(incomplete)}: " + _ids(
-            incomplete, lambda r: f"{room(r[0])}（{_plain(r[1])}）"))
+        import notify_views
+        cov.append(f"・取得未完了のルーム {len(incomplete)}件: " + _ids(
+            incomplete, lambda r: f"{room(r[0])}（{notify_views.fetch_reason_ja(r[1])}）"))
     else:
-        cov.append("・未完了として記録されたルーム: なし"
-                   "（完全性の保証ではありません）")
+        cov.append("・未完了として記録されたルーム: なし")
     scoped = "（全体）" if keep is not None else ""
     if gaps["jobs"]:
-        cov.append(f"・取得待ち/失敗ジョブ{scoped}: " + "・".join(
-            f"{_plain(k)} {n}" for k, n in gaps["jobs"].items()))
+        cov.append(f"・処理待ち・失敗{scoped}: " + "・".join(
+            f"{_JOB_JA.get(k, _plain(k))} {n}" for k, n in gaps["jobs"].items()))
     if gaps["partial_bodies"]:
         cov.append(f"・本文未取得の投稿{scoped}: {gaps['partial_bodies']}件")
     if gaps["reply_gaps"]:
@@ -486,13 +482,27 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     if held:
         cov.append(f"・送信保留の通知（全体）: {held}件")
     containers.append({"type": "text",
-                       "text": "\n".join(["■ 取得状況（記録ベース）", *cov])})
-    footer = [NOTE]
+                       "text": "\n".join(["■ 取得状況", *cov])})
+    footer = []
     if flt["mine"]:
-        footer.insert(0, "※ 担当は担当者欄が表示名と一致する未完了タスクの記録です。"
-                         "正式な担当割当ではありません。")
+        footer.append("※ 担当: 担当者欄が表示名と一致する未完了タスク")
     return fit_parts({"containers": containers,
                       "footer": [{"type": "text", "text": t} for t in footer]})
+
+
+_JOB_JA = {"extract_claim": "抽出準備", "extract_qc": "抽出監査",
+           "history_head": "履歴取得", "reconcile": "突合", "semantic": "意味解析"}
+
+
+def _signal_ja(kind) -> str:
+    return SIGNAL_TYPE_LABEL.get(kind, _plain(kind))
+
+
+def _posted_hhmm(db, mid) -> str:
+    row = db.execute("SELECT posted_at FROM messages WHERE message_id=?", (mid,)).fetchone()
+    posted = row["posted_at"] if row else None
+    return (f"{posted[5:10]} {posted[11:16]}"
+            if isinstance(posted, str) and len(posted) >= 16 else "")
 
 
 def _daily_since(cfg, since, until):

@@ -66,6 +66,7 @@ def project_url(project_id: int) -> str:
 # route-level 403 (see _request)
 SESSION_PROBE_PATH = "/users/self/count"
 LS_TOKEN_KEY = "ngStorage-lastSessionToken"
+HUNG_PROBE_S = 5            # a renderer silent this long on `1` is hung
 _ALLOWED_DOWNLOAD_HOSTS = {"www.medical-care.net"}
 # MCS /files/* 302s to a self-authenticating signed URL on the operator's CDN;
 # following it is safe only WITHOUT the Bearer header (it must never leave
@@ -675,7 +676,7 @@ def _norm_message(m: dict, project_id: int, parent_id: int | None = None,
             or not isinstance(created, str) or not isinstance(count, dict)):
         raise SchemaError("message: fields invalid")
     reply_count = count.get("thread_messages", 0)
-    if type(reply_count) is not int or reply_count < 0:
+    if type(reply_count) is not int or not 0 <= reply_count < 2**63:
         raise SchemaError("message: reply count invalid")
     if "delete_user" in m:
         # tombstone: the reply was deleted on the MCS side — no body will
@@ -974,9 +975,17 @@ class MCSAdapter:
 
     def _ensure_chrome(self, profile_dir: str, chrome_bin: str):
         if self._cdp_up():
+            # the browser process answers /json/version even when an MCS
+            # tab's renderer is hung — such a tab makes every token read
+            # and form fill time out, so heal it before using the browser
+            self._heal_hung_pages()
             return
         import subprocess
         self._remaining_timeout(1)
+        # CDP is down: a hung browser, or this profile opened without the
+        # debugging port, would absorb the relaunch (same-profile hand-off)
+        # and CDP would never come up — stop that instance first
+        self._stop_profile_chrome(profile_dir, chrome_bin)
         subprocess.Popen([
             chrome_bin,
             f"--remote-debugging-port={urllib.parse.urlparse(self.cdp_url).port}",
@@ -993,6 +1002,96 @@ class MCSAdapter:
             if self._cdp_up():
                 return
         raise BootstrapError("chrome launch timed out")
+
+    def _stop_profile_chrome(self, profile_dir: str, chrome_bin: str) -> bool:
+        """Stop Chrome main processes of exactly this dedicated profile
+        (helpers exit with them): SIGTERM, bounded wait, then SIGKILL.
+        Nothing else is touched; an unparseable listing stops nothing."""
+        import signal
+        import subprocess
+        if (not profile_dir or not os.path.isabs(profile_dir)
+                or not chrome_bin or not os.path.isabs(chrome_bin)):
+            return False
+        flag = re.compile(r"(?:^|\s)--user-data-dir=" + re.escape(profile_dir)
+                          + r"(?:\s|$)")
+        try:
+            result = subprocess.run(["ps", "-axww", "-o", "pid=,command="],
+                                    capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if result.returncode != 0:
+            return False
+        pids = []
+        for line in result.stdout.splitlines():
+            pid, _, command = line.strip().partition(" ")
+            # ps flattens argv: paths may contain spaces, but Chrome's flags follow its executable.
+            program, separator, _ = command.partition(" --")
+            if (pid.isdigit() and int(pid) != os.getpid() and separator
+                    and os.path.realpath(program) == os.path.realpath(chrome_bin)
+                    and flag.search(command)
+                    and " --type=" not in f" {command}"):
+                pids.append(int(pid))
+        if not pids:
+            return False
+
+        def alive():
+            out = []
+            for pid in pids:
+                try:
+                    os.kill(pid, 0)
+                    out.append(pid)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    out.append(pid)
+            return out
+
+        for sig, wait_s in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
+            for pid in alive():
+                with suppress(ProcessLookupError, PermissionError):
+                    os.kill(pid, sig)
+            for _ in range(wait_s * 2):
+                if not alive():
+                    break
+                self._sleep_bounded(0.5)
+            if not alive():
+                break
+        self.chrome_restarted = True
+        return True
+
+    def _mcs_pages(self) -> list:
+        return [t for t in self._cdp_json("/json/list")
+                if t.get("type") == "page" and isinstance(t.get("id"), str)
+                and re.fullmatch(r"[0-9A-Fa-f]{16,64}", t["id"])
+                and urllib.parse.urlparse(t.get("url", "")).hostname
+                == "www.medical-care.net"]
+
+    def _heal_hung_pages(self) -> int:
+        """Close MCS tabs whose renderer no longer answers a trivial
+        evaluate (browser side still up). Only www.medical-care.net tabs
+        of this dedicated profile; a run deadline is not a hang. Returns
+        the number of tabs verified gone — callers reopen a fresh tab."""
+        self.healed_tabs = 0
+        try:
+            hung = []
+            for page in self._mcs_pages():
+                try:
+                    self._cdp_eval(page["webSocketDebuggerUrl"], "1", HUNG_PROBE_S)
+                except MCSError as error:
+                    if error.kind == "network_error":
+                        hung.append(page["id"])
+            if not hung:
+                return 0
+            for target in hung:
+                # /json/close answers plain text, which the JSON worker
+                # rejects — the result is verified by re-listing instead
+                with suppress(MCSError, OSError):
+                    self._cdp_json(f"/json/close/{target}")
+            alive = {t["id"] for t in self._mcs_pages()}
+        except (MCSError, OSError, KeyError, TypeError):
+            return 0
+        self.healed_tabs = sum(target not in alive for target in hung)
+        return self.healed_tabs
 
     def _cdp_eval(self, ws_url: str, expr: str, timeout: int = 15):
         return self._io("cdp_eval", timeout, url=ws_url, expression=expr)["value"]
@@ -1100,6 +1199,8 @@ class MCSAdapter:
         'manual_required:no_form' distinguishes a missing login form
         (page never rendered / app redirected) from a submitted login
         that never validated."""
+        # per-attempt journal facts (run_check records them)
+        self.healed_tabs, self.chrome_restarted = 0, False
         try:
             self._ensure_chrome(profile_dir, chrome_bin)
         except (MCSError, OSError):  # incl. deadline_exceeded
@@ -1354,7 +1455,7 @@ class MCSAdapter:
             if not isinstance(projs, list):
                 raise SchemaError("unread: projects missing")
             page_ts = pag.get("timestamp")
-            if type(page_ts) is not int or page_ts <= 0:
+            if not _valid_id(page_ts):
                 raise SchemaError("unread: paginate.timestamp invalid")
             ts = page_ts if ts is None else min(ts, page_ts)
             ids = set()
@@ -1879,7 +1980,7 @@ class MCSAdapter:
         oldest_unread_message; anything else (missing project, the key
         still present, odd shapes) is mark_result_unknown — never
         confirmed (Oracle B02)."""
-        if type(snapshot_ts) is not int or snapshot_ts <= 0:
+        if not _valid_id(snapshot_ts):
             raise MCSError("bad_snapshot_ts")
         try:
             self._get(f"/projects/{project_id}/messages", {

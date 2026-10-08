@@ -154,7 +154,7 @@ def _qc_questions(ex: dict) -> tuple[dict, list, dict]:
             f"本文にこの{measurement}と値を裏付ける記述がない")
         layout.append((qid, section, index))
     urg = ex.get("urgency")
-    if urg in ("high", "routine"):
+    if urg in ("high", "routine", "unclear"):
         questions["urg"] = jev.choice_question(
             "対象の投稿本文の緊急度として最も妥当なものを選ぶ"
             f"（抽出側の分類: {urg}）",

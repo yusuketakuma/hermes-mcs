@@ -127,7 +127,7 @@ def notify_render_body(led):
         "SELECT * FROM notification_view_manifests ORDER BY manifest_id "
         "DESC LIMIT 1").fetchone()
     return notify_render._card_body_text(
-        led.db, card, man, max_chars=None)[1]
+        led.db, card, man, max_chars=None, cfg=CFG, include_summary=False)[1]
 
 
 def test_many_facts_long_thread_parts(led):
@@ -987,3 +987,172 @@ def test_failed_named_post_never_counts_as_old_appended_reply(led):
     prior = notify_cards._prior_body_posts(led.db, card)
     assert notify_cards._body_groups(led.db, card, [100, 101], prior) == [
         ("m:100", [100]), ("m:101", [101])]
+
+
+def test_shrinking_named_group_edits_only_proven_same_thread_surplus(led):
+    _seed_thread(led, mids=(100,))
+    led.db.execute("UPDATE messages SET body_text=? WHERE message_id=100", ("合成の旧長文" * 1200,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    first = _latest_render(led)
+    _deliver_bodies(led, first, "original", n=1200)
+    original = {p["name"]: p["remote_id"] for p in _parts(led, first["delivery_id"]) if p["kind"] == "body_part"}
+    assert len(original) > 2
+    with led.db:
+        led.db.execute("UPDATE messages SET body_text='短い現在の本文',content_hash=? WHERE message_id=100", ("a" * 64,))
+        notify_cards._issue_render(led.db, 1, CFG, NOW + 1, [], force=True)
+    fresh = _latest_render(led)
+    spec = _spec(fresh)
+    active = next(p for p in spec["parts"]["manifest"] if p.get("name") == "m:100#1")
+    assert active["edit_only"] is True and active["prior_remote_id"] == original["m:100#1"]
+    cleanup = [p for p in spec["parts"]["manifest"] if p.get("edit_only") and p.get("name") != "m:100#1"]
+    assert {p["name"] for p in cleanup} == set(original) - {"m:100#1"}
+    assert all(p["prior_remote_id"] == original[p["name"]] for p in cleanup)
+    assert all(spec["parts"]["thread_body_parts"][int(p["part_id"].split(":")[1]) - 1] == notify_cards._THREAD_BODY_COLLECTED for p in cleanup)
+    from adapters.common.spec import validate
+    validate(spec)
+    # A later completed cleanup is not issued over and over.
+    _deliver_bodies(led, fresh, "original", n=1300)
+    for p in cleanup:
+        led.db.execute("UPDATE notification_render_parts SET remote_id=? WHERE delivery_id=? AND part_id=?", (original[p["name"]], fresh["delivery_id"], p["part_id"]))
+    led.db.commit()
+    final = []
+    with led.db:
+        notify_cards._issue_render(led.db, 1, CFG, NOW + 2, final, force=True)
+    assert not any(p.get("edit_only") for p in final[0]["parts"]["manifest"])
+
+
+@pytest.mark.parametrize("fault", ["other_thread", "scope", "unknown", "legacy"])
+def test_surplus_cleanup_does_not_infer_unproven_or_frozen_targets(led, fault):
+    _seed_thread(led, mids=(100,))
+    led.db.execute("UPDATE messages SET body_text=? WHERE message_id=100", ("合成の長文" * 1000,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    first = _latest_render(led)
+    _deliver_bodies(led, first, "original", n=1400)
+    with led.db:
+        if fault == "other_thread":
+            led.db.execute("UPDATE notification_render_parts SET remote_id='other-thread' WHERE delivery_id=? AND kind='thread'", (first["delivery_id"],))
+        elif fault == "scope":
+            led.db.execute("UPDATE notification_renders SET channel_id='other-channel' WHERE delivery_id=?", (first["delivery_id"],))
+        elif fault == "unknown":
+            led.db.execute("UPDATE notification_render_parts SET state='unknown' WHERE delivery_id=? AND name='m:100#2'", (first["delivery_id"],))
+        else:
+            led.db.execute("UPDATE notification_render_parts SET name=NULL WHERE delivery_id=? AND kind='body_part'", (first["delivery_id"],))
+        led.db.execute("UPDATE messages SET body_text='現在の本文',content_hash=? WHERE message_id=100", ("a" * 64,))
+        specs = []
+        notify_cards._issue_render(led.db, 1, CFG, NOW + 1, specs, force=True)
+    if fault == "unknown":
+        assert specs == []
+    else:
+        assert not any(p.get("edit_only") for p in specs[0]["parts"]["manifest"])
+
+
+def test_surplus_cleanup_budget_holds_once_without_claiming_completion(led, monkeypatch):
+    _seed_thread(led, mids=(100,))
+    led.db.execute("UPDATE messages SET body_text=? WHERE message_id=100", ("合成の長文" * 1000,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    first = _latest_render(led)
+    _deliver_bodies(led, first, "original", n=1500)
+    with led.db:
+        led.db.execute("UPDATE messages SET body_text='現在の本文',content_hash=? WHERE message_id=100", ("a" * 64,))
+    monkeypatch.setattr(notify_cards, "MAX_PARTS", 3)
+    specs = []
+    with led.db:
+        assert notify_cards._issue_render(led.db, 1, CFG, NOW + 1, specs, force=True) is None
+    held = _latest_render(led)
+    assert held["state"] == "held" and held["parts_state"] == "held" and specs == []
+    assert _card(led)["delivery_state"] == "update_failed"
+    assert all(p["state"] == "held" and p["error_code"] == "thread_cleanup_budget_exceeded" for p in _parts(led, held["delivery_id"]))
+    assert not _begin(led, held, n=1600)["granted"]
+    with led.db:
+        notify_cards._issue_render(led.db, 1, CFG, NOW + 2, specs)
+    assert _latest_render(led)["delivery_id"] == held["delivery_id"] and specs == []
+    # Both startup recovery and the shared publisher must keep this
+    # special resource hold private, even when watchdogs see it as live.
+    notify_cards.recover(led, CFG, {})
+    root = notify_cards.data_root(led)
+    assert notify_cards._publish_specs(led.db, notify_cards.notify_dirs(root), [_spec(held)], NOW + 3) == []
+    from pathlib import Path
+    assert not (Path(root) / "discord_render" / (held["delivery_id"] + ".json")).exists()
+    assert _latest_render(led)["spec_published"] == 0
+
+
+def test_unchanged_attachment_updates_old_summary_caption_without_reupload(led, tmp_path, monkeypatch):
+    _seed_thread(led, mids=(100,))
+    file = tmp_path / "synthetic.pdf"
+    file.write_bytes(b"synthetic attachment")
+    _attach(led, 100, local_path=str(file), sha256=hashlib.sha256(file.read_bytes()).hexdigest(), nbytes=file.stat().st_size)
+    original_captions = notify_cards._attachment_captions
+    monkeypatch.setattr(notify_cards, "_attachment_captions", lambda db, card, attachments: {a["attachment_id"]: "OLD-GENERATED-SUMMARY" for a in attachments})
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    first = _latest_render(led)
+    _deliver_bodies(led, first, "original", n=1700)
+    attachment = next(p for p in _spec(first)["parts"]["manifest"] if p["kind"] == "attachment_part")
+    _part_receipt(led, first, attachment["part_id"], remote_id="original-file-message", n=1710)
+    monkeypatch.setattr(notify_cards, "_attachment_captions", original_captions)
+    specs = []
+    with led.db:
+        notify_cards._issue_render(led.db, 1, CFG, NOW + 1, specs, force=True)
+    fresh = next(p for p in specs[0]["parts"]["manifest"] if p["kind"] == "attachment_part")
+    assert fresh["prior_remote_id"] == "original-file-message" and fresh["edit_only"] is True
+    assert "OLD-GENERATED-SUMMARY" not in fresh["caption"] and "📋 要約" not in fresh["caption"]
+
+
+def test_native_thread_layout_migrates_once_without_source_or_ack_generation_change(led, monkeypatch):
+    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
+    _seed_thread(led, mids=(100,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    first = _latest_render(led)
+    _deliver_bodies(led, first, "original", n=1800)
+    card = _card(led)
+    old = notify_render._card_content(led.db, card, cfg=CFG)
+    old.pop("thread_layout")
+    with led.db:
+        led.db.execute("UPDATE notification_cards SET content_fp=? WHERE card_id=1", (notify_render._content_fp(old),))
+    initial_source_generation = card["source_generation"]
+    initial_presentation_generation = card["presentation_generation"]
+    # No new message or forced refresh is necessary for the first update.
+    assert notify_cards.sweep(led, CFG, now=NOW + 1)["updated"] == 1
+    fresh = _latest_render(led)
+    assert fresh["op"] == "update"
+    assert _card(led)["source_generation"] == initial_source_generation
+    assert _card(led)["presentation_generation"] == initial_presentation_generation + 1
+    assert "📋 要約" not in "".join(_spec(fresh)["parts"]["thread_body_parts"])
+    assert _prior_ids(fresh)["body:0001"] == "original/body:0001"
+    _deliver_bodies(led, fresh, "original", n=1900)
+    assert notify_cards.sweep(led, CFG, now=NOW + 2)["updated"] == 0
+    assert _latest_render(led)["delivery_id"] == fresh["delivery_id"]
+
+
+
+def test_non_ascii_chunk_name_is_not_a_cleanup_number(led):
+    _seed_thread(led, mids=(100,))
+    led.db.execute("UPDATE messages SET body_text=? WHERE message_id=100", ("合成の長文" * 1000,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    first = _latest_render(led)
+    _deliver_bodies(led, first, "original", n=2000)
+    with led.db:
+        led.db.execute("UPDATE notification_render_parts SET name='m:100#²' WHERE delivery_id=? AND name='m:100#2'", (first["delivery_id"],))
+        led.db.execute("UPDATE messages SET body_text='現在の本文',content_hash=? WHERE message_id=100", ("a" * 64,))
+        specs = []
+        notify_cards._issue_render(led.db, 1, CFG, NOW + 1, specs, force=True)
+    assert specs
+    assert not any(p.get("edit_only") and p["name"] == "m:100#²" for p in specs[0]["parts"]["manifest"])
+
+
+
+def test_changed_active_named_body_uses_exact_prior_but_unchanged_and_new_do_not(led):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    first = _latest_render(led)
+    _deliver_bodies(led, first, "original", n=2100)
+    with led.db:
+        led.db.execute("UPDATE messages SET body_text='変更後の現在本文',content_hash=? WHERE message_id=100", ("a" * 64,))
+    _msg(led, 300, parent=100, body="追加の現在本文")
+    _dispatch(led, _intent(led, payload={"message_ids": [300]}))
+    spec = _spec(_latest_render(led))
+    bodies = {p["name"]: p for p in spec["parts"]["manifest"] if p["kind"] == "body_part"}
+    assert bodies["m:100#1"]["edit_only"] is True
+    assert bodies["m:100#1"]["prior_remote_id"] == "original/body:0001"
+    assert "edit_only" not in bodies["m:101#1"]
+    assert bodies["m:101#1"]["prior_remote_id"] == "original/body:0002"
+    assert "edit_only" not in bodies["m:300#1"] and "prior_remote_id" not in bodies["m:300#1"]

@@ -22,7 +22,7 @@ class _Reg:
         return self.recs.get(cid)
 
     def drop_followup(self, cid):
-        self.recs.pop(cid, None)
+        return self.recs.pop(cid, None) is not None
 
     def put_tokens(self, ctx):
         pass

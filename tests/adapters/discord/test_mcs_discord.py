@@ -418,6 +418,45 @@ async def _deliver(world, worker):
     return worker._bot.channels[42].sent
 
 
+def _delivered_source_signal(world):
+    """Prove the original thread through the fake SDK and deliver the signal there."""
+    world.dispatch(payload={"message_ids": [100]})
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    source = world.card(1)
+    assert source["delivery_state"] == "delivered" and source["thread_state"] == "created"
+    thread = bot.channels[int(source["thread_id"])]
+    thread.parent_id = 42
+    thread.guild = SimpleNamespace(id=7)
+    original_send = thread.send
+
+    async def send(content=None, *, embed=None, view=MISSING, allowed_mentions=None):
+        message = await original_send(content, view=view, allowed_mentions=allowed_mentions)
+        message.embed = embed
+        message.channel = thread
+        return message
+
+    thread.send = send  # SDK accepts card embeds and Components in threads.
+    world.signal("sig-1", mids=[100])
+    world.dispatch(kind="signal", pid=1, payload={
+        "signal_keys": ["sig-1"], "project_id": 1, "type": "med_followup"})
+    for _ in range(3):
+        asyncio.run(_deliver(world, worker))
+        ready = world.led.db.execute("SELECT delivery_state FROM notification_cards WHERE kind='signal'").fetchone()
+        if ready[0] == "delivered":
+            break
+    render = world.led.db.execute("SELECT r.* FROM notification_renders r "
+        "JOIN notification_cards c ON c.card_id=r.card_id WHERE c.kind='signal' "
+        "ORDER BY r.render_rev DESC LIMIT 1").fetchone()
+    spec = json.loads(render["spec_json"])
+    signal = world.card(render["card_id"])
+    assert signal["delivery_state"] == "delivered"
+    assert signal["thread_id"] == source["thread_id"] and spec["parts"]["source_thread"] is True
+    assert len(bot.channels[42].sent) == 1
+    message = next(m for m in thread.messages if str(m.id) == signal["message_id"])
+    return worker, reg, bot, spec, message, thread
+
+
 def test_delivery_end_to_end(world):
     """The full A->B->A loop with the real runner answering."""
     world.seed()
@@ -687,7 +726,7 @@ def test_kill_switch_skips_claim_then_recovers(world):
     async def run():
         await worker.tick()
         assert not reg.claims() and not bot.channels[42].sent
-        flags.write_text(json.dumps({"interactive": True}))
+        flags.write_text(json.dumps({"interactive": True, "route_epoch": 1}))
         await worker.tick()             # claim + begin
         world.drain()                   # grant
         await worker.tick()             # send + receipt
@@ -717,7 +756,7 @@ def test_send_grant_waits_for_current_flags(world, held_flags):
         await worker.tick()
         assert not bot.channels[42].sent
         assert reg.claims()
-        flags.write_text(json.dumps({"interactive": True}))
+        flags.write_text(json.dumps({"interactive": True, "route_epoch": 1}))
         await worker.tick()
         world.drain()
         assert len(bot.channels[42].sent) == 1
@@ -817,7 +856,7 @@ def test_recovery_unfinished_and_unreported(world):
                                  "result": "delivered",
                                  "message_id": "9555"})
 
-    w3, reg3, _ = world.mkworker()
+    w3, reg3, bot3 = world.mkworker()
 
     async def run():
         return await w3.reconcile()
@@ -832,13 +871,45 @@ def test_recovery_unfinished_and_unreported(world):
     assert by_attempt["cd" * 8]["error_code"] == "worker_crash"
     assert by_attempt["12" * 8]["result"] == "delivered"
     assert by_attempt["12" * 8]["message_id"] == "9555"
-    # runner-side the attempts were never granted — the drain answers
-    # both with an honest rejection and nothing is re-sent
-    world.drain()
-    results = [json.loads(p.read_text())
-               for p in (world.data / "cmd_results").glob("*.json")]
-    assert len(results) == 2
-    assert all(r["error"] == "unknown_attempt" for r in results)
+    # The runner has not reached either begin. Keep both factual
+    # witnesses intact until their attempts exist; absence cannot
+    # establish a rejection or permission to resend the original spec.
+    witnesses = {p.name: p.read_bytes()
+                 for p in (world.data / "cmd_int").glob("*.json")}
+    assert len(witnesses) == 2
+    assert reg3.is_dead(spec["delivery_id"])
+
+    async def tick_with_runner():
+        task = asyncio.create_task(w3.tick())
+        try:
+            for _ in range(500):
+                world.drain()
+                if task.done():
+                    break
+                await asyncio.sleep(0.01)
+            assert task.done(), "worker tick did not finish with the synthetic runner"
+            await task
+        finally:
+            if not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+        world.drain()
+
+    assert world.drain() == 0
+    for _ in range(2):
+        # Parts have their own grant/receipt bookkeeping. Pump the
+        # runner as in deployment, while following the original two
+        # primary witnesses separately from those legitimate commands.
+        asyncio.run(tick_with_runner())
+        for name, raw in witnesses.items():
+            assert (world.data / "cmd_int" / name).read_bytes() == raw
+            command_id = json.loads(raw)["command_id"]
+            assert not (world.data / "cmd_results" / (command_id + ".json")).exists()
+        assert bot3.channels[42].sent == []
+        assert not reg3.claims()
+        assert world.led.db.execute(
+            "SELECT count(*) FROM notification_delivery_attempts").fetchone()[0] == 0
 
 
 def test_update_op_edits_bound_message(world):
@@ -1193,22 +1264,15 @@ def test_dismiss_flow_pins_artifact(world):
     """dismiss click -> modal -> confirm -> ops.signal_dismiss with
     the render-time artifact id — a stale signal is the runner's job."""
     world.seed(mids=(100,))
-    world.signal("sig-1", mids=[100])
-    world.dispatch(kind="signal", pid=1,
-                   payload={"signal_keys": ["sig-1"], "project_id": 1,
-                            "type": "med_followup"})
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec, msg, thread = _delivered_source_signal(world)
     tok = world.token(spec, "dismiss")
     act = world.mkactions(reg, bot)
-    msg = bot.channels[42].sent[0]
 
-    ix = FakeInteraction(f"mcs:a:{tok}", message_id=msg.id)
+    ix = FakeInteraction(f"mcs:a:{tok}", message_id=msg.id, channel_id=thread.id, channel=thread)
     asyncio.run(act.on_interaction(ix))
     modal_id = ix.response.modal.custom_id[len("mcs:m:"):]
     submit = FakeInteraction(
-        f"mcs:m:{modal_id}", message_id=msg.id,
+        f"mcs:m:{modal_id}", message_id=msg.id, channel_id=thread.id, channel=thread,
         components=[{"components": [
             {"custom_id": "reason", "value": "対応済み"}]}])
     asyncio.run(world.interact(act, submit))
@@ -1221,7 +1285,7 @@ def test_dismiss_flow_pins_artifact(world):
     assert payload["signal_key"] == "sig-1"
     assert payload["expected_signal_artifact_id"] > 0
 
-    confirm = FakeInteraction(cid, message_id=msg.id)
+    confirm = FakeInteraction(cid, message_id=msg.id, channel_id=thread.id, channel=thread)
     asyncio.run(world.interact(act, confirm))
     row = world.led.db.execute(
         "SELECT content FROM artifacts WHERE kind='signal_v1' "
@@ -1493,7 +1557,7 @@ def test_confirm_wrong_actor_and_replay(world):
         "SELECT COUNT(*) c FROM requests").fetchone()["c"] == 1
     again = FakeInteraction(cid, message_id=msg.id)
     asyncio.run(act.on_interaction(again))
-    assert "期限切れ" in again.response.message["content"]
+    assert "処理中" in again.response.message["content"]   # consumed, not expired
 
 
 def test_confirm_cancel_drops_pending(world):
@@ -1570,7 +1634,7 @@ def test_cancel_during_confirm_publish_never_reports_cancelled(
     assert "処理中" in again.response.message["content"]
     assert "受け付けました" in ok.followup.sent[0]["content"]
     assert len(list((world.data / "cmd_int").glob("*.json"))) == 1
-    assert reg.confirm(cid[len("mcs:c:"):]) is None
+    assert reg.confirm(cid[len("mcs:c:"):])["consumed"] is True
 
 
 @pytest.mark.parametrize("error", [OSError("disk full"),
@@ -1657,22 +1721,15 @@ def test_dismiss_rejected_when_signal_moved(world):
     signal gains a newer transition between preview and confirm the
     runner refuses and the signal stays open."""
     world.seed(mids=(100,))
-    world.signal("sig-1", mids=[100])
-    world.dispatch(kind="signal", pid=1,
-                   payload={"signal_keys": ["sig-1"], "project_id": 1,
-                            "type": "med_followup"})
-    worker, reg, bot = world.mkworker()
-    asyncio.run(_deliver(world, worker))
-    _, spec = world.spec()
+    worker, reg, bot, spec, msg, thread = _delivered_source_signal(world)
     tok = world.token(spec, "dismiss")
     act = world.mkactions(reg, bot)
-    msg = bot.channels[42].sent[0]
 
-    ix = FakeInteraction(f"mcs:a:{tok}", message_id=msg.id)
+    ix = FakeInteraction(f"mcs:a:{tok}", message_id=msg.id, channel_id=thread.id, channel=thread)
     asyncio.run(act.on_interaction(ix))
     modal_id = ix.response.modal.custom_id[len("mcs:m:"):]
     submit = FakeInteraction(
-        f"mcs:m:{modal_id}", message_id=msg.id,
+        f"mcs:m:{modal_id}", message_id=msg.id, channel_id=thread.id, channel=thread,
         components=[{"components": [
             {"custom_id": "reason", "value": "対応済み"}]}])
     asyncio.run(world.interact(act, submit))
@@ -1684,7 +1741,7 @@ def test_dismiss_rejected_when_signal_moved(world):
     # evidence moved after the preview — the pin no longer names HEAD
     world.signal("sig-1", mids=[100, 101])
 
-    confirm = FakeInteraction(cid, message_id=msg.id)
+    confirm = FakeInteraction(cid, message_id=msg.id, channel_id=thread.id, channel=thread)
     asyncio.run(world.interact(act, confirm))
     assert "やり直してください" in confirm.followup.sent[-1]["content"]
     rows = world.led.db.execute(
@@ -2341,6 +2398,11 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         # fixture's own monkeypatch actions (shared instance)
         monkeypatch.setattr(FakeThread, "send", original)
         thread = sent[0].threads[0][1]
+        # A real discord.Thread carries these ownership fields; the
+        # exact-edit path must prove them rather than infer its parent.
+        thread.parent_id = 42
+        thread.guild = SimpleNamespace(id=7)
+        original_thread_id = thread.id
         assert not thread.sent
         assert {r["state"] for r in world.led.db.execute(
             "SELECT state FROM notification_render_parts WHERE kind='body_part'")}
@@ -2355,7 +2417,16 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         await _deliver(world, worker)
         world.drain()
         assert thread.sent                   # backfilled
-        assert "本文" in "\n".join(thread.sent)
+        body = "\n".join(thread.sent)
+        assert "📄 本文" not in body and "追記あり" in body and "スタンプ 未取得" in body
+        post = next(p for p in thread.sent if "追記あり" in p)
+        assert post.index("追記あり") < post.index("スタンプ 未取得")   # body first, stamps trail
+        assert "📋 要約" not in body and "処理待ち" not in body and "解析更新中" not in body
+        _, current_spec = world.spec()
+        assert current_spec["delivery"]["thread_id"] == str(original_thread_id)
+        assert "要約 処理待ち" in notify_cards._card_body_text(world.led.db, dict(world.led.db.execute("SELECT * FROM notification_cards WHERE card_id=1").fetchone()), {"shown": "[100,101]"})[1]
+        assert "要約 処理待ち" in "\n".join(item.get("text", "") for item in current_spec["parts"]["containers"])
+
         n = len(thread.sent)
         # re-running the same delivery posts nothing — the journal
         # already proves every part of this spec
@@ -2377,7 +2448,9 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         world.drain()
         assert len(thread.sent) == n
         assert "さらに追記" in "\n".join(thread.sent)
-        assert sum(message.edits for message in thread.messages) == 1
+        # The unchanged first chunk also reconciles its current empty drug view.
+        assert thread.messages[0].edits == 1 and thread.messages[0].view is None
+        assert sum(message.edits for message in thread.messages[1:]) == 1
 
     asyncio.run(run())
 
@@ -2894,7 +2967,7 @@ def test_summary_click_answers_ephemeral(world):
                          message_id=msg.id)
     asyncio.run(world.interact(act, ix))
     sent = "\n".join(m["content"] for m in ix.followup.sent)
-    assert "患者の記録まとめ（暫定集約）" in sent and "集約資料がまだありません" in sent
+    assert "患者の記録まとめ" in sent and "暫定集約" not in sent and "集約資料なし" in sent
     assert all(m["ephemeral"] for m in ix.followup.sent)
 
 
@@ -2911,7 +2984,7 @@ def test_report_modal_records_feedback(world):
     asyncio.run(world.interact(act, ix))
     field, note = ix.response.modal.children
     assert [o.value for o in field.component.options] == [
-        "summary", "meds", "symptoms", "requests", "vitals", "other"]
+        "summary", "urgency", "meds", "symptoms", "requests", "vitals", "other"]
     assert field.component.min_values == 1
     modal_id = ix.response.modal.custom_id[len("mcs:m:"):]
     s = FakeInteraction(f"mcs:m:{modal_id}", message_id=msg.id, components=[
@@ -2970,7 +3043,7 @@ def test_my_tasks_uses_display_name_and_project_scope(world):
     out = "\n".join(m["content"] for m in ix.followup.sent)
     assert all(m["ephemeral"] for m in ix.followup.sent)
     assert "自分のタスク（担当: 山田 花子）" in out
-    assert "⚠ 期限切れ" in out and "残薬確認" in out
+    assert "⚠期限切れ" in out and "残薬確認" in out
     # project 2 is outside this deployment's scope; 佐藤 is not the clicker
     assert "範囲外の件" not in out and "他人の件" not in out
 
@@ -2987,7 +3060,7 @@ def test_unacked_list_links_the_card(world):
     out = "\n".join(m["content"] for m in ix.followup.sent)
     assert "■ 患者A" in out and "未確認" in out
     assert f"https://discord.com/channels/7/42/{msg.id}" in out
-    assert "作業が済んだかどうかは表しません" in out
+    assert "作業が済んだかどうかは表しません" not in out
 
 
 def test_search_modal_answers_hits_ephemeral(world):
@@ -3007,8 +3080,8 @@ def test_search_modal_answers_hits_ephemeral(world):
     asyncio.run(world.interact(act, s))
     out = "\n".join(m["content"] for m in s.followup.sent)
     assert all(m["ephemeral"] for m in s.followup.sent)
-    assert "「本文」の検索結果" in out and "2件（新しい順）" in out
-    assert "まだ取得していない範囲は検索されません" in out
+    assert "「本文」の検索結果" in out and "2件（取得済み投稿・新しい順）" in out
+    assert "履歴取得:" in out          # the fetched range, no caveat sentence
     # another member cannot submit the clicker's form
     s2 = FakeInteraction(f"mcs:m:{modal_id}", user_id=2002,
                          message_id=msg.id, components=[])
@@ -3048,22 +3121,17 @@ def test_late_search_result_reaches_the_sweep_without_pings(world,
 
 def test_dismiss_reason_code_select_reaches_the_ledger(world):
     world.seed(mids=(100,))
-    world.signal("sig-1", mids=[100])
-    world.dispatch(kind="signal", pid=1,
-                   payload={"signal_keys": ["sig-1"], "project_id": 1,
-                            "type": "med_followup"})
-    worker, reg, bot, spec = _delivered(world)
-    msg = bot.channels[42].sent[0]
+    worker, reg, bot, spec, msg, thread = _delivered_source_signal(world)
     act = world.mkactions(reg, bot)
     ix = FakeInteraction(f"mcs:a:{world.token(spec, 'dismiss')}",
-                         message_id=msg.id)
+                         message_id=msg.id, channel_id=thread.id, channel=thread)
     asyncio.run(act.on_interaction(ix))
     code, note = ix.response.modal.children
     assert [o.value for o in code.component.options] == [
         "false_positive", "already_handled", "duplicate", "out_of_scope",
         "other"]
     modal_id = ix.response.modal.custom_id[len("mcs:m:"):]
-    submit = FakeInteraction(f"mcs:m:{modal_id}", message_id=msg.id,
+    submit = FakeInteraction(f"mcs:m:{modal_id}", message_id=msg.id, channel_id=thread.id, channel=thread,
                              components=[
         {"component": {"custom_id": "reason_code", "values": ["duplicate"]}},
         {"components": [{"custom_id": "note", "value": ""}]}])
@@ -3072,7 +3140,7 @@ def test_dismiss_reason_code_select_reaches_the_ledger(world):
     assert "区分: 重複" in preview["content"]
     cid = next(b.custom_id for b in preview["view"].items
                if not b.custom_id.endswith(":cancel"))
-    asyncio.run(world.interact(act, FakeInteraction(cid, message_id=msg.id)))
+    asyncio.run(world.interact(act, FakeInteraction(cid, message_id=msg.id, channel_id=thread.id, channel=thread)))
     row = json.loads(world.led.db.execute(
         "SELECT content FROM artifacts WHERE kind='signal_v1' "
         "ORDER BY artifact_id DESC LIMIT 1").fetchone()[0])
@@ -3106,3 +3174,224 @@ def test_menu_select_dispatches_like_the_button(world):
     bad.data["values"] = [token, token]
     asyncio.run(world.interact(act, bad))
     assert not bad.followup.sent
+
+
+def _drug_thread(world, monkeypatch, *, medication_count=1, older_medication=False):
+    import hashlib
+    import drug_map
+    from test_drug_map import DOCUMENT
+    world.seed()
+    medication = {"name": "キラナ", "dose": "5mg", "action": "start",
+                  "subject": "patient", "status": "current", "negated": False,
+                  "unverified": False, "evidence": "fictional quotation only"}
+    _llm_extract(world.led, 101, {"meds": [
+        {**medication, "name": "キラナ" if i == 0 else f"合成薬{i + 1}"}
+        for i in range(medication_count)]})
+    if older_medication:
+        _llm_extract(world.led, 100, {"meds": [{**medication, "name": "旧投稿薬"}]})
+    raw = json.dumps(DOCUMENT, ensure_ascii=False).encode()
+    path = world.data / "fictional-drug-map.json"
+    path.write_bytes(raw)
+    path.chmod(0o600)
+    sha = hashlib.sha256(raw).hexdigest()
+    drug_map.derive(world.led, drug_map.load(path, expected_sha256=sha))
+    monkeypatch.setitem(CFG, "drug_map", {"path": str(path), "sha256": sha})
+    world.dispatch()
+    _, reg, bot, spec = _delivered(world)
+    message = bot.channels[42].sent[0]
+    thread = message.threads[0][1]
+    body = thread.messages[0]
+    assert spec["parts"]["thread_drug_actions"] is True
+    return world.mkactions(reg, bot), reg, bot, spec, thread, body
+
+
+def test_meds_thread_button_answers_only_clicker(world, monkeypatch):
+    act, _, bot, spec, thread, body = _drug_thread(world, monkeypatch)
+    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'meds')}",
+                         channel_id=thread.id, channel=SimpleNamespace(parent_id=42),
+                         message_id=body.id)
+    assert actions_mod._origin(ix, "mcs")["thread_id"] == str(thread.id)
+    shared_body = list(thread.sent)
+    asyncio.run(world.interact(act, ix))
+    out = "\n".join(m["content"] for m in ix.followup.sent)
+    assert "キラナ" in out and all(m["ephemeral"] for m in ix.followup.sent)
+    assert not any(m["pings"] for m in ix.followup.sent)
+    assert len(bot.channels[42].sent) == 1
+    assert thread.sent == shared_body
+
+
+@pytest.mark.parametrize("delayed", [False, True])
+def test_drug_search_thread_modal_and_followup_stay_private(world, monkeypatch, delayed):
+    act, reg, bot, spec, thread, body = _drug_thread(world, monkeypatch)
+    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'drugsearch')}",
+                         channel_id=thread.id, channel=SimpleNamespace(parent_id=42),
+                         message_id=body.id)
+    shared_body = list(thread.sent)
+    asyncio.run(world.interact(act, ix))
+    assert ix.response.modal is not None
+    modal_id = ix.response.modal.custom_id[len("mcs:m:"):]
+    assert reg.modal(modal_id)["origin"]["thread_id"] == str(thread.id)
+    submit = FakeInteraction(f"mcs:m:{modal_id}", channel_id=thread.id,
+                             channel=SimpleNamespace(parent_id=42), message_id=body.id,
+                             components=[{"components": [{
+                                 "custom_id": "query", "value": "キラナ"}]}])
+    if delayed:
+        monkeypatch.setattr(actions_mod, "RESULT_WAIT_S", 0)
+        asyncio.run(act.on_interaction(submit))
+        assert reg.followups()
+        rec = next(iter(reg.followups().values()))
+        assert rec["origin"]["thread_id"] == str(thread.id)
+        world.drain()
+        asyncio.run(act.sweep_followups())
+        answers = sys.modules["discord"].Webhook.sent
+    else:
+        asyncio.run(world.interact(act, submit))
+        answers = submit.followup.sent
+    assert any("キラナ" in m["content"] for m in answers)
+    assert all(m["ephemeral"] for m in answers)
+    assert len(bot.channels[42].sent) == 1
+    assert thread.sent == shared_body
+
+
+@pytest.mark.parametrize("delayed", [False, True])
+def test_private_medication_navigation_registers_tokens_before_first_chunk(world, monkeypatch,
+                                                                         delayed):
+    _, reg, bot = world.mkworker()
+    act = world.mkactions(reg, bot)
+    token = "a" * 32
+    result = {"outcome": "applied", "action": "list",
+              "navigation": [{"id": "meds", "ui": "button", "style": "secondary",
+                              "label": "次の5件", "token": token}],
+              "token_ctx": {token: {"action": "meds", "project_id": 1}}}
+    answer = [("synthetic first", None), ("synthetic second", None)]
+    original = (sys.modules["discord"].Webhook.send if delayed else FakeFollowup.send)
+
+    async def checked_send(self, *args, **kwargs):
+        assert reg.token(token) is not None
+        return await original(self, *args, **kwargs)
+
+    if delayed:
+        monkeypatch.setattr(sys.modules["discord"].Webhook, "send", checked_send)
+        origin = {key: SETTINGS[key] for key in
+                  ("application_id", "channel_id", "guild_id", "profile")}
+        origin["thread_id"] = "7700"
+        reg.put_followup("synthetic-cmd", {"application_id": "1", "token": "synthetic",
+                                         "actor": "discord:1001", "origin": origin,
+                                         "project_ids": [1]})
+        monkeypatch.setattr(paths, "read_result", lambda *_: result)
+        monkeypatch.setattr(text, "view_answer", lambda *_: answer)
+        asyncio.run(act.sweep_followups())
+        sent = sys.modules["discord"].Webhook.sent
+    else:
+        monkeypatch.setattr(FakeFollowup, "send", checked_send)
+        interaction = FakeInteraction("synthetic", channel_id=7700,
+                                      channel=SimpleNamespace(parent_id=42))
+        asyncio.run(act._send_answer(interaction, answer, result))
+        sent = interaction.followup.sent
+    assert len(sent) == 2 and all(message["ephemeral"] for message in sent)
+    assert sent[0]["view"].items[0].custom_id == f"mcs:a:{token}"
+    assert sent[0]["view"].stopped
+    assert sent[1]["view"] is MISSING
+
+
+def test_lost_registry_thread_drug_token_refreshes_and_recovers_buttons(world, monkeypatch):
+    act, reg, bot, spec, thread, body = _drug_thread(world, monkeypatch)
+    old_token = world.token(spec, "meds")
+    reg._data["tokens"].pop(old_token)
+    missing = FakeInteraction(f"mcs:a:{old_token}", channel_id=thread.id,
+                              channel=SimpleNamespace(parent_id=42), message_id=body.id)
+    asyncio.run(world.interact(act, missing))
+    world.drain()
+    receipts = [json.loads(row[0]) for row in world.led.db.execute(
+        "SELECT receipt_json FROM command_receipts")]
+    refresh = [receipt for receipt in receipts if receipt.get("kind") == "refresh"]
+    assert len(refresh) == 1 and refresh[0]["outcome"] == "applied"
+    _, fresh = world.spec()
+    assert fresh["render_rev"] > spec["render_rev"]
+    worker, recovered_registry, _ = world.mkworker(bot=bot)
+    asyncio.run(_deliver(world, worker))
+    new_token = world.token(fresh, "meds")
+    assert new_token != old_token
+    assert recovered_registry.token(new_token) is not None
+    assert f"mcs:a:{new_token}" in [item.custom_id for item in body.view.items]
+    assert len(bot.channels[42].sent) == 1
+    recovered = world.mkactions(recovered_registry, bot)
+    click = FakeInteraction(f"mcs:a:{new_token}", channel_id=thread.id,
+                            channel=SimpleNamespace(parent_id=42), message_id=body.id)
+    asyncio.run(world.interact(recovered, click))
+    assert any("キラナ" in item["content"] for item in click.followup.sent)
+    assert all(item["ephemeral"] for item in click.followup.sent)
+
+
+@pytest.mark.parametrize("delayed", [False, True])
+def test_private_medication_navigation_pages_posts_and_rejects_other_origin(world, monkeypatch,
+                                                                          delayed):
+    act, reg, bot, spec, thread, body = _drug_thread(
+        world, monkeypatch, medication_count=6, older_medication=True)
+    initial = FakeInteraction(f"mcs:a:{world.token(spec, 'meds')}",
+                              channel_id=thread.id, channel=SimpleNamespace(parent_id=42),
+                              message_id=body.id)
+    shared_body = list(thread.sent)
+    if delayed:
+        original_wait = actions_mod.RESULT_WAIT_S
+        monkeypatch.setattr(actions_mod, "RESULT_WAIT_S", 0)
+        asyncio.run(act.on_interaction(initial))
+        assert reg.followups()
+        world.drain()
+        asyncio.run(act.sweep_followups())
+        first = sys.modules["discord"].Webhook.sent[0]
+        monkeypatch.setattr(actions_mod, "RESULT_WAIT_S", original_wait)
+    else:
+        asyncio.run(world.interact(act, initial))
+        first = initial.followup.sent[0]
+    assert first["ephemeral"]
+    assert "キラナ" in first["content"] and "合成薬6" not in first["content"]
+    controls = {button.label: button.custom_id for button in first["view"].items}
+    assert {"次の5件", "古い投稿"} <= controls.keys()
+
+    def click(custom_id, *, user_id=1001, thread_id=None):
+        interaction = FakeInteraction(custom_id, user_id=user_id,
+                                      channel_id=thread.id if thread_id is None else thread_id,
+                                      channel=SimpleNamespace(parent_id=42), message_id=999999)
+        asyncio.run(world.interact(act, interaction))
+        return interaction
+
+    # A native ephemeral response message has a new id, but remains in the same thread.
+    page = click(controls["次の5件"])
+    assert any("合成薬6" in message["content"] for message in page.followup.sent)
+    previous = next(button for button in page.followup.sent[0]["view"].items
+                    if button.label == "前の5件")
+    back = click(previous.custom_id)
+    assert any("キラナ" in message["content"] for message in back.followup.sent)
+    older = click(controls["古い投稿"])
+    assert any("旧投稿薬" in message["content"] for message in older.followup.sent)
+    assert any(button.label == "新しい投稿" for button in older.followup.sent[0]["view"].items)
+    # Adapter authorization alone is insufficient: the runner also pins actor and thread.
+    act._settings = {**SETTINGS, "allowed_user_ids": {"1001", "2002"}}
+    outsider = click(controls["次の5件"], user_id=2002)
+    fresh_next = next(button.custom_id for button in back.followup.sent[0]["view"].items
+                      if button.label == "次の5件")
+    sibling = click(fresh_next, thread_id=thread.id + 1)
+    for denied in (outsider, sibling):
+        assert denied.followup.sent
+        assert all("合成薬6" not in message["content"] for message in denied.followup.sent)
+    errors = {json.loads(row[0]).get("error") for row in world.led.db.execute(
+        "SELECT receipt_json FROM command_receipts WHERE outcome='rejected'")}
+    assert "actor_mismatch" in errors and "origin_mismatch" in errors
+    assert all(message["ephemeral"] for interaction in (initial, page, back, older)
+               for message in interaction.followup.sent)
+    assert thread.sent == shared_body and len(bot.channels[42].sent) == 1
+    assert reg.token(controls["次の5件"][len("mcs:a:"):]) is not None
+
+
+def test_thread_post_line_is_subtext_but_signal_patient_heading_is_not():
+    from adapters.discord.cards import _zones, escape_md
+    containers = [{"type": "heading", "text": "合成"},
+                  {"type": "text", "text": "10-01 09:40 合成さん", "rule": True},
+                  {"type": "text", "text": "📋 要約"}]
+    thread = {"kind": "thread", "parts": {"containers": containers, "footer": []}}
+    zones, _ = _zones(thread, escape_md)
+    assert zones[1] == ["-# 10-01 09:40 合成さん", "📋 要約"]
+    signal = {"kind": "signal", "parts": {"containers": containers, "footer": []}}
+    zones, _ = _zones(signal, escape_md)
+    assert zones[1][0] == "10-01 09:40 合成さん"

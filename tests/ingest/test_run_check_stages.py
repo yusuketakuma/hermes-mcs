@@ -450,7 +450,7 @@ def test_session_expired_alert_throttled(tmp_path):
     db.db.execute(
         "UPDATE notify_outbox SET created_at=?"
         " WHERE kind='session_expired'",
-        (time.time() - run_check.SESSION_ALERT_MIN_INTERVAL_S - 1,))
+        (time.time() - run_check.ALERT_MIN_INTERVAL_S - 1,))
     db.db.commit()
     assert run_check._alert_session_expired(db, 3, "d") is True
     n = db.db.execute(
@@ -894,6 +894,29 @@ def test_health_explains_failures_without_changing_overall(tmp_path, monkeypatch
         assert healthy["overall"] == "ok"
         assert healthy["last_ok_at"] == 1000.0
         assert healthy["state_reasons"] == []
+    finally:
+        db.close()
+
+
+def test_health_code_changed_does_not_degrade(tmp_path, monkeypatch):
+    """A mid-tick mcs/ tree change is a deploy guard, not a fault: the
+    run row still records it, but health stays ok and only reports the
+    informational reason."""
+    db = _ledger(tmp_path)
+    monkeypatch.setattr(run_check, "_prev_health", lambda: {"last_ok_at": 100.0})
+    monkeypatch.setattr(run_check, "_free_mb", lambda: 10000)
+    monkeypatch.setattr(run_check.time, "time", lambda: 1000.0)
+    try:
+        health = run_check._health(db, {"errors": ["code_changed"],
+                                        "notify": {}}, "partial")
+        assert health["overall"] == "ok"
+        assert health["last_ok_at"] == 1000.0
+        assert health["state_reasons"] == ["code_changed"]
+        real = run_check._health(
+            db, {"errors": ["code_changed", "synthetic stage error"],
+                 "notify": {}}, "partial")
+        assert real["overall"] == "degraded"
+        assert real["state_reasons"][:2] == ["stage_errors", "code_changed"]
     finally:
         db.close()
 
@@ -1446,6 +1469,74 @@ def test_with_relogin_recovers_and_replays_stage(tmp_path):
          "state": "ok"}]
     db.close()
 
+
+
+
+def _health_unread_at(tmp_path, monkeypatch, unread_at):
+    path = tmp_path / "health.json"
+    path.write_text(json.dumps({"overall": "failed", "unread_at": unread_at}))
+    monkeypatch.setattr(run_check, "HEALTH_FILE", str(path))
+
+
+def test_relogin_journals_heal_facts_without_seeding(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    _health_unread_at(tmp_path, monkeypatch, time.time() - 3 * 3600)
+    adapter = SimpleNamespace(auto_login=lambda **kw: "ok", healed_tabs=1,
+                              chrome_restarted=True)
+    result = {"errors": [], "run_id": 9}
+    assert run_check._attempt_relogin(
+        adapter, db, result, "unread", mcs_adapter.SessionExpired(status=403)) == "ok"
+    assert result["relogin_attempts"][0]["healed_tabs"] == 1
+    assert result["relogin_attempts"][0]["chrome_restarted"] is True
+    assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 0
+    db.close()
+
+
+@pytest.mark.parametrize("gap_s,outage", [(3 * 3600, True), (600, False), (None, False)])
+def test_first_collecting_run_after_any_outage_announces_and_seeds(
+        tmp_path, monkeypatch, gap_s, outage):
+    """Any outage (session, sleep, network, stopped scheduler) leaves
+    unread_at behind. The next collecting run's backfill announces every
+    newly stored row — posts read elsewhere are no longer unread — and
+    the notifying head walk is queued for whatever backfill does not reach."""
+    db = _ledger(tmp_path)
+    now = time.time()
+    for pid, archived in ((1, 0), (2, 0), (3, 1)):
+        db.db.execute("INSERT INTO patients(project_id,patient_name,is_archived)"
+                      " VALUES(?,?,?)", (pid, f"synthetic-{pid}", archived))
+    db.db.commit()
+    _health_unread_at(tmp_path, monkeypatch,
+                      None if gap_s is None else now - gap_s)
+    seen = {}
+    monkeypatch.setattr(run_check, "stage_unread", lambda *a, **k: None)
+    monkeypatch.setattr(run_check, "stage_backfill",
+                        lambda *a, **k: seen.update(k))
+    args = SimpleNamespace(jobs_only=False, no_backfill=False)
+    result = {"errors": [], "run_id": 3}
+    run_check._stage_fetch(None, db, args, {"self_posts": False}, result,
+                           time.monotonic() + 300, 3, False, 86400)
+    assert seen["notify_all_new"] is outage
+    jobs = {pid: db.job_pending("history_head", pid) for pid in (1, 2, 3)}
+    if not outage:
+        assert "outage_since" not in result and not any(jobs.values())
+        db.close()
+        return
+    assert result["outage_since"] == pytest.approx(now - gap_s)
+    assert result["outage_catchup"] == 2 and jobs[3] is None   # archived skipped
+    for pid in (1, 2):
+        payload = json.loads(jobs[pid]["payload"])
+        assert payload["notify"] is True and payload["trickle"] is False
+    db.close()
+
+
+def test_jobs_only_runs_never_open_an_outage_catchup(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    _health_unread_at(tmp_path, monkeypatch, time.time() - 3 * 3600)
+    result = {"errors": []}
+    run_check._stage_fetch(None, db, SimpleNamespace(jobs_only=True), {}, result,
+                           time.monotonic() + 300, 1, False, None)
+    assert "outage_since" not in result
+    db.close()
 
 def test_with_relogin_failed_login_escalates_with_state(tmp_path):
     """A failed auto_login aborts with 'auto_login=<state>' detail so the

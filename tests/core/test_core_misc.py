@@ -579,9 +579,11 @@ def test_prune_attachments_14d_retention(tmp_path):
     dbp = tmp_path / "ledger.db"
     db = _ledger(tmp_path)
     db.save_messages([_message(1)])
-    old_file = tmp_path / "old.bin"
+    att = tmp_path / "attachments"
+    att.mkdir()
+    old_file = att / "old.bin"
     old_file.write_bytes(b"old-payload")
-    new_file = tmp_path / "new.bin"
+    new_file = att / "new.bin"
     new_file.write_bytes(b"new-payload")
     now = time.time()
     db.db.executemany("""
@@ -732,7 +734,7 @@ def test_prune_removes_alias_and_keeps_pending_refs(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message(10), _message(11)])
     old = time.time() - maintenance.ATTACHMENT_KEEP_S - 1
-    att = tmp_path / "att"
+    att = tmp_path / "attachments"
     att.mkdir()
     live = att / "1"
     live.write_bytes(b"x")
@@ -765,9 +767,11 @@ def test_prune_removes_alias_from_previous_attachment_name(tmp_path):
     import maintenance
     db = _ledger(tmp_path)
     db.save_messages([_message(10)])
-    path = tmp_path / "1"
+    att = tmp_path / "attachments"
+    att.mkdir()
+    path = att / "1"
     path.write_bytes(b"synthetic")
-    alias = tmp_path / "1.pdf"
+    alias = att / "1.pdf"
     os.link(path, alias)
     db.db.execute(
         "INSERT INTO attachments(attachment_id,message_id,name,"
@@ -849,16 +853,18 @@ def test_prune_preserves_followup_and_retires_withdrawn_payload(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message(1), _message(2)])
     old = time.time() - maintenance.ATTACHMENT_KEEP_S - 60
+    att = tmp_path / "attachments"
+    att.mkdir()
     for aid, state in ((1, "downloaded"), (2, "withdrawn")):
-        path = tmp_path / str(aid)
+        path = att / str(aid)
         path.write_bytes(b"synthetic")
         db.db.execute(
             "INSERT INTO attachments(attachment_id,message_id,name,local_path,state,downloaded_at) "
             "VALUES(?,?, 'file.pdf',?,?,?)", (aid, aid, str(path), state, old))
     db.outbox_add("attachment_followup", 1, {"attachment_id": 1, "message_id": 1})
     assert maintenance.prune_attachments(str(tmp_path / "ledger.db")) == 1
-    assert (tmp_path / "1").exists()
-    assert not (tmp_path / "2").exists()
+    assert (att / "1").exists()
+    assert not (att / "2").exists()
     assert db.db.execute("SELECT state FROM attachments WHERE attachment_id=2").fetchone()[0] == "withdrawn"
     db.close()
 

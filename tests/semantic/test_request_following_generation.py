@@ -42,16 +42,16 @@ def extract(source, callback, **options):
         source_fingerprint=bundle["source_fingerprint"], **options)
 
 
-def test_default_prompt_and_byte_identical_generation_remain_released(source):
+def test_default_and_explicit_false_share_the_current_plan_generation(source):
     # Given / When
     implicit = extract(source, lambda _: reply())
     explicit = extract(source, lambda _: pytest.fail("default cache missed"), request_following=False)
     # Then: this is a machine cache identity, not a prose assertion.
     assert extraction._chunk_generation("fictional-model", prompts._FACT_V2_PROMPT) == \
-        "fictional-model|8754f91c029d987b"
+        "fictional-model|b7c2f15eb3182ceb|plan:1|size:3000"
     db, _, _ = source
     meta = json.loads(db.artifacts(extraction.KIND_CHUNK_V2)[0]["meta"])
-    assert meta["generation"] == "fictional-model|8754f91c029d987b"
+    assert meta["generation"] == "fictional-model|b7c2f15eb3182ceb|plan:1|size:3000"
     assert implicit["doc"] == explicit["doc"] and explicit["reused_chunks"] == [0]
     assert "generation" not in implicit and "generation" not in explicit
     assert extraction.SCHEMA_VERSION_V2 == "semantic-extraction/v2"

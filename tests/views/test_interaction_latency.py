@@ -284,3 +284,15 @@ def test_absent_policy_never_signals_role_resolution(store, profession):
     # Then: null either way, so null-vs-value cannot reveal a resolved pair.
     assert result["coverage"]["unknown_role_pairs"] is None
     assert result["role_sources"] is None
+
+
+def test_absent_policy_never_reads_roster_or_retains_role_groups(store, monkeypatch):
+    pair(store, 10, start="", end="")
+    pair(store, 20, pid=2, start="", end="")
+    monkeypatch.setattr(mcs_stats, "get_project_metadata",
+                        lambda *_args, **_kwargs: pytest.fail("non-public role resolution"))
+    result = measure(store)
+    assert result["coverage"]["valid_time_pairs"] == 2
+    assert result["coverage"]["unknown_role_pairs"] is None
+    assert result["role_sources"] is None and result["role_cells"] == []
+    assert result["role_cells_reason"] == "owner_policy_required"

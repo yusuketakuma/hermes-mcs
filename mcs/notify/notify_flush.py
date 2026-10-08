@@ -38,7 +38,7 @@ import semantic_send_gate
 import structured_view
 from mcs_util import CONF_PATH, html_to_text, load_config
 from mcs_requests import positive
-from notify_render import _signal_evidence
+from notify_render import SECTION_RULE, _extraction_failed, _signal_evidence
 # Re-exported send-gate verdicts — the canonical definitions live in
 # semantic_send_gate (the send-time semantic policy layer); the legacy
 # private names stay so existing tests and flush() catches are stable.
@@ -247,8 +247,11 @@ def _signal_unit_text(ledger, sigs: list[dict]):
     urgency = (structured_view.message_urgency(ledger.db, mid)
                if message is not None and mid is not None else None)
     if urgency:
+        suffix = (structured_view.urgency_qc_suffix(ledger.db, mid)
+                  if urgency == "llm" else "")
         head, sep, tail = text.partition("\n")
-        text = f"{head} — {structured_view.URGENCY_LABEL[urgency]}{sep}{tail}"
+        text = (f"{head} — {structured_view.URGENCY_LABEL_PLAIN[urgency]}"
+                f"{suffix}{sep}{tail}")
     return text
 
 
@@ -418,9 +421,9 @@ def _msg_rows(ledger, payload: dict, project_id) -> list:
 
 
 def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
-             skipped: dict) -> str:
+             skipped: dict, *, stamps=True, summary_suffix="") -> str:
     s_lines = structured_view.structured_lines(
-        ledger.db, r["message_id"])
+        ledger.db, r["message_id"], plain=True)
     urg = structured_view.message_urgency(ledger.db, r["message_id"])
     body = html_to_text(r["body_html"])
     cap = 500 if s_lines else 600
@@ -448,12 +451,18 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
             marks.append(nm)
         more = f"、他{len(marks) - 5}件" if len(marks) > 5 else ""
         att_line = f"\n{indent}📎 {'、'.join(marks[:5])}{more}"
-    if s_lines:
-        struct = "\n".join(f"{indent}・{ln}" for ln in s_lines)
-        return (f"{head}\n{indent}📋 要約\n{struct}\n"
-                f"{indent}───── 原文 ─────\n"
-                f"{indent}{body or '(本文なし)'}{att_line}")
-    return f"{head}\n{indent}{body or '(本文なし)'}{att_line}"
+    empty = "作成失敗" if not s_lines and _extraction_failed(ledger.db, r["message_id"]) else "処理待ち"
+    summary = ([f"{indent}📋 要約"] + [f"{indent}・" + ln.replace("\n", f"\n{indent}") for ln in s_lines]
+               if s_lines else [f"{indent}📋 要約 {empty}"])
+    if stamps:
+        from ledger import reaction_actor_summary
+        from message_metadata import get_message_metadata, is_self_sender, thread_stamp_line
+        metadata = get_message_metadata(ledger.db, r["message_id"])
+        metadata["own_post"] = is_self_sender(ledger.db, r["sender_id"])
+        summary.append(indent + thread_stamp_line(metadata, reaction_actor_summary(ledger.db, r["message_id"])))
+    return (head + "\n" + "\n".join(summary) + summary_suffix + "\n"
+            + indent + SECTION_RULE + "\n" + indent + "📄 本文\n"
+            + indent + (body or "(本文なし)") + att_line)
 
 
 def _sem_block(ledger, r) -> str:
@@ -490,8 +499,9 @@ def _message_notice(ledger, ev, payload: dict):
     skipped: dict = {}
     files = _collect_files(att_map, [r["message_id"] for r, _ in seq],
                            skipped)
-    out = [_fmt_row(ledger, ev, att_map, r, indent, skipped)
-           + ("" if indent else _sem_block(ledger, r))
+    stamps = not (_target(_config(), ev["kind"]) or "").startswith("lineworks:")
+    out = [_fmt_row(ledger, ev, att_map, r, indent, skipped, stamps=stamps,
+                    summary_suffix="" if indent else _sem_block(ledger, r))
            for r, indent in seq]
     head = f"[MCS {src}] 新着 {len(rows)} 件"
     return (head + "\n\n" + "\n\n".join(out), files)
@@ -841,12 +851,16 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
     sealed = ledger.db.execute(
         "SELECT 1 FROM notification_intent_batches "
         "WHERE event_id=?", (ev["event_id"],)).fetchone()
-    if not sealed and not notify_cards.interactive_enabled(cfg):
+    if not sealed and ev["kind"] not in ("urgent_notice", "signal") and not notify_cards.interactive_enabled(cfg):
         notify_cards.revert_to_text(ledger, ev["event_id"])
         return False
     try:
         outcome = notify_cards.dispatch_intent(ledger, ev, cfg)
-        if outcome.get("error") in ("payload_invalid", "resend_exhausted"):
+        if outcome.get("parked"):
+            res["parked"] += 1
+        elif outcome.get("held"):
+            res["failed"] += 1
+        elif outcome.get("error") in ("payload_invalid", "resend_exhausted"):
             # dispatch already quarantined it — a malformed frozen
             # payload cannot heal, so never re-arm an hourly retry
             ledger.outbox_hold(ev["event_id"], outcome["error"])
@@ -1093,7 +1107,7 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
     exe = _hermes_exe(cfg)
     exe_ok = os.path.isfile(exe) and os.access(exe, os.X_OK)
     if not exe_ok and not any(
-            _route(e) == "interactive"
+            _route(e) == "interactive" or e["kind"] in ("urgent_notice", "signal")
             or _hermes_free(cfg, _target(cfg, e["kind"])) for e in due):
         res["skipped"] = len(due)
         return res
@@ -1123,7 +1137,31 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             ledger.outbox_suppress(ev["event_id"])
             res["suppressed"] += 1
             continue
-        if _route(ev) == "interactive" \
+        # A missing text destination is a pre-send configuration error;
+        # no SQLite/restore lookup or native delivery can be attempted here.
+        if (exe_ok and _route(ev) == "text"
+                and ev["kind"] not in ("urgent_notice", "signal")
+                and not _target(cfg, ev["kind"])):
+            ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
+            res["failed"] += 1
+            continue
+        if ev["kind"] not in _ALERT_KINDS:
+            import notify_cards
+            if notify_cards.restore_pending(notify_cards.data_root(ledger)) is not None:
+                # move it out of the ORDER BY event_id window so held
+                # content can never starve a later alert (no attempt used)
+                ledger.outbox_defer(ev["event_id"], RERENDER_RETRY_S)
+                res["skipped"] += 1
+                res["restore_pending"] = res.get("restore_pending", 0) + 1
+                continue
+        if ev["kind"] in ("urgent_notice", "signal") and _route(ev) != "interactive":
+            if not _send_never_began(ev):
+                _hold_event(ledger, ev, cfg, reason=("send_outcome_unknown" if ev["kind"] == "signal" else "thread_route_after_partial"), rescue=False)
+                res["failed"] += 1
+                continue
+            ledger.db.execute("UPDATE notify_outbox SET route='interactive' WHERE event_id=?", (ev["event_id"],))
+            ledger.db.commit()
+        if (_route(ev) == "interactive" or ev["kind"] in ("urgent_notice", "signal")) \
                 and _dispatch_interactive(ledger, ev, cfg, res):
             continue
         if not exe_ok and not _hermes_free(cfg, _target(cfg, ev["kind"])):
@@ -1137,15 +1175,6 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
             res["failed"] += 1
             continue
-        if ev["kind"] not in _ALERT_KINDS:
-            import notify_cards
-            if notify_cards.restore_pending(notify_cards.data_root(ledger)) is not None:
-                # move it out of the ORDER BY event_id window so held
-                # content can never starve a later alert (no attempt used)
-                ledger.outbox_defer(ev["event_id"], RERENDER_RETRY_S)
-                res["skipped"] += 1
-                res["restore_pending"] = res.get("restore_pending", 0) + 1
-                continue
         argv = _send_argv(cfg, target)
         try:
             _send_text(ledger, ev, cfg, argv, target, res, deadline)

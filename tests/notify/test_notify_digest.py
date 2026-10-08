@@ -91,7 +91,8 @@ def test_body_is_built_outside_the_write_lock(led, monkeypatch):
 def test_counts_ids_and_no_patient_content(led):
     _patient(led, 1, name="患者A")
     _patient(led, 2, name="患者B", archived=1)
-    _seen(led, 100, T - 3600)
+    clinical = "本人が急変。至急連絡してください。秘密の本文"
+    _seen(led, 100, T - 3600, body=clinical)
     _seen(led, 101, T - 60, prof="医師")
     _seen(led, 102, T - 60, prof="")
     _seen(led, 103, T - 2 * 86400)                   # before the window
@@ -100,7 +101,7 @@ def test_counts_ids_and_no_patient_content(led):
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES('extract_v1',1,100,?,'rules',?,?)",
-        (json.dumps({"urgency": "high"}), json.dumps({"hash": f"{100:064x}"}),
+        (json.dumps({"urgency": "high", "urgency_evidence": ["本人が急変"]}), json.dumps({"hash": f"{100:064x}"}),
          T))
     led.db.commit()
     cfg = {**ON, "notify_max_age_h": 48}
@@ -108,31 +109,45 @@ def test_counts_ids_and_no_patient_content(led):
     text = _text(led)
     assert "新着 3件・緊急度高 1件・未完了タスク 0件（期限切れ 0・本日期限 0）" in text
     assert "■ 新着（患者別 1人）\n・project 1 3件（看護師 1・医師 1・職種不明 1）" in text
-    assert "■ 緊急度高 1件\n・project 1 / message 100（機械照合）" in text
-    for secret in ("秘密の本文", "患者A", "患者B", "職員"):
+    assert "■ 緊急度高 1件\n・project 1 09-24 08:40 🚨" in text
+    for secret in ("秘密の本文", "本人が急変", "患者A", "患者B", "職員"):
         assert secret not in text
-    assert "記録が見つからないことは対応がなかったことを意味せず" in text
-    assert "欠落なしの保証ではありません" in text
+    assert "記録が見つからないことは対応がなかったことを意味せず" not in text
+    assert "欠落なしの保証ではありません" not in text
 
 
 def test_patient_names_only_when_opted_in(led):
     """include_names adds the patient name next to each listed project;
     bodies and staff names never appear either way."""
     _patient(led, 1, name="患者A")
-    _seen(led, 100, T - 3600)
+    _seen(led, 100, T - 3600, body="本人が急変。至急連絡してください。秘密の本文")
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES('extract_v1',1,100,?,'rules',?,?)",
-        (json.dumps({"urgency": "high"}), json.dumps({"hash": f"{100:064x}"}),
+        (json.dumps({"urgency": "high", "urgency_evidence": ["本人が急変"]}), json.dumps({"hash": f"{100:064x}"}),
          T))
     led.db.commit()
     cfg = {**ON, "daily_digest": {**ON["daily_digest"], "include_names": True}}
     notify_digest.maybe_enqueue(led, cfg, now=T)
     text = _text(led)
-    assert "■ 緊急度高 1件\n・project 1 患者A / message 100（機械照合）" in text
-    for secret in ("秘密の本文", "職員"):
+    assert "■ 緊急度高 1件\n・患者A 09-24 08:40 🚨" in text
+    for secret in ("秘密の本文", "本人が急変", "職員"):
         assert secret not in text
 
+
+
+def test_ai_urgency_row_is_marked_at_least_as_strongly_as_rule(led, monkeypatch):
+    import structured_view
+    _patient(led, 1, name="患者A")
+    _seen(led, 100, T - 3600)
+    _seen(led, 101, T - 60)
+    monkeypatch.setattr(structured_view, "message_urgency",
+                        lambda db, m: {100: "llm", 101: "rule"}.get(m))
+    monkeypatch.setattr(structured_view, "urgency_qc_suffix", lambda db, m: "")
+    notify_digest.maybe_enqueue(led, ON, now=T)
+    text = _text(led)
+    assert "🚨 緊急度高" in text
+    assert "・project 1 09-24 08:41 🚨" in text
 
 def _summary_at(led, pid, at, comment="連携の秘密本文", empty=False):
     led.karte_summary_store(pid, pid * 10, None if empty else
@@ -180,7 +195,7 @@ def test_karte_summary_names_when_opted_in(led):
     cfg = {**ON, "daily_digest": {**ON["daily_digest"], "include_names": True}}
     notify_digest.maybe_enqueue(led, cfg, now=T)
     text = _text(led)
-    assert "■ 連携サマリー更新\n・1件: project 1 患者A" in text
+    assert "■ 連携サマリー更新\n・1件: 患者A" in text
     assert "連携の秘密本文" not in text and "職員X" not in text
 
 
@@ -192,8 +207,8 @@ def test_karte_summary_zero_line(led):
 def test_coverage_block_always_present(led):
     notify_digest.maybe_enqueue(led, ON, now=T)
     text = _text(led)
-    assert "■ 取得状況（記録ベース）" in text
-    assert "未完了として記録されたルーム: なし（完全性の保証ではありません）" in text
+    assert "■ 取得状況" in text
+    assert "未完了として記録されたルーム: なし" in text and "保証" not in text
 
     _patient(led, 1)
     _patient(led, 2, name="患者B")
@@ -210,9 +225,9 @@ def test_coverage_block_always_present(led):
     led.db.commit()
     notify_digest.maybe_enqueue(led, ON, now=_at("2026-10-02", 9))
     text = _text(led)
-    assert ("・取得未完了のルーム 2: project 1（network_error）, "
+    assert ("・取得未完了のルーム 2件: project 1（通信エラー）, "
             "project 2（unrecorded）") in text
-    assert "・取得待ち/失敗ジョブ: reply 1" in text
+    assert "・処理待ち・失敗: reply 1" in text
     assert "・本文未取得の投稿: 1件" in text
     assert "・送信保留の通知（全体）: 1件" in text
 
@@ -227,7 +242,7 @@ def test_signal_block_excludes_request_and_deadline_types(led):
     led.db.commit()
     notify_digest.maybe_enqueue(led, {**ON, "signals": {"notify": True}},
                                 now=T)
-    assert "■ アラート（open）\n・adherence_concern 1" in _text(led)
+    assert "■ 確認待ちのアラート\n・服薬状況 1" in _text(led)
 
 
 def test_signal_block_needs_signals_notify(led):
@@ -257,7 +272,7 @@ def test_stale_alerts_resurface(led):
                                 now=T)
     text = _text(led)
     assert "アラート 2件" in text
-    assert ("・滞留アラート（3日超・未確認）1件: adherence_concern"
+    assert ("・滞留アラート（3日超・未確認）1件: 服薬状況"
             in text)
 
 

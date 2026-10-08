@@ -45,6 +45,8 @@ class Actions:
             return None
         if not actor.startswith("lineworks:" + self.settings["team_id"] + ":"):
             return None
+        if context.get("actor") is not None and context["actor"] != actor:
+            return None
         if context.get("project_id") is not None:
             if not projects.project_allowed(self.settings, context["project_id"]):
                 return None
@@ -98,7 +100,9 @@ class Actions:
                     await self._more(user, context)
                     return
             elif not (context.get("action") == "task_status"
-                      or (source.get("channelId") is None and context.get("via_more"))):
+                      or (source.get("channelId") is None and (
+                          context.get("via_more") or (context.get("action") == "meds"
+                                                     and context.get("ephemeral") is True)))):
                 return
             origin = {key: self.settings[key] for key in
                       ("transport", "profile", "application_id", "team_id", "channel_id")}
@@ -216,13 +220,17 @@ class Actions:
             await self._prompt(user, session)
             return
         self.reg.drop_modal(mid)
-        if session["action"] in ("search", "mytasks", "digest"):
+        if session["action"] in (*text.VIEW_FORMS, "mytasks"):
             if session["action"] == "digest":
                 inputs = {**(projects.view_inputs(self.settings, "digest", "") or {}),
                           **text.digest_inputs(session["fields"])}
+            elif session["action"] in text.QUERY_FORMS:
+                inputs = {"query": text.search_query(session["fields"])}
+                if not inputs["query"]:
+                    await self._say(user, text.SEARCH_EMPTY)
+                    return
             else:
-                inputs = ({"query": text.search_query(session["fields"])} if session["action"] == "search"
-                          else projects.view_inputs(self.settings, "mytasks", session["fields"]["name"]))
+                inputs = projects.view_inputs(self.settings, "mytasks", session["fields"]["name"])
             if inputs and all(inputs.values()):
                 env = envelopes.notification(session["token"], actor, session["origin"], inputs)
                 self.reg.put_followup(env["command_id"], {**session, "kind": "action",
@@ -275,7 +283,7 @@ class Actions:
             except ClientError:
                 pass  # the publish failure, not the notice failure, is what callers must see
             raise
-        self.reg.drop_confirm(cid)
+        self.reg.consume_confirm(cid)
         await self._say(user, "受け付けました。")
 
     async def sweep_followups(self):
@@ -311,7 +319,8 @@ class Actions:
             if result is None or (rec.get("request_id") and result.get("request_id") != rec["request_id"]):
                 continue
             # At most once: a DM with a lost response must never be automatically posted again.
-            self.reg.drop_followup(cid)
+            if not self.reg.drop_followup(cid):
+                continue
             sent = self._sent
             try:
                 await self._deliver_followup(user, rec, result)
@@ -339,9 +348,18 @@ class Actions:
             return
         token_ctx = result.get("token_ctx") or {}
         self.reg.put_tokens({token: {**ctx, **rec["origin"], "route_epoch": self.settings["route_epoch"]}
-                             for token, ctx in token_ctx.items()})
-        for message, tasks in answer:
-            await self._say(user, message)
+                             for token, ctx in token_ctx.items()}, durable=True)
+        navigation = [{"type": "message", "label": item["label"],
+                       "postback": "mcs:a:" + item["token"]}
+                      for item in result.get("navigation") or []]
+        for index, (message, tasks) in enumerate(answer):
+            if index == 0 and navigation:
+                chunks = text.split_body(message, limit=1000, max_chunks=None)
+                await self._say(user, chunks[0], navigation)
+                for chunk in chunks[1:]:
+                    await self._say(user, chunk)
+            else:
+                await self._say(user, message)
             if tasks:
                 actions = [{"type": "message", "label": f"{tr['label']} #{task['request_id']}"[:20],
                             "postback": "mcs:a:" + tr["token"]}

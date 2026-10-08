@@ -416,7 +416,7 @@ def test_perf_scale_stages(tmp_path, monkeypatch):
         for (cid,) in led.db.execute(
                 "SELECT card_id FROM notification_cards").fetchall():
             content = notify_cards._card_content(
-                led.db, notify_cards._card_row(led.db, cid))
+                led.db, notify_cards._card_row(led.db, cid), cfg=CFG)
             led.db.execute(
                 "UPDATE notification_cards SET source_fp=?,content_fp=?"
                 " WHERE card_id=?",

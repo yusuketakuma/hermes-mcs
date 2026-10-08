@@ -43,6 +43,7 @@ def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL,
     so it never opens host configuration implicitly."""
     import semantic
     import semantic_llm
+    from clinical_chunking import PLAN_VERSION
     if local_model is None:
         local_model = semantic.llm_model()
     return payload_hash({
@@ -58,6 +59,7 @@ def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL,
         "registry": jev.REGISTRY_VERSION,
         "schema": SCHEMA_VERSION,
         "policy": POLICY_VERSION,
+        "chunk_plan": PLAN_VERSION,
     })
 
 
@@ -202,7 +204,7 @@ def invalidate_projections(ledger, scfg: dict) -> int:
             ON m.message_id=a.message_id AND m.project_id=a.project_id
           WHERE m.body_state IS NOT 'deleted'
             AND a.artifact_id=CASE WHEN a.kind='canonical_projection'
-                THEN {current_projection_id()} ELSE {current_v4_id()} END
+                THEN {current_projection_id(require_version=False)} ELSE {current_v4_id(require_version=False)} END
         """)}
     bundles, expired, revived, projects = {}, [], [], set()
     local_model = None

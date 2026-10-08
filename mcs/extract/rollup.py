@@ -20,6 +20,7 @@ from datetime import date, datetime, timedelta
 import json
 import os
 import re
+import sqlite3
 import sys
 import time
 
@@ -28,20 +29,24 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
-from ledger import Ledger, karte_summary_block
+from ledger import Ledger, LedgerReader, karte_summary_block
+from clinical_values import patient_item_scope, patient_current_vitals
+from patient_context import context_items, extract_context, merged_context
 from mcs_queries import (JST, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
-from mcs_util import HOME, acquire_run_lock
+from mcs_util import HOME, acquire_run_lock, loads_dict
+from semantic_projection import PROJECTION_VERSION
 from mcs_signals import normalize_sender_id
-from drug_map import KIND as REF_KIND, current_refs
+from drug_map import (KIND as REF_KIND, PROGRESS_KIND, candidate_note, current_refs,
+                      generation_signature)
 
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "patient_rollup"
 STALE_DAYS = 21          # message unseen this long while siblings refresh
 # Bump when persisted rollup content changes shape: dirty_projects()
 # rebuilds every row stamped with another version (5: empty fact-source vitals).
-# Rebuilds only rewrite artifacts; no notification reads patient_rollup.
-PERIOD_CHECK_VERSION = 5
+# Rebuilds rewrite artifacts; automatic card rendering does not read patient_rollup.
+PERIOD_CHECK_VERSION = 6
 # #20-C thread-level reply_state: strongest reply kind seen in the thread
 # after the request, from another sender. View-only, never a transition.
 _REPLY_STAGE = {k: i for i, k in enumerate(
@@ -68,27 +73,13 @@ def _llm_reply_kind(blob):
     return kind if isinstance(kind, str) else None
 
 
-def build_rollup(ledger, project_id: int) -> dict:
-    db = ledger.db
-    msgs = db.execute("""
-      SELECT message_id, posted_at, posted_at_ts, body_text, sender_id, sender_name, sender_type,
-             parent_id, updated_seen, body_state
-      FROM messages WHERE project_id=? ORDER BY posted_at_ts DESC, message_id DESC
-    """, (project_id,)).fetchall()
-    out: dict = {"project_id": project_id, "generated_at": time.time(),
-                 "msg_count": len(msgs),
-                 "reply_count": sum(1 for m in msgs if m["parent_id"])}
-    # 連携サマリー (#21): the newest karte_summary artifact, or None when
-    # never fetched — 空 (fetched, nothing registered) stays distinct.
-    ks = ledger.karte_summary_current(project_id)
-    out["karte_summary"] = None if ks is None else {
-        **karte_summary_block(ks), "fetched_at": ks.get("fetched_at")}
-    if not msgs:
-        return out
-    newest = msgs[0]
-    out["last_activity"] = newest["posted_at"]
-    out["last_activity_ts"] = newest["posted_at_ts"]
+def _message_artifacts(db, project_id: int):
+    """(arts, ref_mids) — current extraction blobs per message, and the
+    message ids that carry a med_ref row.
 
+    current_refs needs a med_ref row on the exact message: look it up
+    only for those instead of two queries per message (superset filter;
+    current_refs keeps its own project/binding checks)."""
     arts = {}
     for a in db.execute(f"""
       SELECT a.message_id, a.kind, a.content FROM artifacts a
@@ -102,13 +93,105 @@ def build_rollup(ledger, project_id: int) -> dict:
       ORDER BY a.artifact_id
     """, (project_id,)):
         arts.setdefault(a["message_id"], {})[a["kind"]] = a["content"]
-    # current_refs needs a med_ref row on the exact message: look it up
-    # only for those instead of two queries per message (superset filter;
-    # current_refs keeps its own project/binding checks).
     ref_mids = {r[0] for r in db.execute(
         "SELECT DISTINCT a.message_id FROM artifacts a JOIN messages m "
         "ON m.message_id=a.message_id WHERE a.kind=? AND m.project_id=?",
         (REF_KIND, project_id))}
+    return arts, ref_mids
+
+
+def _decode_blobs(blobs: dict):
+    """(v1, lm, llm, has_fact_source) for one message's current artifacts.
+
+    semantic_facts_v4 (T18) shadows canonical_projection, which shadows
+    extract_llm for the same message (a hash-current extract_llm row is
+    kept in blobs only so its reply can be read below)."""
+    llm_blob = blobs.get("extract_llm")
+    has_fact_source = False
+    llm = None
+    try:
+        v1 = json.loads(blobs["extract_v1"]) \
+            if "extract_v1" in blobs else {}
+        lm_blob = blobs.get("semantic_facts_v4") \
+            or blobs.get("canonical_projection") \
+            or llm_blob
+        lm = json.loads(lm_blob) if lm_blob else {}
+        has_fact_source = (lm_blob is not None and isinstance(lm, dict)
+                           and not lm.get("_error"))
+        if lm_blob is not None and lm_blob is llm_blob:
+            llm = lm    # one decode per unshadowed extract_llm row
+    except (ValueError, TypeError, RecursionError):
+        v1 = lm = {}
+    if not isinstance(v1, dict):
+        v1 = {}
+    if not isinstance(lm, dict):
+        lm = {}
+    if lm.get("_error"):
+        lm = {}
+    if not isinstance(llm, dict):
+        llm = loads_dict(llm_blob) or {}
+    return v1, lm, llm, has_fact_source
+
+
+def _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread):
+    """Append one message's v1/llm request rows to the rollup lists."""
+    requests.extend({"kind": rq.get("kind"), "ctx": rq.get("ctx"),
+                     "at": m["posted_at"], "mid": m["message_id"]}
+                    for rq in _dicts(v1.get("requests")))
+    # negated/speculative/ungrounded requests stay flagged for the
+    # readers; any flag other than a literal False fails closed
+    for rq in _dicts(lm.get("requests")):
+        row = {"kind": rq.get("to"), "ctx": rq.get("action"),
+               "at": m["posted_at"], "mid": m["message_id"],
+               "unverified": item_unverified(rq)}
+        # #20 request kind/condition/due_text under NEW keys — "kind"
+        # already means the addressee for mcs-read-model/1 readers
+        for src, dst in (("kind", "req_kind"), ("condition", "condition"),
+                         ("due_text", "due_text")):
+            if isinstance(rq.get(src), str) and rq[src]:
+                row[dst] = rq[src]
+        requests.append(row)
+        # Only the first 15 requests reach the read model; discarded
+        # rows need no reply scan, but all replies remain evidence.
+        if len(requests) <= 15:
+            req_thread.append((row, root, ts, sender_id))
+
+
+def build_rollup(ledger, project_id: int) -> dict:
+    db = ledger.db
+    patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
+    patient_name = patient[0] if patient else None
+    msgs = db.execute("""
+      SELECT message_id, posted_at, posted_at_ts, body_text, sender_id, sender_name, sender_type,
+             parent_id, updated_seen, body_state, content_hash
+      FROM messages WHERE project_id=? ORDER BY posted_at_ts DESC, message_id DESC
+    """, (project_id,)).fetchall()
+    out: dict = {"project_id": project_id, "generated_at": time.time(),
+                 "msg_count": len(msgs),
+                 "reply_count": sum(1 for m in msgs if m["parent_id"])}
+    # 連携サマリー (#21): the newest karte_summary artifact, or None when
+    # never fetched — 空 (fetched, nothing registered) stays distinct.
+    ks = ledger.karte_summary_current(project_id)
+    out["karte_summary"] = None if ks is None else {
+        **karte_summary_block(ks), "fetched_at": ks.get("fetched_at")}
+    context = {}
+    if ks and isinstance(ks.get("comment"), str):
+        for item in context_items({"patient_context": extract_context(ks["comment"])}, ks["comment"]):
+            context.setdefault(item["category"], []).append({
+                **item, "source": "karte_summary", "updated_at": ks.get("updated_at"),
+                "fetched_at": ks.get("fetched_at")})
+    out["patient_context"] = {"memo": context, "chat": {}}
+    from read_model import _registered_data
+    registered = _registered_data(db, "aggregate", project_id, None)
+    if registered is not None and registered["total"]:
+        out["registered_data"] = registered
+    if not msgs:
+        return out
+    newest = msgs[0]
+    out["last_activity"] = newest["posted_at"]
+    out["last_activity_ts"] = newest["posted_at_ts"]
+
+    arts, ref_mids = _message_artifacts(db, project_id)
 
     latest_vitals = None
     latest_labs = {}
@@ -143,32 +226,19 @@ def build_rollup(ledger, project_id: int) -> dict:
         senders[m["sender_name"] or "?"] = \
             senders.get(m["sender_name"] or "?", 0) + 1
         blobs = arts.get(m["message_id"], {})
-        llm_blob = blobs.get("extract_llm")
-        llm = llm_blob   # parsed below when it is the row lm came from
-        has_fact_source = False
-        try:
-            v1 = json.loads(blobs["extract_v1"]) \
-                if "extract_v1" in blobs else {}
-            # semantic_facts_v4 (T18) shadows canonical_projection,
-            # which shadows extract_llm for the same message (a
-            # hash-current extract_llm row is kept in blobs only so
-            # its reply can be read below).
-            lm_blob = blobs.get("semantic_facts_v4") \
-                or blobs.get("canonical_projection") \
-                or llm_blob
-            lm = json.loads(lm_blob) if lm_blob else {}
-            has_fact_source = (lm_blob is not None and isinstance(lm, dict)
-                               and not lm.get("_error"))
-            if lm_blob is not None and lm_blob is llm_blob:
-                llm = lm    # one decode per unshadowed extract_llm row
-        except (ValueError, TypeError, RecursionError):
-            v1 = lm = {}
-        if not isinstance(v1, dict):
-            v1 = {}
-        if not isinstance(lm, dict):
-            lm = {}
-        if lm.get("_error"):
-            lm = {}
+        v1, lm, llm, has_fact_source = _decode_blobs(blobs)
+        # Context is additive to canonical facts, never a diagnosis or a
+        # confirmed current state. Keep every item from the newest report
+        # per category; the detail read model retains all prior reports.
+        context_doc = {"patient_context": merged_context(llm, lm, m["body_text"] or "")}
+        message_context = {}
+        for item in merged_context(v1, context_doc, m["body_text"] or "") \
+                if m["body_state"] in (None, "full") else ():
+            message_context.setdefault(item["category"], []).append({
+                **item, "message_id": m["message_id"], "posted_at": m["posted_at"],
+                "content_hash": m["content_hash"], "source": "chat", "state": "reported"})
+        for category, items in message_context.items():
+            out["patient_context"]["chat"].setdefault(category, items)
         if summary is None and isinstance(lm.get("summary"), str) \
                 and lm["summary"]:
             summary = {"text": lm["summary"], "at": m["posted_at"]}
@@ -177,14 +247,20 @@ def build_rollup(ledger, project_id: int) -> dict:
             # row exists, a missing vitals key may be an intentional
             # exclusion — never resurrect the v1 rule reading over it.
             vit = lm.get("vitals") if has_fact_source else v1.get("vitals")
-            if isinstance(vit, dict) and vit:
+            vit = patient_current_vitals(vit, m["body_text"], patient_name=patient_name)
+            if vit:
                 latest_vitals = {"at": m["posted_at"], **vit}
         # v4 labs: newest report per analyte wins (msgs walk newest-first)
         for lb in _dicts(lm.get("labs")):
+            if lb.get("subject") in ("family", "other") or lb.get("status") in ("past", "planned") \
+                    or lb.get("condition") or patient_item_scope(
+                        lb, m["body_text"], patient_name=patient_name,
+                        surface=lb.get("name")) != "patient":
+                continue  # source detail retains history; it cannot fill current patient labs
             if isinstance(lb, dict) and isinstance(lb.get("name"), str) \
                     and lb["name"].strip() and lb["name"] not in latest_labs:
                 latest_labs[lb["name"]] = {"at": m["posted_at"], **lb}
-        per, chk = _period_candidates(m, v1, as_of)
+        per, chk = _period_candidates(m, v1, as_of, patient_name=patient_name)
         if med_period is None:
             med_period = per
         if chk is not None \
@@ -201,29 +277,10 @@ def build_rollup(ledger, project_id: int) -> dict:
                     and isinstance(meds[i], dict)
                     and meds[i].get("name") == ref["name"]):
                 meds[i] = {**meds[i], "ref": ref}
-        _med_states(m, v1, lm, med_state)
-        _symptom_ts(m, v1, lm, ts, sym_pos, sym_neg)
-        requests.extend({"kind": rq.get("kind"), "ctx": rq.get("ctx"),
-                         "at": m["posted_at"], "mid": m["message_id"]}
-                        for rq in _dicts(v1.get("requests")))
-        # negated/speculative/ungrounded requests stay flagged for the
-        # readers; any flag other than a literal False fails closed
+        _med_states(m, v1, lm, med_state, patient_name=patient_name)
+        _symptom_ts(m, v1, lm, ts, sym_pos, sym_neg, patient_name=patient_name)
         root = m["parent_id"] or m["message_id"]
-        for rq in _dicts(lm.get("requests")):
-            row = {"kind": rq.get("to"), "ctx": rq.get("action"),
-                   "at": m["posted_at"], "mid": m["message_id"],
-                   "unverified": item_unverified(rq)}
-            # #20 request kind/condition/due_text under NEW keys — "kind"
-            # already means the addressee for mcs-read-model/1 readers
-            for src, dst in (("kind", "req_kind"), ("condition", "condition"),
-                             ("due_text", "due_text")):
-                if isinstance(rq.get(src), str) and rq[src]:
-                    row[dst] = rq[src]
-            requests.append(row)
-            # Only the first 15 requests reach the read model; discarded
-            # rows need no reply scan, but all replies remain evidence.
-            if len(requests) <= 15:
-                req_thread.append((row, root, ts, sender_id))
+        _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread)
         # reply lives only in extract_llm; read it there even when a
         # canonical_projection / semantic_facts_v4 blob shadows lm
         kind = _llm_reply_kind(llm)
@@ -307,12 +364,15 @@ def build_rollup(ledger, project_id: int) -> dict:
     return out
 
 
-def _period_candidates(m, v1: dict, as_of):
+def _period_candidates(m, v1: dict, as_of, *, patient_name=None):
     """(med_period, next_boundary_ts) contributed by one message —
     undated/invalid periods are evidence, not current use."""
     best = None
     earliest = None
     for period in reversed(_dicts(v1.get("med_periods"))):
+        if patient_item_scope(period, m["body_text"], patient_name=patient_name,
+                              surface=period.get("raw")) != "patient":
+            continue
         try:
             start = date.fromisoformat(period["start"])
             end = date.fromisoformat(period["end"])
@@ -342,12 +402,13 @@ def _period_candidates(m, v1: dict, as_of):
     return best, earliest
 
 
-def _med_states(m, v1: dict, lm: dict, med_state: dict):
+def _med_states(m, v1: dict, lm: dict, med_state: dict, *, patient_name=None):
     """name -> (bucket, item, posted_at): every med name resolves ONCE,
     on its newest mention — a stop/negation/past report newer than a
     'current' mention suppresses it; an item missing status/subject
     and a rule-extracted name are candidates, never silently current
     (F06/F08)."""
+    has_source = "body_text" in m.keys()
     mentioned_meds = {x.get("name") for x in _dicts(lm.get("meds"))
                       if isinstance(x.get("name"), str)}
     # Chunk merging retains source order. The last mention within a
@@ -358,6 +419,10 @@ def _med_states(m, v1: dict, lm: dict, med_state: dict):
             continue
         if x.get("subject") in ("family", "other"):
             continue
+        scope = (patient_item_scope(x, m["body_text"], patient_name=patient_name, surface=name)
+                 if has_source else "patient")
+        if scope in ("family", "other", "unknown"):
+            continue
         if name in med_state:
             continue  # newest mention already decided this name
         if item_unverified(x):
@@ -365,7 +430,7 @@ def _med_states(m, v1: dict, lm: dict, med_state: dict):
         elif x.get("action") == "stop" or x.get("negated") \
                 or x.get("status") == "past":
             med_state[name] = ("suppressed", x, m["posted_at"])
-        elif med_is_patient_current(x) \
+        elif scope == "patient" and med_is_patient_current(x) \
                 and x.get("status", "current") == "current":
             med_state[name] = ("current", x, m["posted_at"])
         elif not x.get("negated") \
@@ -378,17 +443,22 @@ def _med_states(m, v1: dict, lm: dict, med_state: dict):
             med_state[name] = ("suppressed", x, m["posted_at"])
     for x in _dicts(v1.get("medications")):
         name = x.get("name")
+        if has_source and patient_item_scope(
+                x, m["body_text"], patient_name=patient_name, surface=name) != "patient":
+            continue
         if isinstance(name, str) and name and name not in med_state \
                 and name not in mentioned_meds:
             med_state[name] = ("unverified", x, m["posted_at"])
 
 
 def _symptom_ts(m, v1: dict, lm: dict, ts,
-                sym_pos: dict, sym_neg: dict):
+                sym_pos: dict, sym_neg: dict, *, patient_name=None):
     """term -> latest positive/negated ts (msgs iterated newest-first)."""
     for s in v1.get("symptoms") \
             if isinstance(v1.get("symptoms"), list) else []:
         if not isinstance(s, str) or not s:
+            continue
+        if patient_item_scope({}, m["body_text"], patient_name=patient_name, surface=s) != "patient":
             continue
         if any(x.get("text") == s for x in _dicts(lm.get("symptoms"))):
             continue
@@ -399,6 +469,8 @@ def _symptom_ts(m, v1: dict, lm: dict, ts,
             continue
         if s.get("subject") in ("family", "other") \
                 or item_unverified(s):
+            continue
+        if patient_item_scope(s, m["body_text"], patient_name=patient_name, surface=t) != "patient":
             continue
         # LLM polarity: a negation newer than a positive mention
         # RESOLVES the symptom — it must cancel v1/rule positives,
@@ -426,12 +498,111 @@ _REF_SIG_SQL = ("SELECT COUNT(*) || ':' || IFNULL(MAX(artifact_id), '') "
                 "FROM artifacts WHERE kind=? AND project_id={pid}")
 
 
+def _has_projection(db, project_id) -> bool:
+    """Whether this patient's cached clinical values may depend on canonical projections."""
+    return db.execute("SELECT 1 FROM artifacts WHERE project_id=? "
+                      "AND kind IN ('canonical_projection','semantic_facts_v4') LIMIT 1",
+                      (project_id,)).fetchone() is not None
+
+
+def current_cached_refs(db, project_id: int, roll: dict, meta) -> dict:
+    """Keep raw rollup rows while omitting dictionary annotations without current proof."""
+    signature = generation_signature(db)
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except (ValueError, TypeError, RecursionError):
+            meta = None
+    stamped = meta.get("med_ref_generation") if isinstance(meta, dict) else None
+    marker = db.execute("SELECT 1 FROM artifacts WHERE kind=? LIMIT 1",
+                        (PROGRESS_KIND,)).fetchone() is not None
+    # True absence is the old-version compatibility path, not a disabled
+    # or damaged active-generation marker. New stamped rows still fence drift.
+    mismatch = stamped is not None and stamped != signature
+    out = dict(roll)
+    sources = {}
+    for key in ("medications", "unverified_medications", "planned_medications"):
+        if not isinstance(roll.get(key), list):
+            continue
+        items = []
+        for item in roll[key]:
+            if not isinstance(item, dict) or "ref" not in item:
+                items.append(item)
+                continue
+            item = dict(item)
+            ref, last = item["ref"], item.get("last")
+            valid = (not mismatch and isinstance(ref, dict)
+                     and ref.get("name") == item.get("name")
+                     and isinstance(ref.get("dict_id"), str) and bool(ref["dict_id"])
+                     and isinstance(ref.get("dict_sha256"), str)
+                     and re.fullmatch(r"[0-9a-f]{64}", ref["dict_sha256"]) is not None
+                     and isinstance(ref.get("cands"), list))
+            if valid:
+                try:
+                    valid = bool(candidate_note(ref))
+                except (AttributeError, KeyError, TypeError, ValueError, RecursionError):
+                    valid = False
+            if valid and marker:
+                valid = False
+                if not isinstance(last, str):
+                    item.pop("ref")
+                    items.append(item)
+                    continue
+                if last not in sources:
+                    sources[last] = []
+                    try:
+                        mids = db.execute(
+                            "SELECT DISTINCT m.message_id FROM messages m JOIN artifacts a "
+                            "ON a.message_id=m.message_id WHERE m.project_id=? "
+                            "AND m.posted_at=? AND a.kind=?",
+                            (project_id, last, REF_KIND))
+                        for row in mids:
+                            sources[last].extend(current_refs(db, row[0]))
+                    except sqlite3.DatabaseError:
+                        pass  # old/incomplete schema cannot prove a dictionary annotation
+                valid = ref.get("name") == item.get("name") and ref in sources[last]
+            if not valid:
+                item.pop("ref")
+            items.append(item)
+        out[key] = items
+    # An active generation changed while the reader checked source bindings.
+    # Strip only annotations; vitals/raw medication rows remain available.
+    if generation_signature(db) != signature:
+        for key in ("medications", "unverified_medications", "planned_medications"):
+            if isinstance(out.get(key), list):
+                out[key] = [{k: v for k, v in item.items() if k != "ref"}
+                            if isinstance(item, dict) else item for item in out[key]]
+    # Old rollups can predate source-person guards. Recompute only clinical
+    # fields on the same read-only connection; preserve profiles and metadata.
+    patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
+    name = patient[0] if patient else None
+    scoped = any(patient_item_scope({}, row[0], patient_name=name) != "patient"
+                 for row in db.execute("SELECT body_text FROM messages WHERE project_id=? "
+                                       "AND body_state='full'", (project_id,)))
+    projection_stale = ((not isinstance(meta, dict) or meta.get("projection_version") != PROJECTION_VERSION)
+                        and _has_projection(db, project_id))
+    if scoped or projection_stale:
+        reader = object.__new__(LedgerReader)
+        reader.db = db
+        try:
+            current = build_rollup(reader, project_id)
+        except sqlite3.OperationalError:
+            current = {}  # a legacy snapshot cannot prove scoped current fields
+        for key in ("latest_vitals", "recent_labs", "current_med_period", "medications",
+                    "unverified_medications", "planned_medications", "recent_symptoms"):
+            if key in current:
+                out[key] = current[key]
+            else:
+                out.pop(key, None)
+    return out
+
+
 def _newest_source_ts(ledger, project_id: int) -> float:
     """Newest source stamp dirty_projects compares to generated_at."""
     return ledger.db.execute(
         "SELECT MAX(IFNULL((SELECT MAX(created_at) FROM artifacts"
         " WHERE project_id=:p AND kind IN ('extract_v1','extract_llm',"
-        "'canonical_projection','semantic_facts_v4','karte_summary')), 0),"
+        "'canonical_projection','semantic_facts_v4','karte_summary','project_metadata_v1')), 0),"
         " IFNULL((SELECT MAX(updated_seen) FROM messages"
         " WHERE project_id=:p), 0))", {"p": project_id}).fetchone()[0]
 
@@ -442,6 +613,8 @@ def rebuild(ledger, project_id: int) -> int:
     but generated_at equal) keeps the content and id; it only advances
     meta.generated_at when a newer source would otherwise keep it dirty."""
     # sign before building: a rewrite racing the build stays dirty (M5)
+    ref_generation = generation_signature(ledger.db)
+    has_projection = _has_projection(ledger.db, project_id)
     ref_sig = ledger.db.execute(_REF_SIG_SQL.format(pid="?"),
                                 (REF_KIND, project_id)).fetchone()[0]
     d = build_rollup(ledger, project_id)
@@ -466,7 +639,9 @@ def rebuild(ledger, project_id: int) -> int:
                         == PERIOD_CHECK_VERSION
                         and om.get("next_med_period_check")
                         == d.get("_next_med_period_check")
-                        and om.get("med_ref_sig") == ref_sig):
+                        and om.get("med_ref_sig") == ref_sig
+                        and om.get("med_ref_generation") == ref_generation
+                        and (not has_projection or om.get("projection_version") == PROJECTION_VERSION)):
                     # a no-op source write (LLM error row, unchanged
                     # re-save) must still clear dirty_projects, else the
                     # patient is rebuilt every tick; the stamp was taken
@@ -490,9 +665,11 @@ def rebuild(ledger, project_id: int) -> int:
              json.dumps(d, ensure_ascii=False), "rules-v1",
              json.dumps({"generated_at": d["generated_at"],
                          "period_check_version": PERIOD_CHECK_VERSION,
+                         "projection_version": PROJECTION_VERSION,
                          "next_med_period_check":
                          d.get("_next_med_period_check"),
-                         "med_ref_sig": ref_sig}), time.time()))
+                         "med_ref_sig": ref_sig,
+                         "med_ref_generation": ref_generation}), time.time()))
     return cur.lastrowid
 
 
@@ -505,12 +682,15 @@ def dirty_projects(ledger) -> list:
     content is unchanged never advances generated_at (M5)."""
     rows = ledger.db.execute("""
       SELECT p.project_id, r.g AS gen, r.period_version, r.next_check,
-        r.ref_sig, ({sig}) AS cur_ref_sig,
+        r.projection_version,
+        EXISTS(SELECT 1 FROM artifacts a WHERE a.project_id=p.project_id
+          AND a.kind IN ('canonical_projection','semantic_facts_v4')) AS has_projection,
+        r.ref_sig, r.ref_generation, ({sig}) AS cur_ref_sig,
         (SELECT MAX(a.created_at) FROM artifacts a
           WHERE a.project_id=p.project_id
             AND a.kind IN ('extract_v1','extract_llm',
                            'canonical_projection',
-                           'semantic_facts_v4','karte_summary')) AS art_ts,
+                           'semantic_facts_v4','karte_summary','project_metadata_v1')) AS art_ts,
         (SELECT MAX(m.updated_seen) FROM messages m
           WHERE m.project_id=p.project_id) AS msg_ts
       FROM patients p
@@ -525,7 +705,13 @@ def dirty_projects(ledger) -> list:
                             END) next_check,
                    MAX(CASE WHEN json_valid(meta)
                             THEN json_extract(meta,'$.med_ref_sig')
-                            END) ref_sig
+                            END) ref_sig,
+                   MAX(CASE WHEN json_valid(meta)
+                            THEN json_extract(meta,'$.med_ref_generation')
+                            END) ref_generation,
+                   MAX(CASE WHEN json_valid(meta)
+                            THEN json_extract(meta,'$.projection_version')
+                            END) projection_version
                  FROM artifacts WHERE kind=?
                  GROUP BY project_id) r ON r.project_id=p.project_id
       WHERE EXISTS (SELECT 1 FROM messages m3
@@ -533,11 +719,14 @@ def dirty_projects(ledger) -> list:
     """.replace("{sig}", _REF_SIG_SQL.format(pid="p.project_id")),
         (REF_KIND, KIND)).fetchall()
     now = time.time()
+    ref_generation = generation_signature(ledger.db)
     return [x["project_id"] for x in rows
             if type(x["gen"]) not in (int, float)
             or not 0 <= x["gen"] < 1e12
             or x["period_version"] != PERIOD_CHECK_VERSION
+            or (x["has_projection"] and x["projection_version"] != PROJECTION_VERSION)
             or x["ref_sig"] != x["cur_ref_sig"]
+            or x["ref_generation"] != ref_generation
             or (x["next_check"] is not None and (
                 type(x["next_check"]) not in (int, float)
                 or not 0 <= x["next_check"] < 1e12

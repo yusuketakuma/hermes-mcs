@@ -1394,8 +1394,9 @@ def test_failed_restore_copy_preserves_live_wal(updater, tmp_path, monkeypatch, 
         writer.close()
 
 
+@pytest.mark.parametrize("approved_swap_failure", [False, True])
 def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
-                                                       monkeypatch):
+                                                       monkeypatch, approved_swap_failure):
     """A post-merge failure on a schema-bump release that lands in the
     restore-consent hold keeps the same invariant as rollback(): the
     drainers the NEW-code child restarted are quiesced again and the
@@ -1446,6 +1447,14 @@ def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
         raise mcs_update.UpdateError(
             "post_merge_failed: postcheck_failed: new_env_error: x")
 
+    if approved_swap_failure:
+        monkeypatch.setattr(mcs_update, "_restore_consent", lambda report: "synthetic-consent")
+
+        def fail_swap(path, expected_sha, before_replace):
+            before_replace()
+            raise OSError("synthetic replace failure")
+
+        monkeypatch.setattr(mcs_update, "_replace_database", fail_swap)
     monkeypatch.setattr(mcs_update, "_run_post_merge", post_merge)
     assert mcs_update.apply("v1.1.0", sha, "cid-apply") == 2
     st = mcs_update.load_state()

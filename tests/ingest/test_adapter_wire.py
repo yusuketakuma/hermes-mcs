@@ -640,6 +640,7 @@ def test_chrome_launch_disables_on_device_model_download(monkeypatch):
     launched = []
     monkeypatch.setattr(a, "_cdp_up", lambda: bool(launched))
     monkeypatch.setattr(a, "_sleep_bounded", lambda s: None)
+    monkeypatch.setattr(a, "_stop_profile_chrome", lambda profile, chrome: False)
     monkeypatch.setattr(subprocess, "Popen",
                         lambda argv, **kw: launched.append(argv))
     a._ensure_chrome("/synthetic/profile", "/synthetic/chrome")
@@ -1446,3 +1447,135 @@ def test_project_row_without_usable_karte_id_is_tolerated(karte_id):
 def test_project_row_karte_id_lands_on_unread_patient():
     snap = _UnreadListAdapter([(100, False, [_unread_project(11)])]).list_unread()
     assert snap.patients[0].karte_id == 110
+
+
+def _tab(ident, host="www.medical-care.net"):
+    return {"type": "page", "id": ident, "url": f"https://{host}/home",
+            "webSocketDebuggerUrl": f"ws://127.0.0.1:9333/devtools/page/{ident}"}
+
+
+@pytest.mark.parametrize("kind,closed", [("network_error", True),
+                                         ("deadline_exceeded", False)])
+def test_hung_mcs_tab_is_closed_and_verified(monkeypatch, kind, closed):
+    """A browser that answers /json/version can still hold an MCS tab
+    whose renderer never answers — every token read then times out.
+    Only that tab closes; a run deadline is not evidence of a hang."""
+    a = mcs_adapter.MCSAdapter()
+    hung, live, other = "A" * 32, "B" * 32, "C" * 32
+    tabs = [_tab(hung), _tab(live), _tab(other, "example.invalid")]
+    calls = []
+
+    def cdp_json(path, method="GET", timeout=5):
+        calls.append(path)
+        if path.startswith("/json/close/"):
+            tabs[:] = [t for t in tabs if t["id"] != path.rsplit("/", 1)[1]]
+            raise mcs_adapter.MCSError("network_error")   # plain-text reply
+        return list(tabs)
+
+    def cdp_eval(ws, expr, timeout=15):
+        assert expr == "1" and timeout == mcs_adapter.HUNG_PROBE_S
+        if ws.endswith(hung):
+            raise mcs_adapter.MCSError(kind, retryable=True)
+        return 1
+
+    monkeypatch.setattr(a, "_cdp_json", cdp_json)
+    monkeypatch.setattr(a, "_cdp_eval", cdp_eval)
+    assert a._heal_hung_pages() == int(closed)
+    assert a.healed_tabs == int(closed)
+    assert (f"/json/close/{hung}" in calls) is closed
+    assert not any(p.endswith(live) or p.endswith(other) for p in calls)
+
+
+def test_ensure_chrome_heals_tabs_only_when_browser_is_up(monkeypatch):
+    a = mcs_adapter.MCSAdapter()
+    healed = []
+    monkeypatch.setattr(a, "_heal_hung_pages", lambda: healed.append(1))
+    monkeypatch.setattr(a, "_cdp_up", lambda: True)
+    a._ensure_chrome("/synthetic/profile", "/synthetic/chrome")
+    assert healed == [1]
+
+
+def test_heal_never_raises_when_cdp_listing_fails(monkeypatch):
+    a = mcs_adapter.MCSAdapter()
+
+    def down(*args, **kwargs):
+        raise mcs_adapter.MCSError("network_error")
+    monkeypatch.setattr(a, "_cdp_json", down)
+    assert a._heal_hung_pages() == 0
+
+
+
+def test_cdp_down_stops_only_this_profiles_chrome_before_relaunch(monkeypatch):
+    """A hung browser (or the profile opened without the debugging port)
+    absorbs a same-profile relaunch, so CDP never comes up. Only main
+    processes of exactly this profile are stopped; helpers, other
+    profiles and prefix-matching paths are left alone."""
+    import signal
+    a = mcs_adapter.MCSAdapter()
+    listing = "\n".join([
+        "101 /Apps/Chrome --remote-debugging-port=9333 --user-data-dir=/p/chrome-profile https://x",
+        "102 /Apps/Chrome Helper --type=renderer --user-data-dir=/p/chrome-profile",
+        "103 /Apps/Chrome --user-data-dir=/p/chrome-profile-other",
+        "104 /Apps/Chrome --user-data-dir=/p/other",
+        "105 /usr/bin/python3 /tmp/synthetic-launcher.py --user-data-dir=/p/chrome-profile",
+        "106 /Apps/Chrome Other --user-data-dir=/p/chrome-profile",
+    ])
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(stdout=listing, returncode=0))
+    alive, sent = {101, 105, 106}, []
+
+    def kill(pid, sig):
+        if sig == 0:
+            if pid not in alive:
+                raise ProcessLookupError
+            return
+        sent.append((pid, sig))
+        if sig == signal.SIGKILL:
+            alive.discard(pid)
+
+    monkeypatch.setattr(mcs_adapter.os, "kill", kill)
+    monkeypatch.setattr(a, "_sleep_bounded", lambda s: None)
+    assert a._stop_profile_chrome("/p/chrome-profile", "/Apps/Chrome") is True
+    # SIGTERM ignored (hung) -> escalates to SIGKILL, only for pid 101
+    assert sent == [(101, signal.SIGTERM), (101, signal.SIGKILL)]
+    assert a.chrome_restarted is True
+    assert a._stop_profile_chrome("relative/profile", "/Apps/Chrome") is False
+    assert a._stop_profile_chrome("/p/chrome-profile", "relative/chrome") is False
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_profile_stop_checks_configured_executable_with_spaces(monkeypatch, tmp_path, returncode):
+    import signal
+    chrome = tmp_path / "Google Chrome.app/Contents/MacOS/Google Chrome"
+    chrome.parent.mkdir(parents=True)
+    chrome.touch()
+    alias = tmp_path / "chrome-alias"
+    alias.symlink_to(chrome)
+    listing = (f"101 {chrome} --user-data-dir=/synthetic/profile\n"
+               "102 /usr/bin/python3 /synthetic/launcher.py --user-data-dir=/synthetic/profile\n")
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kw:
+                        SimpleNamespace(stdout=listing, returncode=returncode))
+    alive, sent = {101, 102}, []
+
+    def kill(pid, sig):
+        if sig == 0:
+            if pid not in alive:
+                raise ProcessLookupError
+        else:
+            sent.append((pid, sig))
+            alive.discard(pid)
+
+    monkeypatch.setattr(mcs_adapter.os, "kill", kill)
+    adapter = mcs_adapter.MCSAdapter()
+    monkeypatch.setattr(adapter, "_sleep_bounded", lambda *_: None)
+    assert adapter._stop_profile_chrome("/synthetic/profile", str(alias)) is (returncode == 0)
+    assert sent == ([(101, signal.SIGTERM)] if returncode == 0 else [])
+
+
+def test_auto_login_resets_per_attempt_journal_facts(monkeypatch, tmp_path):
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+    a.healed_tabs, a.chrome_restarted = 3, True
+    monkeypatch.setattr(a, "_ensure_chrome", lambda *a, **k: None)
+    monkeypatch.setattr(a, "_recover_session", lambda: True)
+    assert a.auto_login() == "ok"
+    assert (a.healed_tabs, a.chrome_restarted) == (0, False)

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>患者の記録経過（例）</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper: #f6f4ef;
+      --color-ink: #202124;
+      --color-muted: #66716f;
+      --color-accent: #087f5b;
+      --font-sans: 'Hiragino Sans', 'Noto Sans CJK JP', 'Yu Gothic', sans-serif;
+      --font-mono: Menlo, 'SF Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--color-paper); color: var(--color-ink);
+           min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500; letter-spacing: 0.18em;
+               text-transform: uppercase; color: var(--color-muted); margin-bottom: 0.5rem; }
+    h1 { font-size: clamp(1.4rem, 2vw + 0.75rem, 1.9rem); font-weight: 700; line-height: 1.2; margin-bottom: 1.5rem; }
+    svg { width: 100%; min-width: 1000px; display: block; }
+    @media print { .diagram-container { overflow-x: visible; } svg { min-width: 0; } }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Timeline · Diagram Design</p>
+    <h1>患者の記録経過（例）</h1>
+    <div class="diagram-container">
+      <svg viewBox="0 0 1000 288" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flow-timeline-title flow-timeline-desc">
+        <title id="flow-timeline-title">患者の記録経過（例）</title>
+        <desc id="flow-timeline-desc">退院日をDay 0とし、14日前の症状変化から14日後の再調整までの記録を日数どおりの間隔で並べた架空の経過。</desc>
+        <rect width="100%" height="100%" fill="#f6f4ef"/>
+        <text x="24" y="40" fill="#202124" font-size="14" font-weight="600" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif">患者の記録経過（例）</text>
+
+        <!-- baseline -->
+        <line x1="48" y1="128" x2="952" y2="128" stroke="#d5dcd7" stroke-width="1"/>
+
+        <!-- events (30px per day) -->
+        <circle cx="80" cy="128" r="4" fill="#202124"/>
+        <line x1="80" y1="134" x2="80" y2="148" stroke="rgba(32,33,36,0.12)" stroke-width="1"/>
+        <circle cx="290" cy="128" r="4" fill="#202124"/>
+        <line x1="290" y1="134" x2="290" y2="148" stroke="rgba(32,33,36,0.12)" stroke-width="1"/>
+        <circle cx="500" cy="128" r="6" fill="#087f5b"/>
+        <line x1="500" y1="136" x2="500" y2="148" stroke="rgba(32,33,36,0.12)" stroke-width="1"/>
+        <circle cx="590" cy="128" r="4" fill="#202124"/>
+        <line x1="590" y1="134" x2="590" y2="148" stroke="rgba(32,33,36,0.12)" stroke-width="1"/>
+        <circle cx="710" cy="128" r="4" fill="#202124"/>
+        <line x1="710" y1="134" x2="710" y2="148" stroke="rgba(32,33,36,0.12)" stroke-width="1"/>
+        <circle cx="920" cy="128" r="4" fill="#202124"/>
+        <line x1="920" y1="134" x2="920" y2="148" stroke="rgba(32,33,36,0.12)" stroke-width="1"/>
+        <g font-family="Menlo,'SF Mono',monospace" font-size="12" text-anchor="middle">
+          <text x="80" y="104" fill="#66716f">Day -14</text>
+          <text x="290" y="104" fill="#66716f">Day -7</text>
+          <text x="500" y="104" fill="#087f5b">Day 0</text>
+          <text x="590" y="104" fill="#66716f">Day +3</text>
+          <text x="710" y="104" fill="#66716f">Day +7</text>
+          <text x="920" y="104" fill="#66716f">Day +14</text>
+        </g>
+        <g font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" text-anchor="middle">
+          <text x="80" y="166" fill="#202124" font-size="12">症状変化</text>
+          <text x="290" y="166" fill="#202124" font-size="12">薬剤調整</text>
+          <text x="500" y="168" fill="#087f5b" font-size="14" font-weight="600">退院</text>
+          <text x="590" y="166" fill="#202124" font-size="12">残薬確認</text>
+          <text x="710" y="166" fill="#202124" font-size="12">再評価</text>
+          <text x="920" y="166" fill="#202124" font-size="12">再調整</text>
+        </g>
+
+        <!-- caption + legend strip -->
+        <line x1="24" y1="208" x2="976" y2="208" stroke="rgba(32,33,36,0.12)" stroke-width="0.8"/>
+        <g font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" font-size="12" fill="#66716f">
+          <text x="24" y="240">解析の軸：症状→薬剤変更・薬剤変更→再評価・退院→薬剤照合の間隔、同じ問題の再発、変化の集中</text>
+          <circle cx="32" cy="264" r="4" fill="#202124"/>
+          <text x="44" y="268">記録された出来事</text>
+          <circle cx="168" cy="264" r="6" fill="#087f5b"/>
+          <text x="182" y="268">基準日（退院）</text>
+          <text x="976" y="268" text-anchor="end">横軸は日数に比例</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

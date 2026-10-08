@@ -18,6 +18,9 @@
 launcherの選択runtime追随、backup lifecycle、緊急度の後追い通知は統合検証中です。
 この追記は1.0.13の公開・実機配備・本番有効化の完了を意味しません。
 
+手動更新を中断した場合は、更新後処理・再インストールの子プロセス群を停止・回収してから中断を返します。
+回収の待機時間を制限し、元の中断・エラーを維持します。中断を更新完了とは扱わず、完了状態は既存の復旧手順で確認してください。
+
 > **AI エージェントにセットアップさせる場合:** 対話実行用の手順書は
 > [SETUP_AGENT.md](SETUP_AGENT.md) にあります — その文書を
 > エージェントに読み込ませれば、前提確認→形態選択→設定投入→検証
@@ -53,6 +56,10 @@ cd hermes-mcs
 ./install.sh --dry-run     # 2. （任意）各ステージで何が作られるかを表示
 ./install.sh               # 3. 本導入。途中で止まっても直して再実行すれば続きから進む
 ```
+
+LLM・復旧設定のファイル配置や一時ファイルの削除に失敗した場合も、`install.sh` は非0で停止する。
+権限・空き容量を修復して再実行する。`--recovery-python` を明示した場合は、
+`--no-recovery` と併用した事前チェックでも指定を検証する。
 
 `install.sh` の最後に `Installed. Summary:` と、次に実行するコマンドが
 **フルパスで**表示される。それをそのままコピーして実行する（下はその形。
@@ -493,6 +500,8 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `urgency_escalation.after_min` / `repeat_min` | num(>0) | `30` / `60` | 初回表示から再確認までの分 / 再通知の間隔・分 |
 | `urgency_escalation.max_repeats` / `max_per_day` | int(>=0) | `2` / `10` | 1投稿あたりの再通知回数 / 1日の上限 |
 | `urgency_escalation.source` | choice | `llm` | 判定元。`llm`のみ対応 |
+| `vital_urgency.mode` | choice | `off` | `off`/`flag`/`high`。バイタル数値の決定論的閾値判定。`flag` は閾値超過の測定値を確認用に記録・表示するのみ、`high` は緊急度を高にし閾値根拠を urgency_evidence にする。バイタル欄は測定対象・時制を保持しないため、本人以外の測定・条件節・過去報告・測定不能の文脈は近傍テキストのヒューリスティックで除外する（完全ではない）。有効化・閾値は臨床責任者の承認が前提 |
+| `vital_urgency.thresholds` | object | SpO2≤90 / SBP≤90 / SBP≥180 / BS≤70 | 閾値の上書き（`spo2_lte` / `sbp_lte` / `sbp_gte` / `bs_lte`） |
 | `local_llm.url` | str | `http://127.0.0.1:8080/v1/chat/completions` | ローカルLLMのエンドポイント（loopback http のみ — それ以外は `check` が拒否。別ポートの自前サーバを指せる） |
 | `local_llm.model` | str | `Qwen3.5-9B` | モデル名（OpenAI 互換 API の `model` フィールド） |
 | `semantic.mode` | choice | `off` | `off`以外は本文を外部 Jev API へ送信。`shadow`=記録のみ / `enforce`=判定に使用 |

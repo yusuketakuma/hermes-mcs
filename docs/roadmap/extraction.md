@@ -1,5 +1,8 @@
 # 抽出の詳細計画（#11・#15・#16）
 
+本書の旧版割当・調査時点の「未実装」「未確認」は当時の記録です。末尾の2026-10-06追記に、
+1.0.16開発候補の実装と残る受入条件を区別して記録します。開発実装は公開・配備・有効化の完了ではありません。
+
 2026-10-04版割当: 旧1.0.13〜1.0.15の残件は全て安定稼働版1.0.13へ集約。
 成果物・CLI・受入の正本は[1.0.13開発計画](../development/plans/RELEASE_1.0.13.md)。
 当時の調査・設計例と現在の実装状態を区別し、既存実装は再実装しない。
@@ -52,7 +55,7 @@ F-1の未確認検査値の表示分離は現行`structured_view._lab_lines`に�
 - v1: `extract.py:56-59`（`_MED_TOKEN` / `_MED_CTX`）、`:222-234`（name + dose だけ。単位は mg / μg / mcg / g / mL）、`:64`（RULE_VERSION=6）。
   - 【実行確認】「ロキソニン錠60mg」→ name=「ロキソニン錠」、「アムロジピンOD錠5mg」→「アムロジピンOD錠」（剤形が name に混入）。
   - 【実行確認】半角カナ「ﾛｷｿﾆﾝ錠60mg」・ひらがな「ろきそにん60mg」は未抽出（NFKC 未適用）。
-- v4（extract_llm）: meds は `{name, dose, action, status, subject, negated, route, freq, prn, evidence, unverified}`。name は本文の表記そのまま（`:232-254`、`:688-744`）。merge は (name, subject, action)（`:1094-1101`）。EXTRACT_VERSION=4（`:62`）。
+- v4（extract_llm）: meds は `{name, dose, action, status, subject, negated, route, freq, prn, evidence, unverified}`。name は本文の表記そのまま（`:232-254`、`:688-744`）。merge は (name, subject, action)（`:1094-1101`）。EXTRACT_VERSION=5（urgency_evidence/unclear 追加で再抽出）。
 - semantic: FACT_KINDS に `medication_event` / `medication_exposure`（`semantic_facts.py:28-33`）。`validate_fact` は固定キーで薬剤 ID の欄がない（`:372-410`）。正規化は NFKC + casefold だけ（`:127-128`）。legacy 投影の name は最長カタカナ / 英数トークンで、特定不能は「処方薬」（`semantic_projection.py:50-57,209-232`）。v1 hint は `medication_exposure` 化（`semantic_extraction.py:827-832`）。
 - 読み側は `$.meds[].name` の表層一致で動く。優先順位は v4 > canonical > extract_llm（`mcs_queries.py:167-186`）。rollup `_med_states`（`rollup.py:255-293`）、stats `st_meds`（`mcs_stats.py:378-404`）・`st_med_mentions`（:407-422。`needs` に drug_map: :721-724、notes に「未実装」: :401-402）、signals は (room, 表層名) のエピソード（`mcs_signals.py:250-329`）、structured_view は「薬剤候補（未確認）」の規約（`structured_view.py:293`）、brain_export（`brain_export.py:201-205`）、semantic relation は表層トークンで同一実体を判定（`semantic_relations.py:43,78-87`）。
 - export: `_STATS.meds` は `action_totals` / `distinct_names`（整数）だけ（`export_schema.py:96-100`）。`_FACT` に薬剤欄なし（:107-115）。`read_model._fact_relations` は 5 キーだけをコピー（`read_model.py:229-240`）。stat は C1 で送らない。契約は aggregate 限定（`docs/specs/external-export-contract.md:22,117,137`）。
@@ -234,3 +237,60 @@ F-1の未確認検査値の表示分離は現行`structured_view._lab_lines`に�
 5. 任意: #11 stage 2（集約キー化）、#16 stage 3（LLM / VLM）、C2 向けの型付き値の出力（Q9 承認後）。
 
 全体の位置づけ: §3-1〜10（backup・修復など）と C0 / C1 が上位。#11 → #14、#15-C → C2 の順。3 項目とも C1 を遅らせない。
+
+## 2026-10-06追記: #11の1.0.16開発候補
+
+旧節の「正規化なし」や1.0.13版割当は初期調査・設計の記録であり、現在の未実装一覧ではない。
+[drug_map](../../mcs/extract/drug_map.py)と[converter](../../mcs/ops/import_drug_master.py)には、
+明示辞書の検証、出典付き候補、読取り専用lookup/辞書比較と全件容量対応が開発実装されている。
+共通CLI・型別統計・ローカル未照合レビューの統合も実装済み。共通CLIの合成51件と
+世代連動の対象合成216件は成功し、公開前の最終一式検証中。未公開・未配備。
+
+- 辞書上限は20,000 entries・8MiB・100 aliases/entry。20260930公開masterのRAM容量集計は
+  12,792 identities、出典情報を除くcompact JSON見積5,430,199 bytes、最大42 aliases。
+  pinは変更せず、[出所と変換境界](../specs/official-drug-master.md)の出典・権利・承認条件を維持する。
+- 進捗は既存artifactsの`med_ref_progress`へ辞書世代とcursorだけを保存し、100件ずつ読み進める。
+  時間切れでも後続へ再開し、巡回完了後は先頭側の原文更新も再確認する。辞書切替/無効化や
+  原抽出の変更・破損した進捗があるときに旧注釈を現行と見なさない。新schema・独立queueは追加しない。
+- `DrugMap.lookup`は一致候補、元別名、表層の剤形/用量、辞書ID/SHA/出典/承認有無と
+  未確定理由を返す。未承認辞書を明示してローカルに読取り確認しても、本番候補採用の承認にはならない。
+  `DrugMap.diff`は追加/削除/表示/種別/別名変更と、新規/拡大した別名衝突を返す。
+  表示を制限しても集計対象全体の件数を示し、入力辞書を書き換えない。
+- 型別統計はingredient/general_name/productを分ける。未照合/複数候補は原薬剤名・理由・件数を
+  ローカル確認一覧に残し、辞書未設定・無効・確認不能を単なる別名不足と区別する。
+  臨床的な薬剤同一性や中止/継続を候補だけで自動統合せず、C1への新項目公開も行わない。
+
+実装済みの読取り専用共通CLI:
+
+```text
+mcs drug lookup NAME [--dictionary PATH --sha256 HASH] [--limit N] [--json]
+mcs drug search NAME [--dictionary PATH --sha256 HASH] [--limit N] [--json]
+mcs drug compare --before PATH --before-sha256 HASH --after PATH --after-sha256 HASH [--limit N] [--json]
+mcs drug impact --before PATH --before-sha256 HASH --after PATH --after-sha256 HASH [--snapshot PATH] [--limit N] [--json]
+```
+
+lookup/searchのpath/SHAは対で指定し、省略時は既存設定を使う。compareは両世代の
+path/SHA対が必須。全コマンドのlimitは0〜200（0は集計のみ）、既定はlookup/searchが20、
+compare/impactが50。表示を制限しても全件の候補・変更件数と切詰め表示を返す。
+impactは公開snapshotの現行抽出（`derive`と同じsource）の薬剤名を両辞書で照合し直し、
+変化なし/新たに候補あり/候補なしに変化/複数候補に変化/単一候補に変化/候補が変化を言及数・名称数で数える。
+総称への変化・総称からの変化は「候補が変化」に含める。例示は薬剤名単位の集計だけで投稿・患者IDを出さず、
+未抽出・形式不正の投稿は未評価件数として分け、両辞書のID/SHA/承認有無とsnapshot世代を返す。
+件数は辞書照合の変化で診療上の問題件数ではなく、稼働DB・辞書・設定は開かず変更しない。
+searchは正規化した名称・別名・識別子の部分一致で参照候補を探し、候補付与・承認や設定変更は行わない。
+実MCS・原本DB・辞書の自動取得/有効化や人手正本への書込みは行わない。
+
+合成回帰資産は[進捗/世代](../../tests/extract/test_drug_map_incremental.py)、
+[辞書比較](../../tests/extract/test_drug_map_diff.py)、
+[更新影響](../../tests/extract/test_drug_map_impact.py)、
+[全件converter](../../tests/ops/test_import_drug_master.py)、
+[候補統計](../../tests/views/test_drug_candidates.py)。実master行をfixtureへ転載せず、
+合成の大容量・衝突・不正入力・再開を検証する。これらの存在だけを最終CI/臨床精度の成功とは扱わない。
+相互作用・禁忌チェック、成分/YJ推定、治療上の同等性、OCRの採用は今回の実装範囲外。
+
+世代の有効性は[rollup](../../mcs/extract/rollup.py)とサマリー/キャッシュ/snapshot閲覧、
+[brain_export](../../mcs/ops/brain_export.py)でも確認する。辞書切替・無効化・不正な進捗後は
+古い候補注釈だけを落とし、元の薬剤言及を残す。cursorだけの移動では安定した辞書世代を変えない。
+対象回帰は[CLI](../../tests/ops/test_mcs_drug.py)と
+[世代連動](../../tests/notify/test_summary_drug_generation.py)。成功件数は親の同タスクの隔離結果で、
+未確認の最終一式や実辞書の採用・公開・配備の成功へ転用しない。

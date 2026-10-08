@@ -84,7 +84,9 @@ def test_slack_manifest_attachment_suppresses_text_followup(led, tmp_path):
 def test_retention_waits_for_unsettled_attachment_parts(led, tmp_path, monkeypatch, part_state):
     import maintenance
     _seed_thread(led, mids=(100,))
-    blob = tmp_path / "synthetic.bin"
+    attachments = tmp_path / "data" / "attachments"
+    attachments.mkdir()
+    blob = attachments / "1"
     blob.write_bytes(b"synthetic")
     led.db.execute(
         "INSERT INTO attachments(message_id,file_id,name,local_path,bytes,sha256,state,downloaded_at) "

@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "解析途中と完了後の通知更新を共通化",
+  "summary": "長い解析の途中保存後にも既存投稿の更新を予約し、完了後は更新中表示を解除します。同じカードの描画内では各投稿の進捗を一度だけ読み取り、表示と更新判定を揃えます。",
+  "upgrade": "追加設定は不要です。適用時はgatewayとworkerを再起動してください。処理枠・1600トークン・300秒timeoutは維持し、途中の事実を完成した抽出として公開しません。",
+  "details": ["共有refresh関数はcommit済みの途中保存と最終結果から既存durable rendering経路を利用し、DB処理中にSDK送信しない。", "原投稿・送信先・権限と不確定送信の排他制御を維持し、進捗だけで確認の世代を取り消さない。", "1render内の進捗読取りをローカルdictで共有し、globalcacheや新しい常駐処理を加えない。", "確認済みの互換import・独立復旧・migrationは保持し、安全な根拠のない削除やフォルダ移動は行わない。"],
+  "refs": ["mcs/notify/extraction_refresh.py", "mcs/notify/notify_render.py", "mcs/extract/v4/extract_llm.py", "mcs/semantic/semantic_extraction.py", "mcs/semantic/semantic_drain.py"]
+}

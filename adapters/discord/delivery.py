@@ -77,22 +77,45 @@ class DeliveryWorker(worker.DeliveryWorker):
                 and not cards.single_post_ready(self._bot):
             return {"result": "not_sent",
                     "error_code": "retry_policy_unknown"}
-        channel = await self._channel(delivery["channel_id"])
         if op == "revoke":
             mid = delivery.get("message_id")
             if not mid:
-                return {"result": "not_sent",
-                        "error_code": "no_target"}
+                return {"result": "not_sent", "error_code": "no_target"}
             try:
+                # A sealed delete targets the delivered reply even when its
+                # original evidence disappeared or its thread is archived.
+                source_thread = spec["parts"].get("source_thread") is True
+                channel = await self._channel(delivery["thread_id"] if source_thread else delivery["channel_id"])
+                if source_thread:
+                    parent = getattr(channel, "parent_id", getattr(getattr(channel, "parent", None), "id", None))
+                    guild = getattr(getattr(channel, "guild", None), "id", None)
+                    if (str(channel.id) != delivery["thread_id"] or str(parent) != delivery["channel_id"]
+                            or str(guild) != delivery.get("guild_id")):
+                        return {"result": "not_sent", "error_code": "thread_scope_mismatch"}
                 msg = await _read(channel.fetch_message(int(mid)))
                 await msg.delete()
             except Exception as exc:
                 status = getattr(exc, "status", None)
                 if isinstance(status, int) and status in REVOKE_GONE_STATUS:
-                    # already gone — the revoke goal holds
                     return {"result": "delivered", "message_id": mid}
                 raise
             return {"result": "delivered", "message_id": mid}
+        channel = await self._channel(delivery["channel_id"])
+        if spec["parts"].get("thread_notice") is True or spec["parts"].get("source_thread") is True:
+            notice = spec["parts"].get("thread_notice") is True
+            if notice and op != "notice":
+                return {"result": "not_sent", "error_code": "thread_scope_mismatch"}
+            thread = await self._channel(delivery["thread_id"])
+            parent = getattr(thread, "parent_id", getattr(getattr(thread, "parent", None), "id", None))
+            guild = getattr(getattr(thread, "guild", None), "id", None)
+            # an auto-archived thread reopens on send (Discord unarchives
+            # it); only a locked one refuses the post
+            if (str(thread.id) != delivery["thread_id"]
+                    or (notice and str(thread.id) != delivery.get("message_id"))
+                    or str(parent) != delivery["channel_id"] or str(guild) != delivery.get("guild_id")
+                    or getattr(thread, "locked", False)):
+                return {"result": "not_sent", "error_code": "thread_scope_mismatch"}
+            channel = thread
         if op == "update":
             mid = delivery.get("message_id")
             if not mid:
@@ -133,6 +156,8 @@ class DeliveryWorker(worker.DeliveryWorker):
             thread = await self._channel(ctx["thread_id"])
             ctx["thread"] = thread
         if part["kind"] == "attachment_part" and part.get("unavailable"):
+            if part.get("edit_only") is True:
+                return await self._edit_only_prior(spec, thread, part, cards.escape_md(part["caption"]), ctx)
             # no file to send — its caption is the visible line
             if not part.get("caption"):
                 return {"result": "not_sent",
@@ -149,8 +174,14 @@ class DeliveryWorker(worker.DeliveryWorker):
             # the escaped text is also what remote matching compares
             body = cards.escape_md(
                 spec["parts"]["thread_body_parts"][i])
-            return await self._text_part(spec, thread, part, body, ctx)
+            update_view = i == 0 and spec["parts"].get("thread_drug_actions") is True
+            view = cards.thread_drug_view(spec) if update_view else None
+            return await self._text_part(spec, thread, part, body, ctx,
+                                         view=view, update_view=update_view)
         if part["kind"] == "attachment_part":
+            if part.get("edit_only") is True:
+                return await self._edit_only_prior(spec, thread, part, cards.escape_md(part["caption"]), ctx,
+                                                   attachment=True)
             mid = await self._reuse_prior_file(
                 thread, part.get("prior_remote_id"), ctx)
             if mid is not None:
@@ -176,14 +207,17 @@ class DeliveryWorker(worker.DeliveryWorker):
         return {"result": "not_sent", "error_code": "unsupported_part"}
 
     async def _text_part(self, spec: dict, thread, part: dict, body: str,
-                         ctx: dict) -> dict:
+                         ctx: dict, *, view=None, update_view=False) -> dict:
         """Post one text message into the thread — deduped against this
         bot's history and rewritten in place when its text changed."""
+        if part.get("edit_only") is True:
+            return await self._edit_only_prior(spec, thread, part, body, ctx, view=view)
         if spec["op"] == "update" or spec["delivery"].get("thread_id"):
             # writing into a pre-existing thread — a chunk whose
             # text is already remote binds to that message id
             # instead of posting a duplicate (remote-verified)
-            mid = await self._remote_match(thread, body, ctx)
+            mid = await self._remote_match(
+                thread, body, ctx, view=view, update_view=update_view)
             if mid is not None:
                 return {"result": "delivered",
                         "remote_id": str(mid)}
@@ -191,13 +225,15 @@ class DeliveryWorker(worker.DeliveryWorker):
             # (the extraction arrived, a reply joined): rewrite that
             # post so the thread keeps one post per chunk
             mid = await self._rewrite_prior(
-                thread, part.get("prior_remote_id"), body, ctx)
+                thread, part.get("prior_remote_id"), body, ctx,
+                view=view, update_view=update_view)
             if mid is not None:
                 return {"result": "delivered",
                         "remote_id": str(mid)}
         sent = await cards.single_post(
             self._bot, partial(thread.send, body,
-                               allowed_mentions=cards.no_pings()))
+                               allowed_mentions=cards.no_pings(),
+                               **({"view": view} if view is not None else {})))
         rid = getattr(sent, "id", None)
         if not rid:
             # the wire call completed but carries no provable
@@ -249,7 +285,8 @@ class DeliveryWorker(worker.DeliveryWorker):
         ctx["thread"] = thread
         return {"result": "delivered", "remote_id": str(thread.id)}
 
-    async def _remote_match(self, thread, text: str, ctx: dict):
+    async def _remote_match(self, thread, text: str, ctx: dict, *,
+                            view=None, update_view=False):
         """Bounded history scan — a content match binds the part to the
         real remote message id (remote-verified delivery); a miss means
         send. Only messages authored by this bot may bind: historical or
@@ -267,9 +304,60 @@ class DeliveryWorker(worker.DeliveryWorker):
                 continue                # not ours — never binds a part
             if m.id in ctx["consumed"] or m.content != text:
                 continue
+            if update_view or view is not None:
+                # Text equality cannot prove current runner tokens are installed.
+                try:
+                    await m.edit(view=view, allowed_mentions=cards.no_pings())
+                except Exception as exc:
+                    if worker.is_definitive_reject(exc):
+                        return None     # rejected edit: verify prior or post afresh
+                    raise
             ctx["consumed"].add(m.id)
             return m.id
         return None
+
+    async def _edit_only_prior(self, spec, thread, part, text, ctx, *, view=None, attachment=False):
+        """Edit only the exact owned thread post; uncertain ownership or edits never POST."""
+        prior = part.get("prior_remote_id")
+        delivery = spec["delivery"]
+        parent = getattr(thread, "parent_id", getattr(getattr(thread, "parent", None), "id", None))
+        guild = getattr(getattr(thread, "guild", None), "id", None)
+        if (spec.get("op") != "update" or str(thread.id) != delivery.get("thread_id") or str(thread.id) != str(ctx.get("thread_id"))
+                or str(parent) != delivery.get("channel_id") or str(guild) != delivery.get("guild_id")):
+            return {"result": "unknown", "error_code": "edit_thread_unverified"}
+        try:
+            pid = int(prior)
+        except (TypeError, ValueError):
+            return {"result": "unknown", "error_code": "edit_target_unverified"}
+        me = getattr(getattr(self._bot, "user", None), "id", None)
+        if me is None or pid in ctx["consumed"]:
+            return {"result": "unknown", "error_code": "edit_target_unverified"}
+        verified = False
+        try:
+            msg = await thread.fetch_message(pid)
+            channel = getattr(msg, "channel", None)
+            if (getattr(msg, "id", None) != pid or getattr(getattr(msg, "author", None), "id", None) != me
+                    or (channel is not None and str(channel.id) != str(thread.id))):
+                return {"result": "unknown", "error_code": "edit_target_unverified"}
+            if attachment and not any(
+                    getattr(a, "filename", None) == part.get("name")
+                    and getattr(a, "size", None) == part.get("bytes") for a in getattr(msg, "attachments", ())):
+                return {"result": "unknown", "error_code": "edit_file_unverified"}
+            verified = True
+            response = await msg.edit(content=text, view=view, allowed_mentions=cards.no_pings())
+            if response is not None:
+                channel = getattr(response, "channel", None)
+                if (getattr(response, "id", None) != pid
+                        or (channel is not None and str(channel.id) != str(thread.id))):
+                    return {"result": "unknown", "error_code": "edit_response_unverified"}
+        except Exception as exc:
+            if getattr(exc, "status", None) in (404, 410):
+                return {"result": "delivered", "remote_id": str(prior)}
+            if verified and worker.is_definitive_reject(exc):
+                return {"result": "not_sent", "error_code": f"http_{exc.status}"}
+            return {"result": "unknown", "error_code": "edit_result_unknown"}
+        ctx["consumed"].add(pid)
+        return {"result": "delivered", "remote_id": str(prior)}
 
     async def _own_prior(self, thread, prior, ctx: dict):
         """The runner-named earlier message, only when it still exists
@@ -294,7 +382,8 @@ class DeliveryWorker(worker.DeliveryWorker):
             return None
         return msg
 
-    async def _rewrite_prior(self, thread, prior, text: str, ctx: dict):
+    async def _rewrite_prior(self, thread, prior, text: str, ctx: dict, *,
+                             view=None, update_view=False):
         """Edit this bot's earlier post of the same chunk in place and
         return its id. Only a message this bot authored in this thread
         can be rewritten — a missing, foreign or already-bound target,
@@ -307,7 +396,8 @@ class DeliveryWorker(worker.DeliveryWorker):
         if msg is None:
             return None
         try:
-            await msg.edit(content=text, allowed_mentions=cards.no_pings())
+            await msg.edit(content=text, allowed_mentions=cards.no_pings(),
+                           **({"view": view} if update_view or view is not None else {}))
         except Exception as exc:
             if worker.is_definitive_reject(exc):
                 return None       # the edit did not commit — post afresh

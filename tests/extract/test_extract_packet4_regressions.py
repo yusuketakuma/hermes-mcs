@@ -16,6 +16,7 @@ import extract_bench
 import extract_llm
 import rollup
 import structured_view
+from semantic_projection import PROJECTION_VERSION
 from extract_testkit import _hash, _ledger, _message
 
 
@@ -115,7 +116,7 @@ def test_empty_current_fact_source_never_revives_rule_vitals(db, kind):
                     meta={"hash": _hash(db), "rule_version": extract.RULE_VERSION})
     db.artifact_add(kind, "{}", project_id=1, message_id=1,
                     meta={"hash": _hash(db), "extract_version": extract_llm.EXTRACT_VERSION,
-                          "engine_version": 4})
+                          "engine_version": 4, "projection_version": PROJECTION_VERSION})
     assert rollup.build_rollup(db, 1).get("latest_vitals") is None
 
 
@@ -141,7 +142,10 @@ def test_qualitative_lab_prefix_does_not_confirm_a_different_result(db, suffix):
     db.artifact_add("extract_llm", json.dumps({"labs": [{**raw, "normalized": {
         "confirmation": "quote_supported"}}]}), project_id=1, message_id=1,
         meta={"hash": _hash(db), "extract_version": extract_llm.EXTRACT_VERSION})
-    assert "検査候補（未確認）: 合成検査Q 陰性" in structured_view.structured_lines(db.db, 1)
+    lines = structured_view.structured_lines(db.db, 1)
+    qualifier = "(条件・可能性の記載)" if suffix == "かもしれません" else ""
+    assert "検査候補（未確認）: 合成検査Q 陰性" + qualifier in lines
+    assert not any(line.startswith("検査:") for line in lines)
 
 
 @pytest.mark.parametrize("ending", ["", "。", "です。", "でした。", "、再確認します"])

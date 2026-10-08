@@ -27,8 +27,9 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
+from patient_context import extract_context
 from ledger import Ledger, LedgerReader
-from mcs_util import HOME, acquire_run_lock, loads_dict
+from mcs_util import HOME, acquire_run_lock, loads_dict, locate_quote_span
 
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "extract_v1"
@@ -46,7 +47,8 @@ _ADHERENCE = ("残薬", "飲み忘れ", "飲み残し", "未使用", "服薬不�
               "アドヒアランス", "一包化", "お薬カレンダー", "自己注射",
               "残あり", "残なし")
 _URGENT = re.compile(
-    r"至急|緊急(?:搬送|受診|対応)?|早急|すぐに|急ぎ|救急(?:搬送|受診)?|搬送")
+    r"至急|緊急(?!時|連絡(?:先|網|票|カード)|用|体制)(?:搬送|受診|対応)?|早急|すぐに|急ぎ|"
+    r"救急(?:搬送|受診)?|搬送(?!先|元|方法|手段|経路|用|体制|依頼書)")
 _URGENT_CLAUSES = re.compile(
     r"[。！？!?;\n]|しかし|ただし|けれど(?:も)?|"
     r"(?<=ない)が|(?<=ません)が|(?<=した)が|(?<=ました)が|(?<=です)が")
@@ -60,14 +62,243 @@ _URGENT_NONCURRENT = re.compile(
 # A request in the same clause stays current even after a time word
 # (「明日、至急ご連絡ください」); only plans/reports are cancelled.
 _URGENT_REQUEST = re.compile(r"ください|下さい|お願い|ほしい|欲しい|願います")
+# A contingency head directly before the urgent word (「悪化した場合は救急搬送」
+# 「続くようなら至急連絡」) describes a plan, not a current need; a clock time
+# (「10時に至急」) is not a contingency.
+_URGENT_CONDITIONAL = re.compile(
+    r"(?:(?<![0-9０-９])(?:場合|際|とき|時|折)(?:に|には|は|も|の)?|"
+    r"(?:なら|ようなら|たら|ましたら|れば|ければ|あれば|ようであれば|ようでしたら))"
+    r"[、,\s　]*$")
+_URGENT_HYPOTHETICAL = re.compile(r"もし|万一|万が一")
+# 「すぐに」 alone is a plain adverb (「すぐに眠れる」); it is urgent only with an
+# action or request in its scope.
+_URGENT_SOON_ACTION = re.compile(
+    r"ください|下さい|お願い|願います|ほしい|欲しい|必要|搬送|受診|往診|連絡|中止|"
+    r"対応|確認|報告|相談|救急|呼(?:ん|び)|来て|向か|駆けつけ")
 _URGENT_INACTIVE = re.compile(
-    r"^(?:性|(?:の|な|に)?(?:対応|連絡|確認|受診|処置|搬送|要請))?"
+    r"^(?:性|度|(?:の|な|に)?(?:対応|連絡|確認|受診|処置|搬送|要請))?"
     r"の?(?:は|も|が|を)?(?:で(?:は)?|じゃ|(?:し|され)(?:て(?:い|おり?)?)?|する)?"
     r"(?:ありません|ません|なかった|ない|なく|なし|"
     r"不要(?!では(?:ありません|ない))|必要(?:は|が)?(?:ありません|ない|なし)|"
+    r"低い|低く|低め|高くない|高くありません|"
     r"済み|完了|(?:た|ました|された|されました)"
     # A past ending closes the phrase; 「ただちに」「たすけて」 are not past tense.
     r"(?=$|[、,]|ので|ため|から|けど|けれど|が|と))")
+
+_SELF_PERSON = r"ご本人|患者本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?"
+_FAMILY_PERSON = r"ご家族|家族|お母(?:さん|様)|お父(?:さん|様)|母親|父親|祖母|祖父|義母|義父|母|父|娘(?:さん|様)?|息子(?:さん|様)?|夫|妻|兄|姉|弟|妹|孫|同居者"
+_OTHER_PERSON = r"本人以外|他者|他人|第三者|他の(?:患者|利用者)|他患者|別の(?:患者|利用者)|別患者|(?:職員|スタッフ|看護師|医師|薬剤師|ケアマネ)(?:さん|様)?"
+_CLINICAL_OWNER = (r"症状|状態|体調|意識|呼吸|体温|血圧|収縮期|拡張期|容態|病歴|入院|退院|搬送|死亡|脈拍|酸素|薬|服薬|Cr|eGFR|AST|ALT|BUN|HbA1c|Hb|Na|K|血糖|採血|検査|BP|SpO2|熱|体重|身長|weight|height|BS|Glu|glucose|BNP|INR|CRP|Alb|[胸腹頭背腰]痛|"
+                   + "|".join(map(re.escape, _SYMPTOMS)))
+_NAMED_PERSON = r"[ぁ-んァ-ヶ一-龥A-Za-z0-9]{1,16}(?:さん|様)"
+_COMPOUND_PERSON = rf"(?:{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})(?:ご本人|本人)"
+_OWNER_MODIFIER = r"(?:(?:現在|以前|過去|本日)の|強い|弱い|激しい|軽い)*"
+_PERSON = re.compile(
+    rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|私|自分|{_NAMED_PERSON})"
+    rf"(?P<link>について|の{_OWNER_MODIFIER}(?:{_CLINICAL_OWNER})|[ \t　]+(?={_CLINICAL_OWNER})|に対して|に対し|への|には|に(?={_CLINICAL_OWNER})|は|が|も|を|から|より|[:：])", re.I)
+_DIRECT_OWNER = re.compile(rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})の{_OWNER_MODIFIER}[ \t　]*$")
+_CLINICAL_ACTOR = re.compile(r"^(?:が|は)[、,\s]*[^。！？!?;；\n、,]*?を(?:開始|中止|増量|減量|変更|処方|投与|測定)")
+_CLINICAL_RECIPIENT = re.compile(rf"(?:{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})(?:に対して|に対し|への)")
+_SCOPE_HEADING = re.compile(
+    rf"(?m)^[ \t　]*(?:[【［\[](.*?)[】］\]]|([^\n:：]{{1,24}})[:：]|"
+    rf"({_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|過去|既往|現在|予定|目標|参考|基準)[ \t　]*$)[ \t　]*")
+_REPORTING = re.compile(r"^(?:より|から|が(?:報告|連絡|説明|相談|話)|は(?:報告|連絡|説明|相談|話))")
+_CURRENT_MARK = re.compile(r"現在|今も|今は|本日|今日|続いて|持続|(?:昨日|先週|先月)から|(?:昨日|先週|先月)より")
+_NONCURRENT_MARK = re.compile(r"過去|既往|以前(?!から|より)|先月(?!から|より)|先週(?!から|より)|昨年|一昨年")
+_CONDITIONAL_MARK = re.compile(
+    r"もし|万一|万が一|(?:場合|とき|(?<![0-9０-９一二三四五六七八九十])(?<!採血)(?<!測定)(?<!検査)(?<!服用)(?<!投与)(?<!訪問)(?<!往診)時)(?:は|には|に)|"
+    r"なら(?!ない|なく|なかった|れ|ず|ぬ)|たら(?!しい)|ければ")
+_SCOPE_BREAK = re.compile(r"[。！？!?;；\n、,]|しかし|ただし|だが|けれど(?:も)?|一方")
+_REASON_CUE = re.compile(r"至急|緊急|救急|搬送|急変|意識|反応|呼吸|SpO2|血圧|体温|発熱|高熱|疼痛|痛み|[胸腹頭背腰]痛|苦し|出血|転倒|死亡|逝去|心肺|酸素|けいれん|痙攣|脱水|嘔吐|吐血|血尿|冷汗|(?:BP|BS|Glu)\s*\d", re.I)
+_CLINICAL_REASON_CUE = re.compile(r"救急(?:搬送|受診)|搬送|急変|意識|反応|呼吸|SpO2|血圧|体温|発熱|高熱|疼痛|痛み|[胸腹頭背腰]痛|苦し|出血|転倒|死亡|逝去|心肺|酸素|けいれん|痙攣|脱水|嘔吐|吐血|血尿|冷汗|(?:Cr|eGFR|K|Na|血糖|BP|BS|Glu)\s*\d", re.I)
+
+
+def clinical_urgency_quote(quote, *, symptom=None):
+    """A medical report/event is separate from an urgent reply request; this is not a severity threshold."""
+    if not isinstance(quote, str):
+        return False
+    pattern = (_CLINICAL_REASON_CUE if not isinstance(symptom, str) or not symptom.strip() else
+               re.compile(_CLINICAL_REASON_CUE.pattern + "|" + re.escape(symptom), re.I))
+    for match in pattern.finditer(quote):
+        tail = quote[match.end():]
+        prefix = r"(?:障害|消失|低下)" if match[0] == "意識" else r"困難" if match[0] == "呼吸" else ""
+        if re.match(prefix + r"(?:は|も|が|を)?(?:して|認めて|認め|はして)?(?:では|で|じゃ)?"
+                    r"(?:いません|ありません|ません|ない|なかった|なし|なく)", tail):
+            continue
+        return True
+    return False
+
+
+def urgent_request_quote(quote):
+    """Recognize urgency of a requested action without asserting a patient's clinical state."""
+    return (isinstance(quote, str) and _URGENT.search(quote) is not None
+            and (_URGENT_REQUEST.search(quote) is not None or _URGENT_SOON_ACTION.search(quote) is not None))
+
+
+def patient_clinical_quotes(body, *, patient_name=None):
+    """Source-grounded acute-event clauses, for an already established urgent request."""
+    quotes = []
+    offset = 0
+    for clause in re.split(r"[。！？!?;；\n]", body):
+        start = body.find(clause, offset)
+        offset = start + len(clause)
+        # An unrelated routine measurement must not turn a paperwork request
+        # into a clinical emergency. Cross-sentence linkage requires an
+        # explicit acute event, not a new numeric severity heuristic.
+        if not re.search(r"急変|救急(?:搬送|受診)|意識(?:を失|がない|消失|障害|低下)|呼吸(?:がない|困難|停止)|心肺停止", clause):
+            continue
+        if not clinical_urgency_quote(clause):
+            continue
+        kept, _ = patient_urgency_quotes(body, [clause], patient_name=patient_name)
+        quotes.extend(quote for quote in kept if clinical_urgency_quote(quote))
+    return list(dict.fromkeys(quotes))
+
+
+def _person_scope(person, patient_name):
+    if re.fullmatch(rf"(?:{_FAMILY_PERSON})(?:ご本人|本人)?", person):
+        return "family"
+    if re.fullmatch(rf"(?:{_OTHER_PERSON})(?:ご本人|本人)?", person):
+        return "other"
+    alias = person.removesuffix("ご本人").removesuffix("本人").removesuffix("さん").removesuffix("様")
+    known_name = (isinstance(patient_name, str) and patient_name.strip()
+                  and re.sub(r"\s+", "", alias) == re.sub(r"\s+", "", patient_name))
+    return "patient" if re.fullmatch(_SELF_PERSON, person) or known_name else "unknown"
+
+
+def patient_source_scope(body, start, end, *, patient_name=None, default="patient", provider_fields=False):
+    """Resolve an original span's reported person and explicit noncurrent scope, never from a keyword mask."""
+    if not isinstance(body, str) or not 0 <= start < end <= len(body):
+        return "unknown"
+    events, assignments = [], []
+    for match in _SCOPE_HEADING.finditer(body):
+        label = (match[1] or match[2] or match[3] or "").strip()
+        if (provider_fields and (
+                re.fullmatch(r"(?:.*(?:担当(?:医師|看護師|薬剤師|ケアマネ|スタッフ|職員)|主治医|診療医)(?:名|氏名|名前)?"
+                             r"|(?:医師|看護師|薬剤師|ケアマネ)(?:名|氏名|名前))", label)
+                or (match[2] is not None and re.fullmatch(r".+(?:医師|看護師|薬剤師|ケアマネ)", label)))
+                and not re.search(rf"{_FAMILY_PERSON}|本人|自身|自分|症状|状態|体調|既往|病歴|受診|入院|退院|体温|血圧|服薬", label)):
+            assignments.append(match.span())
+            continue  # Provider assignment/signature fields do not own the patient's schedule.
+        # A report-source heading is not the clinical subject below it.
+        if re.fullmatch(rf"(?:{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})(?:から|より)", label):
+            continue
+        if re.fullmatch(rf"{_COMPOUND_PERSON}|{_NAMED_PERSON}", label):
+            events.append((match.start(), _person_scope(label, patient_name), None))
+        elif re.search(_OTHER_PERSON, label):
+            events.append((match.start(), "other", None))
+        elif re.search(_FAMILY_PERSON, label):
+            events.append((match.start(), "family", None))
+        elif re.search(_SELF_PERSON, label):
+            events.append((match.start(), "patient", None))
+        if re.search(r"過去|既往|以前", label):
+            events.append((match.start(), None, "past"))
+        elif re.search(r"予定|目標|参考|基準", label):
+            events.append((match.start(), None, "planned"))
+        elif re.search(r"現在|現状|本日|本人|患者", label):
+            events.append((match.start(), None, "current"))
+    for match in _PERSON.finditer(body):
+        if any(left <= match.start() < right for left, right in assignments):
+            continue
+        person = match["person"]
+        tail = body[match.start() + len(person):]
+        if _REPORTING.match(tail) and not re.fullmatch(_SELF_PERSON, person) and not re.fullmatch(_COMPOUND_PERSON, person):
+            continue
+        if (re.fullmatch(r"(?:職員|スタッフ|看護師|医師|薬剤師|ケアマネ)(?:さん|様)?", person)
+                and _CLINICAL_ACTOR.match(tail)
+                and _CLINICAL_RECIPIENT.search(re.split(r"[。！？!?;；\n]", body[:match.start()])[-1])
+                and not re.search(r"自身|自分", re.split(r"[。！？!?;；\n]", tail)[0])):
+            continue  # A prescribing/measuring clinician is the actor, not the recipient.
+        subject = _person_scope(person, patient_name)
+        events.append((match.start(), subject, None))
+    owner = _DIRECT_OWNER.search(body[:start])
+    if owner is not None:
+        events.append((owner.start(), _person_scope(owner["person"], patient_name), None))
+    scope, period = default, "current"
+    for position, subject, phase in sorted(events, key=lambda event: event[0]):
+        if position <= start:
+            if subject is not None:
+                scope = subject
+            if phase is not None:
+                period = phase
+    if scope != "patient":
+        return scope
+    # Qualifiers are evaluated in the span's own source clause, not from an
+    # unrelated patient's/history sentence elsewhere in the same message.
+    left = max((m.end() for m in _SCOPE_BREAK.finditer(body[:start])), default=0)
+    right = _SCOPE_BREAK.search(body[end:])
+    clause = body[left:end + right.start() if right else len(body)]
+    if _CONDITIONAL_MARK.search(clause):
+        return "conditional"
+    if period != "current" and not _CURRENT_MARK.search(clause):
+        return period
+    if _NONCURRENT_MARK.search(clause) and not (_CURRENT_MARK.search(clause) or _URGENT_REQUEST.search(clause)):
+        return "past"
+    if re.search(r"(?:予定|目標|参考|基準)(?:の|は|値|:|：)", clause) and not _CURRENT_MARK.search(clause):
+        return "planned"
+    return scope
+
+
+def patient_urgency_quotes(body, quotes, *, patient_name=None, default="patient"):
+    """Keep only source-located patient quotes; another person's urgency remains in the original record."""
+    kept, scopes = [], []
+    for quote in quotes:
+        span = locate_quote_span(body, quote) if isinstance(quote, str) and quote.strip() else None
+        if span is None:
+            scopes.append("unknown")
+            continue
+        cuts = sorted({span[0], span[1], *[m.end() for m in _SCOPE_BREAK.finditer(body, *span)],
+                       *[m.start() for m in _PERSON.finditer(body, *span)]})
+        pieces = [(left, right, patient_source_scope(body, left, right, patient_name=patient_name, default=default))
+                  for left, right in zip(cuts, cuts[1:]) if body[left:right].strip()]
+        if pieces and all(scope == "patient" for _, _, scope in pieces):
+            text = body[span[0]:span[1]]
+            scopes.append("patient")
+            if text not in kept:
+                kept.append(text)
+            continue
+        for left, right, scope in pieces:
+            text = body[left:right].strip()
+            if not text or (len(cuts) > 2 and not _REASON_CUE.search(text)):
+                continue
+            scopes.append(scope)
+            if scope == "patient" and text not in kept:
+                kept.append(text)
+    return kept, scopes
+
+
+def patient_vitals(values, body, *, patient_name=None):
+    """Filter flat cached vital values against original patient spans without reinterpreting other-person measurements."""
+    if not isinstance(values, dict) or not isinstance(body, str):
+        return {}
+    kept = {}
+    for key, pattern in _VITAL_PATTERNS.items():
+        for match in re.finditer(pattern, body):
+            if patient_source_scope(body, match.start(), match.end(), patient_name=patient_name) != "patient":
+                continue
+            actual = ({"sbp": int(match[1]), "dbp": int(match[2])} if key == "sbp" else
+                      {key: float(match[1].replace("．", ".")) if "." in match[1].replace("．", ".")
+                       else int(match[1])})
+            for field, value in actual.items():
+                if type(values.get(field)) in (int, float) and values[field] == value:
+                    kept[field] = value
+    # Partial LLM blood pressures still need their own label, side and patient span.
+    from extract_llm import _bp_side, _nearest_vital_label, _vitals_guard
+    partial = {key: values[key] for key in ("sbp", "dbp")
+               if key not in kept and type(values.get(key)) in (int, float)}
+    grounded = _vitals_guard(body, partial)
+    for match in re.finditer(r"\d+(?:[.．]\d+)?", body):
+        start, end = match.span()
+        if _nearest_vital_label(body, start, end) != "bp":
+            continue
+        side = _bp_side(body, start, end)
+        label = re.search(r"(収縮期|拡張期)(?:血圧)?[^0-9]*$", body[max(0, start - 14):start])
+        if side is None and label is not None:
+            side = "sbp" if label[1] == "収縮期" else "dbp"
+        if side is None or patient_source_scope(body, start, end, patient_name=patient_name) != "patient":
+            continue
+        if side in partial and grounded.get(side) == partial[side] == float(match[0].replace("．", ".")):
+            kept[side] = partial[side]
+    return kept
 _REQUESTS = ((r"ご?確認(?:を|お願い|ください|をお願い)", "confirm"),
              (r"(?:ご)?連絡(?:ください|をお願い|いただき)", "contact"),
              (r"共有(?:いたします|します|をお願い|させて)", "share"),
@@ -83,10 +314,22 @@ _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬
 _MED_PERIOD = re.compile(
     r"(?<![\d/])(?:(\d{4})/)?(\d{1,2}/\d{1,2})"
     r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
-RULE_VERSION = 9
+RULE_VERSION = 18
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
-    r"(?:\)|）)?[　\s]*(?:訪問|診察|往診)")
+    r"(?:\)|）)?[　\s]*(?:訪問(?:診療)?|診察|往診)")
+_NEXT_VISIT_HEAD = (
+    r"(?:次回|次の)[ \t　]*(?:の[ \t　]*)?(?:(?:訪問診療|訪問|往診|診察)"
+    r"[ \t　]*(?:の[ \t　]*)?(?:予定(?:日(?:時)?)?|日時|日程|日)?|予定(?:日(?:時)?)?|日時|日程)"
+    r"[ \t　]*(?:は|が)?[ \t　]*[:：]?[ \t　、,]*")
+_NEXT_PLANNED = re.compile(
+    rf"(?:(?P<scheduled>{_NEXT_VISIT_HEAD})(?P<newline>\r?\n[ \t　]*)?|次回[^。！？!?;；\r\n]{{0,8}}?)"
+    r"(?<!\d)(?:(?P<year>\d{4})[-－/／年])?(?P<month>\d{1,2})[-－/／月](?P<day>\d{1,2})(?!\d)日?"
+    r"(?:[ \t　]*[（(][月火水木金土日](?:曜(?:日)?)?[）)])?")
+_NEXT_CANCELLED = re.compile(
+    r"^[ \t　、,（(]*(?:\d{1,2}[:：時](?:\d{1,2}分?)?[ \t　]*)?"
+    r"(?:の|に)?(?:訪問(?:診療)?|往診|診察)?(?:予定(?:していました|していた)?)?(?:です|でした)?(?:が|は|を)?"
+    r"[ \t　、,]*(?:中止|キャンセル|延期|未定)")
 _PLANNED_BEFORE = re.compile(r"次回|予定(?!通り|どおり)|明日|明後日|今度|来週")
 # 予定通りなら (conditional) right before the date, beyond the 6-char window
 _PLANNED_IF = re.compile(r"予定(?:通り|どおり)なら[　\s、,，]*$")
@@ -103,6 +346,23 @@ _VITAL_PATTERNS = {
             r"(?!\s*(?:[LＬlℓ]|リットル))\s*[%％]?",
     "bs":   r"(?:血糖|BS|Glu)[:：は]?\s*(\d{2,3})",
 }
+
+
+def _next_planned_matches(body):
+    """Keep explicit upcoming dates in their own schedule field, excluding cancelled or other-person plans."""
+    for match in _NEXT_PLANNED.finditer(body):
+        if match["newline"] and not re.match(
+                r"[ \t　]*(?:(?:[01０１]?\d|[2２][0-3０-３])[:：時][0-5０-５]\d分?[ \t　]*)?(?:\r?\n|$)",
+                body[match.end():]):
+            continue
+        if (re.search(r"中止|キャンセル|延期|未定", body[match.start():match.start("month")])
+                or _NEXT_CANCELLED.match(body[match.end():])):
+            continue
+        scopes = (patient_source_scope(body, start, match.end(), provider_fields=True)
+                  for start in (match.start(), match.start("year") if match["year"] else match.start("month")))
+        if any(scope in ("family", "other", "unknown", "past", "conditional") for scope in scopes):
+            continue
+        yield match
 
 
 def _ymd(month: int, day: int, year: int | None,
@@ -166,6 +426,38 @@ def _period_dates(a, b, start_year, end_year, posted, context):
     return candidates[0]
 
 
+def patient_rule_urgency_quotes(body):
+    """Current patient-only lexical emergency scopes, shared by writers and cached readers."""
+    clause_start = 0
+    for clause in _URGENT_CLAUSES.split(body):
+        offset = body.find(clause, clause_start)
+        clause_start = offset + len(clause)
+        # Adjacent urgent words (「すぐに搬送」「緊急で搬送」) share one scope.
+        spans: list[list[int]] = []
+        for match in _URGENT.finditer(clause):
+            if spans and clause[spans[-1][1]:match.start()].strip() in ("", "で"):
+                spans[-1][1] = match.end()
+            else:
+                spans.append([match.start(), match.end()])
+        cursor = 0
+        for i, (start, end) in enumerate(spans):
+            before = clause[cursor:start]
+            cursor = end
+            stop = spans[i + 1][0] if i + 1 < len(spans) else len(clause)
+            if patient_source_scope(body, offset + start, offset + end) != "patient":
+                continue
+            if ((_URGENT_NONCURRENT.search(before)
+                 and not _URGENT_REQUEST.search(clause[end:]))
+                    or _URGENT_CONDITIONAL.search(before)
+                    or _URGENT_HYPOTHETICAL.search(before)
+                    or _URGENT_INACTIVE.match(clause[end:stop].strip())
+                    or (clause[start:end] == "すぐに"
+                        and not _URGENT_SOON_ACTION.search(clause[end:stop]))):
+                continue
+            return [clause.strip()]
+    return []
+
+
 def extract_message(body: str, posted_at: str) -> dict:
     """Structured view of one message. Missing fields are simply absent."""
     out: dict = {"v": 1}
@@ -184,36 +476,41 @@ def extract_message(body: str, posted_at: str) -> dict:
 
     # --- events ---
     ev = set()
-    if re.search(r"訪問(?:し|した|時|実施|致し)", body):
-        ev.add("visit")
-    if re.search(r"診察|往診|診療", body):
-        ev.add("exam")
-    if re.search(r"入院|退院|搬送|急性期", body):
-        ev.add("admission")
-    if re.search(r"看取り|緩和|終末期|ACP|オピオイド|モルヒネ|逝去|"
-                 r"お亡くなり|亡くなっ|死亡確認|息を引き取|心肺停止", body):
-        ev.add("eol")
-    if re.search(r"デイ|ショートステイ|ケアプラン|要介護|介護度", body):
-        ev.add("care")
+    event_patterns = {
+        "visit": r"訪問(?:し|した|時|実施|致し)", "exam": r"診察|往診|診療",
+        "admission": r"入院|退院|搬送|急性期",
+        "eol": r"看取り|緩和|終末期|ACP|オピオイド|モルヒネ|逝去|お亡くなり|亡くなっ|死亡確認|息を引き取|心肺停止",
+        "care": r"デイ|ショートステイ|ケアプラン|要介護|介護度",
+        "adherence": r"残薬|服薬|服用|一包化", "medication": r"処方|変更|開始|中止|減量|増量",
+    }
+    event_mentions = []
+    for event, pattern in event_patterns.items():
+        for match in re.finditer(pattern, body):
+            scope = patient_source_scope(body, match.start(), match.end())
+            if scope in ("family", "other", "unknown"):
+                event_mentions.append({"event": event, "scope": scope, "evidence": match[0]})
+            else:
+                ev.add(event)  # patient historical/planned mentions remain mentions
+    if event_mentions:
+        out["event_mentions"] = event_mentions
     if re.search(r"写真|画像|添付", body):
         ev.add("media_ref")
-    if re.search(r"残薬|服薬|服用|一包化", body):
-        ev.add("adherence")
-    if re.search(r"処方|変更|開始|中止|減量|増量", body):
-        ev.add("medication")
     if ev:
         out["events"] = sorted(ev)
 
     # --- visit date (first M/D preceding 訪問/診察) — a past event ---
     # A planned mention (次回10/5訪問予定) is not a visit that happened:
     # resolving it "past" would fabricate a date one year back.
+    planned = list(_next_planned_matches(body))
     for m in _VISIT_DATE.finditer(body):
         # the look-behind stays inside the date's own sentence
         pre = re.split(r"[。．\n!！?？]",
                        body[max(0, m.start() - 6):m.start()])[-1]
         if _PLANNED_BEFORE.search(pre) \
                 or _PLANNED_IF.search(body, 0, m.start()) \
-                or _PLANNED_AFTER.match(body, m.end()):
+                or _PLANNED_AFTER.match(body, m.end()) \
+                or any(plan["scheduled"] and plan.start() <= m.start() < plan.end()
+                       for plan in _NEXT_PLANNED.finditer(body)):
             continue
         d = _ymd(int(m.group(2)), int(m.group(3)),
                  int(m.group(1)) if m.group(1) else year,
@@ -223,12 +520,11 @@ def extract_message(body: str, posted_at: str) -> dict:
         break
 
     # --- next planned date — a FUTURE date ---
-    m = re.search(
-        r"次回.{0,8}?(?<!\d)(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})", body)
-    if m:
-        d = _ymd(int(m.group(2)), int(m.group(3)),
-                 int(m.group(1)) if m.group(1) else year,
-                 posted, "any" if m.group(1) else "future")
+    if planned:
+        m = planned[0]
+        d = _ymd(int(m["month"]), int(m["day"]),
+                 int(m["year"]) if m["year"] else year,
+                 posted, "any" if m["year"] else "future")
         if d:
             out["next_planned"] = d
 
@@ -282,17 +578,23 @@ def extract_message(body: str, posted_at: str) -> dict:
         out["rx_actions"] = acts[:10]
 
     # --- vitals ---
-    vit = {}
+    vit, mentions = {}, []
     for k, pat in _VITAL_PATTERNS.items():
-        m = re.search(pat, body)
-        if m:
+        for m in re.finditer(pat, body):
+            scope = patient_source_scope(body, m.start(), m.end())
             if k == "sbp":
-                vit["sbp"], vit["dbp"] = int(m.group(1)), int(m.group(2))
+                values = {"sbp": int(m.group(1)), "dbp": int(m.group(2))}
             else:
                 v = m.group(1).replace("．", ".")  # int/float take full-width digits
-                vit[k] = float(v) if "." in v else int(v)
+                values = {k: float(v) if "." in v else int(v)}
+            mentions.append({"scope": scope, "values": values, "evidence": m.group(0)})
+            if scope == "patient":
+                for key, value in values.items():
+                    vit.setdefault(key, value)
     if vit:
         out["vitals"] = vit
+    if any(mention["scope"] != "patient" for mention in mentions):
+        out["vital_mentions"] = mentions
 
     # --- symptoms / adherence flags ---
     sym = [s for s in _SYMPTOMS if s in body]
@@ -331,29 +633,12 @@ def extract_message(body: str, posted_at: str) -> dict:
     if soap:
         out["soap"] = soap
 
-    # --- urgency ---
-    # ponytail: explicit lexical scope only; implicit tense needs grounded LLM extraction.
-    for clause in _URGENT_CLAUSES.split(body):
-        # Adjacent urgent words (「すぐに搬送」「緊急で搬送」) share one scope.
-        spans: list[list[int]] = []
-        for match in _URGENT.finditer(clause):
-            if spans and clause[spans[-1][1]:match.start()].strip() in ("", "で"):
-                spans[-1][1] = match.end()
-            else:
-                spans.append([match.start(), match.end()])
-        cursor = 0
-        for i, (start, end) in enumerate(spans):
-            before = clause[cursor:start]
-            cursor = end
-            stop = spans[i + 1][0] if i + 1 < len(spans) else len(clause)
-            if ((_URGENT_NONCURRENT.search(before)
-                 and not _URGENT_REQUEST.search(clause[end:]))
-                    or _URGENT_INACTIVE.match(clause[end:stop].strip())):
-                continue
-            out["urgency"] = "high"
-            break
-        if out.get("urgency") == "high":
-            break
+    # Recompute the same source scopes when reading an older cached rule row.
+    if patient_rule_urgency_quotes(body):
+        out["urgency"] = "high"
+    context = extract_context(body)
+    if context:
+        out["patient_context"] = context
     return out
 
 

@@ -1,0 +1,22 @@
+{
+  "category": "added",
+  "title": "カードから薬剤の確認と医薬品辞書の検索ができるように",
+  "summary": "カードのメニューに「薬剤を確認」「薬剤を検索」を追加しました。投稿の薬剤ごとに名前・用量・開始/中止・予定と辞書候補を押した本人にだけ表示し、薬名を入力して辞書を検索できます。候補は名称一致の参考情報で、処方や成分を確定しません。",
+  "upgrade": "追加操作は不要です。「薬剤を検索」と辞書候補は、承認済みの医薬品辞書をconfigに設定し、収集処理で導出が完了したときだけ表示されます。Hermes利用時はgatewayの再起動、LINE WORKSは独立アダプターの再起動後に表示されます。",
+  "details": [
+    "Slack・Discord・LINE WORKSの既存メニュー・入力画面・本人向け表示（Slackは本人だけに見えるメッセージ、DiscordはEphemeral、LINE WORKSは1:1）を使う。共有チャンネルへは投稿しない。",
+    "「薬剤を確認」はシグナルの根拠投稿、またはスレッド内で薬剤のある最新投稿を対象にし、カードの薬剤行と同じ選択規則（家族・過去・否定を除外）を使う。複数候補・総称では成分名を出さない。",
+    "「薬剤を検索」はconfigに固定され、DBの現行導出世代と一致する承認済み辞書だけを使う。切替中・未有効・読込み不能ではボタンを出さず、候補も返さない。",
+    "LINE WORKSで検索語を空にしたとき、無応答で終わらず入力を促すようにした。"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_views.py",
+    "mcs/views/structured_view.py",
+    "mcs/extract/drug_map.py",
+    "adapters/common/text.py",
+    "adapters/slack/actions.py",
+    "adapters/discord/actions.py",
+    "adapters/lineworks/actions.py"
+  ]
+}

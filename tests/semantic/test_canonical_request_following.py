@@ -54,7 +54,7 @@ def _with_details(doc, **over):
     return doc
 
 
-def test_old_document_shape_ids_hashes_and_released_generations_are_unchanged(runtime):
+def test_old_document_shape_ids_hashes_and_request_projection_remain_compatible(runtime):
     _, _, _, _, doc = runtime
     old = facts.validate_facts_doc(doc)
     assert not set(DETAILS) & old["facts"][0].keys()
@@ -65,7 +65,7 @@ def test_old_document_shape_ids_hashes_and_released_generations_are_unchanged(ru
     assert projection.project_v2_doc_legacy(old) == projection.project_v2_doc_legacy(enriched)
     assert projection.project_v2_facts(old) == projection.project_v2_facts(enriched)
     assert extraction.SCHEMA_VERSION_V2 == "semantic-extraction/v2"
-    assert projection.PROJECTION_VERSION == 2
+    assert projection.PROJECTION_VERSION == 4
     assert v4.ENGINE_VERSION == 4
 
 

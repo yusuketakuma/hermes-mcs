@@ -24,12 +24,15 @@ MCSサーバーの負荷対策として、自動取得の間隔を5分から10�
 
 ## 画面イメージ — Slack
 
-**通知先とカード操作はSlackを推奨します。** 要点の確認からタスクの確定まで、7画面で紹介します。
+**通知先とカード操作はSlackを推奨します。** 要点の確認からタスクの確定・再確認候補まで、8画面で紹介します。
 掲載画像の名前・投稿・数値はすべて架空です。実データや実投稿の匿名化例は使用していません。現行実装に基づく説明図で、実画面のキャプチャではありません。
 
 ![Slackの全体像：通知カードと本文・添付のスレッドを並べた画面例](docs/screenshots/slack-gallery/01-overview.png)
 
 カードで要点を読み、スレッドで原文と添付を確認します。
+
+![通知から確認・タスクまで：新しい投稿がカードとスレッドで届き、職員の確認・担当・タスク作成が記録されてカード表示に戻る流れ](docs/assets/notification-flow.svg)
+
 スマートフォンの通知には、患者名・発信者・所属・投稿時間・短い要約を含む通知文を送ります。要約が未完成なら原文の一部と処理状態を示し、取得できない項目は推測しません。実際の表示・省略は端末とアプリの通知プレビュー設定に従います。既存のDiscordカードとLINE WORKSのファイル通知では、同じプレビュー表示にならない場合があります。
 画像を開くと拡大できます。画像内のボタンは説明用で、実際の操作はSlackの許可ユーザーが行います。
 
@@ -54,6 +57,7 @@ MCSのスタンプは、カードと未確認一覧に `スタンプ 👀2` の�
 
 `確認する`・`担当する`・`タスク作成`以外の操作（患者の記録まとめ、誤りを報告、タスク一覧、自分のタスク、未確認一覧、この患者を検索、全体の新着集計）を`操作を選ぶ…`にまとめています。
 `タスク一覧`などの表示は、カードの状態や設定で変わります。
+`患者の記録まとめ`は本人だけに背景・療養情報の原記録抜粋を表示します。全患者の詳細情報を根拠付きで保存し、全文と以前の記載は[患者別の詳細読取り](docs/guides/USER_GUIDE.md#c-患者ごとのまとめrollup)から確認できます。
 
 <a name="slack-task"></a>
 
@@ -87,6 +91,14 @@ MCSのスタンプは、カードと未確認一覧に `スタンプ 👀2` の�
 **暫定集約であり、確定した処方一覧ではありません。未取得の記録も「無い」とは扱いません。**
 
 [Slackの導入・接続・許可ユーザー設定](docs/guides/INSTALLATION.md) · [操作の詳しい使い方](docs/guides/USER_GUIDE.md) · [画面画像のソースと更新手順](docs/screenshots/slack-gallery/README.md)
+
+### 該当スレッドで、対象と根拠を確認する
+
+![本人の緊急度再確認候補を元スレッドに追加する完全合成の画面例](docs/screenshots/slack-gallery/08-urgent-notice.png)
+
+本人・家族・他者と、現在・過去・予定を原文から区別します。再確認候補と薬剤シグナルは元投稿の既存スレッドに追加し、原文根拠・投稿日・確認先を短く示します。解析が続いている投稿には「解析更新中」を表示し、既存の投稿を更新します。
+
+新しいカードは患者名の下に緊急度・投稿数・解析中の件数をまとめ、投稿ごとの要約を項目順に表示します。薬剤の確認と辞書検索は押した本人だけに表示し、Slack・Discordでは同じスレッド、LINE WORKSでは1:1トークで確認します。辞書の検索は承認済み辞書が有効な場合だけ使えます。
 
 <details>
 <summary><strong>Discordを使う場合の画面例を開く</strong></summary>
@@ -155,7 +167,7 @@ LINE WORKSではカードのボタンと本人との1:1トークの `mcs JSON` �
 |---|---|
 | 暗号化offsite・鍵escrow・別配置への復元 | `mcs_backup.py`。保存先・鍵・独立SHA receipt・保持のオーナー承認が必要。定期運用は明示opt-in、新端末の復元は同意待ちで停止。[バックアップ・端末喪失ガイド](docs/guides/BACKUP.md) |
 | 構造化薬歴・観測値とチャット候補の別出典閲覧 | `project_metadata.py`（明示sync）と`mcs_view.py`のsnapshot読取り。表示は`--publication`で明示し、`include_chat`は既定off。同一項目・正本・対応完了を自動判定しません。GETはsession・未読保持・権限の実受入後に承認。[MCS連携データの条件](docs/roadmap/mcs-api-survey.md) |
-| 薬剤の表層名とは独立した成分候補注釈 | 明示した私有辞書の出所・SHA・承認に束縛した候補。別名の服薬行を統合せず、総称や複数候補を成分に確定しません。本番辞書の保管責任・利用条件は未確定。[抽出の範囲と残条件](docs/roadmap/extraction.md) |
+| 薬剤の表層名とは独立した候補注釈・照会 | 私有辞書の出所・SHA・承認に束縛した成分・一般名処方・製品候補を併記し、`mcs drug`で照会・参考検索・更新差分を確認できます。別名の薬剤行を統合せず、総称や複数候補を成分に確定しません。公式master原本は[システム更新に同梱](resources/drug-master/README.md)し、私有辞書の承認・有効化は別途行います。[抽出の範囲と残条件](docs/roadmap/extraction.md) |
 | 導入・更新・ローカル診断の統一入口 | `sh scripts/mcs install`、導入後の`mcs setup`・`mcs update`・`mcs doctor`。診断結果やSDK版の取得は接続・更新後プロセスの受入証明ではありません。[更新時の確認](docs/guides/UPGRADE_AGENT.md) |
 
 <a name="use-cases"></a>
@@ -375,7 +387,7 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 | 使い方・画面・データの読み方 | [利用者ガイド](docs/guides/USER_GUIDE.md) |
 | 導入・接続・設定・トラブル対応 | [導入ガイド](docs/guides/INSTALLATION.md) · [LINE WORKS接続](docs/guides/LINEWORKS.md) · [スタンドアローン](docs/guides/STANDALONE.md) · [エージェント向け手順](docs/guides/SETUP_AGENT.md) |
 | データ取扱い・安全境界・AI・復旧の限界 | [SECURITY](SECURITY.md) |
-| 更新・バックアップ・復旧 | [更新ガイド](docs/guides/UPGRADE_AGENT.md) · [1.0.15受入票](docs/development/acceptance/ACCEPTANCE_1.0.15.md) · [ライフサイクル仕様](docs/specs/lifecycle-spec.md) · [鍵escrow・端末喪失ガイド](docs/guides/BACKUP.md) · [配備資産](deployment/README.md) |
+| 更新・バックアップ・復旧 | [更新ガイド](docs/guides/UPGRADE_AGENT.md) · [1.0.16受入票](docs/development/acceptance/ACCEPTANCE_1.0.16.md) · [ライフサイクル仕様](docs/specs/lifecycle-spec.md) · [鍵escrow・端末喪失ガイド](docs/guides/BACKUP.md) · [配備資産](deployment/README.md) |
 | 開発・コマンド・統計・アラート定義 | [開発リファレンス](docs/development/DEVELOPMENT.md) · [Hermesプラグイン](hermes_plugin/README.md) |
 | エクスポート・意味解析の評価 | [外部出力契約](docs/specs/external-export-contract.md) · [意味解析の評価](docs/specs/semantic-evaluation.md) · [rollout](docs/specs/semantic-facts-v2-rollout.md) |
 | 今後の計画 | [ロードマップ](docs/ROADMAP.md) |
@@ -383,5 +395,5 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 ## ライセンス
 
-Private repository — 現時点で公開・再配布は想定していません。
+Proprietary — All Rights Reserved。
 利用・改変はリポジトリ管理者の明示許可に従ってください（[LICENSE](LICENSE)）。

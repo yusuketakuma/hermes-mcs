@@ -134,7 +134,7 @@ def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypa
     for name in ("slack_render", "flags", "cmd_int", "cmd_results"):
         (data_root / name).mkdir(parents=True)
     (data_root / "flags" / "notify.json").write_text(json.dumps({
-        "interactive": True, "transport": "slack",
+        "interactive": True, "transport": "slack", "route_epoch": 1,
     }))
     settings["data_root"] = str(data_root)
     configure(settings)
@@ -346,7 +346,7 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
         (root / name).mkdir(parents=True)
     dirs = slack_paths.ensure_dirs(str(root))
     (root / "flags" / "notify.json").write_text(json.dumps({
-        "interactive": True, "transport": "slack",
+        "interactive": True, "transport": "slack", "route_epoch": 1,
     }))
     reg = registry.Registry(dirs["state"], scope=scope)
     worker = DeliveryWorker(

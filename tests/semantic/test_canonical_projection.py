@@ -67,6 +67,8 @@ def _artifact(db, kind, mid, content, meta):
     project_id = db.execute(
         "SELECT project_id FROM messages WHERE message_id=?", (mid,)
     ).fetchone()[0]
+    if kind in ("canonical_projection", "semantic_facts_v4"):
+        meta = {"projection_version": projection.PROJECTION_VERSION, **meta}
     return db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
         "VALUES(?,?,?,?,?)",
@@ -515,7 +517,8 @@ def test_old_projection_version_rows_are_superseded_on_rerun(tmp_path):
         db.db.commit()
         old_proj = rows("canonical_projection")[0]["artifact_id"]
         old_v4 = rows(v4.KIND_V4)[0]["artifact_id"]
-        assert current(current_projection_id()) == old_proj
+        assert current(current_projection_id()) is None
+        assert current(current_projection_id(require_version=False)) == old_proj
         scfg = semantic_config(_canonical_cfg())[0]
         bundle = semantic.thread_bundle(db, 1, 1)
         member = next(m for m in bundle["members"] if m["message_id"] == 1)

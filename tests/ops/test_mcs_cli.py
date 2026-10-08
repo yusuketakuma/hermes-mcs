@@ -206,3 +206,29 @@ def test_doctor_runs_through_real_cli_without_touching_synthetic_files(tmp_path)
     assert json.loads(result.stdout)["checks"]["services"]["status"] == "not_checked"
     assert "synthetic-private-id" not in result.stdout + result.stderr
     assert before == {str(p): p.read_bytes() for p in home.rglob("*") if p.is_file()}
+
+
+@pytest.mark.parametrize("command", ["lookup", "search", "compare"])
+def test_drug_subcommand_routes_literal_arguments_without_setup_or_db(pinned, monkeypatch, command):
+    import mcs_drug
+    calls = []
+    monkeypatch.setattr(mcs_drug, "main", lambda argv: calls.append(argv) or 0)
+    monkeypatch.setattr(mcs_cli, "load_config", lambda: pytest.fail("pinned drug route must not read config"))
+    arguments = [command, "架空名;$(touch NEVER)", "--limit", "0", "--json"]
+    assert mcs_cli.main(["drug", *arguments]) == 0
+    assert calls == [arguments]
+
+
+def test_bootstrap_drug_route_uses_only_temporary_pinned_interpreter(tmp_path):
+    root = tmp_path / "synthetic-mcs"
+    interpreter = root / "venv/bin/python3"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text(f"#!{sys.executable}\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n")
+    interpreter.chmod(0o700)
+    env = dict(os.environ, HOME=str(tmp_path), MCS_ROOT=str(root))
+    arguments = ["drug", "search", "架空名;$(touch NEVER)", "--limit", "1", "--json"]
+    result = subprocess.run(["/bin/sh", str(ROOT / "scripts/mcs"), *arguments],
+                            env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [str(ROOT / "mcs/ops/mcs_cli.py"), *arguments]
+    assert not (tmp_path / "NEVER").exists()

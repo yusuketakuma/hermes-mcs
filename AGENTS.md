@@ -20,6 +20,7 @@ id は `patients.probe_mid` に記録して繰返し取得を抑える。
 | 通知 | `adapters/{slack,discord,lineworks,common}/`。独立接続と旧APIの実装も接続先配下へ集約。`hermes_plugin/` は Hermes 接続・互換入口、`lineworks_adapter/` は独立CLI入口 |
 | 独立実行 | `runtime_mode=standalone` の `mcs_standalone/` が単一host・6定期ジョブ・cmd取込・抽出worker2本を所有。Hermes未指定は従来経路。`docs/guides/STANDALONE.md` |
 | 検証 | `tests/` は実行領域に対応、`integration/` は統合、`evaluation/` は完全合成の評価資産。conftest がヘルパー import と socket 遮断を担う |
+| 配布master | `resources/drug-master/` は公式公開master原本・出典/版/hashのmanifest。実患者データやfixtureではない。リリース時の更新確認・同梱検証と、私有辞書への変換/承認/有効化を分離する |
 | 文書・配備 | 利用は `docs/guides/`、開発は `docs/development/`、契約は `docs/specs/`。`deployment/` は配備候補で、編集だけでは実機適用しない |
 
 Hermes plugin の更新反映には gateway 再起動が必要。旧 worker が新 spec を
@@ -72,7 +73,9 @@ CI の pinned Hermes 環境で別に検証されるため、ローカル pytest 
   — ベンチ・few-shot・テスト fixture は**完全合成のみ**（実投稿の匿名化も不可）
 - **安全ゲートを壊さない**: 既読化は snapshot timestamp 必須、no-redirect/no-proxy、
   人承認操作は `--confirm-human`+`reason`+receipt 経路のみ
-- 「記録が見つからない」≠「対応がなかった」— 候補提示はこの区別を保持
+- 「記録が見つからない」≠「対応がなかった」— 未対応・未返信などの候補提示はこの区別を保持する。
+  表示の簡潔さは別扱いで、観測済みの0件（スタンプなし等）は行ごと省略してよい。未取得・取得失敗は明示する
+  区別は文言で保つ（「未対応」と断定しない）。チャット表示に責任回避の但し書きや「AI判定」等の出所ラベルは付けない（所有者 2026-10-08）
 - 大きな凝集モジュール（`ledger.py`/`mcs_adapter.py`/`semantic_drain`）を
   行数だけで機械分割しない
 
@@ -100,6 +103,8 @@ Slack画面例は完全合成の説明図を使い、`docs/screenshots/slack-gal
 docstring 先頭文は公開されるので1文要約にする。
 
 ## リリースノート
+
+- このリポジトリのリリース・準備・リリース前監査には、MCS専用の `release-mcs`（リリースMCS）skillを使う。正本は `~/.agents/skills/release-mcs/SKILL.md`。共通リリース手順に加え、毎回公式医薬品マスターサイトの更新を確認し、新版があれば同じリリース候補へ組み込み、出典・hash・版・利用条件・変換境界を検証する。確認不能・未検証の新版を「更新なし」と扱わない。公開master同梱は認めるが、患者情報・実投稿のfixture化や本番辞書の自動承認/有効化は認めない。
 
 - CHANGELOGとGitHub Releaseは毎回`docs/development/RELEASE_NOTES.md`の共通ルールを守る。
   段落は「新機能」「改善」「不具合修正」「動作・設定の変更」「更新時の注意」

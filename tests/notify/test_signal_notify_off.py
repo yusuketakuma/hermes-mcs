@@ -52,18 +52,22 @@ def test_disabled_signal_suppresses_unsealed_intent(led, tmp_path):
 def test_disabled_signal_refuses_grant_but_allows_chat(led):
     event = _signal(led)
     assert _dispatch(led, event, ON, now=NOW)["dispatched"]
+    from test_signal_thread_hotfix import delivered_source
+    delivered_source(led, card_id=2, mids=(100,))
+    _dispatch(led, event, ON, now=NOW)
     render = _latest_render(led)
 
     denied = _begin(led, render, cfg=OFF)
     assert not denied["granted"]
     assert denied["error"] == "denied_signal_notify_off"
 
-    chat = _intent(led, payload={"message_ids": [100]})
+    _msg(led, 101, parent=100)
+    chat = _intent(led, payload={"message_ids": [101]})
     assert _dispatch(led, chat, OFF, now=NOW)["dispatched"]
     chat_render = led.db.execute(
         "SELECT * FROM notification_renders WHERE card_id=("
         "SELECT card_id FROM notification_cards WHERE kind='thread')"
-    ).fetchone()
+    ).fetchall()[-1]
     assert _begin(led, chat_render, n=2, cfg=OFF)["granted"]
 
 

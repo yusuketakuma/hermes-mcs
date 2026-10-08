@@ -17,13 +17,23 @@ from discord_testkit import _fake_discord
 from ledger import publish_snapshot
 from mcs_signals import record_station_staff
 from notify_testkit import (
-    CFG, NOW, _add_request, _card, _click, _deliver, _dispatch, _extract, _intent,
+    CFG, NOW, _add_request, _card, _click, _deliver, _dispatch as _raw_dispatch, _extract, _intent,
     _latest_render, _msg, _patient, _seed_thread, _signal_row, _spec, led, pinned_clock,
 )
 from test_summary_review import _setup
 
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")
+CLINICAL_BODY = "本人が急変し至急確認が必要です。"
+CLINICAL_HIGH = {"urgency": "high", "urgency_evidence": [CLINICAL_BODY]}
+
+
+def _dispatch(led, event, cfg=CFG, now=NOW):
+    if event["kind"] == "signal":
+        from test_signal_thread_hotfix import delivered_source
+        _raw_dispatch(led, event, cfg, now)
+        delivered_source(led, card_id=2, mids=(100,), cfg=cfg)
+    return _raw_dispatch(led, event, cfg, now)
 
 
 def _render(parts, transport, monkeypatch) -> str:
@@ -63,7 +73,7 @@ def _render(parts, transport, monkeypatch) -> str:
 def test_empty_and_long_scoped_summary_keeps_disclosures_on_every_renderer(
         led, tmp_path, monkeypatch, transport):
     # Given: many allowed rooms, partial acquisition, and one excluded patient.
-    for pid in range(1, 45):
+    for pid in range(1, 80):
         _patient(led, pid, name=f"Synthetic patient {pid} " + "名" * 40)
         _msg(led, 100 + pid, pid=pid, ts=int(NOW - 100), body="BODY-CANARY")
         led.db.execute("UPDATE messages SET first_seen=?", (NOW - 10,))
@@ -75,7 +85,7 @@ def test_empty_and_long_scoped_summary_keeps_disclosures_on_every_renderer(
     snapshot = publish_snapshot(str(tmp_path / "data" / "ledger.db"), str(tmp_path / "snapshot"))
     assert snapshot is not None
     # When: the actual command helper reads a scoped snapshot and each renderer consumes parts.
-    answer = summary.answer(snapshot, "days:7", allowed=list(range(1, 45)),
+    answer = summary.answer(snapshot, "days:7", allowed=list(range(1, 80)),
                             now=NOW, dialect="plain")
     rendered = _render(answer["parts"], transport, monkeypatch)
     empty = _render(notify_digest.view(led.db, {}, "", allowed=[], now=NOW)["parts"],
@@ -84,10 +94,10 @@ def test_empty_and_long_scoped_summary_keeps_disclosures_on_every_renderer(
     assert "BODY-CANARY" not in rendered and "OUTSIDE-NAME-CANARY" not in rendered
     assert "project 99" not in rendered
     assert "他" in rendered
-    assert "取得状況" in rendered and "network_error" in rendered
-    assert "欠落なしの保証ではありません" in rendered
+    assert "取得状況" in rendered and "通信エラー" in rendered
+    assert "欠落なしの保証ではありません" not in rendered
     assert "取得状況" in empty and "新着 0件" in empty
-    assert "対応がなかったことを意味せず" in empty
+    assert "対応がなかったことを意味せず" not in empty
 
 
 def test_archived_patients_do_not_leak_tasks_signals_or_summary_updates(led):
@@ -137,15 +147,17 @@ def test_digest_uses_snapshot_bounded_response_observation(led, reply_at, error)
     parts = notify_digest.view(led.db, {}, "", now=NOW)["parts"]
     # Then: neither future replies nor failed capture suppress observation gaps.
     out = notify_render.parts_text(parts)
-    assert "自分宛で応答未観測" in out and "message 1 " in out
+    assert "自分宛で返信の記録なし" in out and "・患者A 自分宛" in out
     assert "自分の返信観測なし" in out
-    assert "記録が見つからない≠対応がなかった" in out
+    assert "記録が見つからない≠対応がなかった" not in out
 
 
 @pytest.mark.parametrize("kind", ["thread", "signal"])
 def test_late_urgency_updates_delivered_card_without_new_intent(led, kind):
     # Given: an already delivered ordinary card.
     _seed_thread(led, mids=(100,))
+    with led.db:
+        led.db.execute("UPDATE messages SET body_text=? WHERE message_id=100", (CLINICAL_BODY,))
     if kind == "signal":
         _signal_row(led, "s", mids=[100])
         event = _intent(led, "signal", payload={"signal_keys": ["s"], "project_id": 1})
@@ -156,12 +168,13 @@ def test_late_urgency_updates_delivered_card_without_new_intent(led, kind):
     before = _latest_render(led)
     count = led.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0]
     # When: current AI high urgency lands after the first card was delivered.
-    _extract(led, 100, {"urgency": "high"}, kind="extract_llm")
+    _extract(led, 100, CLINICAL_HIGH, kind="extract_llm")
     notify_cards.sweep(led, CFG, now=NOW + 1)
     # Then: an update of the existing card exposes the source; it is not a new alert.
     after = _latest_render(led)
     assert after["op"] == "update" and after["render_rev"] == before["render_rev"] + 1
-    assert "［緊急度高・AI判定］" in notify_render.display_text(
+    # a thread card (layout 2) shows the meta-line label; a signal card its tag
+    assert "🚨 緊急度高" in notify_render.display_text(
         json.loads(after["spec_json"])["parts"])
     assert led.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0] == count
 
@@ -176,8 +189,8 @@ def test_signal_card_and_message_notice_follow_same_current_urgency_source(
         led, monkeypatch, kind, stale, level, expected):
     # Given: a synthetic signal and a generation-bound extraction.
     _patient(led)
-    _msg(led, 100)
-    _extract(led, 100, {"urgency": level}, kind=kind, stale=stale)
+    _msg(led, 100, body=CLINICAL_BODY)
+    _extract(led, 100, {"urgency": level, "urgency_evidence": [CLINICAL_BODY]}, kind=kind, stale=stale)
     _signal_row(led, "s", mids=[100])
     event = _intent(led, "signal", payload={"signal_keys": ["s"], "project_id": 1})
     monkeypatch.setattr(notify_flush, "_config", lambda: CFG)
@@ -188,12 +201,15 @@ def test_signal_card_and_message_notice_follow_same_current_urgency_source(
         led, _intent(led, payload={"message_ids": [100]}))
     # Then: stale/routine artifacts don't produce a high badge; sources remain distinct.
     if expected is None:
-        assert "緊急度高" not in face and "緊急語あり" not in face
-        assert "緊急度: 高" not in text and "緊急語を含む" not in text
+        assert "緊急度高" not in face and "緊急語あり" not in face \
+            and "🚨" not in face
+        assert "緊急度高" not in text and "緊急語を含む" not in text \
+            and "🚨" not in text
     else:
         # the card tag and the text notice each keep the source distinct
-        assert notify_render.URGENCY_TAG[expected] in face
-        assert ("AI抽出" if expected == "llm" else "機械照合") in text
+        assert notify_render.URGENCY_PLAIN[expected] in face
+        assert ("緊急度高" if expected == "llm" else "🚨") in text
+        assert "AI" not in face and "AI" not in text
 
 
 @pytest.mark.parametrize("field", ["content", "meta"])
@@ -262,8 +278,8 @@ def test_page_confirmation_does_not_confirm_hidden_items_or_complete_requests(le
 def test_long_signal_explanation_cannot_hide_current_urgency_badge(led, source):
     # Given: a high-urgency signal whose explanation exceeds a physical card page.
     _patient(led)
-    _msg(led, 100)
-    _extract(led, 100, {"urgency": "high"}, kind=source)
+    _msg(led, 100, body=CLINICAL_BODY)
+    _extract(led, 100, CLINICAL_HIGH, kind=source)
     _signal_row(led, "s", mids=[100])
     row = led.db.execute("SELECT artifact_id,content FROM artifacts "
                          "WHERE kind='signal_v1'").fetchone()
@@ -277,6 +293,6 @@ def test_long_signal_explanation_cannot_hide_current_urgency_badge(led, source):
     spec = _spec(led)
     # Then: source-labeled urgency stays visible even after physical truncation.
     face = notify_render.display_text(spec["parts"])
-    assert notify_render.URGENCY_TAG[
+    assert notify_render.URGENCY_PLAIN[
         "llm" if source == "extract_llm" else "rule"] in face
     assert notify_render._text_cost(spec["parts"]) <= notify_render.CARD_TEXT_BUDGET

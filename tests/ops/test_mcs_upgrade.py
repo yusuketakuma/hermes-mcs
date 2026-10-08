@@ -78,6 +78,99 @@ def test_launcher_refuses_target_without_updater(tmp_path):
                           "--to", "v1.1.0"])
 
 
+def test_launcher_requires_a_fetched_release_tag_not_a_same_named_branch(tmp_path):
+    repo, _ = _make_repo(tmp_path)
+    _git(repo, "checkout", "-qb", "v1.2.0")
+    target = repo / "mcs/ops/mcs_update.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("raise SystemExit(0)\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "synthetic non-release branch")
+    before = _git(repo, "rev-parse", "HEAD").stdout
+    with pytest.raises(SystemExit, match="git ls-tree failed"):
+        _launcher().main(["--repo", str(repo), "--no-fetch", "plan", "--to", "v1.2.0"])
+    assert _git(repo, "rev-parse", "HEAD").stdout == before
+    assert _git(repo, "status", "--porcelain").stdout == ""
+
+
+def test_launcher_uses_the_release_tag_despite_an_ambiguous_ref(tmp_path, capfd):
+    repo, bare = _make_repo(tmp_path)
+    stub = "print('synthetic release updater')\n"
+    _release(tmp_path / "remote-work", bare, "v1.2.0", {"mcs/ops/mcs_update.py": stub})
+    _git(repo, "fetch", "-q", "--tags")
+    _git(repo, "update-ref", "refs/v1.2.0", "HEAD")
+    assert _launcher().main(["--repo", str(repo), "--no-fetch", "plan", "--to", "v1.2.0"]) == 0
+    assert capfd.readouterr().out.strip() == "synthetic release updater"
+
+
+@pytest.mark.parametrize("mode,kind,path,error", [
+    ("120000", "blob", "mcs/link.py", "unsupported entry"),
+    ("160000", "commit", "mcs/submodule", "unsupported entry"),
+    ("100644", "blob", "mcs/../escape.py", "unsafe path"),
+    ("100644", "blob", "/escape.py", "unsafe path"),
+])
+def test_extract_rejects_nonfiles_and_unsafe_paths(tmp_path, monkeypatch, mode, kind, path, error):
+    launcher = _launcher()
+    monkeypatch.setattr(launcher, "_git", lambda *_args, **_kw:
+                        f"{mode} {kind} {'a' * 40}\t{path}\0")
+    with pytest.raises(SystemExit, match=error):
+        launcher.extract("synthetic", "v1.2.0", str(tmp_path))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_extract_preserves_binary_blobs_and_executable_bit(tmp_path, monkeypatch):
+    launcher = _launcher()
+    blob = b"#!/bin/sh\n# synthetic binary \xff\x00\n"
+
+    def git(_repo, *args, binary=False):
+        if args[0] == "ls-tree":
+            assert args[2] == "refs/tags/v1.2.0"
+            return f"100755 blob {'a' * 40}\tmcs/synthetic.sh\0"
+        assert args == ("cat-file", "blob", "a" * 40) and binary
+        return blob
+
+    monkeypatch.setattr(launcher, "_git", git)
+    launcher.extract("synthetic", "v1.2.0", str(tmp_path))
+    target = tmp_path / "mcs/synthetic.sh"
+    assert target.read_bytes() == blob
+    assert target.stat().st_mode & 0o777 == 0o755
+
+
+@pytest.mark.parametrize("failure", [OSError(2, "synthetic missing executable"), KeyboardInterrupt()])
+def test_launcher_cleans_staging_on_launch_error_or_cancellation(tmp_path, monkeypatch, failure):
+    launcher = _launcher()
+    staged = tmp_path / "staging"
+    staged.mkdir(mode=0o700)
+    monkeypatch.setattr(launcher.tempfile, "mkdtemp", lambda **_kw: str(staged))
+    monkeypatch.setattr(launcher, "_git", lambda *_args, **_kw: str(tmp_path))
+
+    def extract(*_args):
+        target = staged / "mcs/ops/mcs_update.py"
+        target.parent.mkdir(parents=True)
+        target.write_text("# synthetic updater\n")
+
+    def run(*_args, **_kw):
+        raise failure
+
+    monkeypatch.setattr(launcher, "extract", extract)
+    monkeypatch.setattr(launcher.subprocess, "run", run)
+    expected = SystemExit if isinstance(failure, OSError) else KeyboardInterrupt
+    with pytest.raises(expected):
+        launcher.main(["--repo", str(tmp_path), "--no-fetch", "plan", "--to", "v1.2.0"])
+    assert not staged.exists()
+
+
+def test_git_unavailable_reports_launch_failure(tmp_path, monkeypatch):
+    launcher = _launcher()
+
+    def run(*_args, **_kw):
+        raise FileNotFoundError(2, "synthetic missing git")
+
+    monkeypatch.setattr(launcher.subprocess, "run", run)
+    with pytest.raises(SystemExit, match="git tag failed: synthetic missing git"):
+        launcher.latest_tag(str(tmp_path))
+
+
 CHANGELOG = """# 変更履歴
 
 ## [Unreleased]
@@ -234,7 +327,7 @@ def test_failed_reinstall_rolls_the_tree_back(updater, monkeypatch, tmp_path):
     before = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _fake_install(monkeypatch, rc=1)
     rolled = []
-    monkeypatch.setattr(updater, "_rollback_tree", lambda e: rolled.append(e))
+    monkeypatch.setattr(updater, "_rollback_tree", lambda e, on_hold=None: rolled.append(e))
     assert updater.apply("v1.2.0", None, None, reinstall=True) == 1
     assert rolled and rolled[0]["prev_sha"] == before
     assert "install_failed" in updater.load_state()["attempts"]["v1.2.0"]["detail"]
@@ -354,3 +447,26 @@ def test_launcher_copy_notice_never_migrates_the_live_db(updater, tmp_path):
     kind, payload = json.loads(con.execute("SELECT v FROM seen").fetchone()[0])
     con.close()
     assert kind == "update_notice" and "中止" in payload["text"]
+
+
+def test_extracted_current_updater_imports_with_recovery_helper(tmp_path, monkeypatch):
+    launcher = _launcher()
+    files = {str(p.relative_to(ROOT)): p.read_bytes()
+             for p in (ROOT / "mcs").rglob("*.py")}
+    helper = "deployment/recovery/mcs_recover.py"
+    files[helper] = (ROOT / helper).read_bytes()
+
+    def git(repo, *args, binary=False):
+        if args[0] == "ls-tree":
+            assert args[4:] == ("mcs", helper)
+            return "".join(f"100644 blob {name}\t{name}\0" for name in files)
+        assert args[:2] == ("cat-file", "blob") and binary
+        return files[args[2]]
+
+    monkeypatch.setattr(launcher, "_git", git)
+    launcher.extract("unused", "v1.0.16", str(tmp_path))
+    out = subprocess.run(
+        [sys.executable, str(tmp_path / "mcs/ops/mcs_update.py"), "--help"],
+        capture_output=True, text=True, check=True)
+    assert "rollback" in out.stdout
+    assert (tmp_path / helper).read_bytes() == files[helper]

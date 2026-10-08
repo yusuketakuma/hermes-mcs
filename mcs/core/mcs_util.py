@@ -366,7 +366,7 @@ def text_chunks(text: str, size: int = 3000) -> list:
             out.append(buf)
             buf = ""
         while len(seg) > size:
-            cut = max(seg.rfind("。", 0, size), seg.rfind("\n", 0, size))
+            cut = max(seg.rfind("。", 0, size), seg.rfind("\n", 0, size)) + 1
             if cut <= 0:
                 cut = size
             out.append(seg[:cut])

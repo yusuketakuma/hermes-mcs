@@ -186,6 +186,13 @@ def test_feedback_attrs():
 
 # ---------- 🚫 reason codes / 🔎 / list views ------------------------------
 
+def test_feedback_fields_match_the_runner_vocabulary():
+    import mcs_operations
+    assert tuple(v for v, _ in text.FEEDBACK_FIELDS) \
+        == mcs_operations.EXTRACT_FEEDBACK_FIELDS
+    assert dict(text.FEEDBACK_FIELDS)["urgency"] == "緊急度"
+
+
 def test_dismiss_reasons_match_the_runner_vocabulary():
     import mcs_operations
     assert tuple(v for v, _ in text.DISMISS_REASONS) \
@@ -237,6 +244,8 @@ def test_search_query_normalizes():
     assert text.search_query({"query": "  発熱　 咳 "}) == "発熱 咳"
     assert text.search_query({"query": "  "}) is None
     assert [f["id"] for f in text.modal_fields("search")] == ["query"]
+    assert [f["id"] for f in text.modal_fields("drugsearch")] == ["query"]
+    assert set(text.QUERY_FORMS) <= set(text.VIEW_FORMS) <= set(text.MODAL_ACTIONS)
 
 
 def test_list_messages_filters_scope_and_caps():

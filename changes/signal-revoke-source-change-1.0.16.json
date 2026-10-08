@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "元投稿の変化後も配送済みアラートを撤回",
+  "summary": "元投稿の削除やスレッドの状態変更後でも、配送済みのSlack・Discordアラートを、その配送先と投稿IDに基づいて撤回できるようにします。新規投稿と更新の元投稿確認は維持します。",
+  "upgrade": "追加設定は不要です。Hermes gatewayまたは独立接続hostのworkerへ新コードを反映してください。削除権限が不足する場合は従来どおり失敗として記録し、結果不明を自動で再送しません。",
+  "details": [
+    "撤回のgrantは現在の原投稿スレッド照合を除外し、sealed scope/hash/revision/epochと送信中判定を維持する。",
+    "Slackは原投稿のGETや本文の再描画をせず、配送済み投稿IDのみをchat.deleteへ渡す。",
+    "Discordは同じ送信先とスレッドの投稿IDを削除し、archived/locked状態で新規投稿を禁止する条件と区別する。",
+    "既に削除済みの投稿・Discordスレッドのgone応答は撤回成功として扱う。本文を再送しない。"
+  ],
+  "refs": ["mcs/notify/notify_transport.py", "adapters/slack/delivery.py", "adapters/discord/delivery.py", "tests/notify/test_signal_thread_hotfix.py"]
+}

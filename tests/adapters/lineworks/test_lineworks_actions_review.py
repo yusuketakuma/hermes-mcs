@@ -60,7 +60,8 @@ def test_completed_view_click_waits_for_a_fresh_runner_result(tmp_path):
     assert "合成の新しい要約" in w.client.calls[-1][1]["text"]
 
 
-@pytest.mark.parametrize("action,field", [("search", "query"), ("mytasks", "name")])
+@pytest.mark.parametrize("action,field", [("search", "query"), ("drugsearch", "query"),
+                                          ("mytasks", "name")])
 def test_repeated_private_view_input_uses_a_fresh_result_id(tmp_path, action, field):
     w = world(tmp_path, action=action)
     actor = "lineworks:40029600:operator"
@@ -81,6 +82,31 @@ def test_repeated_private_view_input_uses_a_fresh_result_id(tmp_path, action, fi
     assert second["command_id"] == first["command_id"]
     assert second["request_id"] != first["request_id"]
 
+
+
+@pytest.mark.parametrize("action", ["search", "drugsearch"])
+def test_blank_search_input_is_answered_not_dropped(tmp_path, action):
+    w = world(tmp_path, action=action)
+    actor = "lineworks:40029600:operator"
+    w.reg.put_modal("lw-form-" + envelopes.actor_hash(actor), {
+        "actor": actor, "user": "operator", "action": action, "token": TOKEN,
+        "origin": {**SCOPE, "message_id": "lw:" + "c" * 32}, "fields": {}, "index": 0,
+        "definitions": [{"id": "query", "required": False, "max": 100}]})
+    asyncio.run(w.actions._input("operator", actor, "なし"))
+    assert command_files(w) == []
+    assert "検索する語を入力してください" in w.client.calls[-1][1]["text"]
+
+
+def test_drug_search_menu_result_starts_the_dm_input(tmp_path):
+    w = world(tmp_path, action="drugsearch")
+    actor = "lineworks:40029600:operator"
+    rec = {"kind": "form", "action": "drugsearch", "actor": actor, "user": "operator",
+           "token": TOKEN, "origin": {**SCOPE, "message_id": "lw:" + "c" * 32}}
+    asyncio.run(w.actions._deliver_followup(
+        "operator", rec, {"outcome": "applied", "action": "drugsearch", "modal": True}))
+    session = w.reg.modal("lw-form-" + envelopes.actor_hash(actor))
+    assert [d["id"] for d in session["definitions"]] == ["query"]
+    assert "薬名" in w.client.calls[-1][1]["text"]
 
 @pytest.mark.parametrize("change", [None, "epoch", "user", "project", "origin"])
 def test_human_receipt_rechecks_scope_after_its_card_token_is_retired(tmp_path, change):

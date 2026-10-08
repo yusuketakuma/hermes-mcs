@@ -73,6 +73,7 @@ HEAD_SYNC_OVERLAP_S = 120
 # a failed 連携サマリー GET keeps its project out of the due/fill
 # selection this long, so one broken karte cannot burn every tick's cap
 KARTE_SUMMARY_BACKOFF_S = 6 * 3600
+KARTE_SUMMARY_REFRESH_S = 24 * 3600  # deep runs refresh source summaries daily
 METADATA_SHADOW_INTERVAL_S = 30 * 60
 # Stamp re-read interval by the age of the thread's newest post (owner
 # 2026-10-03: stamps land after a post is written, on roots and replies
@@ -691,10 +692,14 @@ class Ledger:
                 "UPDATE messages SET notified_at=? WHERE is_unread=0",
                 (now,))
             if intended:
-                self.db.execute(
-                    "UPDATE messages SET notified_at=? WHERE message_id IN ("
-                    + ",".join("?" * len(intended)) + ")",
-                    [now, *intended])
+                ids = list(intended)
+                # Keep every statement below the legacy SQLite 999-variable limit.
+                for offset in range(0, len(ids), 900):
+                    batch = ids[offset:offset + 900]
+                    self.db.execute(
+                        "UPDATE messages SET notified_at=? WHERE message_id IN ("
+                        + ",".join("?" * len(batch)) + ")",
+                        [now, *batch])
         if "kind" not in cols("runs"):
             self.db.execute(
               "ALTER TABLE runs ADD COLUMN kind TEXT DEFAULT 'tick'")
@@ -719,6 +724,11 @@ class Ledger:
             column = "scope_json" if table == "notification_intent_batches" else "team_id"
             if column not in cols(table):
                 self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+        # Card face layout: rows from before it keep layout 1 forever
+        if "layout" not in cols("notification_cards"):
+            self.db.execute(
+                "ALTER TABLE notification_cards ADD COLUMN layout INTEGER "
+                "NOT NULL DEFAULT 1")
         # Durable per-part rollup (T7): 'none' marks renders planned
         # before the part ledger existed.
         if "parts_state" not in cols("notification_renders"):
@@ -786,6 +796,11 @@ class Ledger:
 
     def _save_attachments(self, m, now: float):
         for a in m.attachments:
+            saved = self.db.execute(
+                "SELECT local_path FROM attachments WHERE message_id=? AND file_id=? "
+                "AND state='withdrawn'", (m.message_id, a.file_id)).fetchone()
+            has_payload = bool(saved and isinstance(saved[0], str)
+                               and os.path.isfile(saved[0]))
             self.db.execute("""
               INSERT INTO attachments
                 (message_id,file_id,name,url,created_at)
@@ -794,12 +809,12 @@ class Ledger:
                 name=COALESCE(NULLIF(excluded.name,''),attachments.name),
                 url=COALESCE(NULLIF(excluded.url,''),attachments.url),
                 -- a file listed again after being withdrawn is current
-                -- server-side: restore it with its download state intact.
+                -- server-side: reuse only a payload that still exists.
                 -- A FRESH url (signed links rotate) revives a row that
                 -- failed on the stale one — back to pending, attempts
                 -- cleared (F11)
                 state=CASE WHEN attachments.state='withdrawn'
-                           THEN CASE WHEN attachments.local_path IS NOT NULL
+                           THEN CASE WHEN ?
                                      THEN 'downloaded' ELSE 'pending' END
                            WHEN attachments.state IN ('pending','failed')
                                 AND NULLIF(excluded.url,'') IS NOT NULL
@@ -821,7 +836,7 @@ class Ledger:
                                 AND NULLIF(excluded.url,'') IS NOT NULL
                                 AND excluded.url <> attachments.url
                            THEN NULL ELSE attachments.error END
-            """, (m.message_id, a.file_id, a.name, a.url, now))
+            """, (m.message_id, a.file_id, a.name, a.url, now, has_payload))
         # reconcile the set only when the response enumerated `files`
         # (complete list, possibly empty) or the post is deleted —
         # a response that simply omitted the key must not withdraw rows
@@ -1845,7 +1860,8 @@ class Ledger:
         cap over an older carry-over."""
         return [r["project_id"] for r in self.db.execute(
             "SELECT project_id FROM patients WHERE karte_summary_due=1 "
-            "AND karte_id IS NOT NULL AND COALESCE(karte_summary_failed_at,0)"
+            "AND karte_id IS NOT NULL AND COALESCE(is_archived,0)=0 "
+            "AND COALESCE(karte_summary_failed_at,0)"
             "<? ORDER BY last_seen DESC, project_id",
             (time.time() - KARTE_SUMMARY_BACKOFF_S,))]
 
@@ -1875,6 +1891,25 @@ class Ledger:
               WHERE a.kind='karte_summary' AND a.project_id=p.project_id)
             ORDER BY last_seen, project_id LIMIT ?""",
             (time.time() - KARTE_SUMMARY_BACKOFF_S, limit))]
+
+    def karte_summary_stale(self, limit: int) -> list:
+        """Live fetched summaries due for a daily refresh, oldest successful fetch first."""
+        now = time.time()
+        return [r["project_id"] for r in self.db.execute("""
+            SELECT p.project_id, CASE WHEN json_valid(a.meta)
+                  THEN CASE WHEN json_type(a.meta,'$.fetched_at') IN ('integer','real')
+                            THEN json_extract(a.meta,'$.fetched_at') END
+                  END fetched_at
+            FROM patients p JOIN artifacts a ON a.artifact_id=(
+              SELECT MAX(s.artifact_id) FROM artifacts s
+              WHERE s.kind='karte_summary' AND s.project_id=p.project_id)
+            WHERE p.karte_id IS NOT NULL AND COALESCE(p.is_archived,0)=0
+              AND COALESCE(p.karte_summary_failed_at,0)<?
+              AND (fetched_at IS NULL OR fetched_at<=? OR fetched_at>?)
+            ORDER BY CASE WHEN fetched_at BETWEEN 0 AND ? THEN fetched_at ELSE 0 END,
+                     p.last_seen, p.project_id LIMIT ?""",
+            (now - KARTE_SUMMARY_BACKOFF_S, now - KARTE_SUMMARY_REFRESH_S,
+             now, now, limit))]
 
     def set_probe_marker(self, project_id: int, message_id: int):
         self.db.execute(

@@ -16,6 +16,7 @@ import time
 import semantic_facts as sf
 from mcs_util import loads_dict
 from semantic_policy import KIND_MANIFEST
+import clinical_chunking
 
 
 KIND_CHUNK = "semantic_extraction_chunk"
@@ -37,9 +38,9 @@ def _source_fingerprint(member: dict, supplied: str | None) -> str:
                                sort_keys=True, separators=(",", ":")))
 
 
-def _chunk_generation(model: str, prompt_template: str) -> str:
+def _chunk_generation(model: str, prompt_template: str, *, chunk_size: int = 3000) -> str:
     """Return the model + prompt identity a cached chunk must match."""
-    return f"{model}|{_sha256(prompt_template)[:16]}"
+    return f"{model}|{_sha256(prompt_template)[:16]}|plan:{clinical_chunking.PLAN_VERSION}|size:{chunk_size}"
 
 
 def _chunk_specs(source: str, chunk_size: int, chunker) -> list[dict]:
@@ -67,7 +68,8 @@ def _chunk_specs(source: str, chunk_size: int, chunker) -> list[dict]:
 
 
 _HEADING_RE = re.compile(
-    r"^\s*(?:【[^】\n]{1,60}】|#{1,6}\s+|\S[^\n]{0,40}[:：]\s*$)")
+    r"^\s*(?:【[^】\n]{1,60}】|#{1,6}\s+|\S[^\n]{0,40}[:：]\s*$|"
+    r"(?:本人|患者本人|家族|母|父|妻|夫|過去|現在|予定)\s*$)")
 _LIST_ITEM_RE = re.compile(
     r"^\s*(?:・|[-*‐–—●◦▪]|(?:\d{1,3}|[A-Za-z])[.)、．]|"
     r"[（(]\s*\d{1,3}\s*[)）])")
@@ -80,13 +82,13 @@ def _line_kind(line: str) -> str:
         return "table_row"
     if _LIST_ITEM_RE.match(line):
         return "list_item"
-    if _HEADING_RE.match(line):
+    if clinical_chunking.is_heading(line) or _HEADING_RE.match(line):
         return "heading"
     return "clause"
 
 
 def _atomize(source: str, source_fp: str,
-             max_atom: int = 3000) -> list[dict]:
+             max_atom: int = 3000, *, boundaries=()) -> list[dict]:
     """Partition *source* into ordered atoms covering every codepoint once.
 
     Atoms are clause/list-item/table-row/heading units; whitespace-only
@@ -139,6 +141,13 @@ def _atomize(source: str, source_fp: str,
             start += cut
         refined.append((start, end, kind))
 
+    planned = []
+    for start, end, kind in refined:
+        cuts = [start, *boundaries[bisect.bisect_right(boundaries, start):
+                                   bisect.bisect_left(boundaries, end)], end]
+        planned.extend((left, right, kind) for left, right in zip(cuts, cuts[1:]))
+    refined = planned
+
     atoms = []
     heading_index = None
     for index, (start, end, kind) in enumerate(refined):
@@ -158,6 +167,19 @@ def _atomize(source: str, source_fp: str,
                                            heading["end"]].strip()]
             atom["dependency_atom_ids"] = [heading["atom_id"]]
         atoms.append(atom)
+    # Fragments of the same original line retain its shared subject/time
+    # introduction and trailing action as references, never additional owners.
+    ends = [span[1] for span in spans]
+    groups = {}
+    for atom in atoms:
+        groups.setdefault(bisect.bisect_right(ends, atom["start"]), []).append(atom)
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        for atom in group:
+            for endpoint in (group[0]["atom_id"], group[-1]["atom_id"]):
+                if endpoint != atom["atom_id"] and endpoint not in atom["dependency_atom_ids"]:
+                    atom["dependency_atom_ids"].append(endpoint)
     return atoms
 
 
@@ -171,21 +193,21 @@ def build_manifest(source: str, source_fp: str,
     """
     if type(chunk_size) is not int or chunk_size <= 0:
         raise ValueError("chunk_size_invalid")
-    atoms = _atomize(source, source_fp, chunk_size) if source else []
+    specs = _chunk_specs(source, chunk_size, clinical_chunking.plan_chunks)
+    if any(spec["end"] - spec["start"] > chunk_size for spec in specs):
+        raise ValueError("chunk_size_exceeded")
+    atoms = _atomize(source, source_fp, chunk_size,
+                     boundaries=[spec["end"] for spec in specs[:-1]]) if source else []
     by_id = {a["atom_id"]: a for a in atoms}
     positions = {a["atom_id"]: index for index, a in enumerate(atoms)}
     chunks = []
-    core = []
-    size = 0
+    spec_index = 0
     for atom in atoms:
-        width = atom["end"] - atom["start"]
-        if core and size + width > chunk_size:
-            chunks.append(core)
-            core, size = [], 0
-        core.append(atom["atom_id"])
-        size += width
-    if core:
-        chunks.append(core)
+        while atom["start"] >= specs[spec_index]["end"]:
+            spec_index += 1
+        if len(chunks) <= spec_index:
+            chunks.append([])
+        chunks[spec_index].append(atom["atom_id"])
     chunk_rows = []
     for index, core_ids in enumerate(chunks):
         first = by_id[core_ids[0]]
@@ -238,6 +260,26 @@ def _manifest_specs(manifest: dict) -> list[dict]:
             for chunk in manifest["chunks"]]
 
 
+def _chunk_prompt(template, spec, manifest, source, chunk_size):
+    """Expose bounded source neighbours as reference only; evidence stays in the core piece."""
+    prompt = template % spec["text"]
+    references = set(spec.get("context_atom_ids") or []) | set(spec.get("dependency_atom_ids") or [])
+    fragments = [source[atom["start"]:atom["end"]] for atom in manifest["atoms"]
+                 if atom["atom_id"] in references]
+    budget = max(chunk_size, 256)
+    per_fragment = max(1, (budget - max(0, len(fragments) - 1)) // max(1, len(fragments)))
+    context = "\n".join(fragment if len(fragment) <= per_fragment else
+                        fragment[:max(0, (per_fragment - 1) // 2)] + "…" +
+                        (fragment[-(per_fragment // 2):] if per_fragment > 1 else "")
+                        for fragment in fragments)[:budget]
+    if context:
+        prompt = prompt.rsplit("JSON:", 1)[0] + (
+            "\n参考文脈（対象本文の前後・見出し。対象や同薬の解釈用だけ。ここだけの事実は抽出せず、"
+            "evidence_quoteと属性引用は上の対象本文<<< >>>内だけから取る）:\n"
+            + context + "\nJSON:")
+    return prompt
+
+
 def _evidence_atom(manifest: dict, start: int, end: int) -> str | None:
     """Return the atom that owns ``[start, end)``, else ``None``.
 
@@ -257,13 +299,10 @@ def _evidence_atom(manifest: dict, start: int, end: int) -> str | None:
     return atom["atom_id"]
 
 
-def _persist_manifest(ledger, project_id, message_id, model, source_fp,
-                      manifest, body_len):
-    if ledger is None:
-        return
-    doc = {
+def _manifest_content(manifest, body_len):
+    return {
         "version": MANIFEST_VERSION,
-        "source_fingerprint": source_fp,
+        "source_fingerprint": manifest["source_fingerprint"],
         "body_codepoints": body_len,
         "atoms": manifest["atoms"],
         "chunks": [{k: c[k] for k in
@@ -271,6 +310,13 @@ def _persist_manifest(ledger, project_id, message_id, model, source_fp,
                      "dependency_atom_ids", "status", "index", "start",
                     "end", "hash")} for c in manifest["chunks"]],
     }
+
+
+def _persist_manifest(ledger, project_id, message_id, model, source_fp,
+                      manifest, body_len):
+    if ledger is None:
+        return
+    doc = _manifest_content(manifest, body_len)
     existing = ledger.artifacts(KIND_MANIFEST, project_id=project_id,
                                 message_id=message_id)
     for row in reversed(existing or []):
@@ -290,6 +336,8 @@ def _persist_manifest(ledger, project_id, message_id, model, source_fp,
               "body_codepoints": body_len,
               "atoms": len(manifest["atoms"]),
               "chunks": len(manifest["chunks"])})
+    from extraction_refresh import refresh_extraction_cards
+    refresh_extraction_cards(ledger, project_id, message_id)
 
 
 def _json_object(response, semantic):
@@ -530,6 +578,78 @@ def _chunk_progress(specs, completed, reused, failed, failure_reason,
             "source_fingerprint": source_fp}
 
 
+def progress_for_message(db, row, *, model, policy_fingerprint, chunk_size=3000):
+    """Count only current-plan checkpoints; completion requires the existing audited publication gate."""
+    from types import SimpleNamespace
+    import semantic_llm
+    from semantic_store import thread_bundle
+    from semantic_v4 import reproject_doc
+    from semantic_projection import PROJECTION_VERSION, project_v2_doc_legacy
+
+    source = row.get("body_text")
+    if (not isinstance(source, str) or not source or row.get("body_state") not in (None, "full")
+            or not isinstance(model, str) or not model or not isinstance(policy_fingerprint, str)):
+        return None
+    pid, mid = row["project_id"], row["message_id"]
+    ledger = SimpleNamespace(db=db, iter_artifacts=lambda kind, project_id, message_id: db.execute(
+        "SELECT * FROM artifacts WHERE kind=? AND project_id=? AND message_id=? ORDER BY artifact_id",
+        (kind, project_id, message_id)))
+    bundle = thread_bundle(ledger, pid, row.get("parent_id") or mid, local_model=model)
+    if bundle is None:
+        return None
+    fp = bundle["source_fingerprint"]
+    manifest = build_manifest(source, fp, chunk_size)
+    specs = _manifest_specs(manifest)
+    expected = _manifest_content(manifest, len(source))
+    persisted = db.execute("SELECT content,model FROM artifacts WHERE kind=? AND project_id=? "
+                           "AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
+                           (KIND_MANIFEST, pid, mid)).fetchone()
+    if persisted is None:
+        return None
+    out = {"state": "attention", "completed": 0, "total": len(specs), "backend": "semantic"}
+    if persisted["model"] != model or loads_dict(persisted["content"]) != expected:
+        return out
+    publication_blocked = False
+    for publication in db.execute(
+            "SELECT content,meta,model FROM artifacts WHERE kind IN ('semantic_facts_v4','canonical_projection') "
+            "AND project_id=? AND message_id=? ORDER BY artifact_id DESC", (pid, mid)):
+        meta = loads_dict(publication["meta"])
+        if not meta and publication["model"] == model:
+            publication_blocked = True
+            break
+        if (not meta or publication["model"] != model or meta.get("hash") != row["content_hash"]
+                or meta.get("fingerprint") != fp or meta.get("policy_fingerprint") != policy_fingerprint):
+            continue
+        publication_blocked = True
+        if meta.get("invalidated") or meta.get("projection_version") != PROJECTION_VERSION:
+            break
+        doc, _ = reproject_doc(ledger, mid, meta)
+        try:
+            clean = sf.validate_facts_doc(doc)
+        except sf.ContractError:
+            break
+        keys = ("chunk_id", "core_atom_ids", "context_atom_ids", "dependency_atom_ids")
+        if (clean["source"]["source_fingerprint"] == fp and clean["source"]["content_hash"] == _sha256(source)
+                and clean["source"]["revision"] == row["content_hash"]
+                and clean["source"]["message_id"] == str(mid)
+                and clean["source"]["body_codepoints"] == len(source)
+                and clean["atoms"] == manifest["atoms"]
+                and [{key: chunk[key] for key in keys} for chunk in clean["chunks"]]
+                == [{key: chunk[key] for key in keys} for chunk in manifest["chunks"]]
+                and all(chunk["status"] in ("complete", "done") for chunk in clean["chunks"])
+                and all(source[e["start"]:e["end"]] == e["quote"] for e in clean["evidence"])
+                and loads_dict(publication["content"]) == project_v2_doc_legacy(clean)):
+            return {**out, "state": "complete", "completed": len(specs)}
+        break
+    generation = _chunk_generation(model, semantic_llm._FACT_V2_PROMPT, chunk_size=chunk_size)
+    cached = _cached_chunks(ledger, pid, mid, fp, _sha256(source), row["content_hash"], specs, source,
+                            kind=KIND_CHUNK_V2, schema=SCHEMA_VERSION_V2,
+                            extra=_v2_chunk_ok, generation=generation)
+    completed = len(cached)
+    return {**out, "completed": completed,
+            "state": "processing" if not publication_blocked and completed < len(specs) else "attention"}
+
+
 def _persist_chunk(ledger, project_id, message_id, model, source_fp,
                    body_hash, revision, spec, facts, dropped, chunk_count,
                    *, kind: str = KIND_CHUNK, schema: str = SCHEMA_VERSION,
@@ -563,6 +683,8 @@ def _persist_chunk(ledger, project_id, message_id, model, source_fp,
     ledger.artifact_add(
         kind, json.dumps(content, ensure_ascii=False, allow_nan=False),
         project_id=project_id, message_id=message_id, model=model, meta=meta)
+    from extraction_refresh import refresh_extraction_cards
+    refresh_extraction_cards(ledger, project_id, message_id)
 
 
 def extract_facts_resumable(llm_fn, member: dict,
@@ -590,7 +712,7 @@ def extract_facts_resumable(llm_fn, member: dict,
         specs = _chunk_specs(source, chunk_size, chunker)
     _persist_manifest(ledger, project_id, message_id, semantic.llm_model(),
                       source_fp, manifest, len(source))
-    generation = _chunk_generation(semantic.llm_model(), semantic._FACT_PROMPT)
+    generation = _chunk_generation(semantic.llm_model(), semantic._FACT_PROMPT, chunk_size=chunk_size)
     cached = _cached_chunks(ledger, project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
                             generation=generation)
@@ -614,7 +736,7 @@ def extract_facts_resumable(llm_fn, member: dict,
             failure_reason = "deadline"
             break
         parsed, reason = _chunk_llm(
-            llm_fn, semantic._FACT_PROMPT % spec["text"], deadline)
+            llm_fn, _chunk_prompt(semantic._FACT_PROMPT, spec, manifest, source, chunk_size), deadline)
         if reason is not None:
             failed.append(index)
             failure_reason = reason
@@ -808,10 +930,43 @@ def _normalise_facts_v2(items: list, member: dict, source: str, semantic,
             fact["action"] = _enum_or_unknown(item.get("action"),
                                               sf.MED_ACTIONS)
         fact.update(sf.request_details(item, [ev_rec["quote"]] if ev_rec else []))
+        if "patient_context" in item:
+            raw = item["patient_context"]
+            if isinstance(raw, dict) and not set(raw) - {"category", "text", "details"} and ev_rec:
+                candidate = {**raw, "evidence": ev_rec["quote"], "subject": sf.context_subject(subject)}
+                try:
+                    fact["patient_context"] = sf.validate_patient_context(
+                        {"subject": subject, "patient_context": candidate}, [ev_rec["quote"]])
+                except sf.ContractError:
+                    dropped += 1  # Optional claims that failed grounding still block chunk publication.
+            else:
+                dropped += 1
         if obligation_ids:
             obligations[oid]["fact_ids"].append(fact["fact_id"])
         facts.append(fact)
     return facts, dropped
+
+
+def _symptom_names(source, names):
+    """Keep symptom reports; an explicit PRN instruction alone is not a symptom report."""
+    result = []
+    for name in names:
+        if not isinstance(name, str) or not name:
+            continue
+        for match in re.finditer(re.escape(name), source):
+            tail = re.split(r"[。！？!?;；\n]", source[match.end():], maxsplit=1)[0]
+            contingency = re.match(
+                r"\s*(?:(?:の)?(?:時(?!間|刻|期|点|々)|とき(?!どき))(?:に|には|は|のみ|だけ)?|"
+                r"が(?:出た|ある|生じた)(?:場合|とき|時)(?:に|は)?)", tail)
+            medicine = re.search(r"使用|服用|内服|服薬|頓服|投与|飲(?:む|ん|み)", tail)
+            reported = re.search(
+                r"(?:使用|服用|内服|頓服|投与)(?:した|しました|済)|飲んだ|飲みました|"
+                r"現在|持続|続いて|悪化|強い|ない|ありません|不明", tail)
+            if contingency and medicine and not reported:
+                continue
+            result.append(name)
+            break
+    return result
 
 
 def _v1_hint_items(source: str, posted_at: str) -> list:
@@ -838,7 +993,7 @@ def _v1_hint_items(source: str, posted_at: str) -> list:
                 " ".join(p for p in (str(med.get("name") or ""),
                                      str(med.get("dose") or "")) if p),
                 med.get("name"))
-    for name in hints.get("symptoms") or []:
+    for name in _symptom_names(source, hints.get("symptoms") or []):
         add("symptom_state", str(name), name)
     vit = hints.get("vitals")
     if isinstance(vit, dict):
@@ -859,8 +1014,11 @@ def _v1_category_signals(source: str, posted_at: str) -> set:
     hints = extract.extract_message(source, posted_at or "")
     if not isinstance(hints, dict):
         return set()
-    return {category for category, fields in _V1_CATEGORY_FIELDS.items()
+    signals = {category for category, fields in _V1_CATEGORY_FIELDS.items()
             if any(hints.get(field) for field in fields)}
+    if not _symptom_names(source, hints.get("symptoms") or []):
+        signals.discard("symptom_state")
+    return signals
 
 
 def _v2_chunk_ok(content: dict) -> bool:
@@ -947,7 +1105,7 @@ def extract_facts_v2(llm_fn, member: dict,
     _persist_manifest(ledger, project_id, message_id, semantic.llm_model(),
                       source_fp, manifest, len(source))
     cache_schema = SCHEMA_VERSION_V2 + ("/coverage-retry" if retry_coverage else "")
-    generation = _chunk_generation(semantic.llm_model(), prompt_template)
+    generation = _chunk_generation(semantic.llm_model(), prompt_template, chunk_size=chunk_size)
     cached = _cached_chunks(ledger, project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
                             kind=KIND_CHUNK_V2, schema=cache_schema,
@@ -1003,7 +1161,7 @@ def extract_facts_v2(llm_fn, member: dict,
             jev_verdicts[cid] = _preflight_verdict(
                 jev_client, spec["text"], deadline, cid)
         parsed, reason = _chunk_llm(
-            llm_fn, prompt_template % spec["text"], deadline)
+            llm_fn, _chunk_prompt(prompt_template, spec, manifest, source, chunk_size), deadline)
         if reason is not None:
             failed.append(index)
             failure_reason = reason
@@ -1233,6 +1391,15 @@ def _merge_dupe_facts(facts: list) -> list:
             existing["validation_status"] = "verified"
         if fact.get("_evidence") and not existing.get("_evidence"):
             existing["_evidence"] = fact["_evidence"]
+        context = fact.get("patient_context")
+        if context and not existing.get("patient_context"):
+            existing["patient_context"] = context
+        elif context:
+            prior = existing["patient_context"]
+            if all(prior.get(key) == context.get(key) for key in ("category", "text", "evidence", "subject")):
+                for detail in context.get("details") or []:
+                    if detail not in prior.setdefault("details", []):
+                        prior["details"].append(detail)
     return merged_facts
 
 
@@ -1343,7 +1510,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
         import semantic
         import semantic_llm
         generation_detail["generation"] = _chunk_generation(
-            semantic.llm_model(), semantic_llm._FACT_V2_REQUEST_FOLLOWING_PROMPT)
+            semantic.llm_model(), semantic_llm._FACT_V2_REQUEST_FOLLOWING_PROMPT, chunk_size=chunk_size)
     if not isinstance(doc, dict) or not isinstance(member, dict) \
             or not rejected or not callable(llm_fn):
         return {"doc": doc, "repaired": False,
@@ -1422,7 +1589,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
             if any(obligations.get(oid, {}).get("owner_id") == cid
                    for oid in facts_by_id[fid].get("obligation_ids", []))
             or not facts_by_id[fid].get("obligation_ids"))
-        base = prompt_template % spec["text"]
+        base = _chunk_prompt(prompt_template, spec, manifest, source, chunk_size)
         base = base.rsplit("JSON:", 1)[0]
         prompt = base + semantic_llm._FACT_V2_REPAIR_SUFFIX % feedback
         parsed, _reason = _chunk_llm(llm_fn, prompt, deadline)

@@ -1,35 +1,115 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="760" height="210" viewBox="0 0 760 210" font-family="Menlo, 'Hiragino Sans', monospace">
-  <rect width="760" height="210" fill="#0d1117"/>
-  <defs>
-    <marker id="ov_ar" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
-      <path d="M0,0 L9,4.5 L0,9 z" fill="#58a6ff"/>
-    </marker>
-  </defs>
-  <!-- stage 1: source -->
-  <rect x="30" y="60" width="170" height="90" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
-  <text x="115" y="92" font-size="14" fill="#e6edf3" text-anchor="middle" font-weight="bold">MCS</text>
-  <text x="115" y="112" font-size="11" fill="#8b949e" text-anchor="middle">医療・介護チームの</text>
-  <text x="115" y="126" font-size="11" fill="#8b949e" text-anchor="middle">チャット記録</text>
-  <line x1="200" y1="105" x2="248" y2="105" stroke="#58a6ff" stroke-width="2" marker-end="url(#ov_ar)"/>
-  <text x="224" y="92" font-size="10" fill="#58a6ff" text-anchor="middle">10分ごと</text>
-  <text x="224" y="122" font-size="10" fill="#8b949e" text-anchor="middle">自動収集</text>
-  <!-- stage 2: this system -->
-  <rect x="252" y="42" width="230" height="126" rx="10" fill="#1f6feb"/>
-  <text x="367" y="68" font-size="14" fill="#fff" text-anchor="middle" font-weight="bold">hermes-mcs</text>
-  <text x="367" y="90" font-size="11" fill="#dbe8ff" text-anchor="middle">このマシン上に保存し</text>
-  <text x="367" y="106" font-size="11" fill="#dbe8ff" text-anchor="middle">薬・症状・依頼などを整理</text>
-  <text x="367" y="130" font-size="10" fill="#bdd4f7" text-anchor="middle">※ 通知・監査は設定先へ送信</text>
-  <text x="367" y="146" font-size="10" fill="#bdd4f7" text-anchor="middle">※ 元の記録は書き換えません</text>
-  <line x1="482" y1="105" x2="530" y2="105" stroke="#58a6ff" stroke-width="2" marker-end="url(#ov_ar)"/>
-  <text x="506" y="92" font-size="10" fill="#8b949e" text-anchor="middle">見える形に</text>
-  <!-- stage 3: outputs -->
-  <rect x="534" y="20" width="196" height="170" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
-  <text x="632" y="44" font-size="12" fill="#e6edf3" text-anchor="middle" font-weight="bold">見られるようになるもの</text>
-  <text x="556" y="65" font-size="11" fill="#8b949e">・ 新着通知（設定先へ）</text>
-  <text x="566" y="81" font-size="9" fill="#8b949e">Slack / Discord / LINE WORKS</text>
-  <text x="556" y="103" font-size="11" fill="#8b949e">・ 全文検索と患者タイムライン</text>
-  <text x="556" y="122" font-size="11" fill="#8b949e">・ 患者ごとの状態一覧</text>
-  <text x="556" y="140" font-size="11" fill="#8b949e">・ 統計（読み取り専用）</text>
-  <text x="556" y="158" font-size="11" fill="#8b949e">・ 「アラート」の一覧</text>
-  <text x="556" y="178" font-size="10" fill="#6e7681">（判断・登録は人が行う）</text>
-</svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1000" height="440" viewBox="0 0 1000 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flow-overview-title flow-overview-desc" id="flow-overview-root">
+        <title id="flow-overview-title">収集・保存・整理・通知の流れ</title>
+        <desc id="flow-overview-desc">MCSの連絡をこのMacで収集・保存・抽出し、Slack・Discord・LINE WORKSへカードとして通知し、職員の操作を記録する流れ。</desc>
+        <defs>
+      <style>
+      #flow-overview-root { --color-paper: #f6f4ef;
+      --color-ink: #202124;
+      --color-muted: #66716f;
+      --color-accent: #087f5b;
+      --font-sans: 'Hiragino Sans', 'Noto Sans CJK JP', 'Yu Gothic', sans-serif;
+      --font-mono: Menlo, 'SF Mono', ui-monospace, monospace; }
+      #flow-overview-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #flow-overview-root .diagram-container { width: 100%; overflow-x: auto; }
+      #flow-overview-root .diagram-container { overflow-x: visible; }</style>
+          <marker id="flow-overview-fo-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#66716f"/></marker>
+          <marker id="flow-overview-fo-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#087f5b"/></marker>
+          <marker id="flow-overview-fo-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#1264a3"/></marker>
+        </defs>
+        <rect width="100%" height="100%" fill="#f6f4ef"/>
+
+        <!-- zone: this Mac -->
+        <rect x="204" y="68" width="572" height="284" rx="8" fill="#202124" fill-opacity="0.02" stroke="#202124" stroke-opacity="0.14" stroke-width="0.8"/>
+        <rect x="220" y="72" width="76" height="16" rx="2" fill="#f6f4ef"/>
+        <text x="258" y="84" fill="#66716f" font-size="12" font-weight="500" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" text-anchor="middle">このMac</text>
+
+        <!-- arrows first -->
+        <line x1="180" y1="144" x2="226" y2="144" stroke="#66716f" stroke-width="1.2" marker-end="url(#flow-overview-fo-arrow)"/>
+        <line x1="384" y1="144" x2="414" y2="144" stroke="#66716f" stroke-width="1.2" marker-end="url(#flow-overview-fo-arrow)"/>
+        <line x1="572" y1="144" x2="602" y2="144" stroke="#66716f" stroke-width="1.2" marker-end="url(#flow-overview-fo-arrow)"/>
+        <line x1="494" y1="180" x2="494" y2="234" stroke="#66716f" stroke-width="1.2" marker-end="url(#flow-overview-fo-arrow)"/>
+        <path d="M 572,272 H 674 Q 682,272 682,264 V 182" fill="none" stroke="#66716f" stroke-width="1.2" marker-end="url(#flow-overview-fo-arrow)"/>
+        <line x1="760" y1="132" x2="818" y2="132" stroke="#087f5b" stroke-width="1.4" marker-end="url(#flow-overview-fo-arrow-accent)"/>
+        <line x1="820" y1="156" x2="762" y2="156" stroke="#66716f" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#flow-overview-fo-arrow)"/>
+        <line x1="572" y1="288" x2="818" y2="288" stroke="#1264a3" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#flow-overview-fo-arrow-link)"/>
+        <path d="M 452,180 V 200 Q 452,208 444,208 H 314 Q 306,208 306,216 V 234" fill="none" stroke="#66716f" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#flow-overview-fo-arrow)"/>
+
+        <!-- arrow labels (masked, gap from strokes) -->
+        <rect x="692" y="212" width="80" height="16" fill="#f1efeb"/>
+        <text x="732" y="224" fill="#66716f" font-size="12" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" text-anchor="middle">要約・緊急度</text>
+        <rect x="768" y="104" width="44" height="16" fill="#f6f4ef"/>
+        <text x="790" y="116" fill="#087f5b" font-size="12" font-weight="500" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" text-anchor="middle">カード</text>
+        <rect x="772" y="168" width="40" height="16" fill="#f6f4ef"/>
+        <text x="792" y="180" fill="#66716f" font-size="12" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" text-anchor="middle">操作</text>
+        <rect x="708" y="296" width="40" height="16" fill="#f1efeb"/>
+        <text x="728" y="308" fill="#1264a3" font-size="12" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" text-anchor="middle">任意</text>
+        <rect x="340" y="184" width="80" height="16" fill="#f1efeb"/>
+        <text x="380" y="196" fill="#66716f" font-size="12" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" text-anchor="middle">エクスポート</text>
+
+        <!-- nodes -->
+        <g font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif">
+          <!-- MCS (input) -->
+          <rect x="24" y="108" width="156" height="72" rx="6" fill="#f6f4ef"/>
+          <rect x="24" y="108" width="156" height="72" rx="6" fill="#edf0ee" stroke="#66716f" stroke-width="1"/>
+          <text x="36" y="132" fill="#202124" font-size="14" font-weight="600">MCS</text>
+          <text x="36" y="152" fill="#66716f" font-size="12">医療・介護チャット</text>
+          <text x="36" y="168" fill="#66716f" font-size="12">10分ごとに未読を取得</text>
+
+          <!-- collect -->
+          <rect x="228" y="108" width="156" height="72" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="240" y="132" fill="#202124" font-size="14" font-weight="600">収集</text>
+          <text x="240" y="152" fill="#66716f" font-size="12">投稿・返信・添付</text>
+          <text x="240" y="168" fill="#66716f" font-size="12">保存後に既読化</text>
+
+          <!-- ledger (store) -->
+          <rect x="416" y="108" width="156" height="72" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="428" y="132" fill="#202124" font-size="14" font-weight="600">台帳</text>
+          <text x="428" y="152" fill="#66716f" font-size="12">記録・検索・タスク</text>
+          <text x="428" y="168" fill="#66716f" font-size="11" font-family="Menlo,'SF Mono',monospace">SQLite · FTS5</text>
+
+          <!-- notify (focal) -->
+          <rect x="604" y="108" width="156" height="72" rx="6" fill="#f6f4ef"/>
+          <rect x="604" y="108" width="156" height="72" rx="6" fill="#087f5b" fill-opacity="0.08" stroke="#087f5b" stroke-width="1.4"/>
+          <text x="616" y="132" fill="#202124" font-size="14" font-weight="600">通知</text>
+          <text x="616" y="152" fill="#66716f" font-size="12">カード・スレッド</text>
+          <text x="616" y="168" fill="#66716f" font-size="12">確認・担当・タスク</text>
+
+          <!-- extract (local LLM) -->
+          <rect x="416" y="236" width="156" height="72" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="428" y="260" fill="#202124" font-size="14" font-weight="600">抽出</text>
+          <text x="428" y="280" fill="#66716f" font-size="12">ローカルLLM</text>
+          <text x="428" y="296" fill="#66716f" font-size="12">要約・薬剤・緊急度</text>
+
+          <!-- knowledge export (optional) -->
+          <rect x="228" y="236" width="156" height="72" rx="6" fill="#f6f4ef" stroke="#66716f" stroke-width="1" stroke-dasharray="4,3"/>
+          <text x="240" y="260" fill="#202124" font-size="14" font-weight="600">知識ストア出力</text>
+          <text x="240" y="280" fill="#66716f" font-size="12">Markdown</text>
+          <text x="240" y="296" fill="#66716f" font-size="12">明示的に実行</text>
+
+          <!-- chat -->
+          <rect x="820" y="108" width="156" height="72" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="832" y="132" fill="#202124" font-size="14" font-weight="600">チャット</text>
+          <text x="832" y="152" fill="#66716f" font-size="12">Slack（推奨）</text>
+          <text x="832" y="168" fill="#66716f" font-size="12">Discord・LINE WORKS</text>
+
+          <!-- external audit API (optional) -->
+          <rect x="820" y="236" width="156" height="72" rx="6" fill="#f6f4ef" stroke="#1264a3" stroke-width="1" stroke-dasharray="4,3"/>
+          <text x="832" y="260" fill="#202124" font-size="14" font-weight="600">外部の監査API</text>
+          <text x="832" y="280" fill="#66716f" font-size="12">意味チェック</text>
+          <text x="832" y="296" fill="#66716f" font-size="12">既定OFF</text>
+        </g>
+
+        <!-- legend strip -->
+        <line x1="24" y1="372" x2="976" y2="372" stroke="#202124" stroke-opacity="0.12" stroke-width="0.8"/>
+        <g font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" font-size="12" fill="#66716f">
+          <line x1="24" y1="404" x2="56" y2="404" stroke="#66716f" stroke-width="1.2"/>
+          <text x="64" y="408">主な流れ</text>
+          <line x1="160" y1="404" x2="192" y2="404" stroke="#66716f" stroke-width="1" stroke-dasharray="5,4"/>
+          <text x="200" y="408">戻り・明示的な操作</text>
+          <line x1="352" y1="404" x2="384" y2="404" stroke="#1264a3" stroke-width="1" stroke-dasharray="5,4"/>
+          <text x="392" y="408">外部送信（任意・既定OFF）</text>
+          <rect x="592" y="396" width="24" height="16" rx="3" fill="#087f5b" fill-opacity="0.08" stroke="#087f5b" stroke-width="1.2"/>
+          <text x="624" y="408">職員が見る通知</text>
+        </g>
+      </svg>

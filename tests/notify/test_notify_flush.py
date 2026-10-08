@@ -103,6 +103,16 @@ def test_rule_only_medication_is_labeled_unverified(monkeypatch):
                for line in lines)
 
 
+def test_source_less_display_keeps_high_unconfirmed_and_suppresses_patient_values(monkeypatch):
+    document = {"urgency": "high", "urgency_evidence": ["本人が急変"],
+                "vitals": {"spo2": 80}, "vital_flags": [{"key": "spo2", "value": 80}]}
+    monkeypatch.setattr(structured_view, "latest_artifact", lambda db, kind, mid: document if kind == "extract_llm" else {})
+    monkeypatch.setattr(structured_view, "latest_fact_artifact", lambda db, mid: document)
+    lines = structured_view.structured_lines(None, 1)
+    assert any("要確認" in line for line in lines)
+    assert not any("緊急度: 高" in line or "SpO2" in line for line in lines)
+
+
 @pytest.mark.parametrize("outcome", ["timeout", "partial_failure"])
 def test_uncertain_child_delivery_is_held_without_retry(tmp_path, monkeypatch,
                                                        outcome):

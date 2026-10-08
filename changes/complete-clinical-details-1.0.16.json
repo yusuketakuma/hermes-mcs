@@ -1,0 +1,26 @@
+{
+  "category": "added",
+  "title": "服薬・副作用・観測・支援・変更後の結果を詳細属性で保持",
+  "summary": "既存の患者背景へ指定した全情報を19分類・27の原文属性で保存します。出典・観測日・最終確認・確認者・確認状態を根拠付きで保持し、登録薬剤・観測値とチャット情報を別々に表示します。長文の出力打切りと大量の観測値は、検証済みの部分を保存して再開できるようにします。",
+  "upgrade": "更新後はworkerへ反映する再起動が必要です。ルール12／LLM6／詳細契約2へ進め、旧成功・失敗結果も通常workerで順次再抽出します。モデル・1600tokens・稼働枠・DB schema・人承認・既読化・通知先は変更しません。登録情報の定期取得はclinical_metadata=trueを明示選択すると有効です（既定false）。各deep最大12GET／25秒、観測値1項目1万行／観測項目250の支持上限を超える場合は未完を明示し、部分情報を現在値と扱いません。実機適用・設定変更・実取得を行った記録ではありません。",
+  "details": [
+    "各詳細属性の引用を対象本文の親引用内に拘束し、未記載・疑い・他者・過去・予定・条件を確定した患者現在値へ推測しない。",
+    "canonical v3/v4の同fact引用・subject・doc_hashと監査に追加属性を束縛し、既存PASS／admission／公開fenceを維持する。",
+    "本文の全coverageと新layout checkpointを保持し、実出力length時だけ細分化する。語彙による詳細除外は行わない。",
+    "本人限定要約で登録sourceの取得状態と観測日時・単位を確認できる。原文・全属性・履歴はdetailに保持し、aggregateは値を含めない。"
+  ],
+  "refs": [
+    "mcs/extract/patient_context.py",
+    "mcs/extract/v1/extract.py",
+    "mcs/extract/rollup.py",
+    "mcs/views/read_model.py",
+    "mcs/views/project_metadata_view.py",
+    "mcs/notify/notify_views.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/semantic/semantic_llm.py",
+    "mcs/semantic/semantic_extraction.py",
+    "mcs/semantic/semantic_facts.py",
+    "mcs/semantic/semantic_audit.py",
+    "mcs/semantic/semantic_projection.py"
+  ]
+}

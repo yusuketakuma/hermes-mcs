@@ -109,13 +109,13 @@ def test_unreacted_own_posts_section_only_when_published(led):
         _meta(led, mid, reactions=[])
     _meta(led, 109, reactions=["broken"])
     led.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=105")
-    assert _section(_digest(led, CFG), "反応が観測されていない自分の投稿") is None
-    sec = _section(_digest(led), "反応が観測されていない自分の投稿")
-    assert "他者反応0件 2投稿" in sec
-    assert "message 100 2日経過・観測" in sec and "message 103 7日経過" in sec
+    assert _section(_digest(led, CFG), "反応がない自分の投稿") is None
+    sec = _section(_digest(led), "反応がない自分の投稿")
+    assert "反応なし 2投稿" in sec
+    assert "・project 1 2日経過・観測" in sec and "・project 1 7日経過" in sec
     for mid in (101, 102, 104, 105, 106, 107, 108, 109):
         assert f"message {mid} " not in sec
-    assert "スタンプ未取得 1投稿・取得不正 1（0件に含めません）" in sec
+    assert "スタンプ未取得 1投稿・取得不正 1" in sec
     assert "合成同名" not in sec and "本文" not in sec
 
 
@@ -124,15 +124,15 @@ def test_unreacted_section_without_self_id_and_scope(led):
     _patient(led, 2)
     _post(led, 100, SELF, ts=NOW - 100)
     _meta(led, 100, reactions=[])
-    assert "本人の送信者IDが不明" in _section(_digest(led), "反応が観測されていない自分の投稿")
+    assert "本人の送信者IDが不明" in _section(_digest(led), "反応がない自分の投稿")
     _self_known(led)
     _post(led, 200, SELF, ts=NOW - 100, pid=2)
     _meta(led, 200, reactions=[])
-    sec = _section(_digest(led, allowed=[2]), "反応が観測されていない自分の投稿")
-    assert "message 200" in sec and "message 100" not in sec
+    sec = _section(_digest(led, allowed=[2]), "反応がない自分の投稿")
+    assert "・project 2 " in sec and "・project 1 " not in sec
     flt = notify_digest.parse_scope("project:1")
-    sec = _section(_digest(led, flt=flt), "反応が観測されていない自分の投稿")
-    assert "message 100" in sec and "message 200" not in sec
+    sec = _section(_digest(led, flt=flt), "反応がない自分の投稿")
+    assert "・project 1 " in sec and "・project 2 " not in sec
 
 
 def test_addressed_to_me_requires_same_thread_reply_or_self_stamp(led):
@@ -158,18 +158,17 @@ def test_addressed_to_me_requires_same_thread_reply_or_self_stamp(led):
     _meta(led, 160, mentions=[{"type": "station", "id": 5}], reactions=[])
     _meta(led, 170, mentions=[{"type": "user", "id": "7"}], reactions=[])
     _meta(led, 180, mentions=me)
-    sec = _section(_digest(led), "自分宛で応答未観測")
-    assert "message 110 " in sec and "message 130 " in sec and "message 180 " in sec
-    for mid in (100, 140, 150, 160, 170):
-        assert f"message {mid} " not in sec
+    sec = _section(_digest(led), "自分宛で返信の記録なし")
+    # 110, 130 and 180 only — rows name the room, never internal ids
+    assert sec.count("・project 1 自分宛・") == 3 and "message " not in sec
     assert "自分の返信観測なし・本人スタンプ観測なし" in sec
-    assert "message 180 本人宛メンション・1時間経過・自分の返信観測なし・本人スタンプ未取得" in sec
-    assert "施設宛（自局判定なし）: 1投稿" in sec
-    assert "メンション不明（未取得・取得不正）" in sec
-    assert "記録が見つからない≠対応がなかった" in sec
+    assert "自分宛・1時間経過・自分の返信観測なし・本人スタンプ未取得" in sec
+    assert "施設宛: 1投稿" in sec
+    assert "宛先不明: 1投稿" in sec
+    assert "記録が見つからない≠対応がなかった" not in sec
     assert "合成同名" not in sec and "本文" not in sec
     # 同じ表示は publish 設定に依らない（capture の値を読むだけ）
-    assert _section(_digest(led, CFG), "自分宛で応答未観測") == sec
+    assert _section(_digest(led, CFG), "自分宛で返信の記録なし") == sec
 
 
 def test_addressed_section_without_self_id_lists_no_mentions(led):
@@ -178,11 +177,11 @@ def test_addressed_section_without_self_id_lists_no_mentions(led):
     _meta(led, 110, mentions=[{"type": "user", "id": SELF}], reactions=[])
     _signal_row(led, "pru:1:110", stype="pharmacist_request_unanswered", mids=[110])
     cfg = {**PUB, "signals": {"notify": True}}
-    sec = _section(_digest(led, cfg), "自分宛で応答未観測")
+    sec = _section(_digest(led, cfg), "自分宛で返信の記録なし")
     assert "本人の送信者IDが不明のためメンションは判定していません" in sec
     assert "本人宛メンション" not in sec
-    assert "薬剤師宛依頼の応答未確認（シグナル）・本人ID不明" in sec
-    assert _section(_digest(led, cfg, allowed=[2]), "自分宛で応答未観測") is None
+    assert "薬剤師宛の依頼に返信の記録なし・本人ID不明" in sec
+    assert _section(_digest(led, cfg, allowed=[2]), "自分宛で返信の記録なし") is None
 
 
 def test_self_mentioned_and_evidence_flags(led, tmp_path):
@@ -220,7 +219,7 @@ def test_coverage_counts_stamp_gaps_in_window(led):
                        (NOW - 100, mid))
     _meta(led, 101, reactions=[])
     _meta(led, 102, reactions=["broken"])
-    cov = _section(_digest(led), "取得状況（記録ベース）")
+    cov = _section(_digest(led), "取得状況")
     assert "・スタンプ未取得 1投稿・取得不正 1" in cov
 
 
@@ -235,12 +234,12 @@ def test_fit_parts_folds_list_rows_not_disclosures(led):
     folded = notify_render.fit_parts(parts, 600)
     for dialect in ("plain", "slack", "discord"):
         text = notify_render.parts_text(folded, dialect)
-        sec = _section(text, "反応が観測されていない自分の投稿")
-        assert "他者反応0件 40投稿" in sec and "スタンプ未取得 1投稿" in sec
+        sec = _section(text, "反応がない自分の投稿")
+        assert "反応なし 40投稿" in sec and "スタンプ未取得 1投稿" in sec
         assert "・…他" in sec
-        assert "取得状況（記録ベース）" in text
-    full = _section(notify_render.parts_text(parts), "反応が観測されていない自分の投稿")
-    assert full.count("\n・project") == notify_digest.MAX_LIST
+        assert "取得状況" in text
+    full = _section(notify_render.parts_text(parts), "反応がない自分の投稿")
+    assert full.count("0時間経過・観測") == notify_digest.MAX_LIST
     assert "・…他30件" in full
 
 
@@ -258,11 +257,11 @@ def test_patient_summary_request_reply_states(led):
                    "created_at) VALUES('loop_candidate',1,101,?,'t','{}',?)",
                    (json.dumps({"origin": {"revision": f"{101:064x}"}}), NOW))
     _, text = notify_views.patient_summary_text(led.db, 1)
-    sec = text.split("■ 依頼候補の返信状況（記録上）", 1)[1]
+    sec = text.split("■ 依頼候補の返信状況", 1)[1].split("\n■ ", 1)[0]
     assert "・09-30 残薬確認 — 返信: 完了（完了後に取消の記録あり）" in sec
     assert "・09-29 処方変更 — 返信: 記録なし・Loop候補（semantic shadow）あり" in sec
     assert sec.count("\n・") == 5
-    assert "返信記録が見つからないことは対応がなかったことを意味しません" in sec
+    assert "返信記録が見つからないことは対応がなかったことを意味しません" not in sec
 
 
 def test_evidence_shows_actor_counts_for_own_posts_only(led, tmp_path):
@@ -289,14 +288,15 @@ def test_evidence_shows_actor_counts_for_own_posts_only(led, tmp_path):
 
 
 def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
-    """Owner order (2026-10-03) for every message: header, 📋 summary,
-    MCS stamps, then the body as posted to MCS."""
+    """Owner order (2026-10-08, layout 2) for every message: header, the
+    plain summary, a rule, the body as posted to MCS, a rule, then the
+    MCS stamps as the trailer."""
     _patient(led)
     _self_known(led)
     _post(led, 100, OTHER, ts=NOW - 100)
     _post(led, 101, SELF, ts=NOW - 50, parent=100)
     _meta(led, 100, reactions=[_r("accepted", 2, True), _r("good", 1)])
-    monkeypatch.setattr(notify_render, "_structured_block", lambda db, mid: {
+    monkeypatch.setattr(notify_render, "_structured_block", lambda db, mid, **_kw: {
         "type": "text", "text": f"📋 要約\n・要約{mid}"})
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
     body = notify_render._card_body_text(
@@ -305,18 +305,21 @@ def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
                                  ("スタンプ 🙆2 👍1 · 自分 🙆 · ",
                                   "スタンプ 未取得")):
         lines = post.split("\n")
-        assert lines[1:4] == ["📋 要約", f"・要約{mid}", notify_render.SECTION_RULE]
-        assert lines[4].startswith(stamps)        # one merged stamp line
-        assert lines[5] == notify_render.SECTION_RULE
-        assert lines[6] == led.db.execute(
+        assert lines[1] == f"・要約{mid}"
+        assert lines[2] == notify_render.SECTION_RULE
+        assert lines[3] == led.db.execute(
             "SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone()[0]
+        # one merged stamp line, as the trailer behind the second rule
+        assert lines[4] == notify_render.SECTION_RULE
+        assert lines[5].startswith(stamps)
+        assert post.count(notify_render.SECTION_RULE) == 2
 
 
 def test_long_post_keeps_summary_and_stamps_with_its_body():
     """Regression: a long body started its own chunk, leaving the
     header / summary / stamp lines as a post of their own."""
     import notify_cards
-    head = "10-03 08:00 職員\n📋 要約\n・要約\nスタンプ 👀9 🙏1 · 観測 10-03 08:05\n"
+    head = "10-03 08:00 職員\n📋 要約\n・要約\nスタンプ 👀9 🙏1 · 観測 10-03 08:05\n" + notify_render.SECTION_RULE + "\n📄 本文\n"
     for body in ("本" * 1852, "本" * 3000, ("行\n" * 1200)):
         chunks = notify_cards._split_body_chunks(head + body)
         assert "".join(chunks) == head + body
@@ -473,6 +476,16 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
     for mid in (100, 101):
         post = "".join(posts[mid])
         assert "<@" not in post and "@everyone" not in post
+        # layout 2: no transport repeats the face summary in the post
+        assert post.count(notify_render.SECTION_RULE) == (0 if platform == "lineworks" else 1)
+        front, _rule, tail = post.partition(notify_render.SECTION_RULE)
+        assert "📋 要約" not in post
+        if platform != "lineworks":
+            assert "解析更新中" not in post
+        # layout 2: LINE WORKS posts header and body only; Slack/Discord
+        # put the body first and stamps behind the rule
+        assert "📄 本文" not in post
+        assert ("スタンプ" in tail) is (platform != "lineworks")
         if platform == "lineworks":
             # LINE WORKS cannot edit a post: no stamp line at all, so a
             # stamp change never re-posts the body
@@ -628,3 +641,59 @@ def test_stamp_actor_refresh_keeps_human_confirmation_and_source_identity(led, m
     assert after["presentation_generation"] == before["presentation_generation"] + 1
     assert "✅ 確認: <@1001>" in "\n".join(item.get("text", "") for item in specs[0]["parts"]["footer"])
     assert led.db.execute("SELECT count(*) FROM notification_acknowledgements WHERE withdrawn_at IS NULL").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("platform", ["slack", "discord", "lineworks"])
+@pytest.mark.parametrize("ready", [True, False])
+def test_legacy_text_notice_has_summary_stamps_then_one_body_section(led, monkeypatch, platform, ready):
+    import notify_flush
+    _patient(led)
+    _self_known(led)
+    _post(led, 100, OTHER, ts=NOW - 100)
+    _meta(led, 100, reactions=[_r("viewed", 2)])
+    with led.db:
+        led.db.execute("UPDATE messages SET body_html='<p>完全合成の本文です。</p>' WHERE message_id=100")
+    cfg = {**CFG, "notify_target": platform + ":synthetic"}
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+    monkeypatch.setattr(notify_flush.structured_view, "structured_lines", lambda db, mid, **_kw: ["合成の要約"] if ready else [])
+    event = {"kind": "new_messages", "project_id": 1, "payload": '{"message_ids":[100]}'}
+    text, files = notify_flush._format_event(led, event)
+    assert text.count(notify_render.SECTION_RULE) == 1 and files == []
+    front, body = text.split(notify_render.SECTION_RULE, 1)
+    assert "📋 要約" in front
+    assert ("合成の要約" if ready else "処理待ち") in front
+    assert ("スタンプ 👀2" in front) is (platform != "lineworks")
+    assert body == "\n📄 本文\n完全合成の本文です。"
+
+
+def test_legacy_text_audited_supplement_stays_in_summary_section(led, monkeypatch):
+    import notify_flush
+    _patient(led)
+    _post(led, 100, OTHER, ts=NOW - 100)
+    with led.db:
+        led.db.execute("UPDATE messages SET body_html='<p>完全合成の本文です。</p>' WHERE message_id=100")
+    monkeypatch.setattr(notify_flush, "_config", lambda: CFG)
+    monkeypatch.setattr(notify_flush, "_sem_block", lambda *_args: "\n監査済みの合成要約")
+    text, _files = notify_flush._format_event(led, {"kind": "new_messages", "project_id": 1, "payload": '{"message_ids":[100]}'})
+    front, body = text.split(notify_render.SECTION_RULE, 1)
+    assert "監査済みの合成要約" in front and "監査済み" not in body
+
+
+def test_legacy_text_empty_summary_keeps_current_failure_state(led, monkeypatch):
+    import notify_flush
+    _patient(led)
+    _post(led, 100, OTHER, ts=NOW - 100)
+    with led.db:
+        led.db.execute("UPDATE messages SET body_html='<p>完全合成の本文です。</p>' WHERE message_id=100")
+        content_hash = led.db.execute("SELECT content_hash FROM messages WHERE message_id=100").fetchone()[0]
+        led.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) VALUES('extract_llm',1,100,'{}',?,?)",
+                       (json.dumps({"hash": content_hash, "error": 1, "attempts": 5}), NOW))
+    monkeypatch.setattr(notify_flush, "_config", lambda: CFG)
+    text, _files = notify_flush._format_event(led, {"kind": "new_messages", "project_id": 1, "payload": '{"message_ids":[100]}'})
+    front, body = text.split(notify_render.SECTION_RULE, 1)
+    assert "📋 要約 作成失敗" in front and "処理待ち" not in front
+    assert body == "\n📄 本文\n完全合成の本文です。"
+    with led.db:
+        led.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=100")
+    with pytest.raises(notify_flush._StaleSend, match="messages_unavailable"):
+        notify_flush._format_event(led, {"kind": "new_messages", "project_id": 1, "payload": '{"message_ids":[100]}'})

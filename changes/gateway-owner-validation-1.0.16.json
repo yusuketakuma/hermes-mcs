@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "別コマンドをgatewayの再起動対象と誤認する問題を修正",
+  "summary": "gatewayという語を含むだけの別プログラムを自動再起動しません。標準のHermes実行ファイルとgateway起動引数、正規のJXAラッパーを確認してから再起動します。",
+  "upgrade": "標準導入では追加設定は不要です。配備済みの独立復旧プログラムには再配備後に反映されます。独自のconsoleや未知のラッパーは自動再起動の対象外となり、所有を確認できない旨を報告します。明示したHERMES_HOMEとWorkingDirectoryが一致する標準形状の既存導入は維持します。",
+  "details": [
+    "Hermes consoleとvenv Pythonの正規実行位置、module、gateway run引数を検証し、echoや別moduleの引数に含まれる単語を識別根拠にしない。",
+    "Terminalの単一doScriptと、Hermesが生成するlibc systemのJXAラッパーを実行せずに解析し、内部のgateway起動経路を検証する。",
+    "再起動要求とPID置換確認の区別、復元承認保留、所有plistとサービスdomainの確認、秘密値を記録しない報告形式を維持する。",
+    "共有される独立した再起動ヘルパーの引数を維持し、凍結した子プログラムのPython 3.9互換と合成実行を確認する。"
+  ],
+  "refs": ["deployment/recovery/mcs_recover.py", "tests/meta/test_gateway_restart_identity.py"]
+}

@@ -8,6 +8,18 @@ import semantic
 from semantic_testkit import _message, _seeded
 
 
+def test_chunk_plan_change_invalidates_completed_bundle(tmp_path, monkeypatch):
+    import clinical_chunking
+    db = _seeded(tmp_path)
+    try:
+        first = semantic.thread_bundle(db, 1, 1, local_model="synthetic-model")
+        monkeypatch.setattr(clinical_chunking, "PLAN_VERSION", "synthetic-next-plan")
+        changed = semantic.thread_bundle(db, 1, 1, local_model="synthetic-model")
+        assert changed["source_fingerprint"] != first["source_fingerprint"]
+    finally:
+        db.close()
+
+
 def test_thread_attachment_scope_order_and_generation(tmp_path):
     db = _seeded(tmp_path)
     try:

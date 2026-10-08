@@ -1,0 +1,18 @@
+{
+  "category": "fixed",
+  "title": "監視の理由が消える不具合、更新の巻き戻し後に残るカード、壊れたコマンドで毎回失敗する収集を修正",
+  "summary": "停滞判定そのものが失敗しても監視警報に他の理由が残り、Jev の支払い未了などの外部要因と「解析処理が止まっている」は別々に表示されます。更新の巻き戻し後は未送信のカード描画も取り消され、旧 worker に拒否され続けません。読み取れない操作コマンドのファイルは退避され、収集が毎回失敗することはなくなります。",
+  "upgrade": "追加操作は不要です。退避されたコマンドは data/cmd/*.invalid として残るので、必要なら内容を確認して再投入してください。",
+  "details": [
+    "run_check: 停滞判定の例外は理由コード stall_check_failed（例外型は errors へ）にし、health_watch の snake_case 検証で理由一覧が丸ごと無効にならないようにする。health_watch に日本語の説明と対処を追加。",
+    "run_check._backlog_stalls: semantic_jev_* の理由があっても、6時間触られていない due ジョブと完了なしの条件が揃えば semantic_backlog_stalled を併記する（待機中の drainer は due ジョブを触るので、併記は drainer 停止を意味する）。",
+    "mcs_update._cancel_unsent_notices: 巻き戻し後に取り消す対象を、granted/unknown の attempt を持たない queued render 全件に広げ、カードの intent は delivery_id を外して復元後の sweep が再発行できるようにする。",
+    "job_ops.drain_commands: apply_command / apply_card_resolve の ValueError・TypeError・KeyError・UnicodeError・RecursionError は .invalid へ退避して errors に cmd_invalid: apply_failed を記録する。sqlite3.Error と schema 未準備の RuntimeError は従来どおり伝播し、コマンドを消費しない。"
+  ],
+  "refs": [
+    "mcs/ingest/run_check.py",
+    "mcs/ingest/health_watch.py",
+    "mcs/ingest/job_ops.py",
+    "mcs/ops/mcs_update.py"
+  ]
+}

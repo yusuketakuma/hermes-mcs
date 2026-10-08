@@ -99,7 +99,8 @@ def test_chunk_survives_later_exception_and_all_leases_release(db, monkeypatch, 
     monkeypatch.setattr(extract_llm, "_probe_format", lambda **kw: "plain")
 
     def infer(prompt, **kwargs):
-        if "い" * 100 in prompt:
+        core = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
+        if "い" * 100 in core:
             raise RuntimeError("synthetic interruption")
         return {"summary": "完了チャンク"}
 
@@ -275,6 +276,32 @@ def test_date_rule_revision_replaces_fabricated_year(db):
     ('緊急で搬送しました', False),
     ('すぐに搬送の必要はないが、経過観察', False),
     ('明日すぐに至急連絡します', False),
+    ('緊急時に対応します', False),
+    ('緊急時に対応をお願いします', False),
+    ('緊急時はご連絡ください', False),
+    ('夜間の緊急時は当番医へ連絡します', False),
+    ('緊急連絡先を更新しました', False),
+    ('緊急時対応マニュアルを確認しました', False),
+    ('緊急用の酸素を準備しています', False),
+    ('状態が悪化した場合は救急搬送となります', False),
+    ('呼吸が苦しくなった際は至急ご連絡ください', False),
+    ('もし発熱が続くようなら至急ご連絡ください', False),
+    ('万が一転倒したら救急要請してください', False),
+    ('搬送先は合成病院の予定です', False),
+    ('搬送方法を検討中です', False),
+    ('緊急性は低いです', False),
+    ('緊急度は高くないと思います', False),
+    ('すぐに眠れるようになりました', False),
+    ('すぐに食べられるおやつを用意しました', False),
+    ('緊急事態です、至急来てください', True),
+    ('緊急性が高いです', True),
+    ('発熱が続いているので至急ご連絡ください', True),
+    ('救急車を呼んでください', True),
+    ('すぐに来てください', True),
+    ('すぐに受診が必要です', True),
+    ('10時に至急ご連絡ください', True),
+    ('緊急連絡をお願いします', True),
+    ('至急対応が必要です', True),
 ])
 def test_urgency_requires_current_affirmative_evidence(body, high):
     assert (extract.extract_message(body, '2026-10-04').get('urgency')
@@ -290,13 +317,115 @@ def test_urgency_revision_replaces_old_rule_and_shared_display(db):
                     project_id=1, message_id=1,
                     meta={'hash': content_hash,
                           'rule_version': extract.RULE_VERSION - 1})
-    assert message_urgency(db.db, 1) == 'rule'
+    # Cached high is not displayed when the current original explicitly denies urgency.
+    assert message_urgency(db.db, 1) is None
+    assert json.loads(db.artifacts('extract_v1')[0]['content'])['urgency'] == 'high'
     assert extract.run_pending(db)['done'] == 1
     assert message_urgency(db.db, 1) is None
     artifacts = db.artifacts('extract_v1')
     assert len(artifacts) == 1
     assert json.loads(artifacts[0]['meta'])['rule_version'] == extract.RULE_VERSION
     assert extract.run_pending(db)['done'] == 0
+
+
+def _v1_urgent(db, mid=1):
+    chash = db.db.execute('SELECT content_hash FROM messages '
+                          'WHERE message_id=?', (mid,)).fetchone()[0]
+    db.artifact_add('extract_v1', json.dumps({'urgency': 'high'}),
+                    project_id=1, message_id=mid,
+                    meta={'hash': chash, 'rule_version': extract.RULE_VERSION})
+    return chash
+
+
+@pytest.mark.parametrize(('llm', 'llm_meta', 'expect'), [
+    ('routine', {}, None),
+    ('high', {}, 'llm'),
+    # unclear is an abstention, not a clearance — the lexical net still
+    # applies, exactly as it does when no LLM verdict exists
+    ('unclear', {}, 'rule'),
+    (None, None, 'rule'),
+    ('routine', {'hash': 'stale-hash'}, 'rule'),
+    ('routine', {'error': 1}, 'rule'),
+])
+def test_message_urgency_llm_verdict_supersedes_rule(db, llm, llm_meta, expect):
+    from structured_view import message_urgency
+
+    body = '本人が急変、至急ご確認ください'
+    db.save_messages([_message(body=body)])
+    chash = _v1_urgent(db)
+    if llm is not None:
+        meta = {'hash': chash, 'extract_version': extract_llm.EXTRACT_VERSION}
+        meta.update(llm_meta)
+        db.artifact_add('extract_llm', json.dumps({'urgency': llm, 'urgency_evidence': [body]}),
+                        project_id=1, message_id=1, meta=meta)
+    assert message_urgency(db.db, 1) == expect
+
+
+
+def test_stats_count_rule_high_suppressed_by_llm_routine(db):
+    import mcs_stats
+
+    body = '本人が急変、至急ご確認ください'
+    db.save_messages([_message(mid=i, body=body) for i in (1, 2, 3)])
+    for mid, llm in ((1, 'routine'), (2, 'high'), (3, None)):
+        chash = _v1_urgent(db, mid)
+        if llm:
+            db.artifact_add('extract_llm', json.dumps({'urgency': llm, 'urgency_evidence': [body]}),
+                            project_id=1, message_id=mid,
+                            meta={'hash': chash,
+                                  'extract_version': extract_llm.EXTRACT_VERSION})
+    for field in ('urgency', 'meds'):
+        db.artifact_add('extract_feedback_v1', json.dumps({'field': field}),
+                        project_id=1, message_id=1)
+    st = mcs_stats.run_stats(db.db, time.time() + 86400,
+                             {'stat': 'data_quality', 'limit': 20})
+    assert st['stats']['data_quality']['urgency_rule_outcomes'] == {
+        'rule_high': 3, 'llm_high': 1, 'llm_high_qc_disagreed': 0,
+        'rule_only': 1, 'llm_routine_suppressed': 1, 'human_urgency_reports': 1,
+        'request_only': 0, 'scope_or_evidence_held': 0}
+
+def test_message_urgency_llm_verdict_under_v4_read_model(db):
+    from structured_view import message_urgency
+
+    db.save_messages([_message(body='至急ご確認ください')])
+    chash = _v1_urgent(db)
+    db.artifact_add('semantic_facts_v4', json.dumps({'summary': '合成要約'}),
+                    project_id=1, message_id=1,
+                    meta={'hash': chash, 'engine_version': 4})
+    db.artifact_add('extract_llm', json.dumps({'urgency': 'routine'}),
+                    project_id=1, message_id=1,
+                    meta={'hash': chash,
+                          'extract_version': extract_llm.EXTRACT_VERSION})
+    assert message_urgency(db.db, 1) is None
+
+
+def test_urgency_qc_disagreement_flags_only_the_current_artifact(db):
+    from structured_view import urgency_qc_disagreement, urgency_qc_suffix
+
+    db.save_messages([_message(body='至急ご確認ください')])
+    chash = _v1_urgent(db)
+    db.artifact_add('extract_llm', json.dumps({'urgency': 'high'}),
+                    project_id=1, message_id=1,
+                    meta={'hash': chash,
+                          'extract_version': extract_llm.EXTRACT_VERSION})
+    assert urgency_qc_disagreement(db.db, 1) is None
+    src = db.db.execute("SELECT max(artifact_id) FROM artifacts"
+                        " WHERE kind='extract_llm'").fetchone()[0]
+    db.artifact_add('extract_qc', json.dumps(
+        {'qc': 'done', 'items': [],
+         'urgency': {'extracted': 'high', 'jev': 'routine',
+                     'confidence': 0.9}}),
+        project_id=1, message_id=1,
+        meta={'hash': chash, 'source_artifact_id': src})
+    d = urgency_qc_disagreement(db.db, 1)
+    assert d['jev'] == 'routine' and d['extracted'] == 'high'
+    assert urgency_qc_suffix(db.db, 1) == '（監査では通常判定）'
+    # a QC verdict pinned to a superseded extraction must not annotate
+    db.artifact_add('extract_llm', json.dumps({'urgency': 'high'}),
+                    project_id=1, message_id=1,
+                    meta={'hash': chash,
+                          'extract_version': extract_llm.EXTRACT_VERSION})
+    assert urgency_qc_disagreement(db.db, 1) is None
 
 
 def test_rule_revision_cut_by_deadline_keeps_old_artifact(db, monkeypatch):

@@ -1,0 +1,13 @@
+{
+  "category": "changed",
+  "title": "監視警報を日本語・JST表示にし、同じ異常の繰り返し通知を抑制",
+  "summary": "監視警報は「MCS監視: 一部異常」「理由: 処理段階のエラー、通知の送信待ち」「最終正常・最新記録（JST）」の形で表示し、検索用のコードを1行残します。一部異常と正常を行き来しても、同じ理由のままなら4時間は再通知しません。停止・失敗、更新途絶、記録なし・破損は従来どおり即時に通知します。カードとスレッドでは削除済み投稿を「（削除された投稿）」と表示し、日時・送信者が不明な「??-??」表記をなくしました。Slack・Discordのスレッド返信では患者名の繰り返しを省き、スタンプが0件の行と「依頼: 依頼:」の重複を表示しません。",
+  "upgrade": "追加設定は不要です。収集処理への反映後、新しい監視警報と新規描画から適用されます。監視警報を患者用チャンネルから分けたい場合は notify_system_target を設定してください。LINE WORKSのスレッド投稿は患者名を残します。",
+  "details": [
+    "health_watch: _alert_lines を日本語・JSTの複数行にし、degradedへの再突入は同じ理由・REALERT_S以内なら alerted_episode で抑止する。",
+    "notify_render: 削除済み投稿の行を _deleted_line に統一し、Slack・Discordの thread 本文見出しから患者名を省く。観測済み0件のスタンプ行を出さない。",
+    "structured_view: ルール抽出の依頼行で既定ラベル「依頼:」を重ねない。",
+    "AGENTS.md: 「記録が見つからない≠対応がなかった」の適用範囲を候補提示に明確化した。"
+  ],
+  "refs": ["mcs/ingest/health_watch.py", "mcs/notify/notify_render.py", "mcs/views/structured_view.py", "AGENTS.md"]
+}

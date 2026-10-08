@@ -104,3 +104,23 @@ def test_malformed_latest_record_has_bounded_fail_closed_window(tmp_path):
     assert state["consecutive_failures"] == 0
     assert state["open_until"] == 0.0
     db.close()
+
+
+def test_payment_required_opens_and_reads_back_as_a_valid_state(tmp_path):
+    # HTTP 402 is not retryable within a job, yet every call fails until
+    # the account is settled: three in a row open the circuit, and the
+    # persisted class reads back intact (not as a malformed record)
+    import semantic_jev as jev
+    db = Ledger(str(tmp_path / "ledger.db"))
+    err = jev.JevError("payment_required", "http_402", status=402)
+    assert not runtime.record_circuit_result(db, err, now=1000.0)
+    assert not runtime.record_circuit_result(db, err, now=1001.0)
+    assert runtime.record_circuit_result(db, err, now=1002.0)
+    assert runtime.circuit_open(db, now=1002.1)
+    state = _state(db)
+    assert state["failure_class"] == "http_402"
+    assert state["consecutive_failures"] == 3 and state["open_until"] == 1302.0
+    # a success closes it again
+    assert not runtime.record_circuit_result(db, None, now=1500.0)
+    assert not runtime.circuit_open(db, now=1500.0)
+    db.close()

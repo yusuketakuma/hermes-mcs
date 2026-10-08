@@ -336,6 +336,19 @@ def _begin_check(db, req, cfg) -> str | None:
     card = cards._card_row(db, render["card_id"]) \
         if render["card_id"] is not None else None
     if card is not None:
+        if card["kind"] == "signal" and render["op"] != "revoke" \
+                and card["transport"] in ("slack", "discord"):
+            target = cards.signal_thread_target(db, card, cfg)
+            spec = json.loads(render["spec_json"])
+            if spec["parts"].get("source_thread") is True:
+                if (target is None
+                        or spec["delivery"].get("thread_id") != target["thread_id"]
+                        or not cards._scope_match(render, target)):
+                    return "source_thread_changed"
+            elif target is not None:
+                # a channel-routed signal whose post now has a proven
+                # thread must be re-rendered into it
+                return "source_thread_changed"
         if card["kind"] in ("signal", "digest") \
                 and not cards.signals_notify(cfg):
             return "signal_notify_off"
@@ -352,6 +365,23 @@ def _begin_check(db, req, cfg) -> str | None:
             return "source_changed"
         if cards._unsettled_attempt(db, card["card_id"]):
             return "in_flight"
+    elif render["op"] == "notice" and render["intent_event_id"] is not None:
+        event = db.execute("SELECT * FROM notify_outbox WHERE event_id=?", (render["intent_event_id"],)).fetchone()
+        if event is not None and event["kind"] == "urgent_notice":
+            from types import SimpleNamespace
+            import notify_urgent
+            ledger = SimpleNamespace(db=db)
+            checked = notify_urgent.check_delivery(ledger, cfg, event)
+            if not checked["ok"]:
+                return "urgent_source_changed"
+            target = cards.urgent_thread_target(ledger, event, cfg)
+            try:
+                spec = json.loads(render["spec_json"])
+            except (ValueError, TypeError):
+                return "urgent_spec_invalid"
+            if (target is None or spec["parts"].get("thread_notice") is not True
+                    or any(spec["delivery"].get(key) != value for key, value in target.items())):
+                return "urgent_thread_changed"
     return None
 
 

@@ -41,6 +41,8 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.13'
+      - name: Check bundled public medicine master
+        run: python3 scripts/development/check_drug_master_bundle.py
       - name: Check all versions and pending change records
         run: python3 scripts/development/release_notes.py check
       - name: Check README release overview, review record and links
@@ -118,6 +120,15 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           git show-ref --verify "refs/tags/$RELEASE_TAG"
+          if [ -f scripts/development/check_drug_master_bundle.py ]; then
+            python3 scripts/development/check_drug_master_bundle.py
+          elif [[ "$RELEASE_TAG" =~ ^v1\.0\.([0-9]|1[0-5])$ ]] &&
+               [ ! -e resources/drug-master ] && [ ! -L resources/drug-master ]; then
+            echo 'Legacy release predates the public medicine bundle.'
+          else
+            echo 'Required public medicine bundle checker is missing.' >&2
+            exit 1
+          fi
           python3 scripts/development/release_notes.py check
           python3 scripts/development/readme_release.py --check --version "${RELEASE_TAG#v}"
           python3 -m unittest discover -s tests/release -v

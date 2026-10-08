@@ -202,8 +202,11 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
     it was minted by another projection version, which a new row
     supersedes."""
     from semantic_projection import (PROJECTION_VERSION,
-                                     project_v2_doc_legacy,
-                                     projection_current)
+                                      project_v2_doc_legacy,
+                                      projection_current)
+    from semantic_audit import _published_quantity_findings
+    if _published_quantity_findings(v2_doc):
+        return None
     doc_hash = _doc_hash(v2_doc)
     existing = current_v4(ledger, mid, member["revision"])
     if existing is not None and projection_current(existing["meta"], doc_hash):
@@ -258,6 +261,9 @@ def reproject_doc(ledger, mid: int, meta: dict):
     if not isinstance(doc.get("coverage"), dict) \
             or doc["coverage"].get("status") != "complete":
         return None, "coverage_incomplete"
+    from semantic_audit import _published_quantity_findings
+    if _published_quantity_findings(doc):
+        return None, "quantity_unverified"
     if fact_audit_verdict(_current(ledger, KIND_FACT_AUDIT, mid, fp, policy),
                           doc_hash) != "PASS":
         return None, "audit_not_pass"
@@ -283,7 +289,7 @@ def reproject_stale(ledger, scfg: dict,
     readers pick it as the newest ``artifact_id`` and the drain's own
     reuse checks accept it. A row whose document cannot be re-derived
     safely is marked ``reproject_skipped`` (so it cannot starve the
-    bound) and keeps serving until its message is drained again. Run it
+    bound); an old-version row stays outside the current read model. Run it
     after ``invalidate_projections`` in the same tick."""
     from mcs_queries import current_projection_id, current_v4_id
     from semantic_policy import KIND_FACT_PROJ
@@ -301,7 +307,7 @@ def reproject_stale(ledger, scfg: dict,
         "ON m.message_id=a.message_id AND m.project_id=a.project_id "
         "WHERE a.kind IN (?,?) AND m.body_state IS NOT 'deleted' "
         "AND a.artifact_id=CASE WHEN a.kind=? "
-        f"THEN {current_projection_id('m')} ELSE {current_v4_id('m')} END "
+        f"THEN {current_projection_id('m', require_version=False)} ELSE {current_v4_id('m', require_version=False)} END "
         # CASE, not AND: the subquery term above is evaluated last, so a
         # bare json_extract here would raise on a malformed meta row.
         "AND CASE WHEN json_valid(a.meta) AND json_type(a.meta)='object' "

@@ -2,6 +2,8 @@
 import json
 import time
 
+import pytest
+
 import semantic
 import semantic_drain
 import semantic_loops
@@ -34,6 +36,76 @@ def test_backlog_lane_throttles_invalidation(tmp_path, monkeypatch):
         now[0] += semantic_drain._BACKLOG_INVALIDATE_S
         run("backlog")
         assert len(calls) == 3
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("fixed_stop", [False, True])
+def test_slow_invalidation_yields_next_window_with_the_same_budget(tmp_path, monkeypatch, fixed_stop):
+    db = _seeded(tmp_path)
+    clock = [100.0]
+    scans, served = [], []
+    monkeypatch.setattr(semantic_drain.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(semantic_drain, "_invalidated_at", None)
+    monkeypatch.setattr(v4, "reproject_stale", lambda *_: {})
+
+    def invalidate(*_):
+        scans.append(clock[0])
+        clock[0] += 301
+        return 0
+
+    def process(ledger, scfg, job, _jev, _llm, deadline, **_kwargs):
+        served.append(deadline)
+        assert scfg["job_budget_seconds"] == 450
+        assert semantic.runtime.job_deadline(scfg, deadline) == min(deadline, clock[0] + 450)
+        assert semantic.runtime.transition(ledger, semantic.runtime.JobToken.from_row(job), "done")
+        return "done"
+
+    monkeypatch.setattr(semantic_store, "invalidate_projections", invalidate)
+    monkeypatch.setattr(semantic, "_process_job", process)
+    cfg = _cfg("shadow", job_budget_seconds=450)
+    try:
+        first = semantic_drain.run_due(db, cfg, {"errors": []}, 580,
+                                      lane="backlog", max_jobs=1, jev_client=_FakeJev(), llm_fn=lambda *_: None)
+        assert first["done"] == 0 and first["left"] == 1
+        assert semantic_drain._invalidated_at == 401
+        deadline = 580 if fixed_stop else clock[0] + 480
+        second = semantic_drain.run_due(db, cfg, {"errors": []}, deadline,
+                                       lane="backlog", max_jobs=1, jev_client=_FakeJev(), llm_fn=lambda *_: None)
+        assert scans == [100]
+        assert served == ([] if fixed_stop else [881])
+        assert second["done"] == (0 if fixed_stop else 1)
+        row = db.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
+        assert row["state"] == ("pending" if fixed_stop else "done")
+        assert row["attempts"] == 0
+    finally:
+        db.close()
+
+
+def test_slow_backlog_throttle_does_not_skip_realtime_off_revocation(tmp_path, monkeypatch):
+    db = _drained_old_version(tmp_path)
+    clock = [100.0]
+    original = semantic_store.invalidate_projections
+    scans = []
+    monkeypatch.setattr(semantic_drain.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(semantic_drain, "_invalidated_at", None)
+    monkeypatch.setattr(v4, "reproject_stale", lambda *_: {})
+
+    def invalidate(ledger, scfg):
+        scans.append(scfg["mode"])
+        result = original(ledger, scfg)
+        clock[0] += 301
+        return result
+
+    monkeypatch.setattr(semantic_store, "invalidate_projections", invalidate)
+    try:
+        semantic_drain.run_due(db, _canonical_cfg(), {"errors": []}, clock[0] + 480,
+                              lane="backlog", jev_client=_FakeJev(), llm_fn=lambda *_: None)
+        semantic_drain.run_due(db, _cfg("off"), {"errors": []}, clock[0] + 480,
+                              lane="realtime", jev_client=_FakeJev(), llm_fn=lambda *_: None)
+        assert scans == ["enforce", "off"]
+        rows = db.artifacts("canonical_projection") + db.artifacts("semantic_facts_v4")
+        assert rows and all(json.loads(row["meta"]).get("invalidated") for row in rows)
     finally:
         db.close()
 

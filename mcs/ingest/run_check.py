@@ -74,7 +74,7 @@ COVERAGE_STALL_S = 24 * 3600
 # attachments (up to 64 MiB x 30 per tick) defer below floor + this
 ATTACH_DISK_MARGIN_MB = 2048
 KARTE_SUMMARY_TICK_CAP = 12   # 連携サマリー GETs per run; the rest carry over
-KARTE_SUMMARY_FILL = 10       # never-fetched projects filled per deep run
+KARTE_SUMMARY_FILL = 10       # missing/stale summaries filled per deep run
 KARTE_SUMMARY_MARGIN_S = 60   # keep the tail of the deadline for semantic/finish
 
 
@@ -206,6 +206,22 @@ CARD_STALL_S = 1800        # a queued render this old on the live transport
 BACKLOG_STALL_S = 6 * 3600  # untouched due work AND no progress this long
 
 
+_JEV_BLOCK_KINDS = ("payment_required", "no_api_key", "budget_exceeded",
+                    "auth_error")
+
+
+def _jev_block_reason(db) -> str | None:
+    """Why TypeSafe Jev is refusing work, from the newest assessment
+    record: the drainer writes one per status change, so the latest row
+    is the current state. None when the last assessment went through."""
+    row = db.execute(
+        "SELECT json_extract(meta,'$.error_kind') FROM artifacts "
+        "WHERE kind='semantic_assess' AND json_valid(meta) "
+        "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    kind = row[0] if row else None
+    return kind if kind in _JEV_BLOCK_KINDS else None
+
+
 def _backlog_stalls(ledger, cfg, now: float) -> list:
     """Degraded reasons for work that silently stopped moving. Each
     check is gated on its feature being enabled and needs BOTH an old
@@ -237,6 +253,12 @@ def _backlog_stalls(ledger, cfg, now: float) -> list:
     if errors:
         return reasons   # reported as stage errors; admission is closed
     window = now - BACKLOG_STALL_S
+    blocked = _jev_block_reason(db) if scfg["mode"] != "off" else None
+    if blocked:
+        # the cause is known and external — name it. A live drainer keeps
+        # touching due jobs while it waits, so the generic stall below
+        # still only fires when the drainer itself stopped.
+        reasons.append(f"semantic_jev_{blocked}")
     if scfg["mode"] != "off" and db.execute(
             "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "
             "AND state='pending' AND next_try<=? AND updated_at<? LIMIT 1",
@@ -275,10 +297,15 @@ def _health(ledger, result: dict, status: str,
     notify_state = ("incomplete"
                     if notify_res.get("failed") or notify_res.get("skipped")
                     else "parked" if notify_res.get("parked") else "ok")
+    # a signal digest scheduled interval_h ahead and never attempted is
+    # waiting by design, not pending delivery — everything else counts
+    # from its creation, including retries with a future next_try
     outbox = ledger.db.execute(
         "SELECT COUNT(*) c, MIN(created_at) o FROM notify_outbox "
-        "WHERE state IN ('pending','failed') AND next_try IS NOT NULL"
-    ).fetchone()
+        "WHERE state IN ('pending','failed') AND next_try IS NOT NULL "
+        "AND NOT (kind='signal' AND attempts=0 AND next_try>? "
+        "         AND json_valid(payload) AND json_extract(payload,'$.digest')=1)",
+        (now,)).fetchone()
     retired = notify_cards.retired_transports(cfg)
     marks = ",".join("?" * len(retired))
     # Preserve retired receipts while excluding only events whose sealed
@@ -380,10 +407,20 @@ def _health(ledger, result: dict, status: str,
                   if isinstance(cfg, dict) and cfg is not CONFIG_NOT_LOADED
                   else [])
     except Exception as e:
-        stalls = [f"stall_check_failed:{type(e).__name__}"]
+        # a plain reason code: health_watch validates codes as snake_case
+        # and would otherwise drop every reason in the list
+        stalls = ["stall_check_failed"]
+        result["errors"] = list(result.get("errors") or []) \
+            + [f"stall_check_failed: {type(e).__name__}"]
+    errors = result.get("errors") or []
+    # A mid-tick mcs/ change is a deploy guard, not a fault: skipped
+    # stages rerun next tick on the new code. The run row keeps
+    # 'partial' + code_changed for audit, but it must not degrade
+    # health or fire a monitoring alert by itself.
+    real_errors = [e for e in errors if e != "code_changed"]
     overall = ("failed" if status in ("failed", "session_expired")
                else "degraded"
-               if (result.get("errors") or coll["collection"] != "ok"
+               if (real_errors or coll["collection"] != "ok"
                    or notify_state == "incomplete" or stalls)
                else "ok")
     shadow = result.get("metadata_shadow") or {"mode": "off", "reason": "not_run"}
@@ -417,7 +454,8 @@ def _health(ledger, result: dict, status: str,
         code for code, present in (
             ("run_failed", status == "failed"),
             ("session_expired", status == "session_expired"),
-            ("stage_errors", bool(result.get("errors"))),
+            ("stage_errors", bool(real_errors)),
+            ("code_changed", "code_changed" in errors),
             ("run_deadline_exceeded", run_overdue),
             ("ledger_relation_violations", guard_violations),
             ("backup_not_verified", backup_bad),
@@ -524,30 +562,36 @@ def _wait_run_lock(wait_s: float) -> int | None:
     return None
 
 
-SESSION_ALERT_MIN_INTERVAL_S = 3600
+ALERT_MIN_INTERVAL_S = 6 * 3600
 # a flapping session must not drive auto_login in a loop — each wrapped
 # stage allows one attempt, and _attempt_relogin (the single entry point
 # for every caller, run boundary included) bounds the per-run total
 RELOGIN_MAX_PER_RUN = 3
+# unread collection silent longer than this (any cause: session, sleep,
+# network, stopped scheduler) makes the next collecting run announce
+# every newly stored post — posts read elsewhere meanwhile (phone/browser)
+# are no longer unread and would otherwise be stored silently
+OUTAGE_CATCHUP_S = 1200
 
 
 def _alert_throttled(ledger, kind: str, run_id: int, detail: str) -> bool:
     """Enqueue a system alert — throttled so a persistent condition does
-    not re-alert on every tick: one per kind per hour keeps it visible
-    without flooding the channel. The run row and health file still
-    record every occurrence; only the notification is gated."""
+    not re-alert on every tick: one per kind per ALERT_MIN_INTERVAL_S
+    keeps it visible without flooding the channel. The run row and
+    health file still record every occurrence; only the notification
+    is gated."""
     last = ledger.db.execute(
         "SELECT MAX(created_at) t FROM notify_outbox"
         " WHERE kind=?", (kind,)).fetchone()["t"]
     if last is not None \
-            and time.time() - float(last) < SESSION_ALERT_MIN_INTERVAL_S:
+            and time.time() - float(last) < ALERT_MIN_INTERVAL_S:
         return False
     ledger.outbox_add(kind, None, {"run_id": run_id, "detail": detail})
     return True
 
 
 def _alert_session_expired(ledger, run_id: int, detail: str) -> bool:
-    """Enqueue the session_expired alert (one per hour max)."""
+    """Enqueue the session_expired alert (throttled per kind)."""
     return _alert_throttled(ledger, "session_expired", run_id, detail)
 
 
@@ -584,10 +628,45 @@ def _attempt_relogin(adapter, ledger, result, where: str,
         state = "failed"
         attempt["detail"] = type(exc).__name__
     attempt["state"] = state
+    for key in ("healed_tabs", "chrome_restarted"):
+        if getattr(adapter, key, 0):
+            attempt[key] = getattr(adapter, key)
     if state == "ok":
         _alert_session_recovered(ledger, result.get("run_id"),
                                  f"{where}: {attempt['error']}")
     return state
+
+
+def _outage_since(now: float | None = None) -> float | None:
+    """When unread collection last completed, if that is longer ago than
+    OUTAGE_CATCHUP_S — else None. unread_at only advances on runs that
+    collected unread, so every outage cause (and a run that recovered
+    the session only at its boundary) keeps the gap open until a
+    collecting run succeeds."""
+    now = time.time() if now is None else now
+    unread_at = _prev_health().get("unread_at")
+    if not _finite_number(unread_at) or now - unread_at <= OUTAGE_CATCHUP_S:
+        return None
+    return unread_at
+
+
+def _seed_outage_catchup(ledger, result, since: float) -> None:
+    """Queue the bounded notifying history_head walk _post_ack_gap uses
+    for every active patient — it finishes what this run's backfill did
+    not reach. Cheap job rows only; the fetches run in the normal job
+    drains, and notify_max_age_s still bounds what is announced. A
+    pending head job keeps its own `since` and only gains the flag."""
+    seeded = 0
+    for row in ledger.frontier_patients():
+        pid = row["project_id"]
+        start = min(since, ledger.coverage_ts(pid) or ledger.high_watermark(pid)
+                    or since) - BACKFILL_OVERLAP_S
+        ledger.job_add("history_head", pid, payload={
+            "since": max(0, int(start)), "page": 1,
+            "pages": BACKFILL_MAX_PAGES, "trickle": False, "notify": True})
+        ledger.job_set_flag("history_head", pid, 0, "notify")
+        seeded += 1
+    result["outage_catchup"] = seeded
 
 
 def _with_relogin(adapter, ledger, result, where: str, fn, *args,
@@ -878,8 +957,11 @@ def stage_thread_read(adapter, ledger, result, deadline):
 
 def stage_backfill(adapter, ledger, result, deadline, run_id,
                    semantic: bool = False,
-                   notify_max_age_s: float | None = None):
+                   notify_max_age_s: float | None = None,
+                   notify_all_new: bool = False):
     """Catch posts the unread API misses (e.g. read by another human).
+    notify_all_new (the first collecting run after an outage) announces
+    every newly stored row, not only unread ones.
     Walk each patient's history down to CONFIRMED coverage — never the
     newest stored message, so storing a new unread cannot skip older
     unfetched items (Oracle B06). Coverage only advances on a complete
@@ -909,7 +991,8 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
         new_ids = ledger.save_messages(
             hist, project_id=pid,
             notify={"run_id": run_id, "source": "history"},
-            semantic=semantic, notify_max_age_s=notify_max_age_s)
+            semantic=semantic, notify_max_age_s=notify_max_age_s,
+            notify_all_new=notify_all_new)
         if new_ids:
             result["backfilled"] += len(new_ids)
         if merged.error:
@@ -1115,10 +1198,12 @@ def stage_karte_summary(adapter, ledger, result, deadline,
     new chat (unread root, reply job or self-probe import); a deferred
     (cap/margin) or retryably failed GET keeps it, a non-retryable one
     (4xx, schema, or a per-karte expiry while the session probe is
-    fine) clears it until the next new message, and any failure keeps
+    fine) clears the immediate due flag; deep refresh can retry after backoff.
+    Any failure keeps
     the project out of selection for 6 h (KARTE_SUMMARY_BACKOFF_S), so
     a dead karte cannot starve the cap — and on deep runs up to KARTE_SUMMARY_FILL
-    never-fetched live projects (oldest first). At most
+    live projects, prioritizing never-fetched summaries then summaries last
+    fetched at least 24 h ago (oldest first). At most
     KARTE_SUMMARY_TICK_CAP GETs per run, stopping KARTE_SUMMARY_MARGIN_S
     before the deadline; runs after notify. Per-project MCSErrors are
     recorded under result["karte_summary"] and never make the run
@@ -1128,7 +1213,8 @@ def stage_karte_summary(adapter, ledger, result, deadline,
     result["karte_summary"] = stats
     targets = ledger.karte_summary_due()
     if jobs_only:
-        targets += ledger.karte_summary_missing(KARTE_SUMMARY_FILL)
+        missing = ledger.karte_summary_missing(KARTE_SUMMARY_FILL)
+        targets += missing + ledger.karte_summary_stale(KARTE_SUMMARY_FILL - len(missing))
     gets = 0
     for pid in dict.fromkeys(targets):
         karte_id = ledger.karte_id(pid)
@@ -1332,25 +1418,17 @@ def stage_derive(ledger, result, deadline, cfg=None,
                     realtime if admitted is None else realtime & admitted),
                 # Only realtime arrivals use this slot, newest first.
                 # Existing claim leases exclude in-flight work.
-                oldest_first=False, batch_k=extract_llm._BATCH_K)
+                oldest_first=False, batch_k=extract_llm._BATCH_K,
+                vital_policy=extract_llm.vital_threshold_policy(cfg))
     except Exception as e:
         result["errors"].append(f"extract_llm: {type(e).__name__}")
 
     try:
         import drug_map
-        from mcs_setup import _drug_map_config
-        setting = (cfg or {}).get("drug_map")
-        dictionary = None
-        invalid = setting is not None and _drug_map_config(setting) is not None
+        dictionary, error = drug_map.configured(cfg)
+        invalid = error is not None
         if invalid:
-            result["errors"].append("drug_map: invalid_config")
-        elif setting is not None:
-            try:
-                dictionary = drug_map.load(
-                    setting["path"], expected_sha256=setting["sha256"])
-            except ValueError:
-                invalid = True
-                result["errors"].append("drug_map: invalid_dictionary")
+            result["errors"].append(f"drug_map: {error}")
         result["drug_map"] = drug_map.derive(
             ledger, dictionary, deadline=deadline - 30)
         if invalid:
@@ -1546,6 +1624,9 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
     if args.jobs_only:
         result["jobs_only"] = True
         return
+    outage_since = _outage_since()
+    if outage_since is not None:
+        result["outage_since"] = outage_since
     _with_relogin(adapter, ledger, result, "unread",
                   stage_unread, adapter, ledger, args, result, deadline,
                   run_id, semantic=sem_on,
@@ -1566,7 +1647,10 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
         _with_relogin(adapter, ledger, result, "backfill",
                       stage_backfill, adapter, ledger, result, deadline,
                       run_id, semantic=sem_on,
-                      notify_max_age_s=notify_max_age_s)
+                      notify_max_age_s=notify_max_age_s,
+                      notify_all_new=outage_since is not None)
+    if outage_since is not None:
+        _seed_outage_catchup(ledger, result, outage_since)
 
 
 def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
@@ -1862,8 +1946,8 @@ def _fail_run(ledger, args, result, run_id, status, detail,
         if alert == "session":
             _alert_session_expired(ledger, run_id, detail)
         elif alert:
-            ledger.outbox_add("run_failed", None,
-                              {"run_id": run_id, "detail": detail})
+            # an unthrottled run_failed could alert every 10-minute tick
+            _alert_throttled(ledger, "run_failed", run_id, detail)
         # alert=None: the session_recovered notice was already queued by
         # the relogin attempt — the flush below still delivers it
         if not args.no_notify:  # --no-notify suppresses ALL sends;
@@ -2021,6 +2105,10 @@ def _main() -> int:
         _run_stage(result, "metadata_shadow", deadline, _run_metadata_shadow,
                    adapter, ledger, result, deadline, cfg,
                    manual=args.metadata_shadow)
+        if args.jobs_only and cfg.get("clinical_metadata") is True and not _code_changed(result):
+            import project_metadata
+            result["clinical_metadata"] = project_metadata.sync_clinical_metadata(
+                ledger, adapter, enabled=True, deadline=deadline)
         # optional, but a slow MCS can spend every tick's budget on unread
         # — once the daily backup is overdue it runs past the deadline
         _run_stage(result, "housekeeping", deadline, _housekeeping, result,

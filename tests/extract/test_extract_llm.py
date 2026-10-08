@@ -18,6 +18,7 @@ import mcs_signals
 import mcs_stats
 import structured_view
 import rollup
+from semantic_projection import PROJECTION_VERSION
 from extract_testkit import (_extract_artifact, _hash, _ledger, _message,
                              _qc_artifact, _seed_qc_flagged)
 
@@ -343,7 +344,8 @@ def test_thin_output_gets_one_repair_nudge(monkeypatch):
     """A long body returning <=2 fields is almost certainly
     under-extracted — the repair pass re-reads once; a richer answer
     with equal drop count wins."""
-    body = "本日訪問。熱が持続し倦怠感あり。追加対応を検討。明日再訪。" * 14
+    body = ("本日訪問。熱が持続し倦怠感あり。追加対応を検討。明日再訪。" * 14
+            + "夕方から呼吸が苦しそうです")
     calls = []
 
     def fake_call(prompt, **_ignored):
@@ -351,6 +353,7 @@ def test_thin_output_gets_one_repair_nudge(monkeypatch):
         if len(calls) == 1:
             return {"events": ["visit"], "urgency": "routine"}
         return {"events": ["visit"], "urgency": "high",
+                "urgency_evidence": ["夕方から呼吸が苦しそうです"],
                 "summary": "発熱持続",
                 "symptoms": [{"text": "倦怠", "status": "ongoing"}],
                 "requests": [{"to": "医師", "action": "再訪確認"}]}
@@ -698,6 +701,7 @@ def test_replace_current_rerenders_card_once_written(tmp_path, monkeypatch):
     """A newly current extraction re-renders its thread card at once; a
     refused write does nothing and a render failure never undoes it."""
     import notify_cards
+    monkeypatch.setattr(extract_llm, "load_config", lambda: {"notify": {"interactive": "slack"}})
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     pid, chash = db.db.execute(
@@ -1326,6 +1330,7 @@ def test_chunked_full_coverage_and_merge(monkeypatch):
                          {"name": "薬B"}],
                 "symptoms": [{"text": "発熱", "status": "resolved"}],
                 "vitals": {"hr": 90, "spo2": 95}, "urgency": "high",
+                "urgency_evidence": ["脈は90"],
                 "summary": "後半の要約"}
 
     monkeypatch.setattr(extract_llm, "_llm_call", fake_call)
@@ -2629,7 +2634,8 @@ def test_v4_publication_between_prepare_and_insert_fences_legacy(tmp_path):
         if not published and sql.startswith("INSERT INTO artifacts(kind,"):
             other.artifact_add("semantic_facts_v4", '{"meds":[]}',
                                project_id=1, message_id=1,
-                               meta={"hash": row["content_hash"], "engine_version": 4})
+                               meta={"hash": row["content_hash"], "engine_version": 4,
+                                     "projection_version": PROJECTION_VERSION})
             published.append(True)
 
     db.db.set_trace_callback(publish_before_insert)
@@ -2887,3 +2893,121 @@ def test_refail_ignores_older_version_auto_retry(tmp_path):
         assert "auto_retry" not in metas[0]
     finally:
         db.close()
+
+
+# ---------- v5: urgency evidence / unclear / vital thresholds ----------
+
+def test_validate_urgency_unclear_accepted():
+    assert extract_llm._validate(
+        {"urgency": "unclear"}, "様子を見ます")["urgency"] == "unclear"
+
+
+def test_validate_urgency_high_requires_locatable_evidence():
+    body = "意識がはっきりしません。早急な往診をお願いします。"
+    ok = extract_llm._validate(
+        {"urgency": "high",
+         "urgency_evidence": ["意識がはっきりしません",
+                              "本文に無い引用は捨てられる"]}, body)
+    assert ok["urgency"] == "high"
+    assert ok["urgency_evidence"] == ["意識がはっきりしません"]
+    assert ok["_evidence_dropped"] == 1
+    # an unquotable high degrades to unclear — never silently routine
+    miss = extract_llm._validate(
+        {"urgency": "high", "urgency_evidence": ["存在しない引用"]}, body)
+    assert miss["urgency"] == "unclear" and "urgency_evidence" not in miss
+    none = extract_llm._validate({"urgency": "high"}, body)
+    assert none["urgency"] == "unclear"
+    # routine needs no evidence — absence of urgency cannot be quoted
+    assert extract_llm._validate({"urgency": "routine"}, body)["urgency"] \
+        == "routine"
+
+
+def test_merge_urgency_precedence_high_unclear_routine():
+    merge = extract_llm._merge
+    assert merge([{"urgency": "routine"},
+                  {"urgency": "unclear"}])["urgency"] == "unclear"
+    out = merge([{"urgency": "unclear", "urgency_evidence": ["曖昧な記述"]},
+                 {"urgency": "high", "urgency_evidence": ["至急"]},
+                 {"urgency": "routine"}])
+    assert out["urgency"] == "high"
+    assert out["urgency_evidence"] == ["至急"]
+    # unclear chunks carry their evidence forward when no high wins
+    out = merge([{"urgency": "routine"},
+                 {"urgency": "unclear", "urgency_evidence": ["曖昧な記述"]}])
+    assert out["urgency"] == "unclear"
+    assert out["urgency_evidence"] == ["曖昧な記述"]
+
+
+def test_vital_threshold_policy_config():
+    assert extract_llm.vital_threshold_policy(None) is None
+    assert extract_llm.vital_threshold_policy({}) is None
+    assert extract_llm.vital_threshold_policy(
+        {"vital_urgency": {"mode": "off"}}) is None
+    pol = extract_llm.vital_threshold_policy(
+        {"vital_urgency": {"mode": "flag"}})
+    assert pol["mode"] == "flag"
+    assert pol["thresholds"]["spo2_lte"] == 90.0
+    pol = extract_llm.vital_threshold_policy(
+        {"vital_urgency": {"mode": "high",
+                           "thresholds": {"spo2_lte": 92,
+                                          "sbp_lte": "bad"}}})
+    assert pol["thresholds"]["spo2_lte"] == 92.0
+    assert pol["thresholds"]["sbp_lte"] == 90.0
+
+
+def test_vital_threshold_flags_anchor_and_context():
+    th = extract_llm._VITAL_THRESHOLDS_DEFAULT
+    flags = extract_llm._vital_threshold_flags(
+        {"spo2": 88.0}, "SpO2 88%まで低下しています。苦しそうです", th)
+    assert [f["key"] for f in flags] == ["spo2"]
+    assert "SpO2 88" in flags[0]["evidence"]
+    # label mismatch — the number must anchor to the right vital
+    assert extract_llm._vital_threshold_flags(
+        {"spo2": 88.0}, "血糖値は88でした", th) == []
+    # family / conditional / past / unmeasurable readings never fire
+    for body in ("母のSpO2は88%でしたが本人は安定しています",
+                 "SpO2が88%を切ったら連絡してください",
+                 "先月はSpO2 88%まで低下したことがありました",
+                 "SpO2 88%と出ましたが測定不能の可能性があります"):
+        assert extract_llm._vital_threshold_flags(
+            {"spo2": 88.0}, body, th) == [], body
+
+
+def test_vital_policy_off_flag_high_modes(monkeypatch):
+    body = "SpO2 88%です。今も苦しそうな様子が続いています"
+    monkeypatch.setattr(extract_llm, "_llm_call",
+                        lambda *a, **k: {"vitals": {"spo2": 88},
+                                         "urgency": "routine",
+                                         "summary": "SpO2低下"})
+    out = extract_llm.llm_extract(body)
+    assert out["urgency"] == "routine" and "vital_flags" not in out
+    flag = extract_llm.vital_threshold_policy(
+        {"vital_urgency": {"mode": "flag"}})
+    out = extract_llm.llm_extract(body, vital_policy=flag)
+    assert out["urgency"] == "routine" and out["vital_flags"]
+    high = extract_llm.vital_threshold_policy(
+        {"vital_urgency": {"mode": "high"}})
+    out = extract_llm.llm_extract(body, vital_policy=high)
+    assert out["urgency"] == "high"
+    assert out["urgency_evidence"]  # the flagged span grounds the verdict
+
+
+def test_vital_policy_applies_after_chunk_merge(monkeypatch):
+    body = ("あ" * 2600 + "\nSpO2は85%です。至急対応をお願いします。"
+            + "い" * 700)
+
+    def fake(prompt, **_ignored):
+        tgt = prompt.rsplit(
+            "対象本文(投稿日時: 不明):\n<<<\n", 1)[1].rsplit(
+            "\n>>>\nJSON:", 1)[0]
+        if "SpO2" in tgt:
+            return {"vitals": {"spo2": 85}, "urgency": "routine"}
+        return {"urgency": "routine"}
+
+    monkeypatch.setattr(extract_llm, "_llm_call", fake)
+    out = extract_llm.llm_extract(
+        body, vital_policy={"mode": "high",
+                            "thresholds": dict(
+                                extract_llm._VITAL_THRESHOLDS_DEFAULT)})
+    assert out["_chunks_total"] == 2
+    assert out["urgency"] == "high" and out["vital_flags"]

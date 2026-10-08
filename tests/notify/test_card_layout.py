@@ -6,11 +6,12 @@ import json
 import notify_cards
 import notify_render
 from notify_testkit import (
-    NOW, _add_request, _card, _deliver, _dispatch, _intent,
+    CFG, NOW, _add_request, _card, _deliver, _dispatch, _intent,
     _latest_render, _msg, _patient, _seed_thread, _signal_row, _spec,
     led as led,
 )
 from test_notify_lineworks import LINEWORKS, _deliver as _lw_deliver, _render as _lw_render
+from test_signal_thread_hotfix import delivered_source
 
 
 def _texts(spec):
@@ -23,7 +24,8 @@ def test_heading_names_patient_station_and_same_name_suffix(led):
     _patient(led, 2345, name="患者A")              # a same-name room
     _dispatch(led, _intent(led))
     head = _texts(_spec(led))[0]
-    assert head == "💬 患者A 様（あおぞら） #1 · 起点 09-24"
+    # layout 2: the title is the patient alone; start date moves below
+    assert head == "💬 患者A（あおぞら） #1"
 
 
 def test_context_line_counts_posts_missing_replies_files_and_mention(led):
@@ -34,10 +36,12 @@ def test_context_line_counts_posts_missing_replies_files_and_mention(led):
     led.db.commit()
     _dispatch(led, _intent(led))
     texts = _texts(_spec(led))
-    assert texts[1] == "2投稿 · 返信未取得 2件 · 📎 1"
+    assert texts[1] == "09-24〜 · 2投稿 · 返信未取得 2件 · 📎 1 · 解析中 2"
     # each post is its own zone: rule before it, its 要約 state after it
     rules = [c for c in _spec(led)["parts"]["containers"] if c.get("rule")]
-    assert len(rules) == 2 and texts.count("📋 要約 処理待ち") == 2
+    summary = notify_render._summary_block(led.db, 100, cfg=CFG, label=False)["text"]
+    assert len(rules) == 2 and texts.count(summary) == 2
+    assert summary == "要約 処理待ち"      # progress sits once on the meta line
 
 
 def test_new_replies_since_the_card_was_posted(led):
@@ -61,7 +65,10 @@ def test_failed_extraction_is_named_on_the_post(led):
         (json.dumps({"error": 1, "attempts": 5, "hash": f"{100:064x}"}), NOW))
     led.db.commit()
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
-    assert "📋 要約 作成失敗" in _texts(_spec(led))
+    summary = notify_render._summary_block(led.db, 100, cfg=CFG, label=False)["text"]
+    assert summary in _texts(_spec(led))
+    assert summary == "要約 作成失敗"
+    assert "解析要確認 1" in _texts(_spec(led))[1]
 
 
 def test_footer_is_one_state_item_and_revoked_card_has_no_buttons(led):
@@ -87,8 +94,10 @@ def test_signal_face_labels_type_and_state_in_japanese(led):
     _signal_row(led, "s2", stype="discharge_notice", mids=[100])
     _dispatch(led, _intent(led, "signal", payload={
         "signal_keys": ["s1", "s2"], "project_id": 1}))
+    delivered_source(led, card_id=2, mids=(100,))
+    notify_cards.sweep(led, CFG, now=NOW)
     texts = _texts(_spec(led))
-    assert texts[0] == "💬 アラート ［要確認］"           # discharge is immediate
+    assert texts[0] == "🔔 アラート · 要確認"           # discharge is immediate
     assert "・【期限超過】note s1（解消）" in texts[-1]
     assert "・【退院連絡】note s2（未確認）" in texts[-1]
     assert "resolved" not in "".join(texts)
@@ -101,12 +110,14 @@ def test_signal_thread_posts_are_keyed_per_signal(led):
     _signal_row(led, "s2", mids=[100])
     _dispatch(led, _intent(led, "signal", payload={
         "signal_keys": ["s1", "s2"], "project_id": 1}))
+    delivered_source(led, card_id=2, mids=(100,))
+    notify_cards.sweep(led, CFG, now=NOW)
     names = [p["name"] for p in _spec(led)["parts"]["manifest"]
              if p["kind"] == "body_part"]
     assert len(names) == 2 and all(n.startswith("s:") for n in names)
     assert names[0] != names[1]
     body = "".join(_spec(led)["parts"]["thread_body_parts"])
-    assert "/ 状態: 未確認" in body and "↳ 患者A 様 · " in body
+    assert "/ 状態: 未確認" in body and "↳ 患者A · " in body
     assert "[MCS]" not in body and "project 1" not in body
 
 
@@ -119,8 +130,10 @@ def test_attachment_parts_carry_a_caption(led):
     _dispatch(led, _intent(led))
     att = next(p for p in _spec(led)["parts"]["manifest"]
                if p["kind"] == "attachment_part")
-    assert "患者A:" in att["caption"] and "職員（所属未取得） / 09-24 08:40" in att["caption"]
-    assert "要約処理待ち" in att["caption"] and "📎 a.jpg" in att["caption"]
+    assert att["caption"].startswith("患者A / ") and "職員（所属未取得） / 09-24 08:40" in att["caption"]
+    assert "要約処理待ち" not in att["caption"] and "📋 要約" not in att["caption"]
+    assert "📎 a.jpg" in att["caption"]
+    assert "要約処理待ち" in _spec(led)["parts"]["preview_text"]
 
 
 def test_lineworks_card_member_names_repost_marker_and_more(led):

@@ -20,7 +20,7 @@ from project_metadata_view import physician_viewed_status
 from mcs_queries import incomplete_reply_roots
 from mcs_signals import is_own_station_message
 from mcs_util import loads_dict, register_search_fold, search_fold
-from read_model import _snapshot_meta
+from read_model import _snapshot_meta, message_patient_context
 from message_metadata import (
     flag_lines, get_message_metadata, get_metadata_shadow_status, is_self_sender)
 import mcs_requests as requests
@@ -148,6 +148,7 @@ class View:
         row["metadata_flags"] = flag_lines(self.db, row["message_metadata"])
         row["metadata_shadow"] = get_metadata_shadow_status(
             self.db, mid, as_of=self.meta["generated_at"])
+        row["patient_context"] = message_patient_context(self.db, row)
         # 22-F: actor counts by profession × type for own posts only, no
         # names or actor IDs (#22-D2); 'stale'/'failed' are past sets
         row["reaction_actors"] = (reaction_actor_summary(
@@ -451,7 +452,8 @@ class View:
             "out_of_scope": f"投稿時刻が{window_days}日より前または不明のため追加QC対象外の現行抽出件数。過去のQC注記は表示を維持する",
             "coverage": "検査済み・未検査の項目数。判定済みは全項目の確認を意味しない",
             "extract_feedback": "カードの ⚠ 抽出の誤り報告（新しい順、最大20件）。"
-                                "current=1 はまだ再抽出されていない報告",
+                                "current=1 はまだ再抽出されていない報告。"
+                                "field=urgency は緊急度判定の誤り報告",
         }
         from mcs_queries import extract_feedback
         reports = []

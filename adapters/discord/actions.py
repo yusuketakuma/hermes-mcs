@@ -23,7 +23,7 @@ from typing import Any
 
 from hermes_plugin import projects
 from adapters.common import envelopes, paths, registry, text
-from .cards import MENU_ID, no_pings
+from .cards import MENU_ID, no_pings, thread_drug_view
 
 ACTION_PREFIX = "mcs:a:"
 MODAL_PREFIX = "mcs:m:"
@@ -55,6 +55,15 @@ def _task_view(items: list):
                 custom_id=f"{ACTION_PREFIX}{tr['token']}"))
             count += 1
     return view if count else None
+
+
+def _answer_view(tasks, result: dict, index: int):
+    """Task controls or first-chunk private medication navigation."""
+    if tasks:
+        return _task_view(tasks)
+    if index == 0 and result.get("navigation"):
+        return thread_drug_view({"parts": {"action_rows": [result["navigation"]]}})
+    return None
 
 
 def _authorizing_channel(interaction) -> tuple[str, str | None]:
@@ -462,7 +471,7 @@ class Actions:
                 "フォームを開いたカードと送信元が一致しません。")
             return
         await interaction.response.defer(ephemeral=True)
-        if pending["action"] in ("search", "digest"):
+        if pending["action"] in text.VIEW_FORMS:
             await self._search(interaction, modal_id, pending)
             return
 
@@ -507,7 +516,7 @@ class Actions:
 
     async def _search(self, interaction, modal_id: str,
                       pending: dict) -> None:
-        """🔎/📊 submit: the keyword or scope rides the same card token as
+        """🔎/💊/📊 submit: the keyword or scope rides the same card token as
         a view click — no preview/confirm, the runner answers."""
         fields = self._modal_fields(interaction)
         if pending["action"] == "digest":
@@ -656,7 +665,7 @@ class Actions:
                 "送信に失敗しました。もう一度確定してください。")
             return
         # consumed only after the command file is durably queued
-        self._reg.drop_confirm(confirm_id)
+        self._reg.consume_confirm(confirm_id)
         self._result_log(interaction, payload.get("cmd"),
                          {"outcome": "confirmed"},
                          command_id=payload.get("command_id"))
@@ -674,9 +683,8 @@ class Actions:
         result = await self._wait_result(cid, HUMAN_WAIT_S)
         if result is None:
             return                        # supervisor sweeps followups
-        if self._reg.followup(cid) is None:
+        if not self._reg.drop_followup(cid):
             return                        # the sweep already delivered it
-        self._reg.drop_followup(cid)
         self._result_log(interaction, payload.get("cmd"), result)
         await self._followup(interaction, text.ja(result))
 
@@ -716,9 +724,8 @@ class Actions:
             if result is None or (rec.get("request_id") is not None
                                   and result.get("request_id") != rec["request_id"]):
                 continue
-            if self._reg.followup(cid) is None:
+            if not self._reg.drop_followup(cid):
                 continue                 # the inline wait delivered it
-            self._reg.drop_followup(cid)
             try:
                 hook = discord.Webhook.partial(
                     int(rec["application_id"]), rec["token"],
@@ -736,12 +743,12 @@ class Actions:
                     continue
                 # a view answer that outlived the wait window still owes
                 # its text (generic text.ja would only say 反映しました),
-                # and 📋 transition tokens must land before their buttons
+                # and private control tokens must land before their buttons
                 await self._register_tokens(result)
-                for msg, tasks in answer:
+                for index, (msg, tasks) in enumerate(answer):
                     # an all-done list has no buttons: _task_view → None,
                     # and an explicit view=None is a TypeError
-                    view = _task_view(tasks) if tasks else None
+                    view = _answer_view(tasks, result, index)
                     await send(msg, ephemeral=True, **(
                         {"view": view} if view is not None else {}))
             except Exception as e:
@@ -750,8 +757,7 @@ class Actions:
     # -- response helpers --------------------------------------------------
 
     async def _register_tokens(self, result: dict) -> None:
-        """A 📋 task list carries runner-minted transition tokens whose
-        ctx must land in the registry before the buttons are clickable."""
+        """Register runner-issued private-control tokens before their buttons."""
         token_ctx = result.get("token_ctx") or {}
         if token_ctx:
             await asyncio.to_thread(self._reg.put_tokens, token_ctx)
@@ -760,11 +766,11 @@ class Actions:
                            result: dict) -> None:
         """A view answer (text.view_answer) as ephemeral followups —
         text stays ephemeral (unlike a file attachment, whose CDN URL is
-        reachable by link alone); a task list carries its buttons."""
+        reachable by link alone); private task/medication controls ride their text."""
         await self._register_tokens(result)
-        for msg, tasks in answer:
+        for index, (msg, tasks) in enumerate(answer):
             await self._followup(interaction, msg,
-                                 view=_task_view(tasks) if tasks else None)
+                                 view=_answer_view(tasks, result, index))
 
     def _allowed_pid(self, project_id) -> bool:
         return projects.project_allowed(self._settings, project_id)

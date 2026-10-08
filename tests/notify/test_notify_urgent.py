@@ -6,8 +6,10 @@ import pytest
 
 import notify_flush
 import notify_urgent
+import structured_view
 from ledger import Ledger
 from mcs_signals import record_station_staff
+from semantic_projection import PROJECTION_VERSION
 from notify_testkit import (
     CFG, NOW, _add_request, _click, _deliver, _dispatch, _extract, _intent,
     _msg, _patient, _signal_row, _spec, led,
@@ -28,14 +30,14 @@ def world(led, monkeypatch):
     monkeypatch.setattr(notify_flush, "_send",
                         lambda *args, **kwargs: calls.append((args, kwargs)))
     _patient(led)
-    _msg(led, 100, ts=int(NOW - 7200), body="PRIVATE-BODY-CANARY")
+    _msg(led, 100, ts=int(NOW - 7200), body="本人が急変し至急確認が必要です。PRIVATE-BODY-CANARY")
     with led.db:
         led.db.execute("UPDATE messages SET sender_id=8 WHERE message_id=100")
         record_station_staff(led.db, [{"staff_id": 7, "is_self": True}])
     return led, cfg, clock, calls
 
 
-def _base(store, *, mid=100, at=NOW - 1800, state="accepted", interactive=False):
+def _base(store, *, mid=100, at=NOW - 1800, state="accepted", interactive=True):
     with store.db:
         event = store.outbox_add_tx("new_messages", 1, {"message_ids": [mid]},
                                    route="interactive" if interactive else "text")
@@ -45,11 +47,47 @@ def _base(store, *, mid=100, at=NOW - 1800, state="accepted", interactive=False)
             store, {"urgency_escalation": {"mode": "shadow", "room_cooldown_min": 1}}, row, now=at)
     if interactive:
         assert _dispatch(store, row, now=at)["dispatched"]
-        _deliver(store)
+        from notify_testkit import _latest_render, _begin, _receipt, _settle_bodies
+        from test_notify_parts import _part_receipt
+        cid = store.db.execute("SELECT card_id FROM notification_intent_cards WHERE event_id=?", (event,)).fetchone()[0]
+        render = _latest_render(store, cid)
+        serial = 90000 + event * 3
+        assert _begin(store, render, n=serial)["granted"]
+        assert _receipt(store, render, f"{serial:016x}", message_id="m-9", n=serial + 1)["applied"]
+        _settle_bodies(store, render)
+        assert _part_receipt(store, render, "thread", remote_id="synthetic-thread-" + str(cid), n=serial + 2)["applied"]
     with store.db:
         store.db.execute("UPDATE notify_outbox SET state=?,created_at=?,updated_at=? "
                          "WHERE event_id=?", (state, at - 1, at, event))
     return event
+
+
+_NATIVE_SEQ = iter(range(500000, 600000, 2))
+
+
+def _flush_native(store, cfg, calls, *, outcome="delivered", **kwargs):
+    """Flush then simulate one native wire attempt through real grants/receipts."""
+    import notify_cards
+    import notify_render
+    import notify_transport
+    from notify_testkit import _begin, _uuid
+    result = notify_flush.flush(store, **kwargs)
+    for render in store.db.execute("SELECT * FROM notification_renders WHERE op='notice' AND state='queued'").fetchall():
+        serial = next(_NATIVE_SEQ)
+        if not _begin(store, render, n=serial, cfg=cfg)["granted"]:
+            continue
+        spec = json.loads(render["spec_json"])
+        calls.append((("native", notify_render.parts_text(spec["parts"])), {}))
+        receipt = {"version": 1, "op": "transport_receipt", "command_id": _uuid(serial + 1),
+                   "attempt_id": f"{serial:016x}", "delivery_id": render["delivery_id"],
+                   "render_rev": render["render_rev"], "payload_hash": render["payload_hash"],
+                   "route_epoch": 1, "correlation": render["correlation"],
+                   **notify_cards.delivery_scope(cfg), "result": outcome}
+        if outcome == "delivered":
+            receipt["message_id"] = "alert-reply-" + str(serial)
+        assert notify_transport.apply_transport_receipt(store, receipt, cfg)["applied"]
+        result["sent" if outcome == "delivered" else "uncertain"] = result.get("sent" if outcome == "delivered" else "uncertain", 0) + 1
+    return result
 
 
 def test_high_initial_delivery_is_not_a_late_high_transition(world):
@@ -97,13 +135,18 @@ def test_interactive_seal_records_only_covered_initial_messages_and_allows_late_
 
 
 def _fact(store, *, mid=100, urgency="high", at=NOW - 600, kind="extract_llm", **meta):
+    body = store.db.execute("SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone()[0]
+    content = {"urgency": urgency}
+    if urgency == "high" and body:
+        content["urgency_evidence"] = [body.split("。", 1)[0]]
     if kind in ("canonical_projection", "semantic_facts_v4"):
         content_hash = store.db.execute("SELECT content_hash FROM messages WHERE message_id=?",
                                         (mid,)).fetchone()[0]
-        store.artifact_add(kind, json.dumps({"urgency": urgency}), project_id=1, message_id=mid,
-                           meta={"hash": content_hash, "engine_version": 4, **meta})
+        store.artifact_add(kind, json.dumps(content), project_id=1, message_id=mid,
+                           meta={"hash": content_hash, "engine_version": 4,
+                                 "projection_version": PROJECTION_VERSION, **meta})
     else:
-        _extract(store, mid, {"urgency": urgency}, kind=kind, **meta)
+        _extract(store, mid, content, kind=kind, **meta)
     aid = store.db.execute("SELECT max(artifact_id) FROM artifacts").fetchone()[0]
     with store.db:
         store.db.execute("UPDATE artifacts SET created_at=? WHERE artifact_id=?", (at, aid))
@@ -137,13 +180,13 @@ def test_e1_is_durable_and_independent_of_signals_switch(world):
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
     event = _events(store)[0]
     assert json.loads(event["payload"])["stage"] == "E1"
-    assert event["route"] == "text"
+    assert event["route"] == "interactive"
     second = Ledger(store.db.execute("PRAGMA database_list").fetchone()["file"])
     try:
         assert notify_urgent.maybe_enqueue(second, cfg)["queued"] == 0
     finally:
         second.close()
-    result = notify_flush.flush(store)
+    result = _flush_native(store, cfg, calls)
     assert result["sent"] == 1 and len(calls) == 1
     assert _events(store)[0]["state"] == "accepted"
     assert "PRIVATE-BODY-CANARY" not in calls[0][0][1]
@@ -151,7 +194,7 @@ def test_e1_is_durable_and_independent_of_signals_switch(world):
 
 
 def test_e2_exact_deadline_repeat_interval_and_cap(world):
-    store, cfg, clock, _ = world
+    store, cfg, clock, calls = world
     _base(store, interactive=True)
     _fact(store, at=NOW - 1801)  # already high when first delivery completed
     clock[0] = NOW - .125
@@ -159,13 +202,13 @@ def test_e2_exact_deadline_repeat_interval_and_cap(world):
     clock[0] = NOW
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
     assert json.loads(_events(store)[0]["payload"])["stage"] == "E2:1"
-    assert notify_flush.flush(store)["sent"] == 1
+    assert _flush_native(store, cfg, calls)["sent"] == 1
     clock[0] = NOW + 3600 - .125
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 0
     clock[0] = NOW + 3600
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
     assert json.loads(_events(store)[1]["payload"])["stage"] == "E2:2"
-    assert notify_flush.flush(store)["sent"] == 1
+    assert _flush_native(store, cfg, calls)["sent"] == 1
     clock[0] += 3600
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 0
     assert len(_events(store)) == 2
@@ -192,6 +235,81 @@ def test_only_current_llm_generation_can_escalate(world, kind, level, meta, rule
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == expected
 
 
+@pytest.mark.parametrize("kind", ["canonical_projection", "semantic_facts_v4"])
+@pytest.mark.parametrize("projection,legacy,verdict,queued", [
+    (None, "high", "high", 1), (False, "high", "high", 1),
+    ("routine", "high", "routine", 0), ("unclear", "high", "unclear", 0),
+    ("high", "routine", "high", 1), (None, "routine", "routine", 0),
+    (None, "unclear", "unclear", 0),
+])
+def test_projection_urgency_selection_matches_display_and_real_send(
+        world, kind, projection, legacy, verdict, queued):
+    store, cfg, _, calls = world
+    _base(store)
+    llm_id = _fact(store, urgency=legacy, at=NOW - 600)
+    projection_id = _fact(store, kind=kind, urgency=projection, at=NOW - 60)
+    if projection is None:
+        with store.db:
+            store.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                             (json.dumps({"meds": [], "canonical_facts": []}), projection_id))
+    row = notify_urgent._current(store.db, 100)
+    assert row["urgency"] == verdict
+    expected_id = projection_id if isinstance(projection, str) else llm_id
+    assert row["artifact_id"] == expected_id
+    assert row["created_at"] == (NOW - 60 if expected_id == projection_id else NOW - 600)
+    assert structured_view.message_urgency(store.db, 100) == ("llm" if verdict == "high" else None)
+    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == queued
+    if queued:
+        event = _events(store)[0]
+        payload = json.loads(event["payload"])
+        assert payload["urgency_artifact_id"] == expected_id
+        assert payload["stage"] == "E1"
+        assert notify_urgent.check_delivery(store, cfg, event)["ok"]
+        assert _flush_native(store, cfg, calls)["sent"] == 1 and len(calls) == 1
+        assert "PRIVATE-BODY-CANARY" not in calls[0][0][1]
+    else:
+        assert _events(store) == [] and calls == []
+
+
+@pytest.mark.parametrize("kind", ["canonical_projection", "semantic_facts_v4"])
+def test_projection_without_verdict_does_not_restart_initial_high_clock(world, kind):
+    store, cfg, _, _ = world
+    llm_id = _fact(store, at=NOW - 2000)
+    event = _base(store, interactive=True)
+    projection_id = _fact(store, kind=kind, urgency=None, at=NOW - 1)
+    with store.db:
+        store.db.execute("UPDATE artifacts SET content='{}' WHERE artifact_id=?", (projection_id,))
+    assert notify_urgent._initial(store.db, event, 100)["urgency_source"] == "llm"
+    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
+    payload = json.loads(_events(store)[0]["payload"])
+    assert payload["stage"] == "E2:1" and payload["urgency_artifact_id"] == llm_id
+
+
+@pytest.mark.parametrize("fault", ["hash", "deleted", "archived", "error", "routine"])
+def test_fallback_high_is_revalidated_before_send(world, fault):
+    store, cfg, _, calls = world
+    _base(store)
+    llm_id = _fact(store)
+    projection_id = _fact(store, kind="semantic_facts_v4", urgency=None)
+    with store.db:
+        store.db.execute("UPDATE artifacts SET content='{}' WHERE artifact_id=?", (projection_id,))
+    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
+    with store.db:
+        if fault == "hash":
+            store.db.execute("UPDATE messages SET content_hash=? WHERE message_id=100", ("0" * 64,))
+        elif fault == "deleted":
+            store.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=100")
+        elif fault == "archived":
+            store.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+        elif fault == "error":
+            store.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.error',1) WHERE artifact_id=?",
+                             (llm_id,))
+        else:
+            store.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                             (json.dumps({"urgency": "routine"}), llm_id))
+    assert notify_flush.flush(store)["suppressed"] == 1 and calls == []
+
+
 @pytest.mark.parametrize("artifact_project", [None, 1])
 def test_legacy_llm_project_scope_matches_the_current_urgency_display(
         world, artifact_project):
@@ -208,7 +326,7 @@ def test_legacy_llm_project_scope_matches_the_current_urgency_display(
     assert structured_view.message_urgency(store.db, 100) == "llm"
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
     assert notify_urgent.check_delivery(store, cfg, _events(store)[0])["ok"]
-    assert notify_flush.flush(store)["sent"] == 1 and len(calls) == 1
+    assert _flush_native(store, cfg, calls)["sent"] == 1 and len(calls) == 1
 
 
 def test_conflicting_llm_project_is_rejected_before_notification(world):
@@ -236,14 +354,16 @@ def test_initial_delivery_must_be_proven(world, state):
     "routine", "expired", "hash", "deleted", "archived", "request", "own_post", "ack", "off",
 ])
 def test_queued_followup_is_cancelled_before_real_send(world, cancel):
-    store, cfg, _, calls = world
+    store, cfg, clock, calls = world
     _base(store)
     aid = _fact(store, kind="canonical_projection")
     if cancel == "ack":
-        event = _intent(store, payload={"message_ids": [100]})
-        _dispatch(store, event)
+        import notify_cards
+        notify_cards.rerender_message_cards(store, cfg, 1, 100)
         _deliver(store)
-    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
+        clock[0] += 1801
+    observed = notify_urgent.maybe_enqueue(store, cfg)
+    assert observed["queued"] == 1, observed
     if cancel == "routine":
         _fact(store, kind="canonical_projection", urgency="routine", at=NOW - 1)
         _fact(store, kind="extract_v1", urgency="high")
@@ -278,20 +398,20 @@ def test_queued_followup_is_cancelled_before_real_send(world, cancel):
 
 
 def test_rechecks_after_formatting_and_does_not_infer_completion(world, monkeypatch):
+    import alert_view
     store, cfg, _, calls = world
     _base(store)
     _fact(store)
     notify_urgent.maybe_enqueue(store, cfg)
-    original = notify_flush._format_event
-
+    original = alert_view.render_parts
     def format_then_cancel(*args):
         value = original(*args)
         _add_request(store)
         return value
-
-    monkeypatch.setattr(notify_flush, "_format_event", format_then_cancel)
-    assert notify_flush.flush(store)["suppressed"] == 1
+    monkeypatch.setattr(alert_view, "render_parts", format_then_cancel)
+    assert _flush_native(store, cfg, calls)["sent"] == 0
     assert calls == []
+    assert store.db.execute("SELECT error_code FROM notification_delivery_attempts WHERE error_code='denied_urgent_source_changed'").fetchone()
     assert store.db.execute("SELECT status FROM requests").fetchone()[0] == "open"
 
 
@@ -302,33 +422,26 @@ def test_shadow_does_not_send_or_consume_live_stage(world):
     cfg["urgency_escalation"]["mode"] = "shadow"
     assert notify_urgent.maybe_enqueue(store, cfg)["suppressed"] == 1
     assert notify_urgent.maybe_enqueue(store, cfg)["suppressed"] == 0
-    assert notify_flush.flush(store)["sent"] == 0 and calls == []
+    assert _flush_native(store, cfg, calls)["sent"] == 0 and calls == []
     cfg["urgency_escalation"]["mode"] = "on"
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
-    assert notify_flush.flush(store)["sent"] == 1
+    assert _flush_native(store, cfg, calls)["sent"] == 1
     assert len(_events(store)) == 2
 
 
-def test_unknown_delivery_is_held_before_stale_cancellation_and_blocks_repeats(world, monkeypatch):
+def test_unknown_delivery_is_held_before_stale_cancellation_and_blocks_repeats(world):
+    import notify_cards
     store, cfg, clock, calls = world
     _base(store)
     _fact(store)
     notify_urgent.maybe_enqueue(store, cfg)
-
-    def uncertain(*args, **kwargs):
-        calls.append((args, kwargs))
-        raise notify_flush._SendUncertain("synthetic_unknown")
-
-    monkeypatch.setattr(notify_flush, "_send", uncertain)
-    assert notify_flush.flush(store)["uncertain"] == 1
+    assert _flush_native(store, cfg, calls, outcome="unknown")["uncertain"] == 1
     event = _events(store)[0]
-    assert event["state"] == "failed" and event["next_try"] is None
-    assert json.loads(event["progress"])["hold_reason"] == "send_outcome_unknown"
+    assert notify_cards._notice_renders(store.db, event["event_id"])[0]["state"] == "unknown"
     cfg["urgency_escalation"]["mode"] = "off"
     with store.db:
         store.db.execute("UPDATE notify_outbox SET next_try=? WHERE event_id=?", (NOW, event["event_id"]))
-    assert notify_flush.flush(store)["uncertain"] == 1
-    assert _events(store)[0]["state"] == "failed" and _events(store)[0]["next_try"] is None
+    assert notify_flush.flush(store)["parked"] == 1
     assert len(calls) == 1
     cfg["urgency_escalation"]["mode"] = "on"
     clock[0] += 7200
@@ -341,8 +454,8 @@ def test_minimum_budget_and_restore_keep_pending_without_send(world, tmp_path):
     _base(store)
     _fact(store)
     notify_urgent.maybe_enqueue(store, cfg)
-    result = notify_flush.flush(store, deadline=NOW + notify_flush.SEND_MIN_BUDGET_S - .125)
-    assert result["send_budget_insufficient"] == 1 and calls == []
+    result = notify_flush.flush(store, deadline=NOW - .125)
+    assert result["skipped"] == 1 and calls == []
     assert _events(store)[0]["attempts"] == 0 and _events(store)[0]["progress"] is None
     marker = tmp_path / "data" / "restore_pending.json"
     marker.write_text("{}", encoding="utf-8")
@@ -351,7 +464,7 @@ def test_minimum_budget_and_restore_keep_pending_without_send(world, tmp_path):
     assert calls == [] and _events(store)[0]["state"] == "pending"
     marker.unlink()
     clock[0] += notify_flush.RERENDER_RETRY_S  # restore gate deferred it
-    assert notify_flush.flush(store)["sent"] == 1
+    assert _flush_native(store, cfg, calls)["sent"] == 1
 
 
 def test_room_cooldown_and_daily_cap_are_durable(world):
@@ -359,7 +472,7 @@ def test_room_cooldown_and_daily_cap_are_durable(world):
     cfg["urgency_escalation"]["max_per_day"] = 1
     _base(store)
     _fact(store)
-    _msg(store, 101, ts=int(NOW - 3600))
+    _msg(store, 101, ts=int(NOW - 3600), body="本人が急変し至急確認が必要です。")
     _base(store, mid=101)
     _fact(store, mid=101)
     result = notify_urgent.maybe_enqueue(store, cfg)
@@ -373,7 +486,7 @@ def test_tick_reads_history_and_restore_marker_once(world, monkeypatch, tmp_path
     store, cfg, _, _ = world
     _base(store)
     _fact(store)
-    _msg(store, 101, ts=int(NOW - 3600))
+    _msg(store, 101, ts=int(NOW - 3600), body="本人が急変し至急確認が必要です。")
     _base(store, mid=101)
     _fact(store, mid=101)
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1  # 101 is room_cooldown
@@ -398,7 +511,7 @@ def test_signal_text_warning_uses_current_urgency_not_frozen_modifier(world, llm
     _signal_row(store, "s", mids=[100])
     event = _intent(store, "signal", payload={"signal_keys": ["s"], "urgent": frozen_urgent})
     text, files = notify_flush._format_event(store, event)
-    assert ("緊急度: 高（AI抽出）" in text) == (llm == "high")
+    assert ("緊急度高" in text) == (llm == "high")
     assert "原投稿が urgency:high" not in text and files == []
 
 
@@ -416,8 +529,8 @@ def test_real_initial_sender_captures_ordinary_then_late_high_e1(world):
     assert json.loads(event["payload"])["stage"] == "E1"
     checked = notify_urgent.check_delivery(store, cfg, event)
     assert checked["observed_at"] == NOW + 600
-    assert notify_flush.flush(store)["sent"] == 1
-    assert len(calls) == 2 and "PRIVATE-BODY-CANARY" not in calls[1][0][1]
+    assert notify_flush.flush(store)["parked"] == 1
+    assert len(calls) == 1
     clock[0] += 7200
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 0
     assert len(_events(store)) == 1  # Text permits E1, never unconfirmable E2.
@@ -426,7 +539,7 @@ def test_real_initial_sender_captures_ordinary_then_late_high_e1(world):
 def test_text_initial_delivery_never_creates_e2_without_confirmation_route(world):
     store, cfg, clock, calls = world
     _fact(store, at=NOW - 3600)
-    _base(store)
+    _base(store, interactive=False)
     clock[0] += 7200
     result = notify_urgent.maybe_enqueue(store, cfg)
     assert result["queued"] == 0
@@ -437,7 +550,7 @@ def test_text_initial_delivery_never_creates_e2_without_confirmation_route(world
 def test_preexisting_text_e2_is_cancelled_at_send_time(world):
     store, _, _, calls = world
     aid = _fact(store, at=NOW - 3600)
-    base = _base(store)
+    base = _base(store, interactive=False)
     with store.db:
         store.outbox_add_tx("urgent_notice", 1, {
             "message_id": 100, "hash": f"{100:064x}", "stage": "E2:1",
@@ -462,7 +575,7 @@ def test_text_initial_render_and_urgency_witness_share_writer_snapshot(world, mo
         try:
             with other.db:
                 other.db.execute("UPDATE artifacts SET content=?,created_at=? WHERE artifact_id=?",
-                                 (json.dumps({"urgency": "high"}), NOW + .1, aid))
+                                 (json.dumps({"urgency": "high", "urgency_evidence": ["本人が急変し至急確認が必要です"]}), NOW + .1, aid))
         except sqlite3.OperationalError as exc:
             assert "locked" in str(exc)
             blocked.append(True)
@@ -472,11 +585,11 @@ def test_text_initial_render_and_urgency_witness_share_writer_snapshot(world, mo
     try:
         assert notify_flush.flush(store)["sent"] == 1
         assert blocked == [True]
-        assert "緊急度: 高（AI抽出）" not in calls[0][0][1]
+        assert "緊急度高" not in calls[0][0][1]
         assert notify_urgent._initial(store.db, base, 100)["urgency_source"] is None
         with other.db:
             other.db.execute("UPDATE artifacts SET content=?,created_at=? WHERE artifact_id=?",
-                             (json.dumps({"urgency": "high"}), NOW + .1, aid))
+                             (json.dumps({"urgency": "high", "urgency_evidence": ["本人が急変し至急確認が必要です"]}), NOW + .1, aid))
         clock[0] += 1
         assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
         assert json.loads(_events(store)[0]["payload"])["stage"] == "E1"
@@ -485,7 +598,7 @@ def test_text_initial_render_and_urgency_witness_share_writer_snapshot(world, mo
 
 
 def test_page_ack_does_not_confirm_hidden_urgent_message(world):
-    store, cfg, _, calls = world
+    store, cfg, clock, calls = world
     _base(store)
     _fact(store)
     mids = list(range(100, 112))
@@ -495,6 +608,7 @@ def test_page_ack_does_not_confirm_hidden_urgent_message(world):
     _deliver(store)
     assert _spec(store)["parts"]["pages"] == 2
     assert _click(store, _spec(store), "ack")["outcome"] == "applied"
+    clock[0] += 1801
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
     _deliver(store)
     assert _click(store, _spec(store), "prev")["outcome"] == "applied"
@@ -504,12 +618,13 @@ def test_page_ack_does_not_confirm_hidden_urgent_message(world):
 
 
 def test_old_confirmation_is_not_current_after_llm_generation_arrives(world):
-    store, cfg, _, _ = world
+    store, cfg, clock, _ = world
     _base(store)
     _dispatch(store, _intent(store, payload={"message_ids": [100]}))
     _deliver(store)
     assert _click(store, _spec(store), "ack")["outcome"] == "applied"
-    _fact(store)
+    clock[0] += 1
+    _fact(store, at=clock[0])
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
     assert json.loads(_events(store)[0]["payload"])["stage"] == "E1"
 
@@ -538,12 +653,9 @@ def test_uncertain_attempt_after_day_change_reserves_current_daily_budget(world,
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
     clock[0] += 86400
 
-    def uncertain(*args, **kwargs):
-        raise notify_flush._SendUncertain("synthetic_unknown")
-
-    monkeypatch.setattr(notify_flush, "_send", uncertain)
-    assert notify_flush.flush(store)["uncertain"] == 1
-    _msg(store, 101, ts=int(NOW - 3600))
+    calls = []
+    assert _flush_native(store, cfg, calls, outcome="unknown")["uncertain"] == 1
+    _msg(store, 101, ts=int(NOW - 3600), body="本人が急変し至急確認が必要です。")
     _base(store, mid=101)
     _fact(store, mid=101, at=clock[0] - 1)
     result = notify_urgent.maybe_enqueue(store, cfg)
@@ -594,6 +706,9 @@ def test_triage_assigned_or_live_deferral_stops_e2_and_queued_send(
     _fact(store)
     _dispatch(store, _intent(store, payload={"message_ids": [100]}))
     _deliver(store)
+    from test_notify_parts import _part_receipt
+    from notify_testkit import _latest_render
+    assert _part_receipt(store, _latest_render(store), "thread", remote_id="synthetic-thread", n=98000)["applied"]
     clock[0] += 1800
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
     until = None if defer_delta is None else clock[0] + defer_delta
@@ -602,7 +717,7 @@ def test_triage_assigned_or_live_deferral_stops_e2_and_queued_send(
             "INSERT INTO notification_triage(card_id,owner,defer_until,state,updated_at) "
             "SELECT card_id,'synthetic',?,?,? FROM notification_cards WHERE kind='thread'",
             (until, state, clock[0]))
-    result = notify_flush.flush(store)
+    result = _flush_native(store, cfg, calls)
     if claimed:
         assert result["suppressed"] == 1 and calls == []
         clock[0] += 3600
@@ -610,3 +725,39 @@ def test_triage_assigned_or_live_deferral_stops_e2_and_queued_send(
         assert result["queued"] == 0 and result["deferred"]["triage_claimed"] == 1
     else:
         assert result["sent"] == 1 and len(calls) == 1
+
+
+def _qc_urgency(store, mid, aid, jev):
+    """A done QC verdict on urgency, pinned to artifact `aid`."""
+    h = store.db.execute("SELECT content_hash FROM messages WHERE message_id=?",
+                         (mid,)).fetchone()[0]
+    with store.db:
+        store.db.execute(
+            "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at)"
+            " VALUES('extract_qc',1,?,?,'test',?,?)",
+            (mid, json.dumps({"qc": "done", "items": [],
+                              "urgency": {"extracted": "high", "jev": jev,
+                                          "confidence": 0.9}}),
+             json.dumps({"hash": h, "source_artifact_id": aid}), NOW))
+
+
+@pytest.mark.parametrize("jev", ["routine", "unclear"])
+def test_qc_disagreement_vetoes_urgent_escalation(world, jev):
+    """A current QC verdict of routine/unclear on the displayed artifact
+    holds the urgent re-ask — fail-open only when QC is absent or stale."""
+    store, cfg, _, _ = world
+    _base(store, interactive=True)
+    aid = _fact(store)
+    _qc_urgency(store, 100, aid, jev)
+    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 0
+    # a newer extraction supersedes the audited one — its veto expires
+    _fact(store, at=NOW - 300)
+    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
+
+
+def test_qc_agreement_does_not_veto_escalation(world):
+    store, cfg, _, _ = world
+    _base(store, interactive=True)
+    aid = _fact(store)
+    _qc_urgency(store, 100, aid, "high")
+    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1

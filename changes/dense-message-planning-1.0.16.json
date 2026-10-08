@@ -1,0 +1,13 @@
+{
+  "category": "changed",
+  "title": "情報の多い投稿を意味のまとまりで事前分割",
+  "summary": "見出し・段落と薬剤や観測値などの情報密度から、解析前に処理単位を分けます。短い高密度投稿も対象にし、原文を全て保持して、時間内に終わらない場合は完了区間から続きを処理します。患者の記録まとめでは本人だけに処理状況を表示します。",
+  "upgrade": "適用には更新後にgatewayまたは独立workerの再起動が必要です。token1600・timeout300秒・処理枠・既読化・人承認条件は維持します。旧分割契約の途中結果は再利用せず、現行canonical結果は新しいprompt・分割契約の世代で通常再処理します。本変更だけで本番設定や実データは変更しません。",
+  "details": [
+    "共通の分割関数でlegacyとcanonicalの全文範囲を一致させ、本文・prompt・モデル・分割契約でcheckpointを束縛する。",
+    "参照専用の見出し・隣接文と対象本文の証拠を区別し、否定・主体・時制・薬剤や症状の関係を維持する。",
+    "LLMに不要な空欄・重複説明を出力させず、必要な引用・分類判定を省略しない。現行v2にも詳細属性の説明を適用する。",
+    "本人限定のまとめは最新20投稿の状態と区間数だけを追加し、抽出完了を情報の正しさや臨床対応の完了と扱わない。共有通知本文は変更しない。"
+  ],
+  "refs": ["mcs/extract/clinical_chunking.py", "mcs/extract/v4/extract_llm.py", "mcs/semantic/semantic_extraction.py", "mcs/semantic/semantic_store.py", "mcs/notify/notify_views.py", "docs/development/plans/LONG_MESSAGE_1.0.16.md"]
+}

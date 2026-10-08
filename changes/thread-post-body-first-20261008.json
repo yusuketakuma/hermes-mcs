@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "スレッド内の投稿は本文を先に、スタンプを末尾に",
+  "summary": "Slack・Discordのスレッド内の各投稿は、「↳ 日時 投稿者」の見出し行、本文、区切り線、スタンプ行の順になります。読みたい本文がすぐ目に入り、「📄 本文」の見出しはなくなります。LINE WORKSの本文投稿は見出し、📋要約、区切り線、本文の順です。2026-10-08以前に作られたカードのスレッドは従来の順（見出し・スタンプ・区切り・📄 本文）のままで、再投稿は起きません。",
+  "upgrade": "追加設定は不要です。新しく作られるカード（レイアウト2）のスレッド本文から適用されます。本人限定の「本文表示」も同じ順で表示します。README画面例（Slack 01・LINE WORKS 01）のSVG・PNGを更新しました。",
+  "details": [
+    "notify_render._message_post に layout を追加。layout 2 では本文の後に区切り線とスタンプ行を置き、要約を含む表示では要約と本文の間に区切り線を置く。layout 1 は 2026-10-03 の順序を維持する。",
+    "_card_body_text / _signal_body はカードの layout 列を渡す。テキスト通知（notify_flush）は対象外で従来どおり。",
+    "docs/guides/USER_GUIDE.md のスレッド投稿の説明を更新。"
+  ],
+  "refs": ["mcs/notify/notify_render.py", "docs/guides/USER_GUIDE.md", "scripts/development/generate_slack_gallery.py", "scripts/development/generate_lineworks_gallery.py"]
+}

@@ -21,7 +21,7 @@ import notify_cards as runner_cards
 import notify_cmds as runner_cmds
 import notify_reconcile
 from notify_testkit import (
-    NOW, _dispatch, _intent, _latest_render, _seed_thread,
+    NOW, _dispatch, _intent, _latest_render, _llm_extract, _seed_thread,
 )
 from slack_card_testkit import _spec
 from slack_testkit import SCOPE, SLACK, FakeClient, _granted_card, _mkworld
@@ -557,7 +557,8 @@ def _big_body(led, chars=4200):
     led.db.commit()
 
 
-def test_slack_thread_parts_post_under_bound_root_only(led):
+def test_slack_thread_parts_post_under_bound_root_only(led, monkeypatch):
+    monkeypatch.setattr(runner_cards, "drug_search_available", lambda _db: True)
     _seed_thread(led)
     _big_body(led)
     assert _dispatch(led, _intent(led), SLACK)["dispatched"]
@@ -578,11 +579,18 @@ def test_slack_thread_parts_post_under_bound_root_only(led):
     assert all(p["thread_ts"] == "1790000000.000001"
                and p["channel"] == SCOPE["channel_id"]
                and "blocks" not in p for p in w.client.thread_posts)
+    drug_tokens = [token for token, context in token_map(spec).items()
+                   if context["action"] in ("meds", "drugsearch")]
+    assert drug_tokens
+    assert all(w.reg.token(token)["verified_thread_id"] == "1790000000.000001"
+               for token in drug_tokens)
 
     # restart with the registry's parts flag lost (crash before save):
     # only the slack_state journal can prove the card and dedupe parts
     restored = registry.Registry(w.dirs["state"], scope=SCOPE)
     restored._data["parts"].pop(spec["delivery_id"], None)
+    for token in drug_tokens:
+        restored._data["tokens"][token].pop("verified_thread_id", None)
     replacement = DeliveryWorker(
         sender=w.sender, settings=SCOPE, root=str(w.root),
         reg=restored, worker_id=registry.new_worker_id(),
@@ -593,6 +601,8 @@ def test_slack_thread_parts_post_under_bound_root_only(led):
     asyncio.run(replacement._resume_parts(spec))
     assert len(w.client.thread_posts) == n_body
     assert restored.parts_done(spec["delivery_id"])
+    assert all(restored.token(token)["verified_thread_id"] == "1790000000.000001"
+               for token in drug_tokens)
     assert led.db.execute(
         "SELECT parts_state FROM notification_renders"
     ).fetchone()[0] == "complete"
@@ -605,6 +615,124 @@ def test_slack_worker_state_reads_and_writes_share_slack_state(led):
     assert w.worker._dirs["state"] == w.dirs["state"]
     assert w.worker._jview._dir == w.dirs["state"]
     assert w.dirs["state"].endswith("slack_state")
+
+
+@pytest.mark.parametrize("outcome,remote_id,retired", [
+    ("unknown", "1790000000.000002", False),
+    ("not_sent", "1790000000.000002", False),
+    ("delivered", "1790000000.000001", False),
+    ("delivered", "unverified", False),
+    ("delivered", "1790000000.000002", True),
+    ("delivered", "1790000000.000002", False),
+])
+def test_private_drug_thread_pin_requires_delivered_reply_and_live_token(
+        led, outcome, remote_id, retired):
+    _seed_thread(led)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    spec = _spec()
+    spec["parts"]["action_rows"][0][0]["id"] = "drugsearch"
+    spec["parts"]["manifest"] = [{"kind": "body_part", "part_id": "body:0001"}]
+    token = "b" * 32
+    if not retired:
+        w.reg.put_tokens({token: {**token_map(spec)[token],
+                                 "message_id": "1790000000.000001",
+                                 "team_id": SCOPE["team_id"]}})
+    aid = envelopes.part_attempt_id(spec["delivery_id"], "body:0001")
+    w.worker._pin_active_thread(
+        {"spec": spec}, {"card_message_id": "1790000000.000001"},
+        {aid: [{"phase": "result", "result": outcome, "remote_id": remote_id}]})
+    if retired:
+        assert w.reg.token(token) is None
+    else:
+        expected = "1790000000.000001" if outcome == "delivered" \
+            and remote_id == "1790000000.000002" else None
+        assert w.reg.token(token).get("verified_thread_id") == expected
+
+
+def test_slack_private_medication_pages_and_post_navigation_roundtrip(led):
+    _seed_thread(led)
+    med = {"dose": "5mg", "action": "start", "subject": "patient",
+           "status": "current", "negated": False, "unverified": False,
+           "evidence": "fictional quotation only"}
+    _llm_extract(led, 100, {"meds": [{**med, "name": "合成旧薬"}]})
+    names = [f"合成薬{index:02d}" for index in range(16)]
+    _llm_extract(led, 101, {"meds": [{**med, "name": name} for name in names]})
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    spec = json.loads(_latest_render(led)["spec_json"])
+    token = next(token for token, ctx in token_map(spec).items()
+                 if ctx["action"] == "meds")
+    w = _mkworld(led)
+
+    async def scenario():
+        await _granted_card(w.worker, led, w.root)
+        shared_calls = len(w.client.calls)
+        app = SimpleNamespace(client=w.client, action=lambda _p: lambda fn: fn,
+                              view=lambda _p: lambda fn: fn)
+        actions = Actions(app, {**SCOPE, "project_ids": frozenset({1}),
+                               "allowed_user_ids": {"U_SYNTHETIC"}},
+                          w.dirs, w.reg, w.sender, lambda *_a, **_k: None)
+        actions.register()
+        root_ts = "1790000000.000001"
+
+        async def click_answer(clicked, *, private=True):
+            body = {"team": {"id": SCOPE["team_id"]},
+                    "api_app_id": SCOPE["application_id"],
+                    "channel": {"id": SCOPE["channel_id"]},
+                    "user": {"id": "U_SYNTHETIC"}}
+            if private:
+                body["container"] = {"type": "message", "is_ephemeral": True,
+                                     "channel_id": SCOPE["channel_id"],
+                                     "message_ts": "1790000000.000999"}
+            else:
+                body["message"] = {"ts": root_ts}
+
+            async def ack():
+                return None
+
+            before = len(w.client.ephemeral_calls)
+            await actions._action(ack, body, {
+                "action_id": "mcs:a:" + clicked, "value": clicked})
+            result = {"errors": []}
+            assert runner_cmds.drain_int_commands(led, result, SLACK, str(w.root)) == 1
+            assert not result["errors"]
+            await actions.sweep_followups()
+            sent = w.client.ephemeral_calls[before:]
+            assert sent and "スレッドに表示しました" in sent[-1]["text"]
+            sent = [message for message in sent if message.get("thread_ts")]
+            assert sent
+            assert all(message["thread_ts"] == root_ts
+                       and message["user"] == "U_SYNTHETIC" for message in sent)
+            buttons = {button["text"]["text"]: button["value"]
+                       for block in sent[0].get("blocks") or []
+                       if block["type"] == "actions" for button in block["elements"]}
+            assert all("blocks" not in message for message in sent[1:])
+            return "\n".join(message["text"] for message in sent), buttons
+
+        text, buttons = await click_answer(token, private=False)
+        all_text = []
+        for page in range(4):
+            all_text.append(text)
+            expected = names[page * 5:(page + 1) * 5]
+            assert [name for name in names if name in text] == expected
+            assert "古い投稿" in buttons
+            if page < 3:
+                text, buttons = await click_answer(buttons["次の5件"])
+            else:
+                assert "次の5件" not in buttons and "前の5件" in buttons
+        assert all("・" + name in "\n".join(all_text) for name in names)
+        text, buttons = await click_answer(buttons["前の5件"])
+        assert [name for name in names if name in text] == names[10:15]
+        text, buttons = await click_answer(buttons["古い投稿"])
+        assert "合成旧薬" in text and all(name not in text for name in names)
+        assert "新しい投稿" in buttons
+        text, buttons = await click_answer(buttons["新しい投稿"])
+        assert names[0] in text and names[5] not in text
+        assert w.client.thread_posts
+        assert len(w.client.calls) == shared_calls
+        actions.unload()
+
+    asyncio.run(scenario())
 
 
 def test_slack_started_only_part_is_unknown_and_never_resent(led, monkeypatch):

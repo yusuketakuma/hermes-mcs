@@ -75,6 +75,50 @@ def test_semantic_stall_needs_old_due_job_and_no_progress(tmp_path):
     assert run_check._backlog_stalls(db, on, time.time()) == []
 
 
+def test_jev_block_is_named_instead_of_a_generic_stall(tmp_path):
+    db = _ledger(tmp_path)
+    on = {"semantic": {"mode": "shadow", "project_ids": []}}
+    _store(db, 1, OLD)
+    _artifact(db, 1, time.time())          # extraction itself is moving
+    _sem_job(db, 1, "pending", OLD)
+    db.db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+        "VALUES('semantic_assess',1,1,'{}',?,?)",
+        ('{"technical_status":"error","error_kind":"payment_required"}', time.time() - 60))
+    db.db.commit()
+    # the block is named — and a job nobody touched for 6h still means
+    # the drainer itself stopped (a waiting drainer keeps touching it)
+    assert run_check._backlog_stalls(db, on, time.time()) == [
+        "semantic_jev_payment_required", "semantic_backlog_stalled"]
+    db.db.execute("UPDATE fetch_jobs SET updated_at=?", (time.time() - 60,))
+    db.db.commit()
+    assert run_check._backlog_stalls(db, on, time.time()) == ["semantic_jev_payment_required"]
+    # a later successful assessment clears the block and the stall rule returns
+    db.db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+        "VALUES('semantic_assess',1,1,'{}','{\"technical_status\":\"ok\"}',?)", (time.time(),))
+    db.db.execute("UPDATE fetch_jobs SET updated_at=?", (OLD,))
+    db.db.commit()
+    assert run_check._backlog_stalls(db, on, time.time()) == ["semantic_backlog_stalled"]
+
+
+def test_stall_check_failure_stays_a_plain_reason_code(tmp_path, monkeypatch):
+    """health_watch validates every reason as snake_case: a code carrying
+    the exception type would void the whole list (and the flap guard)."""
+    import health_watch
+    db = _ledger(tmp_path)
+
+    def boom(*_args, **_kw):
+        raise RuntimeError("synthetic")
+    monkeypatch.setattr(run_check, "_backlog_stalls", boom)
+    result = {"errors": [], "notify": {}}
+    health = run_check._health(db, result, "ok", cfg=SLACK)
+    assert "stall_check_failed" in health["state_reasons"]
+    assert all(health_watch._is_code(r) for r in health["state_reasons"])
+    assert "stall_check_failed: RuntimeError" in result["errors"]
+    assert "stall_check_failed" in health_watch._REASON_JA
+
+
 def test_extract_stall_needs_unstarted_old_message_and_no_progress(tmp_path):
     db = _ledger(tmp_path)
     _store(db, 1, time.time())
@@ -121,7 +165,11 @@ def test_signal_detector_errors_reach_run_errors(tmp_path, monkeypatch):
 def test_failed_alert_enqueue_is_visible():
     def boom(*a, **k):
         raise OSError("disk")
-    ledger = SimpleNamespace(finish_run=lambda *a: None, outbox_add=boom)
+    ledger = SimpleNamespace(
+        finish_run=lambda *a: None, outbox_add=boom,
+        db=SimpleNamespace(
+            execute=lambda *a: SimpleNamespace(
+                fetchone=lambda: {"t": None})))
     result = {"errors": []}
     run_check._fail_run(ledger, SimpleNamespace(no_notify=True), result, 1,
                         "failed", "crash:X", time.monotonic() + 10, "run")

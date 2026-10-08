@@ -114,3 +114,55 @@ def test_service_runtime_sqlite_is_checked_not_path_python(monkeypatch, tmp_path
     monkeypatch.setattr(mcs_setup, "_run", run)
     assert mcs_setup._py_problem(str(python)) is not None
     assert len(calls) == 2 and all(argv[0] == str(python) for argv in calls)
+
+
+@pytest.mark.parametrize("started,modified,expected", [(100, 101, True), (102, 101, False),
+                                                       (None, 101, None), (100, None, None)])
+def test_doctor_does_not_invent_loaded_revision(monkeypatch, started, modified, expected):
+    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
+    monkeypatch.setattr(mcs_setup, "_gateway_sources_mtime", lambda: modified)
+    def git(argv, **kw):
+        return SimpleNamespace(returncode=0, stdout="a" * 40 + "\n")
+    monkeypatch.setattr(mcs_setup.subprocess, "run", git)
+    def probe(argv, **kw):
+        return SimpleNamespace(returncode=0, stdout="pid = 123\n" if argv[0] == "launchctl" else "invalid")
+    monkeypatch.setattr(mcs_setup, "_run", probe)
+    monkeypatch.setattr(mcs_setup.time, "mktime", lambda value: started)
+    monkeypatch.setattr(mcs_setup.time, "strptime", lambda value, fmt: ())
+    source = mcs_setup._doctor_source({}, probe=True)
+    assert source["disk"]["revision"] == "a" * 40
+    running = source["gateway"]
+    assert running["pid"] == 123 and running["source_revision"] is None
+    assert running["matches_disk"] is None
+    assert running["restart_required"] is expected
+    assert running["status"] == "running_revision_unknown"
+
+
+def test_doctor_source_default_does_not_probe_services(monkeypatch):
+    monkeypatch.setattr(mcs_setup, "_run", lambda *args, **kw: pytest.fail("service access"))
+    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *args, **kw:
+                        SimpleNamespace(returncode=1, stdout="synthetic-secret-not-a-sha"))
+    source = mcs_setup._doctor_source({}, probe=False)
+    assert source["disk"]["revision"] is None
+    assert source["gateway"]["status"] == "not_checked"
+    assert source["gateway"]["source_revision"] is None
+    assert "synthetic-secret" not in json.dumps(source)
+
+
+@pytest.mark.parametrize("status,pid,expected", [("failed", 123, "failed"),
+    ("supervisor_restart_verified", 123, "supervisor_restart_verified"),
+    ("supervisor_restart_verified", 999, "stale")])
+def test_doctor_restart_receipt_is_supervisor_evidence_only(tmp_path, monkeypatch, status, pid, expected):
+    monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "gateway_restart.json").write_text(json.dumps(
+        {"status": status, "pid": pid, "at": mcs_setup.time.time(), "extra": "synthetic-secret"}))
+    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
+    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k:
+                        SimpleNamespace(returncode=0, stdout="a" * 40))
+    monkeypatch.setattr(mcs_setup, "_run", lambda argv, **kw:
+                        SimpleNamespace(returncode=0, stdout="pid = 123\n" if argv[0] == "launchctl" else "invalid"))
+    source = mcs_setup._doctor_source({}, probe=True)
+    assert source["restart_request"]["status"] == expected
+    assert source["gateway"]["source_revision"] is None
+    assert "synthetic-secret" not in json.dumps(source)

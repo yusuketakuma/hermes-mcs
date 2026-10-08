@@ -1,6 +1,6 @@
 """Low-signal prefilter tests (B1).
 
-A body that misses BOTH the v1 rule pass and the broadened signal regex
+Only an exact standalone greeting with no rule findings
 is settled with a durable meta.prefilter='no_signal' marker instead of
 an LLM call — recorded, out of pending, and re-evaluated on edit.
 Synthetic fixtures + temp DB only.
@@ -27,8 +27,9 @@ def _artifacts(db, mid):
 
 
 def test_low_signal_unit():
-    assert extract_llm._low_signal("了解です。", {"v": 1})
-    assert extract_llm._low_signal("ありがとうございます", {"v": 1})
+    assert extract_llm._low_signal("こんにちは。", {"v": 1})
+    assert not extract_llm._low_signal("了解です。", {"v": 1})
+    assert not extract_llm._low_signal("ありがとうございます", {"v": 1})
     # digits, clinical words, request vocabulary -> keep on the LLM path
     assert not extract_llm._low_signal("3時に伺います", {"v": 1})
     assert not extract_llm._low_signal("体調の報告です", {"v": 1})
@@ -40,7 +41,7 @@ def test_low_signal_unit():
 
 def test_no_signal_message_marked_without_llm(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
-    db.save_messages([_message(mid=1, body="了解です。"),
+    db.save_messages([_message(mid=1, body="こんにちは。"),
                       _message(mid=2, body="体温38.2度、咳嗽あり")])
     calls = []
     monkeypatch.setattr(
@@ -64,7 +65,7 @@ def test_no_signal_message_marked_without_llm(tmp_path, monkeypatch):
 
 def test_prefilter_marker_leaves_pending(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
-    db.save_messages([_message(mid=1, body="承知しました")])
+    db.save_messages([_message(mid=1, body="こんにちは。")])
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: {"summary": "unreachable"})
 
@@ -77,7 +78,7 @@ def test_prefilter_marker_leaves_pending(tmp_path, monkeypatch):
 
 def test_body_edit_reenters_queue(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
-    db.save_messages([_message(mid=1, body="了解です")])
+    db.save_messages([_message(mid=1, body="こんにちは。")])
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: {"summary": "ok"})
     extract_llm.run_pending(db, limit=10, budget_s=30)
@@ -96,7 +97,7 @@ def test_body_edit_reenters_queue(tmp_path, monkeypatch):
 
 def test_manifest_admitted_rows_bypass_prefilter(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
-    db.save_messages([_message(mid=1, body="了解です")])
+    db.save_messages([_message(mid=1, body="こんにちは。")])
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: {"summary": "ok"})
 
@@ -109,7 +110,7 @@ def test_manifest_admitted_rows_bypass_prefilter(tmp_path, monkeypatch):
 def test_env_off_disables_prefilter(tmp_path, monkeypatch):
     monkeypatch.setenv("MCS_EXTRACT_PREFILTER", "off")
     db = _ledger(tmp_path)
-    db.save_messages([_message(mid=1, body="了解です")])
+    db.save_messages([_message(mid=1, body="こんにちは。")])
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: {"summary": "ok"})
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
@@ -121,7 +122,7 @@ def test_v1_artifact_written_for_filtered_body(tmp_path, monkeypatch):
     """Speed-lane coverage: a filtered body still mints its extract_v1
     artifact so instant-analysis readers never wait on the LLM lane."""
     db = _ledger(tmp_path)
-    db.save_messages([_message(mid=1, body="了解です")])
+    db.save_messages([_message(mid=1, body="こんにちは。")])
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: {"summary": "ok"})
     extract_llm.run_pending(db, limit=10, budget_s=30)
@@ -199,7 +200,7 @@ def test_prefilter_still_settles_when_circuit_open(tmp_path, monkeypatch):
     """No-signal rows never needed the endpoint — markers still write
     while the breaker holds the LLM lane closed."""
     db = _ledger(tmp_path)
-    db.save_messages([_message(mid=1, body="了解です"),
+    db.save_messages([_message(mid=1, body="こんにちは。"),
                       _message(mid=2, body="体温38度です")])
     mcs_util.circuit_state_path(db).write_text(
         json.dumps({"open_until": time.time() + 3600}))
@@ -250,4 +251,23 @@ def test_eol_body_reaches_llm_not_prefilter(tmp_path, monkeypatch):
         lambda body, **_: calls.append(body) or {"summary": "ok"})
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
     assert res["skipped"] == 0 and calls == ["昨日亡くなりました。"]
+    db.close()
+
+
+@pytest.mark.parametrize("body", ["おはようございます", "こんにちは。", "こんばんは！", " こんにちは。\n"])
+def test_only_three_complete_greetings_are_skipped(body):
+    assert extract_llm._low_signal(body, {"v": 1})
+
+
+@pytest.mark.parametrize("body", ["了解です。", "承知しました。", "ありがとうございます。",
+                                  "ご飯がうまく飲み込めない。", "口からこぼれる。",
+                                  "こんにちは。ご飯がうまく飲み込めない。"])
+def test_replies_and_keyword_free_details_reach_inference(tmp_path, monkeypatch, body):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body=body)])
+    calls = []
+    monkeypatch.setattr(extract_llm, "llm_extract", lambda text, **kw:
+                        calls.append(text) or {"summary": "完全合成の抽出結果"})
+    result = extract_llm.run_pending(db, limit=1, budget_s=30)
+    assert result["done"] == 1 and result["skipped"] == 0 and calls == [body]
     db.close()

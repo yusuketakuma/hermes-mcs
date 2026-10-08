@@ -10,7 +10,7 @@ before v1.0.11) never decides anything:
   "$PY" "$WORK/mcs_upgrade.py" --repo ~/.mcs plan --to v1.0.13
   "$PY" "$WORK/mcs_upgrade.py" --repo ~/.mcs apply --to v1.0.13 [--reinstall]
 
-It copies the tag's exact ``mcs/`` blobs into a private temp dir and runs
+It copies the tag's exact ``mcs/`` blobs and recovery helper into a private temp dir and runs
 that ``mcs/ops/mcs_update.py`` with ``MCS_UPDATE_REPO`` set to the live
 checkout. Stdlib only, imports nothing from the repo. Runbook:
 docs/guides/UPGRADE_AGENT.md.
@@ -35,6 +35,8 @@ def _git(repo: str, *args: str, binary: bool = False):
                            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
     except subprocess.TimeoutExpired:
         raise SystemExit(f"git {args[0]} timed out") from None
+    except OSError as exc:
+        raise SystemExit(f"git {args[0]} failed: {exc.strerror}") from None
     if r.returncode != 0:
         err = r.stderr if not binary else r.stderr.decode(errors="replace")
         raise SystemExit(f"git {args[0]} failed: {err.strip()[:200]}")
@@ -50,15 +52,14 @@ def latest_tag(repo: str) -> str:
 
 
 def extract(repo: str, tag: str, dest: str) -> None:
-    """The tag's exact mcs/ blobs (no git-archive attribute rewriting)."""
-    for rec in _git(repo, "ls-tree", "-rz", tag, "--", "mcs").split("\0"):
+    """Exact updater/runtime blobs, including its independent recovery helper."""
+    for rec in _git(repo, "ls-tree", "-rz", "refs/tags/" + tag, "--", "mcs",
+                    "deployment/recovery/mcs_recover.py").split("\0"):
         if not rec:
             continue
         meta, _, path = rec.partition("\t")
         mode, otype, sha = meta.split()
-        if otype != "blob":
-            continue
-        if mode not in ("100644", "100755"):     # no symlink/gitlink
+        if otype != "blob" or mode not in ("100644", "100755"):  # no symlink/gitlink
             raise SystemExit(f"unsupported entry in {tag}: {mode} {path!r}")
         parts = path.split("/")
         if path.startswith("/") or any(p in ("", ".", "..") for p in parts):
@@ -104,7 +105,10 @@ def main(argv=None) -> int:
             cmd += ["--reinstall"] if args.reinstall else []
             cmd += [f"--install-arg={a}" for a in args.install_arg]
         env = {**os.environ, "MCS_UPDATE_REPO": repo}
-        return subprocess.run(cmd, env=env, cwd=repo).returncode
+        try:
+            return subprocess.run(cmd, env=env, cwd=repo).returncode
+        except OSError as exc:
+            raise SystemExit(f"updater launch failed: {exc.strerror}") from None
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

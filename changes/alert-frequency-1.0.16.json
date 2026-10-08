@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "運用アラートの発生頻度を引き下げ、コード更新中の誤警報を解消",
+  "summary": "持続する障害の監視警報は1時間ごとの再通知から4時間ごとに、セッション切れなどのシステムアラートは1時間ごとから6時間ごとの上限に緩和します。実行失敗時のアラートにも同じ上限を適用し、10分ごとの繰返し通知を防ぎます。あわせて、tick実行中にコードが更新された場合の世代混在防止スキップは障害ではなく安全側の待機として扱い、単独では監視警報を上げなくなります。",
+  "upgrade": "追加操作は不要です。実行記録とヘルスファイルには従来どおり全件が残り、抑制されるのは通知だけです。セッション回復の通知は従来どおり即時です。",
+  "details": ["session_expired 等のシステムアラートは kind ごとに6時間の最小間隔。", "run_failed も同じ間隔でスロットル（従来は無制限）。", "変化のない非ok状態の再警報は REALERT_S=4時間。", "code_changed は runs 表に partial として残るが stage_errors・degraded には計上せず、health の state_reasons には 'code_changed' として記録する。"],
+  "refs": ["mcs/ingest/run_check.py", "mcs/ingest/health_watch.py"]
+}

@@ -65,7 +65,8 @@ def _jev_failure_class(error) -> str:
     retryable failures use finite job retries; permanent failures stop the
     generation until explicitly reseeded.
     """
-    if getattr(error, "kind", "") in {"budget_exceeded", "no_api_key"}:
+    if getattr(error, "kind", "") in {"budget_exceeded", "no_api_key",
+                                      "payment_required"}:
         return "resource"
     return "retry" if getattr(error, "retryable", False) else "failed"
 
@@ -307,7 +308,10 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
             # stored evaluated:false row (mid-audit outage) must be
             # re-run, otherwise a transient failure pins the generation
             # on a failed verdict forever and manual retry cannot clear it
-            if v4.fact_audit_verdict(prev_fa, doc_hash) is not None:
+            from semantic_audit import _published_quantity_findings
+            previous_verdict = v4.fact_audit_verdict(prev_fa, doc_hash)
+            if (previous_verdict is not None and (previous_verdict != "PASS"
+                    or not _published_quantity_findings(v2_doc))):
                 fact_audit = prev_fa["content"]
             else:
                 if time.monotonic() > deadline - 5:
@@ -1172,10 +1176,13 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                 and jev_client.requests_made > requests_before)
 
     try:
-        return _process_job_inner(
+        status = _process_job_inner(
             ledger, scfg, job, jev_client, tracked_llm, deadline,
             cfg_path=cfg_path, config_generation=config_generation,
             reserve_fn=reserve_fn)
+        from extraction_refresh import refresh_extraction_cards
+        refresh_extraction_cards(ledger, job["project_id"], job["message_id"])
+        return status
     except (runtime.RuntimeStale, runtime.RuntimeOff):
         return "stale"
     except runtime.LLMNotSent:
@@ -1454,7 +1461,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             or now_m - _invalidated_at >= _BACKLOG_INVALIDATE_S:
         from semantic_store import invalidate_projections
         invalidate_projections(ledger, scfg)
-        _invalidated_at = now_m
+        _invalidated_at = time.monotonic()
     if scfg["mode"] == "off":
         return out
     # Stability guards shared with the extract lane: a nearly-full
@@ -1691,7 +1698,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                         and getattr(jev_client, "_mcs_jev_hookable", False)):
                     reserve_fn = runtime.usage_reserver(
                         ledger, token, kind=KIND_USAGE, model=jev.JEV_MODEL,
-                        project_id=job["project_id"], message_id=job["message_id"])
+                        project_id=job["project_id"], message_id=job["message_id"],
+                        daily_request_budget=scfg["daily_request_budget"])
                 # only now has the job cleared every gate — the persisted
                 # fairness counters count jobs that were actually served, not
                 # selections lost to circuit/budget/pause breaks (T14)
@@ -1825,6 +1833,14 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     out["deferred"] += 1
                 else:
                     out["failed"] += 1
+                if getattr(getattr(jev_client, "last_error", None),
+                           "kind", "") == "payment_required":
+                    # the service refuses every call until the account is
+                    # settled — stop this pass here rather than spend one
+                    # more 402 per remaining job (2026-10-08)
+                    result["errors"].append("semantic: jev_payment_required")
+                    out["jev_blocked"] = "payment_required"
+                    break
         if scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce":
             try:
                 out["degraded_notices"] = _emit_degraded(ledger, scfg)

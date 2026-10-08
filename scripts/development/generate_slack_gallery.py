@@ -22,14 +22,16 @@ MUTED = "#66716f"
 GREEN = "#087f5b"
 FONT = "Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif"
 # Fully fictional example shared by every screen (no real or anonymised posts).
-HEADING = "💬 山田 花子 様（あおぞら）· 起点 10-01"
+HEADING = "💬 山田 花子（あおぞら）"
+# layout 2: the line under the title — start date, then counts
+META = "10-01〜 · {n}投稿 · 📎 1 · @自分宛て"
 SENDER = "佐藤さん（訪問看護・あおぞら）"
 POSTS = (
     (f"10-01 09:40 {SENDER}",
      ("次回訪問時に残薬を確認してほしいとの連絡",
       "要点: 残薬の確認 / 服薬カレンダーを共有",
-      "区分: 依頼・添付",
-      "依頼: 確認依頼:次回訪問時に残薬を確認(期限:次回訪問時)")),
+      "依頼: 確認依頼:次回訪問時に残薬を確認(期限:次回訪問時)",
+      "区分: 依頼・添付")),
     ("10-01 10:05 鈴木さん（ケアマネ・ひなた）",
      ("確認結果を担当者会議で共有してほしいとの連絡",
       "区分: 連絡")),
@@ -132,16 +134,15 @@ class Screen:
         return sy + 100
 
     def card(self, x, y, width=770, full=False):
-        """Card zones top to bottom: overview, per-post 📋 要約, state."""
+        """Card zones top to bottom: patient title, meta line, per post a
+        small time/sender line over its summary, state."""
         y = self.paragraph(x, y, HEADING, width, 21, INK, True)
-        y = self.paragraph(x, y - 4, "2投稿 · 📎 1 · @自分宛て" if full
-                           else "1投稿 · 📎 1 · @自分宛て", width, 17, MUTED)
+        y = self.paragraph(x, y - 4, META.format(n=2 if full else 1), width, 17, MUTED)
         if full:
             y = self.paragraph(x, y - 4, "🆕 返信+1", width, 17, GREEN)
         for sender, bullets in POSTS[:2 if full else 1]:
             y = self.rule(x, y, width)
-            y = self.paragraph(x, y, sender, width, 17, INK, True)
-            y = self.paragraph(x, y - 2, "📋 要約", width, 17, GREEN, True)
+            y = self.paragraph(x, y, sender, width, 15, MUTED)
             for bullet in bullets:
                 y = self.paragraph(x, y - 2, "・" + bullet, width, 18)
         y = self.rule(x, y, width)
@@ -150,17 +151,14 @@ class Screen:
         return self.rule(x, y, width)
 
     def thread_post(self, x, y, width, size=17, sender=SENDER, stamps=True):
-        """One post in the companion thread: header, 📋 要約, stamps, body."""
-        y = self.paragraph(x, y, f"↳ 山田 花子 様 · 10-01 09:40 {sender}", width, size, INK, True)
-        y = self.paragraph(x, y - 2, "📋 要約", width, size, GREEN, True)
-        for bullet in POSTS[0][1]:
-            y = self.paragraph(x, y - 2, "・" + bullet, width, size)
+        """One native thread post: source line, the body, then stamps."""
+        y = self.paragraph(x, y, f"↳ 10-01 09:40 {sender}", width, size, INK, True)
+        y = self.paragraph(x, y + 2, BODY, width, size)
         if stamps:
             y = self.paragraph(x, y, RULE, width, size, MUTED)
             y = self.paragraph(x, y - 2, "スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 10:00時点",
                                width, size, GREEN)
-        y = self.paragraph(x, y, RULE, width, size, MUTED)
-        return self.paragraph(x, y - 2, BODY, width, size)
+        return y
 
     def finish(self):
         return "\n".join(self.parts + ["</svg>"]) + "\n"
@@ -178,7 +176,7 @@ def overview():
     s.text(689, 313, "MCS", 18, INK, True)
     y = s.thread_post(689, 348, 354, 16)
     s.text(689, y + 24, "MCS", 18, INK, True)
-    y = s.paragraph(689, y + 58, "📎 服薬カレンダー.jpg — 山田 花子 様 10-01 09:40 佐藤さん", 354, 16)
+    y = s.paragraph(689, y + 58, "📎 服薬カレンダー.jpg — 山田 花子 10-01 09:40 佐藤さん", 354, 16)
     s.rect(689, y - 8, 200, 120, "#f3f6f4", 8, "#dce2dd")
     s.text(789, y + 58, "画像", 16, MUTED)
     return s.finish()
@@ -264,22 +262,31 @@ def task_list():
 
 
 def patient_summary():
-    s = Screen(7, "訪問前に、患者の記録をたどる。", "取得済み投稿の暫定集約。未取得の記録を「無い」と扱いません。", 880)
+    s = Screen(7, "訪問前に、患者の記録をたどる。", "未完了タスクと原記録の抜粋を、本人だけに表示。", 1400)
     x, y = s.app(private=True)
-    s.text(x, y, "山田 花子 — 患者の記録まとめ（暫定集約）", 23, INK, True)
+    s.text(x, y, "山田 花子 — 患者の記録まとめ", 23, INK, True)
     y += 38
-    y = s.paragraph(x, y, "※ 取得済み投稿から自動作成した暫定集約です。未取得・未抽出・訂正前の記録があり得るため、確定した処方一覧や依頼台帳の代わりにはなりません。原本で確認してください。", 758, 18, MUTED)
+    y = s.paragraph(x, y, "履歴取得: 未完了（指定日より前は未取得）", 758, 18, MUTED)
     y += 12
-    y = s.paragraph(x, y, "履歴取得: 未完了（指定日より前は未取得）（取れていない記録は「無い」ではありません。欠落なしの保証ではありません）", 758, 18, MUTED)
+    y = s.paragraph(x, y, "抽出の処理状況（最新3投稿）: 処理中1・完了1・要確認1（完了区間4/7）", 758, 18, INK, True)
     y += 19
     rows = [
-        "■ 薬（投稿から抽出。確定した処方ではありません）",
-        "・薬剤A（最終言及 2026-10-01）",
-        "■ 抽出されたバイタルなし",
-        "■ 次回予定（抽出表現）: 10月3日の訪問",
-        "連携サマリー（MCS）: 未取得",
         "■ 未完了タスク",
-        "・#101 次回訪問で残薬を確認 — 担当 田中さん — 期限 2026-10-03",
+        "・#101 次回訪問で残薬を確認 — 担当 田中さん — 期限 2026-10-03 ⚠期限切れ",
+        "■ 薬",
+        "・薬剤A（最終言及 2026-10-01）",
+        "■ バイタル: 未確認",
+        "■ 次回予定: 10月3日の訪問",
+        "■ 依頼候補の返信状況: なし",
+        "■ 背景・療養情報",
+        "・服薬管理（投稿#701）: ご家族が服薬を管理しています。",
+        "・療養方針（投稿#701）: 本人は通所を希望されています。",
+        "■ MCS登録情報（チャットとは別の記録・抜粋）",
+        "・薬剤登録: 取得済み（1処方期間）",
+        "・観測項目: 取得済み（1項目）",
+        "・観測値: 取得済み 1項目",
+        "  体重: 45.2 kg（記録日 2026-10-06）",
+        "■ 連携サマリー（MCS）: 未取得",
     ]
     for row in rows:
         y = s.paragraph(x, y, row, 758, 19)
@@ -287,10 +294,49 @@ def patient_summary():
     return s.finish()
 
 
+def urgent_notice():
+    # Invoke the real formatter over a completely synthetic, in-memory source.
+    import tempfile
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import alert_view
+    from ledger import Ledger
+    from mcs_adapter import Message
+    with tempfile.TemporaryDirectory(prefix="mcs-fictional-gallery-") as temporary:
+        ledger = Ledger(str(Path(temporary) / "ledger.db"))
+        try:
+            ledger.ensure_patient(1)
+            ledger.db.execute("UPDATE patients SET patient_name='山田 花子',station_name='あおぞら' WHERE project_id=1")
+            ledger.db.commit()
+            ledger.save_messages([Message(701, 1, None, 1, "佐藤さん", "user", "訪問看護", "あおぞら",
+                "2026-10-01T09:40:00+09:00", "本人は息苦しいと話しています。担当者へ連絡します。",
+                "full", False, 0)])
+            parts = alert_view.render_parts({"project_id": 1, "message_id": 701,
+                "subject": "patient", "reasons": ["本人は息苦しいと話しています。"],
+                "observed_at": 1790816400}, ledger.db)
+        finally:
+            ledger.close()
+    s = Screen(8, "再確認の理由を、該当スレッドで。",
+               "AIの確認候補。原文・対象人物・時点を見て、人が確認します。", 1040)
+    x, y = s.app()
+    s.text(x, y, "↳ 元の通知スレッドへの追加投稿", 17, MUTED)
+    y += 43
+    for part in parts["containers"]:
+        heading = part["type"] == "heading"
+        text = ("引用: " if part["type"] == "quote" else "") + part["text"]
+        y = s.paragraph(x, y, text, 760, 23 if heading else 20,
+                        INK, heading)
+        y += 17
+    for part in parts["footer"]:
+        y = s.paragraph(x, y, part["text"], 760, 17, MUTED)
+        y += 12
+    return s.finish()
+
+
 SCREENS = {"01-overview": overview, "02-notification": notification,
            "03-actions": menu, "04-task-form": task_form,
            "05-task-preview": task_preview, "06-task-list": task_list,
-           "07-patient-summary": patient_summary}
+           "07-patient-summary": patient_summary, "08-urgent-notice": urgent_notice}
 
 
 def verify_png(path, svg):

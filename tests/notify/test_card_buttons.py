@@ -16,6 +16,7 @@ import notify_cmds
 import notify_flush
 import notify_render
 import notify_views
+from semantic_projection import PROJECTION_VERSION
 from mcs_queries import JST, extract_feedback
 from notify_testkit import (
     CFG, NOW, ORIGIN, _add_request, _click, _deliver, _delivered_card, _dispatch,
@@ -349,11 +350,11 @@ def test_summary_without_rollup_says_so(led):
     spec = _delivered_card(led)
     r = _click(led, spec, "summary")
     assert r["outcome"] == "applied" and r["action"] == "summary"
-    assert "暫定集約" in r["title"]
-    assert notify_views.SUMMARY_CAVEAT in r["body"]
-    assert "集約資料がまだありません" in r["body"]
+    assert "暫定集約" not in r["title"]
+    assert "※" not in r["body"].split("\n")[0]
+    assert "集約資料なし" in r["body"]
     assert "履歴取得: 未完了（完了記録なし）" in r["body"]
-    assert "欠落なしの保証ではありません" in r["body"]
+    assert "欠落なしの保証ではありません" not in r["body"]
     assert "■ 未完了タスク: なし" in r["body"]
     stored = led.db.execute(
         "SELECT receipt_json FROM command_receipts").fetchall()[-1][0]
@@ -378,18 +379,18 @@ def test_summary_with_rollup_and_coverage(led):
             "next_planned": "10/3 訪問"}, ensure_ascii=False), NOW))
     _add_request(led, title="血圧記録の確認", assignee="山田", due="2026-10-01")
     body = _click(led, spec, "summary")["body"]
-    assert ("履歴取得: 完了記録あり／直近の取得は未完了（network_error）"
-            "／返信の取得未完了1件") in body
-    assert "処方期間（抽出表現）: 2026-09-01〜2026-09-28" in body
+    assert ("履歴取得: 完了記録あり · 直近の取得は未完了（通信エラー）"
+            " · 返信未取得 1件") in body
+    assert "処方期間: 2026-09-01〜2026-09-28" in body
     assert "・アムロジピン 5mg 1日1回（最終言及 2026-09-20）" in body
     assert "バイタル: BP 128/70  BT 36.5（2026-09-22）" in body
-    assert "■ 次回予定（抽出表現）: 10/3 訪問" in body
+    assert "■ 次回予定: 10/3 訪問" in body
     assert "血圧記録の確認 — 担当 山田 — 期限 2026-10-01" in body
     led.db.execute("UPDATE artifacts SET content=? WHERE kind='patient_rollup'",
                    (json.dumps({"medications": []}),))
     led.db.commit()
     body = _click(led, _spec(led), "summary")["body"]
-    assert "■ 抽出されたバイタルなし" in body and "記録なし" not in body
+    assert "■ バイタル: 未確認" in body and "記録なし" not in body
 
 
 @pytest.mark.parametrize("ks, line", [
@@ -417,7 +418,7 @@ def test_summary_karte_summary_line(led, ks, line):
     body = notify_views.patient_summary_text(led.db, 1)[1]
     assert "古い要約" not in body
     assert f"{line}\n" in body or body.endswith(line)   # nothing after it
-    assert body.count("連携サマリー") == 1
+    assert body.count("\n■ 連携サマリー（MCS") == 1
     if isinstance(ks, dict):
         assert ks["comment"][:80] not in body      # cut, not the raw text
 
@@ -450,7 +451,8 @@ def test_report_mark_clears_when_v4_becomes_current(led, tmp_path):
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES('semantic_facts_v4',1,101,'{}','v4',?,?)",
-        (json.dumps({"hash": f"{101:064x}", "engine_version": 4}), NOW))
+        (json.dumps({"hash": f"{101:064x}", "engine_version": 4,
+                     "projection_version": PROJECTION_VERSION}), NOW))
     led.db.commit()
     assert not notify_render.feedback_pending(led.db, card)
     assert extract_feedback(led.db, 1)[0]["current"] == 0
@@ -658,7 +660,9 @@ def test_worst_case_footer_stays_under_the_text_budget(led, tmp_path,
 def test_urgency_badge_names_its_source(led):
     import structured_view
     _seed_thread(led, mids=(100, 101, 102))
-    _llm_extract(led, 100, {"urgency": "high", "summary": "至急"})
+    led.db.execute("UPDATE messages SET body_text='本人が急変につき至急ご連絡ください。' WHERE message_id IN (100,101)")
+    _llm_extract(led, 100, {"urgency": "high", "summary": "至急",
+                            "urgency_evidence": ["本人が急変につき至急ご連絡ください。"]})
     h = f"{101:064x}"
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
@@ -671,27 +675,33 @@ def test_urgency_badge_names_its_source(led):
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101, 102]}))
     texts = [c["text"] for c in _spec(led)["parts"]["containers"]
              if c["type"] == "text"]
-    assert any("・緊急度: 高（AI抽出）" in t for t in texts)
-    assert any("・緊急語を含む（機械照合）" in t for t in texts)
+    lines = [ln for t in texts for ln in t.split("\n")]
+    assert any(ln.startswith("・🚨 緊急度高 ") or ln == "・🚨 緊急度高" for ln in lines)
+    assert not any("AI" in ln for ln in lines)
+    assert "・🚨" in lines
 
 
 def test_urgency_reads_the_same_artifact_as_the_body(led):
-    """Once v4 is the message's current extraction, the badge follows
-    it — never a superseded extract_llm the body no longer shows."""
+    """A current v4 read-model row carries no urgency of its own — the
+    badge then reads the hash-current extract_llm verdict behind it; an
+    urgency recorded on the v4 row itself still wins."""
     import structured_view
     _seed_thread(led, mids=(100,))
-    _llm_extract(led, 100, {"urgency": "high", "summary": "旧"})
+    led.db.execute("UPDATE messages SET body_text='本人が急変につき至急ご連絡ください。' WHERE message_id=100")
+    _llm_extract(led, 100, {"urgency": "high", "summary": "旧",
+                            "urgency_evidence": ["本人が急変につき至急ご連絡ください。"]})
     v4 = led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES('semantic_facts_v4',1,100,?,'v4',?,?)",
         (json.dumps({"summary": "新"}),
-         json.dumps({"hash": f"{100:064x}", "engine_version": 4}), NOW))
+         json.dumps({"hash": f"{100:064x}", "engine_version": 4,
+                     "projection_version": PROJECTION_VERSION}), NOW))
     led.db.commit()
     assert structured_view.latest_fact_artifact(led.db, 100)["summary"] \
         == "新"
-    assert structured_view.message_urgency(led.db, 100) is None
+    assert structured_view.message_urgency(led.db, 100) == "llm"
     led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
-                   (json.dumps({"urgency": "high"}), v4.lastrowid))
+                   (json.dumps({"urgency": "high", "urgency_evidence": ["本人が急変につき至急ご連絡ください。"]}), v4.lastrowid))
     led.db.commit()
     assert structured_view.message_urgency(led.db, 100) == "llm"
 

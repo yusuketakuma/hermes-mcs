@@ -15,6 +15,10 @@ repo との drift になる。
 | `recovery/` | `mcs_recover.py` — 更新中断を自律復旧する独立 watchdog ツール（install.sh が `~/.mcs-recovery/` へコピーし `org.mcs.recovery` で定期起動） |
 | `cco/` | [CCO terminal/file 隔離の候補設定・承認記録・検証説明](cco/cco-terminal-isolation.md) |
 
+同梱する公式医薬品マスター原本と版・出典・hashはcheckout内の
+[`resources/drug-master/`](../resources/drug-master/README.md)に置く。gitによる導入・更新で
+コードとともに配布し、実機の私有辞書・configへ自動コピー/有効化しない。
+
 ## セットアップ
 
 入口は `./install.sh`（冪等）。スケジューリング構成と手動手順の詳細は

@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "要約の薬剤・依頼・検査が複数あるときは1項目ずつ改行",
+  "summary": "新しいカードと通知文の要約では、薬剤・依頼・検査（とそれぞれの候補）が2件以上あるとき、「薬剤:」の次の行から「　・薬名 用量[状態]」のように1件ずつ並べます。1件だけなら従来どおり1行です。表示する語は減らしていません。スマートフォンの通知文では従来どおり1行にまとめます。",
+  "upgrade": "追加設定は不要です。新しく作られるカード（レイアウト2）と通知文から適用され、既存カードは変わりません。",
+  "details": [
+    "structured_view._item_line: plain（layout 2・通知）で2件以上のとき項目ごとの行にする。薬剤・薬剤候補・依頼・依頼候補・検査・検査候補に適用。",
+    "notify_render.notification_preview: 項目行を1つの事実にまとめ直してから主文を選ぶ。notify_flush: 返信のインデントを継続行にも付ける。"
+  ],
+  "refs": ["mcs/views/structured_view.py", "mcs/notify/notify_render.py", "mcs/notify/notify_flush.py"]
+}

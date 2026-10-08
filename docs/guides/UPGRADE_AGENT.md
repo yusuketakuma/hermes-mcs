@@ -1,10 +1,21 @@
 # MCS 更新実行手順書（AIエージェント用）
 
-このガイドはv1.0.15仕様のinstall/update/setup/doctorと復旧手順に対応する。
-1.0.15の合成検証・公開・実機反映の状況は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.15.md)で追跡する。
+このガイドはv1.0.16仕様のinstall/update/setup/doctorと復旧手順に対応する。
+1.0.16の合成検証・公開・実機反映の状況は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.16.md)で追跡する。
 過去の1.0.13実機受入計画は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)に残す。
 
-### 1.0.15への更新で確認すること
+### 1.0.16への更新で確認すること
+
+- gatewayまたは使用中の独立host・通知アダプターと抽出workerを更新・再起動し、§6の証拠で反映を確認します。新しい配送形式を旧workerが受け取った場合は保留されます。通知先の現在の配送世代をrunnerが再公開してから配送を再開します。成否不明の配送を未送信と推測して再送しません。
+- DB schemaは9を維持します。既存カードの表示はレイアウト1のまま、新規カードだけレイアウト2になります。投稿・履歴・過去ログを削除する移行はありません。
+- ルール抽出18・LLM抽出6・詳細情報契約2へ更新し、保存済み本文を通常workerで順次再処理します。モデル、最大1600トークン、300秒の呼出上限、取得間隔と人承認・既読化の条件は維持します。再処理中は未完を表示し、途中結果を完成した情報として公開しません。
+- 旧版の意味解析の閲覧用投影は現行版4へ更新するまで採用を保留します。解析を有効にしている環境では既存の保守処理で1回25件まで再生成します。薬剤の用量が同じ事実の原文根拠に一致しない場合は確認待ちのままです。元の履歴は保持し、配送済み・送信中・成否不明の通知を自動訂正したことにはなりません。
+- 登録薬剤・観測値の巡回取得は `clinical_metadata=true` の明示選択が必要です（既定false）。公式医薬品マスターの同梱は私有辞書の承認・有効化を代替しません。
+- `install_sh_changed` または `recovery_tool_changed` の場合は§2の再導入・checkout外の復旧ツール同期を行います。既存のopt-out、復旧Pythonと復元同意を維持します。
+- 更新されたHermesの新しい分離起動形式も、既知のコード・所有する配置・moduleが完全一致する場合だけ再起動対象とします。新Hermesで `plugins.isolation=host` を明示する形態はnative SDKを渡すMCS接続に未対応です。既定の `in_process` と、配布時の固定Hermes版での受入を使います。
+- 緊急度再確認を有効にする場合は `notify.card_thread=true`、患者別シグナル通知を有効にする場合は対話カードが有効であることを確認します。配送できない組合せは設定検証で拒否します。過去のHTTP 402で再試行上限に達したジョブの手動再投入や、本番の一括再処理は別途対象を確認して実施します。
+
+### 1.0.15への更新で確認すること（過去版の注意）
 
 追加設定は不要です。DB schemaは9を維持し、検索・取得・配送用の索引を加法的に追加します。
 台帳の保存データを削除する移行や、抽出モデルの変更はありません。古い版から更新する場合は、その間のschema変更・導入条件も`plan`で確認します。
@@ -23,7 +34,7 @@ v1.0.0〜1.0.2は手動更新条件を保持し、standaloneの外部applyは阻
 schema巻戻しの個別復旧同意を更新承認で代用できません。
 
 [更新経路manifest](../../tests/fixtures/schema_upgrade/update-paths.json)は過去26経路の根拠と、
-現行15公開版・20構成のplan/apply/rollback/bootstrap/reinstall回帰を区別します。
+現行16公開版・22構成のplan/apply/rollback/bootstrap/reinstall回帰を区別します。
 テストは完全合成でGit履歴に依存しませんが、旧target updater全体の26経路再実行、
 実Git・host協調停止・SDK導入・実機配備を検証したものではありません。
 launcherの選択runtime追随とbackup lifecycleは合成回帰で検証し、
@@ -114,6 +125,7 @@ merge 後の `services` が置き換える。`reinstall` 経路では `--install
 | `standalone_external_apply` | 独立モードは host 経由で更新する（[STANDALONE.md](STANDALONE.md#更新復旧)）。`reinstall` がある場合は同書の再導入手順 |
 | `legacy_source_manual` | v1.0.0〜1.0.2 からの更新。§8 の手動経路へ |
 | `reinstall_incomplete` | 前回の再導入が install.sh の途中で中断した。`status` を示し **【ユーザー確認】** の上で `cd "$REPO" && ./install.sh <前回と同じ opt-out> --no-services` → `"$PY" mcs/ops/mcs_setup.py services` → `"$PY" mcs/ops/mcs_update.py reinstall-done`（HEAD が再導入した版のときだけ完了を記録し、残りの後処理を復旧処理で完了）→ `check`。復旧処理は install.sh を無人で再実行しない |
+| `recovery_incomplete`（復旧レポート） | 抽出処理の起動確認が未完了。中断記録を保持するため、起動失敗の原因を修復して `recover` を再実行する。同じ復旧の再試行では起動済み処理を停止し直さない |
 | `update_state_corrupt` | `data/update_state.json` が読めない。内容を変えずに報告し、ユーザー判断を待つ |
 | `tag_not_fetched` | `git fetch --tags origin` が失敗している。ネットワーク・タグ名を確認 |
 | `validate_config_failed` / `preflight_failed: …` | 現在 / 移行先コードで設定検証が実行できない。出力を報告 |

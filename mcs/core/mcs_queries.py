@@ -110,8 +110,10 @@ def current_qc_pred(art: str = "a", msg: str = "m", *, version: int) -> str:
 
 
 def _projection_pred(art: str, hash_ref: str, *,
-                     engine_version: int | None = None) -> str:
+                     engine_version: int | None = None,
+                     require_version: bool = True) -> str:
     """Build the shared current-row predicate for both projection kinds."""
+    from semantic_projection import PROJECTION_VERSION
     col = f"{art}." if art else ""
     return (f"CASE WHEN json_valid({col}content) AND json_valid({col}meta) "
             f"THEN json_type({col}content)='object' "
@@ -121,45 +123,55 @@ def _projection_pred(art: str, hash_ref: str, *,
             f"AND json_extract({col}meta,'$.hash')={hash_ref} "
             + (f"AND json_extract({col}meta,'$.engine_version')="
                f"{engine_version} " if engine_version is not None else "")
+            + (f"AND json_extract({col}meta,'$.projection_version')="
+               f"{PROJECTION_VERSION} " if require_version else "")
             + f"AND COALESCE(json_extract({col}meta,'$.invalidated'),0)=0 "
             "ELSE 0 END")
 
 
-def current_projection_pred(art: str = "c", hash_ref: str = "?") -> str:
+def current_projection_pred(art: str = "c", hash_ref: str = "?", *,
+                            require_version: bool = True) -> str:
     """Predicate: a canonical_projection row is usable right now —
     valid payloads, no error, hash-current to the source message, and not
-    superseded by a later source save (meta.invalidated). Shared by
-    current_projection_id and mcs_requests.candidates."""
-    return _projection_pred(art, hash_ref)
+    superseded by a later source save (meta.invalidated), using the
+    current projection version. Only bounded maintenance may omit the
+    version check. Shared by current_projection_id and candidates."""
+    return _projection_pred(art, hash_ref, require_version=require_version)
 
 
-def current_projection_id(msg: str = "m") -> str:
+def current_projection_id(msg: str = "m", *, require_version: bool = True) -> str:
     """Subquery: THE current canonical-projection row for a message —
     the newest valid artifact_id among hash-current, unexpired projections.
     The writer expires source/context/policy generations explicitly; a
     newer projection of the same generation supersedes older ones, and a new
     EMPTY projection legitimately replaces an old non-empty one (C06).
     Returns the artifact_id or NULL."""
+    pred = current_projection_pred("c", f"{msg}.content_hash",
+                                   require_version=require_version)
     return (f"(SELECT MAX(c.artifact_id) FROM artifacts c"
             f" WHERE c.kind='{CANONICAL_PROJECTION_KIND}'"
             f" AND c.message_id={msg}.message_id"
             f" AND c.project_id={msg}.project_id"
-            f" AND {current_projection_pred('c', f'{msg}.content_hash')})")
+            f" AND {pred})")
 
 
-def current_v4_pred(art: str = "v", hash_ref: str = "?") -> str:
+def current_v4_pred(art: str = "v", hash_ref: str = "?", *,
+                    require_version: bool = True) -> str:
     """Predicate: a semantic_facts_v4 row is usable — same contract as
     current_projection_pred plus the engine version pin."""
-    return _projection_pred(art, hash_ref, engine_version=4)
+    return _projection_pred(art, hash_ref, engine_version=4,
+                            require_version=require_version)
 
 
-def current_v4_id(msg: str = "m") -> str:
+def current_v4_id(msg: str = "m", *, require_version: bool = True) -> str:
     """Subquery: THE current v4 read-model row for a message."""
+    pred = current_v4_pred("v", f"{msg}.content_hash",
+                          require_version=require_version)
     return (f"(SELECT MAX(v.artifact_id) FROM artifacts v"
             f" WHERE v.kind='{V4_PROJECTION_KIND}'"
             f" AND v.message_id={msg}.message_id"
             f" AND v.project_id={msg}.project_id"
-            f" AND {current_v4_pred('v', f'{msg}.content_hash')})")
+            f" AND {pred})")
 
 
 def qc_v4_source_id(msg: str = "m") -> str:

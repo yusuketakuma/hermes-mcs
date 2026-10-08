@@ -18,6 +18,7 @@ patient data. stdout carries one alert line on alert transitions
 machine-readable status, published atomically.
 """
 import argparse
+import fcntl
 import json
 import math
 import os
@@ -39,7 +40,9 @@ STATUS_REL = os.path.join("data", "health_watch_status.json")
 DEFAULT_TICK_S = 600        # deployed cron cadence: */10 * * * *
 DEFAULT_MAX_MISSED = 2      # miss two whole ticks before 'stale'
 RUN_GRACE_S = 480           # run_check's whole-run deadline
-REALERT_S = 3600            # unchanged bad state re-alerts hourly
+REALERT_S = 4 * 3600        # unchanged bad state re-alerts every 4h
+DELIVERY_RETRY_S = 60       # only provably unsent alerts may retry
+UNKNOWN_HISTORY = 50        # retained uncertain-delivery records
 
 OVERALL_STATUS = {"ok": "ok", "degraded": "degraded",
                   "failed": "failed"}
@@ -116,7 +119,8 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
               "overall": overall, "run_status": h.get("run_status"),
               "run_id": h.get("run_id"), "deadline_s": deadline_s,
               "disk_low": h.get("disk_low") is True,
-              "disk_free_mb": h.get("disk_free_mb")}
+              "disk_free_mb": h.get("disk_free_mb")
+              if _finite_number(h.get("disk_free_mb")) else None}
     report["status"] = ("stale" if age > deadline_s
                         else OVERALL_STATUS[overall])
     unread_unknown = "unread_at" in h and not _finite_number(unread_at)
@@ -149,6 +153,9 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     report["last_ok_at"] = (last_ok if _finite_number(last_ok)
                             and last_ok >= 0 else None)
     notify = h.get("notify") if isinstance(h.get("notify"), dict) else {}
+    pending = notify.get("pending")
+    report["notify_pending"] = (pending if _finite_number(pending)
+                                and pending >= 0 else None)
     held = notify.get("held_reasons")
     report["held_reasons"] = (
         held if isinstance(held, dict)
@@ -188,14 +195,15 @@ def evaluate(home: str = HOME, now: float | None = None,
     never re-alerts. ok->ok never alerts even when the file is fresh —
     a healthy producer keeping cadence is not an event. Alerts fire
     on: first non-ok observation, every transition INTO a non-ok
-    status, one bad->ok recovery, and an unchanged non-ok state
+    status, and an unchanged non-ok state
     re-alerted after REALERT_S, plus a fresh non-ok verdict that gains
     a state reason not yet alerted in the current episode. 'ok' is only produced by a fresh
     in-deadline file — recovery can never be assumed. State files
     that predate evidence_at are read via health_at.
 
+    Healthy observations and recovery are internal observations only.
     disk_low has its own dedup: disk_alert fires only when a fresh
-    file flips it (either way); stale/missing/corrupt evidence keeps
+    file turns low; stale/missing/corrupt evidence keeps
     the last known value."""
     now = time.time() if now is None else now
     if not _finite_number(now):
@@ -233,25 +241,31 @@ def evaluate(home: str = HOME, now: float | None = None,
     new_reason = (prior_known and not transition
                   and obs["status"] not in ("ok", "stale")
                   and not set(reasons) <= seen)
-    alerted_at = state.get("alerted_at")
+    alerted_at = state.get("detected_at", state.get("alerted_at"))
     invalid_alert_at = not _finite_number(alerted_at) \
         or alerted_at > now
     realert = (obs["status"] != "ok"
                and (invalid_alert_at
                     or now - alerted_at >= REALERT_S))
-    if not prior_known:
-        alert = obs["status"] != "ok"
-    else:
-        # a fresh 'ok' replacing an 'ok' is a producer keeping its
-        # cadence, not an event — only bad->ok recovery and any
-        # transition into a non-ok status carry an alert
-        alert = transition and (obs["status"] != "ok"
-                                or last.get("status") != "ok")
-    alert = alert or realert or new_reason
+    # Flapping back into the same degraded episode (degraded -> ok ->
+    # degraded with no new reason) inside REALERT_S is not news; severe
+    # states (failed/stale/missing/corrupt) always alert on entry.
+    episode = state.get("alerted_episode")
+    episode = episode if isinstance(episode, dict) else {}
+    episode_reasons = episode.get("reasons")
+    episode_reasons = (set(episode_reasons) if isinstance(episode_reasons, list)
+                       and all(isinstance(r, str) for r in episode_reasons) else None)
+    reflap = (transition and obs["status"] == "degraded"
+              and episode.get("status") == "degraded" and not realert
+              and episode_reasons is not None and set(reasons) <= episode_reasons)
+    if reflap:
+        seen = set(episode_reasons)
+    alert = obs["status"] != "ok" and (
+        (transition and not reflap) or realert or new_reason)
     disk_prev = state.get("disk_low") is True
     disk_low = (obs["disk_low"] if obs["status"] in OVERALL_STATUS
                 else disk_prev)
-    disk_alert = disk_low != disk_prev
+    disk_alert = disk_low and not disk_prev
     state["disk_low"] = disk_low
 
     report = dict(obs)
@@ -262,37 +276,297 @@ def evaluate(home: str = HOME, now: float | None = None,
                      "health_at": obs.get("health_at"),
                      "evidence_at": _dedup_stamp(obs)}
     if alert:
-        state["alerted_at"] = now
+        state["detected_at"] = now
+        state["alerted_episode"] = {"status": obs["status"],
+                                    "reasons": sorted(set(reasons) | (
+                                        episode_reasons or set()
+                                        if episode.get("status") == obs["status"]
+                                        else set()))}
     state["alerted_reasons"] = sorted(seen | set(reasons) if alert
                                       else seen)
+    delivery = _reconcile_delivery(state, obs["status"], key, alert,
+                                   disk_low, disk_alert, transition,
+                                   new_reason or realert, now)
+    if delivery:
+        state["delivery"] = delivery
+        report["delivery"] = dict(delivery)
     try:
         maintenance.atomic_publish_text(
             state_path, json.dumps(state, ensure_ascii=False))
+    except OSError:
+        report["delivery_error"] = "state_persist_failed"
+    try:
         maintenance.atomic_publish_text(
             status_path, json.dumps(report, ensure_ascii=False))
     except OSError:
-        pass    # persistence failure must not crash the watcher
+        report["delivery_error"] = "status_persist_failed"
     return report
 
 
-def deliver_alert(cfg: dict, text: str) -> bool:
+def _archive_unknown(state: dict, delivery: dict) -> None:
+    """Unresolved history is evidence, but the state file must stay
+    bounded: keep the newest UNKNOWN_HISTORY records."""
+    held = state.get("unknown_deliveries")
+    held = held if isinstance(held, list) else []
+    state["unknown_deliveries"] = [*held, dict(delivery)][-UNKNOWN_HISTORY:]
+
+
+def _reconcile_delivery(state: dict, status: str, key: tuple,
+                        alert: bool, disk_low: bool, disk_alert: bool,
+                        transition: bool, new_reason: bool,
+                        now: float) -> dict:
+    """Carry over or replace the durable send record for this verdict.
+
+    pending/not_sent deliveries survive only while their component is
+    still active; an unknown outcome is held verbatim — it can neither
+    be retried nor manufactured into a success. A REALERT_S re-alert
+    arrives as new_reason: it is a fresh alert, not a retry, so a lost
+    send cannot silence a persisting incident forever."""
+    delivery = state.get("delivery")
+    delivery = delivery if isinstance(delivery, dict) else {}
+    current_alert = bool(delivery.get("alert") and status != "ok")
+    current_disk_alert = bool(delivery.get("disk_alert") and disk_low)
+    if delivery.get("outcome") == "unknown" and not (current_alert or current_disk_alert):
+        # Recovery resolves the incident, not its uncertain send outcome.
+        # Retain the witness as unknown; do not manufacture a successful send.
+        _archive_unknown(state, delivery)
+        state.pop("delivery", None)
+        delivery = {}
+    elif delivery.get("outcome") in ("pending", "not_sent"):
+        # Old provably-unsent alerts may not be retried with a healthy
+        # current report. Keep any still-active low-disk component.
+        delivery.update(alert=current_alert, disk_alert=current_disk_alert)
+        if not (current_alert or current_disk_alert):
+            delivery.update(outcome="superseded", superseded_at=now)
+    delivery_key = [*key, disk_low, state["alerted_reasons"]]
+    if (alert or disk_alert) and not (delivery.get("outcome") == "unknown"
+                                     and not (transition or new_reason or disk_alert)):
+        # An uncertain send stays held, including hourly observations
+        # of the same incident. A new verdict/reason is a different alert.
+        if delivery.get("key") != delivery_key or delivery.get("outcome") in ("delivered", "superseded") \
+                or (new_reason and delivery.get("outcome") == "unknown"):
+            if delivery.get("outcome") == "unknown":
+                _archive_unknown(state, delivery)
+            delivery = {"key": delivery_key, "outcome": "pending",
+                        "alert": bool(alert), "disk_alert": disk_alert}
+        elif delivery.get("outcome") != "unknown":
+            delivery.update(alert=bool(alert or delivery.get("alert")),
+                            disk_alert=bool(disk_alert or delivery.get("disk_alert")))
+    return delivery
+
+
+def deliver_alert(cfg: dict, text: str) -> bool | None:
     """Best-effort copy of an alert line to the system notification
     target. cron/launchd stdout only reaches a log file, and the
     outbox drains inside run_check — the very producer a stale verdict
-    says is down — so this uses notify_flush's sender directly. The
-    watcher's own dedup already bounds the rate; a failed send stays
-    silent (stdout line and status file remain)."""
+    says is down — so this uses notify_flush's sender directly.
+    Return True for delivered, False for provably unsent, None for an
+    uncertain outcome which must not be blindly repeated."""
     try:
         import notify_flush
         target = notify_flush._target(cfg, "run_failed")
         if not target:
             return False
-        notify_flush._send(notify_flush._send_argv(cfg, target),
+        argv = notify_flush._send_argv(cfg, target)
+    except Exception:
+        return False                   # transport has not been called
+    try:
+        notify_flush._send(argv,
                            "[MCS] 監視警報\n" + text,
                            deadline=time.monotonic() + 60)
         return True
-    except Exception:
+    except (notify_flush._SendFailed, notify_flush._SendUsage):
         return False
+    except Exception:
+        return None                    # includes _SendUncertain
+
+
+_STATUS_JA = {"degraded": "一部に異常があります", "failed": "収集が失敗しました",
+              "stale": "状態の記録が更新されていません", "missing": "状態の記録がありません",
+              "corrupt": "状態の記録が壊れています"}
+_SEVERE = frozenset({"failed", "stale", "missing", "corrupt"})
+_CHECK = "python3 mcs/ops/mcs_setup.py check"
+# code -> (what happened, in plain words / what to do next)
+_REASON_JA = {
+    "run_failed": ("収集の実行が失敗しました",
+                   f"data/run_check.log の末尾を確認。続く場合は {_CHECK}"),
+    "session_expired": ("MCSのログインが切れ、自動の再ログインも失敗しました",
+                        "MCSに手動でログインし直す（docs/guides/INSTALLATION.md の session_expired）"),
+    "stage_errors": ("収集の一部の処理でエラーがありました",
+                     "次回の収集で再試行されます。続く場合は data/run_check.log を確認"),
+    "code_changed": ("収集中にコードが更新されました", "対処不要。次回の収集で続行します"),
+    "run_deadline_exceeded": ("収集が制限時間を超えました",
+                              "続く場合は llama-server とネットワークの負荷を確認"),
+    "ledger_relation_violations": ("保存データの整合性に問題があります",
+                                   f"{_CHECK} を実行し、修復手順に従う"),
+    "backup_not_verified": ("バックアップの完了を確認できません",
+                            "バックアップの設定と保存先の空き容量を確認"),
+    "collection_incomplete": ("一部の患者の記録を取得できていません",
+                              "次回以降に再取得されます。続く場合はMCSの画面と閲覧権限を確認"),
+    "notification_failed": ("通知の送信に失敗しました",
+                            "通知先の設定と Hermes gateway（独立接続なら ai.mcs.standalone）の稼働を確認"),
+    "notification_deferred": ("通知を先送りしました", "次回の収集で送信されます"),
+    "notification_parked": ("通知が待機中です", "次回の収集で再確認されます"),
+    "notification_held": ("通知が保留されています",
+                          "python3 mcs/ops/mcs_setup.py doctor で保留理由を確認"),
+    "notification_pending": ("送信待ちの通知があります",
+                             "次回の収集で送信されます。長く続く場合は gateway の稼働を確認"),
+    "disk_low": ("ディスクの空き容量が不足しています", "不要なファイルを削除するか保存先を広げる"),
+    "card_delivery_stalled": ("カードの配送が30分以上止まっています",
+                              "hermes gateway restart（独立接続なら ai.mcs.standalone の再起動）"),
+    "extract_backlog_stalled": ("要約の抽出が6時間以上止まっています",
+                                "llama-server と extract-drainer の稼働を確認（launchctl list | grep mcs）"),
+    "semantic_backlog_stalled": ("意味チェックが6時間以上止まっています",
+                                 "extract-drainer の稼働と data/extract_drain.log の jev_error を確認"),
+    "stall_check_failed": ("停滞の判定処理が失敗しました",
+                           f"data/run_check.log の stall_check_failed を確認。続く場合は {_CHECK}"),
+    "semantic_jev_payment_required": ("TypeSafe Jev が支払い未了（HTTP 402）を返しています",
+                                      "TypeSafe の契約・残高を確認。解消まで意味チェックは待機し、収集・通知には影響しません"),
+    "semantic_jev_no_api_key": ("TypeSafe Jev のAPIキーが設定されていません",
+                                "TYPESAFE_API_KEY を .env に設定"),
+    "semantic_jev_budget_exceeded": ("TypeSafe Jev の1日の利用上限に達しました",
+                                     "翌日に自動で再開します。上限は semantic.daily_request_budget"),
+    "semantic_jev_auth_error": ("TypeSafe Jev の認証に失敗しました",
+                                "TYPESAFE_API_KEY の値と有効期限を確認"),
+    "unread_collection_unknown": ("未読収集の状況が記録されていません",
+                                  "次回の収集を待ち、続く場合は data/run_check.log を確認"),
+}
+_AREA_JA = (("semantic", "意味チェック（任意機能）"), ("extract_backlog", "要約の抽出"),
+            ("notification", "通知"), ("card_delivery", "通知"),
+            ("collection_incomplete", "一部患者の記録取得"), ("disk_low", "保存"),
+            ("ledger", "保存データ"), ("backup", "バックアップ"))
+
+
+def _jst(ts) -> str:
+    if not _finite_number(ts):
+        return "不明"
+    try:
+        return time.strftime("%m-%d %H:%M", time.gmtime(ts + 9 * 3600))
+    except (OverflowError, OSError, ValueError):
+        return "不明"
+
+
+def _hours(seconds) -> str:
+    return f"{seconds / 3600:.1f}時間" if _finite_number(seconds) else ""
+
+
+def _impact(report: dict, reasons) -> str:
+    """One sentence a staff member can act on: what is affected and
+    whether collection itself is still running."""
+    if report["status"] in _SEVERE:
+        return "新しい連絡の収集と通知が止まっている可能性があります。"
+    areas = []
+    for r in reasons or []:
+        for prefix, name in _AREA_JA:
+            if r.startswith(prefix) and name not in areas:
+                areas.append(name)
+    parts = []
+    if areas:
+        parts.append("・".join(areas) + "に遅れや不具合があります。")
+    if report.get("run_status") == "ok":
+        parts.append("収集は動いています。")
+    return "".join(parts) or "収集は動いていますが、確認が必要な状態です。"
+
+
+def _reason_rows(report: dict, reasons) -> list[str]:
+    if reasons is None:
+        return ["・理由を特定できません（状態の記録に理由がありません）",
+                f"　→ {_CHECK} で確認"]
+    if not reasons:
+        return ["・記録された理由はありません", "　→ 次回の収集を待つ"]
+    oldest = report.get("oldest_age_s") or {}
+    rows = []
+    for code in reasons:
+        base = code.split(":")[0]
+        meaning, action = _REASON_JA.get(base, (code, f"{_CHECK} で確認"))
+        extra = ""
+        if base == "notification_pending":
+            n = report.get("notify_pending")
+            age = _hours(oldest.get("notify"))
+            extra = (f" {int(n)}件" if _finite_number(n) else "") + (f"（最古 {age}）" if age else "")
+        elif base == "semantic_backlog_stalled" and _hours(oldest.get("semantic_jobs")):
+            extra = f"（最古 {_hours(oldest.get('semantic_jobs'))}）"
+        rows += [f"・{meaning}{extra}", f"　→ {action}"]
+    return rows
+
+
+def _alert_lines(report: dict) -> list[str]:
+    """Staff-readable alert: severity and status first, then the impact,
+    each reason with its next step, timestamps in JST, and the raw codes
+    last on one line for operators to search."""
+    lines = []
+    if report["alert"] and report["status"] != "ok":
+        status = report["status"]
+        reasons = report.get("state_reasons")
+        glyph = "🔴" if status in _SEVERE else "🟠"
+        lines.append(f"{glyph} MCS監視: {_STATUS_JA.get(status, status)}")
+        lines.append("影響: " + _impact(report, reasons))
+        lines.append("原因と対処:")
+        lines.extend(_reason_rows(report, reasons))
+        lines.append(f"最終正常 {_jst(report.get('last_ok_at'))}"
+                     f" / 最新記録 {_jst(report.get('health_at'))}（JST）")
+        lines.append(f"コード: {status} " + (",".join(reasons) if reasons else
+                                            "none" if reasons is not None else "unknown"))
+    if report["disk_alert"] and report["disk_low"]:
+        free = report.get("disk_free_mb")
+        lines.append(f"空き容量不足: 残り {free} MB" if _finite_number(free)
+                     else "空き容量不足: 残り 不明")
+    return lines
+
+
+def _watch(args, cfg) -> int:
+    report = evaluate(home=args.home, now=args.now, cfg=cfg)
+    for line in _alert_lines(report):
+        print(line)
+    if report.get("delivery_error"):
+        return 1
+    delivery = report.get("delivery") or {}
+    now = report["watched_at"]
+    tried = delivery.get("attempted_at")
+    if delivery.get("outcome") not in ("pending", "not_sent") \
+            or (_finite_number(tried) and now - tried < DELIVERY_RETRY_S):
+        return 0
+    lines = _alert_lines({**report, "alert": delivery.get("alert"),
+                          "disk_alert": delivery.get("disk_alert")})
+    if not lines:
+        return 0
+    state_path = os.path.join(args.home, STATE_REL)
+    state = load_config(state_path)
+    if state.get("delivery") != delivery:
+        return 1                         # persistence failed or evidence changed
+    delivery.update(outcome="unknown", attempted_at=now)
+    state["delivery"] = delivery
+    try:
+        # Durable before crossing the wire: a killed watcher never
+        # turns a possibly delivered message into a retryable send.
+        maintenance.atomic_publish_text(state_path, json.dumps(state, ensure_ascii=False))
+    except OSError:
+        report["delivery_error"] = "state_persist_failed"
+        report["delivery"] = {**delivery, "outcome": "not_sent"}
+        try:
+            maintenance.atomic_publish_text(os.path.join(args.home, STATUS_REL),
+                                            json.dumps(report, ensure_ascii=False))
+        except OSError:
+            pass
+        return 1                         # never send without the intent witness
+    outcome = deliver_alert(cfg, "\n".join(lines))
+    delivery["outcome"] = ("delivered" if outcome is True else
+                           "not_sent" if outcome is False else "unknown")
+    if outcome is True:
+        state["alerted_at"] = now
+    report["delivery"] = dict(delivery)
+    try:
+        maintenance.atomic_publish_text(state_path, json.dumps(state, ensure_ascii=False))
+    except OSError:
+        report["delivery_error"] = "state_persist_failed"
+    try:
+        maintenance.atomic_publish_text(os.path.join(args.home, STATUS_REL),
+                                        json.dumps(report, ensure_ascii=False))
+    except OSError:
+        return 1
+    if report.get("delivery_error"):
+        return 1                         # old unknown witness safely holds the send
+    return 0
 
 
 def main(argv: list | None = None) -> int:
@@ -306,32 +580,18 @@ def main(argv: list | None = None) -> int:
     if args.now is not None and not _finite_number(args.now):
         ap.error("now must be a finite number")
     cfg = load_config(args.config) if args.config else load_config()
-    report = evaluate(home=args.home, now=args.now, cfg=cfg)
-    lines = []
-    if report["alert"]:
-        age = report.get("age_s")
-        reasons = report.get("state_reasons")
-        lines.append("mcs health: {status} (overall={overall} "
-                     "health_at={health_at} age_s={age} deadline_s={dl} "
-                     "reasons={reasons} last_ok_at={last_ok})".format(
-                         status=report["status"],
-                         overall=report.get("overall"),
-                         health_at=report.get("health_at"),
-                         age=age, dl=report["deadline_s"],
-                         reasons=(",".join(reasons) or "none")
-                         if reasons is not None else "unknown",
-                         last_ok=report.get("last_ok_at")
-                         if report.get("last_ok_at") is not None
-                         else "unknown"))
-    if report["disk_alert"]:
-        lines.append("mcs disk: {} (free_mb={})".format(
-            "low" if report["disk_low"] else "recovered",
-            report.get("disk_free_mb")))
-    for line in lines:
-        print(line)
-    if lines:
-        deliver_alert(cfg, "\n".join(lines))
-    return 0
+    try:
+        directory = os.path.join(args.home, "data")
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        fd = os.open(os.path.join(directory, "health_watch.lock"),
+                     os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return _watch(args, cfg)
+    except BlockingIOError:
+        return 0                         # the existing watcher owns this observation
+    except OSError:
+        return 1                         # unavailable state store is not successful delivery
 
 
 if __name__ == "__main__":

@@ -25,16 +25,17 @@ import statistics
 from datetime import datetime, timedelta
 from typing import TypedDict
 
-from mcs_queries import (CHANGE_ACTIONS, DAY_S, FACT_KINDS_SQL, JST,
-                         MED_ACTIONS,
+from mcs_queries import (CHANGE_ACTIONS, DAY_S, EXTRACT_FEEDBACK_KIND,
+                         FACT_KINDS_SQL, JST, MED_ACTIONS,
                          current_fact_pred,
                          iter_period_ends, json_or_null,
                          med_capability_evidence,
                          med_is_patient_current, med_period_artifacts,
                          transition_cooccurrences, thread_reply_pairs)
 from project_metadata_view import get_project_metadata
-from drug_map import current_refs
-DEFINITION_VERSION = "2026-10-05"
+from drug_map import current_refs, _progress as drug_map_progress
+import structured_view
+DEFINITION_VERSION = "2026-10-06"
 
 # engineering caps (A-8): detail 20 default / 100 max, top categories
 # 100 max, time buckets 120 — row-count caps bound the response size
@@ -190,6 +191,7 @@ def st_data_quality(db, scope):
               AND json_extract(a.meta,'$.prefilter') IS NOT NULL{w}""",
         p).fetchone()[0]
     return _result("ok", scope, {
+        "urgency_rule_outcomes": _urgency_rule_outcomes(db, w, p),
         "stages": {
             "fetched": _ratio(fetched, total, "messages"),
             "parsed_current_revision": _ratio(parsed, total, "messages"),
@@ -202,7 +204,54 @@ def st_data_quality(db, scope):
                   "stale_parsed = extraction exists but for an older "
                   "content revision",
                   "extract_prefiltered = marked no-signal without an "
-                  "LLM call"]})
+                  "LLM call",
+                  "urgency_rule_outcomes = what the shared urgency reading "
+                  "did with current lexical-rule highs; llm_routine_"
+                  "suppressed counts 🚨 hidden by an AI routine verdict "
+                  "(not a measured miss rate); human_urgency_reports counts "
+                  "⚠ reports on the urgency field"]})
+
+
+def _urgency_rule_outcomes(db, w, p) -> dict:
+    """Counts only: how current rule-high posts are displayed, so the owner
+    can watch how often an AI 'routine' verdict suppresses the 🚨 net and
+    how often a QC audit disagrees with a displayed AI high."""
+    mids = [r[0] for r in db.execute(
+        f"""SELECT DISTINCT m.message_id FROM artifacts a JOIN messages m
+            ON m.message_id=a.message_id
+            WHERE a.kind='extract_v1'
+              AND json_extract({json_or_null('a.content')},'$.urgency')='high'{w}""",
+        p)]
+    out = {"rule_high": 0, "llm_high": 0, "llm_high_qc_disagreed": 0,
+           "rule_only": 0, "llm_routine_suppressed": 0,
+           "request_only": 0, "scope_or_evidence_held": 0,
+           # ⚠ 誤り報告（緊急度）: the human labels #19 starts from
+           "human_urgency_reports": db.execute(
+               f"""SELECT COUNT(*) FROM artifacts h JOIN messages m
+                   ON m.message_id=h.message_id
+                   WHERE h.kind='{EXTRACT_FEEDBACK_KIND}'
+                     AND json_extract({json_or_null('h.content')},'$.field')
+                         ='urgency'{w}""", p).fetchone()[0]}
+    for mid in mids:
+        if (structured_view.latest_artifact(db, "extract_v1", mid) or {}).get(
+                "urgency") != "high":
+            continue                     # only the current rule generation
+        out["rule_high"] += 1
+        details = structured_view.message_urgency_details(db, mid)
+        shown = details["source"]
+        if shown == "llm":
+            out["llm_high"] += 1
+            if structured_view.urgency_qc_disagreement(db, mid):
+                out["llm_high_qc_disagreed"] += 1
+        elif shown == "rule":
+            out["rule_only"] += 1
+        elif details["kind"] == "request":
+            out["request_only"] += 1
+        elif details["raw_verdict"] == "routine":
+            out["llm_routine_suppressed"] += 1
+        else:
+            out["scope_or_evidence_held"] += 1
+    return out
 
 
 # ---------------- T1 ----------------
@@ -429,20 +478,48 @@ def st_meds(db, scope):
         "by_name_month": _items(
             [{"name": k[0], "month": k[1], "mentions": n}
              for k, n in top], CATEGORY_LIMIT),
-        "by_ingredient_candidate": _med_candidate_breakdown(db, msgs),
+        **_med_candidate_breakdown(db, msgs),
         "notes": ["names are raw surface forms, NOT ingredient-normalized",
                   "ingredient annotations are dictionary candidates, unconfirmed",
                   "mention counts, not deduplicated change events",
                   "'none' = mentioned without a change action"]})
 
 
+class DrugCandidateItem(TypedDict):
+    dict_id: str
+    dict_sha256: str
+    resolver_version: str
+    system: str
+    code: str
+    display: str
+    candidate: bool
+    mentions: int
+    share: dict
+
+
+class DrugCandidateBreakdown(TypedDict):
+    status: str
+    mentions: int
+    by_resolution: dict[str, dict]
+    items: dict
+
+
+class DrugReviewItem(TypedDict):
+    name: str
+    status: str
+    reason: str
+    mentions: int
+    share: dict
+
+
 def _med_candidate_breakdown(db, msgs):
-    """Same mention denominator as ST-007, with unavailable annotations
-    explicit; ``msgs`` is st_meds' materialized _med_messages list."""
+    """One candidate pass supplies three identity kinds and a local review queue."""
     counts = dict.fromkeys(
         ("resolved", "ambiguous", "unresolved", "generic", "unavailable"), 0)
-    ingredients = {}
+    kinds = {"ingredient": {}, "general_name": {}, "product": {}}
+    review = {}
     total = 0
+    progress = drug_map_progress(db)
     for _pid, mid, _ts, meds in msgs:
         refs = {ref["i"]: ref for ref in current_refs(db, mid)}
         for i, med in enumerate(meds):
@@ -453,27 +530,59 @@ def _med_candidate_breakdown(db, msgs):
             status = ref["status"] if ref and ref["name"] == med.get("name") \
                 else "unavailable"
             counts[status] += 1
+            if status in ("unresolved", "ambiguous"):
+                name = (med.get("name") or "").strip() or "(unnamed)"
+                key = (name, status)
+                review[key] = review.get(key, 0) + 1
             if status != "resolved" or ref is None:
                 continue
             for cand in ref["cands"]:
-                if cand["kind"] != "ingredient" or cand["candidate"] is not True:
+                if cand["kind"] not in kinds or cand["candidate"] is not True:
                     continue
                 key = (ref["dict_id"], ref["dict_sha256"],
                        ref["resolver_version"], cand["system"],
                        cand["code"], cand["display"])
-                ingredients[key] = ingredients.get(key, 0) + 1
-    return {
-        "status": "ok" if total > counts["unavailable"] else "unavailable",
-        "mentions": total,
-        "by_resolution": {k: _ratio(n, total, "mention_share")
-                          for k, n in counts.items()},
-        "items": _items([
-            {"dict_id": k[0], "dict_sha256": k[1], "resolver_version": k[2],
-             "system": k[3], "code": k[4], "display": k[5],
+                target = kinds[cand["kind"]]
+                target[key] = target.get(key, 0) + 1
+    status = "ok" if total > counts["unavailable"] else "unavailable"
+    resolution = {key: _ratio(value, total, "mention_share")
+                  for key, value in counts.items()}
+    output = {}
+    for kind, identities in kinds.items():
+        items: list[DrugCandidateItem] = [
+            {"dict_id": key[0], "dict_sha256": key[1], "resolver_version": key[2],
+             "system": key[3], "code": key[4], "display": key[5],
              "candidate": True, "mentions": n,
              "share": _ratio(n, total, "mention_share")}
-            for k, n in sorted(ingredients.items(), key=lambda kv: (-kv[1], kv[0]))
-        ], CATEGORY_LIMIT)}
+            for key, n in sorted(identities.items(), key=lambda kv: (-kv[1], kv[0]))]
+        block: DrugCandidateBreakdown = {"status": status, "mentions": total,
+            "by_resolution": resolution, "items": _items(items, CATEGORY_LIMIT)}
+        output["by_" + kind + "_candidate"] = block
+    reason = None
+    review_status = "ok"
+    if progress is None and status != "ok":
+        review_status, reason = "unconfigured", "dictionary_generation_unrecorded"
+    elif progress is not None and progress.get("invalid"):
+        review_status, reason = "unavailable", "dictionary_generation_invalid"
+    elif progress is not None and progress.get("dictionary") is None:
+        review_status, reason = "unavailable", "dictionary_disabled_or_unavailable"
+    elif progress is not None and progress["dictionary"][2]:
+        review_status, reason = "unavailable", "synthetic_dictionary"
+    elif total and status != "ok":
+        review_status, reason = "unavailable", "current_annotation_unavailable"
+    review_items: list[DrugReviewItem] = [
+        {"name": key[0], "status": key[1], "reason":
+         "no_exact_dictionary_match" if key[1] == "unresolved" else "multiple_identity_candidates",
+         "mentions": n, "share": _ratio(n, total, "mention_share")}
+        for key, n in sorted(review.items(), key=lambda kv: (-kv[1], kv[0]))]
+    output["drug_map_review"] = {"status": review_status, "reason": reason,
+        "mentions": total,
+        "review_mentions": counts["unresolved"] + counts["ambiguous"],
+        "unavailable_mentions": counts["unavailable"],
+        "items": _items(review_items, CATEGORY_LIMIT),
+        "notes": ["raw names are not merged; candidate review is not clinical approval",
+                  "missing current annotations are excluded from the curation queue"]}
+    return output
 
 
 def st_med_mentions(db, scope):
@@ -844,12 +953,13 @@ def _feedback_ratio(num, den, unit):
     return ratio
 
 
-def st_signal_feedback(db, scope):
-    """ST-T2: local signal lifecycle measurement, never clinical completion."""
-    from mcs_signals import (ARTIFACT_KIND, DETECTORS, FEEDBACK_KIND,
-                             _signal_content, dismiss_reason_counts,
+def _feedback_episodes(db, scope, types):
+    """Signal-artifact scan -> (episodes, invalid_rows, legacy_rows).
+
+    An invalid/terminal row without an observed opening has no
+    denominator and voids any open episode under the same key."""
+    from mcs_signals import (ARTIFACT_KIND, _signal_content,
                              signal_message_ids)
-    types = {name for name, _ in DETECTORS}
     episodes: list[_FeedbackEpisode] = []
     latest: dict[str, _FeedbackLatest] = {}
     ep: _FeedbackEpisode
@@ -925,10 +1035,11 @@ def st_signal_feedback(db, scope):
             invalid += 1
             continue
         latest[key] = {"state": c["state"], "episode": ep}
+    return episodes, invalid, legacy
 
-    selected = [ep for ep in episodes
-                if (scope["since"] is None or ep["start"] >= scope["since"])
-                and (scope["until"] is None or ep["start"] < scope["until"])]
+
+def _feedback_evidence(db, scope, selected) -> None:
+    """Fold delivery/ack/request evidence into each selected episode."""
     # Bucketed by patient / shown key so each episode only scans its own
     # candidates instead of every request and manifest (was O(episodes x rows)).
     requests: dict = {}
@@ -974,9 +1085,10 @@ def st_signal_feedback(db, scope):
                     if delivered <= at <= ep["end"])
         ep["action_times"].extend(ep["ack_times"] + ep["adoption_times"])
 
-    dismissals = dismiss_reason_counts(
-        db, scope["project_id"], since=scope["since"], until=scope["until"],
-        as_of=scope["as_of"])
+
+def _feedback_suppression(db, scope, types):
+    """Daily suppression rows -> (suppression, suppression_since, straddled)."""
+    from mcs_signals import FEEDBACK_KIND
     suppression = {name: [0, 0] for name in types}
     suppression_since = {}
     straddled = {}
@@ -1013,7 +1125,12 @@ def st_signal_feedback(db, scope):
         suppression[c["type"]][0] += den
         suppression[c["type"]][1] += num
         suppression_since[c["type"]] = min(at, suppression_since.get(c["type"], at))
+    return suppression, suppression_since, straddled
 
+
+def _feedback_by_type(scope, types, selected, dismissals,
+                      suppression, suppression_since, straddled):
+    """Aggregate selected episodes and suppression counts per detector."""
     # Enum allowlist: corrupt/legacy cause strings must not leak free text.
     causes = {"request_missing", "request_status_changed", "request_due_changed",
               "request_age_changed", "project_missing", "project_archived",
@@ -1071,6 +1188,25 @@ def st_signal_feedback(db, scope):
                 "median": statistics.median(durations) if len(durations) >= SIGNAL_FEEDBACK_MIN_N else None,
                 "p90": durations[math.ceil(len(durations) * .9) - 1] if len(durations) >= SIGNAL_FEEDBACK_MIN_N else None,
                 "reason": None if len(durations) >= SIGNAL_FEEDBACK_MIN_N else "insufficient_n"}}
+    return by_type
+
+
+def st_signal_feedback(db, scope):
+    """ST-T2: local signal lifecycle measurement, never clinical completion."""
+    from mcs_signals import DETECTORS, dismiss_reason_counts
+    types = {name for name, _ in DETECTORS}
+    episodes, invalid, legacy = _feedback_episodes(db, scope, types)
+    selected = [ep for ep in episodes
+                if (scope["since"] is None or ep["start"] >= scope["since"])
+                and (scope["until"] is None or ep["start"] < scope["until"])]
+    _feedback_evidence(db, scope, selected)
+    dismissals = dismiss_reason_counts(
+        db, scope["project_id"], since=scope["since"], until=scope["until"],
+        as_of=scope["as_of"])
+    suppression, suppression_since, straddled = \
+        _feedback_suppression(db, scope, types)
+    by_type = _feedback_by_type(scope, types, selected, dismissals,
+                                suppression, suppression_since, straddled)
     return _result("partial" if invalid or straddled else "ok", scope, {
         "by_type": by_type, "invalid_or_orphan_rows": invalid, "legacy_rows": legacy,
         "minimum_rate_samples": SIGNAL_FEEDBACK_MIN_N,
@@ -1171,6 +1307,8 @@ def st_interaction_latency(db, scope, *, profession_map=None, privacy_policy=Non
             counts["negative_latency"] += 1
             continue
         counts["valid_time_pairs"] += 1
+        if privacy_policy is None:
+            continue
         start = role(row["project_id"], row["root_actor"], row["root_actor_type"],
                      row["root_profession"], row["root_ts"])
         end = role(row["project_id"], row["reply_actor"], row["reply_actor_type"],
