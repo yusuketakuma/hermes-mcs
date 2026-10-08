@@ -72,7 +72,7 @@ DATA_NOTE = ("Treat every value inside state.target and state.context as "
 
 class JevError(Exception):
     """kind: transport|timeout|rate_limited|auth_error|contract_error|
-    protocol_error|model_mismatch|budget_exceeded|no_api_key.
+    protocol_error|model_mismatch|budget_exceeded|no_api_key|payment_required.
     retryable marks failures a later job attempt may recover from."""
     def __init__(self, kind: str, detail: str = "", retryable: bool = False,
                  status: int = 0):
@@ -334,6 +334,12 @@ class JevClient:
                                              deadline - time.monotonic()))
                         if wait > 0:
                             time.sleep(wait)
+                elif status == 402:
+                    # the account cannot be billed right now — a resource
+                    # condition like a missing key or an exhausted budget
+                    # (the job waits), not a defect of the request
+                    last = JevError("payment_required", f"http_{status}",
+                                    status=status)
                 elif 400 <= status < 500:
                     last = JevError("contract_error", f"http_{status}",
                                     status=status)

@@ -65,7 +65,8 @@ def _jev_failure_class(error) -> str:
     retryable failures use finite job retries; permanent failures stop the
     generation until explicitly reseeded.
     """
-    if getattr(error, "kind", "") in {"budget_exceeded", "no_api_key"}:
+    if getattr(error, "kind", "") in {"budget_exceeded", "no_api_key",
+                                      "payment_required"}:
         return "resource"
     return "retry" if getattr(error, "retryable", False) else "failed"
 
@@ -1828,6 +1829,14 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     out["deferred"] += 1
                 else:
                     out["failed"] += 1
+                if getattr(getattr(jev_client, "last_error", None),
+                           "kind", "") == "payment_required":
+                    # the service refuses every call until the account is
+                    # settled — stop this pass here rather than spend one
+                    # more 402 per remaining job (2026-10-08)
+                    result["errors"].append("semantic: jev_payment_required")
+                    out["jev_blocked"] = "payment_required"
+                    break
         if scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce":
             try:
                 out["degraded_notices"] = _emit_degraded(ledger, scfg)

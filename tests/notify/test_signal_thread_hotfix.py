@@ -74,7 +74,28 @@ def test_signal_reuses_origin_thread_and_keeps_controls(led):
     assert specs[0]["delivery"]["thread_id"] == "original-thread"
 
 
-@pytest.mark.parametrize("fault", ["missing", "coverage", "deleted", "scope", "foreign", "partial"])
+@pytest.mark.parametrize("fault", ["missing", "coverage"])
+def test_signal_without_a_provable_thread_goes_to_the_channel_after_the_hold(led, fault):
+    # a post whose card never arrives (history/probe import, suppressed
+    # notification) must not hold the alert forever: after
+    # SIGNAL_SOURCE_HOLD_MAX_S it is delivered in the channel (owner 2026-10-08)
+    _seed_thread(led)
+    if fault == "coverage":
+        delivered_source(led)
+        with led.db:
+            led.db.execute("UPDATE notification_intent_cards SET coverage='[999]' ")
+    event, card = _signal(led)
+    assert _latest_render(led, card["card_id"]) is None          # held first
+    late = NOW + notify_cards.SIGNAL_SOURCE_HOLD_MAX_S + 60
+    assert _dispatch(led, event, now=late)["dispatched"]
+    render = _latest_render(led, card["card_id"])
+    spec = json.loads(render["spec_json"])
+    assert "source_thread" not in spec["parts"] and "thread_id" not in spec["delivery"]
+    assert validate(spec)
+    assert _begin(led, render, n=8300)["granted"]
+
+
+@pytest.mark.parametrize("fault", ["deleted", "scope", "foreign", "partial"])
 def test_unproven_signal_target_holds_without_channel_spec(led, fault):
     _seed_thread(led)
     if fault != "missing":

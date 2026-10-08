@@ -231,7 +231,8 @@ def evaluate_source_fact_coverage(jev_client, source_text: str, facts: list,
     except Exception as error:
         reason = ("resource" if getattr(error, "retryable", False)
                   or getattr(error, "kind", "") in {
-                      "no_api_key", "budget_exceeded", "transport"}
+                      "no_api_key", "budget_exceeded", "payment_required",
+                      "transport"}
                   else "model")
         return _coverage_incomplete("source_fact_coverage_unevaluated", reason)
 

@@ -111,8 +111,8 @@ def test_non_ok_reasons_and_last_success_reach_status_and_alert(tmp_path, capsys
     assert health_watch.main(["--home", str(tmp_path), "--now", "1000",
                               "--config", str(tmp_path / "none.json")]) == 0
     out = capsys.readouterr().out
-    assert "コード: notification_held,backup_not_verified" in out
-    assert "最終正常: 01-01 09:06" in out
+    assert "コード: degraded notification_held,backup_not_verified" in out
+    assert "最終正常 01-01 09:06" in out
     st = json.loads((tmp_path / "data" / "health_watch_status.json").read_text())
     assert st["held_reasons"] == {"send_outcome_unknown": 2}
     assert st["oldest_age_s"] == {"notify": 120.5, "semantic_jobs": 60,
@@ -125,7 +125,7 @@ def test_non_ok_reasons_and_last_success_reach_status_and_alert(tmp_path, capsys
     assert health_watch.main(["--home", str(tmp_path), "--now", "1001",
                               "--config", str(tmp_path / "none.json")]) == 0
     out = capsys.readouterr().out
-    assert "コード: unknown" in out and "最終正常: 不明" in out
+    assert "コード: failed unknown" in out and "最終正常 不明" in out
     assert r["held_reasons"] is None
     assert r["oldest_age_s"] == {"notify": None, "semantic_jobs": None,
                                  "extract_qc_jobs": None}
@@ -144,7 +144,7 @@ def test_malformed_reason_fields_stay_unknown(tmp_path, capsys, reasons, held):
                             "notify": {"held_reasons": held}})
     assert health_watch.main(["--home", str(tmp_path), "--now", "1000",
                               "--config", str(tmp_path / "none.json")]) == 0
-    assert "コード: unknown" in capsys.readouterr().out
+    assert "理由を特定できません" in capsys.readouterr().out
     st = json.loads((tmp_path / "data" / "health_watch_status.json").read_text())
     assert st["state_reasons"] is None and st["held_reasons"] is None
 
@@ -159,7 +159,7 @@ def test_well_formed_empty_reasons_mean_none(tmp_path):
 
 
 @pytest.mark.parametrize("now,printed", [(1000, ""),
-                                         (5000, "コード: unknown")])
+                                         (5000, "理由を特定できません")])
 def test_stale_never_shows_recorded_none_as_cause(tmp_path, capsys, now,
                                                   printed):
     _health_file(tmp_path, {"overall": "ok", "at": 995,
@@ -543,7 +543,7 @@ def test_main_delivers_alert_to_system_target(tmp_path, monkeypatch):
     assert len(sent) == 1
     argv, text = sent[0]
     assert argv[argv.index("--to") + 1] == "slack:#ops"
-    assert "MCS監視: 停止・失敗（failed）" in text
+    assert "🔴 MCS監視: 収集が失敗しました" in text
     assert health_watch.main(args + ["--now", "1001"]) == 0
     assert len(sent) == 1                      # deduped: no second send
 
@@ -849,10 +849,28 @@ def test_alert_text_is_japanese_with_jst_times():
         "status": "degraded", "alert": True, "disk_alert": False, "disk_low": False,
         "state_reasons": ["stage_errors", "notification_pending"],
         "last_ok_at": 0, "health_at": 3600})
-    assert lines == ["MCS監視: 一部異常（degraded）",
-                     "理由: 処理段階のエラー、通知の送信待ち",
-                     "最終正常: 01-01 09:00 / 最新記録: 01-01 10:00（JST）",
-                     "コード: stage_errors,notification_pending"]
+    assert lines == ["🟠 MCS監視: 一部に異常があります",
+                     "影響: 通知に遅れや不具合があります。",
+                     "原因と対処:",
+                     "・収集の一部の処理でエラーがありました",
+                     "　→ 次回の収集で再試行されます。続く場合は data/run_check.log を確認",
+                     "・送信待ちの通知があります",
+                     "　→ 次回の収集で送信されます。長く続く場合は gateway の稼働を確認",
+                     "最終正常 01-01 09:00 / 最新記録 01-01 10:00（JST）",
+                     "コード: degraded stage_errors,notification_pending"]
+
+
+def test_alert_counts_pending_notifications_and_names_a_jev_block():
+    lines = health_watch._alert_lines({
+        "status": "degraded", "alert": True, "disk_alert": False, "disk_low": False,
+        "run_status": "ok", "notify_pending": 2,
+        "state_reasons": ["notification_pending", "semantic_jev_payment_required"],
+        "oldest_age_s": {"notify": 63514.1, "semantic_jobs": None, "extract_qc_jobs": None},
+        "last_ok_at": 0, "health_at": 3600})
+    assert lines[1] == "影響: 通知・意味チェック（任意機能）に遅れや不具合があります。収集は動いています。"
+    assert "・送信待ちの通知があります 2件（最古 17.6時間）" in lines
+    assert "・TypeSafe Jev が支払い未了（HTTP 402）を返しています" in lines
+    assert all("AI" not in ln for ln in lines)
 
 
 def test_degraded_flapping_does_not_realert_until_interval(tmp_path):

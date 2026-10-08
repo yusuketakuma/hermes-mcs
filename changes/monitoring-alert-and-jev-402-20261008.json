@@ -1,0 +1,22 @@
+{
+  "category": "fixed",
+  "title": "監視警報を状況・影響・対処が分かる日本語にし、Jevの支払い未了と止まりっぱなしのアラートを修正",
+  "summary": "監視警報は「🟠 MCS監視: 一部に異常があります」「影響: …収集は動いています」「原因と対処」（理由ごとに何が起きたか・次に何をするか）「最終正常 / 最新記録（JST）」「コード」の順で届きます。TypeSafe Jev が HTTP 402（支払い未了）を返すとジョブを失敗にせず待機させ、警報に原因と対処を出します。予定どおり待つ日次ダイジェストは送信待ちに数えません。元投稿のスレッドが6時間たっても確定しない患者別アラートはチャンネルへ配送します。",
+  "upgrade": "追加設定は不要です。収集処理への反映後、次の警報から新しい文面になります。402で失敗扱いになった意味解析ジョブは自動再試行の上限に達したものがあり、必要なら手動で再投入してください。Hermes接続ではgateway再起動で新workerを反映してください。",
+  "details": [
+    "health_watch._alert_lines: 状態の日本語化、影響の1文、理由ごとの説明と対処、送信待ち件数と最古の経過時間、JSTの時刻、検索用のコード行。classify_health が notify.pending を報告へ渡す。",
+    "semantic_jev: HTTP 402 を payment_required（資源待ち・再試行なし）に分類。semantic_drain は資源待ちとして扱い、402 を受けた回はそこで打ち切る。semantic_runtime の circuit は 402 でも開く。semantic_audit も資源扱い。",
+    "run_check._backlog_stalls: 最新の semantic_assess の error_kind が payment_required / no_api_key / budget_exceeded / auth_error なら semantic_jev_ に種別を付けた理由にし、generic な停滞は出さない。送信待ちの件数から、未着手で予定時刻が先の日次ダイジェストを除く。",
+    "notify_cards._bind_signal_thread: 元投稿スレッドの確定を SIGNAL_SOURCE_HOLD_MAX_S（6時間）まで待ち、それを過ぎたらチャンネルへ配送する。source_thread はスレッドに束縛されたカードだけに付け、transport の再検査もそれに合わせる。"
+  ],
+  "refs": [
+    "mcs/ingest/health_watch.py",
+    "mcs/ingest/run_check.py",
+    "mcs/semantic/semantic_jev.py",
+    "mcs/semantic/semantic_drain.py",
+    "mcs/semantic/semantic_runtime.py",
+    "mcs/semantic/semantic_audit.py",
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_transport.py"
+  ]
+}

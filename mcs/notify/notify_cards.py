@@ -1521,7 +1521,7 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
         "context": context,
         "preview_text": content["preview_text"],
     }
-    if card["kind"] == "signal" and present.SOURCE_THREAD:
+    if card["kind"] == "signal" and present.SOURCE_THREAD and card["thread_id"]:
         spec["parts"]["source_thread"] = True
     if any("<@" in (f.get("text") or "") for f in footer):
         # the footer names members as <@id> mentions — a worker must
@@ -2301,8 +2301,9 @@ def _source_thread_target(db, project_id, mid, cfg, *, base=None):
 
 
 
-def signal_thread_target(db, card, cfg):
-    """Choose the latest full evidence message's verified patient thread."""
+def _signal_evidence_mid(db, card):
+    """The latest full evidence message of the card's signals, or None
+    when any signal's evidence is missing or unverifiable."""
     signals = _latest_signals(db, _anchor_keys(card), card["project_id"])
     candidates = []
     for signal in signals.values():
@@ -2311,15 +2312,31 @@ def signal_thread_target(db, card, cfg):
             return None
         stamp = db.execute("SELECT posted_at_ts FROM messages WHERE message_id=? AND project_id=?", (mid, card["project_id"])).fetchone()[0]
         candidates.append((stamp or 0, mid))
-    if not candidates:
+    return max(candidates)[1] if candidates else None
+
+
+def signal_thread_target(db, card, cfg):
+    """Choose the latest full evidence message's verified patient thread."""
+    mid = _signal_evidence_mid(db, card)
+    if mid is None:
         return None
-    mid = max(candidates)[1]
     return _source_thread_target(db, card["project_id"], mid, cfg)
+
+
+SIGNAL_SOURCE_HOLD_MAX_S = 6 * 3600   # wait this long for a provable source thread
 
 
 def _bind_signal_thread(db, card, cfg, now):
     target = signal_thread_target(db, card, cfg)
     if target is None:
+        waited = now - (card["created_at"] or now)
+        if card["thread_id"] is None and waited > SIGNAL_SOURCE_HOLD_MAX_S:
+            # a post whose card never arrives (history/probe import, a
+            # suppressed notification) would hold the alert forever: after
+            # the bounded wait it goes to the channel instead (owner
+            # 2026-10-08 — an unreachable alert is worse than one outside
+            # its source thread)
+            return False
         for event in db.execute("SELECT event_id FROM notification_intent_cards WHERE card_id=? AND state='pending'", (card["card_id"],)).fetchall():
             db.execute("UPDATE notify_outbox SET progress=?,next_try=?,updated_at=? WHERE event_id=?", (json.dumps({"thread_hold": "source_thread_not_ready"}), now + RESEAT_S, now, event[0]))
         return None

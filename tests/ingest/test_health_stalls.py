@@ -75,6 +75,26 @@ def test_semantic_stall_needs_old_due_job_and_no_progress(tmp_path):
     assert run_check._backlog_stalls(db, on, time.time()) == []
 
 
+def test_jev_block_is_named_instead_of_a_generic_stall(tmp_path):
+    db = _ledger(tmp_path)
+    on = {"semantic": {"mode": "shadow", "project_ids": []}}
+    _store(db, 1, OLD)
+    _artifact(db, 1, time.time())          # extraction itself is moving
+    _sem_job(db, 1, "pending", OLD)
+    db.db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+        "VALUES('semantic_assess',1,1,'{}',?,?)",
+        ('{"technical_status":"error","error_kind":"payment_required"}', time.time() - 60))
+    db.db.commit()
+    assert run_check._backlog_stalls(db, on, time.time()) == ["semantic_jev_payment_required"]
+    # a later successful assessment clears the block and the stall rule returns
+    db.db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+        "VALUES('semantic_assess',1,1,'{}','{\"technical_status\":\"ok\"}',?)", (time.time(),))
+    db.db.commit()
+    assert run_check._backlog_stalls(db, on, time.time()) == ["semantic_backlog_stalled"]
+
+
 def test_extract_stall_needs_unstarted_old_message_and_no_progress(tmp_path):
     db = _ledger(tmp_path)
     _store(db, 1, time.time())

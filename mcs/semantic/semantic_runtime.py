@@ -261,6 +261,10 @@ def _circuit_failure_class(error) -> str | None:
     """Return a bounded failure label, never the error/detail text."""
     if error is None:
         return None
+    if getattr(error, "kind", "") == "payment_required":
+        # not retryable within a job, but every call fails until the
+        # account is settled: open the circuit like a persistent 5xx
+        return "http_402"
     retryable = getattr(error, "retryable", None)
     if retryable is not None and retryable is not True:
         return None
