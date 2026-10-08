@@ -856,7 +856,7 @@ def test_recovery_unfinished_and_unreported(world):
                                  "result": "delivered",
                                  "message_id": "9555"})
 
-    w3, reg3, _ = world.mkworker()
+    w3, reg3, bot3 = world.mkworker()
 
     async def run():
         return await w3.reconcile()
@@ -871,13 +871,45 @@ def test_recovery_unfinished_and_unreported(world):
     assert by_attempt["cd" * 8]["error_code"] == "worker_crash"
     assert by_attempt["12" * 8]["result"] == "delivered"
     assert by_attempt["12" * 8]["message_id"] == "9555"
-    # runner-side the attempts were never granted — the drain answers
-    # both with an honest rejection and nothing is re-sent
-    world.drain()
-    results = [json.loads(p.read_text())
-               for p in (world.data / "cmd_results").glob("*.json")]
-    assert len(results) == 2
-    assert all(r["error"] == "unknown_attempt" for r in results)
+    # The runner has not reached either begin. Keep both factual
+    # witnesses intact until their attempts exist; absence cannot
+    # establish a rejection or permission to resend the original spec.
+    witnesses = {p.name: p.read_bytes()
+                 for p in (world.data / "cmd_int").glob("*.json")}
+    assert len(witnesses) == 2
+    assert reg3.is_dead(spec["delivery_id"])
+
+    async def tick_with_runner():
+        task = asyncio.create_task(w3.tick())
+        try:
+            for _ in range(500):
+                world.drain()
+                if task.done():
+                    break
+                await asyncio.sleep(0.01)
+            assert task.done(), "worker tick did not finish with the synthetic runner"
+            await task
+        finally:
+            if not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+        world.drain()
+
+    assert world.drain() == 0
+    for _ in range(2):
+        # Parts have their own grant/receipt bookkeeping. Pump the
+        # runner as in deployment, while following the original two
+        # primary witnesses separately from those legitimate commands.
+        asyncio.run(tick_with_runner())
+        for name, raw in witnesses.items():
+            assert (world.data / "cmd_int" / name).read_bytes() == raw
+            command_id = json.loads(raw)["command_id"]
+            assert not (world.data / "cmd_results" / (command_id + ".json")).exists()
+        assert bot3.channels[42].sent == []
+        assert not reg3.claims()
+        assert world.led.db.execute(
+            "SELECT count(*) FROM notification_delivery_attempts").fetchone()[0] == 0
 
 
 def test_update_op_edits_bound_message(world):
