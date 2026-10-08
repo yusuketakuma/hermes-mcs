@@ -676,7 +676,7 @@ def _norm_message(m: dict, project_id: int, parent_id: int | None = None,
             or not isinstance(created, str) or not isinstance(count, dict)):
         raise SchemaError("message: fields invalid")
     reply_count = count.get("thread_messages", 0)
-    if type(reply_count) is not int or reply_count < 0:
+    if type(reply_count) is not int or not 0 <= reply_count < 2**63:
         raise SchemaError("message: reply count invalid")
     if "delete_user" in m:
         # tombstone: the reply was deleted on the MCS side — no body will
@@ -1455,7 +1455,7 @@ class MCSAdapter:
             if not isinstance(projs, list):
                 raise SchemaError("unread: projects missing")
             page_ts = pag.get("timestamp")
-            if type(page_ts) is not int or page_ts <= 0:
+            if not _valid_id(page_ts):
                 raise SchemaError("unread: paginate.timestamp invalid")
             ts = page_ts if ts is None else min(ts, page_ts)
             ids = set()
@@ -1980,7 +1980,7 @@ class MCSAdapter:
         oldest_unread_message; anything else (missing project, the key
         still present, odd shapes) is mark_result_unknown — never
         confirmed (Oracle B02)."""
-        if type(snapshot_ts) is not int or snapshot_ts <= 0:
+        if not _valid_id(snapshot_ts):
             raise MCSError("bad_snapshot_ts")
         try:
             self._get(f"/projects/{project_id}/messages", {

@@ -416,7 +416,7 @@ def test_empty_message_collection_requires_terminal_page_evidence(replay, histor
     assert not pending
 
 
-@pytest.mark.parametrize("timestamp", [None, 0, True, "1900000000"])
+@pytest.mark.parametrize("timestamp", [None, 0, True, "1900000000", 2**63, 2**128])
 def test_unknown_snapshot_timestamp_never_becomes_zero_success(replay, timestamp):
     adapter, pending, _ = replay([
         ("/projects", {"per_page": 100, "page": 1, "include_meta": 1,
@@ -426,6 +426,24 @@ def test_unknown_snapshot_timestamp_never_becomes_zero_success(replay, timestamp
     with pytest.raises(mcs_adapter.SchemaError):
         adapter.list_unread()
     assert not pending
+
+
+def test_snapshot_timestamp_storage_boundary_remains_accepted(replay):
+    adapter, pending, _ = replay([
+        ("/projects", {"per_page": 100, "page": 1, "include_meta": 1,
+                       "include_paginate_totals": 0},
+         {"projects": [], "paginate": {"timestamp": 2**63 - 1, "has_next": False}}),
+    ])
+    assert adapter.list_unread().timestamp == 2**63 - 1
+    assert not pending
+
+
+@pytest.mark.parametrize("timestamp", [2**63, 2**128])
+def test_oversized_snapshot_is_rejected_before_acknowledgement(monkeypatch, timestamp):
+    adapter = mcs_adapter.MCSAdapter()
+    monkeypatch.setattr(adapter, "_get", lambda *args, **kwargs: pytest.fail("invalid snapshot reached network"))
+    with pytest.raises(mcs_adapter.MCSError, match="bad_snapshot_ts"):
+        adapter.mark_patient_read(PID, timestamp)
 
 
 def test_recent_embedded_reply_keeps_old_history_parent(replay):
@@ -478,6 +496,44 @@ def test_conflicting_message_project_does_not_relabel_a_completed_page(replay, r
     assert batch.error is not None and batch.error.kind == "schema_error"
     assert not batch.reached and batch.pages == 1
     assert [m.message_id for m in batch.messages] == [MID]
+    assert not pending
+
+
+@pytest.mark.parametrize("reader", ["unread", "history", "thread",
+                                   "embedded_unread", "embedded_history"])
+@pytest.mark.parametrize("reply_count", [2**63, 2**128])
+def test_reply_count_outside_storage_range_keeps_only_completed_pages(replay, reader, reply_count):
+    history = reader in ("history", "embedded_history")
+    thread = reader == "thread"
+    path = (f"/projects/{PID}/messages/{MID + 100}/messages" if thread
+            else f"/projects/{PID}/messages")
+    bad = raw_message(MID + 1, count={"thread_messages": reply_count})
+    if reader.startswith("embedded_"):
+        bad = raw_message(MID + 2, thread_messages=[bad])
+    adapter, pending, _ = replay([
+        (path, {"keep_read_status": 1, "page": 1} if thread
+         else message_query(history=history), page([raw_message()], True)),
+        (path, {"keep_read_status": 1, "page": 2} if thread
+         else message_query(2, history=history), page([bad])),
+    ])
+    batch = (adapter.fetch_thread_window(PID, MID + 100) if thread else
+             adapter.fetch_history(PID, 0) if history else
+             adapter.fetch_unread_messages(PID, STAMP))
+    assert batch.error is not None and batch.error.kind == "schema_error"
+    assert batch.pages == 1 and not batch.reached
+    assert [message.message_id for message in batch.messages] == [MID]
+    assert not pending
+
+
+@pytest.mark.parametrize("reply_count", [0, 2**63 - 1])
+def test_reply_count_storage_boundary_remains_accepted(replay, reply_count):
+    adapter, pending, _ = replay([
+        (f"/projects/{PID}/messages", message_query(),
+         page([raw_message(count={"thread_messages": reply_count})])),
+    ])
+    batch = adapter.fetch_unread_messages(PID, STAMP)
+    assert batch.error is None and batch.reached
+    assert batch.messages[0].reply_count == reply_count
     assert not pending
 
 

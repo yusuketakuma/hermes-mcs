@@ -692,10 +692,14 @@ class Ledger:
                 "UPDATE messages SET notified_at=? WHERE is_unread=0",
                 (now,))
             if intended:
-                self.db.execute(
-                    "UPDATE messages SET notified_at=? WHERE message_id IN ("
-                    + ",".join("?" * len(intended)) + ")",
-                    [now, *intended])
+                ids = list(intended)
+                # Keep every statement below the legacy SQLite 999-variable limit.
+                for offset in range(0, len(ids), 900):
+                    batch = ids[offset:offset + 900]
+                    self.db.execute(
+                        "UPDATE messages SET notified_at=? WHERE message_id IN ("
+                        + ",".join("?" * len(batch)) + ")",
+                        [now, *batch])
         if "kind" not in cols("runs"):
             self.db.execute(
               "ALTER TABLE runs ADD COLUMN kind TEXT DEFAULT 'tick'")
