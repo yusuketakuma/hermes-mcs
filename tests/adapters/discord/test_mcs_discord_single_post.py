@@ -163,7 +163,7 @@ def _mk(tmp_path, bot):
     for name in ("discord_render", "cmd_int", "cmd_results", "flags"):
         (tmp_path / name).mkdir(exist_ok=True)
     (tmp_path / "flags" / "notify.json").write_text(
-        json.dumps({"interactive": True}))
+        json.dumps({"interactive": True, "route_epoch": 1}))
     paths.ensure_dirs(str(tmp_path))
     logs = []
     w = DeliveryWorker(bot=bot, settings=SETTINGS, root=str(tmp_path),

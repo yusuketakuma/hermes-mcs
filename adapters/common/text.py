@@ -385,6 +385,8 @@ def view_answer(result: dict | None, allowed,
         return [(m, None) for m in body_messages(result, plain=plain)]
     if action == "tasks":
         items = result.get("tasks") or []
+        if items and not plain:
+            return _task_answers(items)
         return ([(task_list_text(items, plain=plain), items)] if items
                 else [(NO_TASKS_TEXT, None)])
     if action == "list":
@@ -418,6 +420,25 @@ def preview_text(action: str, payload: dict, markdown: bool) -> str:
     if payload.get("due_date"):
         out += f"\n期限: {payload['due_date']}"
     return out + f"\n理由: {payload['reason'][:400]}"
+
+
+def _task_answers(items: list) -> list:
+    """Bound Discord task text and keep each group's controls on its final chunk."""
+    answer, group = [], []
+
+    def flush(tasks):
+        chunks = split_body(task_list_text(tasks), max_chunks=None)
+        answer.extend((chunk, tasks if i == len(chunks) - 1 else None)
+                      for i, chunk in enumerate(chunks))
+
+    for item in items:
+        if group and len(task_list_text([*group, item])) > BODY_CHUNK:
+            flush(group)
+            group = []
+        group.append(item)
+    if group:
+        flush(group)
+    return answer
 
 
 def task_list_text(items: list, *, plain: bool = False) -> str:

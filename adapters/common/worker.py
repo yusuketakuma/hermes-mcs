@@ -611,7 +611,7 @@ class DeliveryWorker:
                 continue              # unknown — reconcile reports it
             if kind != "thread" and not ctx.get("thread_id"):
                 continue              # held — dependents need a thread
-            if not await self._send_allowed():
+            if not await self._send_allowed(spec):
                 return                # retain unfinished parts for resume
             await self._attempt_part(claim, part, ctx)
         self._reg.put_parts_done(spec["delivery_id"])
@@ -773,19 +773,22 @@ class DeliveryWorker:
         self._reg.claim(spec["delivery_id"], claim)
         # fall through — the send happens in the same tick
 
-    async def _send_allowed(self) -> bool:
+    async def _send_allowed(self, spec: dict | None = None) -> bool:
         flags = await asyncio.to_thread(paths.read_flags, self._root)
         return (not self._stopping and not self._journal_incomplete
                 and flags.get("interactive") is True
                 and flags.get("transport", "discord") == self.transport
-                and not flags.get("restore_pending"))
+                and not flags.get("restore_pending")
+                and (spec is None or (
+                    type(flags.get("route_epoch")) is int
+                    and flags["route_epoch"] == spec["delivery"]["route_epoch"])))
 
     async def _step_claim(self, claim: dict, *, allow_parts: bool = True) -> None:
         spec = claim["spec"]
         if claim["phase"] == "begin_sent":
             await self._step_begin(claim)
         if claim["phase"] == "granted":
-            if not await self._send_allowed():
+            if not await self._send_allowed(spec):
                 return
             # fsync'd BEFORE the HTTP request — the single line that
             # separates provable-not-sent from honest-unknown on crash
@@ -832,7 +835,7 @@ class DeliveryWorker:
             outcome = claim.get("outcome") or {}
             mid = outcome.get("message_id")
             if allow_parts and outcome.get("result") == "delivered" and mid:
-                if not await self._send_allowed():
+                if not await self._send_allowed(spec):
                     return
                 await self._deliver_parts(claim, str(mid))
             await self._drop_claim(claim)
