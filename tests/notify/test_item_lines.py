@@ -27,3 +27,15 @@ def test_structured_lines_plain_breaks_requests_and_meds(led):
     assert "依頼:\n　・医師へ合成確認一\n　・薬剤師へ合成確認二" in plain
     assert "薬剤: 合成薬A 5mg[開始]、合成薬B 5mg[開始]" in legacy
     assert "依頼: 医師へ合成確認一 / 薬剤師へ合成確認二" in legacy
+
+
+def test_capped_card_text_drops_a_row_whole():
+    import notify_render
+    rows = "\n".join(f"・薬剤: 合成薬{i} {i}mg[開始]" for i in range(40))
+    capped = notify_render._cap_card_text(rows, cap=200)
+    kept, marker = capped.split("…\n", 1)
+    assert marker == "（省略 — 本文表示または原本を参照）"
+    assert kept.splitlines() and all(line in rows.splitlines() for line in kept.splitlines())
+    assert len(kept) < 200
+    # one long line without a boundary still cuts mid-text
+    assert notify_render._cap_card_text("x" * 300, cap=100).startswith("x" * 99 + "…")

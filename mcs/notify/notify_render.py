@@ -342,7 +342,13 @@ def _cap_card_text(text, cap=PAGE_TEXT_BUDGET) -> str:
     cap = max(cap, 80)
     if len(text) <= cap:
         return text
-    return text[:cap - 1] + "…\n（省略 — 本文表示または原本を参照）"
+    # cut at a line boundary when one lies in the second half, so a drug
+    # or request row is dropped whole rather than left half-read (one row
+    # per item); a single long line still cuts mid-text
+    end = text.rfind("\n", cap // 2, cap - 1)
+    if end == -1:
+        end = cap - 1
+    return text[:end] + "…\n（省略 — 本文表示または原本を参照）"
 
 
 def _fit_item(blocks, budget=PAGE_TEXT_BUDGET) -> list:
