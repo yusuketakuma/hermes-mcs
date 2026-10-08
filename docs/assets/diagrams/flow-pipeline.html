@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>チャットから確認支援まで</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper: #f6f4ef;
+      --color-ink: #202124;
+      --color-muted: #66716f;
+      --color-accent: #087f5b;
+      --font-sans: 'Hiragino Sans', 'Noto Sans CJK JP', 'Yu Gothic', sans-serif;
+      --font-mono: Menlo, 'SF Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--color-paper); color: var(--color-ink);
+           min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500; letter-spacing: 0.18em;
+               text-transform: uppercase; color: var(--color-muted); margin-bottom: 0.5rem; }
+    h1 { font-size: clamp(1.4rem, 2vw + 0.75rem, 1.9rem); font-weight: 700; line-height: 1.2; margin-bottom: 1.5rem; }
+    svg { width: 100%; min-width: 1000px; display: block; }
+    @media print { .diagram-container { overflow-x: visible; } svg { min-width: 0; } }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Data flow · Diagram Design</p>
+    <h1>チャットから確認支援まで</h1>
+    <div class="diagram-container">
+      <svg viewBox="0 0 1000 192" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flow-pipeline-title flow-pipeline-desc">
+        <title id="flow-pipeline-title">チャットから確認支援まで</title>
+        <desc id="flow-pipeline-desc">MCSの医療・介護チャットを症状・薬剤変更・依頼と回答・入退院などのイベントに構造化し、患者時系列と多職種連携にまとめ、統計・症例解析を経て現在の症例の確認支援に使う流れ。</desc>
+        <defs>
+          <marker id="fp-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#66716f"/></marker>
+          <marker id="fp-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#087f5b"/></marker>
+        </defs>
+        <rect width="100%" height="100%" fill="#f6f4ef"/>
+
+        <!-- arrows first -->
+        <line x1="196" y1="96" x2="226" y2="96" stroke="#66716f" stroke-width="1.2" marker-end="url(#fp-arrow)"/>
+        <line x1="388" y1="52" x2="418" y2="52" stroke="#66716f" stroke-width="1.2" marker-end="url(#fp-arrow)"/>
+        <line x1="388" y1="140" x2="418" y2="140" stroke="#66716f" stroke-width="1.2" marker-end="url(#fp-arrow)"/>
+        <line x1="580" y1="52" x2="610" y2="52" stroke="#66716f" stroke-width="1.2" marker-end="url(#fp-arrow)"/>
+        <line x1="580" y1="140" x2="610" y2="140" stroke="#66716f" stroke-width="1.2" marker-end="url(#fp-arrow)"/>
+        <line x1="772" y1="96" x2="802" y2="96" stroke="#087f5b" stroke-width="1.4" marker-end="url(#fp-arrow-accent)"/>
+
+        <!-- nodes -->
+        <g font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif">
+          <rect x="36" y="24" width="160" height="144" rx="6" fill="#edf0ee" stroke="#66716f" stroke-width="1"/>
+          <text x="48" y="46" fill="#202124" font-size="14" font-weight="600">MCS</text>
+          <text x="48" y="66" fill="#66716f" font-size="12">医療・介護チャット</text>
+          <text x="48" y="84" fill="#66716f" font-size="12">原文・時刻・投稿者</text>
+          <text x="48" y="102" fill="#66716f" font-size="12">職種・組織</text>
+          <rect x="228" y="24" width="160" height="144" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="240" y="46" fill="#202124" font-size="14" font-weight="600">構造化</text>
+          <text x="240" y="66" fill="#66716f" font-size="12">イベント：</text>
+          <text x="240" y="84" fill="#66716f" font-size="12">症状・状態変化</text>
+          <text x="240" y="102" fill="#66716f" font-size="12">薬剤変更</text>
+          <text x="240" y="120" fill="#66716f" font-size="12">依頼・回答・判断</text>
+          <text x="240" y="138" fill="#66716f" font-size="12">入退院・ケア移行</text>
+          <rect x="420" y="24" width="160" height="56" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="432" y="57" fill="#202124" font-size="14" font-weight="600">患者時系列</text>
+          <rect x="420" y="112" width="160" height="56" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="432" y="145" fill="#202124" font-size="14" font-weight="600">多職種連携</text>
+          <rect x="612" y="24" width="160" height="144" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="624" y="101" fill="#202124" font-size="14" font-weight="600">統計・症例解析</text>
+          <rect x="804" y="24" width="160" height="144" rx="6" fill="#f6f4ef"/>
+          <rect x="804" y="24" width="160" height="144" rx="6" fill="rgba(8,127,91,0.08)" stroke="#087f5b" stroke-width="1.4"/>
+          <text x="816" y="46" fill="#202124" font-size="14" font-weight="600">確認支援</text>
+          <text x="816" y="66" fill="#66716f" font-size="12">現在の症例</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>
