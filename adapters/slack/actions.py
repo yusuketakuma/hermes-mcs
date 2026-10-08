@@ -733,7 +733,8 @@ class Actions:
                     thread_ts = pin.get("verified_thread_id")
                     if (not isinstance(thread_ts, str)
                             or not _TS.fullmatch(thread_ts)
-                            or thread_ts != pin.get("message_id")):
+                            or pin.get("verified_card_message_id", thread_ts)
+                            != pin.get("message_id")):
                         await self._say(origin["channel_id"], rec["user"],
                                         "薬剤詳細を表示するスレッドの本文配信が確認できません。"
                                         "配信完了を待つか、管理者にスレッド配信の状態確認を依頼してください。")
@@ -743,7 +744,8 @@ class Actions:
                 navigation = []
                 if thread_ts:
                     token_ctx = {
-                        token: {**context, "verified_thread_id": thread_ts}
+                        token: {**context, "verified_thread_id": thread_ts,
+                                "verified_card_message_id": pin["message_id"]}
                         for token, context in token_ctx.items()
                         if isinstance(token, str) and _TOKEN.fullmatch(token)
                         and isinstance(context, dict)

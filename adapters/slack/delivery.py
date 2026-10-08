@@ -340,8 +340,10 @@ class DeliveryWorker(_BaseWorker):
     def _pin_active_thread(self, claim, ctx, records):
         """Pin private drug answers only after a delivered body reply."""
         spec = claim["spec"]
-        root = ctx.get("card_message_id")
-        if not isinstance(root, str) or not _TS.fullmatch(root):
+        message_id = ctx.get("card_message_id")
+        root = spec["delivery"].get("thread_id") or message_id
+        if (not isinstance(message_id, str) or not _TS.fullmatch(message_id)
+                or not isinstance(root, str) or not _TS.fullmatch(root)):
             return
         for part in spec["parts"].get("manifest") or []:
             if part.get("kind") != "body_part":
@@ -352,17 +354,18 @@ class DeliveryWorker(_BaseWorker):
                    and row.get("result") == "delivered"
                    and isinstance(row.get("remote_id"), str)
                    and _TS.fullmatch(row["remote_id"])
-                   and row["remote_id"] != root for row in rows):
+                   and row["remote_id"] not in (root, message_id) for row in rows):
                 pins = {}
                 for token in token_map(spec):
                     current = self._reg.token(token)
                     if (current and current.get("action") in ("meds", "drugsearch")
-                            and current.get("message_id") == root
+                            and current.get("message_id") == message_id
                             and current.get("team_id") == self._settings["team_id"]
                             and current.get("channel_id") == self._settings["channel_id"]):
                         pins[token] = {key: value for key, value in current.items()
                                        if key != "at"}
                         pins[token]["verified_thread_id"] = root
+                        pins[token]["verified_card_message_id"] = message_id
                 if pins:
                     self._reg.put_tokens(pins, durable=True)
                 return
@@ -380,14 +383,10 @@ class DeliveryWorker(_BaseWorker):
 
     async def _perform_part(self, claim: dict, part: dict,
                             ctx: dict) -> dict:
-        """One manifest part's wire call. The card's own ts is the
-        thread root, so 'thread' needs no second post — the delivered
-        card attempt already proved it exists. Body chunks go inside
-        that root as ordered replies; attachments use the bound
-        client upload edge with verified sealed bytes."""
+        """Use the sealed source root or the delivered card's own root for dependent parts."""
         spec = claim["spec"]
         if part["kind"] == "thread":
-            mid = ctx.get("card_message_id")
+            mid = spec["delivery"].get("thread_id") or ctx.get("card_message_id")
             if not mid:
                 return {"result": "not_sent",
                         "error_code": "thread_root_missing"}

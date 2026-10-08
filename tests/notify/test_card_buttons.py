@@ -389,7 +389,7 @@ def test_summary_with_rollup_and_coverage(led):
                    (json.dumps({"medications": []}),))
     led.db.commit()
     body = _click(led, _spec(led), "summary")["body"]
-    assert "■ バイタル: なし" in body and "記録なし" not in body
+    assert "■ バイタル: 未確認" in body and "記録なし" not in body
 
 
 @pytest.mark.parametrize("ks, line", [

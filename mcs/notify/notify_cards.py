@@ -2388,6 +2388,12 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
         if row is None or row["state"] not in ("pending", "failed"):
             return {"skipped": True}
         renders = _notice_renders(db, event_id)
+        moved = [render for render in renders if render["state"] == "queued"
+                 and _notice_route_moved(render, cfg) and _notice_unsent(db, [render])]
+        for render in moved:
+            _cancel_render(db, render["delivery_id"], now)
+        if moved:
+            renders = _notice_renders(db, event_id)
         checked = notify_urgent.check_delivery(ledger, cfg, row, now=now)
         if not checked["ok"]:
             if _notice_unsent(db, renders):

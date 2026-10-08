@@ -70,7 +70,7 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
         vline = (structured_view._vital_line({"vitals": vit}, {})
                  if isinstance(vit, dict) else None)
         lines.append("■ " + (f"{vline}（{vit.get('at')}）" if vline
-                             else "バイタル: なし"))
+                             else "バイタル: 未確認"))
         if isinstance(roll.get("next_planned"), str) and roll["next_planned"]:
             lines.append(f"■ 次回予定: {roll['next_planned']}")
         lines.extend(_request_reply_lines(db, project_id, roll))
@@ -150,7 +150,7 @@ def _patient_context_lines(db, project_id, roll) -> list[str]:
         if len(valid) > 1:
             lines.append(f"  この分類は他{len(valid) - 1}項目（原記録で全文確認）")
     if len(lines) == 1:
-        lines.append("・記載なし")
+        lines.append("・まとめに反映された情報なし")
     return lines
 
 
