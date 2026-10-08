@@ -98,6 +98,8 @@ MCSのスタンプは、カードと未確認一覧に `スタンプ 👀2` の�
 
 本人・家族・他者と、現在・過去・予定を原文から区別します。再確認候補と薬剤シグナルは元投稿の既存スレッドに追加し、原文根拠・投稿日・確認先を短く示します。解析が続いている投稿には「解析更新中」を表示し、既存の投稿を更新します。
 
+新しいカードは患者名の下に緊急度・投稿数・解析中の件数をまとめ、投稿ごとの要約を項目順に表示します。薬剤の確認と辞書検索は押した本人だけに表示し、Slack・Discordでは同じスレッド、LINE WORKSでは1:1トークで確認します。辞書の検索は承認済み辞書が有効な場合だけ使えます。
+
 <details>
 <summary><strong>Discordを使う場合の画面例を開く</strong></summary>
 
@@ -385,7 +387,7 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 | 使い方・画面・データの読み方 | [利用者ガイド](docs/guides/USER_GUIDE.md) |
 | 導入・接続・設定・トラブル対応 | [導入ガイド](docs/guides/INSTALLATION.md) · [LINE WORKS接続](docs/guides/LINEWORKS.md) · [スタンドアローン](docs/guides/STANDALONE.md) · [エージェント向け手順](docs/guides/SETUP_AGENT.md) |
 | データ取扱い・安全境界・AI・復旧の限界 | [SECURITY](SECURITY.md) |
-| 更新・バックアップ・復旧 | [更新ガイド](docs/guides/UPGRADE_AGENT.md) · [1.0.15受入票](docs/development/acceptance/ACCEPTANCE_1.0.15.md) · [ライフサイクル仕様](docs/specs/lifecycle-spec.md) · [鍵escrow・端末喪失ガイド](docs/guides/BACKUP.md) · [配備資産](deployment/README.md) |
+| 更新・バックアップ・復旧 | [更新ガイド](docs/guides/UPGRADE_AGENT.md) · [1.0.16受入票](docs/development/acceptance/ACCEPTANCE_1.0.16.md) · [ライフサイクル仕様](docs/specs/lifecycle-spec.md) · [鍵escrow・端末喪失ガイド](docs/guides/BACKUP.md) · [配備資産](deployment/README.md) |
 | 開発・コマンド・統計・アラート定義 | [開発リファレンス](docs/development/DEVELOPMENT.md) · [Hermesプラグイン](hermes_plugin/README.md) |
 | エクスポート・意味解析の評価 | [外部出力契約](docs/specs/external-export-contract.md) · [意味解析の評価](docs/specs/semantic-evaluation.md) · [rollout](docs/specs/semantic-facts-v2-rollout.md) |
 | 今後の計画 | [ロードマップ](docs/ROADMAP.md) |
@@ -393,5 +395,5 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 ## ライセンス
 
-Private repository — 現時点で公開・再配布は想定していません。
+Proprietary — All Rights Reserved。
 利用・改変はリポジトリ管理者の明示許可に従ってください（[LICENSE](LICENSE)）。
