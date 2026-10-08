@@ -257,7 +257,7 @@ def test_patient_summary_request_reply_states(led):
                    "created_at) VALUES('loop_candidate',1,101,?,'t','{}',?)",
                    (json.dumps({"origin": {"revision": f"{101:064x}"}}), NOW))
     _, text = notify_views.patient_summary_text(led.db, 1)
-    sec = text.split("■ 依頼候補の返信状況（記録上）", 1)[1].split("\n■ ", 1)[0]
+    sec = text.split("■ 依頼候補の返信状況", 1)[1].split("\n■ ", 1)[0]
     assert "・09-30 残薬確認 — 返信: 完了（完了後に取消の記録あり）" in sec
     assert "・09-29 処方変更 — 返信: 記録なし・Loop候補（semantic shadow）あり" in sec
     assert sec.count("\n・") == 5

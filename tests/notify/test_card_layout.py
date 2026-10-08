@@ -36,12 +36,12 @@ def test_context_line_counts_posts_missing_replies_files_and_mention(led):
     led.db.commit()
     _dispatch(led, _intent(led))
     texts = _texts(_spec(led))
-    assert texts[1] == "09-24〜 · 2投稿 · 返信未取得 2件 · 📎 1"
+    assert texts[1] == "09-24〜 · 2投稿 · 返信未取得 2件 · 📎 1 · 解析中 2"
     # each post is its own zone: rule before it, its 要約 state after it
     rules = [c for c in _spec(led)["parts"]["containers"] if c.get("rule")]
     summary = notify_render._summary_block(led.db, 100, cfg=CFG, label=False)["text"]
     assert len(rules) == 2 and texts.count(summary) == 2
-    assert summary == "要約 処理待ち\n解析更新中（1区間中0区間完了）"
+    assert summary == "要約 処理待ち"      # progress sits once on the meta line
 
 
 def test_new_replies_since_the_card_was_posted(led):
@@ -67,7 +67,8 @@ def test_failed_extraction_is_named_on_the_post(led):
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
     summary = notify_render._summary_block(led.db, 100, cfg=CFG, label=False)["text"]
     assert summary in _texts(_spec(led))
-    assert summary == "要約 作成失敗\n解析要確認（1区間中0区間完了）"
+    assert summary == "要約 作成失敗"
+    assert "解析要確認 1" in _texts(_spec(led))[1]
 
 
 def test_footer_is_one_state_item_and_revoked_card_has_no_buttons(led):
@@ -96,7 +97,7 @@ def test_signal_face_labels_type_and_state_in_japanese(led):
     delivered_source(led, card_id=2, mids=(100,))
     notify_cards.sweep(led, CFG, now=NOW)
     texts = _texts(_spec(led))
-    assert texts[0] == "💬 アラート ［要確認］"           # discharge is immediate
+    assert texts[0] == "🔔 アラート · 要確認"           # discharge is immediate
     assert "・【期限超過】note s1（解消）" in texts[-1]
     assert "・【退院連絡】note s2（未確認）" in texts[-1]
     assert "resolved" not in "".join(texts)

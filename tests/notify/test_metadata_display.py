@@ -258,7 +258,7 @@ def test_unacked_remains_unacked_and_partitions_within_patient(led, pinned_clock
     assert view["notes"] == ["※ 本人反応があるカードは同患者内の末尾に表示します。"]
     assert "🙆" not in view["items"][0]["text"]
     assert "スタンプ 🙆1 · 自分 1投稿" in view["items"][1]["text"]
-    assert "未確認" in view["items"][1]["text"]
+    assert "🧵 投稿" in view["items"][1]["text"]
     assert led.db.execute("SELECT count(*) FROM notification_acknowledgements").fetchone()[0] == 0
 
 

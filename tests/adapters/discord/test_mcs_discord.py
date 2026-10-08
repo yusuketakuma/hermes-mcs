@@ -2933,7 +2933,7 @@ def test_summary_click_answers_ephemeral(world):
                          message_id=msg.id)
     asyncio.run(world.interact(act, ix))
     sent = "\n".join(m["content"] for m in ix.followup.sent)
-    assert "患者の記録まとめ" in sent and "暫定集約" not in sent and "集約資料がまだありません" in sent
+    assert "患者の記録まとめ" in sent and "暫定集約" not in sent and "集約資料なし" in sent
     assert all(m["ephemeral"] for m in ix.followup.sent)
 
 
@@ -3009,7 +3009,7 @@ def test_my_tasks_uses_display_name_and_project_scope(world):
     out = "\n".join(m["content"] for m in ix.followup.sent)
     assert all(m["ephemeral"] for m in ix.followup.sent)
     assert "自分のタスク（担当: 山田 花子）" in out
-    assert "⚠ 期限切れ" in out and "残薬確認" in out
+    assert "⚠期限切れ" in out and "残薬確認" in out
     # project 2 is outside this deployment's scope; 佐藤 is not the clicker
     assert "範囲外の件" not in out and "他人の件" not in out
 

@@ -22,7 +22,7 @@ def test_processing_complete_attention_updates_both_face_and_body(led, monkeypat
     original = notify_render._card_content(led.db, card)
     assert "解析更新中" not in notify_render.display_text(original)
     processing = notify_render._card_content(led.db, card, cfg={})
-    assert "解析更新中（3区間中1区間完了）" in notify_render.display_text(processing)
+    assert "解析中 2" in notify_render.display_text(processing)   # once, on the meta line
     body = notify_render._card_body_text(led.db, card, {"shown": json.dumps([100])}, cfg={})[1]
     assert "解析更新中（3区間中1区間完了）" in body
     assert processing["source_fp"] == original["source_fp"]
@@ -31,12 +31,12 @@ def test_processing_complete_attention_updates_both_face_and_body(led, monkeypat
     assert "source_generation" not in drift and "presentation_generation" in drift
     progress.update(state="complete", completed=3)
     complete = notify_render._card_content(led.db, card, cfg={})
-    assert "解析更新中" not in notify_render.display_text(complete)
+    assert "解析中" not in notify_render.display_text(complete)
     assert notify_render._content_fp(complete) != notify_render._content_fp(processing)
     progress.update(state="attention", completed=1)
     attention = notify_render._card_content(led.db, card, cfg={})
-    assert "解析要確認（3区間中1区間完了）" in notify_render.display_text(attention)
-    assert "解析更新中" not in notify_render.display_text(attention)
+    assert "解析要確認 2" in notify_render.display_text(attention)
+    assert "解析中" not in notify_render.display_text(attention)
 
 
 def test_single_message_progress_strips_payload_and_uses_explicit_model(led, monkeypatch):
@@ -111,7 +111,7 @@ def test_card_reads_each_current_message_once_and_reuses_even_unknown_progress(l
     led.db.execute("PRAGMA query_only=ON")
     content = notify_render._card_content(led.db, card, cfg={})
     assert calls == [100, 101]
-    assert "解析更新中（3区間中1区間完了）" in notify_render.display_text(content)
+    assert "解析中 1" in notify_render.display_text(content)
     assert content["progress_fp"] == notify_render.payload_hash([
         (100, {"state": "processing", "completed": 1, "total": 3}), (101, None)])
     calls.clear()
@@ -142,7 +142,7 @@ def test_thread_body_and_attachment_caption_keep_source_without_duplicate_summar
     spec = json.loads(_latest_render(led)["spec_json"])
     face = notify_render.display_text(spec["parts"])
     assert "GENERATED-SUMMARY-CANARY" in face
-    assert "解析更新中（3区間中1区間完了）" in face
+    assert "解析中 1" in face
     body = "".join(spec["parts"]["thread_body_parts"])
     assert raw in body and "📄 本文" in body
     caption = next(part["caption"] for part in spec["parts"]["manifest"] if part["kind"] == "attachment_part")

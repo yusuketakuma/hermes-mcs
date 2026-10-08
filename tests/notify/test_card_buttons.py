@@ -351,7 +351,7 @@ def test_summary_without_rollup_says_so(led):
     assert r["outcome"] == "applied" and r["action"] == "summary"
     assert "暫定集約" not in r["title"]
     assert "※" not in r["body"].split("\n")[0]
-    assert "集約資料がまだありません" in r["body"]
+    assert "集約資料なし" in r["body"]
     assert "履歴取得: 未完了（完了記録なし）" in r["body"]
     assert "欠落なしの保証ではありません" not in r["body"]
     assert "■ 未完了タスク: なし" in r["body"]
@@ -380,16 +380,16 @@ def test_summary_with_rollup_and_coverage(led):
     body = _click(led, spec, "summary")["body"]
     assert ("履歴取得: 完了記録あり／直近の取得は未完了（network_error）"
             "／返信の取得未完了1件") in body
-    assert "処方期間（抽出表現）: 2026-09-01〜2026-09-28" in body
+    assert "処方期間: 2026-09-01〜2026-09-28" in body
     assert "・アムロジピン 5mg 1日1回（最終言及 2026-09-20）" in body
     assert "バイタル: BP 128/70  BT 36.5（2026-09-22）" in body
-    assert "■ 次回予定（抽出表現）: 10/3 訪問" in body
+    assert "■ 次回予定: 10/3 訪問" in body
     assert "血圧記録の確認 — 担当 山田 — 期限 2026-10-01" in body
     led.db.execute("UPDATE artifacts SET content=? WHERE kind='patient_rollup'",
                    (json.dumps({"medications": []}),))
     led.db.commit()
     body = _click(led, _spec(led), "summary")["body"]
-    assert "■ 抽出されたバイタルなし" in body and "記録なし" not in body
+    assert "■ バイタル: なし" in body and "記録なし" not in body
 
 
 @pytest.mark.parametrize("ks, line", [
@@ -417,7 +417,7 @@ def test_summary_karte_summary_line(led, ks, line):
     body = notify_views.patient_summary_text(led.db, 1)[1]
     assert "古い要約" not in body
     assert f"{line}\n" in body or body.endswith(line)   # nothing after it
-    assert body.count("\n連携サマリー（MCS") == 1
+    assert body.count("\n■ 連携サマリー（MCS") == 1
     if isinstance(ks, dict):
         assert ks["comment"][:80] not in body      # cut, not the raw text
 

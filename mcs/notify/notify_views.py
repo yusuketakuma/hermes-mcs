@@ -47,8 +47,7 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
     except (ValueError, TypeError, RecursionError):
         roll = None
     if not isinstance(roll, dict):
-        lines.append("集約資料がまだありません（未抽出・未集約）。"
-                     "原本を確認してください。")
+        lines.append("■ 薬・バイタル・予定: 集約資料なし（未抽出・未集約）")
         roll = {}
     else:
         roll = current_cached_refs(db, project_id, roll, row["meta"])
@@ -57,7 +56,7 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
                 if isinstance(m, dict) and m.get("name")]
         lines.append("■ 薬")
         if isinstance(period, dict) and period.get("start"):
-            lines.append(f"処方期間（抽出表現）: {period.get('start')}"
+            lines.append(f"処方期間: {period.get('start')}"
                          f"〜{period.get('end') or '?'}")
         lines.extend("・" + " ".join(str(m[k]) for k in
                                      ("name", "dose", "freq", "route")
@@ -71,16 +70,16 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
         vline = (structured_view._vital_line({"vitals": vit}, {})
                  if isinstance(vit, dict) else None)
         lines.append("■ " + (f"{vline}（{vit.get('at')}）" if vline
-                             else "抽出されたバイタルなし"))
+                             else "バイタル: なし"))
         if isinstance(roll.get("next_planned"), str) and roll["next_planned"]:
-            lines.append(f"■ 次回予定（抽出表現）: {roll['next_planned']}")
+            lines.append(f"■ 次回予定: {roll['next_planned']}")
         lines.extend(_request_reply_lines(db, project_id, roll))
     lines.extend(_patient_context_lines(db, project_id, roll))
     lines.extend(_registered_clinical_lines(db, project_id))
     # the 連携サマリー line always reads the newest artifact: the rollup
     # holds a copy frozen at its last rebuild, which a newer fetch
     # (updated or emptied summary) supersedes
-    lines.append(_karte_summary_line(
+    lines.append("■ " + _karte_summary_line(
         _karte_summary_from_artifact(db, project_id)))
     return title, "\n".join(lines)
 
@@ -151,7 +150,7 @@ def _patient_context_lines(db, project_id, roll) -> list[str]:
         if len(valid) > 1:
             lines.append(f"  この分類は他{len(valid) - 1}項目（原記録で全文確認）")
     if len(lines) == 1:
-        lines.append("・構造化された背景情報なし（記載なし・未取得・未抽出の可能性）")
+        lines.append("・記載なし")
     else:
         lines.append("※ 背景情報は抜粋です。詳しい内容や以前の記載は原記録をご確認ください。")
     return lines
@@ -209,7 +208,7 @@ REPLY_LABELS = {"ack": "了解", "intent": "対応予定", "progress": "対応�
 def _request_reply_lines(db, project_id, roll) -> list:
     """#25: rollupの依頼候補ごとのスレッド内返信状況（記録上）とLoop候補の有無。"""
     reqs = [r for r in roll.get("recent_requests") or [] if isinstance(r, dict)][:5]
-    lines = ["■ 依頼候補の返信状況（記録上）" + ("" if reqs else ": なし")]
+    lines = ["■ 依頼候補の返信状況" + ("" if reqs else ": なし")]
     for r in reqs:
         state = REPLY_LABELS.get(r.get("reply_state"))
         line = (f"・{_mmdd(r.get('at'))} "
@@ -356,14 +355,14 @@ def my_tasks_view(db, name, now=None, projects=None) -> dict:
         if pid not in names:
             names[pid] = (_inline(_patient_name(db, pid), 30)
                           or f"project {pid}")
-        line = (f"・{'⚠ 期限切れ ' if overdue(r) else ''}#{r['request_id']} "
-                f"{_inline(r['title'], 60)}")
+        # who it is for, what to do, when — the id last for the CLI
+        line = f"・{names[pid]}: {_inline(r['title'], 60)}"
         if r["due_date"]:
-            line += f" — 期限 {r['due_date']}"
+            line += f" — 期限 {r['due_date']}" + (" ⚠期限切れ" if overdue(r) else "")
         if r["status"] == "in_progress":
             line += " — ⏳対応中"
         out["items"].append({"project_id": pid,
-                             "text": f"{line} — {names[pid]}"})
+                             "text": f"{line} #{r['request_id']}"})
     out["more"] = max(0, len(rows) - LIST_FETCH)
     return out
 
@@ -425,7 +424,7 @@ def unacked_view(db, transport, now=None, projects=None,
         for c, reactions in with_reactions:
             at = datetime.fromtimestamp(c["created_at"], JST)
             kind = "🧵 投稿" if c["kind"] == "thread" else "🔔 アラート"
-            line = f"・{kind} {at:%m-%d %H:%M}〜 未確認"
+            line = f"・{kind} {at:%m-%d %H:%M}〜"
             if c["owner"]:
                 owner = notify_render.presenter(transport).owner_label(
                     actor_label(c['owner']), member_names)

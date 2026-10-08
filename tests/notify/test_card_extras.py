@@ -58,9 +58,9 @@ def test_my_tasks_matches_display_name_overdue_first(led):
     view = r["list"]
     assert view["head"] == ["未完了 3件（うち期限切れ 1件）"]
     assert _texts(view) == [
-        f"・⚠ 期限切れ #{late} 昨日の確認 — 期限 2026-01-01 — 患者A",
-        f"・#{later} 来週の確認 — 期限 2026-12-01 — 患者A",
-        f"・#{undated} 期限なし — ⏳対応中 — 患者A"]
+        f"・患者A: 昨日の確認 — 期限 2026-01-01 ⚠期限切れ #{late}",
+        f"・患者A: 来週の確認 — 期限 2026-12-01 #{later}",
+        f"・患者A: 期限なし — ⏳対応中 #{undated}"]
     assert all(i["project_id"] == 1 for i in view["items"])
     assert view["notes"][0].startswith("※ 担当者欄が表示名")
     assert not any("対応がなかったことを意味しません" in n for n in view["notes"])

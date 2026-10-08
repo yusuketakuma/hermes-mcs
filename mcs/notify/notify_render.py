@@ -89,11 +89,17 @@ def notification_preview(db, card, content, *, limit=600) -> str:
                     word in line for word in ("依頼", "予定", "症状", "注意"))), facts[0] if facts else "要約内容を確認できません")
             else:
                 state = "要約作成失敗" if _extraction_failed(db, mid) else "要約処理待ち"
-                main = f"投稿（{state}・原文）: " + (_preview_post(message["body_text"]) or "本文なし")
+                main = f"原文（{state}）: " + (_preview_post(message["body_text"]) or "本文なし")
             urgency = structured_view.message_urgency(db, mid)
             badge = URGENCY_PLAIN.get(urgency, "")
             if urgency == "llm":
                 badge += structured_view.urgency_qc_suffix(db, mid)
+            elif any(structured_view.message_urgency(db, m) == "llm"
+                     for m in content["shown"] if positive(m) and m != mid):
+                # an older shown post is urgent: the push still says so
+                badge = URGENCY_PLAIN["llm"]
+            if badge:
+                badge += " · "
             return _preview_line(header, badge + _inline(main, 260), limit)
         return f"project {card['project_id']}: 表示対象の投稿本文を確認できません。"
     signals = _latest_signals(db, content["shown"], card["project_id"])
@@ -458,6 +464,18 @@ def _progress_label(progress):
     return label
 
 
+def _progress_summary(progress_by_mid) -> list[str]:
+    """Card-level extraction progress for layout 2: how many shown posts
+    are still being analysed or need attention (nothing when all done)."""
+    states = [p["state"] for p in (progress_by_mid or {}).values() if p]
+    out = []
+    if (n := states.count("processing")):
+        out.append(f"解析中 {n}")
+    if (n := states.count("attention")):
+        out.append(f"解析要確認 {n}")
+    return out
+
+
 def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True) -> dict:
     """📋 要約 of one post, or its visible empty state — a post with no
     usable extraction says whether it is still queued or exhausted its
@@ -469,8 +487,11 @@ def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True) -> di
     if not block:
         block = {"type": "text", "text": ("📋 要約 " if label else "要約 ") + (
             "作成失敗" if _extraction_failed(db, mid) else "処理待ち")}
-    progress = _progress_label(progress_by_mid.get(mid) if progress_by_mid is not None
-                               else _progress_state(db, mid, cfg))
+    # layout 2 (label=False) reports extraction progress once on the
+    # card's meta line instead of under every post
+    progress = "" if not label else _progress_label(
+        progress_by_mid.get(mid) if progress_by_mid is not None
+        else _progress_state(db, mid, cfg))
     if progress:
         block["text"] += "\n" + progress
     return block
@@ -789,6 +810,7 @@ def _card_content(db, card, *, cfg=None) -> dict:
             meta.append(f"{_mmdd(first.get('posted_at'))}〜")
             if context:
                 meta.append(context)
+            meta.extend(_progress_summary(progress_by_mid))
             containers.append({"type": "text", "text": " · ".join(meta)})
         else:
             containers = [{"type": "heading", "text":
@@ -840,11 +862,12 @@ def _card_content(db, card, *, cfg=None) -> dict:
             for pid, ks in groups]
         urgent = any(_signal_tier(sigs[k]["content"]) == "immediate"
                      for k in ordered)
+        count = (f"（{len(groups)}名 / {len(ordered)}件）"
+                 if kind == "digest" else "")
         containers = [{"type": "heading", "text":
-                       (f"💬 アラート（{len(groups)}名 / "
-                         f"{len(ordered)}件）"
-                        if kind == "digest" else "💬 アラート")
-                       + (" ［要確認］" if urgent else "")}]
+                       (f"🔔 アラート{count}" + (" · 要確認" if urgent else ""))
+                       if layout >= 2 else
+                       (f"💬 アラート{count}" + (" ［要確認］" if urgent else ""))}]
         item_shown = [ks for _, ks in groups]
         max_count = PAGE_DIGEST if kind == "digest" else PAGE_THREAD
         shown_kind = "signal_keys"

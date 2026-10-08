@@ -18,7 +18,7 @@ def test_background_summary_is_private_excerpt_and_rejects_edited_source(tmp_pat
         assert "投稿#1" in lines and "背景・療養情報" in lines
         led.save_messages([_message(body="既往歴：訂正した合成記載。")])
         lines = "\n".join(notify_views._patient_context_lines(led.db, 1, roll))
-        assert "合成疾患。" not in lines and "背景情報なし" in lines
+        assert "合成疾患。" not in lines and "記載なし" in lines
     finally:
         led.close()
 
