@@ -411,7 +411,8 @@ def _vital_line(llm: dict | None, v1: dict, body=None, *, patient_name=None, def
     return "バイタル: " + "  ".join(parts) if parts else None
 
 
-def _lab_lines(llm: dict, body: str | None = None, *, patient_name=None, default="patient") -> list[str]:
+def _lab_lines(llm: dict, body: str | None = None, *, patient_name=None, default="patient",
+               multiline: bool = False) -> list[str]:
     """Reported lab values (v4) — name+value+unit plus the body's own
     out-of-range marker; the view never invents reference ranges."""
     from clinical_values import lab_candidate
@@ -464,9 +465,9 @@ def _lab_lines(llm: dict, body: str | None = None, *, patient_name=None, default
             break
     lines = []
     if confirmed:
-        lines.append("検査: " + "・".join(confirmed))
+        lines.append(_item_line("検査", confirmed, "・", multiline))
     if candidates:
-        lines.append("検査候補（未確認）: " + "・".join(candidates))
+        lines.append(_item_line("検査候補（未確認）", candidates, "・", multiline))
     return lines
 
 
@@ -575,18 +576,29 @@ def _med_entries(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient"
     return meds, unverified
 
 
-def _med_lines(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient")) -> list[str]:
+def _item_line(label: str, items: list[str], sep: str, multiline: bool) -> str:
+    """``label: a、b`` — or, on the plain (layout 2 / notice) surfaces, one
+    indented row per item once there are two or more, so a long list of
+    drugs, requests or lab values is read down, not across. Every word
+    still shows (owner rule 2026-10-05); only the line breaks change."""
+    if multiline and len(items) > 1:
+        return label + ":\n" + "\n".join("　・" + item for item in items)
+    return f"{label}: " + sep.join(items)
+
+
+def _med_lines(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient"),
+               multiline: bool = False) -> list[str]:
     meds, unverified = _med_entries(llm, v1, refs, context=context)
 
     def shown(entries):
-        return "、".join(text + (f"（{note}）" if (note := _drug_note(ref)) else "")
-                        for text, ref in entries)
+        return [text + (f"（{note}）" if (note := _drug_note(ref)) else "")
+                for text, ref in entries]
 
     lines = []
     if meds:
-        lines.append("薬剤: " + shown(meds))
+        lines.append(_item_line("薬剤", shown(meds), "、", multiline))
     if unverified:
-        lines.append("薬剤候補（未確認）: " + shown(unverified))
+        lines.append(_item_line("薬剤候補（未確認）", shown(unverified), "、", multiline))
     return lines
 
 
@@ -603,7 +615,7 @@ def medication_entries(db, mid: int) -> tuple[list, list]:
 _REQ_KIND_PREFIX = {"self_plan": "予定:", "question": "確認依頼:"}
 
 
-def _request_lines(llm: dict, v1: dict) -> list[str]:
+def _request_lines(llm: dict, v1: dict, *, multiline: bool = False) -> list[str]:
     reqs, cands = [], []
     for r in _items(llm, "requests"):
         if isinstance(r, dict) and (r.get("to") or r.get("action")):
@@ -638,9 +650,9 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
                     for r in _items(v1, "requests")
                     if isinstance(r, dict) and isinstance(r.get("ctx"), str)
                     and r["ctx"])
-    lines = ["依頼: " + " / ".join(reqs)] if reqs else []
+    lines = [_item_line("依頼", reqs, " / ", multiline)] if reqs else []
     if cands:
-        lines.append("依頼候補（未確認）: " + " / ".join(cands))
+        lines.append(_item_line("依頼候補（未確認）", cands, " / ", multiline))
     return lines
 
 
@@ -690,11 +702,13 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
     if flags and body:
         lines.append("閾値超過の測定値: " + "、".join(flags))
     if _items(llm, "labs"):
-        lines.extend(_lab_lines(llm, body, patient_name=patient_name, default=default))
+        lines.extend(_lab_lines(llm, body, patient_name=patient_name, default=default,
+                                multiline=plain))
     if (line := _symptom_line(llm, v1, context=context)) is not None:
         lines.append(line)
-    lines.extend(_med_lines(llm, v1, _drug_refs(db, mid) if drug_candidates else (), context=context))
-    lines.extend(_request_lines(llm, v1))
+    lines.extend(_med_lines(llm, v1, _drug_refs(db, mid) if drug_candidates else (),
+                            context=context, multiline=plain))
+    lines.extend(_request_lines(llm, v1, multiline=plain))
     for mp in _items(v1, "med_periods"):
         if isinstance(mp, dict) and mp.get("start") and _item_scope(mp, context, mp.get("raw")) == "patient":
             lines.append(f"服薬期間: {mp['start']}〜{mp.get('end') or '?'}")

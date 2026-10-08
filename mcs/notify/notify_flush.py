@@ -452,7 +452,7 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
         more = f"、他{len(marks) - 5}件" if len(marks) > 5 else ""
         att_line = f"\n{indent}📎 {'、'.join(marks[:5])}{more}"
     empty = "作成失敗" if not s_lines and _extraction_failed(ledger.db, r["message_id"]) else "処理待ち"
-    summary = ([f"{indent}📋 要約"] + [f"{indent}・{ln}" for ln in s_lines]
+    summary = ([f"{indent}📋 要約"] + [f"{indent}・" + ln.replace("\n", f"\n{indent}") for ln in s_lines]
                if s_lines else [f"{indent}📋 要約 {empty}"])
     if stamps:
         from ledger import reaction_actor_summary

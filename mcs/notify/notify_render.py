@@ -84,7 +84,13 @@ def notification_preview(db, card, content, *, limit=600) -> str:
                 return _preview_line(header, "投稿本文が未取得か確認できない状態です。", limit)
             block = _structured_block(db, mid, plain=True)
             if block:
-                facts = [line.removeprefix("・") for line in block["text"].splitlines()[1:]]
+                facts: list[str] = []
+                for line in block["text"].splitlines()[1:]:
+                    if line.startswith("・") or not facts:
+                        facts.append(line.removeprefix("・"))
+                    else:   # an indented item row belongs to the fact above
+                        facts[-1] += ("" if facts[-1].endswith(":") else "、") \
+                            + line.strip("　").removeprefix("・")
                 main = next((line for line in facts if any(
                     word in line for word in ("依頼", "予定", "症状", "注意"))), facts[0] if facts else "要約内容を確認できません")
             else:
