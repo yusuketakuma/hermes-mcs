@@ -305,11 +305,13 @@ def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
                                   "スタンプ 未取得")):
         lines = post.split("\n")
         assert lines[1:3] == ["📋 要約", f"・要約{mid}"]
-        assert lines[3].startswith(stamps)        # one merged stamp line
-        assert lines[4:6] == [notify_render.SECTION_RULE, "📄 本文"]
-        assert post.count(notify_render.SECTION_RULE) == 1
-        assert lines[6] == led.db.execute(
+        assert lines[3] == notify_render.SECTION_RULE
+        assert lines[4] == led.db.execute(
             "SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone()[0]
+        # one merged stamp line, as the trailer behind the second rule
+        assert lines[5] == notify_render.SECTION_RULE
+        assert lines[6].startswith(stamps)
+        assert post.count(notify_render.SECTION_RULE) == 2
 
 
 def test_long_post_keeps_summary_and_stamps_with_its_body():
@@ -474,11 +476,14 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
         post = "".join(posts[mid])
         assert "<@" not in post and "@everyone" not in post
         assert post.count(notify_render.SECTION_RULE) == 1
-        front, body = post.split(notify_render.SECTION_RULE, 1)
+        front, tail = post.split(notify_render.SECTION_RULE, 1)
         assert ("📋 要約" in front) is (platform == "lineworks")
         if platform != "lineworks":
             assert "解析更新中" not in post
-        assert body.startswith("\n📄 本文\n")
+        # layout 2: LINE WORKS puts the body behind the rule (after its
+        # summary); Slack/Discord put the body first and stamps behind it
+        assert "📄 本文" not in post
+        assert ("スタンプ" in tail) is (platform != "lineworks")
         if platform == "lineworks":
             # LINE WORKS cannot edit a post: no stamp line at all, so a
             # stamp change never re-posts the body

@@ -88,7 +88,7 @@ def delivery():
     s.template(66, y, ["確認する", "担当する", "タスク作成", "MCSで開く", "その他の操作"])
     s.bot(588, 245)
     y = s.block(610, 286, [(f"↳ 山田 花子 · 10-01 09:40 {SENDER}", INK, True), *summary,
-                           (RULE, MUTED, False), ("📄 本文", GREEN, True), (BODY, INK, False)])
+                           (RULE, MUTED, False), (BODY, INK, False)])
     s.bot(588, y + 10)
     s.rect(610, y + 51, 422, 100, "#fff", 9, "#d5e1e5")
     s.rect(626, y + 67, 390, 68, "#f0f5f1", 8)

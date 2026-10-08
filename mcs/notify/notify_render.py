@@ -691,10 +691,15 @@ def _signal_compact(db, pid, contents: list, plain: bool = False) -> list:
 SECTION_RULE = "─" * 12
 
 
-def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None, include_summary=True) -> str:
-    """One MCS post as a thread message, always in the owner's order
-    (2026-10-03): header, 📋 summary, MCS stamps, then the posted body,
-    with one SECTION_RULE before the 📄 body.
+def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
+                  include_summary=True, layout=1) -> str:
+    """One MCS post as a thread message.
+
+    Layout 2 (owner 2026-10-08): header, the optional 📋 summary (then a
+    SECTION_RULE), the posted body itself, and the stamp line as a trailer
+    behind one SECTION_RULE — the body is what staff open the thread for.
+    Layout 1 keeps the 2026-10-03 order (header, 📋 summary, stamps,
+    SECTION_RULE, 📄 本文) so delivered posts never re-post unchanged.
     Native thread delivery omits the optional summary; private body views
     retain it. ``stamps=False`` leaves the stamp line out (LINE WORKS
     posts cannot be edited, so a stamp change must not force a re-post)."""
@@ -704,18 +709,30 @@ def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None, include
     out = [title]
     if include_summary:
         out.append(_summary_block(db, mid, cfg=cfg)["text"])
+    stamp_line = ""
     if stamps:
         meta = get_message_metadata(db, mid)
         sid = m["sender_id"] if "sender_id" in m.keys() else None
         meta["own_post"] = is_self_sender(db, sid)
         line = thread_stamp_line(meta, reaction_actor_summary(db, mid))
         if line != "スタンプ なし":       # an observed zero needs no row
-            out.append(line)
-    out += [SECTION_RULE, "📄 本文", m["body_text"] or ""]
+            stamp_line = line
+    body = m["body_text"] or ""
+    if layout >= 2:
+        if include_summary:
+            out.append(SECTION_RULE)
+        out.append(body)
+        if stamp_line:
+            out += [SECTION_RULE, stamp_line]
+        return "\n".join(out)
+    if stamp_line:
+        out.append(stamp_line)
+    out += [SECTION_RULE, "📄 本文", body]
     return "\n".join(out)
 
 
-def _signal_body(db, sig: dict, stamps=True, *, cfg=None, include_summary=True) -> str:
+def _signal_body(db, sig: dict, stamps=True, *, cfg=None, include_summary=True,
+                 layout=1) -> str:
     """Full-text view of one signal — the thread post and 'body'
     action surface: 【種別】note / state, then the evidence post."""
     lines = [f"{signal_label(sig)}{sig.get('note') or ''} / 状態: {signal_state(sig)}"]
@@ -724,7 +741,8 @@ def _signal_body(db, sig: dict, stamps=True, *, cfg=None, include_summary=True) 
         lines.append(_message_post(
             db, mid, m, _sender_tag(m, db),
             head=f"↳ {patient_heading(db, sig.get('project_id'))} · ",
-            stamps=stamps, cfg=cfg, include_summary=include_summary))
+            stamps=stamps, cfg=cfg, include_summary=include_summary,
+            layout=layout))
     return "\n".join(lines)
 
 
@@ -741,6 +759,7 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
         shown = []
     if not isinstance(shown, list):
         shown = []
+    layout = card["layout"] if "layout" in card.keys() else 1
     if card["kind"] == "thread":
         lines = []
         bare = ("transport" in card.keys()
@@ -758,14 +777,16 @@ def _card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
             if m is None:
                 continue
             lines.append(_message_post(db, mid, m, _sender_tag(m, db),
-                                       head=head, stamps=stamps, cfg=cfg, include_summary=include_summary))
+                                       head=head, stamps=stamps, cfg=cfg,
+                                       include_summary=include_summary, layout=layout))
         title = f"💬 {patient_heading(db, card['project_id'])} — 本文"
         text = "\n\n".join(lines)
     else:
         shown = [k for k in shown if isinstance(k, str)]
         sigs = _latest_signals(db, shown, card["project_id"])
         text = "\n\n— — —\n\n".join(
-            _signal_body(db, sigs[k]["content"], stamps, cfg=cfg, include_summary=include_summary) for k in shown
+            _signal_body(db, sigs[k]["content"], stamps, cfg=cfg,
+                         include_summary=include_summary, layout=layout) for k in shown
             if k in sigs)
         title = ("アラート — 本文" if card["kind"] == "digest"
                  else "シグナル — 本文")

@@ -151,14 +151,14 @@ class Screen:
         return self.rule(x, y, width)
 
     def thread_post(self, x, y, width, size=17, sender=SENDER, stamps=True):
-        """One native thread post with source metadata, stamps and the source body."""
+        """One native thread post: source line, the body, then stamps."""
         y = self.paragraph(x, y, f"↳ 10-01 09:40 {sender}", width, size, INK, True)
+        y = self.paragraph(x, y + 2, BODY, width, size)
         if stamps:
-            y = self.paragraph(x, y + 4, "スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 10:00時点",
+            y = self.paragraph(x, y, RULE, width, size, MUTED)
+            y = self.paragraph(x, y - 2, "スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 10:00時点",
                                width, size, GREEN)
-        y = self.paragraph(x, y, RULE, width, size, MUTED)
-        y = self.paragraph(x, y - 2, "📄 本文", width, size, GREEN, True)
-        return self.paragraph(x, y - 2, BODY, width, size)
+        return y
 
     def finish(self):
         return "\n".join(self.parts + ["</svg>"]) + "\n"

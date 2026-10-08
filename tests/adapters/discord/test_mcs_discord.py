@@ -2386,7 +2386,9 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         world.drain()
         assert thread.sent                   # backfilled
         body = "\n".join(thread.sent)
-        assert "📄 本文" in body and "追記あり" in body and "スタンプ 未取得" in body
+        assert "📄 本文" not in body and "追記あり" in body and "スタンプ 未取得" in body
+        post = next(p for p in thread.sent if "追記あり" in p)
+        assert post.index("追記あり") < post.index("スタンプ 未取得")   # body first, stamps trail
         assert "📋 要約" not in body and "処理待ち" not in body and "解析更新中" not in body
         _, current_spec = world.spec()
         assert current_spec["delivery"]["thread_id"] == str(original_thread_id)

@@ -144,7 +144,7 @@ def test_thread_body_and_attachment_caption_keep_source_without_duplicate_summar
     assert "GENERATED-SUMMARY-CANARY" in face
     assert "解析中 1" in face
     body = "".join(spec["parts"]["thread_body_parts"])
-    assert raw in body and "📄 本文" in body
+    assert raw in body and "📄 本文" not in body
     caption = next(part["caption"] for part in spec["parts"]["manifest"] if part["kind"] == "attachment_part")
     assert "合成所属" in caption
     if platform == "lineworks":

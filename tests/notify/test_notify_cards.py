@@ -616,11 +616,11 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
     title, text = notify_render._card_body_text(
         led.db, card, {"shown": "[100, 101]"})
     assert "09-24 08:" in text
-    # header -> (summary) -> stamps -> posted body, in that order
+    # layout 2: header -> (summary) -> body -> stamps as a trailer
     rule = notify_render.SECTION_RULE
-    assert (f"↳ 09-24 08:40 職員（薬剤師・薬局Y）\n📋 要約 処理待ち\n"
-            f"スタンプ 未取得\n{rule}\n📄 本文\n本文") in text
-    assert f"08:41 職員\n📋 要約 処理待ち\nスタンプ 未取得\n{rule}\n📄 本文\n本文" in text
+    assert (f"↳ 09-24 08:40 職員（薬剤師・薬局Y）\n📋 要約 処理待ち\n{rule}\n"
+            f"本文\n{rule}\nスタンプ 未取得") in text
+    assert f"08:41 職員\n📋 要約 処理待ち\n{rule}\n本文\n{rule}\nスタンプ 未取得" in text
 
 
 def test_signal_quote_shows_sender_metadata(led, tmp_path):
