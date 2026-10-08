@@ -85,9 +85,12 @@ def get_cross_list(db, dataset: str, *, enabled: bool = False,
         if complete is not None:
             saved = _payload(complete["content"])
             # Never display rows against a contradicting current local identity.
+            ids = [row["message_id"] for row in saved["rows"]]
+            local = {row["message_id"]: row for row in db.execute(
+                "SELECT message_id,project_id,parent_id FROM messages WHERE message_id IN "
+                f"({','.join('?' for _ in ids)})", ids)} if ids else {}
             for row in saved["rows"]:
-                stored = db.execute("SELECT project_id,parent_id FROM messages WHERE message_id=?",
-                                    (row["message_id"],)).fetchone()
+                stored = local.get(row["message_id"])
                 if stored is not None and (stored["project_id"] != row["project_id"]
                                           or stored["parent_id"] != row["parent_id"]):
                     raise SchemaError("cross list view: scope mismatch")
