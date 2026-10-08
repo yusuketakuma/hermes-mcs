@@ -418,6 +418,8 @@ _REASON_JA = {
                                 "llama-server と extract-drainer の稼働を確認（launchctl list | grep mcs）"),
     "semantic_backlog_stalled": ("意味チェックが6時間以上止まっています",
                                  "extract-drainer の稼働と data/extract_drain.log の jev_error を確認"),
+    "stall_check_failed": ("停滞の判定処理が失敗しました",
+                           f"data/run_check.log の stall_check_failed を確認。続く場合は {_CHECK}"),
     "semantic_jev_payment_required": ("TypeSafe Jev が支払い未了（HTTP 402）を返しています",
                                       "TypeSafe の契約・残高を確認。解消まで意味チェックは待機し、収集・通知には影響しません"),
     "semantic_jev_no_api_key": ("TypeSafe Jev のAPIキーが設定されていません",

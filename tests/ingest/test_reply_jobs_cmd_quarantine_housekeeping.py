@@ -5,6 +5,8 @@ import json
 import os
 import sys
 import time
+
+import pytest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -115,3 +117,38 @@ def test_overdue_backup_makes_housekeeping_run_past_the_deadline(
     housekeeping.assert_called_once()
     result = json.loads(capsys.readouterr().out)
     assert "housekeeping" not in result["deferred_stages"]
+
+
+def test_command_whose_apply_fails_deterministically_is_quarantined(tmp_path, monkeypatch):
+    """A handler data error would re-fire on every drain and fail every
+    tick: the file moves aside and the tick goes on. A storage error (and
+    a not-ready schema, see test_mcs_features) still propagates so the
+    command is never consumed."""
+    import sqlite3
+    import uuid
+    import mcs_requests
+    db = _ledger(tmp_path)
+    cmd = tmp_path / "cmd"
+    cmd.mkdir()
+    (cmd / "a.json").write_text(json.dumps({
+        "version": 1, "cmd": "ops.retry", "command_id": str(uuid.uuid4()),
+        "actor": "operator:synthetic", "human_confirmed": True, "job_id": 1}))
+
+    def corrupt(*_args, **_kw):
+        raise ValueError("synthetic corrupt receipt")
+    monkeypatch.setattr(mcs_requests, "apply_command", corrupt)
+    result = {"errors": []}
+    job_ops.drain_commands(db, result, cmd_dir=str(cmd))
+    assert sorted(p.name for p in cmd.iterdir()) == ["a.json.invalid"]
+    assert result["errors"] == ["cmd_invalid: apply_failed ValueError"]
+
+    (cmd / "b.json").write_text(json.dumps({
+        "version": 1, "cmd": "ops.retry", "command_id": str(uuid.uuid4()),
+        "actor": "operator:synthetic", "human_confirmed": True, "job_id": 1}))
+
+    def locked(*_args, **_kw):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(mcs_requests, "apply_command", locked)
+    with pytest.raises(sqlite3.OperationalError):
+        job_ops.drain_commands(db, {"errors": []}, cmd_dir=str(cmd))
+    assert (cmd / "b.json").exists()

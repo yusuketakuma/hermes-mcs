@@ -255,10 +255,11 @@ def _backlog_stalls(ledger, cfg, now: float) -> list:
     window = now - BACKLOG_STALL_S
     blocked = _jev_block_reason(db) if scfg["mode"] != "off" else None
     if blocked:
-        # the cause is known and external — name it instead of the
-        # generic stall it would otherwise look like
+        # the cause is known and external — name it. A live drainer keeps
+        # touching due jobs while it waits, so the generic stall below
+        # still only fires when the drainer itself stopped.
         reasons.append(f"semantic_jev_{blocked}")
-    if scfg["mode"] != "off" and not blocked and db.execute(
+    if scfg["mode"] != "off" and db.execute(
             "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "
             "AND state='pending' AND next_try<=? AND updated_at<? LIMIT 1",
             (now, window)).fetchone() and not db.execute(
@@ -406,7 +407,11 @@ def _health(ledger, result: dict, status: str,
                   if isinstance(cfg, dict) and cfg is not CONFIG_NOT_LOADED
                   else [])
     except Exception as e:
-        stalls = [f"stall_check_failed:{type(e).__name__}"]
+        # a plain reason code: health_watch validates codes as snake_case
+        # and would otherwise drop every reason in the list
+        stalls = ["stall_check_failed"]
+        result["errors"] = list(result.get("errors") or []) \
+            + [f"stall_check_failed: {type(e).__name__}"]
     errors = result.get("errors") or []
     # A mid-tick mcs/ change is a deploy guard, not a fault: skipped
     # stages rerun next tick on the new code. The run row keeps

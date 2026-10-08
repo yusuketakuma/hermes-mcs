@@ -52,29 +52,43 @@ def _notify_db(path):
         updated_at REAL);
       CREATE TABLE notification_delivery_attempts(attempt_id TEXT,
         delivery_id TEXT, state TEXT);
+      CREATE TABLE notification_intent_cards(event_id INTEGER, card_id INTEGER,
+        state TEXT, delivery_id TEXT, required_render_rev INTEGER);
       INSERT INTO notify_outbox VALUES(1,'pending',9e9,0),(2,'pending',9e9,0);
       INSERT INTO notification_renders VALUES
         ('unsent',NULL,'notice','queued',1,0),
         ('attempted',NULL,'notice','queued',2,0),
         ('card',7,'create','queued',NULL,0),
+        ('card-sent',8,'update','queued',NULL,0),
         ('done',NULL,'notice','delivered',1,0);
-      INSERT INTO notification_delivery_attempts VALUES('a','attempted','unknown');
+      INSERT INTO notification_delivery_attempts VALUES('a','attempted','unknown'),
+        ('b','card-sent','granted');
+      INSERT INTO notification_intent_cards VALUES(3,7,'pending','card',4),
+        (4,8,'pending','card-sent',2);
     """)
     con.commit()
     con.close()
 
 
-def test_rollback_cancels_only_unsent_cardless_notices(updater):  # noqa: F811
+def test_rollback_cancels_every_unsent_queued_render(updater):  # noqa: F811
+    """A queued card render carries the newer spec keys (post_actions,
+    accent) too: the restored worker would refuse it forever while the
+    restored runner counts it as live, so it is cancelled and its
+    intents unbound for the restored sweep to re-issue."""
     _notify_db(updater.LEDGER)
-    assert updater._cancel_unsent_notices() == 1
+    assert updater._cancel_unsent_notices() == 2
     con = sqlite3.connect(updater.LEDGER)
     states = dict(con.execute(
         "SELECT delivery_id,state FROM notification_renders"))
     due = dict(con.execute("SELECT event_id,next_try FROM notify_outbox"))
+    intents = dict(con.execute(
+        "SELECT event_id,delivery_id FROM notification_intent_cards"))
     con.close()
     assert states == {"unsent": "cancelled", "attempted": "queued",
-                      "card": "queued", "done": "delivered"}
+                      "card": "cancelled", "card-sent": "queued",
+                      "done": "delivered"}
     assert due[1] < 9e9 and due[2] == 9e9    # re-dispatched by restored code
+    assert intents == {3: None, 4: "card-sent"}   # the granted one keeps its send
 
 
 def test_cancel_unsent_notices_never_creates_a_missing_ledger(updater, tmp_path):  # noqa: F811

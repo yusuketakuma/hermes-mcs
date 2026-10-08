@@ -22,6 +22,7 @@ Responsibilities:
   job drains; missing bodies/failed threads become durable reply jobs.
 """
 import os
+import sqlite3
 import time
 from dataclasses import dataclass
 from contextlib import suppress
@@ -152,11 +153,23 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
             # ops.card_resolve carries no normal project_id — its scope is
             # derived from the stored render/coverage — so it must branch
             # before the common apply_command validation would reject it.
-            if req["cmd"] == "ops.card_resolve":
-                import notify_transport
-                receipt = notify_transport.apply_card_resolve(ledger, req)
-            else:
-                receipt = mcs_requests.apply_command(ledger, req)
+            try:
+                if req["cmd"] == "ops.card_resolve":
+                    import notify_transport
+                    receipt = notify_transport.apply_card_resolve(ledger, req)
+                else:
+                    receipt = mcs_requests.apply_command(ledger, req)
+            except (ValueError, TypeError, KeyError, UnicodeError,
+                    RecursionError) as e:
+                # a deterministic data failure (a corrupt stored receipt,
+                # a payload the handler cannot read) would re-fire on
+                # every drain and fail each tick: quarantine the file.
+                # Storage errors and a not-ready schema (RuntimeError)
+                # still propagate so the command is never consumed.
+                os.replace(path, path + ".invalid")
+                result["errors"].append(
+                    f"cmd_invalid: apply_failed {type(e).__name__}")
+                continue
             if receipt["outcome"] == "rejected":
                 result["errors"].append("cmd_invalid: " + receipt["error"])
             elif receipt.get("scheduled") is True \
