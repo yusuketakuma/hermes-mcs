@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 import mcs_stats
+from semantic_projection import PROJECTION_VERSION
 from views_testkit import SCHEMA, SNAP_TS, _extract, _msg
 
 
@@ -98,12 +99,12 @@ def test_canonical_facts_stat(db):
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
         "VALUES ('canonical_projection',1,?,?,?)",
         (1, json.dumps({"canonical_facts": facts}),
-         json.dumps({"hash": "different-hash"})))
+         json.dumps({"hash": "different-hash", "projection_version": PROJECTION_VERSION})))
     db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
         "VALUES ('canonical_projection',1,?,?,?)",
         (2, json.dumps({"canonical_facts": facts}),
-         json.dumps({"hash": "h1"})))
+         json.dumps({"hash": "h1", "projection_version": PROJECTION_VERSION})))
     st = run(db, stat="canonical_facts")["canonical_facts"]
     assert st["status"] == "ok"
     assert st["total"] == 3                       # msg1 stale -> excluded
@@ -378,7 +379,7 @@ def test_parsed_counts_v4_current_message_without_extract_llm(db):
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
         "VALUES ('semantic_facts_v4',1,1,?,?)",
         (json.dumps({"meds": []}),
-         json.dumps({"hash": "h2", "engine_version": 4})))
+         json.dumps({"hash": "h2", "engine_version": 4, "projection_version": PROJECTION_VERSION})))
     st = run(db, stat="data_quality")["data_quality"]
     assert st["stages"]["parsed_current_revision"]["numerator"] == 1
     assert st["stale_parsed"] == 0

@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "薬剤の用量を公開前に原文の根拠と照合",
+  "summary": "薬剤の用量欄を事実監査の対象に含め、原文の根拠と数値・単位・投与範囲が一致しない用量は、閲覧用の投影を作る前に確認待ちにします。他の事実の数字、複数薬剤の曖昧な量や単位換算による補完は行いません。",
+  "upgrade": "旧版の閲覧用投影は一時的に採用を保留し、canonical解析が有効な場合は既存の保守処理で監査済み文書から1回25件まで再生成します。根拠が一致しない用量は確認待ちのままとし、集約済みの薬剤表示も旧版の値を使い続けません。元の投稿・文書・投影の履歴、処理予算・API予算・承認条件は維持します。更新時は既存の手順で送信workerを停止・再起動してください。送信中・成否不明の通知や既に送信・出力した内容は、自動訂正・自動再送しません。",
+  "details": [
+    "事実監査の入力へquantityを追加し、既存の数値・単位・範囲の検証を同じ事実の原文引用だけへ適用する。",
+    "quantityがunknownのルール候補と薬剤以外の型は従来の契約を維持する。",
+    "既存PASS監査の再利用と監査済み文書からの再投影でも同じ用量検証を通す。",
+    "projection_versionを4に進め、通常のcurrent readerは現行版だけを採用する。旧版候補の保守照合ではtenant・本文hash・最新行・error・失効条件を保ち、版条件だけを外す。",
+    "machine read modelのPython側current判定にも同じprojection版を適用し、旧版のfact・relationを現行として出力しない。",
+    "canonical/v4履歴を持つ旧版の患者集約は、読取時に臨床項目を現行ソースから再構築し、既存のdirty-project再集約で版を記録する。legacyだけの集約とプロフィール等は維持する。",
+    "既存の再試行はジョブ状態と試行回数・修復済みの枠に従う。replayは同じsource/policyの保存済み段階を必ず再抽出する操作ではなく、一括再抽出や本番操作を更新の一部として行わない。",
+    "実Jevの誤判定や実患者への誤表示を確認したものではなく、完全合成の対照入力とスタブで公開前の検証経路を確認した。"
+  ],
+  "refs": ["mcs/semantic/semantic_audit.py", "mcs/semantic/semantic_drain.py", "mcs/semantic/semantic_v4.py", "mcs/semantic/semantic_projection.py", "mcs/semantic/semantic_store.py", "mcs/extract/rollup.py", "mcs/views/read_model.py", "mcs/core/mcs_queries.py", "tests/core/test_projection_version_gate.py"]
+}

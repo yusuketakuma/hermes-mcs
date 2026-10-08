@@ -308,7 +308,10 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
             # stored evaluated:false row (mid-audit outage) must be
             # re-run, otherwise a transient failure pins the generation
             # on a failed verdict forever and manual retry cannot clear it
-            if v4.fact_audit_verdict(prev_fa, doc_hash) is not None:
+            from semantic_audit import _published_quantity_findings
+            previous_verdict = v4.fact_audit_verdict(prev_fa, doc_hash)
+            if (previous_verdict is not None and (previous_verdict != "PASS"
+                    or not _published_quantity_findings(v2_doc))):
                 fact_audit = prev_fa["content"]
             else:
                 if time.monotonic() > deadline - 5:
@@ -1458,7 +1461,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             or now_m - _invalidated_at >= _BACKLOG_INVALIDATE_S:
         from semantic_store import invalidate_projections
         invalidate_projections(ledger, scfg)
-        _invalidated_at = now_m
+        _invalidated_at = time.monotonic()
     if scfg["mode"] == "off":
         return out
     # Stability guards shared with the extract lane: a nearly-full

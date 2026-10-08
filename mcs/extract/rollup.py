@@ -35,6 +35,7 @@ from patient_context import context_items, extract_context, merged_context
 from mcs_queries import (JST, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
 from mcs_util import HOME, acquire_run_lock, loads_dict
+from semantic_projection import PROJECTION_VERSION
 from mcs_signals import normalize_sender_id
 from drug_map import (KIND as REF_KIND, PROGRESS_KIND, candidate_note, current_refs,
                       generation_signature)
@@ -497,6 +498,13 @@ _REF_SIG_SQL = ("SELECT COUNT(*) || ':' || IFNULL(MAX(artifact_id), '') "
                 "FROM artifacts WHERE kind=? AND project_id={pid}")
 
 
+def _has_projection(db, project_id) -> bool:
+    """Whether this patient's cached clinical values may depend on canonical projections."""
+    return db.execute("SELECT 1 FROM artifacts WHERE project_id=? "
+                      "AND kind IN ('canonical_projection','semantic_facts_v4') LIMIT 1",
+                      (project_id,)).fetchone() is not None
+
+
 def current_cached_refs(db, project_id: int, roll: dict, meta) -> dict:
     """Keep raw rollup rows while omitting dictionary annotations without current proof."""
     signature = generation_signature(db)
@@ -571,7 +579,9 @@ def current_cached_refs(db, project_id: int, roll: dict, meta) -> dict:
     scoped = any(patient_item_scope({}, row[0], patient_name=name) != "patient"
                  for row in db.execute("SELECT body_text FROM messages WHERE project_id=? "
                                        "AND body_state='full'", (project_id,)))
-    if scoped:
+    projection_stale = ((not isinstance(meta, dict) or meta.get("projection_version") != PROJECTION_VERSION)
+                        and _has_projection(db, project_id))
+    if scoped or projection_stale:
         reader = object.__new__(LedgerReader)
         reader.db = db
         try:
@@ -604,6 +614,7 @@ def rebuild(ledger, project_id: int) -> int:
     meta.generated_at when a newer source would otherwise keep it dirty."""
     # sign before building: a rewrite racing the build stays dirty (M5)
     ref_generation = generation_signature(ledger.db)
+    has_projection = _has_projection(ledger.db, project_id)
     ref_sig = ledger.db.execute(_REF_SIG_SQL.format(pid="?"),
                                 (REF_KIND, project_id)).fetchone()[0]
     d = build_rollup(ledger, project_id)
@@ -629,7 +640,8 @@ def rebuild(ledger, project_id: int) -> int:
                         and om.get("next_med_period_check")
                         == d.get("_next_med_period_check")
                         and om.get("med_ref_sig") == ref_sig
-                        and om.get("med_ref_generation") == ref_generation):
+                        and om.get("med_ref_generation") == ref_generation
+                        and (not has_projection or om.get("projection_version") == PROJECTION_VERSION)):
                     # a no-op source write (LLM error row, unchanged
                     # re-save) must still clear dirty_projects, else the
                     # patient is rebuilt every tick; the stamp was taken
@@ -653,6 +665,7 @@ def rebuild(ledger, project_id: int) -> int:
              json.dumps(d, ensure_ascii=False), "rules-v1",
              json.dumps({"generated_at": d["generated_at"],
                          "period_check_version": PERIOD_CHECK_VERSION,
+                         "projection_version": PROJECTION_VERSION,
                          "next_med_period_check":
                          d.get("_next_med_period_check"),
                          "med_ref_sig": ref_sig,
@@ -669,6 +682,9 @@ def dirty_projects(ledger) -> list:
     content is unchanged never advances generated_at (M5)."""
     rows = ledger.db.execute("""
       SELECT p.project_id, r.g AS gen, r.period_version, r.next_check,
+        r.projection_version,
+        EXISTS(SELECT 1 FROM artifacts a WHERE a.project_id=p.project_id
+          AND a.kind IN ('canonical_projection','semantic_facts_v4')) AS has_projection,
         r.ref_sig, r.ref_generation, ({sig}) AS cur_ref_sig,
         (SELECT MAX(a.created_at) FROM artifacts a
           WHERE a.project_id=p.project_id
@@ -692,7 +708,10 @@ def dirty_projects(ledger) -> list:
                             END) ref_sig,
                    MAX(CASE WHEN json_valid(meta)
                             THEN json_extract(meta,'$.med_ref_generation')
-                            END) ref_generation
+                            END) ref_generation,
+                   MAX(CASE WHEN json_valid(meta)
+                            THEN json_extract(meta,'$.projection_version')
+                            END) projection_version
                  FROM artifacts WHERE kind=?
                  GROUP BY project_id) r ON r.project_id=p.project_id
       WHERE EXISTS (SELECT 1 FROM messages m3
@@ -705,6 +724,7 @@ def dirty_projects(ledger) -> list:
             if type(x["gen"]) not in (int, float)
             or not 0 <= x["gen"] < 1e12
             or x["period_version"] != PERIOD_CHECK_VERSION
+            or (x["has_projection"] and x["projection_version"] != PROJECTION_VERSION)
             or x["ref_sig"] != x["cur_ref_sig"]
             or x["ref_generation"] != ref_generation
             or (x["next_check"] is not None and (

@@ -14,6 +14,7 @@ import notify_flush
 import notify_render
 import notify_transport
 from mcs_requests import payload_hash
+from semantic_projection import PROJECTION_VERSION
 from notify_testkit import (
     CFG, CLICKER, NOW, ORIGIN, SCOPE, _begin, _card, _click, _delivered_card,
     _dispatch, _intent, _latest_render, _llm_extract, _receipt,
@@ -206,7 +207,7 @@ def test_extract_ref_skips_message_shown_from_canonical_projection(led):
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
         "created_at) VALUES('canonical_projection',1,101,'{}','test',?,?)",
-        (json.dumps({"hash": h}), NOW))
+        (json.dumps({"hash": h, "projection_version": PROJECTION_VERSION}), NOW))
     assert notify_cards._extract_ref(led.db, 1, root=100) is None
 
 

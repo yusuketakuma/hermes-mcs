@@ -204,7 +204,7 @@ def invalidate_projections(ledger, scfg: dict) -> int:
             ON m.message_id=a.message_id AND m.project_id=a.project_id
           WHERE m.body_state IS NOT 'deleted'
             AND a.artifact_id=CASE WHEN a.kind='canonical_projection'
-                THEN {current_projection_id()} ELSE {current_v4_id()} END
+                THEN {current_projection_id(require_version=False)} ELSE {current_v4_id(require_version=False)} END
         """)}
     bundles, expired, revived, projects = {}, [], [], set()
     local_model = None

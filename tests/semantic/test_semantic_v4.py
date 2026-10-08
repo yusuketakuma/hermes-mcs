@@ -15,6 +15,7 @@ import semantic
 import semantic_v4 as v4
 from mcs_queries import (current_fact_pred, qc_v4_source_id)
 from semantic_policy import KIND_FACT_REPAIR
+from semantic_projection import PROJECTION_VERSION
 from semantic_testkit import (_AuditFailJev, _drain, _ledger,
                               _message, _PassJev, _patient, _seeded_two)
 
@@ -162,6 +163,8 @@ def _seed_legacy_and_v4(db, mid=1):
     for kind, ver in (("extract_llm", 3), ("canonical_projection", None),
                       (v4.KIND_V4, 4)):
         meta = {"hash": h}
+        if kind in ("canonical_projection", v4.KIND_V4):
+            meta["projection_version"] = PROJECTION_VERSION
         if ver == 4:
             meta.update({"engine_version": 4, "extract_version": 4,
                          "doc_hash": "d"})

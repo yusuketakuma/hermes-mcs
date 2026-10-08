@@ -16,6 +16,7 @@ import notify_cmds
 import notify_flush
 import notify_render
 import notify_views
+from semantic_projection import PROJECTION_VERSION
 from mcs_queries import JST, extract_feedback
 from notify_testkit import (
     CFG, NOW, ORIGIN, _add_request, _click, _deliver, _delivered_card, _dispatch,
@@ -450,7 +451,8 @@ def test_report_mark_clears_when_v4_becomes_current(led, tmp_path):
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES('semantic_facts_v4',1,101,'{}','v4',?,?)",
-        (json.dumps({"hash": f"{101:064x}", "engine_version": 4}), NOW))
+        (json.dumps({"hash": f"{101:064x}", "engine_version": 4,
+                     "projection_version": PROJECTION_VERSION}), NOW))
     led.db.commit()
     assert not notify_render.feedback_pending(led.db, card)
     assert extract_feedback(led.db, 1)[0]["current"] == 0
@@ -692,7 +694,8 @@ def test_urgency_reads_the_same_artifact_as_the_body(led):
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES('semantic_facts_v4',1,100,?,'v4',?,?)",
         (json.dumps({"summary": "新"}),
-         json.dumps({"hash": f"{100:064x}", "engine_version": 4}), NOW))
+         json.dumps({"hash": f"{100:064x}", "engine_version": 4,
+                     "projection_version": PROJECTION_VERSION}), NOW))
     led.db.commit()
     assert structured_view.latest_fact_artifact(led.db, 100)["summary"] \
         == "新"

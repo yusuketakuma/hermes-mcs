@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import math
 from contextlib import suppress
+from semantic_projection import PROJECTION_VERSION
 
 from patient_context import context_items, extract_context, merged_context
 
@@ -118,6 +119,9 @@ def _kind_state(rows, content_hash: str, *, engine_version=None,
             saw_error = True
             continue
         if engine_version is not None and meta.get("engine_version") != engine_version:
+            continue
+        if canonical and meta.get("projection_version") != PROJECTION_VERSION:
+            saw_stale = True
             continue
         if content_hash is not None \
                 and meta.get("hash") == content_hash \

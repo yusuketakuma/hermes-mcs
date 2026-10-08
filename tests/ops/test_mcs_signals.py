@@ -9,6 +9,7 @@ import pytest
 
 import ledger as ledger_mod
 import mcs_signals
+from semantic_projection import PROJECTION_VERSION
 from ops_testkit import DAY, NOW, _extract_v1, _msg
 
 
@@ -223,7 +224,8 @@ def _projection(db, mid, chash, content, pid=1):
     db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
         "VALUES ('canonical_projection',?,?,?,?)",
-        (mid, pid, json.dumps(content), json.dumps({"hash": chash})))
+        (mid, pid, json.dumps(content),
+         json.dumps({"hash": chash, "projection_version": PROJECTION_VERSION})))
 
 
 def test_med_change_detected_from_canonical_projection(led):

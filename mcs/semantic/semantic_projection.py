@@ -14,7 +14,7 @@ from __future__ import annotations
 # canonical document: writers store it in the row meta and reuse an
 # existing projection only when the version matches, so a reprocessed
 # message never keeps serving an older projection's clinical semantics.
-PROJECTION_VERSION = 3
+PROJECTION_VERSION = 4
 
 
 def projection_current(meta: dict, doc_hash: str) -> bool:

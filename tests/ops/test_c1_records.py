@@ -16,6 +16,7 @@ import ledger
 import mcs_signals
 import mcs_view
 import read_model
+from semantic_projection import PROJECTION_VERSION
 from semantic_testkit import _message
 
 SNAP_TS = 1790000000.5
@@ -74,7 +75,7 @@ def _snapshot(tmp_path, monkeypatch, times=None):
                     "validation_status": "unverified", "workflow_status": "pending",
                     "evidence_ids": ["e-synth"], "statement": "STATEMENT_NOT_SENT",
                     "evidence_quote": "QUOTE_NOT_SENT"}], "canonical_relations": []}),
-                 json.dumps({"hash": source_hash}), SNAP_TS))
+                 json.dumps({"hash": source_hash, "projection_version": PROJECTION_VERSION}), SNAP_TS))
             for n in (1, 2):
                 content = {"type": "request_aging", "project_id": 1, "state": "open",
                            "detected_at": SNAP_TS - n, "evidence": {"message_ids": [101]},

@@ -12,6 +12,7 @@ import pytest
 
 import drug_map
 import rollup
+from semantic_projection import PROJECTION_VERSION
 from extract_testkit import _hash, _ledger, _message
 
 
@@ -78,7 +79,9 @@ def _seed(store, mid=1, names=("キラナ",), *, kind="extract_llm",
              "evidence": "fictional quotation only"} for n in names]
     return store.artifact_add(
         kind, json.dumps({key: meds}), project_id=1, message_id=mid,
-        meta={"hash": _hash(store, mid), "engine_version": 4})
+        meta={"hash": _hash(store, mid), "engine_version": 4,
+              **({"projection_version": PROJECTION_VERSION}
+                 if kind in ("canonical_projection", "semantic_facts_v4") else {})})
 
 
 @pytest.fixture
@@ -363,7 +366,8 @@ def test_source_changes_hide_old_refs_before_rederive(store, tmp_path, change):
         store.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=1")
     elif change == "invalidated":
         store.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
-                         (json.dumps({"hash": _hash(store), "invalidated": True}), sid))
+                         (json.dumps({"hash": _hash(store), "invalidated": True,
+                                      "projection_version": PROJECTION_VERSION}), sid))
     else:
         _seed(store, names=("別キラナ",), kind="semantic_facts_v4")
     assert drug_map.current_refs(store.db, 1) == []

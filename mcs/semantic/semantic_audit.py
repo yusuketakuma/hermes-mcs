@@ -9,7 +9,7 @@ import json
 from contextlib import suppress
 
 import semantic_jev as jev
-from semantic_quantities import claim_quantity_findings
+from semantic_quantities import claim_quantity_findings, extract_quantities
 
 
 def _probability(value) -> bool:
@@ -266,7 +266,8 @@ def _fact_audit_target(fact: dict) -> str:
               f"epistemic:{fact.get('epistemic')}",
               f"workflow:{fact.get('workflow_status')}",
               f"event_time:{fact.get('event_time')}",
-              f"subject:{fact.get('subject')}"]
+               f"subject:{fact.get('subject')}",
+               f"quantity:{fact.get('quantity', 'unknown')}"]
     if fact.get("kind") == "medication_event":
         fields.append(f"action:{fact.get('action')}")
     if "patient_context" in fact:
@@ -274,6 +275,32 @@ def _fact_audit_target(fact: dict) -> str:
         fields.append("patient_context:" + json.dumps(
             validate_patient_context(fact), ensure_ascii=False, sort_keys=True))
     return f"{fact.get('statement')} [{' '.join(fields)}]"
+
+
+def _published_quantity_findings(doc: dict) -> list:
+    """Check known medication quantities against only their own evidence quotes."""
+    evidence = {item["evidence_id"]: item for item in doc.get("evidence", [])
+                if isinstance(item, dict) and item.get("evidence_id")}
+    findings = []
+    for fact in doc.get("facts", []):
+        if (not isinstance(fact, dict)
+                or fact.get("validation_status") != "verified"
+                or fact.get("kind") not in ("medication_event", "medication_exposure")
+                or fact.get("quantity", "unknown") in (None, "unknown")):
+            continue
+        quantity = fact["quantity"]
+        fid = fact.get("fact_id")
+        if not extract_quantities(quantity):
+            findings.append({"code": "fact_quantity_unverified", "fact": fid})
+            continue
+        quotes = [{"_evidence": {"quote": evidence[ref].get("quote")}}
+                  for ref in fact.get("evidence_ids", []) if ref in evidence]
+        checked = claim_quantity_findings(
+            {"claim_id": fid, "text": f"{fact.get('statement', '')} [quantity:{quantity}]",
+             "fact_refs": list(range(len(quotes)))}, quotes)
+        findings.extend({"code": item["code"].replace("claim_", "fact_", 1), "fact": fid}
+                        for item in checked)
+    return findings
 
 
 def audit_facts_v2(jev_client, doc: dict, source_text: str,
@@ -300,7 +327,8 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
                   if f.get("validation_status") != "verified"]
     if unverified:
         findings.append({"code": "unverified_facts",
-                         "count": len(unverified)})
+                          "count": len(unverified)})
+    findings.extend(_published_quantity_findings(doc))
     coverage_doc = doc.get("coverage")
     if not isinstance(coverage_doc, dict) \
             or coverage_doc.get("status") != "complete":

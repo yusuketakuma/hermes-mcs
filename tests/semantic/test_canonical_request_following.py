@@ -65,7 +65,7 @@ def test_old_document_shape_ids_hashes_and_request_projection_remain_compatible(
     assert projection.project_v2_doc_legacy(old) == projection.project_v2_doc_legacy(enriched)
     assert projection.project_v2_facts(old) == projection.project_v2_facts(enriched)
     assert extraction.SCHEMA_VERSION_V2 == "semantic-extraction/v2"
-    assert projection.PROJECTION_VERSION == 3
+    assert projection.PROJECTION_VERSION == 4
     assert v4.ENGINE_VERSION == 4
 
 

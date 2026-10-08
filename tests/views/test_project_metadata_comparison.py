@@ -11,6 +11,7 @@ from ledger import Ledger, publish_snapshot
 from mcs_view import View
 from project_metadata import ARTIFACT_KIND, normalize_rows
 import project_metadata_view as metadata
+from semantic_projection import PROJECTION_VERSION
 
 
 POSTED = "2026-10-04T12:00:00+09:00"
@@ -67,7 +68,9 @@ def _chat(store, *, mid=1, pid=1, kind="extract_llm", content=None, meta=None,
                          {"meds": [CHAT_MED], "labs": [CHAT_LAB],
                           "summary": "SUMMARY_CANARY"}),
         project_id=pid, message_id=mid,
-        meta={"hash": _hash(store, mid), "engine_version": 4, **(meta or {})})
+        meta={"hash": _hash(store, mid), "engine_version": 4,
+              **({"projection_version": PROJECTION_VERSION}
+                 if kind in ("canonical_projection", "semantic_facts_v4") else {}), **(meta or {})})
 
 
 @contextmanager
