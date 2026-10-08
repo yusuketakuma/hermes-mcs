@@ -44,6 +44,7 @@ import mcs_runtime
 from mcs_adapter import project_url
 from mcs_queries import HOLD_PROGRESS_SET, current_fact_pred
 from mcs_requests import canonical, payload_hash, positive, valid_hash
+from mcs_util import loads_dict
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
     _latest_signals, _mmdd, _patient_name, _preview_header, _preview_line, _signal_evidence, _source_fp,
@@ -1524,7 +1525,9 @@ def _build_spec(db, card, content, gens, op, rev, cfg, now) -> dict:
         "preview_text": content["preview_text"],
     }
     if card["kind"] == "signal" and present.SOURCE_THREAD and card["thread_id"]:
-        spec["parts"]["source_thread"] = True
+        target = signal_thread_target(db, card, cfg)
+        if target is not None and card["thread_id"] == target["thread_id"] and _scope_match(card, target):
+            spec["parts"]["source_thread"] = True
     if any("<@" in (f.get("text") or "") for f in footer):
         # the footer names members as <@id> mentions — a worker must
         # render them without pinging; one that predates this key
@@ -2295,10 +2298,11 @@ def _source_thread_target(db, project_id, mid, cfg, *, base=None):
         JOIN notify_outbox o ON o.event_id=ic.event_id
         WHERE (? IS NULL OR ic.event_id=?) AND o.kind='new_messages' AND ic.state='delivered' AND j.type='integer' AND j.value=?
           AND c.kind='thread' AND c.project_id=? AND c.root_message_id=?
-          AND c.delivery_state='delivered' AND c.message_id IS NOT NULL
+          AND c.delivery_state IN ('delivered','update_failed') AND c.message_id IS NOT NULL
           AND c.thread_state='created' AND c.thread_id IS NOT NULL""",
         (base, base, mid, project_id, root)).fetchall()
-    bound = [dict(row) for row in rows if _scope_match(row, scope)]
+    bound = [dict(row) for row in rows if _scope_match(row, scope)
+             and (row["delivery_state"] == "delivered" or _thread_binding_creates(db, row))]
     if len(bound) != 1:
         return None
     card = bound[0]
@@ -2333,6 +2337,59 @@ def signal_thread_target(db, card, cfg):
 SIGNAL_SOURCE_HOLD_MAX_S = 6 * 3600   # wait this long for a provable source thread
 
 
+def _thread_binding_creates(db, card):
+    """Delivered creates proving this card message and companion thread in the same scope."""
+    if not card["message_id"] or not card["thread_id"]:
+        return []
+    return [row for row in db.execute("""SELECT r.* FROM notification_renders r
+        JOIN notification_render_parts c ON c.delivery_id=r.delivery_id AND c.part_id='card'
+        JOIN notification_render_parts t ON t.delivery_id=r.delivery_id AND t.part_id='thread'
+        WHERE r.card_id=? AND r.op='create' AND r.state='delivered'
+          AND c.state='delivered' AND c.remote_id=? AND t.state='delivered' AND t.remote_id=?
+        ORDER BY r.render_rev DESC""", (card["card_id"], card["message_id"], card["thread_id"]))
+        if _scope_match(row, stored_scope(card))]
+
+
+def _signal_route_witness(raw):
+    """Content-free source/card route evidence from a sealed spec or its GC witness."""
+    spec = loads_dict(raw)
+    if spec is None:
+        return None
+    if set(spec) == {"signal_thread_route", "thread_id"}:
+        route, thread = spec["signal_thread_route"], spec["thread_id"]
+        return spec if (route == "card" and thread is None or route == "source"
+                        and isinstance(thread, str) and thread) else None
+    delivery, parts = spec.get("delivery"), spec.get("parts")
+    if not isinstance(delivery, dict) or not isinstance(parts, dict) or "schema" not in spec:
+        return None
+    thread = delivery.get("thread_id")
+    if parts.get("source_thread") is True and isinstance(thread, str) and thread:
+        return {"signal_thread_route": "source", "thread_id": thread}
+    if parts.get("source_thread") is None and thread is None:
+        return {"signal_thread_route": "card", "thread_id": None}
+    return None
+
+
+def _signal_thread_route(db, card):
+    """Identify a bound signal route without guessing from missing historical specs."""
+    if (card["transport"] == "slack" and card["thread_state"] == "created"
+            and card["delivery_state"] in ("delivered", "update_failed")
+            and card["message_id"] and card["thread_id"] == card["message_id"]):
+        return "card"
+    rows = _thread_binding_creates(db, card)
+    if card["message_id"] is None:
+        row = db.execute("SELECT * FROM notification_renders WHERE card_id=? AND op='create' "
+                         "AND state IN ('queued','held') ORDER BY render_rev DESC LIMIT 1",
+                         (card["card_id"],)).fetchone()
+        rows = [row] if row is not None and _scope_match(row, stored_scope(card)) else []
+    for row in rows:
+        witness = _signal_route_witness(row["spec_json"])
+        if witness is not None and (witness["signal_thread_route"] == "card"
+                                    or witness["thread_id"] == card["thread_id"]):
+            return witness["signal_thread_route"]
+    return None
+
+
 def _bind_signal_thread(db, card, cfg, now):
     """Home a signal card in its proven source thread: False when the
     current route stands, True after a move, None while it must wait."""
@@ -2355,6 +2412,11 @@ def _bind_signal_thread(db, card, cfg, now):
         # its evidence post deleted) falls back the same way.
         if card["thread_id"] is None:
             return False
+        route = _signal_thread_route(db, card)
+        if route == "card":
+            return False
+        if route is None:
+            return None
         return _move_signal(db, card, None, now)
     if card["thread_id"] == target["thread_id"] and card["thread_state"] == "created":
         return False
@@ -3399,7 +3461,8 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
     and delivered renders whose durable parts are all settled and no
     active restore hold covers the render or its card — in both cases
     only with no unsettled attempt on the card and no pending intent
-    binding. DB readers of spec_json (dispatch re-entry, sweep watchdog,
+    binding. Delivered signal creates retain only a content-free thread-route
+    witness. DB readers of spec_json (dispatch re-entry, sweep watchdog,
     recover) republish queued/held renders or delivered plans with
     pending parts; the latter cannot enter this clearing path. The
     worker and reconcile read the spec file, which a pending part plan
@@ -3414,8 +3477,13 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
             (now,)).rowcount
         cleared = 0
         for r in db.execute(
-                """SELECT r.delivery_id FROM notification_renders r
+                """SELECT r.delivery_id,r.op,r.state,r.spec_json,c.kind FROM notification_renders r
+                   LEFT JOIN notification_cards c ON c.card_id=r.card_id
                    WHERE r.spec_json IS NOT NULL
+                     AND CASE WHEN json_valid(r.spec_json) THEN NOT (
+                       json_type(r.spec_json,'$.signal_thread_route') IS NOT NULL
+                       AND json_type(r.spec_json,'$.thread_id') IS NOT NULL
+                       AND (SELECT COUNT(*) FROM json_each(r.spec_json))=2) ELSE 1 END
                      AND NOT EXISTS (
                        SELECT 1 FROM notification_delivery_attempts a
                        JOIN notification_renders active
@@ -3444,10 +3512,12 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                                   AND (h.delivery_id=r.delivery_id
                                        OR h.card_id=r.card_id))))
                    ORDER BY r.updated_at LIMIT ?""", (limit,)).fetchall():
+            witness = (_signal_route_witness(r["spec_json"]) if r["kind"] == "signal"
+                       and r["op"] == "create" and r["state"] == "delivered" else None)
             db.execute(
-                "UPDATE notification_renders SET spec_json=NULL,"
+                "UPDATE notification_renders SET spec_json=?,"
                 "updated_at=? WHERE delivery_id=?",
-                (now, r["delivery_id"]))
+                (canonical(witness).decode() if witness is not None else None, now, r["delivery_id"]))
             cleared += 1
         # spec files for terminal renders can go — a begin against them
         # would be denied anyway; unknown stays for investigation. A

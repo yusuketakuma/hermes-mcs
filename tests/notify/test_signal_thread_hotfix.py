@@ -12,7 +12,7 @@ from notify_testkit import (CFG, NOW, _begin, _dispatch, _intent,
                             _settle_bodies, _signal_row, led)
 
 __all__ = ["led"]
-_SOURCE_SEQ = itertools.count(8001, 3)
+_SOURCE_SEQ = itertools.count(800001, 3)
 
 
 def delivered_source(led, *, card_id=1, mids=(100, 101), cfg=CFG):
@@ -62,7 +62,8 @@ def test_signal_reuses_origin_thread_and_keeps_controls(led):
     assert spec["delivery"]["thread_id"] == "original-thread"
     assert "message_id" not in spec["delivery"]
     assert {b["id"] for row in spec["parts"]["action_rows"] for b in row} >= {"ack", "assign", "dismiss", "request"}
-    assert _begin(led, render, n=8100)["granted"]
+    begun = _begin(led, render, n=8100)
+    assert begun["granted"], begun
     assert _receipt(led, render, f"{8100:016x}", message_id="signal-reply", n=8101)["applied"]
     _settle_bodies(led, render)
     # A later presentation update edits this reply, without creating a nested thread.
