@@ -1698,7 +1698,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                         and getattr(jev_client, "_mcs_jev_hookable", False)):
                     reserve_fn = runtime.usage_reserver(
                         ledger, token, kind=KIND_USAGE, model=jev.JEV_MODEL,
-                        project_id=job["project_id"], message_id=job["message_id"])
+                        project_id=job["project_id"], message_id=job["message_id"],
+                        daily_request_budget=scfg["daily_request_budget"])
                 # only now has the job cleared every gate — the persisted
                 # fairness counters count jobs that were actually served, not
                 # selections lost to circuit/budget/pause breaks (T14)

@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "並列解析でもAPIの日次上限を予約直前に確認",
+  "summary": "複数の解析workerが交互に進む場合も、API送信前の使用量予約を同じ書込トランザクションで確認します。他のworkerが残りを使い切った場合は、新しい送信をせず待機し、ジョブの試行回数を消費しません。",
+  "upgrade": "設定済みの日次上限・処理予算・モデル・承認条件は変更しません。送信前に確定した使用量予約と、失敗・成否不明の要求の記録は保持します。",
+  "details": [
+    "JevClientのローカルrequest_capに加え、durable usage予約の直前に日次残量をBEGIN IMMEDIATE下で照合する。",
+    "日次枠が尽きた場合や使用量記録が不明な場合はresource待機として送信しない。",
+    "完全合成の2clientとスタブtransportの交差で、設定2件に対して3件予約できた条件を確認した。実API呼出しや実費用の発生を調査したものではない。"
+  ],
+  "refs": ["mcs/semantic/semantic_runtime.py", "mcs/semantic/semantic_drain.py"]
+}
