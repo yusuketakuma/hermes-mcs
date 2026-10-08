@@ -248,6 +248,32 @@ URGENCY_LABEL = {"llm": "🚨 緊急度: 高（AI抽出）",
                  "rule": "🚨"}
 
 
+def _typed_urgency_reasons(document, reasons, context):
+    from extract import clinical_urgency_quote
+    from mcs_util import locate_quote_span
+
+    body, _, _ = context
+    kept = []
+    for item in _items(document, "symptoms"):
+        if (not isinstance(item, dict) or item_unverified(item) or item.get("subject") != "patient"
+                or item.get("status") not in ("new", "ongoing") or item.get("negated") is not False):
+            continue
+        text, quote = item.get("text"), item.get("evidence")
+        if not isinstance(text, str) or not text.strip() or not isinstance(quote, str):
+            continue
+        span = locate_quote_span(body, quote)
+        inner = locate_quote_span(body[span[0]:span[1]], text) if span is not None else None
+        if span is None or inner is None or _item_scope(item, context, text) != "patient":
+            continue
+        for reason in reasons:
+            reason_span = locate_quote_span(body, reason)
+            if (reason_span is not None and reason_span[0] <= span[0] + inner[0]
+                    and span[0] + inner[1] <= reason_span[1]
+                    and clinical_urgency_quote(reason, symptom=text) and reason not in kept):
+                kept.append(reason)
+    return kept
+
+
 def message_urgency(db, mid: int) -> str | None:
     """'llm' when the current fact artifact says urgency high, None when it
     says routine (the content-level verdict supersedes the lexical rule),
@@ -295,6 +321,8 @@ def message_urgency_details(db, mid: int) -> dict:
         reasons, scopes = patient_urgency_quotes(
             body, quotes if isinstance(quotes, list) else [], patient_name=row["patient_name"], default=default)
         clinical = [quote for quote in reasons if clinical_urgency_quote(quote)]
+        clinical += [quote for quote in _typed_urgency_reasons(document, reasons, (body, row["patient_name"], default))
+                     if quote not in clinical]
         if clinical:
             return {**result, "source": "llm", "subject": "patient", "reasons": clinical[:2]}
         if reasons and any(urgent_request_quote(quote) for quote in reasons):

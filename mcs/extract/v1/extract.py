@@ -88,13 +88,17 @@ _URGENT_INACTIVE = re.compile(
 _SELF_PERSON = r"ご本人|患者本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?"
 _FAMILY_PERSON = r"ご家族|家族|お母(?:さん|様)|お父(?:さん|様)|母親|父親|祖母|祖父|義母|義父|母|父|娘(?:さん|様)?|息子(?:さん|様)?|夫|妻|兄|姉|弟|妹|孫|同居者"
 _OTHER_PERSON = r"本人以外|他者|他人|第三者|他の(?:患者|利用者)|他患者|別の(?:患者|利用者)|別患者|(?:職員|スタッフ|看護師|医師|薬剤師|ケアマネ)(?:さん|様)?"
-_CLINICAL_OWNER = (r"症状|状態|体調|意識|呼吸|体温|血圧|容態|病歴|入院|退院|搬送|死亡|脈拍|酸素|薬|服薬|Cr|eGFR|AST|ALT|BUN|HbA1c|Hb|Na|K|血糖|採血|検査|BP|SpO2|熱|"
+_CLINICAL_OWNER = (r"症状|状態|体調|意識|呼吸|体温|血圧|収縮期|拡張期|容態|病歴|入院|退院|搬送|死亡|脈拍|酸素|薬|服薬|Cr|eGFR|AST|ALT|BUN|HbA1c|Hb|Na|K|血糖|採血|検査|BP|SpO2|熱|体重|身長|weight|height|BS|Glu|glucose|BNP|INR|CRP|Alb|[胸腹頭背腰]痛|"
                    + "|".join(map(re.escape, _SYMPTOMS)))
 _NAMED_PERSON = r"[ぁ-んァ-ヶ一-龥A-Za-z0-9]{1,16}(?:さん|様)"
 _COMPOUND_PERSON = rf"(?:{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})(?:ご本人|本人)"
+_OWNER_MODIFIER = r"(?:(?:現在|以前|過去|本日)の|強い|弱い|激しい|軽い)*"
 _PERSON = re.compile(
     rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|私|自分|{_NAMED_PERSON})"
-    rf"(?P<link>について|の(?:{_CLINICAL_OWNER})|[ \t　]+(?={_CLINICAL_OWNER})|には|に(?={_CLINICAL_OWNER})|は|が|も|を|から|より|[:：])", re.I)
+    rf"(?P<link>について|の{_OWNER_MODIFIER}(?:{_CLINICAL_OWNER})|[ \t　]+(?={_CLINICAL_OWNER})|に対して|に対し|への|には|に(?={_CLINICAL_OWNER})|は|が|も|を|から|より|[:：])", re.I)
+_DIRECT_OWNER = re.compile(rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})の{_OWNER_MODIFIER}[ \t　]*$")
+_CLINICAL_ACTOR = re.compile(r"^(?:が|は)[、,\s]*[^。！？!?;；\n、,]*?を(?:開始|中止|増量|減量|変更|処方|投与|測定)")
+_CLINICAL_RECIPIENT = re.compile(rf"(?:{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})(?:に対して|に対し|への)")
 _SCOPE_HEADING = re.compile(
     rf"(?m)^[ \t　]*(?:[【［\[](.*?)[】］\]]|([^\n:：]{{1,24}})[:：]|"
     rf"({_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|過去|既往|現在|予定|目標|参考|基準)[ \t　]*$)[ \t　]*")
@@ -105,18 +109,21 @@ _CONDITIONAL_MARK = re.compile(
     r"もし|万一|万が一|(?:場合|とき|(?<![0-9０-９一二三四五六七八九十])(?<!採血)(?<!測定)(?<!検査)(?<!服用)(?<!投与)(?<!訪問)(?<!往診)時)(?:は|には|に)|"
     r"なら(?!ない|なく|なかった|れ|ず|ぬ)|たら(?!しい)|ければ")
 _SCOPE_BREAK = re.compile(r"[。！？!?;；\n、,]|しかし|ただし|だが|けれど(?:も)?|一方")
-_REASON_CUE = re.compile(r"至急|緊急|救急|搬送|急変|意識|反応|呼吸|SpO2|血圧|体温|発熱|高熱|疼痛|痛み|苦し|出血|転倒|死亡|逝去|心肺|酸素|けいれん|痙攣|脱水|嘔吐|吐血|血尿|冷汗")
-_CLINICAL_REASON_CUE = re.compile(r"救急(?:搬送|受診)|搬送|急変|意識|反応|呼吸|SpO2|血圧|体温|発熱|高熱|疼痛|痛み|苦し|出血|転倒|死亡|逝去|心肺|酸素|けいれん|痙攣|脱水|嘔吐|吐血|血尿|冷汗|(?:Cr|eGFR|K|Na|血糖)\s*\d", re.I)
+_REASON_CUE = re.compile(r"至急|緊急|救急|搬送|急変|意識|反応|呼吸|SpO2|血圧|体温|発熱|高熱|疼痛|痛み|[胸腹頭背腰]痛|苦し|出血|転倒|死亡|逝去|心肺|酸素|けいれん|痙攣|脱水|嘔吐|吐血|血尿|冷汗|(?:BP|BS|Glu)\s*\d", re.I)
+_CLINICAL_REASON_CUE = re.compile(r"救急(?:搬送|受診)|搬送|急変|意識|反応|呼吸|SpO2|血圧|体温|発熱|高熱|疼痛|痛み|[胸腹頭背腰]痛|苦し|出血|転倒|死亡|逝去|心肺|酸素|けいれん|痙攣|脱水|嘔吐|吐血|血尿|冷汗|(?:Cr|eGFR|K|Na|血糖|BP|BS|Glu)\s*\d", re.I)
 
 
-def clinical_urgency_quote(quote):
+def clinical_urgency_quote(quote, *, symptom=None):
     """A medical report/event is separate from an urgent reply request; this is not a severity threshold."""
     if not isinstance(quote, str):
         return False
-    for match in _CLINICAL_REASON_CUE.finditer(quote):
+    pattern = (_CLINICAL_REASON_CUE if not isinstance(symptom, str) or not symptom.strip() else
+               re.compile(_CLINICAL_REASON_CUE.pattern + "|" + re.escape(symptom), re.I))
+    for match in pattern.finditer(quote):
         tail = quote[match.end():]
         prefix = r"(?:障害|消失|低下)" if match[0] == "意識" else r"困難" if match[0] == "呼吸" else ""
-        if re.match(prefix + r"(?:は|も|が)?(?:して|を認めて|はして)?(?:いません|ありません|ない|なし|なく)", tail):
+        if re.match(prefix + r"(?:は|も|が|を)?(?:して|認めて|認め|はして)?(?:では|で|じゃ)?"
+                    r"(?:いません|ありません|ません|ない|なかった|なし|なく)", tail):
             continue
         return True
     return False
@@ -158,13 +165,20 @@ def _person_scope(person, patient_name):
     return "patient" if re.fullmatch(_SELF_PERSON, person) or known_name else "unknown"
 
 
-def patient_source_scope(body, start, end, *, patient_name=None, default="patient"):
+def patient_source_scope(body, start, end, *, patient_name=None, default="patient", provider_fields=False):
     """Resolve an original span's reported person and explicit noncurrent scope, never from a keyword mask."""
     if not isinstance(body, str) or not 0 <= start < end <= len(body):
         return "unknown"
-    events = []
+    events, assignments = [], []
     for match in _SCOPE_HEADING.finditer(body):
         label = (match[1] or match[2] or match[3] or "").strip()
+        if (provider_fields and (
+                re.fullmatch(r"(?:.*(?:担当(?:医師|看護師|薬剤師|ケアマネ|スタッフ|職員)|主治医|診療医)(?:名|氏名|名前)?"
+                             r"|(?:医師|看護師|薬剤師|ケアマネ)(?:名|氏名|名前))", label)
+                or (match[2] is not None and re.fullmatch(r".+(?:医師|看護師|薬剤師|ケアマネ)", label)))
+                and not re.search(rf"{_FAMILY_PERSON}|本人|自身|自分|症状|状態|体調|既往|病歴|受診|入院|退院|体温|血圧|服薬", label)):
+            assignments.append(match.span())
+            continue  # Provider assignment/signature fields do not own the patient's schedule.
         # A report-source heading is not the clinical subject below it.
         if re.fullmatch(rf"(?:{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})(?:から|より)", label):
             continue
@@ -183,12 +197,22 @@ def patient_source_scope(body, start, end, *, patient_name=None, default="patien
         elif re.search(r"現在|現状|本日|本人|患者", label):
             events.append((match.start(), None, "current"))
     for match in _PERSON.finditer(body):
+        if any(left <= match.start() < right for left, right in assignments):
+            continue
         person = match["person"]
         tail = body[match.start() + len(person):]
         if _REPORTING.match(tail) and not re.fullmatch(_SELF_PERSON, person) and not re.fullmatch(_COMPOUND_PERSON, person):
             continue
+        if (re.fullmatch(r"(?:職員|スタッフ|看護師|医師|薬剤師|ケアマネ)(?:さん|様)?", person)
+                and _CLINICAL_ACTOR.match(tail)
+                and _CLINICAL_RECIPIENT.search(re.split(r"[。！？!?;；\n]", body[:match.start()])[-1])
+                and not re.search(r"自身|自分", re.split(r"[。！？!?;；\n]", tail)[0])):
+            continue  # A prescribing/measuring clinician is the actor, not the recipient.
         subject = _person_scope(person, patient_name)
         events.append((match.start(), subject, None))
+    owner = _DIRECT_OWNER.search(body[:start])
+    if owner is not None:
+        events.append((owner.start(), _person_scope(owner["person"], patient_name), None))
     scope, period = default, "current"
     for position, subject, phase in sorted(events, key=lambda event: event[0]):
         if position <= start:
@@ -257,6 +281,23 @@ def patient_vitals(values, body, *, patient_name=None):
             for field, value in actual.items():
                 if type(values.get(field)) in (int, float) and values[field] == value:
                     kept[field] = value
+    # Partial LLM blood pressures still need their own label, side and patient span.
+    from extract_llm import _bp_side, _nearest_vital_label, _vitals_guard
+    partial = {key: values[key] for key in ("sbp", "dbp")
+               if key not in kept and type(values.get(key)) in (int, float)}
+    grounded = _vitals_guard(body, partial)
+    for match in re.finditer(r"\d+(?:[.．]\d+)?", body):
+        start, end = match.span()
+        if _nearest_vital_label(body, start, end) != "bp":
+            continue
+        side = _bp_side(body, start, end)
+        label = re.search(r"(収縮期|拡張期)(?:血圧)?[^0-9]*$", body[max(0, start - 14):start])
+        if side is None and label is not None:
+            side = "sbp" if label[1] == "収縮期" else "dbp"
+        if side is None or patient_source_scope(body, start, end, patient_name=patient_name) != "patient":
+            continue
+        if side in partial and grounded.get(side) == partial[side] == float(match[0].replace("．", ".")):
+            kept[side] = partial[side]
     return kept
 _REQUESTS = ((r"ご?確認(?:を|お願い|ください|をお願い)", "confirm"),
              (r"(?:ご)?連絡(?:ください|をお願い|いただき)", "contact"),
@@ -273,10 +314,22 @@ _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬
 _MED_PERIOD = re.compile(
     r"(?<![\d/])(?:(\d{4})/)?(\d{1,2}/\d{1,2})"
     r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
-RULE_VERSION = 13
+RULE_VERSION = 18
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
-    r"(?:\)|）)?[　\s]*(?:訪問|診察|往診)")
+    r"(?:\)|）)?[　\s]*(?:訪問(?:診療)?|診察|往診)")
+_NEXT_VISIT_HEAD = (
+    r"(?:次回|次の)[ \t　]*(?:の[ \t　]*)?(?:(?:訪問診療|訪問|往診|診察)"
+    r"[ \t　]*(?:の[ \t　]*)?(?:予定(?:日(?:時)?)?|日時|日程|日)?|予定(?:日(?:時)?)?|日時|日程)"
+    r"[ \t　]*(?:は|が)?[ \t　]*[:：]?[ \t　、,]*")
+_NEXT_PLANNED = re.compile(
+    rf"(?:(?P<scheduled>{_NEXT_VISIT_HEAD})(?P<newline>\r?\n[ \t　]*)?|次回[^。！？!?;；\r\n]{{0,8}}?)"
+    r"(?<!\d)(?:(?P<year>\d{4})[-－/／年])?(?P<month>\d{1,2})[-－/／月](?P<day>\d{1,2})(?!\d)日?"
+    r"(?:[ \t　]*[（(][月火水木金土日](?:曜(?:日)?)?[）)])?")
+_NEXT_CANCELLED = re.compile(
+    r"^[ \t　、,（(]*(?:\d{1,2}[:：時](?:\d{1,2}分?)?[ \t　]*)?"
+    r"(?:の|に)?(?:訪問(?:診療)?|往診|診察)?(?:予定(?:していました|していた)?)?(?:です|でした)?(?:が|は|を)?"
+    r"[ \t　、,]*(?:中止|キャンセル|延期|未定)")
 _PLANNED_BEFORE = re.compile(r"次回|予定(?!通り|どおり)|明日|明後日|今度|来週")
 # 予定通りなら (conditional) right before the date, beyond the 6-char window
 _PLANNED_IF = re.compile(r"予定(?:通り|どおり)なら[　\s、,，]*$")
@@ -293,6 +346,23 @@ _VITAL_PATTERNS = {
             r"(?!\s*(?:[LＬlℓ]|リットル))\s*[%％]?",
     "bs":   r"(?:血糖|BS|Glu)[:：は]?\s*(\d{2,3})",
 }
+
+
+def _next_planned_matches(body):
+    """Keep explicit upcoming dates in their own schedule field, excluding cancelled or other-person plans."""
+    for match in _NEXT_PLANNED.finditer(body):
+        if match["newline"] and not re.match(
+                r"[ \t　]*(?:(?:[01０１]?\d|[2２][0-3０-３])[:：時][0-5０-５]\d分?[ \t　]*)?(?:\r?\n|$)",
+                body[match.end():]):
+            continue
+        if (re.search(r"中止|キャンセル|延期|未定", body[match.start():match.start("month")])
+                or _NEXT_CANCELLED.match(body[match.end():])):
+            continue
+        scopes = (patient_source_scope(body, start, match.end(), provider_fields=True)
+                  for start in (match.start(), match.start("year") if match["year"] else match.start("month")))
+        if any(scope in ("family", "other", "unknown", "past", "conditional") for scope in scopes):
+            continue
+        yield match
 
 
 def _ymd(month: int, day: int, year: int | None,
@@ -431,13 +501,16 @@ def extract_message(body: str, posted_at: str) -> dict:
     # --- visit date (first M/D preceding 訪問/診察) — a past event ---
     # A planned mention (次回10/5訪問予定) is not a visit that happened:
     # resolving it "past" would fabricate a date one year back.
+    planned = list(_next_planned_matches(body))
     for m in _VISIT_DATE.finditer(body):
         # the look-behind stays inside the date's own sentence
         pre = re.split(r"[。．\n!！?？]",
                        body[max(0, m.start() - 6):m.start()])[-1]
         if _PLANNED_BEFORE.search(pre) \
                 or _PLANNED_IF.search(body, 0, m.start()) \
-                or _PLANNED_AFTER.match(body, m.end()):
+                or _PLANNED_AFTER.match(body, m.end()) \
+                or any(plan["scheduled"] and plan.start() <= m.start() < plan.end()
+                       for plan in _NEXT_PLANNED.finditer(body)):
             continue
         d = _ymd(int(m.group(2)), int(m.group(3)),
                  int(m.group(1)) if m.group(1) else year,
@@ -447,12 +520,11 @@ def extract_message(body: str, posted_at: str) -> dict:
         break
 
     # --- next planned date — a FUTURE date ---
-    m = re.search(
-        r"次回.{0,8}?(?<!\d)(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})", body)
-    if m:
-        d = _ymd(int(m.group(2)), int(m.group(3)),
-                 int(m.group(1)) if m.group(1) else year,
-                 posted, "any" if m.group(1) else "future")
+    if planned:
+        m = planned[0]
+        d = _ymd(int(m["month"]), int(m["day"]),
+                 int(m["year"]) if m["year"] else year,
+                 posted, "any" if m["year"] else "future")
         if d:
             out["next_planned"] = d
 

@@ -28,7 +28,12 @@ def patient_item_scope(item, body, *, patient_name=None, surface=None, default="
         return "patient" if scopes and all(scope == "patient" for scope in scopes) else "unknown"
     # A full-sentence quote may start before its explicit subject. Locate the
     # item's own surface inside that quote, while retaining surrounding scope.
-    for anchor in (surface, item.get("value")):
+    anchors = (surface, item.get("value"))
+    if surface and body[span[0]:span[1]].count(str(surface)) > 1:
+        if item.get("value") is None or locate_quote_span(body[span[0]:span[1]], str(item["value"])) is None:
+            return "unknown"
+        anchors = (item.get("value"), surface)
+    for anchor in anchors:
         inner = locate_quote_span(body[span[0]:span[1]], str(anchor)) if anchor is not None else None
         if inner is not None:
             span = (span[0] + inner[0], span[0] + inner[1])
