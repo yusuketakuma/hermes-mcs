@@ -240,8 +240,11 @@ def _canonical_finding_lines(llm: dict, *, context=(None, None, "patient")) -> l
 
 
 # Where high urgency came from: a lexical rule match is only the 🚨 icon —
-# not a clinical assessment — while the AI verdict keeps its wording.
-URGENCY_LABEL = {"llm": "緊急度: 高（AI抽出）",
+# not a clinical assessment — while the AI verdict adds its wording.
+# owner 2026-10-08: no "(AI抽出)" style qualifiers on anything new; the
+# legacy wording stays only for layout-1 cards so their faces never drift
+URGENCY_LABEL_PLAIN = {"llm": "🚨 緊急度高", "rule": "🚨"}   # one spelling on every surface
+URGENCY_LABEL = {"llm": "🚨 緊急度: 高（AI抽出）",
                  "rule": "🚨"}
 
 
@@ -357,12 +360,13 @@ _VFLAG_LABEL = {"spo2": "SpO2", "sbp": "収縮期BP", "bs": "BS"}
 
 
 def _head_lines(llm: dict | None, v1: dict, urgency: str | None = None,
-                urgency_suffix: str = "") -> list[str]:
+                urgency_suffix: str = "", plain: bool = False) -> list[str]:
     selected = llm is not None
     llm = llm or {}
     lines: list[str] = []
-    if urgency in URGENCY_LABEL:
-        lines.append(URGENCY_LABEL[urgency] + urgency_suffix)
+    labels = URGENCY_LABEL_PLAIN if plain else URGENCY_LABEL
+    if urgency in labels:
+        lines.append(labels[urgency] + urgency_suffix)
     summary = llm.get("summary")
     if isinstance(summary, str) and summary.strip():
         lines.append(summary.strip())
@@ -407,7 +411,8 @@ def _vital_line(llm: dict | None, v1: dict, body=None, *, patient_name=None, def
     return "バイタル: " + "  ".join(parts) if parts else None
 
 
-def _lab_lines(llm: dict, body: str | None = None, *, patient_name=None, default="patient") -> list[str]:
+def _lab_lines(llm: dict, body: str | None = None, *, patient_name=None, default="patient",
+               multiline: bool = False) -> list[str]:
     """Reported lab values (v4) — name+value+unit plus the body's own
     out-of-range marker; the view never invents reference ranges."""
     from clinical_values import lab_candidate
@@ -460,9 +465,9 @@ def _lab_lines(llm: dict, body: str | None = None, *, patient_name=None, default
             break
     lines = []
     if confirmed:
-        lines.append("検査: " + "・".join(confirmed))
+        lines.append(_item_line("検査", confirmed, "・", multiline))
     if candidates:
-        lines.append("検査候補（未確認）: " + "・".join(candidates))
+        lines.append(_item_line("検査候補（未確認）", candidates, "・", multiline))
     return lines
 
 
@@ -571,18 +576,29 @@ def _med_entries(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient"
     return meds, unverified
 
 
-def _med_lines(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient")) -> list[str]:
+def _item_line(label: str, items: list[str], sep: str, multiline: bool) -> str:
+    """``label: a、b`` — or, on the plain (layout 2 / notice) surfaces, one
+    indented row per item once there are two or more, so a long list of
+    drugs, requests or lab values is read down, not across. Every word
+    still shows (owner rule 2026-10-05); only the line breaks change."""
+    if multiline and len(items) > 1:
+        return label + ":\n" + "\n".join("　・" + item for item in items)
+    return f"{label}: " + sep.join(items)
+
+
+def _med_lines(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient"),
+               multiline: bool = False) -> list[str]:
     meds, unverified = _med_entries(llm, v1, refs, context=context)
 
     def shown(entries):
-        return "、".join(text + (f"（{note}）" if (note := _drug_note(ref)) else "")
-                        for text, ref in entries)
+        return [text + (f"（{note}）" if (note := _drug_note(ref)) else "")
+                for text, ref in entries]
 
     lines = []
     if meds:
-        lines.append("薬剤: " + shown(meds))
+        lines.append(_item_line("薬剤", shown(meds), "、", multiline))
     if unverified:
-        lines.append("薬剤候補（未確認）: " + shown(unverified))
+        lines.append(_item_line("薬剤候補（未確認）", shown(unverified), "、", multiline))
     return lines
 
 
@@ -599,7 +615,7 @@ def medication_entries(db, mid: int) -> tuple[list, list]:
 _REQ_KIND_PREFIX = {"self_plan": "予定:", "question": "確認依頼:"}
 
 
-def _request_lines(llm: dict, v1: dict) -> list[str]:
+def _request_lines(llm: dict, v1: dict, *, multiline: bool = False) -> list[str]:
     reqs, cands = [], []
     for r in _items(llm, "requests"):
         if isinstance(r, dict) and (r.get("to") or r.get("action")):
@@ -629,18 +645,19 @@ def _request_lines(llm: dict, v1: dict) -> list[str]:
                 prefix + to + action + suffix)
     # rule fallback only when the selected facts carry no request at all
     if _empty_field(llm, "requests"):
-        reqs.extend(f"{_label(REQ_LABEL, r.get('kind')) or '依頼'}:"
-                    f"{r['ctx']}"
+        reqs.extend(("" if (_label(REQ_LABEL, r.get("kind")) or "依頼") == "依頼"
+                     else f"{_label(REQ_LABEL, r.get('kind'))}:") + r["ctx"]
                     for r in _items(v1, "requests")
                     if isinstance(r, dict) and isinstance(r.get("ctx"), str)
                     and r["ctx"])
-    lines = ["依頼: " + " / ".join(reqs)] if reqs else []
+    lines = [_item_line("依頼", reqs, " / ", multiline)] if reqs else []
     if cands:
-        lines.append("依頼候補（未確認）: " + " / ".join(cands))
+        lines.append(_item_line("依頼候補（未確認）", cands, " / ", multiline))
     return lines
 
 
-def structured_lines(db, mid: int, *, drug_candidates: bool = True) -> list[str]:
+def structured_lines(db, mid: int, *, drug_candidates: bool = True,
+                     plain: bool = False) -> list[str]:
     """Compact structured summary from extract_v1 + the current fact
     artifact (canonical_projection shadows extract_llm).  Returns []
     when nothing usable exists (caller falls back to raw only)."""
@@ -662,9 +679,10 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True) -> list[str]
         if ev:
             suffix = f" — 根拠:「{str(ev[0])[:40]}」"
         suffix += urgency_qc_suffix(db, mid)
-    lines: list[str] = _head_lines(selected, v1, urgency, suffix)
+    lines: list[str] = _head_lines(selected, v1, urgency, suffix, plain)
     if details["held"]:
         lines.append("急ぎの確認依頼（本人の緊急状態とは別）" if details["kind"] == "request" else
+                     "緊急度: 要確認（対象人物・時点の根拠を確認）" if plain else
                      "緊急度: 要確認（対象人物・時点の根拠を確認。元のAI判定は高）")
     elif details["kind"] == "request":
         lines.append("急ぎの確認依頼（本人の緊急状態とは別）")
@@ -684,11 +702,13 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True) -> list[str]
     if flags and body:
         lines.append("閾値超過の測定値: " + "、".join(flags))
     if _items(llm, "labs"):
-        lines.extend(_lab_lines(llm, body, patient_name=patient_name, default=default))
+        lines.extend(_lab_lines(llm, body, patient_name=patient_name, default=default,
+                                multiline=plain))
     if (line := _symptom_line(llm, v1, context=context)) is not None:
         lines.append(line)
-    lines.extend(_med_lines(llm, v1, _drug_refs(db, mid) if drug_candidates else (), context=context))
-    lines.extend(_request_lines(llm, v1))
+    lines.extend(_med_lines(llm, v1, _drug_refs(db, mid) if drug_candidates else (),
+                            context=context, multiline=plain))
+    lines.extend(_request_lines(llm, v1, multiline=plain))
     for mp in _items(v1, "med_periods"):
         if isinstance(mp, dict) and mp.get("start") and _item_scope(mp, context, mp.get("raw")) == "patient":
             lines.append(f"服薬期間: {mp['start']}〜{mp.get('end') or '?'}")
@@ -696,4 +716,27 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True) -> list[str]
     if v1.get("next_planned"):
         lines.append(f"次回予定: {v1['next_planned']}")
     lines.extend(_canonical_finding_lines(llm, context=context))
+    if plain:
+        # owner 2026-10-08: one fixed reading order on new cards and notices
+        # (missing items are simply absent); layout-1 cards keep the old order
+        lines.sort(key=_summary_rank)
     return lines
+
+
+# 緊急度 → 概要・要点 → 依頼 → 薬剤 → 臨床所見（バイタル・検査・症状） → 予定 → 区分
+_SUMMARY_ORDER = (
+    (0, ("🚨", "緊急度", "急ぎの確認依頼")),
+    (2, ("依頼",)),
+    (3, ("薬剤", "服薬期間")),
+    (4, ("バイタル", "閾値超過", "検査", "症状")),
+    (5, ("次回予定",)),
+    (7, ("区分",)),
+)
+
+
+def _summary_rank(line: str) -> int:
+    for rank, prefixes in _SUMMARY_ORDER:
+        if line.startswith(prefixes):
+            return rank
+    # canonical findings read 「ラベル｜…」 next to the other findings
+    return 4 if "｜" in line.split(" ", 1)[0] else 1

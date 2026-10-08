@@ -34,9 +34,18 @@ _POSTS: contextvars.ContextVar[list[int | None] | None] = contextvars.ContextVar
 # accent bar colour per card kind — the visible card edge; a missing
 # kind (notice op) leaves the container unaccented
 _ACCENTS = {"thread": 0x5865F2, "signal": 0xF0A233, "digest": 0xF0A233}
+_URGENT_ACCENT = 0xED4245         # parts["discord"]["accent"] == "urgent"
+
+
+def _accent(spec):
+    own = spec["parts"].get("discord") or {}
+    if own.get("accent") == "urgent":
+        return _URGENT_ACCENT
+    return _ACCENTS.get(spec.get("kind"))
 
 MENU_ID = "mcs:menu"              # the 他の操作 select — value = token
-_MENU_PLACEHOLDER = "他の操作…"
+_MENU_PLACEHOLDER = "その他の操作…"     # the same words as the LINE WORKS button
+_POST_BUTTONS_MAX = 5                   # one action row of per-post 💊 buttons
 _MENU_MAX = 25                    # options per select
 # kept verbatim: runner footer mentions (pings stay off via
 # allowed_mentions) and URLs (a substitution would break the link)
@@ -88,13 +97,23 @@ def _zones(spec: dict, esc) -> tuple:
     """Card face as text zones: a container with ``rule`` and the footer
     each start a new zone (a Separator is drawn between zones)."""
     zones, cur = [], []
-    for c in spec["parts"]["containers"]:
+    own = spec["parts"].get("discord") or {}
+    actions = {a["at"]: a["button"] for a in own.get("post_actions") or []}
+    for index, c in enumerate(spec["parts"]["containers"]):
         t = c["type"]
         if t == "meta":
             continue                       # correlation — not displayed
         if c.get("rule") and cur:
             zones.append(cur)
             cur = []
+        if index in actions:
+            # (subtext line, button): a Section with the post's 💊 accessory
+            cur.append(("-# " + esc(c["text"]).replace("\n", " "), actions[index]))
+            continue
+        if spec.get("kind") == "thread" and c.get("rule") and t == "text":
+            # a post's time/sender line is subtext above its summary
+            cur.extend(f"-# {esc(ln)}" for ln in c["text"].splitlines())
+            continue
         if t == "heading":
             cur.append(f"## {esc(c['text'])}")
         elif t == "field":
@@ -164,6 +183,11 @@ def message_payload(spec, *, components_v2=False):
         view.stop()
         return {"view": view}
     zones, footer = _zones(spec, escape_md)
+    # the legacy embed has no sections: a post action's line stays text
+    # and its 💊 becomes a button in a row of its own, labelled with the
+    # post's time when more than one post has one
+    posts = [ln for zone in zones for ln in zone if not isinstance(ln, str)]
+    zones = [[ln if isinstance(ln, str) else ln[0] for ln in zone] for zone in zones]
     face = "\n\n".join(["\n".join(zone) for zone in zones] + ["\n".join(footer)]).strip() or "—"
     if len(face) > 4096:
         raise ValueError("discord_embed_budget")
@@ -176,9 +200,16 @@ def message_payload(spec, *, components_v2=False):
         view.add_item(discord.ui.Select(
             custom_id=MENU_ID, placeholder=_MENU_PLACEHOLDER,
             min_values=1, max_values=1, options=menu[:_MENU_MAX], row=1))
+    for line, button in posts[:_POST_BUTTONS_MAX]:
+        # "-# MM-DD HH:MM sender…" -> "💊 MM-DD HH:MM"
+        stamp = " ".join(line.removeprefix("-# ").split(" ")[:2])
+        view.add_item(discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label=button["label"] if len(posts) == 1 else f"💊 {stamp}"[:80],
+            custom_id=f"mcs:a:{button['token']}", row=2))
     payload = {"content": escape_md(notification_preview(spec["parts"])),
-               "embed": discord.Embed(description=face, colour=_ACCENTS.get(spec.get("kind")))}
-    if primary or menu:
+               "embed": discord.Embed(description=face, colour=_accent(spec))}
+    if primary or menu or posts:
         view.stop()
         payload["view"] = view
     return payload
@@ -215,8 +246,22 @@ def build_view(spec: dict):
         for lines in groups:
             if out:
                 out.append(separator())
-            out.extend(discord.ui.TextDisplay(chunk)
-                       for chunk in _text_chunks(lines))
+            run = []
+            for line in lines + [None]:
+                if isinstance(line, str):
+                    run.append(line)
+                    continue
+                out.extend(discord.ui.TextDisplay(chunk)
+                           for chunk in _text_chunks(run))
+                run = []
+                if line is not None:
+                    text, button = line
+                    out.append(discord.ui.Section(
+                        discord.ui.TextDisplay(text),
+                        accessory=discord.ui.Button(
+                            style=discord.ButtonStyle.secondary,
+                            label=button["label"],
+                            custom_id=f"mcs:a:{button['token']}")))
         return out
 
     def layout(groups):
@@ -232,18 +277,29 @@ def build_view(spec: dict):
             children.extend(rows)
         return children
 
+    def too_big(children):
+        # the Container, its children (a Section also counts its text
+        # and accessory) and every row's items count
+        nested = sum(2 for c in children if getattr(c, "accessory", None) is not None)
+        return len(children) > _CONTAINER_MAX or 1 + len(children) + nested + sum(
+            len(r.children) for r in rows) > MAX_COMPONENTS
+
+    def plain(zone):
+        return [ln if isinstance(ln, str) else ln[0] for ln in zone]
+
     children = layout(zones)
-    # the Container, its children and every row's items count
-    if len(children) > _CONTAINER_MAX or 1 + len(children) + sum(
-            len(r.children) for r in rows) > MAX_COMPONENTS:
+    if too_big(children):
         # too many rule zones: one text zone (no rule lines — the text
         # must stay within the validator's budget)
         children = layout([[ln for z in zones for ln in z]])
+    if too_big(children):
+        # still too many parts: post buttons fall back to text lines
+        # (the card's 💊 menu entry still reaches every post)
+        children = layout([plain([ln for z in zones for ln in z])])
     if not children:
         children.append(discord.ui.TextDisplay("—"))
     view = discord.ui.LayoutView(timeout=None)
-    view.add_item(discord.ui.Container(
-        *children, accent_color=_ACCENTS.get(spec.get("kind"))))
+    view.add_item(discord.ui.Container(*children, accent_color=_accent(spec)))
     return view
 
 

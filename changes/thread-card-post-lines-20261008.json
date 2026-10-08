@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "スレッドカードの投稿者行を小さな補足表示にし、要約を読みやすく",
+  "summary": "Slack・Discordのスレッドカードでは、各投稿の日時・投稿者の行を小さな補足文字（Slackのcontext、Discordのsubtext）で表示し、その下の📋要約が主な内容として読めるようにしました。シグナルカードの患者名見出しは識別情報のため従来どおり通常の大きさで表示します。",
+  "upgrade": "Hermes gatewayまたは独立接続hostの再起動で新workerを反映すると、以後に描画・更新されるカードから適用されます。runnerの表示モデルとspecは変わらないため、既存カードの一斉再描画は起きません。README画面例のSVG・PNGは旧表示のままで、Inkscapeのある環境で再生成が必要です。",
+  "details": [
+    "adapters/slack/cards.render_parts: thread カードの rule テキストを context ブロックで描画する。",
+    "adapters/discord/cards._zones: thread カードの rule テキストを -# subtext で描画する。",
+    "送信先ごとの表示判断を mcs/notify/present_{slack,discord,lineworks}.py に分離した（出力は不変）。"
+  ],
+  "refs": ["adapters/slack/cards.py", "adapters/discord/cards.py", "mcs/notify/present_slack.py", "mcs/notify/present_discord.py", "mcs/notify/present_lineworks.py"]
+}

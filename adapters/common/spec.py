@@ -68,7 +68,16 @@ PARTS_KEYS = frozenset({
     "page", "pages", "thread_name", "thread_body_parts", "manifest",
     # "silent": footer text carries <@id> member mentions — Discord sends
     # them with allowed_mentions=none; Slack replaces them with names
-    "mentions", "preview_text", "thread_drug_actions", "drug_view_navigation", "thread_notice", "source_thread"})
+    "mentions", "preview_text", "thread_drug_actions", "drug_view_navigation", "thread_notice", "source_thread",
+    # per-transport presentation (mcs/notify/present_<t>.py); only the
+    # spec's own transport may carry its key — see _transport_parts_cost
+    "slack", "discord", "lineworks"})
+# what each transport namespace may hold
+TRANSPORT_PART_KEYS = {"slack": frozenset({"post_actions"}),
+                       "discord": frozenset({"post_actions", "accent"}),
+                       "lineworks": frozenset()}
+POST_ACTION_IDS = frozenset({"meds"})   # read-only, clicker-scoped views
+MAX_POST_ACTIONS = 5
 PART_ENTRY_KEYS = frozenset({
     "part_id", "kind", "index", "sha256", "bytes", "name",
     "attachment_id", "path", "unavailable", "prior_remote_id", "caption", "edit_only"})
@@ -221,17 +230,58 @@ def _action_rows_cost(rows) -> int:
                 if not _text(b.get("id"), 32):
                     _err("bad_button_id")
                 continue
-            if not isinstance(b, dict) or b.get("ui") != "button":
-                _err("bad_button")
-            if not _TOKEN.fullmatch(str(b.get("token") or "")):
-                _err("bad_button_token")
-            if not _text(b.get("label"), MAX_LABEL):
-                _err("bad_button_label")
-            if (not isinstance(b.get("style", "secondary"), str)
-                    or b.get("style", "secondary") not in STYLES):
-                _err("bad_button_style")
-            if not _text(b.get("id"), 32):
-                _err("bad_button_id")
+            _validate_button(b)
+    return slots
+
+
+def _validate_button(b) -> None:
+    if not isinstance(b, dict) or b.get("ui") != "button":
+        _err("bad_button")
+    if not _TOKEN.fullmatch(str(b.get("token") or "")):
+        _err("bad_button_token")
+    if not _text(b.get("label"), MAX_LABEL):
+        _err("bad_button_label")
+    if (not isinstance(b.get("style", "secondary"), str)
+            or b.get("style", "secondary") not in STYLES):
+        _err("bad_button_style")
+    if not _text(b.get("id"), 32):
+        _err("bad_button_id")
+
+
+def _transport_parts_cost(spec, parts) -> int:
+    """Validate the per-transport namespace and return the component
+    slots it adds: a post action turns one text line into a section
+    with an accessory button (two more slots on Discord)."""
+    transport = spec["delivery"].get("transport", "discord")
+    slots = 0
+    for name, allowed in TRANSPORT_PART_KEYS.items():
+        if name not in parts:
+            continue
+        own = parts[name]
+        if name != transport or not isinstance(own, dict) or not own:
+            _err("bad_transport_parts")
+        _known_keys(own, allowed, f"{name}_parts")
+        if "accent" in own and own["accent"] != "urgent":
+            _err("bad_accent")
+        actions = own.get("post_actions")
+        if actions is None:
+            continue
+        rules = {i for i, c in enumerate(parts["containers"])
+                 if c.get("rule") and c.get("type") == "text"}
+        if spec.get("kind") != "thread" or not isinstance(actions, list) \
+                or not 0 < len(actions) <= MAX_POST_ACTIONS:
+            _err("bad_post_actions")
+        seen = set()
+        for a in actions:
+            if not isinstance(a, dict) or a.keys() != {"at", "button"} \
+                    or type(a["at"]) is not int or a["at"] not in rules \
+                    or a["at"] in seen:
+                _err("bad_post_action")
+            seen.add(a["at"])
+            _validate_button(a["button"])
+            if a["button"]["id"] not in POST_ACTION_IDS:
+                _err("bad_post_action_id")
+            slots += 2
     return slots
 
 
@@ -267,6 +317,7 @@ def validate(spec) -> dict:
     if text_budget < 0:
         _err("text_budget")
     budget -= _action_rows_cost(parts.get("action_rows") or [])
+    budget -= _transport_parts_cost(spec, parts)
     if budget < 0:
         _err("component_budget")
     name = parts.get("thread_name")
@@ -425,7 +476,11 @@ def token_map(spec: dict) -> dict:
     action rows — works before the snapshot has seen the new tokens."""
     out = {}
     ctx = spec["parts"].get("context") or {}
-    for row in spec["parts"].get("action_rows") or []:
+    transport = spec["delivery"].get("transport", "discord")
+    own = spec["parts"].get(transport)
+    posts = [[a["button"] for a in own.get("post_actions") or []]] \
+        if isinstance(own, dict) else []
+    for row in (spec["parts"].get("action_rows") or []) + posts:
         for b in row:
             if b.get("ui") == "link":
                 continue                   # no token — nothing to route

@@ -25,44 +25,41 @@
 <rect x="288" y="227" width="38" height="20" rx="4" fill="#edf0ee"/>
 <text x="294" y="242" font-size="11" fill="#66716f">APP</text>
 <text x="339" y="243" font-size="14" fill="#66716f">10:02</text>
-<text x="236" y="282" font-size="21" fill="#202124" font-weight="bold">💬 山田 花子（あおぞら）· 起点 </text>
-<text x="236" y="315.6" font-size="21" fill="#202124" font-weight="bold">10-01</text>
-<text x="236" y="345.20000000000005" font-size="17" fill="#66716f">1投稿 · 📎 1 · @自分宛て</text>
-<path d="M236 360.40000000000003 L633 360.40000000000003" stroke="#d5dcd7" fill="none"/>
-<text x="236" y="388.40000000000003" font-size="17" fill="#202124" font-weight="bold">10-01 09:40 佐藤さん（訪問看護・あおぞら）</text>
-<text x="236" y="413.6" font-size="17" fill="#087f5b" font-weight="bold">📋 要約</text>
-<text x="236" y="438.8" font-size="18" fill="#202124">・次回訪問時に残薬を確認してほしいとの連絡</text>
-<text x="236" y="465.6" font-size="18" fill="#202124">・要点: 残薬の確認 / 服薬カレンダーを共有</text>
-<text x="236" y="492.40000000000003" font-size="18" fill="#202124">・区分: 依頼・添付</text>
-<text x="236" y="519.2" font-size="18" fill="#202124">・依頼: 確認依頼:次回訪問時に残薬を確認(期</text>
-<text x="236" y="548.0" font-size="18" fill="#202124">限:次回訪問時)</text>
-<path d="M236 564.8 L633 564.8" stroke="#d5dcd7" fill="none"/>
-<text x="236" y="590.8" font-size="17" fill="#66716f">📝 タスク 1件 · スタンプ 👀2 🙆1</text>
-<path d="M236 606.0 L633 606.0" stroke="#d5dcd7" fill="none"/>
-<rect x="236" y="634.0" width="110" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
-<text x="250" y="661.0" font-size="18" fill="#202124">確認する</text>
-<rect x="356" y="634.0" width="110" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
-<text x="370" y="661.0" font-size="18" fill="#202124">担当する</text>
-<rect x="476" y="634.0" width="128" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
-<text x="490" y="661.0" font-size="18" fill="#202124">タスク作成</text>
-<rect x="236" y="686.0" width="173" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
-<text x="250" y="713.0" font-size="18" fill="#202124">操作を選ぶ… ▾</text>
-<text x="236" y="762.0" font-size="18" fill="#1264a3">MCSで開く</text>
+<text x="236" y="282" font-size="21" fill="#202124" font-weight="bold">💬 山田 花子（あおぞら）</text>
+<text x="236" y="311.6" font-size="17" fill="#66716f">10-01〜 · 1投稿 · 📎 1 · @自分宛て</text>
+<path d="M236 326.8 L633 326.8" stroke="#d5dcd7" fill="none"/>
+<text x="236" y="354.8" font-size="15" fill="#66716f">10-01 09:40 佐藤さん（訪問看護・あおぞら）</text>
+<text x="236" y="376.8" font-size="18" fill="#202124">・次回訪問時に残薬を確認してほしいとの連絡</text>
+<text x="236" y="403.6" font-size="18" fill="#202124">・要点: 残薬の確認 / 服薬カレンダーを共有</text>
+<text x="236" y="430.40000000000003" font-size="18" fill="#202124">・区分: 依頼・添付</text>
+<text x="236" y="457.20000000000005" font-size="18" fill="#202124">・依頼: 確認依頼:次回訪問時に残薬を確認(期</text>
+<text x="236" y="486.00000000000006" font-size="18" fill="#202124">限:次回訪問時)</text>
+<path d="M236 502.80000000000007 L633 502.80000000000007" stroke="#d5dcd7" fill="none"/>
+<text x="236" y="528.8000000000001" font-size="17" fill="#66716f">📝 タスク 1件 · スタンプ 👀2 🙆1</text>
+<path d="M236 544.0000000000001 L633 544.0000000000001" stroke="#d5dcd7" fill="none"/>
+<rect x="236" y="572.0000000000001" width="110" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="250" y="599.0000000000001" font-size="18" fill="#202124">確認する</text>
+<rect x="356" y="572.0000000000001" width="110" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="370" y="599.0000000000001" font-size="18" fill="#202124">担当する</text>
+<rect x="476" y="572.0000000000001" width="128" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="490" y="599.0000000000001" font-size="18" fill="#202124">タスク作成</text>
+<rect x="236" y="624.0000000000001" width="173" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="250" y="651.0000000000001" font-size="18" fill="#202124">操作を選ぶ… ▾</text>
+<text x="236" y="700.0000000000001" font-size="18" fill="#1264a3">MCSで開く</text>
 <text x="689" y="227" font-size="23" fill="#202124" font-weight="bold">スレッド</text>
 <text x="689" y="257" font-size="16" fill="#66716f"># mcs-demo</text>
 <path d="M682 275 L1059 275" stroke="#e3e7e4" fill="none"/>
 <text x="689" y="313" font-size="18" fill="#202124" font-weight="bold">MCS</text>
-<text x="689" y="348" font-size="16" fill="#202124" font-weight="bold">↳ 山田 花子 · 10-01 09:40 佐藤さん（訪</text>
-<text x="689" y="373.6" font-size="16" fill="#202124" font-weight="bold">問看護・あおぞら）</text>
-<text x="689" y="403.20000000000005" font-size="16" fill="#087f5b">スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · </text>
-<text x="689" y="428.80000000000007" font-size="16" fill="#087f5b">10-01 10:00時点</text>
-<text x="689" y="454.4000000000001" font-size="16" fill="#66716f">────────────</text>
-<text x="689" y="478.0000000000001" font-size="16" fill="#087f5b" font-weight="bold">📄 本文</text>
-<text x="689" y="501.60000000000014" font-size="16" fill="#202124">次回訪問時に残薬を確認してください。服薬カレ</text>
-<text x="689" y="527.2000000000002" font-size="16" fill="#202124">ンダーの写真を共有します。</text>
-<text x="689" y="576.8000000000002" font-size="18" fill="#202124" font-weight="bold">MCS</text>
-<text x="689" y="610.8000000000002" font-size="16" fill="#202124">📎 服薬カレンダー.jpg — 山田 花子 10-01</text>
-<text x="689" y="636.4000000000002" font-size="16" fill="#202124"> 09:40 佐藤さん</text>
-<rect x="689" y="654.0000000000002" width="200" height="120" rx="8" fill="#f3f6f4" stroke="#dce2dd"/>
-<text x="789" y="720.0000000000002" font-size="16" fill="#66716f">画像</text>
+<text x="689" y="348" font-size="16" fill="#202124" font-weight="bold">↳ 10-01 09:40 佐藤さん（訪問看護・あおぞ</text>
+<text x="689" y="373.6" font-size="16" fill="#202124" font-weight="bold">ら）</text>
+<text x="689" y="401.20000000000005" font-size="16" fill="#202124">次回訪問時に残薬を確認してください。服薬カレ</text>
+<text x="689" y="426.80000000000007" font-size="16" fill="#202124">ンダーの写真を共有します。</text>
+<text x="689" y="452.4000000000001" font-size="16" fill="#66716f">────────────</text>
+<text x="689" y="476.0000000000001" font-size="16" fill="#087f5b">スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · </text>
+<text x="689" y="501.60000000000014" font-size="16" fill="#087f5b">10-01 10:00時点</text>
+<text x="689" y="551.2000000000002" font-size="18" fill="#202124" font-weight="bold">MCS</text>
+<text x="689" y="585.2000000000002" font-size="16" fill="#202124">📎 服薬カレンダー.jpg — 山田 花子 10-01</text>
+<text x="689" y="610.8000000000002" font-size="16" fill="#202124"> 09:40 佐藤さん</text>
+<rect x="689" y="628.4000000000002" width="200" height="120" rx="8" fill="#f3f6f4" stroke="#dce2dd"/>
+<text x="789" y="694.4000000000002" font-size="16" fill="#66716f">画像</text>
 </svg>

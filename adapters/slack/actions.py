@@ -334,6 +334,7 @@ class Actions:
 
     async def _say(self, channel, user, text, *, blocks=None, thread_ts=None,
                    navigation=None):
+        from .delivery import _call   # one Retry-After resend, as for cards
         client = self._client()
         if client is None:
             self._log("followup_failed", error="retry_policy_unknown")
@@ -351,7 +352,7 @@ class Actions:
                 elif navigation and index == 0:
                     kwargs["blocks"] = _sections(unescape(chunk)) + [
                         {"type": "actions", "elements": navigation}]
-                await client.chat_postEphemeral(**kwargs)
+                await _call(client.chat_postEphemeral, **kwargs)
         except Exception as exc:
             self._log("followup_failed", error=type(exc).__name__)
 
@@ -647,7 +648,7 @@ class Actions:
             self._reg.end_confirm(confirm_id)
             await self._say(origin["channel_id"], user, "送信に失敗しました。")
             return
-        self._reg.drop_confirm(confirm_id)
+        self._reg.consume_confirm(confirm_id)
         self._reg.put_followup(payload["command_id"], {
             "kind": "human", "origin": origin, "actor": actor,
             "token": pending["token"], "user": user,
@@ -708,7 +709,8 @@ class Actions:
             if result is None or (rec.get("request_id") is not None
                                   and result.get("request_id") != rec["request_id"]):
                 continue
-            self._reg.drop_followup(cid)
+            if not self._reg.drop_followup(cid):
+                continue    # a concurrent sweep took it during the read
             if rec["kind"] == "modal":
                 pending = self._reg.modal(rec["modal_id"])
                 if pending is None or pending["actor"] != rec["actor"]:
@@ -776,5 +778,10 @@ class Actions:
                                         _task_blocks(tasks) if tasks else None),
                                     thread_ts=thread_ts,
                                     navigation=navigation if index == 0 else None)
+                if thread_ts:
+                    # a threaded ephemeral shows only inside the thread: a
+                    # click on the card face would otherwise look ignored
+                    await self._say(origin["channel_id"], rec["user"],
+                                    "💊 結果をこのカードのスレッドに表示しました。")
             elif rec["kind"] == "human" or result.get("outcome") != "applied":
                 await self._say(origin["channel_id"], rec["user"], ja(result))

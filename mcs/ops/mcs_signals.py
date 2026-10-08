@@ -376,8 +376,7 @@ def _med_followup_note(meds, days):
     """med_change_no_followup note for one or several meds sharing a
     post — 「A」「B」 juxtaposition keeps the single-med wording intact."""
     names = "".join(f"「{m}」" for m in meds)
-    return (f"薬{names}の変更言及後{days}日以内の後続記録を確認できません"
-            "でした（記録上の確認であり、対応の有無を示すものではありません）")
+    return f"薬{names}の変更言及後{days}日以内の後続記録を確認できませんでした"
 
 
 def _patient_fact_keys(db, key, horizon):
@@ -508,8 +507,7 @@ def _comm_concentration(db, now, th, sig_cfg):
             "evidence": {"project_id": pid},
             "context": {"posts": n, "window_hours": th["conc_window_h"],
                         "threshold": th["conc_min_posts"]},
-            "note": f"直近{th['conc_window_h']}時間の記録が{n}件と集中して"
-                    "います（件数の集中であり重症度ではありません）"}
+            "note": f"直近{th['conc_window_h']}時間の記録が{n}件と集中しています"}
 
 
 def _request_overdue(db, now, th, sig_cfg):
@@ -690,8 +688,7 @@ def _transition_reconciliation(db, now, th, sig_cfg):
                              "med_change_message_ids": change_ids},
                 "context": {"window_days": th["transition_med_window_d"]},
                 "note": "退院の言及の前後に薬変更の言及があります — "
-                        "処方内容の照合が必要かどうか人が原記録を確認し"
-                        "てください（自動判定ではありません）"}
+                        "処方内容の照合が必要か原記録で確認してください"}
 
 
 # requests.to spellings meaning 'addressed to a pharmacist/pharmacy' —
@@ -765,8 +762,7 @@ def _pharmacist_request(db, now, th, sig_cfg):
             "context": {"days_unanswered": days},
             "note": f"薬剤師宛の依頼・相談の言及（「{'」「'.join(acts)}」）"
                     f"から{th['request_response_days']}日以上経過し、記録上"
-                    "の応答を確認できませんでした（記録上の確認であり、"
-                    "対応の有無を示すものではありません）"}
+                    "の応答を確認できませんでした"}
 
 
 def _rx_request_visibility(db, now, th, sig_cfg):
@@ -982,8 +978,7 @@ def _discharge_notice(db, now, th, sig_cfg):
             "type": "discharge_notice", "project_id": pid,
             "evidence": {"discharge_message_id": mid},
             "context": {},
-            "note": "退院・転院の言及があります — 処方変更の有無を原記録"
-                    "で確認する機会です（自動判定ではありません）"}
+            "note": "退院・転院の言及があります — 処方変更の有無を原記録で確認してください"}
 
 
 def _symptom_after_med(db, now, th, sig_cfg):
@@ -1046,8 +1041,7 @@ def _symptom_after_med(db, now, th, sig_cfg):
                          "symptoms": symps},
             "context": {},
             "note": f"薬変更言及（{'・'.join(meds)}）と同じ投稿で症状言及"
-                    f"（{'・'.join(symps)}）があります — 関連は人が原記録"
-                    "で判断してください（自動判定ではありません）"}
+                    f"（{'・'.join(symps)}）があります — 関連を原記録で確認してください"}
 
 
 DETECTORS = (("request_overdue", _request_overdue),

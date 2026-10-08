@@ -1,0 +1,21 @@
+{
+  "category": "fixed",
+  "title": "監視警報の再通知・LINE WORKSの患者別アラート・緊急表示の強弱を修正",
+  "summary": "監視警報の送信結果が不明になっても、同じ障害が続く限り4時間ごとに再警報します。LINE WORKSでは患者別アラート候補を保留せず、従来どおりチャンネルへ配送し、確認・担当・却下の操作を使えます。AI判定の緊急度高にも🚨を付け、機械照合（🚨のみ）より弱く見えないようにしました。古いカードを押したときの一部の拒否理由を日本語で表示します。",
+  "upgrade": "追加設定は不要です。収集処理への反映後、新規描画から適用されます。Hermes接続ではgateway再起動、LINE WORKSは独立アダプターの再起動で新workerを反映してください。LINE WORKSで既に保留（lineworks_thread_unsupported）になった通知は自動では再送しません。送信結果が不明な監視警報は、同じ障害が続く場合だけ4時間間隔で新しい警報として送ります（同じ送信の再試行はしません）。",
+  "details": [
+    "health_watch: REALERT_S経過の再警報を新しい理由と同様に扱い、unknownの記録を保存したうえで新しいpendingを作る。",
+    "notify_cards / notify_transport: 元投稿スレッドへの束縛をSlack・Discordに限定し、LINE WORKSのsignalはsource_threadを付けず従来経路を使う。緊急度の再確認通知のLINE WORKS保留は変更しない。",
+    "URGENCY_TAG / URGENCY_LABEL のAI判定に🚨を前置し、日次ダイジェストのAI判定行に「🚨［AI判定］」を表示する。機械照合の🚨表示は変更しない。",
+    "ERR_JA に action_not_applicable / actor_mismatch / origin_mismatch を追加する。"
+  ],
+  "refs": [
+    "mcs/ingest/health_watch.py",
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_transport.py",
+    "mcs/notify/notify_render.py",
+    "mcs/notify/notify_digest.py",
+    "mcs/views/structured_view.py",
+    "adapters/common/text.py"
+  ]
+}

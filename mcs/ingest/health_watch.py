@@ -153,6 +153,9 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     report["last_ok_at"] = (last_ok if _finite_number(last_ok)
                             and last_ok >= 0 else None)
     notify = h.get("notify") if isinstance(h.get("notify"), dict) else {}
+    pending = notify.get("pending")
+    report["notify_pending"] = (pending if _finite_number(pending)
+                                and pending >= 0 else None)
     held = notify.get("held_reasons")
     report["held_reasons"] = (
         held if isinstance(held, dict)
@@ -244,7 +247,21 @@ def evaluate(home: str = HOME, now: float | None = None,
     realert = (obs["status"] != "ok"
                and (invalid_alert_at
                     or now - alerted_at >= REALERT_S))
-    alert = obs["status"] != "ok" and (transition or realert or new_reason)
+    # Flapping back into the same degraded episode (degraded -> ok ->
+    # degraded with no new reason) inside REALERT_S is not news; severe
+    # states (failed/stale/missing/corrupt) always alert on entry.
+    episode = state.get("alerted_episode")
+    episode = episode if isinstance(episode, dict) else {}
+    episode_reasons = episode.get("reasons")
+    episode_reasons = (set(episode_reasons) if isinstance(episode_reasons, list)
+                       and all(isinstance(r, str) for r in episode_reasons) else None)
+    reflap = (transition and obs["status"] == "degraded"
+              and episode.get("status") == "degraded" and not realert
+              and episode_reasons is not None and set(reasons) <= episode_reasons)
+    if reflap:
+        seen = set(episode_reasons)
+    alert = obs["status"] != "ok" and (
+        (transition and not reflap) or realert or new_reason)
     disk_prev = state.get("disk_low") is True
     disk_low = (obs["disk_low"] if obs["status"] in OVERALL_STATUS
                 else disk_prev)
@@ -260,11 +277,16 @@ def evaluate(home: str = HOME, now: float | None = None,
                      "evidence_at": _dedup_stamp(obs)}
     if alert:
         state["detected_at"] = now
+        state["alerted_episode"] = {"status": obs["status"],
+                                    "reasons": sorted(set(reasons) | (
+                                        episode_reasons or set()
+                                        if episode.get("status") == obs["status"]
+                                        else set()))}
     state["alerted_reasons"] = sorted(seen | set(reasons) if alert
                                       else seen)
     delivery = _reconcile_delivery(state, obs["status"], key, alert,
                                    disk_low, disk_alert, transition,
-                                   new_reason, now)
+                                   new_reason or realert, now)
     if delivery:
         state["delivery"] = delivery
         report["delivery"] = dict(delivery)
@@ -297,7 +319,9 @@ def _reconcile_delivery(state: dict, status: str, key: tuple,
 
     pending/not_sent deliveries survive only while their component is
     still active; an unknown outcome is held verbatim — it can neither
-    be retried nor manufactured into a success."""
+    be retried nor manufactured into a success. A REALERT_S re-alert
+    arrives as new_reason: it is a fresh alert, not a retry, so a lost
+    send cannot silence a persisting incident forever."""
     delivery = state.get("delivery")
     delivery = delivery if isinstance(delivery, dict) else {}
     current_alert = bool(delivery.get("alert") and status != "ok")
@@ -319,7 +343,8 @@ def _reconcile_delivery(state: dict, status: str, key: tuple,
                                      and not (transition or new_reason or disk_alert)):
         # An uncertain send stays held, including hourly observations
         # of the same incident. A new verdict/reason is a different alert.
-        if delivery.get("key") != delivery_key or delivery.get("outcome") in ("delivered", "superseded"):
+        if delivery.get("key") != delivery_key or delivery.get("outcome") in ("delivered", "superseded") \
+                or (new_reason and delivery.get("outcome") == "unknown"):
             if delivery.get("outcome") == "unknown":
                 _archive_unknown(state, delivery)
             delivery = {"key": delivery_key, "outcome": "pending",
@@ -356,25 +381,133 @@ def deliver_alert(cfg: dict, text: str) -> bool | None:
         return None                    # includes _SendUncertain
 
 
+_STATUS_JA = {"degraded": "一部に異常があります", "failed": "収集が失敗しました",
+              "stale": "状態の記録が更新されていません", "missing": "状態の記録がありません",
+              "corrupt": "状態の記録が壊れています"}
+_SEVERE = frozenset({"failed", "stale", "missing", "corrupt"})
+_CHECK = "python3 mcs/ops/mcs_setup.py check"
+# code -> (what happened, in plain words / what to do next)
+_REASON_JA = {
+    "run_failed": ("収集の実行が失敗しました",
+                   f"data/run_check.log の末尾を確認。続く場合は {_CHECK}"),
+    "session_expired": ("MCSのログインが切れ、自動の再ログインも失敗しました",
+                        "MCSに手動でログインし直す（docs/guides/INSTALLATION.md の session_expired）"),
+    "stage_errors": ("収集の一部の処理でエラーがありました",
+                     "次回の収集で再試行されます。続く場合は data/run_check.log を確認"),
+    "code_changed": ("収集中にコードが更新されました", "対処不要。次回の収集で続行します"),
+    "run_deadline_exceeded": ("収集が制限時間を超えました",
+                              "続く場合は llama-server とネットワークの負荷を確認"),
+    "ledger_relation_violations": ("保存データの整合性に問題があります",
+                                   f"{_CHECK} を実行し、修復手順に従う"),
+    "backup_not_verified": ("バックアップの完了を確認できません",
+                            "バックアップの設定と保存先の空き容量を確認"),
+    "collection_incomplete": ("一部の患者の記録を取得できていません",
+                              "次回以降に再取得されます。続く場合はMCSの画面と閲覧権限を確認"),
+    "notification_failed": ("通知の送信に失敗しました",
+                            "通知先の設定と Hermes gateway（独立接続なら ai.mcs.standalone）の稼働を確認"),
+    "notification_deferred": ("通知を先送りしました", "次回の収集で送信されます"),
+    "notification_parked": ("通知が待機中です", "次回の収集で再確認されます"),
+    "notification_held": ("通知が保留されています",
+                          "python3 mcs/ops/mcs_setup.py doctor で保留理由を確認"),
+    "notification_pending": ("送信待ちの通知があります",
+                             "次回の収集で送信されます。長く続く場合は gateway の稼働を確認"),
+    "disk_low": ("ディスクの空き容量が不足しています", "不要なファイルを削除するか保存先を広げる"),
+    "card_delivery_stalled": ("カードの配送が30分以上止まっています",
+                              "hermes gateway restart（独立接続なら ai.mcs.standalone の再起動）"),
+    "extract_backlog_stalled": ("要約の抽出が6時間以上止まっています",
+                                "llama-server と extract-drainer の稼働を確認（launchctl list | grep mcs）"),
+    "semantic_backlog_stalled": ("意味チェックが6時間以上止まっています",
+                                 "extract-drainer の稼働と data/extract_drain.log の jev_error を確認"),
+    "stall_check_failed": ("停滞の判定処理が失敗しました",
+                           f"data/run_check.log の stall_check_failed を確認。続く場合は {_CHECK}"),
+    "semantic_jev_payment_required": ("TypeSafe Jev が支払い未了（HTTP 402）を返しています",
+                                      "TypeSafe の契約・残高を確認。解消まで意味チェックは待機し、収集・通知には影響しません"),
+    "semantic_jev_no_api_key": ("TypeSafe Jev のAPIキーが設定されていません",
+                                "TYPESAFE_API_KEY を .env に設定"),
+    "semantic_jev_budget_exceeded": ("TypeSafe Jev の1日の利用上限に達しました",
+                                     "翌日に自動で再開します。上限は semantic.daily_request_budget"),
+    "semantic_jev_auth_error": ("TypeSafe Jev の認証に失敗しました",
+                                "TYPESAFE_API_KEY の値と有効期限を確認"),
+    "unread_collection_unknown": ("未読収集の状況が記録されていません",
+                                  "次回の収集を待ち、続く場合は data/run_check.log を確認"),
+}
+_AREA_JA = (("semantic", "意味チェック（任意機能）"), ("extract_backlog", "要約の抽出"),
+            ("notification", "通知"), ("card_delivery", "通知"),
+            ("collection_incomplete", "一部患者の記録取得"), ("disk_low", "保存"),
+            ("ledger", "保存データ"), ("backup", "バックアップ"))
+
+
+def _jst(ts) -> str:
+    if not _finite_number(ts):
+        return "不明"
+    return time.strftime("%m-%d %H:%M", time.gmtime(ts + 9 * 3600))
+
+
+def _hours(seconds) -> str:
+    return f"{seconds / 3600:.1f}時間" if _finite_number(seconds) else ""
+
+
+def _impact(report: dict, reasons) -> str:
+    """One sentence a staff member can act on: what is affected and
+    whether collection itself is still running."""
+    if report["status"] in _SEVERE:
+        return "新しい連絡の収集と通知が止まっている可能性があります。"
+    areas = []
+    for r in reasons or []:
+        for prefix, name in _AREA_JA:
+            if r.startswith(prefix) and name not in areas:
+                areas.append(name)
+    parts = []
+    if areas:
+        parts.append("・".join(areas) + "に遅れや不具合があります。")
+    if report.get("run_status") == "ok":
+        parts.append("収集は動いています。")
+    return "".join(parts) or "収集は動いていますが、確認が必要な状態です。"
+
+
+def _reason_rows(report: dict, reasons) -> list[str]:
+    if reasons is None:
+        return ["・理由を特定できません（状態の記録に理由がありません）",
+                f"　→ {_CHECK} で確認"]
+    if not reasons:
+        return ["・記録された理由はありません", "　→ 次回の収集を待つ"]
+    oldest = report.get("oldest_age_s") or {}
+    rows = []
+    for code in reasons:
+        base = code.split(":")[0]
+        meaning, action = _REASON_JA.get(base, (code, f"{_CHECK} で確認"))
+        extra = ""
+        if base == "notification_pending":
+            n = report.get("notify_pending")
+            age = _hours(oldest.get("notify"))
+            extra = (f" {int(n)}件" if _finite_number(n) else "") + (f"（最古 {age}）" if age else "")
+        elif base == "semantic_backlog_stalled" and _hours(oldest.get("semantic_jobs")):
+            extra = f"（最古 {_hours(oldest.get('semantic_jobs'))}）"
+        rows += [f"・{meaning}{extra}", f"　→ {action}"]
+    return rows
+
+
 def _alert_lines(report: dict) -> list[str]:
+    """Staff-readable alert: severity and status first, then the impact,
+    each reason with its next step, timestamps in JST, and the raw codes
+    last on one line for operators to search."""
     lines = []
     if report["alert"] and report["status"] != "ok":
-        age = report.get("age_s")
+        status = report["status"]
         reasons = report.get("state_reasons")
-        lines.append("mcs health: {status} (overall={overall} "
-                     "health_at={health_at} age_s={age} deadline_s={dl} "
-                     "reasons={reasons} last_ok_at={last_ok})".format(
-                         status=report["status"],
-                         overall=report.get("overall"),
-                         health_at=report.get("health_at"),
-                         age=age, dl=report["deadline_s"],
-                         reasons=(",".join(reasons) or "none")
-                         if reasons is not None else "unknown",
-                         last_ok=report.get("last_ok_at")
-                         if report.get("last_ok_at") is not None
-                         else "unknown"))
+        glyph = "🔴" if status in _SEVERE else "🟠"
+        lines.append(f"{glyph} MCS監視: {_STATUS_JA.get(status, status)}")
+        lines.append("影響: " + _impact(report, reasons))
+        lines.append("原因と対処:")
+        lines.extend(_reason_rows(report, reasons))
+        lines.append(f"最終正常 {_jst(report.get('last_ok_at'))}"
+                     f" / 最新記録 {_jst(report.get('health_at'))}（JST）")
+        lines.append(f"コード: {status} " + (",".join(reasons) if reasons else
+                                            "none" if reasons is not None else "unknown"))
     if report["disk_alert"] and report["disk_low"]:
-        lines.append("mcs disk: low (free_mb={})".format(report.get("disk_free_mb")))
+        free = report.get("disk_free_mb")
+        lines.append(f"空き容量不足: 残り {free} MB" if _finite_number(free)
+                     else "空き容量不足: 残り 不明")
     return lines
 
 

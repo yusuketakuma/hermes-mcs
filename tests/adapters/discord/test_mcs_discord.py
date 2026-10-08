@@ -1525,7 +1525,7 @@ def test_confirm_wrong_actor_and_replay(world):
         "SELECT COUNT(*) c FROM requests").fetchone()["c"] == 1
     again = FakeInteraction(cid, message_id=msg.id)
     asyncio.run(act.on_interaction(again))
-    assert "期限切れ" in again.response.message["content"]
+    assert "処理中" in again.response.message["content"]   # consumed, not expired
 
 
 def test_confirm_cancel_drops_pending(world):
@@ -1602,7 +1602,7 @@ def test_cancel_during_confirm_publish_never_reports_cancelled(
     assert "処理中" in again.response.message["content"]
     assert "受け付けました" in ok.followup.sent[0]["content"]
     assert len(list((world.data / "cmd_int").glob("*.json"))) == 1
-    assert reg.confirm(cid[len("mcs:c:"):]) is None
+    assert reg.confirm(cid[len("mcs:c:"):])["consumed"] is True
 
 
 @pytest.mark.parametrize("error", [OSError("disk full"),
@@ -2386,12 +2386,14 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         world.drain()
         assert thread.sent                   # backfilled
         body = "\n".join(thread.sent)
-        assert "📄 本文" in body and "追記あり" in body and "スタンプ 未取得" in body
+        assert "📄 本文" not in body and "追記あり" in body and "スタンプ 未取得" in body
+        post = next(p for p in thread.sent if "追記あり" in p)
+        assert post.index("追記あり") < post.index("スタンプ 未取得")   # body first, stamps trail
         assert "📋 要約" not in body and "処理待ち" not in body and "解析更新中" not in body
         _, current_spec = world.spec()
         assert current_spec["delivery"]["thread_id"] == str(original_thread_id)
-        assert "📋 要約" in notify_cards._card_body_text(world.led.db, dict(world.led.db.execute("SELECT * FROM notification_cards WHERE card_id=1").fetchone()), {"shown": "[100,101]"})[1]
-        assert "📋 要約" in "\n".join(item.get("text", "") for item in current_spec["parts"]["containers"])
+        assert "要約 処理待ち" in notify_cards._card_body_text(world.led.db, dict(world.led.db.execute("SELECT * FROM notification_cards WHERE card_id=1").fetchone()), {"shown": "[100,101]"})[1]
+        assert "要約 処理待ち" in "\n".join(item.get("text", "") for item in current_spec["parts"]["containers"])
 
         n = len(thread.sent)
         # re-running the same delivery posts nothing — the journal
@@ -2933,7 +2935,7 @@ def test_summary_click_answers_ephemeral(world):
                          message_id=msg.id)
     asyncio.run(world.interact(act, ix))
     sent = "\n".join(m["content"] for m in ix.followup.sent)
-    assert "患者の記録まとめ（暫定集約）" in sent and "集約資料がまだありません" in sent
+    assert "患者の記録まとめ" in sent and "暫定集約" not in sent and "集約資料なし" in sent
     assert all(m["ephemeral"] for m in ix.followup.sent)
 
 
@@ -3009,7 +3011,7 @@ def test_my_tasks_uses_display_name_and_project_scope(world):
     out = "\n".join(m["content"] for m in ix.followup.sent)
     assert all(m["ephemeral"] for m in ix.followup.sent)
     assert "自分のタスク（担当: 山田 花子）" in out
-    assert "⚠ 期限切れ" in out and "残薬確認" in out
+    assert "⚠期限切れ" in out and "残薬確認" in out
     # project 2 is outside this deployment's scope; 佐藤 is not the clicker
     assert "範囲外の件" not in out and "他人の件" not in out
 
@@ -3026,7 +3028,7 @@ def test_unacked_list_links_the_card(world):
     out = "\n".join(m["content"] for m in ix.followup.sent)
     assert "■ 患者A" in out and "未確認" in out
     assert f"https://discord.com/channels/7/42/{msg.id}" in out
-    assert "作業が済んだかどうかは表しません" in out
+    assert "作業が済んだかどうかは表しません" not in out
 
 
 def test_search_modal_answers_hits_ephemeral(world):
@@ -3046,8 +3048,8 @@ def test_search_modal_answers_hits_ephemeral(world):
     asyncio.run(world.interact(act, s))
     out = "\n".join(m["content"] for m in s.followup.sent)
     assert all(m["ephemeral"] for m in s.followup.sent)
-    assert "「本文」の検索結果" in out and "2件（新しい順）" in out
-    assert "まだ取得していない範囲は検索されません" in out
+    assert "「本文」の検索結果" in out and "2件（取得済み投稿・新しい順）" in out
+    assert "履歴取得:" in out          # the fetched range, no caveat sentence
     # another member cannot submit the clicker's form
     s2 = FakeInteraction(f"mcs:m:{modal_id}", user_id=2002,
                          message_id=msg.id, components=[])
@@ -3348,3 +3350,16 @@ def test_private_medication_navigation_pages_posts_and_rejects_other_origin(worl
                for message in interaction.followup.sent)
     assert thread.sent == shared_body and len(bot.channels[42].sent) == 1
     assert reg.token(controls["次の5件"][len("mcs:a:"):]) is not None
+
+
+def test_thread_post_line_is_subtext_but_signal_patient_heading_is_not():
+    from adapters.discord.cards import _zones, escape_md
+    containers = [{"type": "heading", "text": "合成"},
+                  {"type": "text", "text": "10-01 09:40 合成さん", "rule": True},
+                  {"type": "text", "text": "📋 要約"}]
+    thread = {"kind": "thread", "parts": {"containers": containers, "footer": []}}
+    zones, _ = _zones(thread, escape_md)
+    assert zones[1] == ["-# 10-01 09:40 合成さん", "📋 要約"]
+    signal = {"kind": "signal", "parts": {"containers": containers, "footer": []}}
+    zones, _ = _zones(signal, escape_md)
+    assert zones[1][0] == "10-01 09:40 合成さん"

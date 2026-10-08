@@ -74,12 +74,13 @@ def test_earlier_native_content_fp_drifts_layout_once_and_keeps_ack_source(led, 
 def test_earlier_non_native_content_fp_stays_compatible(led, transport):
     _delivered_card(led)
     card = _card(led)
+    card["layout"] = 1                    # a card created before layout 2
     if transport is None:
         card.pop("transport")
     else:
         card["transport"] = transport
     content = notify_cards._card_content(led.db, card)
-    assert "thread_layout" not in content
+    assert "thread_layout" not in content and "layout" not in content
     old_fp = payload_hash({"c": content["containers"], "f": content["footer"],
                            "s": content["shown"], "p": content["page"],
                            "a": content.get("actor_fp")})
@@ -87,6 +88,17 @@ def test_earlier_non_native_content_fp_stays_compatible(led, transport):
     assert notify_cards._generation_drift(card, content) == {}
     changed = {**content, "preview_text": "別のプレビュー"}
     assert notify_render._content_fp(changed) == old_fp
+
+
+def test_layout_one_card_keeps_legacy_face_and_new_cards_use_layout_two(led):
+    _delivered_card(led)
+    card = _card(led)
+    assert card["layout"] == notify_cards.CARD_LAYOUT == 2
+    new = notify_cards._card_content(led.db, card)
+    legacy = notify_cards._card_content(led.db, {**card, "layout": 1})
+    assert " · 起点 " in legacy["containers"][0]["text"]
+    assert " · 起点 " not in new["containers"][0]["text"]
+    assert notify_render._content_fp(legacy) != notify_render._content_fp(new)
 
 
 # 2 ---------------------------------------------------------------------

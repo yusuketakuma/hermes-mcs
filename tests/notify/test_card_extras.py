@@ -58,12 +58,12 @@ def test_my_tasks_matches_display_name_overdue_first(led):
     view = r["list"]
     assert view["head"] == ["未完了 3件（うち期限切れ 1件）"]
     assert _texts(view) == [
-        f"・⚠ 期限切れ #{late} 昨日の確認 — 期限 2026-01-01 — 患者A",
-        f"・#{later} 来週の確認 — 期限 2026-12-01 — 患者A",
-        f"・#{undated} 期限なし — ⏳対応中 — 患者A"]
+        f"・患者A: 昨日の確認 — 期限 2026-01-01 ⚠期限切れ #{late}",
+        f"・患者A: 来週の確認 — 期限 2026-12-01 #{later}",
+        f"・患者A: 期限なし — ⏳対応中 #{undated}"]
     assert all(i["project_id"] == 1 for i in view["items"])
-    assert any("手入力の別表記" in n for n in view["notes"])
-    assert any("対応がなかったことを意味しません" in n for n in view["notes"])
+    assert view["notes"][0].startswith("※ 担当者欄が表示名")
+    assert not any("対応がなかったことを意味しません" in n for n in view["notes"])
     # a different name is a different command — never a conflict
     other = _click(led, spec, "mytasks", {"name": "佐藤"})
     assert other["list"]["items"] == []
@@ -111,7 +111,7 @@ def test_unacked_lists_until_acknowledged(led):
     assert (item["project_id"], item["group"]) == (1, "患者A")
     assert "https://www.medical-care.net/projects/medical/1" in item["text"]
     assert "https://discord.com/channels/g1/ch1/m-9" in item["text"]
-    assert any("作業が済んだかどうかは表しません" in n for n in view["notes"])
+    assert not any("作業が済んだかどうかは表しません" in n for n in view["notes"])
 
     _click(led, spec, "assign")
     _deliver(led)
@@ -163,11 +163,9 @@ def test_search_opens_modal_then_answers_hits(led):
     assert first["modal"] is True and first["action"] == "search"
     r = _click(led, spec, "search", {"query": "発熱 解熱"})
     view = r["list"]
-    assert view["head"][0].startswith("1件（新しい順）")
+    assert view["head"][0].startswith("1件（取得済み投稿・新しい順）")
     assert view["items"] == [{"project_id": 1, "text":
                               "・09-24 08:42 看護師: 昨日から 発熱 あり。解熱剤を使用"}]
-    assert any("まだ取得していない範囲は検索されません" in n
-               for n in view["notes"])
     assert any(n.startswith("履歴取得:") for n in view["notes"])
     # the hits reach the clicker once — never the durable receipt
     stored = led.db.execute("SELECT receipt_json FROM command_receipts "

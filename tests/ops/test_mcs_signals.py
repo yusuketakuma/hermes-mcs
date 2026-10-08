@@ -130,7 +130,7 @@ def test_med_change_no_followup(led):
     assert sig["evidence"]["med"] == "薬A"
     assert sig["evidence"]["message_ids"] == [1]
     assert "確認できませんでした" in sig["note"]
-    assert "対応の有無を示すものではありません" in sig["note"]
+    assert "対応の有無を示すものではありません" not in sig["note"]
 
 
 def test_med_episode_groups_same_med(led):
@@ -188,7 +188,7 @@ def test_comm_concentration(led):
     assert _ev(led)["open"] == 1
     sig = mcs_signals.current_open(led.db)["items"][0]
     assert sig["type"] == "comm_concentration"
-    assert "重症度ではありません" in sig["note"]
+    assert "重症度ではありません" not in sig["note"]
 
 
 def test_request_aging(led):
@@ -891,7 +891,7 @@ def test_same_post_meds_merge_into_one_notice(led, monkeypatch):
     assert "ダイジェスト（3件）" in text
     assert "med インスリン・在宅酸素" in text
     assert "薬「インスリン」「在宅酸素」の変更言及後" in text
-    assert "対応の有無を示すものではありません" in text
+    assert "対応の有無を示すものではありません" not in text
     assert "山田 テスト" in text and "最新言及" in text
     assert '"op":"timeline"' in text and files == []
 
@@ -1178,7 +1178,7 @@ def test_pharmacist_request_unanswered(led):
     items = mcs_signals.current_open(led.db)["items"]
     ph = [s for s in items if s["type"] == "pharmacist_request_unanswered"]
     assert len(ph) == 1
-    assert "記録上の確認" in ph[0]["note"]
+    assert "確認できませんでした" in ph[0]["note"] and "記録上の確認であり" not in ph[0]["note"]
     assert "残薬調整の確認" in ph[0]["note"]
     # a pharmacist-profession post after the mention counts as a
     # responder -> no signal
@@ -1326,7 +1326,7 @@ def test_symptom_after_med_change_same_post(led):
     assert items[0]["project_id"] == 1
     assert items[0]["evidence"]["meds"] == ["薬A"]
     assert items[0]["evidence"]["symptoms"] == ["浮腫"]
-    assert "関連は人が原記録で判断" in items[0]["note"]
+    assert "関連を原記録で確認" in items[0]["note"]
 
 
 
@@ -1433,7 +1433,7 @@ def test_urgency_high_escalates_to_immediate(led, monkeypatch):
     ev = led.db.execute("SELECT * FROM notify_outbox").fetchone()
     text, _ = notify_flush._format_event(led, ev)
     import structured_view
-    assert structured_view.URGENCY_LABEL["llm"] in text
+    assert structured_view.URGENCY_LABEL_PLAIN["llm"] in text
 
 
 def test_tier_override_config(led):

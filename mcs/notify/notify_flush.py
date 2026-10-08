@@ -250,7 +250,7 @@ def _signal_unit_text(ledger, sigs: list[dict]):
         suffix = (structured_view.urgency_qc_suffix(ledger.db, mid)
                   if urgency == "llm" else "")
         head, sep, tail = text.partition("\n")
-        text = (f"{head} — {structured_view.URGENCY_LABEL[urgency]}"
+        text = (f"{head} — {structured_view.URGENCY_LABEL_PLAIN[urgency]}"
                 f"{suffix}{sep}{tail}")
     return text
 
@@ -423,7 +423,7 @@ def _msg_rows(ledger, payload: dict, project_id) -> list:
 def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
              skipped: dict, *, stamps=True, summary_suffix="") -> str:
     s_lines = structured_view.structured_lines(
-        ledger.db, r["message_id"])
+        ledger.db, r["message_id"], plain=True)
     urg = structured_view.message_urgency(ledger.db, r["message_id"])
     body = html_to_text(r["body_html"])
     cap = 500 if s_lines else 600
@@ -452,7 +452,7 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
         more = f"、他{len(marks) - 5}件" if len(marks) > 5 else ""
         att_line = f"\n{indent}📎 {'、'.join(marks[:5])}{more}"
     empty = "作成失敗" if not s_lines and _extraction_failed(ledger.db, r["message_id"]) else "処理待ち"
-    summary = ([f"{indent}📋 要約"] + [f"{indent}・{ln}" for ln in s_lines]
+    summary = ([f"{indent}📋 要約"] + [f"{indent}・" + ln.replace("\n", f"\n{indent}") for ln in s_lines]
                if s_lines else [f"{indent}📋 要約 {empty}"])
     if stamps:
         from ledger import reaction_actor_summary

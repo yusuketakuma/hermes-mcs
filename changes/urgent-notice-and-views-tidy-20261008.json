@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "緊急度の再確認通知と薬剤表示を見やすく整理",
+  "summary": "緊急度の再確認通知は、見出し（🚨）、患者と対象、理由の原文引用、発信者・投稿時刻・AI判定時刻、注記の順に表示し、患者名と時刻の重複をなくしました。スマートフォンの通知文は「🚨緊急度高」から始まり、通常の確認依頼と区別できます。注記は「確認・依頼登録の記録は見つかっていません。記録がないことは未対応・業務完了を意味しません」に変えました。解析の進み具合は「解析更新中（3区間中1区間完了）」と表示します。💊薬剤の表示は、投稿が1件・1ページのときの投稿番号とページの行を出さず、辞書の識別子を末尾の注記へ移しました。",
+  "upgrade": "追加設定は不要です。収集処理への反映後、新しい通知と描画から適用されます。解析中の表記変更により、解析中のカードは次の描画で文言が更新されます。README画面例08のSVG・PNGを更新しました（PNGはQuick LookとImageMagickで描画）。",
+  "details": [
+    "alert_view.render_parts: 理由の引用を発信者行より前に置き、発信者・投稿・AI判定を1行にまとめる。preview_text の先頭に「🚨緊急度高」を付ける。",
+    "notify_render と extraction_progress の進捗表記を「N区間中M区間完了」に統一する。",
+    "meds_view: ページ行は複数ページのときだけ、辞書の識別子は notes に表示する。投稿の切替行は対象投稿が2件以上のときだけ表示する。"
+  ],
+  "refs": ["mcs/notify/alert_view.py", "mcs/notify/notify_render.py", "mcs/views/extraction_progress.py", "mcs/notify/notify_views.py", "mcs/notify/notify_cards.py", "docs/screenshots/slack-gallery/08-urgent-notice.svg"]
+}

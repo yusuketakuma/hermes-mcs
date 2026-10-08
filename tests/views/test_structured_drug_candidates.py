@@ -40,7 +40,7 @@ def test_chat_and_text_summaries_show_candidates_preserving_raw_dose_action_plan
     for text in ('\n'.join(structured_view.structured_lines(store.db, 1)),
                  _text_notice(store)):
         assert 'キラナ 5mg[開始][予定](内服・1日1回・頓服)' in text
-        assert '成分候補: 架空成分甲' in text and '・未確認' in text
+        assert '成分候補: 架空成分甲［未確認・辞書 ' in text
         assert 'キラナ' in text  # the ingredient never replaces the surface-name row
     card = notify_render._structured_block(store.db, 1)['text']
     assert 'キラナ 5mg[開始][予定](内服・1日1回・頓服)' in card
@@ -59,13 +59,13 @@ def test_filtered_medications_never_return_through_dictionary_or_rule_fallback(s
         assert 'キラナ' not in text and '架空成分甲' not in text
 
 
-@pytest.mark.parametrize('name,label', [('共通架空', '複数候補'), ('未知の架空薬', '不明')])
+@pytest.mark.parametrize('name,label', [('共通架空', '複数あり'), ('未知の架空薬', '一致なし')])
 def test_ambiguous_and_unresolved_names_are_explicitly_unconfirmed(store, tmp_path, name, label):
     _facts(store, names=(name,), dose='5mg')
     drug_map.derive(store, _dictionary(tmp_path))
     text = '\n'.join(structured_view.structured_lines(store.db, 1))
     assert name + ' 5mg[開始]' in text
-    assert '成分候補: ' + label in text and '未確認' in text
+    assert '辞書候補: ' + label + '［未確認' in text
     assert '架空成分甲' not in text and '架空成分乙' not in text
 
 

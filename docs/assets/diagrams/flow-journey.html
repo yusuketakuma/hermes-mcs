@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>症例経過としての投稿のつながり</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper: #f6f4ef;
+      --color-ink: #202124;
+      --color-muted: #66716f;
+      --color-accent: #087f5b;
+      --font-sans: 'Hiragino Sans', 'Noto Sans CJK JP', 'Yu Gothic', sans-serif;
+      --font-mono: Menlo, 'SF Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--color-paper); color: var(--color-ink);
+           min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500; letter-spacing: 0.18em;
+               text-transform: uppercase; color: var(--color-muted); margin-bottom: 0.5rem; }
+    h1 { font-size: clamp(1.4rem, 2vw + 0.75rem, 1.9rem); font-weight: 700; line-height: 1.2; margin-bottom: 1.5rem; }
+    svg { width: 100%; min-width: 1000px; display: block; }
+    @media print { .diagram-container { overflow-x: visible; } svg { min-width: 0; } }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Swimlane · Diagram Design</p>
+    <h1>症例経過としての投稿のつながり</h1>
+    <div class="diagram-container">
+      <svg viewBox="0 0 1000 624" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flow-journey-title flow-journey-desc">
+        <title id="flow-journey-title">症例経過としての投稿のつながり</title>
+        <desc id="flow-journey-desc">訪問看護師・薬剤師・医師の6件の投稿が、症状・評価・提案・判断・実施・再評価の順につながり、一つの症例経過になる流れ。</desc>
+        <defs>
+          <marker id="fj-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#66716f"/></marker>
+        </defs>
+        <rect width="100%" height="100%" fill="#f6f4ef"/>
+
+        <!-- lanes (vertical columns) -->
+        <g stroke="rgba(32,33,36,0.12)" stroke-width="1">
+          <line x1="24" y1="72" x2="976" y2="72"/>
+          <line x1="340" y1="32" x2="340" y2="528"/>
+          <line x1="660" y1="32" x2="660" y2="528"/>
+        </g>
+        <g font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" font-size="14" font-weight="600" fill="#202124" text-anchor="middle">
+          <text x="180" y="57">訪問看護師</text>
+          <text x="500" y="57">薬剤師</text>
+          <text x="820" y="57">医師</text>
+        </g>
+
+        <!-- arrows first -->
+        <path d="M 308,120 H 492 Q 500,120 500,128 V 166" fill="none" stroke="#66716f" stroke-width="1.2" marker-end="url(#fj-arrow)"/>
+        <line x1="500" y1="224" x2="500" y2="242" stroke="#66716f" stroke-width="1.2" marker-end="url(#fj-arrow)"/>
+        <path d="M 628,272 H 812 Q 820,272 820,280 V 318" fill="none" stroke="#66716f" stroke-width="1.2" marker-end="url(#fj-arrow)"/>
+        <path d="M 692,348 H 188 Q 180,348 180,356 V 394" fill="none" stroke="#66716f" stroke-width="1.2" marker-end="url(#fj-arrow)"/>
+        <path d="M 308,424 H 492 Q 500,424 500,432 V 470" fill="none" stroke="#66716f" stroke-width="1.2" marker-end="url(#fj-arrow)"/>
+
+        <!-- nodes -->
+        <g font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif">
+          <rect x="52" y="92" width="256" height="56" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="64" y="114" fill="#202124" font-size="14" font-weight="600">疼痛増悪・レスキュー増加を共有</text>
+          <text x="64" y="134" fill="#66716f" font-size="12">症状</text>
+
+          <rect x="372" y="168" width="256" height="56" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="384" y="190" fill="#202124" font-size="14" font-weight="600">薬物療法を評価</text>
+          <text x="384" y="210" fill="#66716f" font-size="12">評価</text>
+
+          <rect x="372" y="244" width="256" height="56" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="384" y="266" fill="#202124" font-size="14" font-weight="600">処方調整を相談</text>
+          <text x="384" y="286" fill="#66716f" font-size="12">提案</text>
+
+          <rect x="692" y="320" width="256" height="56" rx="6" fill="#f6f4ef"/>
+          <rect x="692" y="320" width="256" height="56" rx="6" fill="rgba(8,127,91,0.08)" stroke="#087f5b" stroke-width="1.4"/>
+          <text x="704" y="342" fill="#202124" font-size="14" font-weight="600">処方変更</text>
+          <text x="704" y="362" fill="#66716f" font-size="12">判断</text>
+
+          <rect x="52" y="396" width="256" height="56" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="64" y="418" fill="#202124" font-size="14" font-weight="600">変更後の状態を共有</text>
+          <text x="64" y="438" fill="#66716f" font-size="12">実施</text>
+
+          <rect x="372" y="472" width="256" height="56" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="384" y="494" fill="#202124" font-size="14" font-weight="600">効果・副作用を再評価</text>
+          <text x="384" y="514" fill="#66716f" font-size="12">再評価</text>
+        </g>
+
+        <!-- caption + legend strip -->
+        <line x1="24" y1="552" x2="976" y2="552" stroke="rgba(32,33,36,0.12)" stroke-width="0.8"/>
+        <g font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" font-size="12" fill="#66716f">
+          <text x="24" y="588">6件の投稿を「症状→評価→提案→判断→実施→再評価」の一つの症例経過としてまとめる</text>
+          <line x1="640" y1="584" x2="672" y2="584" stroke="#66716f" stroke-width="1.2"/>
+          <text x="680" y="588">投稿の順序</text>
+          <rect x="776" y="576" width="24" height="16" rx="3" fill="rgba(8,127,91,0.08)" stroke="#087f5b" stroke-width="1.2"/>
+          <text x="808" y="588">医師の判断</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

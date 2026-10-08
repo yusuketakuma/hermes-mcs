@@ -355,7 +355,7 @@ def test_cancel_during_confirm_publish_never_reports_cancelled(tmp_path):
         assert not any("取り消し" in m["text"] for m in app.client.messages)
         assert "受け付けました" in app.client.messages[-1]["text"]
         assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 2
-        assert reg.confirm(confirm_id) is None
+        assert reg.confirm(confirm_id)["consumed"] is True
     asyncio.run(scenario())
 
 
@@ -776,9 +776,11 @@ def test_search_modal_submits_query_as_view_click(tmp_path, kind, title):
                outcome="applied", action="list", list=_list_result(
                    [{"project_id": 123, "text": "・09-24 看護師: 発熱あり"}]))
         await actions.sweep_followups()
-        assert "発熱あり" in app.client.messages[-1]["text"]
+        answer = app.client.messages[-2 if kind == "drugsearch" else -1]
+        assert "発熱あり" in answer["text"]
         if kind == "drugsearch":
-            assert app.client.messages[-1]["thread_ts"] == TS
+            assert answer["thread_ts"] == TS
+            assert "スレッドに表示しました" in app.client.messages[-1]["text"]
         assert reg.modal(view["private_metadata"]) is None
     asyncio.run(scenario())
 
@@ -804,8 +806,10 @@ def test_drug_answers_use_only_verified_card_thread(tmp_path, kind, thread):
         assert all(m["user"] == "U_OPERATOR" and m["link_names"] is False
                    for m in app.client.messages)
         if thread == TS:
-            assert all(m["thread_ts"] == TS for m in app.client.messages)
-            assert "合成薬剤詳細" in "".join(m["text"] for m in app.client.messages)
+            threaded = [m for m in app.client.messages if m.get("thread_ts")]
+            assert threaded and all(m["thread_ts"] == TS for m in threaded)
+            assert "スレッドに表示しました" in app.client.messages[-1]["text"]
+            assert "合成薬剤詳細" in "".join(m["text"] for m in threaded)
             assert all("<@" not in m["text"] for m in app.client.messages)
         else:
             assert len(app.client.messages) == 1
@@ -835,8 +839,13 @@ def test_private_meds_navigation_preserves_card_thread_and_actor(tmp_path, inval
                    "id": "meds", "ui": "button", "label": "古い投稿へ",
                    "token": nav_token, "style": "secondary"}])
         await actions.sweep_followups()
-        assert len(app.client.messages) > 1
-        assert all(m["thread_ts"] == TS for m in app.client.messages)
+        assert len(app.client.messages) > 2
+        threaded = [m for m in app.client.messages if m.get("thread_ts")]
+        assert len(threaded) == len(app.client.messages) - 1
+        assert all(m["thread_ts"] == TS for m in threaded)
+        # the threaded answer is invisible from the card face: one channel
+        # line points there
+        assert "スレッドに表示しました" in app.client.messages[-1]["text"]
         assert "blocks" in app.client.messages[0]
         assert all("blocks" not in m for m in app.client.messages[1:])
         assert reg.token(nav_token)["verified_thread_id"] == TS
@@ -857,8 +866,9 @@ def test_private_meds_navigation_preserves_card_thread_and_actor(tmp_path, inval
         result(dirs, next_env["request_id"], request_id=next_env["request_id"],
                outcome="applied", action="body", body="合成の古い薬剤投稿")
         await actions.sweep_followups()
-        assert app.client.messages[-1]["thread_ts"] == TS
-        assert "古い薬剤投稿" in app.client.messages[-1]["text"]
+        assert app.client.messages[-2]["thread_ts"] == TS
+        assert "古い薬剤投稿" in app.client.messages[-2]["text"]
+        assert "thread_ts" not in app.client.messages[-1]
         origin = {**SCOPE, "message_id": "1790000000.000999",
                   "actor": "slack:T_SYNTHETIC:U_OPERATOR"}
         assert actions._pinned(nav_token, origin, origin["actor"])
@@ -1085,3 +1095,22 @@ def test_plain_answers_carry_no_markup():
                                          "title": "t"}]},
                              lambda _p: True, markdown=False)
     assert "*" not in tasks[0][0]
+
+
+def test_second_confirm_after_queueing_reads_as_in_progress(tmp_path):
+    """The ephemeral preview keeps its buttons after 確定: a second tap
+    must neither queue the task again nor tell the nurse to redo it."""
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="request")
+        body, (confirm_action, _) = await _to_confirm(
+            actions, app, dirs, 123)
+        await actions._confirm(ack, body, confirm_action)
+        assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 2
+        before = len(app.client.messages)
+        await actions._confirm(ack, body, confirm_action)
+        assert len(list(Path(dirs["cmd_int"]).glob("*.json"))) == 2
+        assert [m["text"] for m in app.client.messages[before:]] == [
+            "この確認は処理中です。結果をお待ちください。"]
+        confirm_id = confirm_action["action_id"].split(":")[2]
+        assert reg.confirm(confirm_id)["consumed"] is True
+    asyncio.run(scenario())

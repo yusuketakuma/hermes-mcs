@@ -2248,3 +2248,19 @@ def test_gateway_lifecycle_refused_in_test_sandbox(monkeypatch, tmp_path, verb):
     # read-only verbs still run
     assert mcs_setup._hermes_cli(str(exe), "", "gateway", "status").returncode == 0
     assert marker.exists()
+
+
+def test_alerts_need_an_interactive_transport():
+    """signals.notify delivers cards only: with cards off every alert is
+    held silently, so the config check says so up front."""
+    base = {"mcs_login_id": "u1", "notify_target": "slack:#mcs",
+            "signals": {"notify": True}}
+    errors, _ = mcs_setup.validate_config(base)
+    assert errors == ['signals.notify: requires notify.interactive '
+                      '("slack", "discord" or "lineworks") — alerts are cards']
+    scope = {"profile": "default", "application_id": "A1234567890",
+             "team_id": "T1234567890", "channel_id": "C1234567890"}
+    assert mcs_setup.validate_config(
+        {**base, "notify": {"interactive": "slack", "slack": scope}})[0] == []
+    assert mcs_setup.validate_config(
+        {**base, "signals": {"notify": False}})[0] == []

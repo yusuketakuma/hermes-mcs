@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>解析概要イメージ</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper: #f6f4ef;
+      --color-ink: #202124;
+      --color-muted: #66716f;
+      --color-accent: #087f5b;
+      --font-sans: 'Hiragino Sans', 'Noto Sans CJK JP', 'Yu Gothic', sans-serif;
+      --font-mono: Menlo, 'SF Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--color-paper); color: var(--color-ink);
+           min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500; letter-spacing: 0.18em;
+               text-transform: uppercase; color: var(--color-muted); margin-bottom: 0.5rem; }
+    h1 { font-size: clamp(1.4rem, 2vw + 0.75rem, 1.9rem); font-weight: 700; line-height: 1.2; margin-bottom: 1.5rem; }
+    svg { width: 100%; min-width: 1000px; display: block; }
+    @media print { .diagram-container { overflow-x: visible; } svg { min-width: 0; } }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Summary cards · Diagram Design</p>
+    <h1>解析概要イメージ</h1>
+    <div class="diagram-container">
+      <svg viewBox="0 0 1000 264" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="analytics-overview-title analytics-overview-desc">
+        <title id="analytics-overview-title">解析概要イメージ</title>
+        <desc id="analytics-overview-desc">架空データの例で、直近7日の薬剤変更4件（通常は週0.8件）、関与職種2から5・組織数2から4への増加、変更後の再評価記録まで2.1日を示し、薬剤変更後の再評価記録の確認を候補として挙げる解析概要。</desc>
+        <rect width="100%" height="100%" fill="#f6f4ef"/>
+
+        <g font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif">
+          <!-- medication -->
+          <rect x="24" y="32" width="236" height="168" rx="6" fill="#ffffff" stroke="rgba(32,33,36,0.12)" stroke-width="1"/>
+          <text x="44" y="60" fill="#66716f" font-size="12" font-weight="500">薬剤</text>
+          <text x="44" y="88" fill="#66716f" font-size="12">直近7日の薬剤変更</text>
+          <text x="44" y="128" fill="#202124" font-size="32" font-weight="700">4<tspan font-size="16" font-weight="600" dx="4">件</tspan></text>
+          <text x="44" y="156" fill="#66716f" font-size="12">通常（28日平均）0.8件/週</text>
+          <line x1="44" y1="168" x2="240" y2="168" stroke="rgba(32,33,36,0.12)" stroke-width="0.8"/>
+          <text x="44" y="188" fill="#202124" font-size="12" font-weight="600">↑ 通常より多い</text>
+
+          <!-- collaboration -->
+          <rect x="284" y="32" width="212" height="168" rx="6" fill="#ffffff" stroke="rgba(32,33,36,0.12)" stroke-width="1"/>
+          <text x="304" y="60" fill="#66716f" font-size="12" font-weight="500">連携</text>
+          <text x="304" y="88" fill="#66716f" font-size="12">関与職種</text>
+          <text x="304" y="128" fill="#202124" font-size="32" font-weight="700">2<tspan fill="#66716f" font-size="20" font-weight="500" dx="8">→</tspan><tspan dx="8">5</tspan></text>
+          <text x="304" y="156" fill="#66716f" font-size="12">組織数 2 → 4</text>
+          <line x1="304" y1="168" x2="476" y2="168" stroke="rgba(32,33,36,0.12)" stroke-width="0.8"/>
+          <text x="304" y="188" fill="#202124" font-size="12" font-weight="600">↑ 連携が増加</text>
+
+          <!-- follow-up -->
+          <rect x="520" y="32" width="184" height="168" rx="6" fill="#ffffff" stroke="rgba(32,33,36,0.12)" stroke-width="1"/>
+          <text x="540" y="60" fill="#66716f" font-size="12" font-weight="500">フォローアップ</text>
+          <text x="540" y="88" fill="#66716f" font-size="12">変更後の再評価記録まで</text>
+          <text x="540" y="128" fill="#202124" font-size="32" font-weight="700">2.1<tspan font-size="16" font-weight="600" dx="4">日</tspan></text>
+          <line x1="540" y1="168" x2="684" y2="168" stroke="rgba(32,33,36,0.12)" stroke-width="0.8"/>
+          <text x="540" y="188" fill="#66716f" font-size="12" font-weight="600">範囲内</text>
+
+          <!-- review candidate (focal) -->
+          <rect x="728" y="32" width="248" height="168" rx="6" fill="#f6f4ef"/>
+          <rect x="728" y="32" width="248" height="168" rx="6" fill="rgba(8,127,91,0.08)" stroke="#087f5b" stroke-width="1.4"/>
+          <text x="748" y="60" fill="#087f5b" font-size="12" font-weight="600">確認候補</text>
+          <text x="748" y="104" fill="#202124" font-size="16" font-weight="600">薬剤変更後の再評価</text>
+          <text x="748" y="130" fill="#202124" font-size="16" font-weight="600">記録を確認してください</text>
+        </g>
+
+        <!-- bottom strip -->
+        <line x1="24" y1="224" x2="976" y2="224" stroke="rgba(32,33,36,0.12)" stroke-width="0.8"/>
+        <text x="24" y="248" fill="#66716f" font-size="12" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif">架空データの例</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

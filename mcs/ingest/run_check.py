@@ -206,6 +206,22 @@ CARD_STALL_S = 1800        # a queued render this old on the live transport
 BACKLOG_STALL_S = 6 * 3600  # untouched due work AND no progress this long
 
 
+_JEV_BLOCK_KINDS = ("payment_required", "no_api_key", "budget_exceeded",
+                    "auth_error")
+
+
+def _jev_block_reason(db) -> str | None:
+    """Why TypeSafe Jev is refusing work, from the newest assessment
+    record: the drainer writes one per status change, so the latest row
+    is the current state. None when the last assessment went through."""
+    row = db.execute(
+        "SELECT json_extract(meta,'$.error_kind') FROM artifacts "
+        "WHERE kind='semantic_assess' AND json_valid(meta) "
+        "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    kind = row[0] if row else None
+    return kind if kind in _JEV_BLOCK_KINDS else None
+
+
 def _backlog_stalls(ledger, cfg, now: float) -> list:
     """Degraded reasons for work that silently stopped moving. Each
     check is gated on its feature being enabled and needs BOTH an old
@@ -237,6 +253,12 @@ def _backlog_stalls(ledger, cfg, now: float) -> list:
     if errors:
         return reasons   # reported as stage errors; admission is closed
     window = now - BACKLOG_STALL_S
+    blocked = _jev_block_reason(db) if scfg["mode"] != "off" else None
+    if blocked:
+        # the cause is known and external — name it. A live drainer keeps
+        # touching due jobs while it waits, so the generic stall below
+        # still only fires when the drainer itself stopped.
+        reasons.append(f"semantic_jev_{blocked}")
     if scfg["mode"] != "off" and db.execute(
             "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "
             "AND state='pending' AND next_try<=? AND updated_at<? LIMIT 1",
@@ -275,10 +297,15 @@ def _health(ledger, result: dict, status: str,
     notify_state = ("incomplete"
                     if notify_res.get("failed") or notify_res.get("skipped")
                     else "parked" if notify_res.get("parked") else "ok")
+    # a signal digest scheduled interval_h ahead and never attempted is
+    # waiting by design, not pending delivery — everything else counts
+    # from its creation, including retries with a future next_try
     outbox = ledger.db.execute(
         "SELECT COUNT(*) c, MIN(created_at) o FROM notify_outbox "
-        "WHERE state IN ('pending','failed') AND next_try IS NOT NULL"
-    ).fetchone()
+        "WHERE state IN ('pending','failed') AND next_try IS NOT NULL "
+        "AND NOT (kind='signal' AND attempts=0 AND next_try>? "
+        "         AND json_valid(payload) AND json_extract(payload,'$.digest')=1)",
+        (now,)).fetchone()
     retired = notify_cards.retired_transports(cfg)
     marks = ",".join("?" * len(retired))
     # Preserve retired receipts while excluding only events whose sealed
@@ -380,7 +407,11 @@ def _health(ledger, result: dict, status: str,
                   if isinstance(cfg, dict) and cfg is not CONFIG_NOT_LOADED
                   else [])
     except Exception as e:
-        stalls = [f"stall_check_failed:{type(e).__name__}"]
+        # a plain reason code: health_watch validates codes as snake_case
+        # and would otherwise drop every reason in the list
+        stalls = ["stall_check_failed"]
+        result["errors"] = list(result.get("errors") or []) \
+            + [f"stall_check_failed: {type(e).__name__}"]
     errors = result.get("errors") or []
     # A mid-tick mcs/ change is a deploy guard, not a fault: skipped
     # stages rerun next tick on the new code. The run row keeps

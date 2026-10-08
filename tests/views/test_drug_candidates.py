@@ -61,7 +61,7 @@ def test_export_candidate_notes_and_machine_contract_remain_separate(store, tmp_
     text = brain_export._patient_md(1, "fictional", {}, roll)
     assert "架空成分甲" in text
     assert "架空成分乙" not in text
-    assert "複数候補" in text and "fictional-v1@" in text
+    assert "辞書候補: 複数あり" in text and "fictional-v1@" in text
     stat = _stats(store)
     projected = project_record({
         "type": "stat", "contract": "mcs-read-model/1",

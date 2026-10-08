@@ -234,7 +234,7 @@ _CIRCUIT_FAILURE_LIMIT = 3
 _CIRCUIT_COOLDOWN_SECONDS = 300.0
 _CIRCUIT_RETRYABLE_KINDS = frozenset({"rate_limited", "transport", "timeout"})
 _CIRCUIT_FAILURE_CLASSES = _CIRCUIT_RETRYABLE_KINDS | {
-    "http_429", "http_529", "http_5xx"
+    "http_402", "http_429", "http_529", "http_5xx"
 }
 
 
@@ -261,6 +261,10 @@ def _circuit_failure_class(error) -> str | None:
     """Return a bounded failure label, never the error/detail text."""
     if error is None:
         return None
+    if getattr(error, "kind", "") == "payment_required":
+        # not retryable within a job, but every call fails until the
+        # account is settled: open the circuit like a persistent 5xx
+        return "http_402"
     retryable = getattr(error, "retryable", None)
     if retryable is not None and retryable is not True:
         return None

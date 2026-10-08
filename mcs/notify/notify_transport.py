@@ -336,12 +336,18 @@ def _begin_check(db, req, cfg) -> str | None:
     card = cards._card_row(db, render["card_id"]) \
         if render["card_id"] is not None else None
     if card is not None:
-        if card["kind"] == "signal" and render["op"] != "revoke":
+        if card["kind"] == "signal" and render["op"] != "revoke" \
+                and card["transport"] in ("slack", "discord"):
             target = cards.signal_thread_target(db, card, cfg)
             spec = json.loads(render["spec_json"])
-            if (target is None or spec["parts"].get("source_thread") is not True
-                    or spec["delivery"].get("thread_id") != target["thread_id"]
-                    or not cards._scope_match(render, target)):
+            if spec["parts"].get("source_thread") is True:
+                if (target is None
+                        or spec["delivery"].get("thread_id") != target["thread_id"]
+                        or not cards._scope_match(render, target)):
+                    return "source_thread_changed"
+            elif target is not None:
+                # a channel-routed signal whose post now has a proven
+                # thread must be re-rendered into it
                 return "source_thread_changed"
         if card["kind"] in ("signal", "digest") \
                 and not cards.signals_notify(cfg):

@@ -387,6 +387,22 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
     sig = cfg.get("signals")
     if isinstance(sig, dict) and "notify" in sig and type(sig["notify"]) is not bool:
         errors.append("signals.notify: must be a boolean")
+    ntf = cfg.get("notify") if isinstance(cfg.get("notify"), dict) else {}
+    if isinstance(sig, dict) and sig.get("notify") is True \
+            and ntf.get("interactive", "off") == "off":
+        # alerts are delivered as cards only: with cards off every alert
+        # is held and nothing says so
+        errors.append('signals.notify: requires notify.interactive '
+                      '("slack", "discord" or "lineworks") — alerts are cards')
+    esc = cfg.get("urgency_escalation")
+    if isinstance(esc, dict) and esc.get("mode") == "on" and (
+            ntf.get("card_thread") is not True
+            or ntf.get("interactive") not in ("slack", "discord")):
+        # the re-check notice posts only in the source thread, which
+        # needs card threads on Slack/Discord; anywhere else it waits
+        # out its hold and is dropped
+        errors.append('urgency_escalation.mode "on": requires notify.card_thread '
+                      'true and notify.interactive "slack" or "discord"')
     if isinstance(sig, dict):
         for key in ("self_organizations", "self_professions",
                     "request_targets", "med_exclude_names"):

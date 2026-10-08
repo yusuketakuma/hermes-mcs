@@ -108,10 +108,12 @@ class DeliveryWorker(worker.DeliveryWorker):
             thread = await self._channel(delivery["thread_id"])
             parent = getattr(thread, "parent_id", getattr(getattr(thread, "parent", None), "id", None))
             guild = getattr(getattr(thread, "guild", None), "id", None)
+            # an auto-archived thread reopens on send (Discord unarchives
+            # it); only a locked one refuses the post
             if (str(thread.id) != delivery["thread_id"]
                     or (notice and str(thread.id) != delivery.get("message_id"))
                     or str(parent) != delivery["channel_id"] or str(guild) != delivery.get("guild_id")
-                    or getattr(thread, "archived", False) or getattr(thread, "locked", False)):
+                    or getattr(thread, "locked", False)):
                 return {"result": "not_sent", "error_code": "thread_scope_mismatch"}
             channel = thread
         if op == "update":

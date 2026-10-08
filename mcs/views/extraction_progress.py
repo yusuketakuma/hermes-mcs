@@ -65,7 +65,7 @@ def patient_progress(db, project_id, *, cfg=None):
 
 
 def summary_lines(db, project_id, *, cfg=None):
-    """Two count-only lines; completion never means clinical or archive completeness."""
+    """One count-only line about extraction progress for the patient."""
     progress = patient_progress(db, project_id, cfg=cfg)
     if not progress["posts"]:
         return ["抽出の処理状況: 要確認（表示対象の取得済み投稿なし）"]
@@ -73,8 +73,7 @@ def summary_lines(db, project_id, *, cfg=None):
     line = (f"抽出の処理状況（{scope}）: 処理中{progress['processing']}・"
             f"完了{progress['complete']}・要確認{progress['attention']}")
     if progress["total"]:
-        line += f"（完了区間{progress['completed']}/{progress['total']}）"
-    caveat = "完了は抽出処理のみ。記録や臨床情報の完全性は保証しません。"
+        line += f"（{progress['total']}区間中{progress['completed']}区間完了）"
     if progress["limited"]:
-        caveat = "以前の投稿は表示対象外。" + caveat
-    return [line, caveat]
+        line += "（以前の投稿は対象外）"
+    return [line]

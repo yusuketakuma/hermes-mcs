@@ -1875,11 +1875,12 @@ def _rollback_tree(entry: dict, on_hold=None) -> None:
 
 
 def _cancel_unsent_notices() -> int:
-    """After a tree rollback, a queued never-attempted card-less notice
-    render still carries the newer renderer's spec (e.g. preview_text),
-    which the restored worker rejects forever while dispatch keeps
-    republishing it. Cancel it — the restored dispatch issues a fresh
-    render for the same event, as for a moved route. Best-effort."""
+    """After a tree rollback, a queued never-attempted render still
+    carries the newer renderer's spec (e.g. preview_text, post_actions),
+    which the restored worker rejects forever while the runner counts it
+    as live. Cancel it — the restored dispatch issues a fresh notice
+    render for the same event, and the restored sweep a fresh card render
+    for the unbound intents or drift, as for a moved route. Best-effort."""
     if not os.path.isfile(LEDGER):
         return 0
     try:
@@ -1889,21 +1890,27 @@ def _cancel_unsent_notices() -> int:
             with con:
                 now = time.time()
                 rows = con.execute(
-                    "SELECT delivery_id,intent_event_id "
-                    "FROM notification_renders r WHERE card_id IS NULL "
-                    "AND op='notice' AND state='queued' AND NOT EXISTS ("
+                    "SELECT delivery_id,card_id,intent_event_id "
+                    "FROM notification_renders r WHERE state='queued' "
+                    "AND NOT EXISTS ("
                     "SELECT 1 FROM notification_delivery_attempts a "
                     "WHERE a.delivery_id=r.delivery_id "
                     "AND a.state IN ('granted','unknown'))").fetchall()
-                for delivery_id, event_id in rows:
+                for delivery_id, card_id, event_id in rows:
                     con.execute(
                         "UPDATE notification_renders SET state='cancelled',"
                         "updated_at=? WHERE delivery_id=? AND state='queued'",
                         (now, delivery_id))
-                    con.execute(
-                        "UPDATE notify_outbox SET next_try=?,updated_at=? "
-                        "WHERE event_id=? AND state='pending'",
-                        (now, now, event_id))
+                    if card_id is None:
+                        con.execute(
+                            "UPDATE notify_outbox SET next_try=?,updated_at=? "
+                            "WHERE event_id=? AND state='pending'",
+                            (now, now, event_id))
+                    else:
+                        con.execute(
+                            "UPDATE notification_intent_cards SET "
+                            "delivery_id=NULL,required_render_rev=0 "
+                            "WHERE delivery_id=?", (delivery_id,))
             return len(rows)
         finally:
             con.close()

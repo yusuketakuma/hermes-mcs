@@ -111,8 +111,8 @@ def test_non_ok_reasons_and_last_success_reach_status_and_alert(tmp_path, capsys
     assert health_watch.main(["--home", str(tmp_path), "--now", "1000",
                               "--config", str(tmp_path / "none.json")]) == 0
     out = capsys.readouterr().out
-    assert "reasons=notification_held,backup_not_verified" in out
-    assert "last_ok_at=400" in out
+    assert "コード: degraded notification_held,backup_not_verified" in out
+    assert "最終正常 01-01 09:06" in out
     st = json.loads((tmp_path / "data" / "health_watch_status.json").read_text())
     assert st["held_reasons"] == {"send_outcome_unknown": 2}
     assert st["oldest_age_s"] == {"notify": 120.5, "semantic_jobs": 60,
@@ -125,7 +125,7 @@ def test_non_ok_reasons_and_last_success_reach_status_and_alert(tmp_path, capsys
     assert health_watch.main(["--home", str(tmp_path), "--now", "1001",
                               "--config", str(tmp_path / "none.json")]) == 0
     out = capsys.readouterr().out
-    assert "reasons=unknown" in out and "last_ok_at=unknown" in out
+    assert "コード: failed unknown" in out and "最終正常 不明" in out
     assert r["held_reasons"] is None
     assert r["oldest_age_s"] == {"notify": None, "semantic_jobs": None,
                                  "extract_qc_jobs": None}
@@ -144,7 +144,7 @@ def test_malformed_reason_fields_stay_unknown(tmp_path, capsys, reasons, held):
                             "notify": {"held_reasons": held}})
     assert health_watch.main(["--home", str(tmp_path), "--now", "1000",
                               "--config", str(tmp_path / "none.json")]) == 0
-    assert "reasons=unknown" in capsys.readouterr().out
+    assert "理由を特定できません" in capsys.readouterr().out
     st = json.loads((tmp_path / "data" / "health_watch_status.json").read_text())
     assert st["state_reasons"] is None and st["held_reasons"] is None
 
@@ -159,7 +159,7 @@ def test_well_formed_empty_reasons_mean_none(tmp_path):
 
 
 @pytest.mark.parametrize("now,printed", [(1000, ""),
-                                         (5000, "reasons=unknown")])
+                                         (5000, "理由を特定できません")])
 def test_stale_never_shows_recorded_none_as_cause(tmp_path, capsys, now,
                                                   printed):
     _health_file(tmp_path, {"overall": "ok", "at": 995,
@@ -322,7 +322,7 @@ def test_disk_low_alerts_on_transitions_only(tmp_path, capsys):
                             "disk_free_mb": 800})
     health_watch.main(["--home", str(tmp_path), "--now", "5700",
                        "--config", str(tmp_path / "none.json")])
-    assert "mcs disk: low (free_mb=800)" in capsys.readouterr().out
+    assert "空き容量不足: 残り 800 MB" in capsys.readouterr().out
 
 
 
@@ -543,7 +543,7 @@ def test_main_delivers_alert_to_system_target(tmp_path, monkeypatch):
     assert len(sent) == 1
     argv, text = sent[0]
     assert argv[argv.index("--to") + 1] == "slack:#ops"
-    assert "mcs health: failed" in text
+    assert "🔴 MCS監視: 収集が失敗しました" in text
     assert health_watch.main(args + ["--now", "1001"]) == 0
     assert len(sent) == 1                      # deduped: no second send
 
@@ -621,6 +621,29 @@ def test_unknown_alert_is_held_until_a_different_verdict(tmp_path, monkeypatch, 
 
 
 
+def test_unknown_alert_realerts_after_interval(tmp_path, monkeypatch):
+    import notify_flush
+    sent = []
+
+    def send(*args, **kwargs):
+        sent.append(args)
+        raise notify_flush._SendUncertain("synthetic timeout")
+
+    monkeypatch.setattr(notify_flush, "_send", send)
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"notify_target": "slack:#ops"}))
+    args = ["--home", str(tmp_path), "--config", str(cfg)]
+    later = 1000 + health_watch.REALERT_S + 1
+    for now in (1000, 1060, later, later + 60):
+        _health_file(tmp_path, {"overall": "failed", "at": now - 1})
+        health_watch.main(args + ["--now", str(now)])
+    # A lost send must not silence a persisting incident: the periodic
+    # re-alert is a new alert, and still only one per interval.
+    assert len(sent) == 2
+    state = json.loads((tmp_path / health_watch.STATE_REL).read_text())
+    assert len(state["unknown_deliveries"]) == 1
+
+
 def test_unknown_delivery_history_is_bounded(tmp_path, monkeypatch):
     import notify_flush
 
@@ -674,7 +697,7 @@ def test_healthy_status_cannot_be_rendered_as_legacy_alert_but_low_disk_remains(
     report = {"status": "ok", "alert": True, "disk_alert": True, "disk_low": False}
     assert health_watch._alert_lines(report) == []
     assert health_watch._alert_lines({**report, "disk_low": True, "disk_free_mb": 123}) == [
-        "mcs disk: low (free_mb=123)"]
+        "空き容量不足: 残り 123 MB"]
 
 
 def test_unsent_combined_alert_retries_only_still_low_disk_after_health_recovers(
@@ -685,7 +708,7 @@ def test_unsent_combined_alert_retries_only_still_low_disk_after_health_recovers
     health_watch.evaluate(str(tmp_path), 1000, cfg={})
     _health_file(tmp_path, {"overall": "ok", "at": 1060, "disk_low": True, "disk_free_mb": 123})
     assert health_watch._watch(SimpleNamespace(home=str(tmp_path), now=1061), {}) == 0
-    assert calls == ["mcs disk: low (free_mb=123)"]
+    assert calls == ["空き容量不足: 残り 123 MB"]
     assert capsys.readouterr().out == ""
 
 
@@ -818,4 +841,49 @@ def test_disk_alert_never_echoes_a_non_numeric_producer_field(tmp_path, capsys):
                        "--config", str(tmp_path / "none.json")])
     output = capsys.readouterr().out
     assert "synthetic private free text" not in output
-    assert "free_mb=None" in output
+    assert "空き容量不足: 残り 不明" in output
+
+
+def test_alert_text_is_japanese_with_jst_times():
+    lines = health_watch._alert_lines({
+        "status": "degraded", "alert": True, "disk_alert": False, "disk_low": False,
+        "state_reasons": ["stage_errors", "notification_pending"],
+        "last_ok_at": 0, "health_at": 3600})
+    assert lines == ["🟠 MCS監視: 一部に異常があります",
+                     "影響: 通知に遅れや不具合があります。",
+                     "原因と対処:",
+                     "・収集の一部の処理でエラーがありました",
+                     "　→ 次回の収集で再試行されます。続く場合は data/run_check.log を確認",
+                     "・送信待ちの通知があります",
+                     "　→ 次回の収集で送信されます。長く続く場合は gateway の稼働を確認",
+                     "最終正常 01-01 09:00 / 最新記録 01-01 10:00（JST）",
+                     "コード: degraded stage_errors,notification_pending"]
+
+
+def test_alert_counts_pending_notifications_and_names_a_jev_block():
+    lines = health_watch._alert_lines({
+        "status": "degraded", "alert": True, "disk_alert": False, "disk_low": False,
+        "run_status": "ok", "notify_pending": 2,
+        "state_reasons": ["notification_pending", "semantic_jev_payment_required"],
+        "oldest_age_s": {"notify": 63514.1, "semantic_jobs": None, "extract_qc_jobs": None},
+        "last_ok_at": 0, "health_at": 3600})
+    assert lines[1] == "影響: 通知・意味チェック（任意機能）に遅れや不具合があります。収集は動いています。"
+    assert "・送信待ちの通知があります 2件（最古 17.6時間）" in lines
+    assert "・TypeSafe Jev が支払い未了（HTTP 402）を返しています" in lines
+    assert all("AI" not in ln for ln in lines)
+
+
+def test_degraded_flapping_does_not_realert_until_interval(tmp_path):
+    def tick(now, overall, reasons):
+        _health_file(tmp_path, {"overall": overall, "at": now - 1,
+                                "state_reasons": reasons})
+        return health_watch.evaluate(str(tmp_path), now, cfg={})["alert"]
+    assert tick(1000, "degraded", ["stage_errors"])
+    assert not tick(1600, "ok", [])
+    assert not tick(2200, "degraded", ["stage_errors"])       # same episode: quiet
+    assert tick(2800, "degraded", ["stage_errors", "disk_low"])  # new reason
+    assert not tick(3400, "ok", [])
+    assert tick(4000, "failed", ["run_failed"])               # severe: always
+    assert not tick(4600, "ok", [])
+    later = 4000 + health_watch.REALERT_S
+    assert tick(later, "degraded", ["stage_errors"])           # interval passed

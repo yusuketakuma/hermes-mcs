@@ -214,7 +214,7 @@ def test_stamps_and_busy_footer_fit_card_budget(
     led.db.execute("INSERT INTO notification_triage"
                    "(card_id,owner,state,last_actor,updated_at) "
                    "VALUES(1,'discord:1000000000000000000','assigned','a',?)", (NOW,))
-    monkeypatch.setattr(notify_render, "_structured_block", lambda *args: {
+    monkeypatch.setattr(notify_render, "_structured_block", lambda *args, **_kw: {
         "type": "text", "text": "合" * structured_length})
     card = _card(led)
     source_fp = notify_render._source_fp(led.db, card)
@@ -254,11 +254,11 @@ def test_unacked_remains_unacked_and_partitions_within_patient(led, pinned_clock
     _metadata(led, 100, [_react("accepted")])
     view = notify_views.unacked_view(led.db, "discord", now=NOW)
     assert view["head"] == ["未確認 2件（うち担当者あり 0件）",
-                            "MCSで本人反応あり 1件（確認状態は変えません）"]
-    assert "MCSスタンプも承認・作業完了を保証せず" in view["notes"][0]
+                            "MCSで本人反応あり 1件"]
+    assert view["notes"] == ["※ 本人反応があるカードは同患者内の末尾に表示します。"]
     assert "🙆" not in view["items"][0]["text"]
     assert "スタンプ 🙆1 · 自分 1投稿" in view["items"][1]["text"]
-    assert "未確認" in view["items"][1]["text"]
+    assert "🧵 投稿" in view["items"][1]["text"]
     assert led.db.execute("SELECT count(*) FROM notification_acknowledgements").fetchone()[0] == 0
 
 
@@ -311,9 +311,9 @@ def test_digest_counts_observation_window_not_post_time_or_shadow(led):
     _metadata(led, 107, [_react()], at=NOW - 10)
     led.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=107")
     text = notify_digest.build_text(led.db, CFG, NOW - 20, NOW)
-    assert "■ MCS 本人スタンプ観測: 2投稿" in text
+    assert "■ MCS 本人スタンプ: 2投稿" in text
     assert "完了 1" in text and "見ました 1" in text
-    assert "押下時刻・操作件数・業務完了を表しません" in text
+    assert "押下時刻・操作件数・業務完了を表しません" not in text
     assert "職員" not in text
 
 
@@ -326,6 +326,6 @@ def test_summary_stamp_counts_follow_project_scope(led):
     _metadata(led, 101, [_react("completed")], at=NOW - 10)
     got = notify_digest.view(led.db, CFG, "all", allowed=[1], now=NOW)
     text = notify_render.parts_text(got["parts"])
-    stamps = text.split("■ MCS 本人スタンプ観測:", 1)[1].split("■", 1)[0]
+    stamps = text.split("■ MCS 本人スタンプ:", 1)[1].split("■", 1)[0]
     assert "1投稿" in stamps and "見ました 1" in stamps
     assert "完了 1" not in stamps

@@ -28,8 +28,8 @@ def test_private_summary_uses_only_validated_counts_and_no_checkpoint_text(led, 
     assert progress == {"processing": 1, "complete": 1, "attention": 1,
                         "completed": 4, "total": 7, "posts": 3, "limited": False}
     text = notify_views.patient_summary_text(led.db, 1, cfg={})[1]
-    assert "処理中1・完了1・要確認1（完了区間4/7）" in text
-    assert "完了は抽出処理のみ" in text
+    assert "処理中1・完了1・要確認1（7区間中4区間完了）" in text
+    assert "完了は抽出処理のみ" not in text
     assert "CANARY" not in text and "CANARY" not in str(progress)
 
 
@@ -102,7 +102,7 @@ def test_newest_twenty_scope_is_explicit_and_other_patient_deleted_posts_exclude
     lines = extraction_progress.summary_lines(led.db, 1, cfg={})
     assert seen == list(range(22, 2, -1))
     assert "最新20投稿" in lines[0] and "完了20" in lines[0]
-    assert "以前の投稿は表示対象外" in lines[1]
+    assert "以前の投稿は対象外" in lines[0] and len(lines) == 1
 
 
 def test_no_fetched_post_is_unconfirmed_not_a_zero_post_completion(led):
@@ -136,5 +136,5 @@ def test_real_legacy_checkpoint_reaches_private_summary_read_only(led, change):
     assert progress["total"] > 1
     assert progress["completed"] == (1 if change == "none" else 0)
     text = notify_views.patient_summary_text(led.db, 1, cfg=cfg)[1]
-    assert f"完了区間{progress['completed']}/{progress['total']}" in text
-    assert "SOURCE_CANARY" not in text and "完了は抽出処理のみ" in text
+    assert f"{progress['total']}区間中{progress['completed']}区間完了" in text
+    assert "SOURCE_CANARY" not in text and "完了は抽出処理のみ" not in text

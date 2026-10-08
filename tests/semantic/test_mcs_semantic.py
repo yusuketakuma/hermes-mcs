@@ -138,6 +138,26 @@ def test_retryable_status_backoff():
     assert out["answers"]["a"]["noul"] == 0.8 and len(calls) == 2
 
 
+def test_payment_required_is_a_resource_wait_not_a_contract_error():
+    import semantic_drain
+    import semantic_runtime
+    calls = []
+
+    def post(body, timeout):
+        calls.append(1)
+        return 402, {}, b"{}"
+
+    c = jev.JevClient(api_key="k", post_fn=post)
+    with pytest.raises(jev.JevError) as caught:
+        c.evaluate({}, {"a": jev.noul_question("i", "t", "f")},
+                   time.monotonic() + 30)
+    err = caught.value
+    assert (err.kind, err.status, err.retryable) == ("payment_required", 402, False)
+    assert len(calls) == 1                       # never blind-retried
+    assert semantic_drain._jev_failure_class(err) == "resource"   # jobs wait
+    assert semantic_runtime._circuit_failure_class(err) == "http_402"
+
+
 def test_nonretryable_fail_fast():
     calls = []
 

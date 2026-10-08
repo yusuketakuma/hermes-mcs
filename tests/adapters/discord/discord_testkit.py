@@ -63,11 +63,12 @@ def _fake_discord():
 
     class Button:
         def __init__(self, style=None, label=None, custom_id=None,
-                     url=None):
+                     url=None, row=None):
             self.style = style
             self.label = label
             self.custom_id = custom_id
             self.url = url
+            self.row = row
 
     class SelectOption:
         def __init__(self, label=None, value=None, default=False):
@@ -141,7 +142,11 @@ def _fake_discord():
                 {"content": content, "ephemeral": ephemeral,
                  "view": view, "allowed_mentions": allowed_mentions})
 
-    mod.ui = SimpleNamespace(LayoutView=LayoutView, View=View,
+    class Section:
+        def __init__(self, *children, accessory=None):
+            self.children, self.accessory = list(children), accessory
+
+    mod.ui = SimpleNamespace(LayoutView=LayoutView, View=View, Section=Section,
                              TextDisplay=TextDisplay, ActionRow=ActionRow,
                              Container=Container,
                              Button=Button, Modal=Modal,

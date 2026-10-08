@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "新しい通知カードの見出しと要約を見やすく整理（レイアウト2）",
+  "summary": "新しく作られるスレッドカードは、見出しを「💬 患者名（施設）」だけにし、その下の1行に「🚨 緊急度高（AI判定） · 10-01〜 · 2投稿 · 📎 1」のように緊急度・開始日・件数をまとめます。スマートフォンでも見出しの患者名と緊急度が切れません。各投稿は日時・投稿者の行の下に要約の箇条書きを並べ、カード上で毎回出ていた「📋 要約」の見出しを省きました。既存のカードは従来の表示のまま変わりません。",
+  "upgrade": "Hermes gatewayの再起動とrunnerへの反映後、新しく作られるカードから適用されます。ledgerの起動時に notification_cards へ layout 列（既定1）を追加し、既存カードは1（従来表示）、新しいカードは2になります。表示の指紋が変わらないため既存カードの一斉再描画やLINE WORKSの再投稿は起きません。README画面例のSlack 01〜03とLINE WORKS 01〜02のSVG・PNGを更新しました（PNGはQuick LookとImageMagickで描画）。",
+  "details": [
+    "notify_cards.CARD_LAYOUT=2 を作成時に記録し、notify_render._card_content は layout が2以上のときだけ新しい見出し・メタ行・ラベルなし要約を使い、content_fp に layout を含める。",
+    "ledger: notification_cards.layout を追加（既存行は1）。",
+    "スレッド本文・本人限定の表示は変更なし（2026-10-03の並び順ルールを維持）。"
+  ],
+  "refs": ["mcs/notify/notify_cards.py", "mcs/notify/notify_render.py", "mcs/core/ledger.py", "scripts/development/generate_slack_gallery.py", "scripts/development/generate_lineworks_gallery.py"]
+}

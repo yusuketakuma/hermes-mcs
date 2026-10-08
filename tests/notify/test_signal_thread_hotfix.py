@@ -74,7 +74,28 @@ def test_signal_reuses_origin_thread_and_keeps_controls(led):
     assert specs[0]["delivery"]["thread_id"] == "original-thread"
 
 
-@pytest.mark.parametrize("fault", ["missing", "coverage", "deleted", "scope", "foreign", "partial"])
+@pytest.mark.parametrize("fault", ["missing", "coverage"])
+def test_signal_without_a_provable_thread_goes_to_the_channel_after_the_hold(led, fault):
+    # a post whose card never arrives (history/probe import, suppressed
+    # notification) must not hold the alert forever: after
+    # SIGNAL_SOURCE_HOLD_MAX_S it is delivered in the channel (owner 2026-10-08)
+    _seed_thread(led)
+    if fault == "coverage":
+        delivered_source(led)
+        with led.db:
+            led.db.execute("UPDATE notification_intent_cards SET coverage='[999]' ")
+    event, card = _signal(led)
+    assert _latest_render(led, card["card_id"]) is None          # held first
+    late = NOW + notify_cards.SIGNAL_SOURCE_HOLD_MAX_S + 60
+    assert _dispatch(led, event, now=late)["dispatched"]
+    render = _latest_render(led, card["card_id"])
+    spec = json.loads(render["spec_json"])
+    assert "source_thread" not in spec["parts"] and "thread_id" not in spec["delivery"]
+    assert validate(spec)
+    assert _begin(led, render, n=8300)["granted"]
+
+
+@pytest.mark.parametrize("fault", ["deleted", "scope", "foreign", "partial"])
 def test_unproven_signal_target_holds_without_channel_spec(led, fault):
     _seed_thread(led)
     if fault != "missing":
@@ -129,18 +150,19 @@ def test_held_signal_resumes_same_event_after_original_thread_receipt(led):
     assert led.db.execute("SELECT count(*) FROM notification_renders WHERE card_id=?", (card["card_id"],)).fetchone()[0] == 1
 
 
-def test_lineworks_signal_is_explicitly_held_without_retry_or_fallback(led):
+def test_lineworks_signal_keeps_channel_route(led):
+    # LINE WORKS has no native thread: a held signal would silently drop
+    # the card and its dismiss/ack controls, so it keeps the channel route.
     _seed_thread(led)
     _signal_row(led, "synthetic-key", mids=[100])
     event = _intent(led, "signal", payload={"signal_keys": ["synthetic-key"], "project_id": 1})
     cfg = {"notify": {"interactive": "lineworks", "lineworks": {
         "profile": "synthetic", "application_id": "1", "team_id": "2", "channel_id": "3"}},
         "signals": {"notify": True}}
-    assert _dispatch(led, event, cfg)["held"] == "lineworks_thread_unsupported"
-    row = led.db.execute("SELECT * FROM notify_outbox WHERE event_id=?", (event["event_id"],)).fetchone()
-    assert row["state"] == "failed" and row["next_try"] is None
-    assert json.loads(row["progress"])["hold_reason"] == "lineworks_thread_unsupported"
-    assert led.db.execute("SELECT count(*) FROM notification_renders").fetchone()[0] == 0
+    assert _dispatch(led, event, cfg)["dispatched"]
+    render = led.db.execute("SELECT spec_json FROM notification_renders").fetchone()
+    spec = json.loads(render["spec_json"])
+    assert "source_thread" not in spec["parts"] and "thread_id" not in spec["delivery"]
 
 
 @pytest.mark.parametrize("fault", ["unchanged", "message_deleted", "thread_deleted", "thread_changed", "evidence_unknown"])
@@ -197,3 +219,44 @@ def test_signal_revoke_keeps_sealed_identity_and_scope_gates(led, fault, error):
                       "render_rev": render["render_rev"] + 1, "route_epoch": 2}[fault]
     result = notify_transport.apply_transport_begin(led, request, CFG, now=NOW + 1)
     assert not result["granted"] and result["error"] == "denied_" + error
+
+
+def test_signal_never_waits_where_card_threads_are_off(led):
+    # no card opens a thread with card_thread off, so there is nothing
+    # to wait for: the alert goes to the channel at once
+    cfg = {**CFG, "notify": {**CFG["notify"], "card_thread": False}}
+    _seed_thread(led)
+    _signal_row(led, "synthetic-key", mids=[101])
+    event = _intent(led, "signal", payload={"signal_keys": ["synthetic-key"], "project_id": 1})
+    assert _dispatch(led, event, cfg)["dispatched"]
+    card = dict(led.db.execute("SELECT * FROM notification_cards WHERE kind='signal'").fetchone())
+    spec = json.loads(_latest_render(led, card["card_id"])["spec_json"])
+    assert "source_thread" not in spec["parts"] and "thread_id" not in spec["delivery"]
+    assert validate(spec)
+
+
+def test_bound_signal_whose_thread_vanished_moves_to_the_channel(led):
+    # a signal already homed in its source thread must not stay silent
+    # forever when that thread is deleted: after the hold it re-posts in
+    # the channel, and the render queued for the old route is cancelled
+    _seed_thread(led)
+    delivered_source(led)
+    _, card = _signal(led)
+    render = _latest_render(led, card["card_id"])
+    assert json.loads(render["spec_json"])["parts"]["source_thread"] is True
+    with led.db:
+        led.db.execute("UPDATE notification_cards SET thread_state='deleted' WHERE kind='thread'")
+    late = NOW + notify_cards.SIGNAL_SOURCE_HOLD_MAX_S + 60
+    with led.db:
+        notify_cards._issue_render(led.db, card["card_id"], CFG, late, [], force=True)
+    moved = _latest_render(led, card["card_id"])
+    assert moved["delivery_id"] != render["delivery_id"]
+    spec = json.loads(moved["spec_json"])
+    assert "source_thread" not in spec["parts"] and "thread_id" not in spec["delivery"]
+    assert validate(spec)
+    row = led.db.execute("SELECT thread_id,thread_state FROM notification_cards WHERE card_id=?",
+                         (card["card_id"],)).fetchone()
+    assert row["thread_id"] is None and row["thread_state"] == "none"
+    assert led.db.execute("SELECT state FROM notification_renders WHERE delivery_id=?",
+                          (render["delivery_id"],)).fetchone()[0] == "cancelled"
+    assert _begin(led, moved, n=8400)["granted"]

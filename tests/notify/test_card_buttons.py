@@ -349,11 +349,11 @@ def test_summary_without_rollup_says_so(led):
     spec = _delivered_card(led)
     r = _click(led, spec, "summary")
     assert r["outcome"] == "applied" and r["action"] == "summary"
-    assert "暫定集約" in r["title"]
-    assert notify_views.SUMMARY_CAVEAT in r["body"]
-    assert "集約資料がまだありません" in r["body"]
+    assert "暫定集約" not in r["title"]
+    assert "※" not in r["body"].split("\n")[0]
+    assert "集約資料なし" in r["body"]
     assert "履歴取得: 未完了（完了記録なし）" in r["body"]
-    assert "欠落なしの保証ではありません" in r["body"]
+    assert "欠落なしの保証ではありません" not in r["body"]
     assert "■ 未完了タスク: なし" in r["body"]
     stored = led.db.execute(
         "SELECT receipt_json FROM command_receipts").fetchall()[-1][0]
@@ -378,18 +378,18 @@ def test_summary_with_rollup_and_coverage(led):
             "next_planned": "10/3 訪問"}, ensure_ascii=False), NOW))
     _add_request(led, title="血圧記録の確認", assignee="山田", due="2026-10-01")
     body = _click(led, spec, "summary")["body"]
-    assert ("履歴取得: 完了記録あり／直近の取得は未完了（network_error）"
-            "／返信の取得未完了1件") in body
-    assert "処方期間（抽出表現）: 2026-09-01〜2026-09-28" in body
+    assert ("履歴取得: 完了記録あり · 直近の取得は未完了（通信エラー）"
+            " · 返信未取得 1件") in body
+    assert "処方期間: 2026-09-01〜2026-09-28" in body
     assert "・アムロジピン 5mg 1日1回（最終言及 2026-09-20）" in body
     assert "バイタル: BP 128/70  BT 36.5（2026-09-22）" in body
-    assert "■ 次回予定（抽出表現）: 10/3 訪問" in body
+    assert "■ 次回予定: 10/3 訪問" in body
     assert "血圧記録の確認 — 担当 山田 — 期限 2026-10-01" in body
     led.db.execute("UPDATE artifacts SET content=? WHERE kind='patient_rollup'",
                    (json.dumps({"medications": []}),))
     led.db.commit()
     body = _click(led, _spec(led), "summary")["body"]
-    assert "■ 抽出されたバイタルなし" in body and "記録なし" not in body
+    assert "■ バイタル: なし" in body and "記録なし" not in body
 
 
 @pytest.mark.parametrize("ks, line", [
@@ -417,7 +417,7 @@ def test_summary_karte_summary_line(led, ks, line):
     body = notify_views.patient_summary_text(led.db, 1)[1]
     assert "古い要約" not in body
     assert f"{line}\n" in body or body.endswith(line)   # nothing after it
-    assert body.count("\n連携サマリー（MCS") == 1
+    assert body.count("\n■ 連携サマリー（MCS") == 1
     if isinstance(ks, dict):
         assert ks["comment"][:80] not in body      # cut, not the raw text
 
@@ -673,8 +673,10 @@ def test_urgency_badge_names_its_source(led):
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101, 102]}))
     texts = [c["text"] for c in _spec(led)["parts"]["containers"]
              if c["type"] == "text"]
-    assert any("・緊急度: 高（AI抽出）" in t for t in texts)
-    assert any("・🚨" in t for t in texts)
+    lines = [ln for t in texts for ln in t.split("\n")]
+    assert any(ln.startswith("・🚨 緊急度高 ") or ln == "・🚨 緊急度高" for ln in lines)
+    assert not any("AI" in ln for ln in lines)
+    assert "・🚨" in lines
 
 
 def test_urgency_reads_the_same_artifact_as_the_body(led):

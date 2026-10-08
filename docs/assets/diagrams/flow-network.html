@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>患者記録を中心にした多職種連携</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper: #f6f4ef;
+      --color-ink: #202124;
+      --color-muted: #66716f;
+      --color-accent: #087f5b;
+      --font-sans: 'Hiragino Sans', 'Noto Sans CJK JP', 'Yu Gothic', sans-serif;
+      --font-mono: Menlo, 'SF Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--color-paper); color: var(--color-ink);
+           min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500; letter-spacing: 0.18em;
+               text-transform: uppercase; color: var(--color-muted); margin-bottom: 0.5rem; }
+    h1 { font-size: clamp(1.4rem, 2vw + 0.75rem, 1.9rem); font-weight: 700; line-height: 1.2; margin-bottom: 1.5rem; }
+    svg { width: 100%; min-width: 1000px; display: block; }
+    @media print { .diagram-container { overflow-x: visible; } svg { min-width: 0; } }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · Diagram Design</p>
+    <h1>患者記録を中心にした多職種連携</h1>
+    <div class="diagram-container">
+      <svg viewBox="0 0 1000 436" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flow-network-title flow-network-desc">
+        <title id="flow-network-title">患者記録を中心にした多職種連携</title>
+        <desc id="flow-network-desc">患者ごとのMCSチャットルームを中心に、医師・訪問看護・ケアマネ・薬剤師・病院がそれぞれの情報をやり取りし、その記録から相談相手・回答時間・依頼の完結・調整の集中・連携の密度を読み取る構造。</desc>
+        <defs>
+          <marker id="nn-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse"><polygon points="0 0, 8 3, 0 6" fill="#66716f"/></marker>
+          <marker id="nn-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#087f5b"/></marker>
+        </defs>
+        <rect width="100%" height="100%" fill="#f6f4ef"/>
+
+        <!-- arrows first (two-way) -->
+        <line x1="500" y1="82" x2="500" y2="146" stroke="#66716f" stroke-width="1.2" marker-start="url(#nn-arrow)" marker-end="url(#nn-arrow)"/>
+        <line x1="186" y1="188" x2="358" y2="188" stroke="#66716f" stroke-width="1.2" marker-start="url(#nn-arrow)" marker-end="url(#nn-arrow)"/>
+        <line x1="642" y1="188" x2="814" y2="188" stroke="#66716f" stroke-width="1.2" marker-start="url(#nn-arrow)" marker-end="url(#nn-arrow)"/>
+        <path d="M 420,230 V 316 Q 420,324 412,324 H 186" fill="none" stroke="#66716f" stroke-width="1.2" marker-start="url(#nn-arrow)" marker-end="url(#nn-arrow)"/>
+        <path d="M 580,230 V 316 Q 580,324 588,324 H 814" fill="none" stroke="#66716f" stroke-width="1.2" marker-start="url(#nn-arrow)" marker-end="url(#nn-arrow)"/>
+
+        <!-- arrow labels -->
+        <g font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" font-size="12" text-anchor="middle">
+          <rect x="508" y="106" width="76" height="16" fill="#f6f4ef"/>
+          <text x="546" y="118" fill="#66716f">指示・方針</text>
+          <rect x="210" y="164" width="124" height="16" fill="#f6f4ef"/>
+          <text x="272" y="176" fill="#66716f">症状・バイタル報告</text>
+          <rect x="666" y="164" width="124" height="16" fill="#f6f4ef"/>
+          <text x="728" y="176" fill="#66716f">生活情報・日程調整</text>
+          <rect x="236" y="300" width="124" height="16" fill="#f6f4ef"/>
+          <text x="298" y="312" fill="#66716f">服薬提案・残薬確認</text>
+          <rect x="640" y="300" width="124" height="16" fill="#f6f4ef"/>
+          <text x="702" y="312" fill="#66716f">退院情報・処方照合</text>
+        </g>
+
+        <!-- nodes -->
+        <g font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif">
+          <rect x="360" y="148" width="280" height="80" rx="6" fill="#f6f4ef"/>
+          <rect x="360" y="148" width="280" height="80" rx="6" fill="rgba(8,127,91,0.08)" stroke="#087f5b" stroke-width="1.4"/>
+          <text x="372" y="170" fill="#202124" font-size="14" font-weight="600">患者ごとの記録</text>
+          <text x="372" y="190" fill="#66716f" font-size="12">MCSのチャットルーム</text>
+          <rect x="420" y="24" width="160" height="56" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="432" y="57" fill="#202124" font-size="14" font-weight="600">医師</text>
+          <rect x="24" y="160" width="160" height="56" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="36" y="193" fill="#202124" font-size="14" font-weight="600">訪問看護</text>
+          <rect x="816" y="160" width="160" height="56" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="828" y="193" fill="#202124" font-size="14" font-weight="600">ケアマネ</text>
+          <rect x="24" y="296" width="160" height="56" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="36" y="329" fill="#202124" font-size="14" font-weight="600">薬剤師</text>
+          <rect x="816" y="296" width="160" height="56" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
+          <text x="828" y="329" fill="#202124" font-size="14" font-weight="600">病院</text>
+        </g>
+
+        <!-- caption -->
+        <line x1="24" y1="384" x2="976" y2="384" stroke="rgba(32,33,36,0.12)" stroke-width="0.8"/>
+        <text x="24" y="412" fill="#66716f" font-size="12" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif"><tspan font-weight="600" fill="#202124">読み取れる軸</tspan>　誰が誰に相談したか・回答までの時間・依頼→回答→実施の完結・調整の集中・連携の密度と双方向性</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

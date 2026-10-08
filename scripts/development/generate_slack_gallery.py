@@ -22,7 +22,9 @@ MUTED = "#66716f"
 GREEN = "#087f5b"
 FONT = "Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif"
 # Fully fictional example shared by every screen (no real or anonymised posts).
-HEADING = "💬 山田 花子（あおぞら）· 起点 10-01"
+HEADING = "💬 山田 花子（あおぞら）"
+# layout 2: the line under the title — start date, then counts
+META = "10-01〜 · {n}投稿 · 📎 1 · @自分宛て"
 SENDER = "佐藤さん（訪問看護・あおぞら）"
 POSTS = (
     (f"10-01 09:40 {SENDER}",
@@ -132,16 +134,15 @@ class Screen:
         return sy + 100
 
     def card(self, x, y, width=770, full=False):
-        """Card zones top to bottom: overview, per-post 📋 要約, state."""
+        """Card zones top to bottom: patient title, meta line, per post a
+        small time/sender line over its summary, state."""
         y = self.paragraph(x, y, HEADING, width, 21, INK, True)
-        y = self.paragraph(x, y - 4, "2投稿 · 📎 1 · @自分宛て" if full
-                           else "1投稿 · 📎 1 · @自分宛て", width, 17, MUTED)
+        y = self.paragraph(x, y - 4, META.format(n=2 if full else 1), width, 17, MUTED)
         if full:
             y = self.paragraph(x, y - 4, "🆕 返信+1", width, 17, GREEN)
         for sender, bullets in POSTS[:2 if full else 1]:
             y = self.rule(x, y, width)
-            y = self.paragraph(x, y, sender, width, 17, INK, True)
-            y = self.paragraph(x, y - 2, "📋 要約", width, 17, GREEN, True)
+            y = self.paragraph(x, y, sender, width, 15, MUTED)
             for bullet in bullets:
                 y = self.paragraph(x, y - 2, "・" + bullet, width, 18)
         y = self.rule(x, y, width)
@@ -150,14 +151,14 @@ class Screen:
         return self.rule(x, y, width)
 
     def thread_post(self, x, y, width, size=17, sender=SENDER, stamps=True):
-        """One native thread post with source metadata, stamps and the source body."""
-        y = self.paragraph(x, y, f"↳ 山田 花子 · 10-01 09:40 {sender}", width, size, INK, True)
+        """One native thread post: source line, the body, then stamps."""
+        y = self.paragraph(x, y, f"↳ 10-01 09:40 {sender}", width, size, INK, True)
+        y = self.paragraph(x, y + 2, BODY, width, size)
         if stamps:
-            y = self.paragraph(x, y + 4, "スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 10:00時点",
+            y = self.paragraph(x, y, RULE, width, size, MUTED)
+            y = self.paragraph(x, y - 2, "スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 10:00時点",
                                width, size, GREEN)
-        y = self.paragraph(x, y, RULE, width, size, MUTED)
-        y = self.paragraph(x, y - 2, "📄 本文", width, size, GREEN, True)
-        return self.paragraph(x, y - 2, BODY, width, size)
+        return y
 
     def finish(self):
         return "\n".join(self.parts + ["</svg>"]) + "\n"

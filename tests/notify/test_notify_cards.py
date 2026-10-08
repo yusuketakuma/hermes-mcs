@@ -474,7 +474,7 @@ def test_card_page_indicator_shows_position(led, tmp_path):
     assert c["pages"] > 1
     # the context line under the heading: post count, then the page
     ctx = c["containers"][1]["text"]
-    assert ctx.startswith("14投稿") and f"1/{c['pages']}ページ" in ctx
+    assert "14投稿" in ctx and f"1/{c['pages']}ページ" in ctx
     # last page shows its position
     card["ui_state"] = json.dumps({"page": c["pages"] - 1})
     c = notify_render._card_content(led.db, card)
@@ -519,7 +519,8 @@ def test_card_thread_shows_structured_lines(led, tmp_path):
     card["ui_state"] = json.dumps({"page": 0})
     c = notify_render._card_content(led.db, card)
     texts = [b.get("text") or "" for b in c["containers"]]
-    struct = [t for t in texts if t.startswith("📋 要約")]
+    # layout 2: the post line heads the summary, no 📋 label on the face
+    struct = [t for t in texts if t.startswith("・")]
     assert struct and "症状" in struct[0] and "疼痛" in struct[0]
     # the header line remains alongside the structured block; the raw
     # body itself stays off the card (📄本文表示 serves it)
@@ -561,7 +562,7 @@ def test_card_stale_and_bad_extraction_not_shown(led, tmp_path):
     c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
     # no current extraction: each post says so instead of a stale block
-    assert joined.count("📋 要約 処理待ち") == 2 and "疼痛" not in joined
+    assert joined.count("要約 処理待ち") == 2 and "疼痛" not in joined
     # the card still renders the message headers (bodies stay off-card)
     assert "職員" in joined and "本文" not in joined
 
@@ -582,9 +583,9 @@ def test_card_deleted_message_hides_structured_data(led, tmp_path):
     card["ui_state"] = json.dumps({"page": 0})
     c = notify_render._card_content(led.db, card)
     joined = "\n".join(b.get("text") or "" for b in c["containers"])
-    assert "（削除済み）" in joined
-    # only the live reply carries a 📋 line; the deleted post none
-    assert joined.count("📋 要約") == 1 and "疼痛" not in joined
+    assert "（削除された投稿）" in joined
+    # only the live reply carries a summary line; the deleted post none
+    assert joined.count("要約 処理待ち") == 1 and "疼痛" not in joined
 
 
 def test_card_sender_tag_shows_time_profession_org(led, tmp_path):
@@ -615,11 +616,11 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
     title, text = notify_render._card_body_text(
         led.db, card, {"shown": "[100, 101]"})
     assert "09-24 08:" in text
-    # header -> (summary) -> stamps -> posted body, in that order
+    # layout 2: header -> (summary) -> body -> stamps as a trailer
     rule = notify_render.SECTION_RULE
-    assert (f"↳ 患者A · 09-24 08:40 職員（薬剤師・薬局Y）\n📋 要約 処理待ち\n"
-            f"スタンプ 未取得\n{rule}\n📄 本文\n本文") in text
-    assert f"08:41 職員\n📋 要約 処理待ち\nスタンプ 未取得\n{rule}\n📄 本文\n本文" in text
+    assert (f"↳ 09-24 08:40 職員（薬剤師・薬局Y）\n要約 処理待ち\n{rule}\n"
+            f"本文\n{rule}\nスタンプ 未取得") in text
+    assert f"08:41 職員\n要約 処理待ち\n{rule}\n本文\n{rule}\nスタンプ 未取得" in text
 
 
 def test_signal_quote_shows_sender_metadata(led, tmp_path):
@@ -662,7 +663,7 @@ def test_card_signal_structured_evidence(led, tmp_path):
     assert "📋 要約" not in joined and "退院後フォローの記録" not in joined
     _, body = notify_render._card_body_text(
         led.db, card, {"shown": json.dumps(c["shown"])})
-    assert "📋 要約\n・状態安定\n・要点: 経過観察" in body
+    assert "職員\n・状態安定\n・要点: 経過観察\n" in body
     assert "退院後フォローの記録" in body        # raw body still there
 
 
@@ -1798,7 +1799,7 @@ def test_sweep_detects_source_delete(led):
     r = _latest_render(led)
     assert r["render_rev"] == r0["render_rev"] + 1
     assert r["op"] == "update"
-    assert "（削除済み）" in json.dumps(r["spec_json"],
+    assert "（削除された投稿）" in json.dumps(r["spec_json"],
                                      ensure_ascii=False)
 
 
@@ -2254,7 +2255,7 @@ def test_body_replay_uses_live_source_and_revocation(led, tmp_path):
     led.db.execute("UPDATE messages SET body_state='deleted' WHERE project_id=1")
     led.db.commit()
     second = notify_cards.apply_notification(led, req, CFG, now=NOW + 1)
-    assert '（削除済み）' in second['body']
+    assert '（削除された投稿）' in second['body']
     assert ': 本文' not in second['body']
     notify_cards.revoke_card(led.db, card['card_id'], NOW + 2)
     led.db.commit()
