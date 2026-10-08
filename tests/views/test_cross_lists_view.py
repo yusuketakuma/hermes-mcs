@@ -110,3 +110,35 @@ def test_snapshot_read_and_scope_recheck(store, replay, tmp_path):
     store.save_messages([_norm_message(message(), PID + 1)], project_id=PID + 1)
     view = get_cross_list(store.db, "mentioned", enabled=True, now=100)
     assert view["state"] == "unknown" and view["rows"] == []
+
+
+@pytest.mark.parametrize("count", [0, 1, 200])
+@pytest.mark.parametrize("conflict", [None, "project", "parent"])
+def test_batched_identity_read_keeps_missing_and_conflicting_scope(store, replay, count, conflict):
+    from copy import deepcopy
+    from mcs_adapter import _norm_message
+    capture(store, replay)
+    payload = json.loads(store.artifacts(ARTIFACT_KIND)[0]["content"])
+    prototype = payload["rows"][0]
+    payload["rows"] = [dict(deepcopy(prototype), message_id=MID + offset) for offset in range(count)]
+    store.artifact_add(ARTIFACT_KIND, json.dumps(payload))
+    if count and conflict:
+        saved = message(MID)
+        parent = MID + 1000 if conflict == "parent" else None
+        project = PID + 1 if conflict == "project" else PID
+        store.save_messages([_norm_message(saved, project, parent_id=parent)], project_id=project)
+        actual = store.db.execute("SELECT project_id,parent_id FROM messages WHERE message_id=?", (MID,)).fetchone()
+        assert tuple(actual) == (project, parent)
+    store.db.execute("PRAGMA query_only=ON")
+    queries = []
+    store.db.set_trace_callback(queries.append)
+    try:
+        view = get_cross_list(store.db, "mentioned", enabled=True, now=100)
+    finally:
+        store.db.set_trace_callback(None)
+    if count and conflict:
+        assert view["state"] == "unknown" and view["rows"] == []
+    else:
+        assert view["state"] == ("complete" if count else "empty")
+        assert view["rows"] == payload["rows"] and view["current_known"]
+    assert len(queries) == 2 + bool(count)

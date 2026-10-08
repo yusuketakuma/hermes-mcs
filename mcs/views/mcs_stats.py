@@ -1307,6 +1307,8 @@ def st_interaction_latency(db, scope, *, profession_map=None, privacy_policy=Non
             counts["negative_latency"] += 1
             continue
         counts["valid_time_pairs"] += 1
+        if privacy_policy is None:
+            continue
         start = role(row["project_id"], row["root_actor"], row["root_actor_type"],
                      row["root_profession"], row["root_ts"])
         end = role(row["project_id"], row["reply_actor"], row["reply_actor_type"],
