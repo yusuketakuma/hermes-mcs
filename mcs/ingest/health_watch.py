@@ -440,7 +440,10 @@ _AREA_JA = (("semantic", "意味チェック（任意機能）"), ("extract_back
 def _jst(ts) -> str:
     if not _finite_number(ts):
         return "不明"
-    return time.strftime("%m-%d %H:%M", time.gmtime(ts + 9 * 3600))
+    try:
+        return time.strftime("%m-%d %H:%M", time.gmtime(ts + 9 * 3600))
+    except (OverflowError, OSError, ValueError):
+        return "不明"
 
 
 def _hours(seconds) -> str:
