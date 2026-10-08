@@ -432,3 +432,15 @@ def test_absent_or_stale_facts_keep_rule_events_and_vitals(db, kind):
         db.artifact_add(kind, "{}", project_id=1, message_id=1,
                         meta={"hash": "synthetic-stale", "engine_version": 4})
     assert structured_view.structured_lines(db.db, 1) == ["区分: 訪問", "バイタル: HR 72"]
+
+
+def test_plain_summary_uses_one_fixed_order():
+    import structured_view
+    lines = ["区分: 依頼", "🚨 緊急度: 高", "合成の概要", "症状: 合成症状",
+             "薬剤: 合成薬 5mg[開始]", "要点: 合成の要点", "次回予定: 合成日",
+             "依頼: 医師へ合成確認", "バイタル: BT 37.0"]
+    ordered = sorted(lines, key=structured_view._summary_rank)
+    assert ordered == ["🚨 緊急度: 高", "合成の概要", "要点: 合成の要点",
+                       "依頼: 医師へ合成確認", "薬剤: 合成薬 5mg[開始]",
+                       "症状: 合成症状", "バイタル: BT 37.0", "次回予定: 合成日",
+                       "区分: 依頼"]

@@ -109,13 +109,13 @@ def test_unreacted_own_posts_section_only_when_published(led):
         _meta(led, mid, reactions=[])
     _meta(led, 109, reactions=["broken"])
     led.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=105")
-    assert _section(_digest(led, CFG), "反応が観測されていない自分の投稿") is None
-    sec = _section(_digest(led), "反応が観測されていない自分の投稿")
-    assert "他者反応0件 2投稿" in sec
-    assert "message 100 2日経過・観測" in sec and "message 103 7日経過" in sec
+    assert _section(_digest(led, CFG), "反応がない自分の投稿") is None
+    sec = _section(_digest(led), "反応がない自分の投稿")
+    assert "反応なし 2投稿" in sec
+    assert "・project 1 2日経過・観測" in sec and "・project 1 7日経過" in sec
     for mid in (101, 102, 104, 105, 106, 107, 108, 109):
         assert f"message {mid} " not in sec
-    assert "スタンプ未取得 1投稿・取得不正 1（0件に含めません）" in sec
+    assert "スタンプ未取得 1投稿・取得不正 1" in sec
     assert "合成同名" not in sec and "本文" not in sec
 
 
@@ -124,15 +124,15 @@ def test_unreacted_section_without_self_id_and_scope(led):
     _patient(led, 2)
     _post(led, 100, SELF, ts=NOW - 100)
     _meta(led, 100, reactions=[])
-    assert "本人の送信者IDが不明" in _section(_digest(led), "反応が観測されていない自分の投稿")
+    assert "本人の送信者IDが不明" in _section(_digest(led), "反応がない自分の投稿")
     _self_known(led)
     _post(led, 200, SELF, ts=NOW - 100, pid=2)
     _meta(led, 200, reactions=[])
-    sec = _section(_digest(led, allowed=[2]), "反応が観測されていない自分の投稿")
-    assert "message 200" in sec and "message 100" not in sec
+    sec = _section(_digest(led, allowed=[2]), "反応がない自分の投稿")
+    assert "・project 2 " in sec and "・project 1 " not in sec
     flt = notify_digest.parse_scope("project:1")
-    sec = _section(_digest(led, flt=flt), "反応が観測されていない自分の投稿")
-    assert "message 100" in sec and "message 200" not in sec
+    sec = _section(_digest(led, flt=flt), "反応がない自分の投稿")
+    assert "・project 1 " in sec and "・project 2 " not in sec
 
 
 def test_addressed_to_me_requires_same_thread_reply_or_self_stamp(led):
@@ -158,18 +158,17 @@ def test_addressed_to_me_requires_same_thread_reply_or_self_stamp(led):
     _meta(led, 160, mentions=[{"type": "station", "id": 5}], reactions=[])
     _meta(led, 170, mentions=[{"type": "user", "id": "7"}], reactions=[])
     _meta(led, 180, mentions=me)
-    sec = _section(_digest(led), "自分宛で応答未観測")
-    assert "message 110 " in sec and "message 130 " in sec and "message 180 " in sec
-    for mid in (100, 140, 150, 160, 170):
-        assert f"message {mid} " not in sec
+    sec = _section(_digest(led), "自分宛で応答なし")
+    # 110, 130 and 180 only — rows name the room, never internal ids
+    assert sec.count("・project 1 自分宛・") == 3 and "message " not in sec
     assert "自分の返信観測なし・本人スタンプ観測なし" in sec
-    assert "message 180 本人宛メンション・1時間経過・自分の返信観測なし・本人スタンプ未取得" in sec
-    assert "施設宛（自局判定なし）: 1投稿" in sec
-    assert "メンション不明（未取得・取得不正）" in sec
+    assert "自分宛・1時間経過・自分の返信観測なし・本人スタンプ未取得" in sec
+    assert "施設宛: 1投稿" in sec
+    assert "宛先不明: 1投稿" in sec
     assert "記録が見つからない≠対応がなかった" not in sec
     assert "合成同名" not in sec and "本文" not in sec
     # 同じ表示は publish 設定に依らない（capture の値を読むだけ）
-    assert _section(_digest(led, CFG), "自分宛で応答未観測") == sec
+    assert _section(_digest(led, CFG), "自分宛で応答なし") == sec
 
 
 def test_addressed_section_without_self_id_lists_no_mentions(led):
@@ -178,11 +177,11 @@ def test_addressed_section_without_self_id_lists_no_mentions(led):
     _meta(led, 110, mentions=[{"type": "user", "id": SELF}], reactions=[])
     _signal_row(led, "pru:1:110", stype="pharmacist_request_unanswered", mids=[110])
     cfg = {**PUB, "signals": {"notify": True}}
-    sec = _section(_digest(led, cfg), "自分宛で応答未観測")
+    sec = _section(_digest(led, cfg), "自分宛で応答なし")
     assert "本人の送信者IDが不明のためメンションは判定していません" in sec
     assert "本人宛メンション" not in sec
-    assert "薬剤師宛依頼の応答未確認（シグナル）・本人ID不明" in sec
-    assert _section(_digest(led, cfg, allowed=[2]), "自分宛で応答未観測") is None
+    assert "薬剤師宛の依頼に応答なし・本人ID不明" in sec
+    assert _section(_digest(led, cfg, allowed=[2]), "自分宛で応答なし") is None
 
 
 def test_self_mentioned_and_evidence_flags(led, tmp_path):
@@ -220,7 +219,7 @@ def test_coverage_counts_stamp_gaps_in_window(led):
                        (NOW - 100, mid))
     _meta(led, 101, reactions=[])
     _meta(led, 102, reactions=["broken"])
-    cov = _section(_digest(led), "取得状況（記録ベース）")
+    cov = _section(_digest(led), "取得状況")
     assert "・スタンプ未取得 1投稿・取得不正 1" in cov
 
 
@@ -235,12 +234,12 @@ def test_fit_parts_folds_list_rows_not_disclosures(led):
     folded = notify_render.fit_parts(parts, 600)
     for dialect in ("plain", "slack", "discord"):
         text = notify_render.parts_text(folded, dialect)
-        sec = _section(text, "反応が観測されていない自分の投稿")
-        assert "他者反応0件 40投稿" in sec and "スタンプ未取得 1投稿" in sec
+        sec = _section(text, "反応がない自分の投稿")
+        assert "反応なし 40投稿" in sec and "スタンプ未取得 1投稿" in sec
         assert "・…他" in sec
-        assert "取得状況（記録ベース）" in text
-    full = _section(notify_render.parts_text(parts), "反応が観測されていない自分の投稿")
-    assert full.count("\n・project") == notify_digest.MAX_LIST
+        assert "取得状況" in text
+    full = _section(notify_render.parts_text(parts), "反応がない自分の投稿")
+    assert full.count("0時間経過・観測") == notify_digest.MAX_LIST
     assert "・…他30件" in full
 
 

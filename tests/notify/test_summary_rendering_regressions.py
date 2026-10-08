@@ -147,7 +147,7 @@ def test_digest_uses_snapshot_bounded_response_observation(led, reply_at, error)
     parts = notify_digest.view(led.db, {}, "", now=NOW)["parts"]
     # Then: neither future replies nor failed capture suppress observation gaps.
     out = notify_render.parts_text(parts)
-    assert "自分宛で応答未観測" in out and "message 1 " in out
+    assert "自分宛で応答なし" in out and "・患者A 自分宛" in out
     assert "自分の返信観測なし" in out
     assert "記録が見つからない≠対応がなかった" not in out
 

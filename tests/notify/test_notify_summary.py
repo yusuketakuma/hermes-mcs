@@ -129,7 +129,7 @@ def test_fetch_gap_disclosure_is_never_folded(led):
     led.db.commit()
     parts = notify_digest.build(led.db, {}, NOW - 86400, NOW, names=True)
     out = notify_render.display_text(notify_render.fit_parts(parts, 600))
-    assert "■ 取得状況（記録ベース）" in out and "・取得未完了のルーム 38" in out
+    assert "■ 取得状況" in out and "・取得未完了のルーム 38" in out
     assert "…他" not in out.split("■ 取得状況")[1]
 
 

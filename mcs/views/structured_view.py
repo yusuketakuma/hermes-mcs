@@ -702,4 +702,27 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
     if v1.get("next_planned"):
         lines.append(f"次回予定: {v1['next_planned']}")
     lines.extend(_canonical_finding_lines(llm, context=context))
+    if plain:
+        # owner 2026-10-08: one fixed reading order on new cards and notices
+        # (missing items are simply absent); layout-1 cards keep the old order
+        lines.sort(key=_summary_rank)
     return lines
+
+
+# 緊急度 → 概要・要点 → 依頼 → 薬剤 → 臨床所見（バイタル・検査・症状） → 予定 → 区分
+_SUMMARY_ORDER = (
+    (0, ("🚨", "緊急度", "急ぎの確認依頼")),
+    (2, ("依頼",)),
+    (3, ("薬剤", "服薬期間")),
+    (4, ("バイタル", "閾値超過", "検査", "症状")),
+    (5, ("次回予定",)),
+    (7, ("区分",)),
+)
+
+
+def _summary_rank(line: str) -> int:
+    for rank, prefixes in _SUMMARY_ORDER:
+        if line.startswith(prefixes):
+            return rank
+    # canonical findings read 「ラベル｜…」 next to the other findings
+    return 4 if "｜" in line.split(" ", 1)[0] else 1
