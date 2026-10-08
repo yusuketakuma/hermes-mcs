@@ -726,7 +726,7 @@ def test_kill_switch_skips_claim_then_recovers(world):
     async def run():
         await worker.tick()
         assert not reg.claims() and not bot.channels[42].sent
-        flags.write_text(json.dumps({"interactive": True}))
+        flags.write_text(json.dumps({"interactive": True, "route_epoch": 1}))
         await worker.tick()             # claim + begin
         world.drain()                   # grant
         await worker.tick()             # send + receipt
@@ -756,7 +756,7 @@ def test_send_grant_waits_for_current_flags(world, held_flags):
         await worker.tick()
         assert not bot.channels[42].sent
         assert reg.claims()
-        flags.write_text(json.dumps({"interactive": True}))
+        flags.write_text(json.dumps({"interactive": True, "route_epoch": 1}))
         await worker.tick()
         world.drain()
         assert len(bot.channels[42].sent) == 1

@@ -162,7 +162,7 @@ def _mkworker(tmp_path, bot=None, wid="w1"):
         (tmp_path / name).mkdir(exist_ok=True)
     flags = tmp_path / "flags" / "notify.json"
     if not flags.exists():
-        flags.write_text(json.dumps({"interactive": True}))
+        flags.write_text(json.dumps({"interactive": True, "route_epoch": 1}))
     paths.ensure_dirs(str(tmp_path))          # creates discord_state
     reg = Registry(str(_state(tmp_path)))
     bot = bot or FakeBot()
@@ -387,7 +387,7 @@ def test_stop_between_parts_resumes_only_unsent_remainder(tmp_path, monkeypatch,
     _card_delivered(tmp_path)
     asyncio.run(w._resume_parts(spec))
     assert not thread.sent
-    flags.write_text(json.dumps({"interactive": True}))
+    flags.write_text(json.dumps({"interactive": True, "route_epoch": 1}))
     if stop_kind == "restore_marker":
         (tmp_path / "restore_pending.json").unlink()
     asyncio.run(w._resume_parts(spec))
