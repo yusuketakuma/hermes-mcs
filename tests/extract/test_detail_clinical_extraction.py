@@ -221,7 +221,7 @@ def test_old_generation_valid_failed_and_checkpointed_rows_reenter_normal_pendin
         db.artifact_add("extract_llm_chunk", json.dumps({"summary": "旧合成checkpoint"}),
                         project_id=1, message_id=mid, meta={"hash": row["content_hash"],
                         "ver": 5, "chunk_size": 3000, "chunk": 0,
-                        "context": extract_llm._chunk_context(row, None)})
+                        "context": extract_llm._chunk_context(row, None, checkpoint=True)})
     calls = []
     def infer(body, **kwargs):
         calls.append(body)
@@ -305,7 +305,7 @@ def test_parallel_dense_rows_keep_independent_source_bound_layouts(db, monkeypat
 def test_adaptive_layout_cannot_cross_generation_context_or_shape(db, bad):
     db.save_messages([_message(body="独居です。")])
     row = db.db.execute("SELECT * FROM messages").fetchone()
-    meta = {"hash": row["content_hash"], "ver": 6, "context": extract_llm._chunk_context(row, None),
+    meta = {"hash": row["content_hash"], "ver": 6, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": -1, "chunk_size": 10, **bad}
     db.artifact_add("extract_llm_chunk", '{}', project_id=1, message_id=1, meta=meta)
     assert extract_llm._saved_chunk_size(db, row) == extract_llm._CHUNK_SIZE
@@ -350,8 +350,10 @@ def test_piece_hints_and_repair_hints_cannot_include_sibling_details(monkeypatch
         prompts.append(prompt)
         other = next(part for part in extract_llm.text_chunks(body, 70) if part != piece)
         # Each supplied rule/context field belongs to this target piece only.
-        hint_prefix = prompt.split("<<<\n", 1)[0]
-        assert other not in hint_prefix
+        blocks = [part.split(extract_llm._HINT_TAIL, 1)[0]
+                  for part in prompt.split(extract_llm._HINT_HEAD)[1:]]
+        assert len(blocks) == (0 if extract_llm._REPAIR_HEAD in prompt else 1)
+        assert all(piece in block and other not in block for block in blocks)
         if piece not in repaired:
             repaired.add(piece)
             return {"labs": [{"name": "合成項目", "value": "x", "evidence": "ない引用"}]}
@@ -373,6 +375,32 @@ def test_child_of_initial_single_chunk_never_gets_whole_body_thin_repair(monkeyp
     out = extract_llm.llm_extract(body)
     assert out is not None
     assert len(seen) == 1 + len(extract_llm.text_chunks(body, len(body) // 2))
+
+
+@pytest.mark.parametrize("dense", [False, True])
+def test_rule_hints_are_included_once_and_only_for_the_target_piece(monkeypatch, dense):
+    names = [f"合成薬{letter}" for letter in "ABCDEFGHIJKLMN"]
+    body = ("、".join(f"{name}{i + 10}mg朝夕1錠" for i, name in enumerate(names))
+            + "を継続。") if dense else "合成薬A10mgを継続。"
+    seen = []
+
+    def rules(row):
+        return {"medications": [{"name": name} for name in names if name in row["body_text"]]}
+
+    def infer(prompt, **kwargs):
+        seen.append(prompt)
+        return {}
+
+    monkeypatch.setattr(extract_llm, "_rule_hints", rules)
+    monkeypatch.setattr(extract_llm, "_llm_call", infer)
+    assert extract_llm.llm_extract(body, hints=rules({"body_text": body})) is not None
+    assert len(seen) > 1 if dense else len(seen) == 1
+    for prompt in seen:
+        piece = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
+        blocks = prompt.split(extract_llm._HINT_HEAD)[1:]
+        assert len(blocks) == 1
+        block = blocks[0].split(extract_llm._HINT_TAIL, 1)[0]
+        assert all((name in block) == (name in piece) for name in names)
 
 
 def test_repair_length_stop_splits_pending_piece_and_preserves_completed_sibling(db, monkeypatch):
@@ -427,18 +455,22 @@ def test_adversarial_local_split_records_cannot_authorize_cached_children(db, fa
         assert loaded_splits == {} and saved == {}
 
 
-def test_processing_revision_invalidates_old_global_hints_checkpoint(db):
+@pytest.mark.parametrize("revision", [None, "clinical-plan/v3"])
+def test_processing_revision_invalidates_old_global_hints_checkpoint(db, revision):
     import hashlib
     body = "独居の合成本文です。"
     db.save_messages([_message(body=body)])
     row = db.db.execute("SELECT * FROM messages").fetchone()
-    old_context = hashlib.sha256(json.dumps([row["posted_at"], None, extract_llm.MODEL,
-                                extract_llm._PROMPT_HEAD, extract_llm._SCHEMA],
+    contract = [row["posted_at"], None, extract_llm.MODEL,
+                extract_llm._PROMPT_HEAD, extract_llm._SCHEMA]
+    if revision is not None:
+        contract.extend([revision, extract_llm.PLAN_VERSION])
+    old_context = hashlib.sha256(json.dumps(contract,
                                 ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     db.artifact_add("extract_llm_chunk", '{}', project_id=1, message_id=1,
                     meta={"hash": row["content_hash"], "ver": 6, "chunk": 0,
                           "chunk_size": 3000, "context": old_context})
-    assert old_context != extract_llm._chunk_context(row, None)
+    assert old_context != extract_llm._chunk_context(row, None, checkpoint=True)
     assert extract_llm._saved_chunks(db, row) == {}
 
 
@@ -448,7 +480,7 @@ def test_root_split_requires_explicit_piece_hash_but_legacy_empty_root_remains_v
     db.save_messages([_message(body=body)])
     row = db.db.execute("SELECT * FROM messages").fetchone()
     # Legacy complete index 0 may have no piece hash; it still proves coverage.
-    meta = {"hash": row["content_hash"], "ver": 6, "context": extract_llm._chunk_context(row, None),
+    meta = {"hash": row["content_hash"], "ver": 6, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": 0, "chunk_size": 3000}
     db.artifact_add("extract_llm_chunk", '{}', project_id=1, message_id=1, meta=meta)
     assert extract_llm._saved_chunks(db, row) == {0: {}}
@@ -457,6 +489,32 @@ def test_root_split_requires_explicit_piece_hash_but_legacy_empty_root_remains_v
                     meta={**meta, "split_size": 50})
     splits, saved = extract_llm._saved_chunk_state(db, row)
     assert splits == {} and saved == {}
+
+
+def test_verified_completed_results_survive_local_hint_checkpoint_revision(db, monkeypatch):
+    import hashlib
+
+    body = "独居の合成本文です。"
+    db.save_messages([_message(body=body)])
+    _fake_backend(monkeypatch, lambda piece: {
+        "status": 200, "text": json.dumps({"patient_context": [_context(piece, "living")]}),
+        "finish_reason": "stop"})
+    assert extract_llm.run_pending(db, limit=1, budget_s=200)["done"] == 1
+    row = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    final = db.db.execute("SELECT content,meta,model FROM artifacts WHERE kind='extract_llm'").fetchone()
+    meta = json.loads(final["meta"])
+    context = extract_llm._thread_context(db, row)
+    old_binding = hashlib.sha256(json.dumps([
+        row["posted_at"], context, final["model"], extract_llm._PROMPT_HEAD,
+        extract_llm._SCHEMA, "clinical-plan/v3", extract_llm.PLAN_VERSION],
+        ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    assert meta["context_binding"] == old_binding
+    db.artifact_add("extract_llm_chunk", final["content"], project_id=1, message_id=1,
+                    model=final["model"], meta={"hash": row["content_hash"], "ver": 6,
+                        "chunk": 0, "chunk_size": 3000, "context": old_binding})
+    assert extract_llm._saved_chunks(db, row, context) == {}
+    assert extract_llm.progress_for_message(db.db, row, model=final["model"])["state"] == "complete"
+    assert extract_llm.run_pending(db, limit=1, budget_s=200)["selected"] == 0
 
 
 def test_repair_length_attempt_is_counted_before_local_split(monkeypatch):

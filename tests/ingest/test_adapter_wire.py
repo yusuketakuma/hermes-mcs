@@ -640,7 +640,7 @@ def test_chrome_launch_disables_on_device_model_download(monkeypatch):
     launched = []
     monkeypatch.setattr(a, "_cdp_up", lambda: bool(launched))
     monkeypatch.setattr(a, "_sleep_bounded", lambda s: None)
-    monkeypatch.setattr(a, "_stop_profile_chrome", lambda profile: False)
+    monkeypatch.setattr(a, "_stop_profile_chrome", lambda profile, chrome: False)
     monkeypatch.setattr(subprocess, "Popen",
                         lambda argv, **kw: launched.append(argv))
     a._ensure_chrome("/synthetic/profile", "/synthetic/chrome")
@@ -1517,10 +1517,12 @@ def test_cdp_down_stops_only_this_profiles_chrome_before_relaunch(monkeypatch):
         "102 /Apps/Chrome Helper --type=renderer --user-data-dir=/p/chrome-profile",
         "103 /Apps/Chrome --user-data-dir=/p/chrome-profile-other",
         "104 /Apps/Chrome --user-data-dir=/p/other",
+        "105 /usr/bin/python3 /tmp/synthetic-launcher.py --user-data-dir=/p/chrome-profile",
+        "106 /Apps/Chrome Other --user-data-dir=/p/chrome-profile",
     ])
     monkeypatch.setattr(subprocess, "run",
                         lambda *a, **k: SimpleNamespace(stdout=listing, returncode=0))
-    alive, sent = {101}, []
+    alive, sent = {101, 105, 106}, []
 
     def kill(pid, sig):
         if sig == 0:
@@ -1533,11 +1535,41 @@ def test_cdp_down_stops_only_this_profiles_chrome_before_relaunch(monkeypatch):
 
     monkeypatch.setattr(mcs_adapter.os, "kill", kill)
     monkeypatch.setattr(a, "_sleep_bounded", lambda s: None)
-    assert a._stop_profile_chrome("/p/chrome-profile") is True
+    assert a._stop_profile_chrome("/p/chrome-profile", "/Apps/Chrome") is True
     # SIGTERM ignored (hung) -> escalates to SIGKILL, only for pid 101
     assert sent == [(101, signal.SIGTERM), (101, signal.SIGKILL)]
     assert a.chrome_restarted is True
-    assert a._stop_profile_chrome("relative/profile") is False
+    assert a._stop_profile_chrome("relative/profile", "/Apps/Chrome") is False
+    assert a._stop_profile_chrome("/p/chrome-profile", "relative/chrome") is False
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_profile_stop_checks_configured_executable_with_spaces(monkeypatch, tmp_path, returncode):
+    import signal
+    chrome = tmp_path / "Google Chrome.app/Contents/MacOS/Google Chrome"
+    chrome.parent.mkdir(parents=True)
+    chrome.touch()
+    alias = tmp_path / "chrome-alias"
+    alias.symlink_to(chrome)
+    listing = (f"101 {chrome} --user-data-dir=/synthetic/profile\n"
+               "102 /usr/bin/python3 /synthetic/launcher.py --user-data-dir=/synthetic/profile\n")
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kw:
+                        SimpleNamespace(stdout=listing, returncode=returncode))
+    alive, sent = {101, 102}, []
+
+    def kill(pid, sig):
+        if sig == 0:
+            if pid not in alive:
+                raise ProcessLookupError
+        else:
+            sent.append((pid, sig))
+            alive.discard(pid)
+
+    monkeypatch.setattr(mcs_adapter.os, "kill", kill)
+    adapter = mcs_adapter.MCSAdapter()
+    monkeypatch.setattr(adapter, "_sleep_bounded", lambda *_: None)
+    assert adapter._stop_profile_chrome("/synthetic/profile", str(alias)) is (returncode == 0)
+    assert sent == ([(101, signal.SIGTERM)] if returncode == 0 else [])
 
 
 def test_auto_login_resets_per_attempt_journal_facts(monkeypatch, tmp_path):

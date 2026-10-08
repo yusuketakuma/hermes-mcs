@@ -22,7 +22,6 @@ Responsibilities:
   job drains; missing bodies/failed threads become durable reply jobs.
 """
 import os
-import sqlite3
 import time
 from dataclasses import dataclass
 from contextlib import suppress

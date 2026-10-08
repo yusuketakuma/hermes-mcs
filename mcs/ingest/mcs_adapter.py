@@ -985,7 +985,7 @@ class MCSAdapter:
         # CDP is down: a hung browser, or this profile opened without the
         # debugging port, would absorb the relaunch (same-profile hand-off)
         # and CDP would never come up — stop that instance first
-        self._stop_profile_chrome(profile_dir)
+        self._stop_profile_chrome(profile_dir, chrome_bin)
         subprocess.Popen([
             chrome_bin,
             f"--remote-debugging-port={urllib.parse.urlparse(self.cdp_url).port}",
@@ -1003,25 +1003,32 @@ class MCSAdapter:
                 return
         raise BootstrapError("chrome launch timed out")
 
-    def _stop_profile_chrome(self, profile_dir: str) -> bool:
+    def _stop_profile_chrome(self, profile_dir: str, chrome_bin: str) -> bool:
         """Stop Chrome main processes of exactly this dedicated profile
         (helpers exit with them): SIGTERM, bounded wait, then SIGKILL.
         Nothing else is touched; an unparseable listing stops nothing."""
         import signal
         import subprocess
-        if not profile_dir or not os.path.isabs(profile_dir):
+        if (not profile_dir or not os.path.isabs(profile_dir)
+                or not chrome_bin or not os.path.isabs(chrome_bin)):
             return False
         flag = re.compile(r"(?:^|\s)--user-data-dir=" + re.escape(profile_dir)
                           + r"(?:\s|$)")
         try:
-            listing = subprocess.run(["ps", "-axww", "-o", "pid=,command="],
-                                     capture_output=True, text=True, timeout=10).stdout
+            result = subprocess.run(["ps", "-axww", "-o", "pid=,command="],
+                                    capture_output=True, text=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
             return False
+        if result.returncode != 0:
+            return False
         pids = []
-        for line in listing.splitlines():
+        for line in result.stdout.splitlines():
             pid, _, command = line.strip().partition(" ")
-            if (pid.isdigit() and int(pid) != os.getpid() and flag.search(command)
+            # ps flattens argv: paths may contain spaces, but Chrome's flags follow its executable.
+            program, separator, _ = command.partition(" --")
+            if (pid.isdigit() and int(pid) != os.getpid() and separator
+                    and os.path.realpath(program) == os.path.realpath(chrome_bin)
+                    and flag.search(command)
                     and " --type=" not in f" {command}"):
                 pids.append(int(pid))
         if not pids:

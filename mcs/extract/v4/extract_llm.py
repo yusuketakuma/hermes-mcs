@@ -1767,10 +1767,6 @@ def llm_extract(body: str, *, context: str | None = None,
             context = context[cut:]
     if context:
         prompt += _CTX_HEAD + context + _CTX_TAIL
-    if hints:
-        block = _hint_block(hints)
-        if block:
-            prompt += _HINT_HEAD + block + _HINT_TAIL
     if feedback:
         flines = [str(x)[:140] for x in feedback if str(x).strip()][:8]
         if flines:
@@ -2611,11 +2607,12 @@ def _release(ledger, r, lease: float | None):
     ledger.db.commit()
 
 
-def _chunk_context(r, context: str | None) -> str:
+def _chunk_context(r, context: str | None, *, checkpoint: bool = False) -> str:
+    """Bind completed results to their source and checkpoints to the local-hint contract."""
     return hashlib.sha256(json.dumps(
         [r["posted_at"], context,
          r["_target"][1] if "_target" in r.keys() else MODEL,
-         _PROMPT_HEAD, _SCHEMA, "clinical-plan/v3", PLAN_VERSION],
+         _PROMPT_HEAD, _SCHEMA, "clinical-plan/v4" if checkpoint else "clinical-plan/v3", PLAN_VERSION],
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
@@ -2633,7 +2630,7 @@ def _saved_chunk_size(ledger, r, context: str | None = None) -> int:
         if (isinstance(meta, dict) and type(meta.get("chunk")) is int and meta["chunk"] == -1
                 and meta.get("hash") == r["content_hash"]
                 and meta.get("ver") == EXTRACT_VERSION
-                and meta.get("context") == _chunk_context(r, context)):
+                and meta.get("context") == _chunk_context(r, context, checkpoint=True)):
             size = meta.get("chunk_size")
             return size if type(size) is int and 1 <= size <= _CHUNK_SIZE else _CHUNK_SIZE
     return _CHUNK_SIZE
@@ -2668,7 +2665,7 @@ def _chunk_piece(body, chunk_size, key, splits):
 def _saved_chunk_state(ledger, r, context=None, *, chunk_size=None):
     """Newest bound node records; invalid parents cannot authorize child coverage."""
     chunk_size = _CHUNK_SIZE if chunk_size is None else chunk_size
-    binding = _chunk_context(r, context)
+    binding = _chunk_context(r, context, checkpoint=True)
     records = {}
     stream = getattr(ledger, "iter_artifacts", None)
     rows = (stream("extract_llm_chunk", message_id=r["message_id"]) if callable(stream)
@@ -2730,7 +2727,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
             if piece is None:
                 raise ValueError("extract_checkpoint_path_invalid")
             meta = {"hash": r["content_hash"], "ver": EXTRACT_VERSION, "chunk": key,
-                    "context": _chunk_context(r, context), "chunk_size": chunk_size,
+                    "context": _chunk_context(r, context, checkpoint=True), "chunk_size": chunk_size,
                     "piece_sha256": hashlib.sha256(piece.encode()).hexdigest(),
                     "actual_model": r["_target"][1] if "_target" in r.keys() else MODEL,
                     "plan_version": PLAN_VERSION}

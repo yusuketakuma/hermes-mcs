@@ -64,7 +64,7 @@ def test_legacy_chunk_malformed_latest_owner_still_invalidates_old_checkpoint(le
     row = {"message_id": 1, "project_id": 1, "body_text": "SYNTH", "content_hash": "hash",
            "posted_at": "2026-01-01T00:00:00+09:00"}
     meta = {"hash": "hash", "ver": extract_llm.EXTRACT_VERSION,
-            "chunk_size": extract_llm._CHUNK_SIZE, "context": extract_llm._chunk_context(row, None),
+            "chunk_size": extract_llm._CHUNK_SIZE, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": 0}
     add(ledger, "extract_llm_chunk", {"summary": "SYNTH"}, meta)
     assert extract_llm._saved_chunks(ledger, row) == {0: {"summary": "SYNTH"}}
@@ -92,7 +92,7 @@ def test_cache_readers_preserve_artifacts_only_ledger_protocol(ledger):
     row = {"message_id": 1, "project_id": 1, "body_text": "SYNTH", "content_hash": "hash",
            "posted_at": "2026-01-01T00:00:00+09:00"}
     meta = {"hash": "hash", "ver": extract_llm.EXTRACT_VERSION,
-            "chunk_size": extract_llm._CHUNK_SIZE, "context": extract_llm._chunk_context(row, None),
+            "chunk_size": extract_llm._CHUNK_SIZE, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": 0}
     add(ledger, "extract_llm_chunk", {"summary": "SYNTH"}, meta)
     assert extract_llm._saved_chunks(legacy, row) == {0: {"summary": "SYNTH"}}
