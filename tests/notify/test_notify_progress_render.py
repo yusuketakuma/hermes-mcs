@@ -24,7 +24,7 @@ def test_processing_complete_attention_updates_both_face_and_body(led, monkeypat
     processing = notify_render._card_content(led.db, card, cfg={})
     assert "解析中 2" in notify_render.display_text(processing)   # once, on the meta line
     body = notify_render._card_body_text(led.db, card, {"shown": json.dumps([100])}, cfg={})[1]
-    assert "解析更新中（3区間中1区間完了）" in body
+    assert "解析更新中" not in body    # layout 2: progress sits on the meta line only
     assert processing["source_fp"] == original["source_fp"]
     assert processing["source_fp"] == card["source_fp"]
     drift = notify_cards._generation_drift(card, processing)
@@ -147,14 +147,15 @@ def test_thread_body_and_attachment_caption_keep_source_without_duplicate_summar
     assert raw in body and "📄 本文" not in body
     caption = next(part["caption"] for part in spec["parts"]["manifest"] if part["kind"] == "attachment_part")
     assert "合成所属" in caption
+    # layout 2: the face carries every post's summary, so no transport
+    # repeats it in the body post
+    assert "GENERATED-SUMMARY-CANARY" not in body and "解析更新中" not in body
+    assert "📋 要約" not in body
     if platform == "lineworks":
-        assert "GENERATED-SUMMARY-CANARY" in body and "解析更新中" in body
         assert "GENERATED-SUMMARY-CANARY" in caption
     else:
-        assert "GENERATED-SUMMARY-CANARY" not in body and "解析更新中" not in body
-        assert "📋 要約" not in body
         assert "スタンプ 未取得" in body
         assert "GENERATED-SUMMARY-CANARY" not in caption and "解析更新中" not in caption
         assert raw not in caption
     private = notify_render._card_body_text(led.db, _card(led), {"shown": "[100]"}, cfg=cfg)[1]
-    assert "GENERATED-SUMMARY-CANARY" in private and "解析更新中" in private
+    assert "GENERATED-SUMMARY-CANARY" in private and "解析更新中" not in private

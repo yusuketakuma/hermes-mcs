@@ -509,7 +509,7 @@ def test_signal_text_warning_uses_current_urgency_not_frozen_modifier(world, llm
     _signal_row(store, "s", mids=[100])
     event = _intent(store, "signal", payload={"signal_keys": ["s"], "urgent": frozen_urgent})
     text, files = notify_flush._format_event(store, event)
-    assert ("緊急度: 高" in text) == (llm == "high")
+    assert ("緊急度高" in text) == (llm == "high")
     assert "原投稿が urgency:high" not in text and files == []
 
 
@@ -583,7 +583,7 @@ def test_text_initial_render_and_urgency_witness_share_writer_snapshot(world, mo
     try:
         assert notify_flush.flush(store)["sent"] == 1
         assert blocked == [True]
-        assert "緊急度: 高" not in calls[0][0][1]
+        assert "緊急度高" not in calls[0][0][1]
         assert notify_urgent._initial(store.db, base, 100)["urgency_source"] is None
         with other.db:
             other.db.execute("UPDATE artifacts SET content=?,created_at=? WHERE artifact_id=?",

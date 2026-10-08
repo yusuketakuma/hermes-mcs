@@ -1,0 +1,26 @@
+{
+  "category": "fixed",
+  "title": "レビューで見つかった配送の止まりどころを解消し、ボタン操作の取り違えを防ぐ",
+  "summary": "患者別アラートは、カードのスレッド機能がオフの環境ではすぐチャンネルへ届き、元スレッドが消えた場合も6時間以内にチャンネルへ移ります。緊急の再確認通知はスレッドが現れないまま6時間たつと取り下げ、他の通知の送信枠を占有しません。Discord の新規カードにも投稿ごとの 💊 ボタンが付き、自動アーカイブされたスレッドへのアラートも届きます。「確定する」を二度押しても同じタスクは二重に作られず、Slack のカード面から押した 💊 の結果はスレッドへ案内します。",
+  "upgrade": "追加設定は不要です。Hermes接続では gateway 再起動で新しい worker を反映してください。urgency_escalation.mode が on で notify.card_thread が true でない、または signals.notify が true で notify.interactive が off の設定は、次回の check で設定エラーになります（その組合せではアラートが届かないため）。",
+  "details": [
+    "notify_cards._bind_signal_thread: card_thread が true でなければ元スレッドの確定を待たない。束縛済みのスレッドが消えた（削除・証拠投稿の削除）カードも、保留上限の後はチャンネルへ再投稿する（_move_signal）。再束縛時は旧経路の queued render を取り消してから再描画する。",
+    "notify_cards._dispatch_urgent_notice: スレッド未確定の駐車を作成後10分までは毎分、以降は1時間ごとにし、SIGNAL_SOURCE_HOLD_MAX_S を過ぎたら取り下げる（suppressed）。",
+    "adapters/discord/cards.message_payload: 旧形式 embed（新規カードの経路）でも post_actions を独立した行のボタンにする。投稿が2件以上なら投稿時刻をラベルにする。メニューの文言を LINE WORKS と同じ「その他の操作…」にする。",
+    "adapters/discord/delivery: archived のスレッドは送信で再開されるため拒否せず、locked だけを thread_scope_mismatch にする。",
+    "adapters/common/registry.consume_confirm: 確定済みの確認は TTL まで処理中（busy）として残し、二度目の確定・取消を「処理中」と答える。Slack・Discord・LINE WORKS が drop_confirm の代わりに使う。",
+    "adapters/common/registry.drop_followup: 削除できた呼出しだけ True を返し、Slack・Discord・LINE WORKS の sweep と Discord の即時待ちは False なら送信しない（同じ回答の二重投稿防止）。",
+    "adapters/slack/actions._say: chat.postEphemeral を delivery._call 経由にし、429 の Retry-After を1回待つ。スレッド付き ephemeral を送った後、チャンネル側に「💊 結果をこのカードのスレッドに表示しました。」を1行出す。",
+    "mcs_setup.validate_config: signals.notify=true かつ notify.interactive=off、urgency_escalation.mode=on かつ（card_thread が true でない／interactive が slack・discord でない）を設定エラーにする。"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "adapters/discord/cards.py",
+    "adapters/discord/delivery.py",
+    "adapters/common/registry.py",
+    "adapters/slack/actions.py",
+    "adapters/discord/actions.py",
+    "adapters/lineworks/actions.py",
+    "mcs/ops/mcs_setup.py"
+  ]
+}

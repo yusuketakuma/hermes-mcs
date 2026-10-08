@@ -219,3 +219,44 @@ def test_signal_revoke_keeps_sealed_identity_and_scope_gates(led, fault, error):
                       "render_rev": render["render_rev"] + 1, "route_epoch": 2}[fault]
     result = notify_transport.apply_transport_begin(led, request, CFG, now=NOW + 1)
     assert not result["granted"] and result["error"] == "denied_" + error
+
+
+def test_signal_never_waits_where_card_threads_are_off(led):
+    # no card opens a thread with card_thread off, so there is nothing
+    # to wait for: the alert goes to the channel at once
+    cfg = {**CFG, "notify": {**CFG["notify"], "card_thread": False}}
+    _seed_thread(led)
+    _signal_row(led, "synthetic-key", mids=[101])
+    event = _intent(led, "signal", payload={"signal_keys": ["synthetic-key"], "project_id": 1})
+    assert _dispatch(led, event, cfg)["dispatched"]
+    card = dict(led.db.execute("SELECT * FROM notification_cards WHERE kind='signal'").fetchone())
+    spec = json.loads(_latest_render(led, card["card_id"])["spec_json"])
+    assert "source_thread" not in spec["parts"] and "thread_id" not in spec["delivery"]
+    assert validate(spec)
+
+
+def test_bound_signal_whose_thread_vanished_moves_to_the_channel(led):
+    # a signal already homed in its source thread must not stay silent
+    # forever when that thread is deleted: after the hold it re-posts in
+    # the channel, and the render queued for the old route is cancelled
+    _seed_thread(led)
+    delivered_source(led)
+    _, card = _signal(led)
+    render = _latest_render(led, card["card_id"])
+    assert json.loads(render["spec_json"])["parts"]["source_thread"] is True
+    with led.db:
+        led.db.execute("UPDATE notification_cards SET thread_state='deleted' WHERE kind='thread'")
+    late = NOW + notify_cards.SIGNAL_SOURCE_HOLD_MAX_S + 60
+    with led.db:
+        notify_cards._issue_render(led.db, card["card_id"], CFG, late, [], force=True)
+    moved = _latest_render(led, card["card_id"])
+    assert moved["delivery_id"] != render["delivery_id"]
+    spec = json.loads(moved["spec_json"])
+    assert "source_thread" not in spec["parts"] and "thread_id" not in spec["delivery"]
+    assert validate(spec)
+    row = led.db.execute("SELECT thread_id,thread_state FROM notification_cards WHERE card_id=?",
+                         (card["card_id"],)).fetchone()
+    assert row["thread_id"] is None and row["thread_state"] == "none"
+    assert led.db.execute("SELECT state FROM notification_renders WHERE delivery_id=?",
+                          (render["delivery_id"],)).fetchone()[0] == "cancelled"
+    assert _begin(led, moved, n=8400)["granted"]

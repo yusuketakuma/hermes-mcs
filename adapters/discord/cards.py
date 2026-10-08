@@ -44,7 +44,8 @@ def _accent(spec):
     return _ACCENTS.get(spec.get("kind"))
 
 MENU_ID = "mcs:menu"              # the 他の操作 select — value = token
-_MENU_PLACEHOLDER = "他の操作…"
+_MENU_PLACEHOLDER = "その他の操作…"     # the same words as the LINE WORKS button
+_POST_BUTTONS_MAX = 5                   # one action row of per-post 💊 buttons
 _MENU_MAX = 25                    # options per select
 # kept verbatim: runner footer mentions (pings stay off via
 # allowed_mentions) and URLs (a substitution would break the link)
@@ -183,7 +184,9 @@ def message_payload(spec, *, components_v2=False):
         return {"view": view}
     zones, footer = _zones(spec, escape_md)
     # the legacy embed has no sections: a post action's line stays text
-    # (the card's own 💊 menu entry still reaches every post)
+    # and its 💊 becomes a button in a row of its own, labelled with the
+    # post's time when more than one post has one
+    posts = [ln for zone in zones for ln in zone if not isinstance(ln, str)]
     zones = [[ln if isinstance(ln, str) else ln[0] for ln in zone] for zone in zones]
     face = "\n\n".join(["\n".join(zone) for zone in zones] + ["\n".join(footer)]).strip() or "—"
     if len(face) > 4096:
@@ -197,9 +200,16 @@ def message_payload(spec, *, components_v2=False):
         view.add_item(discord.ui.Select(
             custom_id=MENU_ID, placeholder=_MENU_PLACEHOLDER,
             min_values=1, max_values=1, options=menu[:_MENU_MAX], row=1))
+    for line, button in posts[:_POST_BUTTONS_MAX]:
+        # "-# MM-DD HH:MM sender…" -> "💊 MM-DD HH:MM"
+        stamp = " ".join(line.removeprefix("-# ").split(" ")[:2])
+        view.add_item(discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label=button["label"] if len(posts) == 1 else f"💊 {stamp}"[:80],
+            custom_id=f"mcs:a:{button['token']}", row=2))
     payload = {"content": escape_md(notification_preview(spec["parts"])),
                "embed": discord.Embed(description=face, colour=_accent(spec))}
-    if primary or menu:
+    if primary or menu or posts:
         view.stop()
         payload["view"] = view
     return payload

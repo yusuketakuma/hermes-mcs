@@ -1,0 +1,22 @@
+{
+  "category": "changed",
+  "title": "通知プレビュー・本文表示・各種一覧の文言をカード面と揃え、注意書きと英語コードをなくす",
+  "summary": "プッシュ通知の要約は、緊急度高の投稿があればその投稿を示し、最新投稿が削除済みのときだけ削除済みと伝えます。本文表示・アラート本文・LINE WORKS の投稿もカード面と同じ要約書式（ラベルなし・2件以上は行分け・固定順）になり、LINE WORKS では要約の二重表示がなくなります。背景情報・MCS登録情報・検索・薬剤検索の注意書き文を外し、緊急度の表記を「🚨 緊急度高」に統一、取得理由の英語コードを日本語にし、日時がない投稿は「日時未取得」と表示します。",
+  "upgrade": "追加操作は不要です。配送済みの投稿は書き換えません。日次サマリーの見出し「自分宛で応答なし」は「自分宛で返信の記録なし」になります。",
+  "details": [
+    "notify_render.notification_preview: 緊急度高（LLM）の投稿を優先し、なければ最新投稿（削除済みならその旨）。読める投稿がないときは患者名で「投稿本文を確認できません。」。「原文（要約処理待ち）:」を「原文・要約処理待ち:」に。",
+    "notify_render._message_post: layout 2 では _summary_block を label=False で呼び、本文表示・_signal_body・LINE WORKS 投稿がカード面と同じ書式になる。notify_cards の LINE WORKS 投稿は layout 2 で要約を含めない。",
+    "notify_render._when_posted: 投稿日時がない行は「日時未取得」（プレビュー見出し・スレッド投稿見出し・カード面の投稿行）。",
+    "structured_view.URGENCY_LABEL_PLAIN と alert_view のプレビュー先頭を「🚨 緊急度高」に統一。",
+    "notify_views: 背景情報・MCS登録情報の注意書き、検索の注意書き、薬剤検索の注意書きを削除。検索の見出しを「N件（取得済み投稿・新しい順）」に。履歴取得の行を「履歴取得: 完了記録あり · 直近の取得は未完了（通信エラー） · 返信未取得 1件」の形にし、fetch_reason_ja で取得理由を日本語化。",
+    "notify_digest: 見出し「自分宛で返信の記録なし」、行「薬剤師宛の依頼に返信の記録なし」、取得未完了のルームは「N件」と取得理由の日本語。"
+  ],
+  "refs": [
+    "mcs/notify/notify_render.py",
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_views.py",
+    "mcs/notify/notify_digest.py",
+    "mcs/notify/alert_view.py",
+    "mcs/views/structured_view.py"
+  ]
+}

@@ -158,7 +158,7 @@ def test_addressed_to_me_requires_same_thread_reply_or_self_stamp(led):
     _meta(led, 160, mentions=[{"type": "station", "id": 5}], reactions=[])
     _meta(led, 170, mentions=[{"type": "user", "id": "7"}], reactions=[])
     _meta(led, 180, mentions=me)
-    sec = _section(_digest(led), "自分宛で応答なし")
+    sec = _section(_digest(led), "自分宛で返信の記録なし")
     # 110, 130 and 180 only — rows name the room, never internal ids
     assert sec.count("・project 1 自分宛・") == 3 and "message " not in sec
     assert "自分の返信観測なし・本人スタンプ観測なし" in sec
@@ -168,7 +168,7 @@ def test_addressed_to_me_requires_same_thread_reply_or_self_stamp(led):
     assert "記録が見つからない≠対応がなかった" not in sec
     assert "合成同名" not in sec and "本文" not in sec
     # 同じ表示は publish 設定に依らない（capture の値を読むだけ）
-    assert _section(_digest(led, CFG), "自分宛で応答なし") == sec
+    assert _section(_digest(led, CFG), "自分宛で返信の記録なし") == sec
 
 
 def test_addressed_section_without_self_id_lists_no_mentions(led):
@@ -177,11 +177,11 @@ def test_addressed_section_without_self_id_lists_no_mentions(led):
     _meta(led, 110, mentions=[{"type": "user", "id": SELF}], reactions=[])
     _signal_row(led, "pru:1:110", stype="pharmacist_request_unanswered", mids=[110])
     cfg = {**PUB, "signals": {"notify": True}}
-    sec = _section(_digest(led, cfg), "自分宛で応答なし")
+    sec = _section(_digest(led, cfg), "自分宛で返信の記録なし")
     assert "本人の送信者IDが不明のためメンションは判定していません" in sec
     assert "本人宛メンション" not in sec
-    assert "薬剤師宛の依頼に応答なし・本人ID不明" in sec
-    assert _section(_digest(led, cfg, allowed=[2]), "自分宛で応答なし") is None
+    assert "薬剤師宛の依頼に返信の記録なし・本人ID不明" in sec
+    assert _section(_digest(led, cfg, allowed=[2]), "自分宛で返信の記録なし") is None
 
 
 def test_self_mentioned_and_evidence_flags(led, tmp_path):
@@ -288,8 +288,9 @@ def test_evidence_shows_actor_counts_for_own_posts_only(led, tmp_path):
 
 
 def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
-    """Owner order (2026-10-03) for every message: header, 📋 summary,
-    MCS stamps, then the body as posted to MCS."""
+    """Owner order (2026-10-08, layout 2) for every message: header, the
+    plain summary, a rule, the body as posted to MCS, a rule, then the
+    MCS stamps as the trailer."""
     _patient(led)
     _self_known(led)
     _post(led, 100, OTHER, ts=NOW - 100)
@@ -304,13 +305,13 @@ def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
                                  ("スタンプ 🙆2 👍1 · 自分 🙆 · ",
                                   "スタンプ 未取得")):
         lines = post.split("\n")
-        assert lines[1:3] == ["📋 要約", f"・要約{mid}"]
-        assert lines[3] == notify_render.SECTION_RULE
-        assert lines[4] == led.db.execute(
+        assert lines[1] == f"・要約{mid}"
+        assert lines[2] == notify_render.SECTION_RULE
+        assert lines[3] == led.db.execute(
             "SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone()[0]
         # one merged stamp line, as the trailer behind the second rule
-        assert lines[5] == notify_render.SECTION_RULE
-        assert lines[6].startswith(stamps)
+        assert lines[4] == notify_render.SECTION_RULE
+        assert lines[5].startswith(stamps)
         assert post.count(notify_render.SECTION_RULE) == 2
 
 
@@ -475,13 +476,14 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
     for mid in (100, 101):
         post = "".join(posts[mid])
         assert "<@" not in post and "@everyone" not in post
-        assert post.count(notify_render.SECTION_RULE) == 1
-        front, tail = post.split(notify_render.SECTION_RULE, 1)
-        assert ("📋 要約" in front) is (platform == "lineworks")
+        # layout 2: no transport repeats the face summary in the post
+        assert post.count(notify_render.SECTION_RULE) == (0 if platform == "lineworks" else 1)
+        front, _rule, tail = post.partition(notify_render.SECTION_RULE)
+        assert "📋 要約" not in post
         if platform != "lineworks":
             assert "解析更新中" not in post
-        # layout 2: LINE WORKS puts the body behind the rule (after its
-        # summary); Slack/Discord put the body first and stamps behind it
+        # layout 2: LINE WORKS posts header and body only; Slack/Discord
+        # put the body first and stamps behind the rule
         assert "📄 本文" not in post
         assert ("スタンプ" in tail) is (platform != "lineworks")
         if platform == "lineworks":

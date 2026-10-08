@@ -378,8 +378,8 @@ def test_summary_with_rollup_and_coverage(led):
             "next_planned": "10/3 訪問"}, ensure_ascii=False), NOW))
     _add_request(led, title="血圧記録の確認", assignee="山田", due="2026-10-01")
     body = _click(led, spec, "summary")["body"]
-    assert ("履歴取得: 完了記録あり／直近の取得は未完了（network_error）"
-            "／返信の取得未完了1件") in body
+    assert ("履歴取得: 完了記録あり · 直近の取得は未完了（通信エラー）"
+            " · 返信未取得 1件") in body
     assert "処方期間: 2026-09-01〜2026-09-28" in body
     assert "・アムロジピン 5mg 1日1回（最終言及 2026-09-20）" in body
     assert "バイタル: BP 128/70  BT 36.5（2026-09-22）" in body
@@ -674,7 +674,7 @@ def test_urgency_badge_names_its_source(led):
     texts = [c["text"] for c in _spec(led)["parts"]["containers"]
              if c["type"] == "text"]
     lines = [ln for t in texts for ln in t.split("\n")]
-    assert any(ln.startswith("・🚨 緊急度: 高 ") or ln == "・🚨 緊急度: 高" for ln in lines)
+    assert any(ln.startswith("・🚨 緊急度高 ") or ln == "・🚨 緊急度高" for ln in lines)
     assert not any("AI" in ln for ln in lines)
     assert "・🚨" in lines
 

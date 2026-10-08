@@ -283,7 +283,7 @@ class Actions:
             except ClientError:
                 pass  # the publish failure, not the notice failure, is what callers must see
             raise
-        self.reg.drop_confirm(cid)
+        self.reg.consume_confirm(cid)
         await self._say(user, "受け付けました。")
 
     async def sweep_followups(self):
@@ -319,7 +319,8 @@ class Actions:
             if result is None or (rec.get("request_id") and result.get("request_id") != rec["request_id"]):
                 continue
             # At most once: a DM with a lost response must never be automatically posted again.
-            self.reg.drop_followup(cid)
+            if not self.reg.drop_followup(cid):
+                continue
             sent = self._sent
             try:
                 await self._deliver_followup(user, rec, result)

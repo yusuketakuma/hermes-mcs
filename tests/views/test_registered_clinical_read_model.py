@@ -49,7 +49,7 @@ def test_private_summary_shows_observation_provenance_without_promoting_chat_val
     text = "\n".join(notify_views._registered_clinical_lines(db.db, 1))
     assert "チャットとは別の記録" in text and "架空観測項目: 23" in text
     assert "架空単位" in text and VALUE["observation_issued_at"] in text
-    assert "1処方期間" in text and "現在の状態を断定しません" in text
+    assert "1処方期間" in text and "断定しません" not in text and "※" not in text
 
 
 def test_canonical_context_details_reach_machine_read_without_a_legacy_llm(context_db):

@@ -618,9 +618,9 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
     assert "09-24 08:" in text
     # layout 2: header -> (summary) -> body -> stamps as a trailer
     rule = notify_render.SECTION_RULE
-    assert (f"↳ 09-24 08:40 職員（薬剤師・薬局Y）\n📋 要約 処理待ち\n{rule}\n"
+    assert (f"↳ 09-24 08:40 職員（薬剤師・薬局Y）\n要約 処理待ち\n{rule}\n"
             f"本文\n{rule}\nスタンプ 未取得") in text
-    assert f"08:41 職員\n📋 要約 処理待ち\n{rule}\n本文\n{rule}\nスタンプ 未取得" in text
+    assert f"08:41 職員\n要約 処理待ち\n{rule}\n本文\n{rule}\nスタンプ 未取得" in text
 
 
 def test_signal_quote_shows_sender_metadata(led, tmp_path):
@@ -663,7 +663,7 @@ def test_card_signal_structured_evidence(led, tmp_path):
     assert "📋 要約" not in joined and "退院後フォローの記録" not in joined
     _, body = notify_render._card_body_text(
         led.db, card, {"shown": json.dumps(c["shown"])})
-    assert "📋 要約\n・状態安定\n・要点: 経過観察" in body
+    assert "職員\n・状態安定\n・要点: 経過観察\n" in body
     assert "退院後フォローの記録" in body        # raw body still there
 
 

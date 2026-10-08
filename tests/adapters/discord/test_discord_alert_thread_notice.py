@@ -34,7 +34,7 @@ def test_native_alert_only_posts_in_bound_source_thread(tmp_path, monkeypatch, f
         spec["delivery"]["message_id"] = str(thread.id)
     outcome = asyncio.run(_outcome_of(worker._perform({"spec": spec})))
     assert len(bot.channels[42].sent) == before
-    if fault:
+    if fault and fault != "archived":    # an auto-archived thread reopens on send
         assert outcome["result"] == "not_sent" and thread.sent == []
     else:
         assert outcome["result"] == "delivered" and len(thread.sent) == 1

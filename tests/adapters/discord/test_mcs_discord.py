@@ -1525,7 +1525,7 @@ def test_confirm_wrong_actor_and_replay(world):
         "SELECT COUNT(*) c FROM requests").fetchone()["c"] == 1
     again = FakeInteraction(cid, message_id=msg.id)
     asyncio.run(act.on_interaction(again))
-    assert "期限切れ" in again.response.message["content"]
+    assert "処理中" in again.response.message["content"]   # consumed, not expired
 
 
 def test_confirm_cancel_drops_pending(world):
@@ -1602,7 +1602,7 @@ def test_cancel_during_confirm_publish_never_reports_cancelled(
     assert "処理中" in again.response.message["content"]
     assert "受け付けました" in ok.followup.sent[0]["content"]
     assert len(list((world.data / "cmd_int").glob("*.json"))) == 1
-    assert reg.confirm(cid[len("mcs:c:"):]) is None
+    assert reg.confirm(cid[len("mcs:c:"):])["consumed"] is True
 
 
 @pytest.mark.parametrize("error", [OSError("disk full"),
@@ -2392,7 +2392,7 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         assert "📋 要約" not in body and "処理待ち" not in body and "解析更新中" not in body
         _, current_spec = world.spec()
         assert current_spec["delivery"]["thread_id"] == str(original_thread_id)
-        assert "📋 要約" in notify_cards._card_body_text(world.led.db, dict(world.led.db.execute("SELECT * FROM notification_cards WHERE card_id=1").fetchone()), {"shown": "[100,101]"})[1]
+        assert "要約 処理待ち" in notify_cards._card_body_text(world.led.db, dict(world.led.db.execute("SELECT * FROM notification_cards WHERE card_id=1").fetchone()), {"shown": "[100,101]"})[1]
         assert "要約 処理待ち" in "\n".join(item.get("text", "") for item in current_spec["parts"]["containers"])
 
         n = len(thread.sent)
@@ -3048,8 +3048,8 @@ def test_search_modal_answers_hits_ephemeral(world):
     asyncio.run(world.interact(act, s))
     out = "\n".join(m["content"] for m in s.followup.sent)
     assert all(m["ephemeral"] for m in s.followup.sent)
-    assert "「本文」の検索結果" in out and "2件（新しい順）" in out
-    assert "まだ取得していない範囲は検索されません" in out
+    assert "「本文」の検索結果" in out and "2件（取得済み投稿・新しい順）" in out
+    assert "履歴取得:" in out          # the fetched range, no caveat sentence
     # another member cannot submit the clicker's form
     s2 = FakeInteraction(f"mcs:m:{modal_id}", user_id=2002,
                          message_id=msg.id, components=[])

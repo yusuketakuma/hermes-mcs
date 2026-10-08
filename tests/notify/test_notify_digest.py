@@ -225,7 +225,7 @@ def test_coverage_block_always_present(led):
     led.db.commit()
     notify_digest.maybe_enqueue(led, ON, now=_at("2026-10-02", 9))
     text = _text(led)
-    assert ("・取得未完了のルーム 2: project 1（network_error）, "
+    assert ("・取得未完了のルーム 2件: project 1（通信エラー）, "
             "project 2（unrecorded）") in text
     assert "・処理待ち・失敗: reply 1" in text
     assert "・本文未取得の投稿: 1件" in text

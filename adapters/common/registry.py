@@ -428,6 +428,18 @@ class Registry:
                                               None) is not None:
             self.save(immediate=True)
 
+    @_locked
+    def consume_confirm(self, confirm_id: str) -> None:
+        """The command is durably queued: the confirm stays taken until
+        its TTL, so a second 確定 from the preview that is still on screen
+        reads as in progress (take_confirm -> busy) instead of expired —
+        never a retry that queues the same task twice."""
+        rec = self._data["pending_confirms"].get(confirm_id)
+        if rec is not None:
+            rec["in_flight"] = True
+            rec["consumed"] = True
+            self.save(immediate=True)
+
     # 確定 awaits the durable command write; a 取消 (or a second 確定)
     # landing inside that await must see the confirm as taken, never
     # report 取り消しました for a command that is being queued. First
@@ -474,9 +486,13 @@ class Registry:
         return self._unexpired("followups", command_id)
 
     @_locked
-    def drop_followup(self, command_id: str) -> None:
+    def drop_followup(self, command_id: str) -> bool:
+        """True for the one caller that removed the record — it delivers
+        the result; a concurrent sweep that lost the race gets False."""
         if self._data["followups"].pop(command_id, None) is not None:
             self.save(immediate=True)
+            return True
+        return False
 
     @_locked
     def followups(self) -> dict:

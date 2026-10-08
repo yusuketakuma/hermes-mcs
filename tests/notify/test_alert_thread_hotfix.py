@@ -116,3 +116,19 @@ def test_lineworks_has_explicit_hold_instead_of_pseudo_thread_or_channel_fallbac
     assert held["state"] == "failed" and held["next_try"] is None
     assert "lineworks_thread_unsupported" in held["progress"]
     assert not world[3]
+
+
+def test_parked_alert_waits_minutely_then_hourly_and_is_dropped_after_the_hold(world):
+    # a thread-only alert whose thread never comes must not sit due every
+    # minute forever (it would hog flush slots and the daily quota)
+    store, cfg, event, _ = _alert(world, ready=False)
+    assert notify_cards.dispatch_intent(store, dict(event), cfg)["parked"] == "source_thread_not_ready"
+    row = _events(store)[0]
+    assert row["next_try"] - row["updated_at"] == 60          # the card usually lands within minutes
+    aged = row["created_at"] + 601
+    assert notify_cards.dispatch_intent(store, dict(event), cfg, now=aged)["parked"] == "source_thread_not_ready"
+    assert _events(store)[0]["next_try"] - aged == notify_cards.RESEAT_S   # then hourly
+    late = row["created_at"] + notify_cards.SIGNAL_SOURCE_HOLD_MAX_S + 1
+    assert notify_cards.dispatch_intent(store, dict(event), cfg, now=late)["suppressed"] == "source_thread_not_ready"
+    assert _events(store)[0]["state"] == "suppressed"
+    assert notify_cards._notice_renders(store.db, event["event_id"]) == []

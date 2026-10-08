@@ -665,7 +665,7 @@ class Actions:
                 "送信に失敗しました。もう一度確定してください。")
             return
         # consumed only after the command file is durably queued
-        self._reg.drop_confirm(confirm_id)
+        self._reg.consume_confirm(confirm_id)
         self._result_log(interaction, payload.get("cmd"),
                          {"outcome": "confirmed"},
                          command_id=payload.get("command_id"))
@@ -683,9 +683,8 @@ class Actions:
         result = await self._wait_result(cid, HUMAN_WAIT_S)
         if result is None:
             return                        # supervisor sweeps followups
-        if self._reg.followup(cid) is None:
+        if not self._reg.drop_followup(cid):
             return                        # the sweep already delivered it
-        self._reg.drop_followup(cid)
         self._result_log(interaction, payload.get("cmd"), result)
         await self._followup(interaction, text.ja(result))
 
@@ -725,9 +724,8 @@ class Actions:
             if result is None or (rec.get("request_id") is not None
                                   and result.get("request_id") != rec["request_id"]):
                 continue
-            if self._reg.followup(cid) is None:
+            if not self._reg.drop_followup(cid):
                 continue                 # the inline wait delivered it
-            self._reg.drop_followup(cid)
             try:
                 hook = discord.Webhook.partial(
                     int(rec["application_id"]), rec["token"],

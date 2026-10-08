@@ -94,7 +94,7 @@ def test_empty_and_long_scoped_summary_keeps_disclosures_on_every_renderer(
     assert "BODY-CANARY" not in rendered and "OUTSIDE-NAME-CANARY" not in rendered
     assert "project 99" not in rendered
     assert "他" in rendered
-    assert "取得状況" in rendered and "network_error" in rendered
+    assert "取得状況" in rendered and "通信エラー" in rendered
     assert "欠落なしの保証ではありません" not in rendered
     assert "取得状況" in empty and "新着 0件" in empty
     assert "対応がなかったことを意味せず" not in empty
@@ -147,7 +147,7 @@ def test_digest_uses_snapshot_bounded_response_observation(led, reply_at, error)
     parts = notify_digest.view(led.db, {}, "", now=NOW)["parts"]
     # Then: neither future replies nor failed capture suppress observation gaps.
     out = notify_render.parts_text(parts)
-    assert "自分宛で応答なし" in out and "・患者A 自分宛" in out
+    assert "自分宛で返信の記録なし" in out and "・患者A 自分宛" in out
     assert "自分の返信観測なし" in out
     assert "記録が見つからない≠対応がなかった" not in out
 
@@ -203,12 +203,12 @@ def test_signal_card_and_message_notice_follow_same_current_urgency_source(
     if expected is None:
         assert "緊急度高" not in face and "緊急語あり" not in face \
             and "🚨" not in face
-        assert "緊急度: 高" not in text and "緊急語を含む" not in text \
+        assert "緊急度高" not in text and "緊急語を含む" not in text \
             and "🚨" not in text
     else:
         # the card tag and the text notice each keep the source distinct
         assert notify_render.URGENCY_PLAIN[expected] in face
-        assert ("緊急度: 高" if expected == "llm" else "🚨") in text
+        assert ("緊急度高" if expected == "llm" else "🚨") in text
         assert "AI" not in face and "AI" not in text
 
 

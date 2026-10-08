@@ -244,7 +244,7 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
             state = (_response_state(db, msg, self_id, until)[2]
                      if msg and self_id else "本人ID不明")
             rows.append(f"・{room(c['project_id'])} "
-                        f"薬剤師宛の依頼に応答なし・{state}")
+                        f"薬剤師宛の依頼に返信の記録なし・{state}")
     unknown, station = 0, 0
     if self_id is not None:
         for r in _recent_posts(db, until, ok, ""):
@@ -406,7 +406,7 @@ def build(db, cfg, since: float, until: float, flt=None, *,
             " 🚨 緊急度高" + structured_view.urgency_qc_suffix(db, m)
             if u == "llm" else " 🚨")
         for p, m, u in urgent], fold=True)
-    section("自分宛で応答なし",
+    section("自分宛で返信の記録なし",
             _addressed_unanswered(db, until, ok, room, self_id, signals_on), fold=True)
 
     per: dict = {}
@@ -459,8 +459,9 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     cov = []
     incomplete = [r for r in gaps["incomplete_rooms"] if ok(r[0])]
     if incomplete:
-        cov.append(f"・取得未完了のルーム {len(incomplete)}: " + _ids(
-            incomplete, lambda r: f"{room(r[0])}（{_plain(r[1])}）"))
+        import notify_views
+        cov.append(f"・取得未完了のルーム {len(incomplete)}件: " + _ids(
+            incomplete, lambda r: f"{room(r[0])}（{notify_views.fetch_reason_ja(r[1])}）"))
     else:
         cov.append("・未完了として記録されたルーム: なし")
     scoped = "（全体）" if keep is not None else ""

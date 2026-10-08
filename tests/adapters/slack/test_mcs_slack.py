@@ -698,6 +698,8 @@ def test_slack_private_medication_pages_and_post_navigation_roundtrip(led):
             assert not result["errors"]
             await actions.sweep_followups()
             sent = w.client.ephemeral_calls[before:]
+            assert sent and "スレッドに表示しました" in sent[-1]["text"]
+            sent = [message for message in sent if message.get("thread_ts")]
             assert sent
             assert all(message["thread_ts"] == root_ts
                        and message["user"] == "U_SYNTHETIC" for message in sent)

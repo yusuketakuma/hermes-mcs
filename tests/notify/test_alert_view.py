@@ -20,7 +20,7 @@ def test_grounded_reason_and_separate_post_observation_times(led):
     assert "記録がないことは未対応・業務完了を意味しません" not in text
     # reason before sender/time; the patient name appears once
     assert text.index("引用: ") < text.index("投稿 ")
-    assert parts["preview_text"].startswith("🚨緊急度高 ")
+    assert parts["preview_text"].startswith("🚨 緊急度高 ")
     assert "MCSで開く" in text and "投稿 #100" in text
     assert len(text) < 600
     assert "🚨" in notify_render.parts_text(parts, "discord")

@@ -151,8 +151,6 @@ def _patient_context_lines(db, project_id, roll) -> list[str]:
             lines.append(f"  この分類は他{len(valid) - 1}項目（原記録で全文確認）")
     if len(lines) == 1:
         lines.append("・記載なし")
-    else:
-        lines.append("※ 背景情報は抜粋です。詳しい内容や以前の記載は原記録をご確認ください。")
     return lines
 
 
@@ -165,7 +163,7 @@ def _registered_clinical_lines(db, project_id) -> list[str]:
     names = {"medication_periods": "薬剤登録", "observation_items": "観測項目", "observation_values": "観測値"}
     states = {"complete": "取得済み", "empty": "登録行なし", "unknown": "未取得・未確認",
               "failed": "取得失敗", "stale": "古い・定義変更あり"}
-    lines = ["■ MCS登録情報（チャットとは別の記録・抜粋。現在の状態を断定しません）"]
+    lines = ["■ MCS登録情報（チャットとは別の記録・抜粋）"]
     for dataset, name in names.items():
         records = [r for r in registered["records"] if r["dataset"] == dataset]
         if not records:
@@ -196,8 +194,6 @@ def _registered_clinical_lines(db, project_id) -> list[str]:
                     lines.append(f"  {_inline(lab.get('name'), 35) or '観測項目'}: {values} "
                                  f"{_inline(lab.get('unit'), 20)}（記録日 "
                                  f"{_inline(row.get('observation_issued_at'), 35) or '不明'}{previous}）")
-    if registered["truncated"] or any(r["rows_truncated"] for r in registered["records"]):
-        lines.append("※ 登録情報は一部の抜粋です。全項目と履歴はMCSの原記録で確認してください。")
     return lines
 
 
@@ -273,17 +269,34 @@ def _coverage_line(db, project_id) -> str:
     if floor == -1:
         parts = ["完了記録あり"]
         if p["fetch_state"] == "incomplete":
-            parts.append(f"直近の取得は未完了（{p['fetch_reason'] or '理由未記録'}）")
+            parts.append(f"直近の取得は未完了（{fetch_reason_ja(p['fetch_reason'])}）")
     else:
-        why = (p["fetch_reason"] if p and p["fetch_state"] == "incomplete"
+        why = (fetch_reason_ja(p["fetch_reason"]) if p and p["fetch_state"] == "incomplete"
                and p["fetch_reason"] else
                "指定日より前は未取得" if floor and floor > 0
                else "完了記録なし")
         parts = [f"未完了（{why}）"]
     n = incomplete_reply_roots(db, project_id)
     if n:
-        parts.append(f"返信の取得未完了{n}件")
-    return "履歴取得: " + "／".join(parts)
+        parts.append(f"返信未取得 {n}件")
+    return "履歴取得: " + " · ".join(parts)
+
+
+# the collector's fetch_reason codes as staff read them (an unknown
+# code stays visible rather than hidden behind a generic word)
+_FETCH_REASON_JA = {
+    "timeout": "時間切れ", "deadline": "制限時間超過", "network_error": "通信エラー",
+    "session_expired": "ログイン切れ", "parent_body_incomplete": "本文の取得が未完了",
+    "thread_incomplete": "返信の取得が未完了", "unavailable": "取得できず",
+    "unread_capped": "未読件数の上限", "replies_missing": "返信の一部が未取得",
+    "http_error": "サーバー応答エラー",
+}
+
+
+def fetch_reason_ja(reason) -> str:
+    if not reason:
+        return "理由未記録"
+    return _FETCH_REASON_JA.get(reason, str(reason))
 
 
 
@@ -487,12 +500,11 @@ def patient_search_view(db, project_id, query) -> dict:
                       f"{_snippet(r['body_text'], terms[0])}"}
              for r in rows[:SEARCH_HITS]]
     return {"title": f"🔎 {name} — 「{_inline(query, 40)}」の検索結果",
-            "head": [f"{len(rows)}件（新しい順）— MCS: "
+            "head": [f"{len(rows)}件（取得済み投稿・新しい順）— MCS: "
                      f"{project_url(project_id)}"],
             "items": items, "more": max(0, len(rows) - SEARCH_HITS),
             "empty": "取得済みの投稿に一致するものはありません。",
-            "notes": ["※ 取得済みの投稿だけが対象です。まだ取得していない範囲は"
-                      "検索されません。", _coverage_line(db, project_id)]}
+            "notes": [_coverage_line(db, project_id)]}
 
 
 # ---------- 💊 薬剤を確認 / 薬剤を検索 (DM-1 / DM-2) ---------------------
@@ -613,4 +625,4 @@ def drug_search_view(db, cfg, project_id, query) -> dict:
                      f"{found['dictionary']['sha256'][:8]}"],
             "items": items, "more": max(0, found["total"] - len(items)),
             "empty": "一致する候補はありません。一般名・製品名など別の表記でも試してください。",
-            "notes": ["※ 参照用の検索です。処方・成分を確定せず、投稿の照合結果も変えません。"]}
+            "notes": []}

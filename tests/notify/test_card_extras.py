@@ -163,11 +163,9 @@ def test_search_opens_modal_then_answers_hits(led):
     assert first["modal"] is True and first["action"] == "search"
     r = _click(led, spec, "search", {"query": "発熱 解熱"})
     view = r["list"]
-    assert view["head"][0].startswith("1件（新しい順）")
+    assert view["head"][0].startswith("1件（取得済み投稿・新しい順）")
     assert view["items"] == [{"project_id": 1, "text":
                               "・09-24 08:42 看護師: 昨日から 発熱 あり。解熱剤を使用"}]
-    assert any("まだ取得していない範囲は検索されません" in n
-               for n in view["notes"])
     assert any(n.startswith("履歴取得:") for n in view["notes"])
     # the hits reach the clicker once — never the durable receipt
     stored = led.db.execute("SELECT receipt_json FROM command_receipts "

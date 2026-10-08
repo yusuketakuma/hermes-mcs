@@ -60,7 +60,7 @@ def render_parts(checked, db=None):
     main = next((part["text"] for part in parts["containers"] if part["type"] == "quote"), "緊急理由の引用は未取得")
     # the push/notification line: urgency first, so a lock screen tells
     # it apart from a routine request
-    parts["preview_text"] = "🚨緊急度高 " + notify_render._preview_line(
+    parts["preview_text"] = "🚨 緊急度高 " + notify_render._preview_line(
         header, f"再確認候補（{subject}）: {main}", limit=393)
     return parts
 

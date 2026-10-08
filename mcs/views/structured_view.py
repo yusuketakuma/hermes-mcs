@@ -243,7 +243,7 @@ def _canonical_finding_lines(llm: dict, *, context=(None, None, "patient")) -> l
 # not a clinical assessment — while the AI verdict adds its wording.
 # owner 2026-10-08: no "(AI抽出)" style qualifiers on anything new; the
 # legacy wording stays only for layout-1 cards so their faces never drift
-URGENCY_LABEL_PLAIN = {"llm": "🚨 緊急度: 高", "rule": "🚨"}
+URGENCY_LABEL_PLAIN = {"llm": "🚨 緊急度高", "rule": "🚨"}   # one spelling on every surface
 URGENCY_LABEL = {"llm": "🚨 緊急度: 高（AI抽出）",
                  "rule": "🚨"}
 

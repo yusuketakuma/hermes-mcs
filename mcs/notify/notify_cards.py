@@ -1189,10 +1189,12 @@ def _build_part_manifest(db, card, spec, content, in_thread_body, *, cfg=None) -
     for key, mids in _body_groups(db, card, planned, posts):
         man = {"shown": json.dumps(mids, ensure_ascii=False)}
         # a transport that cannot edit a post gets no stamp line, so
-        # only a change of the original text or its extraction re-posts
+        # only a change of the original text or its extraction re-posts;
+        # from layout 2 its card face already carries each post's summary
+        layout = card["layout"] if "layout" in card.keys() else 1
         body = _card_body_text(db, card, man, max_chars=None,
                                stamps=editable, cfg=cfg,
-                               include_summary=not editable)[1]
+                               include_summary=not editable and layout < 2)[1]
         # lossless — no chunk dropped
         chunks = _split_body_chunks(body)
         keyed += [(f"{key}#{k}", c) for k, c in enumerate(chunks, 1)]
@@ -1658,6 +1660,11 @@ def _issue_render(db, card_id, cfg, now, specs, force=False):
         if changed is None:
             _cancel_open_renders(db, card_id, now)
             return None
+        if changed:
+            # a render queued for the old route is never claimed again
+            # (begin denies source_thread_changed) and would otherwise
+            # count as live and block the replacement until content drift
+            _cancel_open_renders(db, card_id, now)
         force = force or changed
     op = _render_op(card)
     if op is None:
@@ -2327,29 +2334,45 @@ SIGNAL_SOURCE_HOLD_MAX_S = 6 * 3600   # wait this long for a provable source thr
 
 
 def _bind_signal_thread(db, card, cfg, now):
+    """Home a signal card in its proven source thread: False when the
+    current route stands, True after a move, None while it must wait."""
     target = signal_thread_target(db, card, cfg)
     if target is None:
         waited = now - (card["created_at"] or now)
-        if card["thread_id"] is None and waited > SIGNAL_SOURCE_HOLD_MAX_S:
-            # a post whose card never arrives (history/probe import, a
-            # suppressed notification) would hold the alert forever: after
-            # the bounded wait it goes to the channel instead (owner
-            # 2026-10-08 — an unreachable alert is worse than one outside
-            # its source thread)
+        if notify_cfg(cfg).get("card_thread") is not True:
+            # no new thread will open here (a thread created while the
+            # switch was on is still used above): nothing to wait for
+            waited = SIGNAL_SOURCE_HOLD_MAX_S + 1
+        if waited <= SIGNAL_SOURCE_HOLD_MAX_S:
+            for event in db.execute("SELECT event_id FROM notification_intent_cards WHERE card_id=? AND state='pending'", (card["card_id"],)).fetchall():
+                db.execute("UPDATE notify_outbox SET progress=?,next_try=?,updated_at=? WHERE event_id=?", (json.dumps({"thread_hold": "source_thread_not_ready"}), now + RESEAT_S, now, event[0]))
+            return None
+        # a post whose card never arrives (history/probe import, a
+        # suppressed notification) would hold the alert forever: after
+        # the bounded wait it goes to the channel instead (owner
+        # 2026-10-08 — an unreachable alert is worse than one outside
+        # its source thread). A bound thread that is gone (deleted, or
+        # its evidence post deleted) falls back the same way.
+        if card["thread_id"] is None:
             return False
-        for event in db.execute("SELECT event_id FROM notification_intent_cards WHERE card_id=? AND state='pending'", (card["card_id"],)).fetchall():
-            db.execute("UPDATE notify_outbox SET progress=?,next_try=?,updated_at=? WHERE event_id=?", (json.dumps({"thread_hold": "source_thread_not_ready"}), now + RESEAT_S, now, event[0]))
-        return None
+        return _move_signal(db, card, None, now)
     if card["thread_id"] == target["thread_id"] and card["thread_state"] == "created":
         return False
+    return _move_signal(db, card, target["thread_id"], now)
+
+
+def _move_signal(db, card, thread_id, now):
+    """Re-home a signal card in ``thread_id`` (the channel when None).
+    Native posts cannot move threads: the old post and its audit rows
+    stay, its controls retire, and the replacement is created on the new
+    route. None while delivered parts are still settling."""
     latest = db.execute("SELECT * FROM notification_renders WHERE card_id=? ORDER BY render_rev DESC LIMIT 1", (card["card_id"],)).fetchone()
     if _parts_in_flight(db, latest):
         return None
-    # Native posts cannot move threads. Preserve the old post and audit rows,
-    # retire its controls, then create the replacement in the proven thread.
+    state = "created" if thread_id else "none"
     db.execute("UPDATE notification_action_tokens SET expires_at=? WHERE card_id=? AND expires_at>?", (now, card["card_id"], now))
-    db.execute("UPDATE notification_cards SET message_id=NULL,thread_id=?,thread_state='created',delivery_state='pending',updated_at=? WHERE card_id=?", (target["thread_id"], now, card["card_id"]))
-    card.update(message_id=None, thread_id=target["thread_id"], thread_state="created", delivery_state="pending")
+    db.execute("UPDATE notification_cards SET message_id=NULL,thread_id=?,thread_state=?,delivery_state='pending',updated_at=? WHERE card_id=?", (thread_id, state, now, card["card_id"]))
+    card.update(message_id=None, thread_id=thread_id, thread_state=state, delivery_state="pending")
     return True
 
 
@@ -2379,8 +2402,17 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
                 db.execute("UPDATE notify_outbox SET state='failed',next_try=NULL," + HOLD_PROGRESS_SET +
                            ",updated_at=? WHERE event_id=?", (reason, now, event_id))
                 return {"held": reason}
+            age = now - (row["created_at"] or now)
+            if age > SIGNAL_SOURCE_HOLD_MAX_S:
+                # the thread never came (card_thread off, the post's card
+                # suppressed): a thread-only alert parked forever would
+                # occupy a flush slot and the daily quota for nothing
+                _close_notice(db, event_id, renders, now)
+                return {"suppressed": reason}
+            # the card usually lands within minutes; afterwards an hourly
+            # look is enough and keeps the due queue free for other sends
             db.execute("UPDATE notify_outbox SET next_try=?,progress=?,updated_at=? WHERE event_id=?",
-                       (now + 60, json.dumps({"thread_hold": reason}), now, event_id))
+                       (now + (60 if age < 600 else RESEAT_S), json.dumps({"thread_hold": reason}), now, event_id))
             return {"parked": reason}
         live = [render for render in renders if render["state"] in LIVE_RENDER]
         if live:

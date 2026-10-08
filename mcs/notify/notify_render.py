@@ -56,7 +56,7 @@ def _preview_header(db, pid, message) -> str:
     sender = (_inline(message["sender_name"], 24) if message else "") or "発信者未取得"
     organization = (_inline(message["organization"], 24) if message else "") or "所属未取得"
     posted = message["posted_at"] if message else None
-    return f"{patient} / {sender}（{organization}） / {_mmdd(posted)} {_hhmm(posted)}"
+    return f"{patient} / {sender}（{organization}） / {_when_posted(posted)}"
 
 
 def _preview_line(header, summary, limit=600):
@@ -68,6 +68,7 @@ def _preview_line(header, summary, limit=600):
 def notification_preview(db, card, content, *, limit=600) -> str:
     """表示対象の患者・発信者・所属・時刻・内容を通知プレビュー向けに短く示す。"""
     if card["kind"] == "thread":
+        rows = []                                   # newest first
         for mid in reversed(content["shown"]):
             if not positive(mid):
                 continue
@@ -75,39 +76,43 @@ def notification_preview(db, card, content, *, limit=600) -> str:
                 "SELECT sender_name,profession,organization,posted_at,body_text,body_state,content_hash "
                 "FROM messages WHERE message_id=? AND project_id=?",
                 (mid, card["project_id"])).fetchone()
-            if not message:
-                continue
-            header = _preview_header(db, card["project_id"], message)
-            if message["body_state"] == "deleted":
-                return _preview_line(header, "表示対象の投稿は削除済みです。", limit)
-            if message["body_state"] != "full" or not valid_hash(message["content_hash"]):
-                return _preview_line(header, "投稿本文が未取得か確認できない状態です。", limit)
-            block = _structured_block(db, mid, plain=True)
-            if block:
-                facts: list[str] = []
-                for line in block["text"].splitlines()[1:]:
-                    if line.startswith("・") or not facts:
-                        facts.append(line.removeprefix("・"))
-                    else:   # an indented item row belongs to the fact above
-                        facts[-1] += ("" if facts[-1].endswith(":") else "、") \
-                            + line.strip("　").removeprefix("・")
-                main = next((line for line in facts if any(
-                    word in line for word in ("依頼", "予定", "症状", "注意"))), facts[0] if facts else "要約内容を確認できません")
-            else:
-                state = "要約作成失敗" if _extraction_failed(db, mid) else "要約処理待ち"
-                main = f"原文（{state}）: " + (_preview_post(message["body_text"]) or "本文なし")
-            urgency = structured_view.message_urgency(db, mid)
-            badge = URGENCY_PLAIN.get(urgency, "")
-            if urgency == "llm":
-                badge += structured_view.urgency_qc_suffix(db, mid)
-            elif any(structured_view.message_urgency(db, m) == "llm"
-                     for m in content["shown"] if positive(m) and m != mid):
-                # an older shown post is urgent: the push still says so
-                badge = URGENCY_PLAIN["llm"]
-            if badge:
-                badge += " · "
-            return _preview_line(header, badge + _inline(main, 260), limit)
-        return f"project {card['project_id']}: 表示対象の投稿本文を確認できません。"
+            if message:
+                rows.append((mid, message))
+        if not rows:
+            patient = _inline(_patient_name(db, card["project_id"]), 30) or f"project {card['project_id']}"
+            return f"{patient}: 投稿本文を確認できません。"
+        # the urgent post is what the push must carry, even under newer
+        # replies; otherwise the newest post (deleted or not) speaks
+        mid, message = next(((m, row) for m, row in rows
+                             if row["body_state"] != "deleted"
+                             and structured_view.message_urgency(db, m) == "llm"),
+                            rows[0])
+        header = _preview_header(db, card["project_id"], message)
+        if message["body_state"] == "deleted":
+            return _preview_line(header, "表示対象の投稿は削除済みです。", limit)
+        if message["body_state"] != "full" or not valid_hash(message["content_hash"]):
+            return _preview_line(header, "投稿本文が未取得か確認できない状態です。", limit)
+        block = _structured_block(db, mid, plain=True)
+        if block:
+            facts: list[str] = []
+            for line in block["text"].splitlines()[1:]:
+                if line.startswith("・") or not facts:
+                    facts.append(line.removeprefix("・"))
+                else:   # an indented item row belongs to the fact above
+                    facts[-1] += ("" if facts[-1].endswith(":") else "、") \
+                        + line.strip("　").removeprefix("・")
+            main = next((line for line in facts if any(
+                word in line for word in ("依頼", "予定", "症状", "注意"))), facts[0] if facts else "要約内容を確認できません")
+        else:
+            state = "要約作成失敗" if _extraction_failed(db, mid) else "要約処理待ち"
+            main = f"原文・{state}: " + (_preview_post(message["body_text"]) or "本文なし")
+        urgency = structured_view.message_urgency(db, mid)
+        badge = URGENCY_PLAIN.get(urgency, "")
+        if urgency == "llm":
+            badge += structured_view.urgency_qc_suffix(db, mid)
+        if badge:
+            badge += " · "
+        return _preview_line(header, badge + _inline(main, 260), limit)
     signals = _latest_signals(db, content["shown"], card["project_id"])
     items = []
     for entry in signals.values():
@@ -298,6 +303,12 @@ def _hhmm(posted_at) -> str:
     if isinstance(posted_at, str) and len(posted_at) >= 16:
         return posted_at[11:16]
     return "??:??"
+
+
+def _when_posted(posted_at) -> str:
+    """MM-DD HH:MM of a post, or a plain word when no time is stored —
+    never a row of question marks on a notification."""
+    return f"{_mmdd(posted_at)} {_hhmm(posted_at)}" if posted_at else "日時未取得"
 
 
 def _sender_tag(m, db=None) -> str:
@@ -711,10 +722,11 @@ def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
     posts cannot be edited, so a stamp change must not force a re-post)."""
     if m["body_state"] == "deleted":
         return head + _deleted_line(m["posted_at"], sender)
-    title = f"{head}{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} {sender}"
+    title = f"{head}{_when_posted(m['posted_at'])} {sender}"
     out = [title]
     if include_summary:
-        out.append(_summary_block(db, mid, cfg=cfg)["text"])
+        # the same plain wording and item rows as the card face
+        out.append(_summary_block(db, mid, cfg=cfg, label=layout < 2)["text"])
     stamp_line = ""
     if stamps:
         meta = get_message_metadata(db, mid)
@@ -855,8 +867,7 @@ def _card_content(db, card, *, cfg=None) -> dict:
         for m in msgs:
             line = (_deleted_line(m["posted_at"], _sender_tag(m, db))
                     if m["body_state"] == "deleted" else
-                    f"{_mmdd(m['posted_at'])} {_hhmm(m['posted_at'])} "
-                    f"{_sender_tag(m, db)}")
+                    f"{_when_posted(m['posted_at'])} {_sender_tag(m, db)}")
             blocks = [{"type": "text", "rule": True, "text": line}]
             if m["body_state"] != "deleted":
                 blocks.append(_summary_block(db, m["message_id"], cfg=cfg,
