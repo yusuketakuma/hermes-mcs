@@ -58,3 +58,11 @@ v1.0.15のexact tagから空DBのschemaを隔離環境で生成し、shape-8の�
 - CI範囲ruff・shellcheck・差分空白検査が成功。追跡1419対象の保護パス/secret-patternの一致0。新規受入文書等も公開前に同じgateへ通す。
 - SDK未導入とOS/runtime固有のlocal skipは残す。固定SDKとHermesの受入は既存CIのexact最終SHAへ委ねる。
 - 公式利用条件ページも2026-10-08に再確認し、PDL1.0参照・出典/加工表示と例外を確認。これは運用者による採用承認ではない。
+
+## 更新されたHermesとの限定比較
+
+ユーザーのHermes更新後、現在のローカルrevision `5ab86c42b1768060a78f67cd842fbeb25be702ec` とCI/install固定版 `fd50a275e2616118c48fe07e7e1c878782b15ccd` を、MCSが使う入口に限って比較した。PluginContextの登録・設定・task/unload、plugin managerのfactory/invoke、native context/attestation、Slack client取得はAST一致。新しい分離Python起動文字列だけが再起動対象の旧literalと異なり、既存の完全一致形式へ追加して、任意code・未知module/repo/引数を拒否する11合成回帰を残した。
+
+新しい `plugins.isolation=host` はnative SDKを渡すMCS接続に未対応で、既定in_processとは区別する。実設定や稼働サービスは読取り・変更しておらず、その環境でのload失敗とは断定しない。ローカルrevisionは公開remoteで確認できず、Hermesを公開したりCI/install pinを未検証版へ進めたりしていない。新しいローカルHermesの全SDK/runtime受入を、固定版CIの成功へ読み替えない。
+
+CIの初回Hermes境界失敗は、合成Slack fixtureの通知フラグにroute_epochが無いことによる正しい保留だった。fixtureを現行の世代に一致させ、期待する本文2件・upload3段階・retry禁止・スレッド束縛を保持した。修正後commit2174739の必須CI全6領域は成功。新bootstrap追加後のexact SHAは再度既存CIで受け入れる。

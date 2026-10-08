@@ -296,6 +296,83 @@ def test_configured_custom_hermes_home_retains_owned_jxa_shape(gateway):
     assert any(call[1] == 'kickstart' for call in calls)
 
 
+def _current_bootstrap(install, module='hermes_cli.main'):
+    return ("import os, sys, runpy; "
+            "os.environ.pop('PYTHONHOME', None); os.environ.pop('PYTHONPATH', None); "
+            "os.environ.pop('VIRTUAL_ENV', None); "
+            f"sys.path.insert(0, {str(install)!r}); "
+            "sys._hermes_pin_default_home = True; import hermes_bootstrap; "
+            "os.environ.get('HERMES_HOME') or os.environ.__setitem__('HERMES_HOME', "
+            "str(__import__('hermes_constants').get_default_hermes_root())); "
+            f"runpy.run_module({module!r}, run_name='__main__', alter_sys=True)")
+
+
+@pytest.mark.parametrize('mode', ['direct', 'timestamp', 'libc_jxa'])
+@pytest.mark.parametrize('custom', [False, True])
+def test_current_exact_bootstrap_keeps_owned_modules_pid_and_restore_gates(gateway, mode, custom):
+    import shlex
+    import sys
+    rec, data, agents, _, calls, running = gateway
+    home = agents.parent.parent
+    selected = home / 'configured-hermes' if custom else home / '.hermes'
+    install = selected / 'hermes-agent'
+    python = install / 'venv/bin/python3'
+    python.parent.mkdir(parents=True)
+    python.symlink_to(sys.executable)
+    argv = [str(python), '-I', '-c', _current_bootstrap(install),
+            'gateway', 'run', '--external-supervisor']
+    logs = selected / 'logs'
+    if mode in ('timestamp', 'libc_jxa'):
+        argv = [str(python), '-I', '-c', _current_bootstrap(install, 'hermes_cli.stderr_timestamp'),
+                '--error-log', str(logs / 'gateway.error.log'), '--', *argv]
+    if mode == 'libc_jxa':
+        shell = ('exec ' + shlex.join(argv) + ' >> ' + shlex.quote(str(logs / 'gateway.log'))
+                 + ' 2>> ' + shlex.quote(str(logs / 'gateway.error.log')))
+        script = ('ObjC.import("stdlib"); const status=$.system(' + json.dumps(shell) + '); '
+                  'const signal=status & 127; '
+                  '$.exit(status === -1 ? 1 : signal === 0 ? (status >> 8) & 255 : 128 + signal);')
+        argv = ['/usr/bin/osascript', '-l', 'JavaScript', '-e', script]
+    fields = {'WorkingDirectory': str(install),
+              'EnvironmentVariables': {'HERMES_HOME': str(selected)}} if custom else {}
+    _program(gateway, argv, **fields)
+    (data / 'restore_pending.json').write_text('{"phase":"awaiting_consent"}')
+    assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
+    assert not any(call[1] == 'kickstart' for call in calls)
+    (data / 'restore_pending.json').write_text('{"phase":"restored"}')
+    assert rec._gateway_restart_run(str(data), str(agents), 501) == 0
+    assert any(call[1] == 'kickstart' for call in calls)
+    report = json.loads((data / 'gateway_restart.json').read_text())
+    assert report['status'] == 'supervisor_restart_verified'
+    assert report['previous_pid'] == 101 and report['pid'] == running['pid'] == 202
+
+
+@pytest.mark.parametrize('fault', ['append_code', 'injected_code', 'foreign_repo',
+                                  'unknown_module', 'unknown_gateway_argument'])
+def test_current_bootstrap_never_authorizes_extra_code_or_foreign_identity(gateway, fault):
+    import sys
+    rec, data, agents, _, calls, running = gateway
+    install = agents.parent.parent / '.hermes/hermes-agent'
+    source = _current_bootstrap(install)
+    argv = [sys.executable, '-I', '-c', source, 'gateway', 'run']
+    if fault == 'append_code':
+        argv[3] += '; print("synthetic appended code")'
+    elif fault == 'injected_code':
+        argv[3] = source.replace('import hermes_bootstrap; ', 'print("synthetic injected code"); import hermes_bootstrap; ')
+    elif fault == 'foreign_repo':
+        argv[3] = _current_bootstrap(install.parent / 'unowned-repository')
+    elif fault == 'unknown_module':
+        argv[3] = _current_bootstrap(install, 'unowned.module')
+    else:
+        argv.append('--unowned-option')
+    _program(gateway, argv)
+    assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
+    assert not any(call[1] == 'kickstart' for call in calls)
+    assert running['pid'] == 101
+    report = json.loads((data / 'gateway_restart.json').read_text())
+    assert report['status'] == 'failed' and report['error'] == 'gateway_service_not_owned'
+    assert 'ProgramArguments' not in report
+
+
 def test_frozen_shared_gateway_program_is_python39_compatible(gateway):
     import ast
     rec, data, agents, _, calls, _ = gateway

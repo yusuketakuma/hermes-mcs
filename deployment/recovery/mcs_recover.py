@@ -507,16 +507,22 @@ def _gateway_restart_run(data, agents, uid):
                 # Exact isolated bootstrap emitted by hermes_cli._launchers.
                 modules = {}
                 for root in installs:
-                    prefix = ("import os, sys, runpy; "
+                    common = ("import os, sys, runpy; "
                               "os.environ.pop('PYTHONHOME', None); os.environ.pop('PYTHONPATH', None); "
                               "os.environ.pop('VIRTUAL_ENV', None); "
-                              "sys.path.insert(0, " + repr(str(root)) + "); "
-                              "os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or "
-                              "str(__import__('hermes_constants').get_default_hermes_root()); "
-                              "import hermes_bootstrap; ")
-                    modules.update({prefix + "runpy.run_module(" + repr(module)
-                                    + ", run_name='__main__', alter_sys=True)": module
-                                    for module in ("hermes_cli.main", "hermes_cli.stderr_timestamp")})
+                              "sys.path.insert(0, " + repr(str(root)) + "); ")
+                    prefixes = (
+                        common + "os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or "
+                        "str(__import__('hermes_constants').get_default_hermes_root()); "
+                        "import hermes_bootstrap; ",
+                        common + "sys._hermes_pin_default_home = True; import hermes_bootstrap; "
+                        "os.environ.get('HERMES_HOME') or os.environ.__setitem__('HERMES_HOME', "
+                        "str(__import__('hermes_constants').get_default_hermes_root())); ",
+                    )
+                    for prefix in prefixes:
+                        modules.update({prefix + "runpy.run_module(" + repr(module)
+                                        + ", run_name='__main__', alter_sys=True)": module
+                                        for module in ("hermes_cli.main", "hermes_cli.stderr_timestamp")})
                 module = modules.get(argv[3])
                 if module is None:
                     return False
