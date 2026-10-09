@@ -42,6 +42,7 @@ import uuid
 
 import notify_cards as cards
 from mcs_queries import HOLD_PROGRESS_SET
+from mcs_util import loads_dict
 import notify_transport
 
 _RESULT_VALUES = ("delivered", "not_sent", "unknown")
@@ -511,11 +512,9 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
                 ledger, ev, cfg, reason="restore_text_unverified", rescue=False)
             new_text_holds += 1
         else:
-            try:
-                progress = json.loads(ev["progress"] or "{}")
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(progress, dict) \
+            # unreadable progress (bad, too deep, not an object) is skipped
+            progress = loads_dict(ev["progress"] or "{}")
+            if progress is None \
                     or progress.get("hold_reason") != "restore_text_unverified":
                 continue
         text_held.append({"event_id": ev["event_id"], "kind": ev["kind"],

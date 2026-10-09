@@ -18,6 +18,7 @@ import job_ops
 import ledger
 import mcs_requests as requests
 import mcs_view
+from semantic_projection import PROJECTION_VERSION
 from mcs_adapter import Message
 from ops_testkit import _create, _snapshot, _source
 
@@ -208,7 +209,7 @@ def test_candidates_canonical_projection_shadows_extract_llm(tmp_path):
     db.artifact_add("canonical_projection",
                     '{"requests":[{"to":"不明","action":"canonical依頼"}]}',
                     project_id=1, message_id=1,
-                    meta={"hash": msg["content_hash"]})
+                    meta={"hash": msg["content_hash"], "projection_version": PROJECTION_VERSION})
     kinds = {r["extraction_kind"] for r in requests.candidates(db.db, msg)}
     assert "canonical_projection" in kinds and "extract_llm" not in kinds
     # stale projection (old hash) — extract_llm stays visible
@@ -219,7 +220,8 @@ def test_candidates_canonical_projection_shadows_extract_llm(tmp_path):
                     meta={"hash": msg2["content_hash"]})
     db.artifact_add("canonical_projection",
                     '{"requests":[{"to":"不明","action":"古い"}]}',
-                    project_id=1, message_id=4, meta={"hash": "stale"})
+                    project_id=1, message_id=4,
+                    meta={"hash": "stale", "projection_version": PROJECTION_VERSION})
     kinds2 = {r["extraction_kind"] for r in requests.candidates(db.db, msg2)}
     assert "extract_llm" in kinds2 and "canonical_projection" not in kinds2
     db.close()

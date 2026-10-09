@@ -541,20 +541,37 @@ def bind_jev(client, guard, reserve=None):
 
 
 def usage_reserver(ledger, token: JobToken, *, kind: str,
-                   model: str, project_id: int, message_id: int):
+                   model: str, project_id: int, message_id: int,
+                   daily_request_budget: int | None = None):
     """Build a durable one-request reservation written before POST."""
+    if daily_request_budget is not None and (
+            type(daily_request_budget) is not int or daily_request_budget < 0):
+        raise ValueError("semantic_daily_budget_invalid")
+
     def reserve(body: dict, timeout: float):
         request_fp = payload_hash(body)
-        ledger.artifact_add(
-            kind,
-            json.dumps({"job_id": token.job_id, "reserved": True},
-                       ensure_ascii=False),
-            project_id=project_id, message_id=message_id, model=model,
-            meta={"jev_requests": 1, "reserved": True,
-                  "job_id": token.job_id, "generation": token.generation,
-                  "request_fp": request_fp,
-                  "timeout_seconds": float(timeout),
-                  "reservation_id": uuid.uuid4().hex})
+        if not ledger.db.in_transaction:
+            ledger.db.execute("BEGIN IMMEDIATE")
+        with ledger.db:
+            if daily_request_budget is not None:
+                from semantic_jev import JevError
+                from semantic_store import jev_usage_today
+                try:
+                    used = jev_usage_today(ledger)
+                except ValueError:
+                    raise JevError("budget_exceeded", "semantic_usage_invalid", retryable=True) from None
+                if used >= daily_request_budget:
+                    raise JevError("budget_exceeded", "daily_cap", retryable=True)
+            ledger.artifact_add_tx(
+                kind,
+                json.dumps({"job_id": token.job_id, "reserved": True},
+                           ensure_ascii=False),
+                project_id=project_id, message_id=message_id, model=model,
+                meta={"jev_requests": 1, "reserved": True,
+                      "job_id": token.job_id, "generation": token.generation,
+                      "request_fp": request_fp,
+                      "timeout_seconds": float(timeout),
+                      "reservation_id": uuid.uuid4().hex})
     return reserve
 
 

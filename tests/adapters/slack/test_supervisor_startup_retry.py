@@ -57,13 +57,19 @@ def test_bind_failure_is_retried_until_the_workspace_binds(tmp_path, monkeypatch
         sup = make_slack_factory(ctx)(_App(client), None)
         sup._log = lambda event, **fields: logs.append(event)
         task = asyncio.ensure_future(sup._run())
-        for _ in range(200):
-            if sup._actions._active:
-                break
-            await real_sleep(0)
-        assert sup._actions._active          # bound after the blips
-        sup.unload()
-        await asyncio.wait_for(task, 5)
+        async def bound():
+            while not sup._actions._active:
+                if task.done():
+                    await task
+                    raise AssertionError("supervisor exited before binding")
+                await real_sleep(0.001)
+
+        try:
+            await asyncio.wait_for(bound(), 5)
+            assert sup._actions._active      # bound after the blips
+        finally:
+            sup.unload()
+            await asyncio.wait_for(task, 5)
 
     asyncio.run(scenario())
     assert logs.count("workspace_bind_failed") == 2

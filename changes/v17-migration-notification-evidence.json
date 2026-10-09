@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "古い通知記録が壊れていてもDB更新を停止しない",
+  "summary": "旧版DBの更新時に、読めない通知JSONやSQLiteで扱えない通知対象IDがあると起動できなくなる問題を修正しました。正常な記録による通知済みの判定を維持し、読めない記録を根拠に通知済みとは判定しません。",
+  "upgrade": "追加設定は不要です。通知済み境界を再構築するスキーマ7より前のDBを更新する場合に適用されます。元の通知記録やメッセージは削除しません。",
+  "details": [
+    "ledger._migrate_bodyは既存loads_dictで保存JSONを読み、ValueError・RecursionErrorを含めて読めないものを通知済みの根拠から除く。",
+    "message_idsは既存のpositive検証を使い、bool・文字列・小数・SQLite整数の範囲外を除外する。正常IDの900件分割・共通timestamp・移行失敗時のrollback・schema version更新の境界は維持する。"
+  ],
+  "refs": [
+    "mcs/core/ledger.py",
+    "tests/core/test_migration_bind_bounds.py"
+  ]
+}

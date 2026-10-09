@@ -14,6 +14,8 @@ _CHANGE = re.compile(r"中止|終了|開始|変更|増量|減量|頓服|指示|�
 _FIELD = re.compile(r"(?:^|\n)[ \t　]*(?:[■●◆・*-][ \t　]*)?[^\n:：]{1,24}[:：]")
 _HEADING = re.compile(r"^(?:[【\[［].+[】\]］]|[■●◆#].+|[^:：]{1,32}[:：]|本人|患者本人|家族|母|父|妻|夫|過去|現在|予定)\s*$")
 _CONTINUATION = re.compile(r"^(?:用法|用量|服用|対応|転帰|結果|変更後|支援後|同薬|同剤|朝|昼|夕|夜|食前|食後|就寝|\d+日\d+回)")
+_NONSPACE = re.compile(r"\S")
+_ITEM_END = re.compile(r"[、,。\n]")
 
 
 def is_heading(text: str) -> bool:
@@ -56,13 +58,16 @@ def plan_chunks(source: str, size: int = 3000) -> list[str]:
         fragments, start = [], 0
         if _pressure(unit) > _OUTPUT_BUDGET:
             for comma in re.finditer(r"[、,]", unit):
-                tail = unit[comma.end():].lstrip()
-                head = re.split(r"[、,。\n]", tail, maxsplit=1)[0]
+                item = _NONSPACE.search(unit, comma.end())
+                if item is None:
+                    continue
+                end = _ITEM_END.search(unit, item.start())
+                head = unit[item.start():end.start() if end else len(unit)]
                 folded = unicodedata.normalize("NFKC", head)
                 dose = _DOSE.search(folded)
                 prefix = folded[:dose.start()].strip() if dose else ""
                 if (dose and prefix and not re.match(r"毎|翌|隔|就寝|食後|食前|週|\d", prefix)
-                        and not _CONTINUATION.match(tail)):
+                        and not _CONTINUATION.match(head)):
                     fragments.append(unit[start:comma.end()])
                     start = comma.end()
         fragments.append(unit[start:])

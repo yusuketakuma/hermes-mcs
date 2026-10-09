@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "読めない保存サマリーがあっても取得・抽出を停止しない",
+  "summary": "保存済み連携サマリーの本文や管理情報に、巨大な整数や深すぎるJSONがあると読取り・再取得後の保存が例外で止まる問題を修正しました。読めない最新記録は不明として扱い、正常な再取得結果を保存できるようになります。",
+  "upgrade": "追加設定は不要です。取得・抽出処理の更新を反映してください。過去の記録は保持し、正常なサマリーの重複保存抑制と未登録・未取得の区別は維持します。",
+  "details": [
+    "ledger.karte_summary_currentの保存content/meta読取り、karte_summary_storeの既存meta照合でValueErrorとRecursionErrorを捕捉する。旧記録への自動修復や古いサマリーへのフォールバックは行わない。"
+  ],
+  "refs": [
+    "mcs/core/ledger.py",
+    "tests/core/test_core_misc.py"
+  ]
+}

@@ -51,6 +51,17 @@ def test_dense_comma_drug_list_never_cuts_names_from_doses():
     assert "を中止。" in parts[-1]
 
 
+@pytest.mark.parametrize("gap", ["", " \t", "　", "\n"])
+def test_dense_item_scanning_preserves_neighbours_and_every_character(gap):
+    drugs = [f"合成薬A{i}mg" for i in range(1, 101)]
+    source = ("、" + gap).join(drugs) + "、朝1日2回、用量: 1錠、　"
+    parts = clinical_chunking.plan_chunks(source)
+    assert "".join(parts) == source
+    assert all(any(drug in part for part in parts) for drug in drugs)
+    assert all(len(part) <= 3000 for part in parts)
+    assert "朝1日2回、用量: 1錠、　" in parts[-1]
+
+
 def test_low_density_inference_stays_single_and_reference_cannot_supply_evidence(monkeypatch):
     calls = []
     source = "前の文は家族の薬でした。\n本人の記載は独居です。"

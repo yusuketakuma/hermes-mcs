@@ -1,35 +1,37 @@
 {
-  "version": "1.0.15",
+  "version": "1.0.16",
   "sections": {
     "features": {
-      "notes": "2026-10-06、1.0.15の変更記録と通知プレビュー・履歴検索・抽出・台帳・稼働状態の実装を照合。プレビューは保存済みの患者/発信者/所属/投稿時刻/要約、未完成時は原文と待機/失敗状態を送る。READMEへ端末依存と既存Discord/LINE WORKSファイル通知の制約、全角半角・英字大小の検索、走査/メモリと再試行・停滞記録の改善を反映。性能改善率は未測定のため記載しない。通常モデル、自動取得10分、任意取得・氏名表示の既定offと人承認は維持。 公開前監査の長い添付名境界は通知文だけ拡張子を残して省略する修正と関連152合成テストで確認。",
+      "notes": "2026-10-08、1.0.16の全変更記録と収集・抽出・集約・通知の実装を照合。次回訪問予定はルール18、詳細19分類/27原文属性はLLM6/詳細2。本人/家族/過去を区別し、薬剤の既知用量を同じ事実の引用へ照合する投影4へ更新。カードから本人限定の薬剤確認・辞書検索、新規カードのレイアウト2、通知重複の抑止を確認。モデル・取得10分・1600tokens・人承認/既読化は維持。任意登録情報はclinical_metadata既定false、辞書の同梱と承認/有効化を区別。実装候補の必須CI全領域は成功。リリース文書完成後のexact SHAと公開は別に照合する。",
       "sources": [
         "README.md",
-        "mcs/notify/notify_render.py",
-        "mcs/notify/notify_cards.py",
-        "mcs/views/mcs_view.py",
-        "mcs/core/mcs_util.py",
-        "mcs/core/ledger.py",
+        "mcs/extract/v1/extract.py",
         "mcs/extract/v4/extract_llm.py",
-        "mcs/ingest/run_check.py"
+        "mcs/extract/patient_context.py",
+        "mcs/extract/rollup.py",
+        "mcs/semantic/semantic_audit.py",
+        "mcs/semantic/semantic_projection.py",
+        "mcs/notify/notify_cards.py",
+        "mcs/notify/notify_views.py"
       ]
     },
     "demos": {
-      "notes": "2026-10-06、Slack先頭7画面とDiscord/LINE WORKS説明図をソース対応表・cards/actions/deliveryと照合。カード本文・操作・本人向け確認と人承認条件を維持するため画像変更不要。プレビューはSlack fallback、Discord新規contentと既存V2互換、LINE WORKS altTextの変更で、説明図の本文配置とは別。架空データ・操作不能な説明図の明示を保持。今回両galleryの生成器checkを実施し、実端末の受信/省略/ロック画面と実SDKの操作成功は未検証として区別する。",
+      "notes": "2026-10-08、Slack先頭8画面・Discord・LINE WORKS説明図をcards/actions/rendererへ照合。Slack01〜03の要約順、07の未完了タスク先頭・未確認バイタル・現在の項目名を生成元から整合しSVG/PNGを再生成。LINE WORKS01の共通例も同期。本人限定・内容確認後の確定・架空データの条件を保持し、両galleryの生成/CRC/hash整合を隔離検証。実SDKと実端末の受信・操作は別受入で、説明図を実画面として扱わない。",
       "sources": [
         "README.md",
         "docs/screenshots/slack-gallery/README.md",
         "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_slack_gallery.py",
+        "scripts/development/generate_lineworks_gallery.py",
         "adapters/slack/cards.py",
-        "adapters/slack/actions.py",
         "adapters/discord/cards.py",
         "adapters/lineworks/cards.py",
-        "adapters/lineworks/actions.py",
-        "adapters/common/text.py"
+        "mcs/notify/notify_render.py",
+        "mcs/notify/notify_views.py"
       ]
     },
     "quickstart": {
-      "notes": "2026-10-06、macOS前提・preflight・モード選択・CLI導入/診断/更新入口をinstall.shと既存ガイドへ照合し、導入コマンド変更不要と確認。1.0.15は設定追加なし、schema9の加法索引追加。更新ガイドへgateway/使用中host・adapter/抽出workerの反映確認、LINE WORKSの初回手動再起動、recovery_tool_changed時のwatchdog本体同期を追記。servicesのみでは復旧本体を更新しない。既存recovery_python・opt-outを維持し、旧版のschema変更/手動更新/standalone host契約は残す。配備・実接続成功は文書検証から推定しない。",
+      "notes": "2026-10-08、macOS前提とHermes/standalone選択・preflight・配置・初期設定・diagnostic/updateの入口をinstaller/launcher/runtimeへ照合。配置失敗・中断・復旧不完了を成功扱いしない。更新ガイドを1.0.16へ整合し、既存opt-out/復旧Python/復元同意、checkout外の復旧本体同期、gateway/host/adapter/worker反映確認を明記。v0〜15全16版/22構成をmanifestへ追加し、exact v15旧schemaからの保持/backup/rollback matrix238件成功。実Git・brew/SDK実導入・host停止・実接続は合成成功から推定しない。",
       "sources": [
         "README.md",
         "install.sh",
@@ -37,38 +39,43 @@
         "scripts/mcs_upgrade.py",
         "mcs/ops/mcs_update.py",
         "mcs/ops/mcs_setup.py",
-        "mcs/core/ledger.py",
         "docs/guides/INSTALLATION.md",
+        "docs/guides/SETUP_AGENT.md",
         "docs/guides/UPGRADE_AGENT.md",
-        "docs/guides/STANDALONE.md",
-        "docs/guides/LINEWORKS.md"
+        "tests/fixtures/schema_upgrade/origins.json",
+        "tests/fixtures/schema_upgrade/update-paths.json"
       ]
     },
     "safety": {
-      "notes": "2026-10-06、SECURITYと患者既読/返信既読・添付送信・確定操作の境界を照合。READMEへ通知プレビューの患者名/本文がロック画面へ出る可能性と端末設定確認、attachments内の実体だけ送る条件を追加。返信の補完再試行上限に達した保存済み抜粋は既読化を妨げず、未保存返信は既読にしない条件を正確化。患者既読の保存commit/snapshot、返信の7日/最大10件と新着競合リスク、任意外部取得/公開・氏名表示の既定off、人承認/reason/receiptは維持。破損・結果不明の配送は未送信と推定せず保留し、復元同意と通知保留を弱めない。 SECURITY・利用者ガイドにも取得失敗済みの保存済み返信と未保存返信の扱いを整合。",
+      "notes": "2026-10-08、SECURITYと通知先/tenant/project/世代・snapshot・人承認/reason/receipt・添付保存先境界を再照合。新workerは送信前の配送世代を確認、未知の送信を未送信にせず、未到達beginを待つreceiptを保持。用量を照合できない投影と旧臨床cacheは現在値として採用を保留する。意味解析の並列日次予約は原子的な使用量確認で上限を守り、不明な使用量は送信しない。私有辞書の承認と公式master配布を分離、実master行・実投稿をfixture化しない。端末プレビュー・外部Jev・ローカルPHI出力の既存説明と人判断の境界は維持し、チャットの短い表示を医学的な確定としない。",
       "sources": [
         "README.md",
         "SECURITY.md",
+        "adapters/common/worker.py",
+        "mcs/notify/notify_cmds.py",
+        "mcs/notify/notify_transport.py",
+        "mcs/core/mcs_queries.py",
+        "mcs/semantic/semantic_runtime.py",
+        "mcs/semantic/semantic_store.py",
         "mcs/ingest/run_check.py",
-        "mcs/core/ledger.py",
-        "adapters/common/paths.py",
-        "adapters/common/registry.py",
-        "adapters/slack/actions.py",
-        "adapters/discord/actions.py",
-        "adapters/lineworks/actions.py",
-        "mcs/ops/mcs_update.py"
+        "resources/drug-master/README.md",
+        "docs/specs/official-drug-master.md"
       ]
     },
     "docs": {
-      "notes": "2026-10-06、READMEの目的別リンク/主要アンカー・導入/操作/安全/更新/開発導線を再照合。最新受入票リンクを1.0.15へ変更し、1.0.13計画と過去版契約への既存導線は保持。GENERATED:releaseは手編集せず、親のrelease_notes buildでCHANGELOG正本から更新後にreadme_release --checkを行う。検証記録・公開・本番反映は受入票でそれぞれ追跡し、文書更新を配備完了として記録しない。",
+      "notes": "2026-10-08、READMEの導入/操作/安全/更新/開発の全導線を再照合。1.0.16受入票へのリンクとsetupの古い未公開表記、LINE WORKSの患者別アラートとスレッド限定通知の違い、galleryのソース対応を訂正。ライセンス権限を変更せずREADMEを既存Proprietary表記へ合わせた。GENERATED:releaseはCHANGELOG正本から生成し、最新変更記録全件と個別更新条件を保持する。生成ブロック・参照リンク・ノートを既存生成器で最終照合し、公開と配備の完了を区別する。",
       "sources": [
         "README.md",
+        "LICENSE",
+        "CHANGELOG.md",
+        "docs/guides/USER_GUIDE.md",
+        "docs/guides/SETUP_AGENT.md",
         "docs/guides/UPGRADE_AGENT.md",
+        "docs/development/acceptance/ACCEPTANCE_1.0.16.md",
         "docs/development/README_MAINTENANCE.md",
         "docs/development/RELEASE_NOTES.md",
         "scripts/development/readme_release.py",
-        "scripts/development/release_notes.py",
-        "docs/development/plans/RELEASE_1.0.13.md"
+        "scripts/development/release_notes.py"
       ]
     }
   }

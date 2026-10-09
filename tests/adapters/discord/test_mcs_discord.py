@@ -726,7 +726,7 @@ def test_kill_switch_skips_claim_then_recovers(world):
     async def run():
         await worker.tick()
         assert not reg.claims() and not bot.channels[42].sent
-        flags.write_text(json.dumps({"interactive": True}))
+        flags.write_text(json.dumps({"interactive": True, "route_epoch": 1}))
         await worker.tick()             # claim + begin
         world.drain()                   # grant
         await worker.tick()             # send + receipt
@@ -756,7 +756,7 @@ def test_send_grant_waits_for_current_flags(world, held_flags):
         await worker.tick()
         assert not bot.channels[42].sent
         assert reg.claims()
-        flags.write_text(json.dumps({"interactive": True}))
+        flags.write_text(json.dumps({"interactive": True, "route_epoch": 1}))
         await worker.tick()
         world.drain()
         assert len(bot.channels[42].sent) == 1
@@ -856,7 +856,7 @@ def test_recovery_unfinished_and_unreported(world):
                                  "result": "delivered",
                                  "message_id": "9555"})
 
-    w3, reg3, _ = world.mkworker()
+    w3, reg3, bot3 = world.mkworker()
 
     async def run():
         return await w3.reconcile()
@@ -871,13 +871,45 @@ def test_recovery_unfinished_and_unreported(world):
     assert by_attempt["cd" * 8]["error_code"] == "worker_crash"
     assert by_attempt["12" * 8]["result"] == "delivered"
     assert by_attempt["12" * 8]["message_id"] == "9555"
-    # runner-side the attempts were never granted — the drain answers
-    # both with an honest rejection and nothing is re-sent
-    world.drain()
-    results = [json.loads(p.read_text())
-               for p in (world.data / "cmd_results").glob("*.json")]
-    assert len(results) == 2
-    assert all(r["error"] == "unknown_attempt" for r in results)
+    # The runner has not reached either begin. Keep both factual
+    # witnesses intact until their attempts exist; absence cannot
+    # establish a rejection or permission to resend the original spec.
+    witnesses = {p.name: p.read_bytes()
+                 for p in (world.data / "cmd_int").glob("*.json")}
+    assert len(witnesses) == 2
+    assert reg3.is_dead(spec["delivery_id"])
+
+    async def tick_with_runner():
+        task = asyncio.create_task(w3.tick())
+        try:
+            for _ in range(500):
+                world.drain()
+                if task.done():
+                    break
+                await asyncio.sleep(0.01)
+            assert task.done(), "worker tick did not finish with the synthetic runner"
+            await task
+        finally:
+            if not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+        world.drain()
+
+    assert world.drain() == 0
+    for _ in range(2):
+        # Parts have their own grant/receipt bookkeeping. Pump the
+        # runner as in deployment, while following the original two
+        # primary witnesses separately from those legitimate commands.
+        asyncio.run(tick_with_runner())
+        for name, raw in witnesses.items():
+            assert (world.data / "cmd_int" / name).read_bytes() == raw
+            command_id = json.loads(raw)["command_id"]
+            assert not (world.data / "cmd_results" / (command_id + ".json")).exists()
+        assert bot3.channels[42].sent == []
+        assert not reg3.claims()
+        assert world.led.db.execute(
+            "SELECT count(*) FROM notification_delivery_attempts").fetchone()[0] == 0
 
 
 def test_update_op_edits_bound_message(world):
@@ -2176,6 +2208,29 @@ def test_unknown_token_unauthorized_no_refresh(world):
     asyncio.run(act.on_interaction(ix))
     assert "権限" in ix.response.message["content"]
     assert not list((world.data / "cmd_int").glob("*.json"))
+
+
+def test_unknown_token_refresh_publish_failure_is_reported(world, monkeypatch):
+    """A refresh that never reached the inbox must not promise a card
+    update — the user sees the send failure and the journal records it."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    msg = bot.channels[42].sent[0]
+    act = world.mkactions(reg, bot)
+
+    def fail(*_a):
+        raise OSError("disk full")
+    monkeypatch.setattr(envelopes, "publish_command", fail)
+    ix = FakeInteraction("mcs:a:" + "ff" * 16, message_id=msg.id)
+    asyncio.run(act.on_interaction(ix))
+    assert ix.response.message["ephemeral"] is True
+    assert "送信に失敗" in ix.response.message["content"]
+    assert "更新します" not in ix.response.message["content"]
+    outcomes = [f["outcome"] for e, f in world.logs
+                if e == "interaction_result" and f["action"] == "refresh"]
+    assert outcomes == ["refresh_publish_failed"]
 
 
 # ---------- D4: thread failure separation (RC18) ------------------------------

@@ -67,6 +67,8 @@ def _artifact(db, kind, mid, content, meta):
     project_id = db.execute(
         "SELECT project_id FROM messages WHERE message_id=?", (mid,)
     ).fetchone()[0]
+    if kind in ("canonical_projection", "semantic_facts_v4"):
+        meta = {"projection_version": projection.PROJECTION_VERSION, **meta}
     return db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
         "VALUES(?,?,?,?,?)",
@@ -515,7 +517,8 @@ def test_old_projection_version_rows_are_superseded_on_rerun(tmp_path):
         db.db.commit()
         old_proj = rows("canonical_projection")[0]["artifact_id"]
         old_v4 = rows(v4.KIND_V4)[0]["artifact_id"]
-        assert current(current_projection_id()) == old_proj
+        assert current(current_projection_id()) is None
+        assert current(current_projection_id(require_version=False)) == old_proj
         scfg = semantic_config(_canonical_cfg())[0]
         bundle = semantic.thread_bundle(db, 1, 1)
         member = next(m for m in bundle["members"] if m["message_id"] == 1)
@@ -862,3 +865,31 @@ def test_invalidation_reads_model_config_once_per_active_scan(
         assert len(reads) == (1 if enabled else 0)
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("workflow", ["done", "performed", "reported", "cancelled", "unknown"])
+def test_completed_or_unplanned_care_is_an_observation_not_a_schedule(workflow):
+    doc = _doc([_fact("f1", kind="care_event", statement="本日退院済み", workflow_status=workflow)])
+    assert projection.project_v2_facts(doc)[0]["kind"] == "observation"
+
+
+@pytest.mark.parametrize("workflow", ["planned", "ordered", "pending", "considering", "on_hold", "in_progress"])
+def test_pending_care_preserves_legacy_schedule_kind(workflow):
+    doc = _doc([_fact("f1", kind="care_event", statement="訪問の予定", workflow_status=workflow)])
+    assert projection.project_v2_facts(doc)[0]["kind"] == "schedule"
+
+
+@pytest.mark.parametrize("event_time,expected", [
+    ("3日前", None), ("3日後まで", None), ("2026-02-30", None),
+    ("2026-10-09", "2026-10-09"), ("2026/10/09", "2026-10-09"),
+    ("2026年10月9日", "2026-10-09"),
+])
+def test_projection_absolute_date_slots_do_not_accept_relative_or_invalid_dates(event_time, expected):
+    doc = _doc([_fact("f1", kind="request_pending", statement="合成の確認依頼", event_time=event_time)])
+    fact = projection.project_v2_facts(doc)[0]
+    request = projection.project_v2_doc_legacy(doc)["requests"][0]
+    assert fact["occurred_at"] == expected
+    assert fact["time_text"] == event_time
+    assert request["due"] == expected
+    if expected is None:
+        assert request["due_text"] == event_time

@@ -29,6 +29,7 @@ def test_update_restarts_the_connector_or_gateway(monkeypatch, tmp_path):
 
 def test_update_precheck_needs_no_hermes_in_standalone(monkeypatch):
     import mcs_setup
+    monkeypatch.setattr(mcs_update, "_tree_clean", lambda: True)
     monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda exe: False)
     monkeypatch.setattr(mcs_setup, "_py_problem", lambda exe: None)
     monkeypatch.setattr(mcs_setup, "validate_config", lambda cfg: ([], []))

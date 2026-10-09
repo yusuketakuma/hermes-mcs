@@ -566,7 +566,7 @@ def publish_flags(cfg: dict, root: str) -> bool:
                 prior.pop("at", None)
                 cur = dict(flags)
                 cur.pop("at", None)
-                if prior == cur:
+                if canonical(prior) == canonical(cur):
                     return False
         except (ValueError, RecursionError):
             pass

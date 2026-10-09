@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "履歴の取り込み中にログインが切れても、取り込みを失敗扱いにしない",
+  "summary": "過去の履歴を取り込む途中で返信の取得中にMCSのログインが切れると、それを「同じ範囲から進めない」と数えていたため、再ログインを挟んで同じ範囲で8回起きると取り込みが失敗で止まる問題を修正しました。ログイン切れは中断として扱い、次回の実行で同じ位置から続けます。",
+  "upgrade": "追加設定は不要です。取り込み処理の更新を反映してください。すでに失敗で止まった取り込みは、従来どおり取り込み依頼をもう一度出すと再開します。",
+  "details": [
+    "job_ops.run_history_jobs は merge_full_replies が SessionExpired を返したとき stalls を加算しない（deadline 打ち切りと同じ扱い）。例外は従来どおりジョブ状態を記録した後に送出する。run_reconcile_jobs は以前から stall 計上の前に送出しており変更しない。"
+  ],
+  "refs": [
+    "mcs/ingest/job_ops.py",
+    "tests/ingest/test_history_session_expiry_not_stall.py"
+  ]
+}

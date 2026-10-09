@@ -82,6 +82,54 @@ def test_fresh_statuses_distinct(tmp_path):
         assert r["status"] == want, overall
 
 
+@pytest.mark.parametrize("code,meaning", [
+    ("backup_retention_capacity", "保持上限"),
+    ("backup_cipher_unavailable", "暗号化ツール"),
+])
+def test_known_backup_failure_reaches_operator_alert(tmp_path, capsys, code, meaning):
+    _health_file(tmp_path, {"overall": "degraded", "at": 990,
+                           "state_reasons": ["backup_not_verified"],
+                           "backup": {"state": "degraded", "reasons": ["backup_failed"],
+                                      "failure_code": code}})
+    health_watch.main(["--home", str(tmp_path), "--now", "1000",
+                       "--config", str(tmp_path / "none.json")])
+    out = capsys.readouterr().out
+    assert meaning in out
+    assert "コード: degraded backup_not_verified" in out
+
+
+@pytest.mark.parametrize("code", [None, [], {}, True, "PRIVATE_CODE_CANARY"])
+def test_unknown_backup_failure_code_is_not_relayed(tmp_path, code):
+    p = _health_file(tmp_path, {"overall": "degraded", "at": 990,
+                              "state_reasons": ["backup_not_verified"],
+                              "backup": {"state": "degraded", "reasons": ["backup_failed"],
+                                         "failure_code": code}})
+    report = health_watch.classify_health(str(p), now=1000, deadline_s=900)
+    text = "\n".join(health_watch._reason_rows(report, report["state_reasons"]))
+    assert "PRIVATE_CODE_CANARY" not in text
+    assert "バックアップの完了を確認できません" in text
+
+
+def test_stale_backup_failure_cannot_describe_current_state(tmp_path):
+    p = _health_file(tmp_path, {"overall": "degraded", "at": 50,
+                              "state_reasons": ["backup_not_verified"],
+                              "backup": {"state": "degraded", "reasons": ["backup_failed"],
+                                         "failure_code": "backup_retention_capacity"}})
+    report = health_watch.classify_health(str(p), now=1000, deadline_s=900)
+    assert report["status"] == "stale"
+    assert report.get("backup_failure_code") is None
+
+
+@pytest.mark.parametrize("state", ["ok", "disabled", "invalid", None])
+def test_non_failed_backup_block_cannot_supply_failure_cause(tmp_path, state):
+    p = _health_file(tmp_path, {"overall": "degraded", "at": 990,
+                              "state_reasons": ["backup_not_verified"],
+                              "backup": {"state": state, "reasons": ["backup_failed"],
+                                         "failure_code": "backup_retention_capacity"}})
+    report = health_watch.classify_health(str(p), now=1000, deadline_s=900)
+    assert report.get("backup_failure_code") is None
+
+
 def test_boundary_age_is_fresh(tmp_path):
     p = _health_file(tmp_path, {"overall": "ok", "at": 100})
     r = health_watch.classify_health(str(p), now=1000.0, deadline_s=900)

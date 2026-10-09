@@ -9,6 +9,7 @@ import semantic_observe as observe
 import semantic_render as render
 import semantic
 import semantic_runtime as runtime
+from semantic_projection import PROJECTION_VERSION
 from semantic_testkit import _message
 from test_semantic_poison_rows import poison_json
 
@@ -41,7 +42,8 @@ def test_cohort_history_ignores_unreadable_siblings(ledger):
 def test_current_v4_unreadable_content_is_unavailable(ledger):
     revision = ledger.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
     aid = ledger.artifact_add(v4.KIND_V4, '{"meds":[]}', project_id=1, message_id=1,
-                              meta={"hash": revision, "engine_version": 4, "extract_version": 4, "doc_hash": "d"})
+                              meta={"hash": revision, "engine_version": 4, "extract_version": 4, "doc_hash": "d",
+                                    "projection_version": PROJECTION_VERSION})
     assert v4.current_v4(ledger, 1, revision)
     ledger.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (poison_json(ledger), aid))
     ledger.db.commit()

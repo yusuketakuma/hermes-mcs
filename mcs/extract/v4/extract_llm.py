@@ -72,7 +72,8 @@ TIMEOUT = 300
 # contract — a high verdict without a locatable quote degrades to
 # "unclear" — so all bodies are re-extracted under the new contract.
 # v6: source-bound clinical/context details re-enter the existing generation boundaries.
-EXTRACT_VERSION = 6
+# v7: reapply the single-reading BP merge contract to completed legacy outputs.
+EXTRACT_VERSION = 7
 PATIENT_CONTEXT_VERSION = 2
 _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -554,13 +555,15 @@ def _nearest_vital_label(body: str, s: int, e: int):
     a following unit (a label after the number belongs to the NEXT
     reading: 血圧120/80 脈60)."""
     best = None
-    back = body[max(0, s - _VITAL_WIN_BACK):s]
+    # search the window inside the body, not a slice of it: a slice cuts
+    # 'BP' to a bare 'P' whose look-behind can no longer see the 'B'
+    start = max(0, s - _VITAL_WIN_BACK)
     for cls, rx in _VITAL_LABELS.items():
         m_end = None
-        for m in rx.finditer(back):
+        for m in rx.finditer(body, start, s):
             m_end = m.end()
         if m_end is not None:
-            dist = len(back) - m_end
+            dist = s - m_end
             if best is None or dist < best[0]:
                 best = (dist, cls)
     for cls, rx in _VITAL_UNITS.items():
@@ -579,6 +582,53 @@ def _bp_side(body: str, s: int, e: int):
     if body[s - 1:s] in ("/", "／"):
         return "dbp"
     return None
+
+
+# One blood-pressure reading is a written 'A/B' whose nearest label is a
+# blood-pressure label (BP/血圧/mmHg — never inferred from the values, so
+# an unlabelled date such as 10/12 is not one) or an explicitly
+# side-labelled single value.
+# numbers follow the guard's own grammar (\d+ with an optional ./． decimal)
+_BP_NUM = r"\d+(?:[.．]\d+)?"
+_BP_PAIR = re.compile(rf"(?<![\d.．])({_BP_NUM})\s*[/／]\s*({_BP_NUM})(?![\d.．])")
+_BP_SIDE_WORD = re.compile(r"(収縮期|拡張期)(?:血圧)?[^0-9]*$")
+
+
+def _bp_readings(body: str, keep=None):
+    """(pairs, side-labelled values) of the body's blood pressures; spans
+    keep(start, end) rejects — another person's, say — are left out."""
+    accept = keep or (lambda s, e: True)
+    pairs = set()
+    for m in _BP_PAIR.finditer(body):
+        if _nearest_vital_label(body, m.start(1), m.end(1)) == "bp" \
+                and accept(m.start(), m.end()):
+            pairs.add((_bp_number(m[1]), _bp_number(m[2])))
+    sides = {"sbp": set(), "dbp": set()}
+    for m in re.finditer(rf"(?<![\d.．/／]){_BP_NUM}(?![\d.．/／])", body):
+        word = _BP_SIDE_WORD.search(body[max(0, m.start() - _VITAL_WIN_BACK):m.start()])
+        if word and accept(*m.span()):
+            sides["sbp" if word[1] == "収縮期" else "dbp"].add(_bp_number(m[0]))
+    return pairs, sides
+
+
+def _bp_number(text: str) -> float:
+    """The guard's token value (full-width point folded, no rounding)."""
+    return float(text.replace("．", "."))
+
+
+def _bp_pair_unproven(body: str, sbp, dbp, keep=None) -> bool:
+    """True when sbp and dbp come from the body's blood-pressure readings
+    but no single reading carries both: a side holds several different
+    values and this combination is never written as one reading. Values
+    with no such structure keep the existing per-value contract."""
+    pairs, sides = _bp_readings(body, keep)
+    if (sbp, dbp) in pairs:
+        return False
+    systolic = {upper for upper, _ in pairs} | sides["sbp"]
+    diastolic = {lower for _, lower in pairs} | sides["dbp"]
+    if sbp not in systolic and dbp not in diastolic:
+        return False
+    return len(systolic) > 1 or len(diastolic) > 1
 
 
 # Deterministic vital-sign thresholds, active only when the config
@@ -714,8 +764,10 @@ def _vitals_guard(body: str | None, vit: dict,
         if kcls in winners:
             tgt = k
             if kcls == "bp":
-                tgt = next((_bp_side(body, s, e) for s, e in hits
-                            if _bp_side(body, s, e)), k)
+                sides = [_bp_side(body, s, e) for s, e in hits]
+                # BP80/80: the value also stands on its own side
+                if k not in sides:
+                    tgt = next((side for side in sides if side), k)
         else:
             winners.discard(None)
             if len(winners) != 1:
@@ -740,6 +792,11 @@ def _vitals_guard(body: str | None, vit: dict,
             out[tgt] = val          # relabel, e.g. bs -> hr
         else:
             out[k] = val
+    if "sbp" in out and "dbp" in out \
+            and _bp_pair_unproven(body, out["sbp"], out["dbp"]):
+        note(f"vitals.sbp/dbp={out['sbp']:g}/{out['dbp']:g} は"
+             "本文で同じ測定ではありません")
+        del out["sbp"], out["dbp"]
     return out
 
 
@@ -1358,30 +1415,27 @@ def _integrity_note(response) -> None:
 
 def _integrity_summary(notes: list) -> dict:
     calls = len(notes)
-    usage = {"prompt_tokens": 0, "completion_tokens": 0,
-             "total_tokens": 0}
-    have_usage = False
-    timings = {"prompt_n": 0, "prompt_ms": 0, "predicted_n": 0,
-               "predicted_ms": 0, "cache_n": 0}
-    have_timings = False
+    usage, timings = {}, {}
     finishes = {}
     for note in notes:
         finish = note.get("finish_reason")
         if finish is not None:
             finishes[finish] = finishes.get(finish, 0) + 1
         for key, value in (note.get("usage") or {}).items():
-            if key in usage and type(value) is int:
-                usage[key] += value
-                have_usage = True
+            if key in ("prompt_tokens", "completion_tokens", "total_tokens") \
+                    and type(value) is int and value >= 0:
+                usage[key] = usage.get(key, 0) + value
         for key, value in (note.get("timings") or {}).items():
-            if key in timings and type(value) in (int, float):
-                timings[key] += value
-                have_timings = True
+            if key in ("prompt_n", "prompt_ms", "predicted_n", "predicted_ms", "cache_n") \
+                    and type(value) in (int, float) and 0 <= value <= sys.float_info.max:
+                timings[key] = timings.get(key, 0) + value
+    timings = {key: value for key, value in timings.items()
+               if 0 <= value <= sys.float_info.max}
     return {"calls": calls,
             "length_stops": finishes.get("length", 0),
             "finish_reasons": finishes,
-            "usage": usage if have_usage else None,
-            "timings": timings if have_timings else None}
+            "usage": usage or None,
+            "timings": timings or None}
 
 
 def _llm_call(prompt: str, deadline: float | None = None,
@@ -1483,7 +1537,8 @@ def _merge(outs: list[dict]) -> dict:
     it: meds dedupe on (name, subject, action) so a past stop and a
     planned restart coexist; symptoms keep the LAST status per text —
     a later "resolved" must overwrite an earlier "new" or downstream
-    resolvers never fire; vitals keep the latest reading per key;
+    resolvers never fire; vitals keep the latest reading per key,
+    with blood-pressure sides kept together from one chunk;
     labs retain distinct explicit sampling dates and confirmation groups;
     requests dedupe on (to, from, action, due, condition, due_text).
     urgency is high if any chunk said high (grounded by then — _validate
@@ -1554,7 +1609,13 @@ def _merge(outs: list[dict]) -> dict:
             if len(out.setdefault("points", [])) < 3 \
                     and p not in out["points"]:
                 out["points"].append(p)
-        for k, v in (d.get("vitals") or {}).items():
+        vitals = d.get("vitals") or {}
+        if "sbp" in vitals or "dbp" in vitals:
+            # A later single-side reading never borrows the earlier side.
+            prior = out.setdefault("vitals", {})
+            prior.pop("sbp", None)
+            prior.pop("dbp", None)
+        for k, v in vitals.items():
             out.setdefault("vitals", {})[k] = v   # latest reading wins
         if d.get("urgency") == "high":
             out["urgency"] = "high"
@@ -2470,11 +2531,15 @@ def _qc_feedback(ledger, src_artifact_id):
 def _next_retry(ledger) -> float | None:
     """Earliest next_try among retriable error artifacts, or None when
     nothing is retriable (all remaining are permanent failures)."""
+    safe_meta = json_or_null("meta")
+    timestamp = f"json_extract({safe_meta},'$.next_try')"
     row = ledger.db.execute(
-        "SELECT MIN(json_extract(meta,'$.next_try')) FROM artifacts "
+        f"SELECT MIN({timestamp}) FROM artifacts "
         "WHERE kind=? AND json_valid(meta) "
         "AND json_extract(meta,'$.error')=1 "
-        "AND COALESCE(json_extract(meta,'$.attempts'),0) < 5",
+        "AND COALESCE(json_extract(meta,'$.attempts'),0) < 5 "
+        f"AND json_type({safe_meta},'$.next_try') IN ('integer','real') "
+        f"AND {timestamp} BETWEEN -{sys.float_info.max!r} AND {sys.float_info.max!r}",
         (KIND,)).fetchone()
     return row[0] if row and row[0] is not None else None
 
@@ -3493,7 +3558,8 @@ def _llm_call_stats(metas) -> dict | None:
     reported is None, and all-None collapses to None."""
     llm_calls = {"calls": 0, "prompt_ms": 0.0, "predicted_ms": 0.0,
                  "tokens": 0}
-    have_calls = have_ms = have_toks = False
+    have_calls = have_toks = False
+    have_ms = set()
     seen_meta = set()
     for meta in metas:
         if not isinstance(meta, dict) or id(meta) in seen_meta:
@@ -3507,9 +3573,9 @@ def _llm_call_stats(metas) -> dict | None:
         if isinstance(timings, dict):
             for key in ("prompt_ms", "predicted_ms"):
                 value = timings.get(key)
-                if type(value) in (int, float):
+                if type(value) in (int, float) and 0 <= value <= sys.float_info.max:
                     llm_calls[key] += value
-                    have_ms = True
+                    have_ms.add(key)
         usage = meta.get("usage")
         if isinstance(usage, dict) \
                 and type(usage.get("total_tokens")) is int:
@@ -3517,8 +3583,9 @@ def _llm_call_stats(metas) -> dict | None:
             have_toks = True
     if not have_calls:
         llm_calls["calls"] = None
-    if not have_ms:
-        llm_calls["prompt_ms"] = llm_calls["predicted_ms"] = None
+    for key in ("prompt_ms", "predicted_ms"):
+        if key not in have_ms or not 0 <= llm_calls[key] <= sys.float_info.max:
+            llm_calls[key] = None
     if not have_toks:
         llm_calls["tokens"] = None
     return llm_calls if any(

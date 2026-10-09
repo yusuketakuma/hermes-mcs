@@ -119,7 +119,8 @@ def current_candidate(db, project_id: int, artifact_id: int,
     if not isinstance(fingerprint, str) or not valid_hash(fingerprint):
         raise ValueError("loop_fingerprint_invalid")
     candidate_fingerprint = meta.get("source_fingerprint", meta.get("fingerprint"))
-    if candidate_fingerprint != fingerprint:
+    # an invalidated row was reinterpreted away in its own generation
+    if candidate_fingerprint != fingerprint or meta.get("invalidated"):
         raise ValueError("loop_candidate_stale")
 
     policy_row = db.execute(

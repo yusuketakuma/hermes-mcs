@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "時間を置いて届いた返信も、Slackのチャンネルに通知する",
+  "summary": "以前の投稿に後から返信が付いたときも、元のメイン投稿のSlackスレッドへ新しい返信として投稿し、チャンネルにも新着として表示します。既存カードの書き換えとスレッド内だけの追加では新着が見えなかった問題を修正しました。",
+  "upgrade": "追加設定は不要です。Hermesのgatewayまたは独立実行のhostを再起動して更新を反映してください。新しい通知カードの投稿、配信済み投稿の書き換え、長い本文の続き、添付、Discord・LINE WORKSの表示は変わりません。反映前に届いた返信は再送されません。",
+  "details": [
+    "adapters/slack/delivery.DeliveryWorker._body_part は spec.op が update で、本文パートが prior_remote_id を持たず、名前が m:ID#1（そのカードに新しく加わる投稿の先頭部分）のときだけ chat.postMessage に reply_broadcast=True を付ける。create、書き換えと書換え不能時の再投稿、2つ目以降の分割、添付の見出し、signal と legacy の投稿、既存返信への再結合は従来どおりスレッド内だけに投稿する。"
+  ],
+  "refs": [
+    "adapters/slack/delivery.py",
+    "tests/adapters/slack/test_slack_late_reply_broadcast.py",
+    "tests/adapters/slack/test_slack_delayed_reply_flow.py"
+  ]
+}

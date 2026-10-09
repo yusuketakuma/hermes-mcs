@@ -1,9 +1,9 @@
 # MCS セットアップ実行手順書（AIエージェント用）
 
-このガイドは公開済みv1.0.12の実行可能な手順。安定稼働版1.0.13の
-install/update/setup/doctor統一は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)で追跡する。
-統一入口（`sh scripts/mcs install`、導入後の`mcs setup`・`mcs update`・`mcs doctor`）はローカル実装済みだが未公開で、実機受入は未確認。
-公開版の導入では、下記のinstall.sh・init・bootstrap・plan/apply・doctorを使用する。
+このガイドは現行のinstall/update/setup/doctorと、下記のinstall.sh・init・bootstrap・plan/apply・doctorの手順を説明する。
+統一入口は `sh scripts/mcs install`、導入後は `mcs setup`・`mcs update`・`mcs doctor`。
+導入する公開タグの仕様はCHANGELOGと[更新ガイド](UPGRADE_AGENT.md)で確認する。合成検証と実機受入は区別し、実接続・鍵・通知先の受入は各環境で確認する。
+1.0.13の歴史的な開発・実機受入条件は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)に保持する。
 
 > **この文書は AI エージェント（Devin / Claude Code / Codex 等）が
 > 読み込み、ユーザーと対話しながら MCS を自動セットアップするための

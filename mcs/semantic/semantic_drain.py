@@ -221,6 +221,13 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                     # The contract normalizes supported IDs/text before use.
                     # Keep the original stored row and any document extensions.
                     prev_v2["content"] = cached
+        # A stored document the hint rebuild did not confirm (skipped, or a
+        # past generation) is never reused, but the retry it already spent
+        # still binds this run.
+        spent = False
+        if prev_v2 is not None and prev_v2["meta"].get("hint_rebuild") \
+                not in (None, "same"):
+            spent, prev_v2 = bool(prev_v2["meta"].get("coverage_retry")), None
         # C03: an adjudicated-but-incomplete stored doc must not be
         # reused forever — one bounded re-extraction resumes from the
         # missing chunks; if it still cannot complete, the generation
@@ -235,8 +242,11 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
             # boundaries inside extract_facts_v2) — no model call
             v4.record_stage(ledger, pid, mid, fp, policy,
                             "s0_prep", "done")
+        # the hint-merge build of the document this run continues from
+        doc_build = None
         if prev_v2 is not None and not coverage_retry:
             v2_doc = prev_v2["content"]
+            doc_build = prev_v2["meta"].get("build")
             if fact_source == "canonical":
                 v4.record_stage(ledger, pid, mid, fp, policy,
                                 "s1_extract", "reused")
@@ -249,7 +259,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
             v2_result = extract_facts_v2(
                 llm_fn, member, deadline - 5, ledger=ledger,
                 source_fingerprint=fp, project_id=pid,
-                jev_client=jev_client, retry_coverage=coverage_retry)
+                jev_client=jev_client, retry_coverage=coverage_retry or spent)
             if not v2_result["extraction_complete"]:
                 if fact_source == "canonical":
                     return {"outcome": "retryable"
@@ -258,6 +268,8 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                 v2_doc = None      # shadow: incomplete doc not stored
             else:
                 v2_doc = v2_result["doc"]
+                from semantic_extraction import FACTS_V2_BUILD
+                doc_build = FACTS_V2_BUILD
                 meta = {"fingerprint": fp,
                         "policy_fingerprint": policy,
                         "schema": SCHEMA_VERSION,
@@ -267,8 +279,9 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                         "facts": len(v2_doc["facts"]),
                         "open_obligations": len(
                             v2_doc["coverage"]
-                            ["open_obligation_ids"])}
-                if coverage_retry:
+                            ["open_obligation_ids"]),
+                        "build": FACTS_V2_BUILD}
+                if coverage_retry or spent:
                     # the bounded retry already ran — a still-incomplete
                     # doc is flagged for human review and never
                     # re-extracted again (C03)
@@ -288,7 +301,8 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                     meta=meta)
         if fact_source == "canonical" and v2_doc is not None \
                 and v2_doc["coverage"]["status"] != "complete":
-            if coverage_retry or (prev_v2 and prev_v2["meta"].get("coverage_retry")):
+            if coverage_retry or spent \
+                    or (prev_v2 and prev_v2["meta"].get("coverage_retry")):
                 return _park_needs_review(
                     ledger, pid, mid, fp, policy, v2_doc)
             return {"outcome": "incomplete", "v2_doc": v2_doc}
@@ -308,7 +322,10 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
             # stored evaluated:false row (mid-audit outage) must be
             # re-run, otherwise a transient failure pins the generation
             # on a failed verdict forever and manual retry cannot clear it
-            if v4.fact_audit_verdict(prev_fa, doc_hash) is not None:
+            from semantic_audit import _published_quantity_findings
+            previous_verdict = v4.fact_audit_verdict(prev_fa, doc_hash)
+            if (previous_verdict is not None and (previous_verdict != "PASS"
+                    or not _published_quantity_findings(v2_doc))):
                 fact_audit = prev_fa["content"]
             else:
                 if time.monotonic() > deadline - 5:
@@ -452,7 +469,8 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                               "repaired": True,
                               "coverage_status":
                                   v2_doc["coverage"]["status"],
-                              "facts": len(v2_doc["facts"])})
+                              "facts": len(v2_doc["facts"]),
+                              **({"build": doc_build} if doc_build else {})})
                     # the repair drops every rejected fact and reopens
                     # the obligations they covered — a repaired doc with
                     # open obligations must never reach PASS (rollout
@@ -548,7 +566,9 @@ def _publish_v4(ledger, pid: int, mid: int, fp: str, policy: str,
     doc = v2_docs_by_target.get(mid)
     if doc is None:
         prev_v2 = _current(ledger, KIND_FACTS_V2, mid, fp)
-        doc = prev_v2["content"] if prev_v2 else None
+        # never publish from a document the hint rebuild could not re-derive
+        doc = prev_v2["content"] if prev_v2 and prev_v2["meta"].get(
+            "hint_rebuild") in (None, "same") else None
     doc_hash = v4._doc_hash(doc) if doc else None
     if final_status == "PASS" and doc is not None:
         vid = v4.publish(ledger, pid, mid, fp, policy,
@@ -1458,7 +1478,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             or now_m - _invalidated_at >= _BACKLOG_INVALIDATE_S:
         from semantic_store import invalidate_projections
         invalidate_projections(ledger, scfg)
-        _invalidated_at = now_m
+        _invalidated_at = time.monotonic()
     if scfg["mode"] == "off":
         return out
     # Stability guards shared with the extract lane: a nearly-full
@@ -1695,7 +1715,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                         and getattr(jev_client, "_mcs_jev_hookable", False)):
                     reserve_fn = runtime.usage_reserver(
                         ledger, token, kind=KIND_USAGE, model=jev.JEV_MODEL,
-                        project_id=job["project_id"], message_id=job["message_id"])
+                        project_id=job["project_id"], message_id=job["message_id"],
+                        daily_request_budget=scfg["daily_request_budget"])
                 # only now has the job cleared every gate — the persisted
                 # fairness counters count jobs that were actually served, not
                 # selections lost to circuit/budget/pause breaks (T14)

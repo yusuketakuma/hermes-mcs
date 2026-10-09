@@ -19,8 +19,10 @@ def test_git_failure_does_not_echo_untrusted_stderr(monkeypatch):
 
 def test_git_wrapper_redacts_failed_process_diagnostics(monkeypatch):
     canary = 'SYNTHETIC_PRIVATE_GIT_DIAGNOSTIC'
-    monkeypatch.setattr(mcs_update.subprocess, 'run',
-                        lambda args, **kw: subprocess.CompletedProcess(args, 128, '', canary))
+    # the owned-session runner is the process boundary of _git
+    monkeypatch.setattr(mcs_update, '_run_owned',
+                        lambda args, timeout, env, stdin=None:
+                        subprocess.CompletedProcess(args, 128, '', canary))
     result = mcs_update._git(['merge', '--ff-only', 'synthetic'])
     assert result.returncode == 128
     assert canary not in result.stderr

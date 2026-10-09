@@ -197,6 +197,8 @@ def _backup_health(cfg: dict, now: float) -> dict:
         elif not 0 <= now - at <= interval:
             reasons.append("backup_" + field.removeprefix("last_") + "_stale")
     return {"state": "degraded" if reasons else "ok", "reasons": reasons,
+            # backup_failed stays the reason; the known fixed code says why
+            "failure_code": recorded["last_failure_code"],
             **{key: recorded[key] for key in (
                 "last_offsite_at", "last_verify_at", "last_drill_at",
                 "last_restore_at", "source_last_successful_run", "max_rpo_seconds")}}
@@ -772,9 +774,13 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
     result["projects"] = len(snap.patients)
     result["snapshot_ts"] = snap.timestamp
 
-    for p in snap.patients:
+    for index, p in enumerate(snap.patients):
         if time.monotonic() > deadline:
             result["errors"].append("deadline_exceeded")
+            # never fetched this tick: incomplete, not 'nothing unread'
+            result["incomplete"].extend(
+                q.project_id for q in snap.patients[index:]
+                if q.project_id and q.project_id not in result["incomplete"])
             break
         batch = None
         session_error = None
@@ -934,6 +940,11 @@ def stage_thread_read(adapter, ledger, result, deadline):
                 for rid in sorted(missing):
                     ledger.job_add("reply", pid, rid, parent_id=parent,
                                    revive_failed=False)
+                # a burnt-out reply never settles this thread: make it
+                # visible instead of retrying silently every tick
+                if any(ledger.job_state("reply", pid, rid) == "failed"
+                       for rid in missing):
+                    result["errors"].append("thread_read: reply_failed")
                 continue
             ledger.mark_thread_read(pid, parent, last, "unknown")
             seen = adapter.read_thread(pid, parent)
@@ -1896,6 +1907,18 @@ def _housekeeping(result):
         result["errors"].append(f"prune_leftovers: {type(e).__name__}")
 
 
+def _overdue_housekeeping(result) -> None:
+    """An MCS failure ends the tick before housekeeping; a long outage or
+    manual re-login wait must not also stop the local daily backup. Once
+    it is overdue (no backup yet is not overdue), run the local-only
+    housekeeping — no MCS request, no send — and keep its errors."""
+    try:
+        if maintenance.backup_overdue():
+            _housekeeping(result)
+    except Exception as e:
+        result["errors"].append(f"housekeeping: {type(e).__name__}")
+
+
 def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
     """Tail drain, run record and snapshot publish — returns the final
     run status for the health write."""
@@ -1940,8 +1963,11 @@ def _fail_run(ledger, args, result, run_id, status, detail,
     to errors, then best-effort alert + pending flush. A failed alert
     must never mask the original failure; the caller still writes
     health and prints the result."""
-    ledger.finish_run(run_id, status, detail)
     result["errors"].append(detail)
+    try:
+        ledger.finish_run(run_id, status, detail)
+    except Exception as e:  # health + exit code must still report the failure
+        result["errors"].append(f"run_record_failed: {type(e).__name__}")
     try:  # operational alert — silent death is worse than noise
         if alert == "session":
             _alert_session_expired(ledger, run_id, detail)
@@ -2124,8 +2150,12 @@ def _main() -> int:
         # 'crashed' by the next begin_run (the crashed-run path).
         result["errors"].append("run_lock_lost")
         if e.held:
-            ledger.finish_run(run_id, "partial",
-                              "; ".join(result["errors"][:8]))
+            try:
+                ledger.finish_run(run_id, "partial",
+                                  "; ".join(result["errors"][:8]))
+            except Exception as record_error:
+                result["errors"].append(
+                    f"run_record_failed: {type(record_error).__name__}")
             _write_health(ledger, result, "partial", run_id=run_id, cfg=cfg)
         print(json.dumps(result, ensure_ascii=False))
         return 1
@@ -2145,12 +2175,14 @@ def _main() -> int:
         _fail_run(ledger, args, result, run_id, "session_expired",
                   detail, deadline,
                   alert=None if recovered else "session")
+        _overdue_housekeeping(result)
         _write_health(ledger, result, "session_expired", run_id=run_id, cfg=cfg)
         print(json.dumps(result, ensure_ascii=False))
         return 2
     except MCSError as e:
         _fail_run(ledger, args, result, run_id, "failed", _err_str(e),
                   deadline, alert="run_failed")
+        _overdue_housekeeping(result)
         _write_health(ledger, result, "failed", run_id=run_id, cfg=cfg)
         print(json.dumps(result, ensure_ascii=False))
         return 1

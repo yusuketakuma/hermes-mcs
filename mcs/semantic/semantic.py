@@ -263,18 +263,19 @@ def _long_marks() -> dict:
 
 
 def _long_mark(key: str, level: int) -> None:
-    """Best effort — a lost write only costs one more length stop."""
-    # ponytail: unlocked read-modify-write across processes; a lost
-    # concurrent mark only re-spends one call — lock it if marks churn
+    """Keep retry suppression monotonic without waiting for another worker."""
+    import fcntl
     try:
         import maintenance
-        marks = _long_marks()
-        marks.pop(key, None)
-        marks[key] = level
-        while len(marks) > _LONG_MAX:
-            marks.pop(next(iter(marks)))
         os.makedirs(os.path.dirname(_LONG_PATH), exist_ok=True)
-        maintenance.atomic_publish_text(_LONG_PATH, json.dumps(marks))
+        with open(_LONG_PATH + ".lock", "a", encoding="utf-8") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            marks = _long_marks()
+            level = max(level, marks.pop(key, 0))
+            marks[key] = level
+            while len(marks) > _LONG_MAX:
+                marks.pop(next(iter(marks)))
+            maintenance.atomic_publish_text(_LONG_PATH, json.dumps(marks))
     except Exception:
         pass
 
@@ -347,8 +348,11 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
                 if level and timeout < _LONG_MIN_CALL_S:
                     # The rejected request already left: do not report a
                     # free not-sent defer, or send a long call that cannot
-                    # fit. Keep the mark for a later adequately sized try.
-                    break  # retain HTTP 400 for the terminal check below
+                    # fit. A format refusal says nothing about the prompt,
+                    # so this is a retryable model failure, never the plain
+                    # HTTP 400 terminal rejection; plain is remembered and
+                    # the mark kept for a later adequately sized try.
+                    return None
                 continue
             if response is not None \
                     and response.get("finish_reason") == "length":

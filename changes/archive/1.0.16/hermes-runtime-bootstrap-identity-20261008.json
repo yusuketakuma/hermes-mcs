@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "更新後のHermes起動形式でもgatewayの所有権を照合",
+  "summary": "Hermesが新しい分離起動形式を使う場合も、MCSの更新後にgatewayの再起動対象を正しく照合できるようにしました。従来の起動形式を維持し、所有するインストールと既知の起動コードが完全一致する場合だけ対象とします。",
+  "upgrade": "追加設定は不要です。MCS側の再起動対象の照合だけを修正し、Hermesのインストール・設定・サービスやCIの固定版は変更しません。実機への更新適用や再起動は従来の明示した手順で行ってください。",
+  "details": [
+    "Hermesの新しいdefault-home pin bootstrapを既存の完全一致形式へ追加する。任意コード、未知のインストール・モジュール・gateway引数は引き続き拒否する。",
+    "再起動前の所有者・サービスpath・復元保留の検証と、再起動後のPID置換の確認を維持する。",
+    "完全合成のlaunchctlスタブで既知の直接起動・時刻付きstderrラッパー・JXA形式と、不正コードや未知の起動対象の拒否を確認する。"
+  ],
+  "refs": ["deployment/recovery/mcs_recover.py", "tests/meta/test_gateway_restart_identity.py"]
+}

@@ -11,7 +11,7 @@ import drug_map
 import notify_cards
 import notify_cmds
 from notify_testkit import (
-    CFG, CLICKER, NOW, ORIGIN, _deliver, _dispatch, _intent, _llm_extract,
+    CFG, CLICKER, NOW, ORIGIN, _deliver, _dispatch, _extract, _intent, _llm_extract,
     _seed_thread, _spec, _token_for, led, pinned_clock)
 from test_drug_map import DOCUMENT
 
@@ -326,3 +326,14 @@ def test_drug_post_before_twenty_medication_free_replies_remains_available(led):
     result = _click(led, spec, "meds")
     assert not result["list"]["head"][0].startswith("薬剤記載のある投稿")
     assert "キラナ" in result["list"]["items"][0]["text"]
+
+
+def test_unverified_medication_says_unverified_without_a_source_label(led):
+    _seed_thread(led)
+    _llm_extract(led, 101, {"meds": []})       # the LLM saw no medication
+    _extract(led, 101, {"medications": [{"name": "ソラノ", "dose": "1錠"}]})
+    _dispatch(led, _intent(led))
+    _deliver(led)
+    view = _click(led, _spec(led), "meds")["list"]
+    firsts = [item["text"].split("\n", 1)[0] for item in view["items"]]
+    assert firsts == ["・ソラノ 1錠（未確認）"]

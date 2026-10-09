@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "読めない通知記録で添付の取得を停止しない",
+  "summary": "保存された通知JSONが深すぎたり、巨大な整数や扱えない投稿IDを含む場合に、添付の取得処理が止まる問題を修正しました。正常な通知の添付優先順位を維持し、元の通知記録は保持します。",
+  "upgrade": "追加設定は不要です。収集処理の更新を反映してください。添付の取得・配送条件や、送信結果不明の通知を保留する条件は変わりません。",
+  "details": [
+    "ledger.pending_notify_message_idsが既存loads_dictで保存JSONを読み、既存positiveでSQLite範囲内の投稿IDだけを優先順位へ渡す。通知を削除・既読化・再送せず、対象stateとnext_try条件は維持する。"
+  ],
+  "refs": [
+    "mcs/core/ledger.py",
+    "tests/core/test_core_misc.py",
+    "mcs/ingest/run_check.py"
+  ]
+}

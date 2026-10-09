@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "読めないアラート記録を候補なしと扱う問題を修正",
+  "summary": "アラートの最新記録を読み取れない場合は、読取り結果へ状態不明の理由を返すようにしました。出力処理も候補なしとして既存ファイルを上書きせず、失敗理由を返して前回の出力を保持します。",
+  "upgrade": "追加操作は不要です。signalsの読取り結果にerrorsを追加します。signal_state_corruptは一部の最新記録を読み取れないことを示し、表示できる候補件数が0でも候補の不在を確認した意味ではありません。出力がsignal_state_invalidで止まる場合は管理者が保存記録を確認してください。記録の自動削除や過去の候補の復活は行いません。",
+  "details": ["最新行の不明状態を既存のsignal_state_corruptコードで返し、brain_exportは出力の置換や整理を始める前に状態不明を拒否する。正常に測定できた0件は従来どおり扱う。"],
+  "refs": ["mcs/ops/mcs_signals.py", "mcs/ops/brain_export.py", "tests/ops/test_mcs_signals.py", "tests/ops/test_brain_export.py"]
+}

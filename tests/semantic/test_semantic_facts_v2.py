@@ -315,7 +315,9 @@ def test_hint_dedup_retargets_dangling_obligation_links():
     survivors = [f for f in doc["facts"]
                  if f["statement"] == "アムロジピン 5mg"]
     assert len(survivors) == 1
-    assert "extract_v1" in survivors[0]["provenance"]
+    # the hint quote occurs twice (no unique span), so it cannot point at
+    # the model fact's evidence and never corroborates it
+    assert survivors[0]["provenance"] == "local_llm"
 
 
 def test_hint_dedup_subject_mismatch_also_safe():

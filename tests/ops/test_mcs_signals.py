@@ -9,6 +9,7 @@ import pytest
 
 import ledger as ledger_mod
 import mcs_signals
+from semantic_projection import PROJECTION_VERSION
 from ops_testkit import DAY, NOW, _extract_v1, _msg
 
 
@@ -223,7 +224,8 @@ def _projection(db, mid, chash, content, pid=1):
     db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
         "VALUES ('canonical_projection',?,?,?,?)",
-        (mid, pid, json.dumps(content), json.dumps({"hash": chash})))
+        (mid, pid, json.dumps(content),
+         json.dumps({"hash": chash, "projection_version": PROJECTION_VERSION})))
 
 
 def test_med_change_detected_from_canonical_projection(led):
@@ -2112,3 +2114,41 @@ def test_self_reaction_detector_error_never_resolves(led, monkeypatch):
     res = _ev(led, SELF_REACT_CFG)
     assert "pharmacist_request_unanswered:RuntimeError" in res["errors"]
     assert res["resolved"] == 0 and len(_ph_open(led.db)) == 1
+
+
+@pytest.mark.parametrize("covered", [False, True])
+def test_sql_valid_unreadable_pending_digest_does_not_block_new_signal(led, covered):
+    key = "request_aging:1:1" if covered else "fictional-prior-key"
+    raw = ('{"digest":true,"signal_keys":' + json.dumps([key]) + ','
+           '"synthetic_unused":' + '9' * 5000 + '}')
+    assert led.db.execute("SELECT json_valid(?)", (raw,)).fetchone()[0] == 1
+    with pytest.raises(ValueError):
+        json.loads(raw)
+    old = led.outbox_add_tx("signal", None, {}, next_try=NOW + DAY)
+    led.db.execute("UPDATE notify_outbox SET payload=? WHERE event_id=?", (raw, old))
+    _req(led.db, "open", created=NOW - 40 * DAY)
+    result = _ev(led, cfg={"signals": {"notify": True}})
+    assert result["notify_enqueued"] == (0 if covered else 1) and result["opened"] == 1
+    assert led.db.execute("SELECT payload FROM notify_outbox WHERE event_id=?", (old,)).fetchone()[0] == raw
+    assert led.db.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0] == (1 if covered else 2)
+    if not covered:
+        latest = led.db.execute("SELECT payload FROM notify_outbox ORDER BY event_id DESC LIMIT 1").fetchone()[0]
+        assert json.loads(latest)["signal_keys"] == ["request_aging:1:1"]
+    assert mcs_signals.current_open(led.db)["total"] == 1
+
+
+def test_unreadable_latest_signal_reports_unknown_without_reviving_history(led):
+    _req(led.db, "open", due="2026-09-10")
+    _ev(led)
+    key = "request_overdue:1:1"
+    led.artifact_add("signal_v1", "{broken", project_id=1, meta={"key": key})
+    before = led.db.total_changes
+    result = mcs_signals.current_open(led.db)
+    assert result["total"] == 0 and result["items"] == []
+    assert result["errors"] == ["signal_state_corrupt"]
+    assert led.db.total_changes == before
+
+
+def test_measured_empty_signal_list_has_no_read_errors(led):
+    result = mcs_signals.current_open(led.db)
+    assert result["total"] == 0 and result["errors"] == []

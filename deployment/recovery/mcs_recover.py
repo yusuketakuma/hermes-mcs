@@ -24,7 +24,9 @@ import math
 import os
 import re
 import shutil
+import signal
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -89,15 +91,56 @@ GIT_LOCK_MIN_AGE_S = 600
 T_GIT = 30
 
 
+GIT_TERM_GRACE_S = 2      # an owned git removes its own *.lock on SIGTERM
+
+
+def _run_owned(argv, timeout, env, stdin=None):
+    """= mcs_update._run_owned, self-contained. subprocess.run(capture_output,
+    text) for one command in its own
+    session. On timeout or interruption that session is stopped by
+    _stop_owned and the exception re-raised. Worst case: timeout +
+    GIT_TERM_GRACE_S + the bounded reap."""
+    child = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, env=env,
+                             start_new_session=True)
+    try:
+        out, err = child.communicate(timeout=timeout)
+    except BaseException:
+        _stop_owned(child)
+        raise
+    return subprocess.CompletedProcess(argv, child.returncode, out, err)
+
+
+def _stop_owned(child):
+    """SIGTERM first so git cleans its lock, SIGKILL after the grace,
+    then a bounded reap. Only a still-unreaped leader's group is
+    signalled — its pid (= group id) cannot have been reused."""
+    if child.returncode is None:
+        with suppress(OSError):
+            os.killpg(child.pid, signal.SIGTERM)
+        with suppress(BaseException):
+            child.communicate(timeout=GIT_TERM_GRACE_S)
+        if child.returncode is None:
+            with suppress(OSError):
+                os.killpg(child.pid, signal.SIGKILL)
+    with suppress(BaseException):
+        child.communicate(timeout=5)
+    if child.returncode is None:
+        with suppress(BaseException):
+            child.wait(timeout=5)
+    for stream in (child.stdout, child.stderr):
+        if stream is not None:
+            with suppress(OSError):
+                stream.close()   # an escaped holder must not leak our fds
+
+
 def _git(args, timeout=T_GIT):
     try:
         # never let git walk up into an unrelated parent repository
         # when REPO itself is not a checkout
         env = dict(os.environ, GIT_CEILING_DIRECTORIES=os.path.dirname(
             os.path.abspath(REPO)))
-        return subprocess.run(["git", "-C", REPO, *args],
-                              capture_output=True, text=True,
-                              timeout=timeout, env=env)
+        return _run_owned(["git", "-C", REPO, *args], timeout, env)
     except (OSError, subprocess.TimeoutExpired):
         return None
 
@@ -507,16 +550,22 @@ def _gateway_restart_run(data, agents, uid):
                 # Exact isolated bootstrap emitted by hermes_cli._launchers.
                 modules = {}
                 for root in installs:
-                    prefix = ("import os, sys, runpy; "
+                    common = ("import os, sys, runpy; "
                               "os.environ.pop('PYTHONHOME', None); os.environ.pop('PYTHONPATH', None); "
                               "os.environ.pop('VIRTUAL_ENV', None); "
-                              "sys.path.insert(0, " + repr(str(root)) + "); "
-                              "os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or "
-                              "str(__import__('hermes_constants').get_default_hermes_root()); "
-                              "import hermes_bootstrap; ")
-                    modules.update({prefix + "runpy.run_module(" + repr(module)
-                                    + ", run_name='__main__', alter_sys=True)": module
-                                    for module in ("hermes_cli.main", "hermes_cli.stderr_timestamp")})
+                              "sys.path.insert(0, " + repr(str(root)) + "); ")
+                    prefixes = (
+                        common + "os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or "
+                        "str(__import__('hermes_constants').get_default_hermes_root()); "
+                        "import hermes_bootstrap; ",
+                        common + "sys._hermes_pin_default_home = True; import hermes_bootstrap; "
+                        "os.environ.get('HERMES_HOME') or os.environ.__setitem__('HERMES_HOME', "
+                        "str(__import__('hermes_constants').get_default_hermes_root())); ",
+                    )
+                    for prefix in prefixes:
+                        modules.update({prefix + "runpy.run_module(" + repr(module)
+                                        + ", run_name='__main__', alter_sys=True)": module
+                                        for module in ("hermes_cli.main", "hermes_cli.stderr_timestamp")})
                 module = modules.get(argv[3])
                 if module is None:
                     return False
@@ -656,16 +705,18 @@ def request_gateway_restart(data, agents, uid):
 
 
 def _restart_gateway():
-    # runs after durable bookkeeping — never undo it (mirrors
-    # mcs_update.restart_gateway)
+    """True when the restart request was saved/started (or none applies).
+    Runs after durable bookkeeping — never undo it (mirrors
+    mcs_update.restart_gateway, which reports a lost request too)."""
     if _runtime_mode() == "standalone":
         live = _standalone_status()
         if live is not None:
             path = Path(DATA, "standalone-restart.request")
             value = {"generation": live["generation"], "request_id": uuid.uuid4().hex,
                      "requested_at": time.time()}
-            fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".restart.")
+            tmp = None
             try:
+                fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".restart.")
                 with os.fdopen(fd, "w", encoding="utf-8") as handle:
                     json.dump(value, handle)
                     handle.flush()
@@ -677,13 +728,54 @@ def _restart_gateway():
                     os.fsync(directory)
                 finally:
                     os.close(directory)
+            except OSError:
+                return False
             finally:
-                with suppress(OSError):
-                    os.unlink(tmp)
-        return
+                if tmp is not None:
+                    with suppress(OSError):
+                        os.unlink(tmp)
+        return True
     if _runtime_mode() != "hermes":
-        return
-    request_gateway_restart(DATA, AGENTS_DIR, os.getuid())
+        return True
+    return request_gateway_restart(DATA, AGENTS_DIR, os.getuid())
+
+
+def _restart_lineworks():
+    """= mcs_update.restart_lineworks, self-contained: after the tree
+    changed, kickstart the independent LINE WORKS adapter — a still
+    running old adapter rejects spec keys the new renderer writes and
+    holds every new card. A standalone host restarts it as its own
+    child; an unknown runtime restarts nothing. False only when the
+    request could not be issued."""
+    cfg = _runtime_config()
+    notify = cfg.get("notify")
+    if cfg.get("runtime_mode", "hermes") != "hermes" or not isinstance(notify, dict) \
+            or notify.get("interactive") != "lineworks":
+        return True
+    try:
+        subprocess.Popen(
+            ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/ai.mcs.lineworks"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, close_fds=True, start_new_session=True)
+    except OSError:
+        return False        # never issued; completion itself is never awaited
+    return True
+
+
+def _restart_services(result, gateway, lineworks=True):
+    """= mcs_update.restart_services after the durable bookkeeping of a
+    completed recovery. A lost gateway/host restart request is reported,
+    never returned as success (the journal is already consumed)."""
+    ok = _restart_gateway() if gateway else True
+    if lineworks:
+        ok = _restart_lineworks() and ok
+    if ok:
+        return 0
+    _report("restart_request_failed", "restart request not saved or started",
+            completed=result)
+    _notify("[MCS] 更新の復旧後に再起動要求を保存・起動できません。"
+            "更新記録と稼働プロセスを確認し、常駐プロセスを再起動してください。")
+    return 1
 
 
 def _clean_stale_git_locks():
@@ -1038,6 +1130,40 @@ def _loss_report(backup_path):
     return report
 
 
+_MAX_RECEIPT_BYTES = 16384      # = mcs_requests.MAX_COMMAND_BYTES
+
+
+def _approval_receipt(raw, command_id):
+    """= mcs_update._approval_receipt, self-contained (this tool must run
+    without the checkout): a scheduled receipt without ambiguous JSON
+    (duplicate keys, NaN/Infinity, oversized) or contradictory identity."""
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("duplicate_key")
+            result[key] = value
+        return result
+
+    def constant(_):
+        raise ValueError("invalid_number")
+
+    try:
+        if len(raw) > _MAX_RECEIPT_BYTES:
+            return None
+        receipt = json.loads(raw, object_pairs_hook=pairs,
+                             parse_constant=constant)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if (not isinstance(command_id, str) or not command_id.strip()
+            or not isinstance(receipt, dict) or receipt.get("scheduled") is not True
+            or receipt.get("command_id", command_id) != command_id
+            or receipt.get("outcome", "applied") != "applied"
+            or receipt.get("error") is not None):
+        return None
+    return receipt
+
+
 def _consent_for(report):
     """The newest ops.restore_approve receipt bound to this exact loss
     report, or None — an earlier update/rollback approval never counts."""
@@ -1046,40 +1172,132 @@ def _consent_for(report):
             Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error:
         return None
+    found = None
     try:
-        try:
-            rows = con.execute(
-                "SELECT command_id, receipt_json FROM command_receipts"
-                " WHERE outcome='applied'"
-                " ORDER BY processed_at DESC, rowid DESC").fetchall()
-        except sqlite3.Error:
-            return None
+        rows = con.execute(
+            "SELECT command_id, receipt_json FROM command_receipts"
+            " WHERE outcome='applied'"
+            " ORDER BY processed_at DESC, rowid DESC")
+        for cid, rj in rows:
+            if found is None and _bound_consent(rj, cid, report):
+                found = cid   # newest bound receipt; keep reading (unparsed)
+        # so an unreadable later row still fails closed, as fetchall() did
+    except sqlite3.Error:
+        return None
     finally:
         con.close()
-    for cid, rj in rows:
-        try:
-            rec = json.loads(rj)
-        except (json.JSONDecodeError, TypeError, RecursionError):
-            continue
-        if not isinstance(rec, dict):
-            continue
-        if rec.get("cmd") != "ops.restore_approve" \
-                or rec.get("scheduled") is not True:
-            continue
-        if rec.get("report_id") == report["report_id"] \
-                and rec.get("backup_sha256") == report["backup_sha256"] \
-                and rec.get("backup_schema") == report["backup_schema"]:
-            return cid
-    return None
+    return found
+
+
+def _bound_consent(raw, command_id, report):
+    """= mcs_update._bound_restore_consent."""
+    rec = _approval_receipt(raw, command_id)
+    return (rec is not None and rec.get("cmd") == "ops.restore_approve"
+            and type(rec.get("backup_schema")) is int
+            and rec.get("report_id") == report["report_id"]
+            and rec.get("backup_sha256") == report["backup_sha256"]
+            and rec.get("backup_schema") == report["backup_schema"])
+
+
+# = mcs_update staging ownership, self-contained.
+# The staging copy's journal record: the exact file this restore created.
+# Only a file proven to be that one (same name, regular, single link, our
+# uid, same device/inode) is ever cleaned up — never by name or age alone.
+_STAGING_NAME = re.compile(r"\.restore\.[A-Za-z0-9_]{8}\.db")
+_STAGING_KEYS = ("dev", "ino", "uid")
+
+
+def _staging_record(state):
+    """(state, applying, record) of a usable journal — OSError otherwise."""
+    if state.get("_corrupt"):
+        raise OSError("restore_staging_journal_corrupt")
+    applying = state.get("applying")
+    if not isinstance(applying, dict):
+        raise OSError("restore_staging_unjournaled")
+    record = applying.get("restore_staging")
+    if record is not None and not (
+            isinstance(record, dict) and set(record) == {"name", *_STAGING_KEYS}
+            and isinstance(record["name"], str) and _STAGING_NAME.fullmatch(record["name"])
+            and all(type(record[key]) is int for key in _STAGING_KEYS)):
+        raise OSError("restore_staging_record_invalid")
+    return applying, record
+
+
+def _staging_matches(dfd, record):
+    """None when the recorded name is gone; whether it is provably ours."""
+    try:
+        st = os.stat(record["name"], dir_fd=dfd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    return (stat.S_ISREG(st.st_mode) and st.st_nlink == 1
+            and st.st_uid == os.getuid() == record["uid"]
+            and (st.st_dev, st.st_ino) == (record["dev"], record["ino"]))
+
+
+def _settle_staging(directory):
+    """Under both locks, before a new copy: remove the recorded copy of an
+    interrupted restore, or keep everything and refuse when it cannot be
+    proven to be that copy."""
+    state = _load_state()
+    applying, record = _staging_record(state)
+    if record is None:
+        return
+    dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        matches = _staging_matches(dfd, record)
+        if matches is False:
+            raise OSError("restore_staging_identity_changed")
+        if matches:
+            os.unlink(record["name"], dir_fd=dfd)
+            os.fsync(dfd)
+    finally:
+        os.close(dfd)
+    applying.pop("restore_staging")
+    _save_state(state)
+
+
+def _release_staging(directory, record, journaled=True):
+    """After this attempt: remove our copy if it is still exactly ours and
+    drop its record; a mismatch keeps both for a human."""
+    dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        matches = _staging_matches(dfd, record)
+        if matches is False:
+            return
+        if matches:
+            os.unlink(record["name"], dir_fd=dfd)
+            os.fsync(dfd)
+    finally:
+        os.close(dfd)
+    if not journaled:
+        return
+    state = _load_state()
+    applying, current = _staging_record(state)
+    if current == record:
+        applying.pop("restore_staging")
+        _save_state(state)
 
 
 def _replace_database(backup_path, expected_sha, before_replace):
-    """Stage and verify the backup before checkpointing and replacing the live DB."""
+    """Stage and verify the backup before checkpointing and replacing the live DB.
+    The staging copy is journaled (applying.restore_staging) before any byte
+    of the backup is copied; there is no unjournaled fallback."""
     directory = os.path.dirname(LEDGER)
+    _settle_staging(directory)
     fd, temporary = tempfile.mkstemp(dir=directory, prefix=".restore.", suffix=".db")
+    created = os.fstat(fd)
+    own = {"name": os.path.basename(temporary), "dev": created.st_dev,
+           "ino": created.st_ino, "uid": created.st_uid}
+    journaled = False
     try:
-        with os.fdopen(fd, "wb") as dst, open(backup_path, "rb") as src:
-            shutil.copyfileobj(src, dst)
+        with os.fdopen(fd, "wb") as dst:
+            state = _load_state()
+            applying, _ = _staging_record(state)
+            applying["restore_staging"] = own
+            _save_state(state)
+            journaled = True
+            with open(backup_path, "rb") as src:
+                shutil.copyfileobj(src, dst)
             dst.flush()
             os.fsync(dst.fileno())
         if _file_sha256(temporary) != expected_sha:
@@ -1115,10 +1333,8 @@ def _replace_database(backup_path, expected_sha, before_replace):
     except sqlite3.Error as exc:
         raise OSError("restore_database_unverifiable") from exc
     finally:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
+        with suppress(OSError):          # never mask the restore's own failure
+            _release_staging(directory, own, journaled)
 
 
 def _record_hold(state, report, backup_path):
@@ -1357,9 +1573,8 @@ def recover(if_stale=False):
             _remove_marker()
             _report("resumed_done", "completed bookkeeping after crash")
             _notify("[MCS] 中断された更新の後処理を完了しました")
-            if _runtime_mode() == "standalone" or (applied and applied[-1].get("plugin_changed")):
-                _restart_gateway()
-            return 0
+            return _restart_services("resumed_done", _runtime_mode() == "standalone" or bool(
+                applied and applied[-1].get("plugin_changed")))
         if not applying:
             # pre-'applying' remnant: nothing was ever mutated
             return _finish(state, "interrupted_pre_merge", removed)
@@ -1435,9 +1650,8 @@ def recover(if_stale=False):
             _remove_marker()
             _report("resumed", "post-merge converged after crash")
             _notify("[MCS] 更新の中断を検出し、post-merge を完了しました")
-            if _runtime_mode() == "standalone" or applying.get("plugin_changed"):
-                _restart_gateway()
-            return 0
+            return _restart_services("resumed", _runtime_mode() == "standalone"
+                                     or bool(applying.get("plugin_changed")))
         if prev and head == prev:
             if held():
                 # a held restore resolves ONLY through the head==target
@@ -1490,9 +1704,9 @@ def _finish(state, result, removed):
     _save_state(state)
     _report(result, "removed locks: " + ",".join(removed))
     _notify(f"[MCS] 更新が中断され復旧しました: {result}")
-    if _runtime_mode() == "standalone":
-        _restart_gateway()
-    return 0
+    # = mcs_update._finish_recovery: the tree is back on prev, so the
+    # adapter needs no refresh; only the standalone host is re-requested
+    return _restart_services(result, _runtime_mode() == "standalone", lineworks=False)
 
 
 def _remove_marker():

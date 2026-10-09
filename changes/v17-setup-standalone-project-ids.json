@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "独立実行の初期設定で、不正なproject IDを黙って除外しない",
+  "summary": "独立実行（standalone）の初期設定で --plugin-project-ids に正の整数でない値が含まれていた場合、その値だけを黙って除いて保存していた問題を修正しました。Hermes接続の場合と同じく指定全体を受け付けず、初期設定を失敗として終了します。パスワードや.env、config.jsonには何も書き込みません。",
+  "upgrade": "追加設定は不要です。正しいproject IDだけを指定した初期設定の結果は変わりません。カンマ区切りに加えて [7,8] の形式も受け付けます。",
+  "details": [
+    "mcs_setup.cmd_initは、runtime_modeがstandaloneで --plugin-project-ids が指定されたとき、Hermes接続と同じ _project_ids_yaml で全体を検証し、不正ならキーチェーン・.env・config.jsonへの書込みより前に終了コード1で止める。",
+    "到達しない定期ジョブ用launchd plistの生成（_cron_plist と _desired_agents の分岐）を削除し、説明を独立実行の単一ホスト構成に合わせた。_calendar、CRON_TIMEOUT_S、_TIMEOUT_PL は独立実行の定期実行が使うため残す。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "tests/ops/test_mcs_setup_standalone_project_ids.py"
+  ]
+}

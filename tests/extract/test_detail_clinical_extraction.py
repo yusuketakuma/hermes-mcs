@@ -172,7 +172,7 @@ def test_actual_length_stop_splits_only_when_needed_and_preserves_full_coverage(
     def compact(text):
         return "".join(text.split())
     assert compact("".join(entry["text"] for entry in content["patient_context"])) == compact(body)
-    assert meta["extract_version"] == 6 and meta["patient_context_version"] == 2
+    assert meta["extract_version"] == extract_llm.EXTRACT_VERSION and meta["patient_context_version"] == 2
     assert meta["integrity"]["length_stops"] >= 1
     assert meta["integrity"]["chunk_size"] < extract_llm._CHUNK_SIZE
     assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == 0
@@ -230,7 +230,7 @@ def test_old_generation_valid_failed_and_checkpointed_rows_reenter_normal_pendin
     monkeypatch.setattr(extract_llm, "llm_extract", infer)
     result = extract_llm.run_pending(db, limit=3, budget_s=200)
     assert result["done"] == 2 and len(calls) == 2
-    assert all(json.loads(row[0])["extract_version"] == 6 for row in db.db.execute(
+    assert all(json.loads(row[0])["extract_version"] == extract_llm.EXTRACT_VERSION for row in db.db.execute(
         "SELECT meta FROM artifacts WHERE kind='extract_llm'"))
 
 
@@ -305,7 +305,7 @@ def test_parallel_dense_rows_keep_independent_source_bound_layouts(db, monkeypat
 def test_adaptive_layout_cannot_cross_generation_context_or_shape(db, bad):
     db.save_messages([_message(body="独居です。")])
     row = db.db.execute("SELECT * FROM messages").fetchone()
-    meta = {"hash": row["content_hash"], "ver": 6, "context": extract_llm._chunk_context(row, None, checkpoint=True),
+    meta = {"hash": row["content_hash"], "ver": extract_llm.EXTRACT_VERSION, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": -1, "chunk_size": 10, **bad}
     db.artifact_add("extract_llm_chunk", '{}', project_id=1, message_id=1, meta=meta)
     assert extract_llm._saved_chunk_size(db, row) == extract_llm._CHUNK_SIZE
@@ -480,7 +480,7 @@ def test_root_split_requires_explicit_piece_hash_but_legacy_empty_root_remains_v
     db.save_messages([_message(body=body)])
     row = db.db.execute("SELECT * FROM messages").fetchone()
     # Legacy complete index 0 may have no piece hash; it still proves coverage.
-    meta = {"hash": row["content_hash"], "ver": 6, "context": extract_llm._chunk_context(row, None, checkpoint=True),
+    meta = {"hash": row["content_hash"], "ver": extract_llm.EXTRACT_VERSION, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": 0, "chunk_size": 3000}
     db.artifact_add("extract_llm_chunk", '{}', project_id=1, message_id=1, meta=meta)
     assert extract_llm._saved_chunks(db, row) == {0: {}}

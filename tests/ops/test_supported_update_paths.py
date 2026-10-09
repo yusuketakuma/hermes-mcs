@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import time
 
 import pytest
 
@@ -308,7 +309,14 @@ def test_legacy_manual_reinstall_migration_and_restore(
     with pytest.raises(updater.RestoreConsentPending) as held:
         updater._restore_db(backup)
     _seed_consent(updater.LEDGER, backup, report=held.value.report)
+    state = updater.load_state()       # the rollback journal a real replace runs under
+    state["applying"] = {"tag": objects.target, "sha": objects.after,
+                         "prev_sha": objects.before, "rollback": True,
+                         "backup_path": backup, "at": time.time()}
+    updater.save_state(state)
     updater._restore_db(backup)
+    applying = updater.load_state()["applying"]
+    assert applying["backup_path"] == backup and "restore_staging" not in applying
     durable = {table: rows for table, rows in expected.items()
                if table != "notify_outbox" and not table.startswith("notification_")}
     _preserved(Path(updater.LEDGER), durable)

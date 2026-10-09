@@ -280,7 +280,7 @@ def apply_transport_begin(ledger, req, cfg, now=None) -> dict:
 
 _FINAL_DENIALS = frozenset({
     "hash_mismatch", "rev_mismatch", "epoch_mismatch",
-    "render_cancelled", "card_revoked"})
+    "render_cancelled", "card_revoked", "urgent_payload_invalid"})
 
 
 def _denial_is_final(db, delivery_id, reason) -> bool:
@@ -373,7 +373,11 @@ def _begin_check(db, req, cfg) -> str | None:
             ledger = SimpleNamespace(db=db)
             checked = notify_urgent.check_delivery(ledger, cfg, event)
             if not checked["ok"]:
-                return "urgent_source_changed"
+                # a corrupted notice can never grant: a final denial that
+                # retires its spec; every other reason stays transient
+                return ("urgent_payload_invalid"
+                        if checked["reason"] == "urgent_payload_invalid"
+                        else "urgent_source_changed")
             target = cards.urgent_thread_target(ledger, event, cfg)
             try:
                 spec = json.loads(render["spec_json"])
@@ -840,15 +844,31 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
     return receipt
 
 
+def hold_events(hold) -> list[int] | None:
+    """The outbox event ids a restore hold quarantined, or None when the
+    stored list is not exactly a JSON list of positive event ids. The one
+    reading shared by authorization and the rebind writes: a malformed
+    entry is never skipped, coerced or partly honoured."""
+    try:
+        events = json.loads(hold["events_json"] or "[]")
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if not isinstance(events, list) or not all(positive(e) for e in events):
+        return None
+    return events
+
+
 def _rebind_check(hold, card, req) -> str | None:
     """Verify an attempt-lost resolve against the scope reconcile
     captured when it held the scope — the render row is gone, so the
     hold record is the identity witness."""
     if hold["attempt_id"] != req["attempt_id"]:
         return "attempt_mismatch"
+    if hold_events(hold) is None:
+        return "hold_events_corrupt"
     try:
         scope = json.loads(hold["scope_json"] or "{}")
-    except (json.JSONDecodeError, TypeError, RecursionError):
+    except (ValueError, TypeError, RecursionError):
         return "hold_scope_corrupt"
     if not isinstance(scope, dict):
         return "hold_scope_corrupt"
@@ -883,7 +903,14 @@ def _rebind_apply(db, req, hold, card, now) -> None:
                         message_id=req.get("message_id") if delivered else None,
                         error_code=f"resolve:{req['result']}")
         return
-    if card is not None:
+    if card is not None and card["delivery_state"] == "revoked":
+        # a revocation is permanent (the shared settle contract): a proven
+        # delivery only binds the remote message the revoke must delete
+        if delivered and card["message_id"] is None:
+            db.execute(
+                "UPDATE notification_cards SET message_id=?,updated_at=? "
+                "WHERE card_id=?", (str(req["message_id"]), now, card["card_id"]))
+    elif card is not None:
         if delivered:
             db.execute(
                 "UPDATE notification_cards SET message_id=?,"
@@ -901,11 +928,8 @@ def _rebind_apply(db, req, hold, card, now) -> None:
         "WHERE delivery_id=? AND state='held'",
         ("delivered" if delivered else "not_sent",
          now, req["delivery_id"]))
-    try:
-        eids = json.loads(hold["events_json"] or "[]")
-    except (json.JSONDecodeError, TypeError):
-        eids = []
-    for eid in eids:
+    # _rebind_check refused a hold whose list is not positive ids
+    for eid in hold_events(hold) or []:
         if delivered:
             # the remote card exists — the intent's work is done
             db.execute(

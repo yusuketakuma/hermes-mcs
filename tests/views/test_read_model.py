@@ -9,6 +9,7 @@ import pytest
 
 import ledger as _ledger_mod
 import read_model
+from semantic_projection import PROJECTION_VERSION
 from semantic_testkit import _ledger, _message, _patient
 
 SECRET = "SYNTHETIC_BODY_NEVER_IN_AGGREGATE_7x2"
@@ -23,6 +24,8 @@ def _db(tmp_path, mids=(1, 2, 3)):
 
 
 def _artifact(db, kind, mid, content, meta):
+    if kind in ("canonical_projection", "semantic_facts_v4") and isinstance(meta, dict):
+        meta = {"projection_version": PROJECTION_VERSION, **meta}
     db.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta,"
         "created_at) VALUES(?,1,?,?,?,?)",
@@ -369,5 +372,43 @@ def test_malformed_newer_projection_keeps_usable_current_row(tmp_path):
         rec = read_model.read_model(db.db)["records"][0]
         assert rec["extraction"]["canonical_projection"]["state"] == "current"
         assert [f["fact_id"] for f in rec["facts"]] == ["valid"]
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("kind", ["canonical_projection", "semantic_facts_v4"])
+@pytest.mark.parametrize("version,current", [(PROJECTION_VERSION - 1, False), (None, False),
+                                            (str(PROJECTION_VERSION), False),
+                                            (PROJECTION_VERSION, True), (float(PROJECTION_VERSION), True)])
+def test_machine_read_model_uses_the_same_public_projection_version(tmp_path, kind, version, current):
+    db = _db(tmp_path, (1,))
+    try:
+        _artifact(db, kind, 1, {"canonical_facts": [{"fact_id": "published",
+                  "statement": "synthetic quantity", "evidence_ids": ["e1"]},
+                  {"fact_id": "linked", "evidence_ids": ["e2"]}],
+                  "canonical_relations": [{"left_fact_id": "published", "right_fact_id": "linked",
+                                           "type": "COMPLEMENTS"}]},
+                  {"hash": _hash_of(db, 1), "engine_version": 4, "projection_version": version})
+        changes = db.db.total_changes
+        for scope in ("aggregate", "detail"):
+            rec = read_model.read_model(db.db, scope=scope)["records"][0]
+            assert rec["extraction"][kind]["state"] == ("current" if current else "stale")
+            assert bool(rec["facts"]) is current
+            assert bool(rec["relations"]) is current
+        assert db.db.total_changes == changes
+    finally:
+        db.close()
+
+
+def test_newer_old_version_row_cannot_displace_the_current_machine_facts(tmp_path):
+    db = _db(tmp_path, (1,))
+    try:
+        for version, fid in ((PROJECTION_VERSION, "current"), (3, "old")):
+            _artifact(db, "canonical_projection", 1,
+                      {"canonical_facts": [{"fact_id": fid}]},
+                      {"hash": _hash_of(db, 1), "projection_version": version})
+        rec = read_model.read_model(db.db)["records"][0]
+        assert rec["extraction"]["canonical_projection"]["state"] == "current"
+        assert [fact["fact_id"] for fact in rec["facts"]] == ["current"]
     finally:
         db.close()

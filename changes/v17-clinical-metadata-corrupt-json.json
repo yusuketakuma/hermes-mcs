@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "読めない取得記録で臨床データの収集が止まる問題を修正",
+  "summary": "保存された臨床データの取得位置や項目定義が深いJSONで読み取れない場合も、他の対象の取得を続行します。取得位置は最初から確認し直し、読めない項目定義を測定値の取得や表示に採用しません。",
+  "upgrade": "追加設定は不要です。clinical_metadataを有効にしている場合に適用されます。既存の項目定義の履歴は削除しません。",
+  "details": ["進捗と項目定義のJSON読取りに既存のloads_dictを使用し、SQLiteが有効と判定してもPythonで解釈できない深いJSONを不採用にする。"],
+  "refs": ["mcs/ingest/project_metadata.py", "tests/ingest/test_clinical_metadata_acquisition.py"]
+}

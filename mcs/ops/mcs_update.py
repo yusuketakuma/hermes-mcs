@@ -31,6 +31,7 @@ import os
 import re
 import runpy
 import shutil
+import signal
 import sqlite3
 import stat
 import subprocess
@@ -242,13 +243,54 @@ def _acquire_run_lock_wait(tries: int = RUN_LOCK_TRIES) -> int | None:
 
 # ------------------------------------------------------------------ git
 
+GIT_TERM_GRACE_S = 2      # an owned git removes its own *.lock on SIGTERM
+
+
+def _run_owned(argv: list[str], timeout: float, env: dict,
+               stdin=None) -> subprocess.CompletedProcess:
+    """subprocess.run(capture_output, text) for one command in its own
+    session. On timeout or interruption that session is stopped by
+    _stop_owned and the exception re-raised. Worst case: timeout +
+    GIT_TERM_GRACE_S + the bounded reap."""
+    child = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, env=env,
+                             start_new_session=True)
+    try:
+        out, err = child.communicate(timeout=timeout)
+    except BaseException:
+        _stop_owned(child)
+        raise
+    return subprocess.CompletedProcess(argv, child.returncode, out, err)
+
+
+def _stop_owned(child) -> None:
+    """SIGTERM first so git cleans its lock, SIGKILL after the grace,
+    then a bounded reap. Only a still-unreaped leader's group is
+    signalled — its pid (= group id) cannot have been reused."""
+    if child.returncode is None:
+        with suppress(OSError):
+            os.killpg(child.pid, signal.SIGTERM)
+        with suppress(BaseException):
+            child.communicate(timeout=GIT_TERM_GRACE_S)
+        if child.returncode is None:
+            with suppress(OSError):
+                os.killpg(child.pid, signal.SIGKILL)
+    with suppress(BaseException):
+        child.communicate(timeout=5)
+    if child.returncode is None:
+        with suppress(BaseException):
+            child.wait(timeout=5)
+    for stream in (child.stdout, child.stderr):
+        if stream is not None:
+            with suppress(OSError):
+                stream.close()   # an escaped holder must not leak our fds
+
+
 def _git(args: list[str], timeout: int = T_GIT) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env.update(GIT_ENV)
     try:
-        result = subprocess.run(["git", "-C", REPO, *args],
-                                capture_output=True, text=True,
-                                timeout=timeout, env=env)
+        result = _run_owned(["git", "-C", REPO, *args], timeout, env)
         if result.returncode != 0:
             result.stderr = f"exit={result.returncode}"
         return result
@@ -506,16 +548,20 @@ def precheck_tag(tag: str) -> list[str]:
     # Rule-based ignored-path check (S16): the tag must not track
     # anything the repo's own ignore rules would cover.
     if paths:
-        r = subprocess.run(
-            ["git", "-C", REPO, "check-ignore", "-z", "--stdin",
-             "--no-index"],
-            input="\0".join(paths), capture_output=True, text=True,
-            timeout=T_GIT)
-        if r.returncode == 0:
-            errors.extend(f"ignored_path_tracked: {name}"
-                          for name in r.stdout.split("\0") if name)
-        elif r.returncode > 1:
+        try:
+            r = subprocess.run(
+                ["git", "-C", REPO, "check-ignore", "-z", "--stdin",
+                 "--no-index"],
+                input="\0".join(paths), capture_output=True, text=True,
+                timeout=T_GIT)
+        except (OSError, subprocess.TimeoutExpired):
             errors.append("check_ignore_failed")
+        else:
+            if r.returncode == 0:
+                errors.extend(f"ignored_path_tracked: {name}"
+                              for name in r.stdout.split("\0") if name)
+            elif r.returncode > 1:
+                errors.append("check_ignore_failed")
     # untracked collision: merge would refuse, but name the files first
     untracked = set(_git_out(
         ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"))
@@ -1014,16 +1060,21 @@ def restart_lineworks(cfg: dict) -> None:
     adapter rejects spec keys the new renderer writes and holds every
     new card. A standalone host restarts it as its own child."""
     ntf = cfg.get("notify")
-    if mcs_runtime.standalone(cfg) or not isinstance(ntf, dict) \
+    if cfg.get("runtime_mode", "hermes") != "hermes" or not isinstance(ntf, dict) \
             or ntf.get("interactive") != "lineworks":
-        return
-    with suppress(OSError):  # not installed = nothing running to refresh
+        return             # standalone host / unknown runtime: nothing to kick
+    try:
         subprocess.Popen(
             ["launchctl", "kickstart", "-k",
              f"gui/{_uid()}/ai.mcs.lineworks"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL, close_fds=True,
             start_new_session=True)
+    except OSError:
+        # the request was never issued — the same human boundary as a
+        # lost gateway restart request (completion is never awaited)
+        _enqueue_notice("[MCS] LINE WORKSアダプターの再起動要求を起動できません。"
+                        "更新記録と稼働プロセスを確認し、アダプターを再起動してください。")
 
 
 def restart_services(cfg: dict, plugin_changed) -> None:
@@ -1068,6 +1119,36 @@ def _approval_receipt(raw, command_id):
     return receipt
 
 
+def _scan_receipt(executed, applies, rollbacks, consumed, cid, rj, at, rowid) -> None:
+    """One receipt row of scan_pending_approvals, in processed_at order."""
+    if cid in executed:
+        return
+    if at is not None and (type(at) not in (int, float) or not 0 <= at < 1e12):
+        return
+    rec = _approval_receipt(rj, cid)
+    if rec is None:
+        return
+    cmd = rec.get("cmd")
+    if cmd == "ops.update_apply":
+        base = rec.get("base_sha")
+        if _ver_key(rec.get("tag")) is None \
+                or not isinstance(rec.get("target_sha"), str) \
+                or not HEX_RE.fullmatch(rec["target_sha"]) \
+                or (base is not None and (not isinstance(base, str)
+                                          or not HEX_RE.fullmatch(base))):
+            return
+        applies.append({"command_id": cid, "tag": rec.get("tag"),
+                        "target_sha": rec.get("target_sha"),
+                        "base_sha": base,
+                        "at": at, "rowid": rowid})
+    elif cmd == "ops.update_rollback":
+        consumed.extend((p["command_id"], "vetoed")
+                        for p in applies)
+        applies.clear()
+        rollbacks.append({"command_id": cid, "rollback": True,
+                          "at": at, "rowid": rowid})
+
+
 def scan_pending_approvals(state: dict
                            ) -> tuple[list[dict], list[str]]:
     """Read command_receipts read-only (no Ledger init — R16).
@@ -1084,46 +1165,24 @@ def scan_pending_approvals(state: dict
             Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error:
         return [], []
-    try:
-        rows = con.execute(
-            "SELECT command_id, receipt_json, processed_at, rowid"
-            " FROM command_receipts WHERE outcome='applied'"
-            " ORDER BY processed_at, rowid").fetchall()
-    except sqlite3.Error:
-        return [], []
-    finally:
-        con.close()
     executed = state.get("executed", {})
     applies: list[dict] = []
     rollbacks: list[dict] = []
     consumed: list[tuple[str, str]] = []
-    for cid, rj, at, rowid in rows:
-        if cid in executed:
-            continue
-        if at is not None and (type(at) not in (int, float) or not 0 <= at < 1e12):
-            continue
-        rec = _approval_receipt(rj, cid)
-        if rec is None:
-            continue
-        cmd = rec.get("cmd")
-        if cmd == "ops.update_apply":
-            base = rec.get("base_sha")
-            if _ver_key(rec.get("tag")) is None \
-                    or not isinstance(rec.get("target_sha"), str) \
-                    or not HEX_RE.fullmatch(rec["target_sha"]) \
-                    or (base is not None and (not isinstance(base, str)
-                                              or not HEX_RE.fullmatch(base))):
-                continue
-            applies.append({"command_id": cid, "tag": rec.get("tag"),
-                            "target_sha": rec.get("target_sha"),
-                            "base_sha": base,
-                            "at": at, "rowid": rowid})
-        elif cmd == "ops.update_rollback":
-            consumed.extend((p["command_id"], "vetoed")
-                            for p in applies)
-            applies.clear()
-            rollbacks.append({"command_id": cid, "rollback": True,
-                              "at": at, "rowid": rowid})
+    try:
+        # streamed in the same order; any unreadable row still fails the
+        # whole scan closed, exactly like the former fetchall()
+        rows = con.execute(
+            "SELECT command_id, receipt_json, processed_at, rowid"
+            " FROM command_receipts WHERE outcome='applied'"
+            " ORDER BY processed_at, rowid")
+        for cid, rj, at, rowid in rows:
+            _scan_receipt(executed, applies, rollbacks, consumed,
+                          cid, rj, at, rowid)
+    except sqlite3.Error:
+        return [], []
+    finally:
+        con.close()
     # same-tag duplicates: the NEWEST receipt wins (it carries the
     # freshest sha pin / review context) — older ones are superseded
     by_tag: dict[str, dict] = {}
@@ -2133,29 +2192,34 @@ def _restore_loss_report(backup_path: str) -> dict:
                   for t in _STORED_TABLES}
         effects = {t: _table_count(live, t) - _table_count(back, t)
                    for t in _EFFECT_TABLES}
+    except (sqlite3.Error, OSError) as e:
+        raise UpdateError("restore_report_read_failed") from e
     finally:
         live.close()
         back.close()
-    metrics = {"v": 1,
-               "live_content_sha256": live_digest,
-               "backup_sha256": _file_sha256(backup_path),
-               "backup_schema": _db_version(backup_path),
-               "watermark_ts": watermark,
-               "stored_since_backup": stored,
-               "external_effects": effects,
-               "intervening_messages": sum(max(0, n)
-                                           for n in stored.values()),
-               "external_effect_rows": sum(max(0, n)
-                                           for n in effects.values())}
-    metrics["report_id"] = hashlib.sha256(
-        json.dumps(metrics, sort_keys=True, separators=(",", ":"),
-                   ensure_ascii=False).encode("utf-8")).hexdigest()
-    report = dict(metrics, computed_at=time.time())
-    atomic_write(RESTORE_REPORT_PATH,
-                 lambda f: json.dump(report, f, ensure_ascii=False,
-                                     sort_keys=True),
-                 tmp_prefix=".rreport.")
-    return report
+    try:
+        metrics = {"v": 1,
+                   "live_content_sha256": live_digest,
+                   "backup_sha256": _file_sha256(backup_path),
+                   "backup_schema": _db_version(backup_path),
+                   "watermark_ts": watermark,
+                   "stored_since_backup": stored,
+                   "external_effects": effects,
+                   "intervening_messages": sum(max(0, n)
+                                               for n in stored.values()),
+                   "external_effect_rows": sum(max(0, n)
+                                               for n in effects.values())}
+        metrics["report_id"] = hashlib.sha256(
+            json.dumps(metrics, sort_keys=True, separators=(",", ":"),
+                       ensure_ascii=False).encode("utf-8")).hexdigest()
+        report = dict(metrics, computed_at=time.time())
+        atomic_write(RESTORE_REPORT_PATH,
+                     lambda f: json.dump(report, f, ensure_ascii=False,
+                                         sort_keys=True),
+                     tmp_prefix=".rreport.")
+        return report
+    except OSError as e:
+        raise UpdateError("restore_report_publish_failed") from e
 
 
 def _restore_consent(report: dict) -> str | None:
@@ -2168,28 +2232,30 @@ def _restore_consent(report: dict) -> str | None:
             Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error:
         return None
+    found = None
     try:
-        try:
-            rows = con.execute(
-                "SELECT command_id, receipt_json FROM command_receipts"
-                " WHERE outcome='applied' ORDER BY processed_at DESC,"
-                " rowid DESC").fetchall()
-        except sqlite3.Error:
-            return None
+        rows = con.execute(
+            "SELECT command_id, receipt_json FROM command_receipts"
+            " WHERE outcome='applied' ORDER BY processed_at DESC,"
+            " rowid DESC")
+        for cid, rj in rows:
+            if found is None and _bound_restore_consent(rj, cid, report):
+                found = cid   # newest bound receipt; keep reading (unparsed)
+        # so an unreadable later row still fails closed, as fetchall() did
+    except sqlite3.Error:
+        return None
     finally:
         con.close()
-    for cid, rj in rows:
-        rec = _approval_receipt(rj, cid)
-        if rec is None:
-            continue
-        if rec.get("cmd") != "ops.restore_approve" \
-                or type(rec.get("backup_schema")) is not int:
-            continue
-        if rec.get("report_id") == report["report_id"] \
-                and rec.get("backup_sha256") == report["backup_sha256"] \
-                and rec.get("backup_schema") == report["backup_schema"]:
-            return cid
-    return None
+    return found
+
+
+def _bound_restore_consent(raw, command_id, report: dict) -> bool:
+    rec = _approval_receipt(raw, command_id)
+    return (rec is not None and rec.get("cmd") == "ops.restore_approve"
+            and type(rec.get("backup_schema")) is int
+            and rec.get("report_id") == report["report_id"]
+            and rec.get("backup_sha256") == report["backup_sha256"]
+            and rec.get("backup_schema") == report["backup_schema"])
 
 
 def _reconcile_restored() -> None:
@@ -2210,13 +2276,104 @@ def _reconcile_restored() -> None:
         restored.close()
 
 
-def _replace_database(backup_path, expected_sha, before_replace):
-    """Stage and verify the backup before checkpointing and replacing the live DB."""
-    directory = os.path.dirname(LEDGER)
-    fd, temporary = tempfile.mkstemp(dir=directory, prefix=".restore.", suffix=".db")
+# The staging copy's journal record: the exact file this restore created.
+# Only a file proven to be that one (same name, regular, single link, our
+# uid, same device/inode) is ever cleaned up — never by name or age alone.
+_STAGING_NAME = re.compile(r"\.restore\.[A-Za-z0-9_]{8}\.db")
+_STAGING_KEYS = ("dev", "ino", "uid")
+
+
+def _staging_record(state):
+    """(state, applying, record) of a usable journal — OSError otherwise."""
+    if state.get("_corrupt"):
+        raise OSError("restore_staging_journal_corrupt")
+    applying = state.get("applying")
+    if not isinstance(applying, dict):
+        raise OSError("restore_staging_unjournaled")
+    record = applying.get("restore_staging")
+    if record is not None and not (
+            isinstance(record, dict) and set(record) == {"name", *_STAGING_KEYS}
+            and isinstance(record["name"], str) and _STAGING_NAME.fullmatch(record["name"])
+            and all(type(record[key]) is int for key in _STAGING_KEYS)):
+        raise OSError("restore_staging_record_invalid")
+    return applying, record
+
+
+def _staging_matches(dfd, record) -> bool | None:
+    """None when the recorded name is gone; whether it is provably ours."""
     try:
-        with os.fdopen(fd, "wb") as dst, open(backup_path, "rb") as src:
-            shutil.copyfileobj(src, dst)
+        st = os.stat(record["name"], dir_fd=dfd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    return (stat.S_ISREG(st.st_mode) and st.st_nlink == 1
+            and st.st_uid == os.getuid() == record["uid"]
+            and (st.st_dev, st.st_ino) == (record["dev"], record["ino"]))
+
+
+def _settle_staging(directory) -> None:
+    """Under both locks, before a new copy: remove the recorded copy of an
+    interrupted restore, or keep everything and refuse when it cannot be
+    proven to be that copy."""
+    state = load_state()
+    applying, record = _staging_record(state)
+    if record is None:
+        return
+    dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        matches = _staging_matches(dfd, record)
+        if matches is False:
+            raise OSError("restore_staging_identity_changed")
+        if matches:
+            os.unlink(record["name"], dir_fd=dfd)
+            os.fsync(dfd)
+    finally:
+        os.close(dfd)
+    applying.pop("restore_staging")
+    save_state(state)
+
+
+def _release_staging(directory, record, journaled=True) -> None:
+    """After this attempt: remove our copy if it is still exactly ours and
+    drop its record; a mismatch keeps both for a human."""
+    dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        matches = _staging_matches(dfd, record)
+        if matches is False:
+            return
+        if matches:
+            os.unlink(record["name"], dir_fd=dfd)
+            os.fsync(dfd)
+    finally:
+        os.close(dfd)
+    if not journaled:
+        return
+    state = load_state()
+    applying, current = _staging_record(state)
+    if current == record:
+        applying.pop("restore_staging")
+        save_state(state)
+
+
+def _replace_database(backup_path, expected_sha, before_replace):
+    """Stage and verify the backup before checkpointing and replacing the live DB.
+    The staging copy is journaled (applying.restore_staging) before any byte
+    of the backup is copied; there is no unjournaled fallback."""
+    directory = os.path.dirname(LEDGER)
+    _settle_staging(directory)
+    fd, temporary = tempfile.mkstemp(dir=directory, prefix=".restore.", suffix=".db")
+    created = os.fstat(fd)
+    own = {"name": os.path.basename(temporary), "dev": created.st_dev,
+           "ino": created.st_ino, "uid": created.st_uid}
+    journaled = False
+    try:
+        with os.fdopen(fd, "wb") as dst:
+            state = load_state()
+            applying, _ = _staging_record(state)
+            applying["restore_staging"] = own
+            save_state(state)
+            journaled = True
+            with open(backup_path, "rb") as src:
+                shutil.copyfileobj(src, dst)
             dst.flush()
             os.fsync(dst.fileno())
         if _file_sha256(temporary) != expected_sha:
@@ -2252,10 +2409,8 @@ def _replace_database(backup_path, expected_sha, before_replace):
     except sqlite3.Error as exc:
         raise OSError("restore_database_unverifiable") from exc
     finally:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
+        with suppress(OSError):          # never mask the restore's own failure
+            _release_staging(directory, own, journaled)
 
 
 def _restore_db(backup_path: str, on_hold=None) -> None:
@@ -2278,6 +2433,8 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
     if not ledger.valid_mcs_db(backup_path):
         raise UpdateError("backup_invalid: " + backup_path)
     live_ver = _db_version(LEDGER)
+    if live_ver is None:
+        raise UpdateError("live_db_unreadable")
     back_ver = _db_version(backup_path)
     if live_ver is not None and live_ver == back_ver:
         # Nothing to replace — but a crash between the post-swap marker

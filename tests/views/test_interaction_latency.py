@@ -255,7 +255,7 @@ def test_published_snapshot_view_accepts_explicit_policy_and_cli_defaults_closed
 
 @pytest.mark.parametrize("extra,released", [
     ([(30, "薬剤師", "家族")], False),
-    ([(30, "薬剤師", "家族"), (40, "家族", "医師")], True),
+    ([(30, "薬剤師", "家族"), (40, "家族", "医師")], False),
 ])
 def test_suppressed_cell_count_cannot_be_derived_from_coverage(store, extra, released):
     # Given: a releasable doctor-to-nurse cell (n=2) plus single-pair cells.
@@ -275,6 +275,33 @@ def test_suppressed_cell_count_cannot_be_derived_from_coverage(store, extra, rel
     assert bool(result["role_cells"]) is released
 
 
+@pytest.mark.parametrize("shared", ["root_actor", "reply_actor", "project"])
+def test_suppressed_residual_keeps_actor_and_project_thresholds(store, shared):
+    pair(store, 10)
+    pair(store, 20, pid=2)
+    for i, (start, end) in enumerate((("薬剤師", "家族"), ("家族", "医師"))):
+        mid = 30 + i * 10
+        pid = 3 if shared == "project" else 3 + i
+        post(store, mid, pid=pid, profession=start, replies=1,
+             actor=900 if shared == "root_actor" else mid)
+        post(store, mid + 1, pid=pid, parent=mid, ts=NOW + 60,
+             profession=end, actor=901 if shared == "reply_actor" else mid + 1)
+    result = measure(store, interaction_privacy_policy=POLICY)
+    assert result["coverage"]["valid_time_pairs"] == 4
+    assert result["role_cells"] == []
+    assert result["role_sources"] is None
+
+
+def test_suppressed_residual_with_all_thresholds_keeps_releasable_cell(store):
+    pair(store, 10)
+    pair(store, 20, pid=2)
+    pair(store, 30, pid=3, start="薬剤師", end="家族")
+    pair(store, 40, pid=4, start="家族", end="医師")
+    result = measure(store, interaction_privacy_policy=POLICY)
+    assert len(result["role_cells"]) == 1
+    assert result["role_cells"][0]["n"] == 2
+
+
 @pytest.mark.parametrize("profession", ["医師", "UNMAPPED_CANARY"])
 def test_absent_policy_never_signals_role_resolution(store, profession):
     # Given: resolvable or unresolvable roles under an absent owner policy.
@@ -284,3 +311,15 @@ def test_absent_policy_never_signals_role_resolution(store, profession):
     # Then: null either way, so null-vs-value cannot reveal a resolved pair.
     assert result["coverage"]["unknown_role_pairs"] is None
     assert result["role_sources"] is None
+
+
+def test_absent_policy_never_reads_roster_or_retains_role_groups(store, monkeypatch):
+    pair(store, 10, start="", end="")
+    pair(store, 20, pid=2, start="", end="")
+    monkeypatch.setattr(mcs_stats, "get_project_metadata",
+                        lambda *_args, **_kwargs: pytest.fail("non-public role resolution"))
+    result = measure(store)
+    assert result["coverage"]["valid_time_pairs"] == 2
+    assert result["coverage"]["unknown_role_pairs"] is None
+    assert result["role_sources"] is None and result["role_cells"] == []
+    assert result["role_cells_reason"] == "owner_policy_required"

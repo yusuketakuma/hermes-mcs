@@ -91,7 +91,7 @@ F-2のルール緊急度問題は1.0.13で是正予定。#17と#19（残件、�
 **設計方針**
 - **12a（表示。plugin 不要）**
   - `structured_view.message_urgency(db, mid)` を新設し、`notify_flush._urgency` と `mcs_signals._urgency_high` の重複を置換する。level と source（llm / rule）を返す。
-  - `_head_lines` に 1 行足す: 「緊急度: 高（AI抽出）」/「緊急語を含む（機械照合）」。`structured_lines` は text / card 共有（:325）なので同時に反映される。
+  - `_head_lines` に 1 行足す: 「🚨 緊急度高」（LLM 判定）/「🚨」（機械照合。1.0.17 で全レイアウトの表記を統一）。`structured_lines` は text / card 共有（:325）なので同時に反映される。
   - LLM 由来は `latest_artifact(db,'extract_llm',mid)` で読む。canonical_projection が shadow するため、`latest_fact_artifact` では拾えない。
   - 既存カードは sweep が source_fp（`fact_generations`）差分で update render する（`notify_render.py:165-211`、`notify_cards.py:1847-1911`）。編集は通知を鳴らさない。
 - **12b（再通知。通知層の機能で、signal 型は増やさない）**: 新モジュール `mcs/notify/notify_urgent.py`（`ledger` 引数だけ）を `run_check._deliver` の flush 直前に呼ぶ。

@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "通知先変更後の旧配送と長いタスク一覧を修正",
+  "summary": "Slack・Discord・LINE WORKSは送信直前に現在の配送世代を照合し、古い世代の未送信カード・本文・添付を保留します。Discordの長いタスク一覧は全文を分割表示し、各タスクの操作ボタンを対応する表示に残します。",
+  "upgrade": "Hermes利用時は対象gateway、独立モードでは対象接続を再起動して新しいworkerを読み込んでください。配送世代が不明な旧フラグも保留されるため、runnerが現在のフラグを再公開してから配送します。配送済み・結果不明の記録は変更せず、未送信の旧世代partsは元の配送世代が復旧した場合のみ再開します。",
+  "details": ["永続grantの保存・receipt・結果不明の保留条件は維持する。", "フラグの再公開はJSONの型も照合し、破損したboolean・小数の配送世代を正しい整数へ修復する。通常の時刻更新だけでは再公開しない。", "Discordの即時応答と遅延応答で同じ全文分割を使い、Slack・LINE WORKSの既存分割は維持する。"],
+  "refs": ["adapters/common/worker.py", "adapters/common/text.py", "mcs/notify/notify_cards.py"]
+}

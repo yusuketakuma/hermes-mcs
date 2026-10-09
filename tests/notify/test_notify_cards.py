@@ -1083,7 +1083,9 @@ def test_drain_int_two_pass_and_results(led, tmp_path):
     res_dir = root / "cmd_results"
     results = sorted(p.name for p in res_dir.iterdir())
     assert results == [_uuid(1) + ".json", _uuid(2) + ".json"]
-    assert not list(int_dir.iterdir())
+    assert not list(int_dir.glob("*.json"))
+    assert {p.name for p in int_dir.iterdir()} == {notify_cmds._DRAIN_CURSOR}
+    assert set(json.loads((int_dir / notify_cmds._DRAIN_CURSOR).read_text())) == {"after"}
     row = led.db.execute(
         "SELECT state,message_id FROM notification_delivery_attempts "
         "WHERE attempt_id=?", ("0" * 15 + "7",)).fetchone()

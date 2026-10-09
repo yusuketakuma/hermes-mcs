@@ -202,8 +202,11 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
     it was minted by another projection version, which a new row
     supersedes."""
     from semantic_projection import (PROJECTION_VERSION,
-                                     project_v2_doc_legacy,
-                                     projection_current)
+                                      project_v2_doc_legacy,
+                                      projection_current)
+    from semantic_audit import _published_quantity_findings
+    if _published_quantity_findings(v2_doc):
+        return None
     doc_hash = _doc_hash(v2_doc)
     existing = current_v4(ledger, mid, member["revision"])
     if existing is not None and projection_current(existing["meta"], doc_hash):
@@ -258,6 +261,9 @@ def reproject_doc(ledger, mid: int, meta: dict):
     if not isinstance(doc.get("coverage"), dict) \
             or doc["coverage"].get("status") != "complete":
         return None, "coverage_incomplete"
+    from semantic_audit import _published_quantity_findings
+    if _published_quantity_findings(doc):
+        return None, "quantity_unverified"
     if fact_audit_verdict(_current(ledger, KIND_FACT_AUDIT, mid, fp, policy),
                           doc_hash) != "PASS":
         return None, "audit_not_pass"
@@ -283,7 +289,7 @@ def reproject_stale(ledger, scfg: dict,
     readers pick it as the newest ``artifact_id`` and the drain's own
     reuse checks accept it. A row whose document cannot be re-derived
     safely is marked ``reproject_skipped`` (so it cannot starve the
-    bound) and keeps serving until its message is drained again. Run it
+    bound); an old-version row stays outside the current read model. Run it
     after ``invalidate_projections`` in the same tick."""
     from mcs_queries import current_projection_id, current_v4_id
     from semantic_policy import KIND_FACT_PROJ
@@ -301,7 +307,7 @@ def reproject_stale(ledger, scfg: dict,
         "ON m.message_id=a.message_id AND m.project_id=a.project_id "
         "WHERE a.kind IN (?,?) AND m.body_state IS NOT 'deleted' "
         "AND a.artifact_id=CASE WHEN a.kind=? "
-        f"THEN {current_projection_id('m')} ELSE {current_v4_id('m')} END "
+        f"THEN {current_projection_id('m', require_version=False)} ELSE {current_v4_id('m', require_version=False)} END "
         # CASE, not AND: the subquery term above is evaluated last, so a
         # bare json_extract here would raise on a malformed meta row.
         "AND CASE WHEN json_valid(a.meta) AND json_type(a.meta)='object' "
@@ -310,9 +316,10 @@ def reproject_stale(ledger, scfg: dict,
         "ORDER BY a.artifact_id LIMIT ?",
         (KIND_FACT_PROJ, KIND_V4, KIND_FACT_PROJ, PROJECTION_VERSION,
          PROJECTION_VERSION, limit)).fetchall()
+    reinterpreted = {}
     for row in rows:
         meta = loads_dict(row["meta"])
-        content = None
+        content, doc = None, None
         try:
             doc, reason = (reproject_doc(ledger, row["message_id"], meta)
                            if meta is not None
@@ -350,7 +357,355 @@ def reproject_stale(ledger, scfg: dict,
                 "DELETE FROM artifacts WHERE kind='patient_rollup' "
                 "AND project_id=?", (row["project_id"],))
         out["reprojected"] += 1
+        if doc is not None:
+            reinterpreted.setdefault(
+                (row["project_id"], row["message_id"]), (doc, meta))
+    for (pid, mid), (doc, meta) in reinterpreted.items():
+        _reinterpret_loops(ledger, scfg, pid, mid, doc, meta, out)
+    used = _rebuild_hint_docs(ledger, scfg, limit - len(rows), out)
+    _hold_upgraded_repairs(ledger, scfg, limit - len(rows) - used, out)
     return out
+
+
+# A fact entry's provenance text; a non-object entry or non-text value
+# reads as '' (same operand guard as mcs_queries.JSON_OBJECT_SQL).
+_FACT_OBJECT = "CASE WHEN f.type='object' THEN f.value ELSE '{}' END"
+_PROVENANCE = (f"CASE WHEN json_type({_FACT_OBJECT},'$.provenance')='text' "
+               f"THEN json_extract({_FACT_OBJECT},'$.provenance') ELSE '' END")
+
+_HELD_KINDS = ("semantic_summary", "semantic_audit", "semantic_coverage",
+               "semantic_facts_audit", "loop_candidate")
+
+
+def _count(out: dict, key: str) -> None:
+    out["skip_reasons"][key] = out["skip_reasons"].get(key, 0) + 1
+
+
+def _member_bundle(ledger, pid: int, mid: int, fp):
+    """(bundle, member) of the message's live thread, or (None, None)
+    when the stored generation ``fp`` is no longer the live one."""
+    from semantic_store import thread_bundle
+    row = ledger.db.execute(
+        "SELECT COALESCE(parent_id,message_id) r FROM messages "
+        "WHERE project_id=? AND message_id=?", (pid, mid)).fetchone()
+    bundle = thread_bundle(ledger, pid, row["r"]) if row else None
+    if bundle is None or bundle["source_fingerprint"] != fp:
+        return None, None
+    member = next((m for m in bundle["members"] if m["message_id"] == mid), None)
+    return (bundle, member) if member is not None else (None, None)
+
+
+def _reinterpret_loops(ledger, scfg, pid, mid, doc, meta, out) -> None:
+    """Loop candidates follow the current projection of the same audited
+    document: items it no longer yields stop being current (no model)."""
+    from semantic_policy import policy_fingerprint
+    from semantic_projection import project_v2_facts
+    if scfg.get("loop_mode", "off") == "off" \
+            or meta.get("policy_fingerprint") != policy_fingerprint(scfg):
+        return
+    bundle, _ = _member_bundle(ledger, pid, mid, meta.get("fingerprint"))
+    if bundle is None:
+        return
+    from semantic_loops import update_loops
+    try:
+        update_loops(ledger, pid, bundle, {mid: project_v2_facts(doc)}, None,
+                     scfg, time.monotonic() + 30)
+    except Exception:
+        _count(out, "loop_reinterpret_failed")
+
+
+def _hold_derivatives(ledger, pid: int, mid: int, fp: str,
+                      reason: str) -> None:
+    """Stop everything derived from a stored canonical document that is no
+    longer trusted from being current: every projection of the message's
+    generation, and the generation's summary/audit/coverage/fact audit and Loop
+    candidates. Rows stay as history; a summary is also marked stale so
+    the send gate holds any queued notice. Caller holds the transaction."""
+    from semantic_policy import KIND_FACT_PROJ
+    # Every publication of this message's generation, not only the one bound
+    # to the held document: readers pick the newest non-invalidated row, so
+    # an older document's row of the same generation would otherwise become
+    # current again. Other generations, messages and patients stay as they are.
+    ledger.db.execute(
+        "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true'),"
+        "'$.invalidated_reason',?) WHERE project_id=? AND message_id=? "
+        "AND kind IN (?,?) AND CASE WHEN json_valid(meta) "
+        "AND json_type(meta)='object' THEN json_extract(meta,'$.fingerprint')=? "
+        "AND json_extract(meta,'$.invalidated') IS NOT 1 END",
+        (reason, pid, mid, KIND_FACT_PROJ, KIND_V4, fp))
+    held = ("WHERE project_id=? AND message_id=? AND kind IN ({}) "
+            "AND CASE WHEN json_valid(meta) AND json_type(meta)='object' "
+            "THEN json_extract(meta,'$.fingerprint')=? "
+            "AND json_extract(meta,'$.invalidated') IS NOT 1 END")
+    # the summary first: its stale mark is what the send gate reads
+    ledger.db.execute(
+        "UPDATE artifacts SET meta=json_set(meta,'$.stale',json('true')) "
+        + held.format("?"), (pid, mid, "semantic_summary", fp))
+    ledger.db.execute(
+        "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true'),"
+        "'$.invalidated_reason',?) " + held.format(",".join("?" * len(_HELD_KINDS))),
+        (reason, pid, mid, *_HELD_KINDS, fp))
+    ledger.db.execute(
+        "DELETE FROM artifacts WHERE kind='patient_rollup' AND project_id=?",
+        (pid,))
+
+
+def _seed_rebuild(ledger, scfg, pid: int, mid: int, meta: dict):
+    """Queue one notification-free re-run of the message's thread unless
+    the generation is parked/failed (no new retry budget) or queued.
+    Runs inside the caller's transaction."""
+    if meta.get("needs_review"):
+        return "needs_review"
+    if meta.get("repaired"):
+        # re-running would re-audit the unrepaired base under a spent
+        # repair: the held thread waits for an explicit manual retry
+        return "repaired"
+    scope = scfg.get("project_ids")
+    if scope is not None and pid not in scope:
+        return "out_of_scope"
+    row = ledger.db.execute(
+        "SELECT COALESCE(parent_id,message_id) r FROM messages "
+        "WHERE project_id=? AND message_id=?", (pid, mid)).fetchone()
+    state = ledger.job_state("semantic", pid, row["r"]) if row else None
+    if state in ("failed", "pending"):
+        return f"job_{state}"
+    ledger._semantic_seed_tx(pid, [mid], {"source": "hint_rebuild",
+                                          "notification_free": True})
+    return None
+
+
+def _rebuild_hint_docs(ledger, scfg: dict, limit: int, out: dict) -> None:
+    """Bounded pass over current semantic_facts_v2 documents whose hint
+    merge predates the evidence-span rule (``FACTS_V2_BUILD``).
+
+    Each is re-derived from its cached chunks with no model/Jev call and
+    marked once (``hint_rebuild``) so it never re-enters the pass:
+    ``same`` keeps every derived row as is; ``replaced`` stores the new
+    document and holds the old one's derivatives; ``skipped:<reason>``
+    (unrebuildable) holds them too. A rebuilt or unrebuildable thread is
+    re-queued at most once, never when failed/parked/repaired. Only for
+    ``fact_source=canonical``, where the document feeds every consumer."""
+    from semantic_extraction import FACTS_V2_BUILD, rebuild_facts_v2_cached
+    from semantic_facts import ContractError, validate_facts_doc
+    from semantic_policy import KIND_FACTS_V2
+    stats = {"same": 0, "replaced": 0, "skipped": 0, "history": 0, "seeded": 0}
+    # shadow/legacy summaries and Loops come from legacy facts, not from
+    # this document: holding them by fingerprint would touch unrelated rows
+    if limit < 1 or scfg.get("fact_source") != "canonical":
+        return 0
+    rows = ledger.db.execute(
+        "SELECT a.artifact_id,a.project_id,a.message_id,a.model,a.content,"
+        "a.meta FROM artifacts a JOIN messages m "
+        "ON m.message_id=a.message_id AND m.project_id=a.project_id "
+        "WHERE a.kind=? AND m.body_state IS NOT 'deleted' "
+        "AND a.artifact_id=(SELECT MAX(b.artifact_id) FROM artifacts b "
+        "WHERE b.kind=a.kind AND b.message_id=a.message_id) "
+        # nested CASE: every JSON operand is proven parseable before it is
+        # read, whatever order SQLite evaluates AND terms in
+        "AND CASE WHEN json_valid(a.meta) AND json_valid(a.content) THEN "
+        "CASE WHEN json_type(a.meta)='object' "
+        "AND json_type(a.content,'$.facts')='array' "
+        "THEN json_extract(a.meta,'$.build') IS NULL "
+        "AND json_extract(a.meta,'$.hint_rebuild') IS NULL "
+        f"AND EXISTS(SELECT 1 FROM json_each(a.content,'$.facts') f "
+        f"WHERE instr({_PROVENANCE},'extract_v1')>0 "
+        f"AND instr({_PROVENANCE},'+')>0) END END "
+        "ORDER BY a.artifact_id LIMIT ?", (KIND_FACTS_V2, limit)).fetchall()
+
+    def mark(row, value):
+        ledger.db.execute(
+            "UPDATE artifacts SET meta=json_set(meta,'$.hint_rebuild',?) "
+            "WHERE artifact_id=?", (value, row["artifact_id"]))
+
+    for row in rows:
+        pid, mid = row["project_id"], row["message_id"]
+        meta, doc = loads_dict(row["meta"]) or {}, loads_dict(row["content"])
+        fp = meta.get("fingerprint")
+        new, reason = None, None
+        try:
+            _, member = _member_bundle(ledger, pid, mid, fp)
+            if member is None:
+                reason = "history"   # not the live generation: never reused
+            elif meta.get("repaired"):
+                reason = "repaired"  # cannot be re-derived from cached chunks
+            else:
+                old = json.dumps(validate_facts_doc(doc), sort_keys=True)
+                new, reason = rebuild_facts_v2_cached(member, ledger, fp, pid,
+                                                      doc, meta)
+                if new is not None and old == json.dumps(
+                        validate_facts_doc(new), sort_keys=True):
+                    new, reason = None, "same"
+        except (ContractError, KeyError, TypeError, ValueError):
+            new, reason = None, "document_invalid"
+        except Exception:
+            # anything else still marks the row, or it would stay first in
+            # the ORDER BY and block every later document every tick
+            new, reason = None, "rebuild_failed"
+        if reason in ("history", "same"):
+            with ledger.db:
+                if reason == "same":
+                    ledger.db.execute(
+                        "UPDATE artifacts SET meta=json_set(meta,'$.build',?) "
+                        "WHERE artifact_id=?", (FACTS_V2_BUILD, row["artifact_id"]))
+                mark(row, reason)
+            stats[reason] += 1
+            continue
+        # The new document, the mark, the hold and the re-queue commit
+        # together. Loop candidates are re-derived by the drain once the
+        # rebuilt document passes its audit, never from an unaudited one.
+        try:
+            with ledger.db:
+                if new is not None:
+                    new_meta = {k: v for k, v in meta.items()
+                                if k != "hint_rebuild"}
+                    new_meta.update(
+                        build=FACTS_V2_BUILD, rebuilt_from=row["artifact_id"],
+                        coverage_status=new["coverage"]["status"],
+                        facts=len(new["facts"]),
+                        open_obligations=len(new["coverage"]["open_obligation_ids"]))
+                    ledger.artifact_add_tx(
+                        KIND_FACTS_V2, json.dumps(new, ensure_ascii=False,
+                                                  allow_nan=False),
+                        project_id=pid, message_id=mid,
+                        model=row["model"] or "", meta=new_meta)
+                    mark(row, "replaced")
+                else:
+                    mark(row, f"skipped:{reason}")
+                _hold_derivatives(ledger, pid, mid, fp, "hint_rebuild")
+                held = _seed_rebuild(ledger, scfg, pid, mid, meta)
+        except Exception:
+            # nothing above is half-applied; still hold the old document's
+            # derivatives and mark it so it cannot block later rows
+            new, reason, held = None, "write_failed", "write_failed"
+            with ledger.db:
+                mark(row, "skipped:write_failed")
+                _hold_derivatives(ledger, pid, mid, fp, "hint_rebuild")
+        if new is not None:
+            stats["replaced"] += 1
+        else:
+            stats["skipped"] += 1
+            _count(out, f"hint_rebuild:{reason}")
+        if held is None:
+            stats["seeded"] += 1
+        else:
+            _count(out, f"hint_rebuild_seed:{held}")
+    if any(stats.values()):
+        # reported only when the pass did something: an idle tick keeps
+        # the reproject result unchanged
+        out["hint_rebuild"] = stats
+    return len(rows)
+
+
+def _upgraded_obligations(ledger, row, meta, doc) -> tuple[str, list]:
+    """Prove which obligations a pre-fix repair turned from an adjudicated
+    absence into coverage: ``("held", ids)``, ``("clear", [])`` or
+    ``("unproven:<why>", [])``. The proof is the generation's completed
+    repair receipt and the stored pre-repair document it names, both
+    earlier than the repaired document; both documents must satisfy the
+    canonical contract and bind this message, revision and generation.
+    Anything missing, invalid or ambiguous is never asserted — a broken
+    candidate is never skipped in favour of another one."""
+    from semantic_facts import ContractError, validate_facts_doc
+    from semantic_policy import KIND_FACT_REPAIR, KIND_FACTS_V2
+    fp, mid, rid = meta.get("fingerprint"), row["message_id"], row["artifact_id"]
+
+    def bound(candidate):
+        """The contract-normalised document when it binds this generation."""
+        clean = validate_facts_doc(candidate)
+        source = clean["source"]
+        if source["message_id"] != str(mid) or source["source_fingerprint"] != fp:
+            raise ContractError("contract:repair_proof_unbound")
+        return clean
+
+    try:
+        repaired = bound(doc)
+    except (ContractError, KeyError, TypeError, ValueError):
+        return ("unproven:repaired_document", [])
+    hashes = set()
+    for r in ledger.db.execute(
+            "SELECT content,meta FROM artifacts WHERE kind=? AND message_id=? "
+            "AND project_id=? AND artifact_id<?",
+            (KIND_FACT_REPAIR, mid, row["project_id"], rid)):
+        rmeta, content = loads_dict(r["meta"]), loads_dict(r["content"])
+        if rmeta and rmeta.get("fingerprint") == fp and content \
+                and content.get("repaired") is True:
+            hashes.add(rmeta.get("doc_hash"))
+    if len(hashes) != 1 or not isinstance(next(iter(hashes)), str):
+        return ("unproven:receipt", [])
+    base_hash = hashes.pop()
+    bases = []
+    for r in ledger.db.execute(
+            "SELECT content,meta FROM artifacts WHERE kind=? AND message_id=? "
+            "AND project_id=? AND artifact_id<?",
+            (KIND_FACTS_V2, mid, row["project_id"], rid)):
+        bmeta, base = loads_dict(r["meta"]), loads_dict(r["content"])
+        if not bmeta or bmeta.get("fingerprint") != fp or bmeta.get("repaired"):
+            continue
+        try:
+            if _doc_hash(base) != base_hash:
+                continue
+        except (KeyError, TypeError):
+            continue
+        try:
+            clean = bound(base)
+        except (ContractError, KeyError, TypeError, ValueError):
+            return ("unproven:base_document", [])
+        if (clean["source"]["revision"], clean["source"]["content_hash"]) != \
+                (repaired["source"]["revision"], repaired["source"]["content_hash"]):
+            return ("unproven:base_document", [])
+        bases.append({o["obligation_id"]: o["status"] for o in clean["obligations"]})
+    if not bases or any(b != bases[0] for b in bases):
+        return ("unproven:base_document", [])
+    upgraded = [o["obligation_id"] for o in repaired["obligations"]
+                if o["status"] == "covered"
+                and bases[0].get(o["obligation_id"]) == "explicit_no_fact"]
+    return ("held", upgraded) if upgraded else ("clear", [])
+
+
+def _hold_upgraded_repairs(ledger, scfg: dict, limit: int, out: dict) -> None:
+    """Bounded check of current repaired canonical documents stored before
+    a repair stopped turning an adjudicated absence into coverage.
+
+    Each is checked once (``repair_checked``). A proven upgrade holds the
+    generation exactly like an unrebuildable hint document — derivatives
+    stop being current and the document is never reused, with no model or
+    Jev call, no re-queue and no new repair; it waits for a manual retry.
+    A plain repaired document, or one whose proof is missing or
+    contradictory, is left as it is."""
+    if limit < 1 or scfg.get("fact_source") != "canonical":
+        return
+    from semantic_policy import KIND_FACTS_V2
+    rows = ledger.db.execute(
+        "SELECT a.artifact_id,a.project_id,a.message_id,a.content,a.meta "
+        "FROM artifacts a JOIN messages m "
+        "ON m.message_id=a.message_id AND m.project_id=a.project_id "
+        "WHERE a.kind=? AND m.body_state IS NOT 'deleted' "
+        "AND a.artifact_id=(SELECT MAX(b.artifact_id) FROM artifacts b "
+        "WHERE b.kind=a.kind AND b.message_id=a.message_id) "
+        "AND CASE WHEN json_valid(a.meta) THEN CASE WHEN json_type(a.meta)='object' "
+        "THEN json_extract(a.meta,'$.repaired') IS 1 "
+        "AND json_extract(a.meta,'$.repair_checked') IS NULL "
+        "AND json_extract(a.meta,'$.hint_rebuild') IS NULL END END "
+        "ORDER BY a.artifact_id LIMIT ?", (KIND_FACTS_V2, limit)).fetchall()
+    for row in rows:
+        meta, doc = loads_dict(row["meta"]) or {}, loads_dict(row["content"]) or {}
+        try:
+            verdict, _ = _upgraded_obligations(ledger, row, meta, doc)
+        except Exception:
+            verdict = "unproven:check_failed"
+        with ledger.db:
+            ledger.db.execute(
+                "UPDATE artifacts SET meta=json_set(meta,'$.repair_checked',?) "
+                "WHERE artifact_id=?", (verdict, row["artifact_id"]))
+            if verdict == "held":
+                # the drain refuses a skipped document: never reused again
+                ledger.db.execute(
+                    "UPDATE artifacts SET meta=json_set(meta,'$.hint_rebuild',"
+                    "'skipped:repair_absence') WHERE artifact_id=?",
+                    (row["artifact_id"],))
+                _hold_derivatives(ledger, row["project_id"], row["message_id"],
+                                  meta.get("fingerprint"), "repair_absence")
+        _count(out, f"repair_absence:{verdict}")
 
 
 def _doc_hash(v2_doc: dict) -> str:

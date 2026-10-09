@@ -107,7 +107,10 @@ def _fm(title: str) -> str:
 
 
 def _jst(timestamp: float, pattern: str) -> str:
-    return datetime.fromtimestamp(timestamp, _JST).strftime(pattern)
+    try:
+        return datetime.fromtimestamp(timestamp, _JST).strftime(pattern)
+    except (OverflowError, OSError, ValueError):
+        raise ValueError("snapshot_time_unrepresentable") from None
 
 
 def _banner(view) -> str:
@@ -348,6 +351,7 @@ def _sweep_exports(out_dir: Path, now: float) -> list:
 def run(out_dir: Path, snapshot: Path) -> dict:
     view = mcs_view.View(str(snapshot))
     try:
+        banner = _banner(view)  # validate calendar rendering before any publication
         # Generated subdirectories must belong to this export, including
         # when no patient pages remain and only cleanup would visit them.
         for name in ("patients", "stats", "signals"):
@@ -371,11 +375,13 @@ def run(out_dir: Path, snapshot: Path) -> dict:
             try:
                 pages[f"p{pid}.md"] = (
                     _patient_md(pid, name, info.get(pid) or {}, roll)
-                    + "\n---\n\n" + _banner(view))
+                    + "\n---\n\n" + banner)
             except (AttributeError, TypeError, ValueError, RecursionError):
                 raise ValueError("patient_rollup_invalid") from None
         today = _jst(time.time(), "%Y-%m-%d")
         sig_res = mcs_signals.current_open(view.db, limit=200)
+        if sig_res.get("errors"):
+            raise ValueError("signal_state_invalid")
         model = read_model.read_model(view.db, scope="aggregate")
         _write(out_dir, "meta.md", _meta_md(view))
         _write(out_dir, "health.md", _health_md(view))

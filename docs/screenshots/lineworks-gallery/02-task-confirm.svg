@@ -25,17 +25,19 @@
 <rect x="66" y="304" width="422" height="44.0" rx="9" fill="#fff" stroke="#d5e1e5"/>
 <text x="82" y="334" font-size="15" fill="#202124" font-weight="bold">💬 山田 花子（あおぞら）</text>
 <rect x="76" y="350.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
-<text x="277" y="371.0" font-size="16" fill="#176cc2" text-anchor="middle">患者の記録まとめ</text>
+<text x="277" y="371.0" font-size="16" fill="#176cc2" text-anchor="middle">タスク一覧</text>
 <rect x="76" y="383.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
-<text x="277" y="404.0" font-size="16" fill="#176cc2" text-anchor="middle">誤りを報告</text>
+<text x="277" y="404.0" font-size="16" fill="#176cc2" text-anchor="middle">患者の記録まとめ</text>
 <rect x="76" y="416.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
-<text x="277" y="437.0" font-size="16" fill="#176cc2" text-anchor="middle">自分のタスク</text>
+<text x="277" y="437.0" font-size="16" fill="#176cc2" text-anchor="middle">誤りを報告</text>
 <rect x="76" y="449.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
-<text x="277" y="470.0" font-size="16" fill="#176cc2" text-anchor="middle">未確認一覧</text>
+<text x="277" y="470.0" font-size="16" fill="#176cc2" text-anchor="middle">全体の新着集計</text>
 <rect x="76" y="482.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
-<text x="277" y="503.0" font-size="16" fill="#176cc2" text-anchor="middle">この患者を検索</text>
+<text x="277" y="503.0" font-size="16" fill="#176cc2" text-anchor="middle">自分のタスク</text>
 <rect x="76" y="515.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
-<text x="277" y="536.0" font-size="16" fill="#176cc2" text-anchor="middle">全体の新着集計</text>
+<text x="277" y="536.0" font-size="16" fill="#176cc2" text-anchor="middle">未確認一覧</text>
+<rect x="76" y="548.0" width="402" height="29" rx="5" fill="#f3f5f7" stroke="#d5e1e5"/>
+<text x="277" y="569.0" font-size="16" fill="#176cc2" text-anchor="middle">この患者を検索</text>
 <text x="44" y="600" font-size="16" fill="#087f5b" font-weight="bold">「タスク作成」を押したとき</text>
 <rect x="44" y="614" width="30" height="30" rx="8" fill="#087f5b"/>
 <text x="51" y="636" font-size="18" fill="#fff" font-weight="bold">M</text>

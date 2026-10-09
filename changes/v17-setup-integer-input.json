@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "長すぎるIDで設定確認が終了する問題を修正",
+  "summary": "設定されたチャンネルIDや入力されたプロジェクトIDが整数として読み取れない長さの場合、設定エラーとして案内します。例外で設定確認や導入処理が終了することを防ぎます。",
+  "upgrade": "追加設定は不要です。有効なIDの受付条件は変更せず、不正なIDは修正する必要があります。",
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "tests/ops/test_setup_integer_input.py"
+  ],
+  "details": [
+    "整数変換でValueErrorとなるIDを、既存のプロジェクトID受付拒否またはDiscordチャンネルID設定エラーへ変換する。"
+  ]
+}

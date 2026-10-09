@@ -18,6 +18,7 @@ import os
 import re
 import sqlite3
 import time
+from bisect import bisect_right
 from contextlib import suppress
 
 import mcs_requests
@@ -396,15 +397,38 @@ def _human_cmd_check(req) -> str | None:
 
 
 SCAN_FACTOR = 16
+_DRAIN_CURSOR = ".drain-cursor"
+
+
+def _scan_window(directory, names, count):
+    """Rotate a bounded filename window; the cursor conveys no command authority."""
+    after = ""
+    try:
+        cursor = mcs_requests.read_command(os.path.join(directory, _DRAIN_CURSOR))
+        if (isinstance(cursor, dict) and set(cursor) == {"after"}
+                and isinstance(cursor["after"], str)
+                and 0 < len(cursor["after"]) <= 255
+                and cursor["after"].endswith(".json")
+                and os.path.basename(cursor["after"]) == cursor["after"]):
+            after = cursor["after"]
+    except (OSError, ValueError):
+        pass
+    start = bisect_right(names, after)
+    if start == len(names):
+        start = 0
+    window = names[start:start + count]
+    if len(window) < min(count, len(names)):
+        window += names[:min(count, len(names)) - len(window)]
+    return window
 
 
 def drain_int_commands(ledger, result, cfg, root, deadline=None,
                        limit=32) -> int:
-    """Bounded three-class drain of data/cmd_int. Begins apply first —
-    the attempt row a receipt settles must exist, and a receipt drained
-    before its begin would hit unknown_attempt yet still be consumed,
-    leaving a granted attempt orphaned until an operator resolve. Then
-    receipts (dependency resolution), then interactions. Each
+    """Bounded three-class drain of data/cmd_int with dependency-safe receipt retention.
+    Begins apply first, then receipts, then interactions. A receipt
+    whose attempt does not yet exist waits without a result or consume;
+    a persistent filename cursor lets later begins and other ready
+    commands progress even when uncertain receipts fill the window. Each
     command gets a result file under data/cmd_results/ and the command
     file is consumed; permanently unparsable files are quarantined
     (publication is atomic, so a parse failure is never mid-write), and
@@ -418,11 +442,11 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
         return 0
     if not names:
         return 0
-    # classify a wider window than we apply: with a backlog, a receipt
-    # can sort into the first `limit` names while its begin sorts past
-    # them — begins must be picked from the whole scanned window first
+    # Classify at most the existing parse budget. The cursor is only a
+    # scheduling hint: every selected command still passes normal gates.
+    window = _scan_window(int_dir, names, limit * SCAN_FACTOR)
     pending = []
-    for name in names[:limit * SCAN_FACTOR]:
+    for name in window:
         path = os.path.join(int_dir, name)
         try:
             req = mcs_requests.read_command(path)
@@ -438,18 +462,37 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
         except OSError:
             continue                       # transient — next drain
         pending.append((path, req))
+    if window:
+        try:
+            notify_cards.publish_file(int_dir, _DRAIN_CURSOR,
+                                      canonical({"after": window[-1]}))
+        except OSError as e:
+            result.setdefault("errors", []).append(
+                f"cmd_int_cursor_publish_failed:{type(e).__name__}")
     begins = [p for p in pending
               if p[1].get("op") == "transport_begin"]
     receipts = [p for p in pending if p[1].get("op") in _RECEIPT_OPS]
     others = [p for p in pending if p[1].get("op") not in TRANSPORT_OPS]
     done = 0
+    attempted = 0
     card_actions = False
-    for path, req in (begins + receipts + others)[:limit]:
+    for path, req in begins + receipts + others:
+        if attempted >= limit:
+            break
         if deadline is not None and time.monotonic() > deadline:
             result.setdefault("errors", []).append(
                 "cmd_int_drain_deadline")
             break
         error = validate_int(req)
+        if (error is None and req.get("op") == "transport_receipt"
+                and notify_cards._db(ledger).execute(
+                    "SELECT 1 FROM notification_delivery_attempts WHERE attempt_id=?",
+                    (req["attempt_id"],)).fetchone() is None):
+            # A worker can publish its factual pre-wire recovery receipt
+            # before the runner reaches its queued begin. Missing rows
+            # prove neither delivery nor rejection, so retain the witness.
+            continue
+        attempted += 1
         cid = req.get("command_id")
         if not isinstance(cid, str):
             cid = os.path.basename(path)[:-5]
@@ -467,6 +510,10 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
                 out = {"outcome": "rejected",
                        "error": f"crash:{type(e).__name__}",
                        "command_id": cid}
+        if not error and req.get("op") not in TRANSPORT_OPS:
+            # dispatched: its card changes are re-rendered in THIS drain
+            # even when the answer or the file consume below fails
+            card_actions = True
         out.setdefault("command_id", cid)
         out["processed_at"] = time.time()
         # Separate each click's response from the durable mutation identity.
@@ -492,14 +539,19 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
             result.setdefault("errors", []).append(
                 f"result_publish_failed:{safe}:{type(e).__name__}")
             continue                       # keep the command file
-        if error:
-            os.replace(path, path + ".invalid")   # forensic quarantine
-        else:
-            os.unlink(path)
+        try:
+            if error:
+                os.replace(path, path + ".invalid")   # forensic quarantine
+            else:
+                os.unlink(path)
+        except OSError as e:
+            # the answer is published; the file stays for the next drain
+            # (receipts keep a replay idempotent) and the rest proceeds
+            result.setdefault("errors", []).append(
+                f"cmd_int_consume_failed:{safe}:{type(e).__name__}")
+            continue
         result["commands"] = result.get("commands", 0) + 1
         done += 1
-        if not error and req.get("op") not in TRANSPORT_OPS:
-            card_actions = True
     if card_actions:
         # applied actions change card content (triage footer, signal
         # state via request.create / ops.signal_dismiss) — re-render

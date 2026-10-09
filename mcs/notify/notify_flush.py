@@ -602,14 +602,12 @@ def _hold_event(ledger, ev, cfg, proven_undelivered=False,
         except (ValueError, TypeError, RecursionError):
             payload = None
         if isinstance(payload, dict):
-            rescuable = (
-                payload.get("digest") is True
-                or payload.get("signal_keys")
-                or payload.get("signal_key")
-                or (ev["kind"] == "new_messages"
-                    and payload.get("rescue_of") is None
-                    and any(type(m) is int
-                            for m in (payload.get("message_ids") or []))))
+            ids = payload.get("message_ids")
+            mids = [mid for mid in ids if positive(mid)] if isinstance(ids, list) else []
+            rescuable = (payload.get("rescue_of") is None and bool(mids)
+                         if ev["kind"] == "new_messages" else
+                         payload.get("digest") is True
+                         or payload.get("signal_keys") or payload.get("signal_key"))
             if rescuable:
                 sc = cfg.get("signals")
                 ih = sc.get("digest_interval_h") \
@@ -628,8 +626,6 @@ def _hold_event(ledger, ev, cfg, proven_undelivered=False,
                         # single-shot: a rescued intent that also
                         # quarantines does not respawn (rescue_of marks
                         # the lineage)
-                        mids = [m for m in (payload.get("message_ids")
-                                            or []) if type(m) is int]
                         ledger.outbox_add_tx(
                             "new_messages", ev["project_id"],
                             {"message_ids": mids,

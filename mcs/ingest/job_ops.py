@@ -538,9 +538,9 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
         if batch.pages and merged.checkpoint_safe:
             pl["page"] = sp + batch.pages
             pl["stalls"] = 0
-        elif not batch.error and not merged.deadline:
-            # a deadline-cut merge is unfinished, not a blocker — it resumes
-            # next tick via the plain checkpoint below.
+        elif not batch.error and not merged.deadline and merged.error is None:
+            # a deadline-cut merge or an expired session (raised below) is
+            # unfinished, not a blocker — it resumes via the checkpoint.
             # same window re-walked with checkpoint unsafe — track stalls
             # so a permanently unverifiable blocker surfaces instead of
             # re-fetching identical pages forever

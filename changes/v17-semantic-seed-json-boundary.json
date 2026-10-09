@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "読めない意味チェックのジョブが新着保管を止めないように修正",
+  "summary": "既存の意味チェックジョブに巨大な整数や深すぎるJSONがあると、新しい返信の保存まで巻き戻される問題を修正しました。既存の読めないJSONと同じ再登録経路を使い、正常な新着を保管して処理対象にできます。",
+  "upgrade": "追加設定は不要です。収集・意味チェック処理の更新を反映してください。正常なジョブの再試行回数、手動による追加試行枠、通知の対象条件は変わりません。",
+  "details": [
+    "ledger._semantic_seed_txは既存loads_dictで保存payloadを読み、JSON構文エラーの従来の空object扱いをValueError・RecursionErrorにも適用する。解析できない旧targetsやoriginを推測して復元せず、実際に保管した入力から現在の世代を作る。",
+    "正常なpayloadで入力世代が同じときは使い切った予算を再開せず、入力変更時だけ既存規則に従う。新着保管とjob登録の同一transaction、通知eligible/provenance/notification_freeの条件を維持する。"
+  ],
+  "refs": [
+    "mcs/core/ledger.py",
+    "tests/core/test_core_misc.py",
+    "tests/semantic/test_semantic_manual_retry.py"
+  ]
+}

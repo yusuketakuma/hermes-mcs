@@ -229,16 +229,17 @@ def _request_reply_lines(db, project_id, roll) -> list:
 
 def _karte_summary_from_artifact(db, project_id) -> dict | None:
     """Newest karte_summary artifact in the rollup's block shape; None
-    when the summary was never fetched."""
+    when the summary was never fetched or the newest one is unreadable —
+    an older summary never stands in for it."""
     row = db.execute(
         "SELECT content FROM artifacts WHERE kind='karte_summary' "
-        "AND project_id=? AND json_valid(content) "
-        "ORDER BY artifact_id DESC LIMIT 1", (project_id,)).fetchone()
+        "AND project_id=? ORDER BY artifact_id DESC LIMIT 1",
+        (project_id,)).fetchone()
     if not row:
         return None
     try:
         c = json.loads(row["content"])
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return None
     if not isinstance(c, dict):
         return None
@@ -389,7 +390,7 @@ UNACKED_WINDOW_S = 7 * 86400
 
 def unacked_view(db, transport, now=None, projects=None,
                  member_names=None) -> dict:
-    """🗂 delivered thread/signal cards updated within the window whose
+    """🗂 delivered thread/signal cards created or content-rendered within the window whose
     current content carries no live acknowledgement, grouped by patient
     (oldest card's patient first), oldest first; assigned-but-unconfirmed
     cards are marked. Digest cards span projects and are left out.
@@ -412,9 +413,11 @@ def unacked_view(db, transport, now=None, projects=None,
            WHERE c.kind IN ('thread','signal') AND c.transport=?
              AND c.message_id IS NOT NULL AND c.project_id IS NOT NULL
              AND c.delivery_state NOT IN ('revoked','message_deleted')
-             AND c.updated_at>=?
+             AND (c.created_at>=? OR EXISTS (
+                 SELECT 1 FROM notification_view_manifests recent
+                 WHERE recent.card_id=c.card_id AND recent.created_at>=?))
            ORDER BY c.created_at, c.card_id""",
-        (transport, now - UNACKED_WINDOW_S)).fetchall()
+        (transport, now - UNACKED_WINDOW_S, now - UNACKED_WINDOW_S)).fetchall()
     rows = _in_scope(rows, projects)
     # A click on another card can observe new source material before sweep
     # persists this card's generation. Its older acknowledgement is stale.
@@ -574,7 +577,7 @@ def meds_view(db, project_id, message_id, *, can_report=False,
     items = [{"project_id": project_id,
               "text": f"・{_inline(text, 120)}{label}\n"
                       f"{_candidate_line(ref, active)}"}
-             for entries, label in ((meds, ""), (unverified, "（ルール抽出・未確認）"))
+             for entries, label in ((meds, ""), (unverified, "（未確認）"))
              for text, ref in entries]
     notes = []
     if refs:

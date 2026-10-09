@@ -18,6 +18,7 @@ import mcs_signals
 import mcs_stats
 import structured_view
 import rollup
+from semantic_projection import PROJECTION_VERSION
 from extract_testkit import (_extract_artifact, _hash, _ledger, _message,
                              _qc_artifact, _seed_qc_flagged)
 
@@ -2633,7 +2634,8 @@ def test_v4_publication_between_prepare_and_insert_fences_legacy(tmp_path):
         if not published and sql.startswith("INSERT INTO artifacts(kind,"):
             other.artifact_add("semantic_facts_v4", '{"meds":[]}',
                                project_id=1, message_id=1,
-                               meta={"hash": row["content_hash"], "engine_version": 4})
+                               meta={"hash": row["content_hash"], "engine_version": 4,
+                                     "projection_version": PROJECTION_VERSION})
             published.append(True)
 
     db.db.set_trace_callback(publish_before_insert)

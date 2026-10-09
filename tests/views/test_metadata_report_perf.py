@@ -122,3 +122,51 @@ def test_snapshot_without_metadata_table_stays_unavailable(db):
     assert report["messages"] == 0
     assert report["outcomes"] == {}
     assert report["watch"] == {"available": False}
+
+
+@pytest.mark.parametrize("source", ["capture", "shadow"])
+@pytest.mark.parametrize("checked", [None, 0, -1, "SYNTHETIC_INVALID_TIME", 253402214400])
+def test_unknown_check_time_preserves_observation_and_does_not_crash_report(db, source, checked):
+    raw = json.dumps({"reactions": {"value": [{"type": "viewed", "count": 2, "self_reacted": False}],
+                                     "observed_at": NOW - 120}})
+    for name in ("capture", "shadow"):
+        _row(db, 1, name, raw=raw, checked=checked if name == source else NOW - 60)
+    db.execute("PRAGMA query_only=ON")
+    changes = db.total_changes
+    report = metadata_report.build_report(_reader(db, [{"message_id": 1, "project_id": 1}]), now=NOW)
+    assert db.total_changes == changes
+    assert report["outcomes"] == {"match": 1}
+    assert report["time_direction"] == {"match_check_time_unknown": 1}
+    assert report["capture_to_shadow_lag"] == {"lt_1h": 1}
+    if source == "capture":
+        assert report["watch"]["oldest_shadow_check_age_s"] == 60
+    else:
+        assert report["watch"]["oldest_shadow_check_age_s"] is None
+        assert "shadow最古経過 不明" in metadata_report.render_text(report)
+    assert report["watch"]["due_never_attempted"] == 0
+    assert "SYNTHETIC_INVALID_TIME" not in json.dumps(report)
+
+
+def test_existing_shadow_with_unknown_time_and_no_observation_is_not_missing(db):
+    _row(db, 1, "capture")
+    _row(db, 1, "shadow", raw="{}", checked=0)
+    report = metadata_report.build_report(_reader(db, [{"message_id": 1, "project_id": 1}]), now=NOW)
+    assert report["outcomes"] == {"shadow_check_time_unknown": 1}
+    assert report["watch"]["due_never_attempted"] == 0
+    assert report["watch"]["oldest_shadow_check_age_s"] is None
+
+
+@pytest.mark.parametrize("error,code", [("network_error", "network_error"),
+                                       ("synthetic-private-canary", "metadata_error")])
+def test_unknown_shadow_check_time_preserves_known_failure(db, error, code):
+    _row(db, 1, "capture")
+    _row(db, 1, "shadow", raw="{}", checked=0, error=error)
+    db.execute("PRAGMA query_only=ON")
+    changes = db.total_changes
+    report = metadata_report.build_report(_reader(db, [{"message_id": 1, "project_id": 1}]), now=NOW)
+    assert report["outcomes"] == {"shadow_failed": 1}
+    assert report["shadow_failures_by_code"] == {code: 1}
+    assert report["watch"]["due_never_attempted"] == 0
+    assert report["watch"]["oldest_shadow_check_age_s"] is None
+    assert db.total_changes == changes
+    assert "synthetic-private-canary" not in json.dumps(report)

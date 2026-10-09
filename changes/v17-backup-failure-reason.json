@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "バックアップ失敗の理由を状態と診断に表示",
+  "summary": "定期バックアップが保存数の上限や暗号化コマンドの不在などで失敗したとき、既知の固定コードで理由を記録し、状態確認と診断に表示します。従来どおりの「backup_failed」の判定は変わらず、後の検証成功でオフサイト失敗の理由が消えることもありません。",
+  "upgrade": "追加設定は不要です。次の失敗から理由が記録され、成功すると消えます。自動削除・オフサイト通信・暗号化の導入・有効化は行いません。",
+  "details": ["mcs_backupが発生させる固定コード58種だけを記録・公開し、例外の本文・パス・設定値は保存しない。未知の内容はbackup_io_or_policy_failedとして記録する。", "status()にlast_failure_code、run_checkのバックアップ診断にfailure_codeを追加し、既存のreasonsは維持する。"],
+  "refs": ["mcs/ops/mcs_backup.py", "mcs/ingest/run_check.py", "tests/ops/test_mcs_backup.py", "tests/ops/test_backup_integration.py"]
+}

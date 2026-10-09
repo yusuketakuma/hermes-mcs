@@ -10,6 +10,7 @@ import pytest
 
 from extract_testkit import _ledger, _message, _hash
 import rollup
+from semantic_projection import PROJECTION_VERSION
 
 
 @pytest.fixture
@@ -27,11 +28,35 @@ def _fact(fid, kind, statement, quote="引用"):
             "validation_status": "verified"}
 
 
+def test_rollup_and_cached_reader_do_not_resurrect_contradictory_vitals(db):
+    body = "本人の血圧120/80を測定しました。"
+    db.save_messages([_message(mid=1, body=body,
+                               posted_at="2026-10-09T00:00:00+09:00")])
+    db.artifact_add("extract_llm", json.dumps({"vitals": {"sbp": 180, "dbp": 80}}),
+                    project_id=1, message_id=1, meta={"hash": _hash(db, 1)})
+    current = rollup.build_rollup(db, 1)
+    assert current["latest_vitals"] == {"at": "2026-10-09T00:00:00+09:00", "dbp": 80}
+    old = {**current, "latest_vitals": {"at": "2026-10-09T00:00:00+09:00",
+                                      "sbp": 180, "dbp": 80},
+           "profile_extension": {"text": "架空の補足"},
+           "medications": [{"name": "架空の旧薬", "dose": "旧形式を保持"}]}
+    meta = {"period_check_version": rollup.PERIOD_CHECK_VERSION - 1}
+    before = db.db.total_changes
+    safe = rollup.current_cached_refs(db.db, 1, old, meta)
+    assert safe["latest_vitals"] == current["latest_vitals"]
+    assert safe["profile_extension"] == old["profile_extension"]
+    assert safe["medications"] == old["medications"]
+    assert db.db.total_changes == before
+
+
 def _add(db, mid, kind, content, posted):
     db.save_messages([_message(mid=mid, body="合成本文",
                                posted_at=posted)])
+    meta = {"hash": _hash(db, mid)}
+    if kind in ("canonical_projection", "semantic_facts_v4"):
+        meta["projection_version"] = PROJECTION_VERSION
     db.artifact_add(kind, json.dumps(content), project_id=1,
-                    message_id=mid, meta={"hash": _hash(db, mid)})
+                    message_id=mid, meta=meta)
 
 
 def test_rollup_collects_canonical_facts_newest_first(db):
@@ -290,7 +315,7 @@ def test_rollup_reply_survives_canonical_projection_shadowing(db):
                   _reply("done"))])
     db.artifact_add("canonical_projection", json.dumps({"canonical_facts": []}),
                     project_id=1, message_id=2,
-                    meta={"hash": _hash(db, 2)})
+                    meta={"hash": _hash(db, 2), "projection_version": PROJECTION_VERSION})
     rows = rollup.build_rollup(db, 1)["recent_requests"]
     assert rows[0]["reply_state"] == "done"
 
@@ -323,7 +348,8 @@ def test_rollup_sql_valid_shadowed_reply_at_python_depth_limit_is_safe(db):
     _thread(db, [(1, None, "SYNTH-A", "2026-09-19T00:30:00+09:00", _REQ),
                  (2, 1, "SYNTH-B", "2026-09-19T01:00:00+09:00", _reply("done"))])
     db.artifact_add("canonical_projection", json.dumps({"canonical_facts": []}),
-                    project_id=1, message_id=2, meta={"hash": _hash(db, 2)})
+                    project_id=1, message_id=2,
+                    meta={"hash": _hash(db, 2), "projection_version": PROJECTION_VERSION})
     source_id, original = db.db.execute(
         "SELECT artifact_id,content FROM artifacts WHERE kind='extract_llm' AND message_id=2"
     ).fetchone()
@@ -445,7 +471,8 @@ def test_rollup_decodes_each_llm_blob_once(db, monkeypatch, shadow, decodes):
         for mid in (1, 2):
             db.artifact_add("canonical_projection", json.dumps(
                 {"requests": _REQ["requests"]} if mid == 1 else {}),
-                project_id=1, message_id=mid, meta={"hash": _hash(db, mid)})
+                project_id=1, message_id=mid,
+                meta={"hash": _hash(db, mid), "projection_version": PROJECTION_VERSION})
     calls = []
     real = json.loads
     monkeypatch.setattr(rollup.json, "loads",

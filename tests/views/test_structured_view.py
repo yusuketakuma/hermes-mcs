@@ -5,6 +5,7 @@ import pytest
 
 import ledger
 import structured_view
+from semantic_projection import PROJECTION_VERSION
 
 
 @pytest.fixture
@@ -146,7 +147,7 @@ def test_rule_fallback_skipped_when_llm_excluded_medication(db):
 
 def _fact_artifact(db, kind, content, chash="synthetic-hash"):
     db.artifact_add(kind, json.dumps(content), project_id=1, message_id=1,
-                    meta={"hash": chash})
+                    meta={"hash": chash, "projection_version": PROJECTION_VERSION})
 
 
 def test_current_projection_shadows_extract_llm(db):
@@ -253,7 +254,8 @@ def test_projected_findings_keep_qualifiers_before_full_text(db, kind, attrs, ma
         chunks=[{"chunk_id": "chunk-a", "core_atom_ids": ["atom-a"], "status": "done"}]))
     content = project_v2_doc_legacy(doc)
     db.artifact_add(kind, json.dumps(content), project_id=1, message_id=1,
-                    meta={"hash": "synthetic-hash", "engine_version": 4})
+                    meta={"hash": "synthetic-hash", "engine_version": 4,
+                          "projection_version": PROJECTION_VERSION})
     text = "\n".join(structured_view.structured_lines(db.db, 1))
     assert marker in text and text.index(marker) < text.index(statement[:60])
     # owner rule 2026-10-05: the statement and its evidence are never cut
@@ -288,7 +290,8 @@ def test_foreign_project_artifact_cannot_supply_structured_facts(db, kind):
     db.artifact_add(kind, json.dumps({"summary": "別患者の合成情報",
                                      "medications": [{"name": "別患者薬"}]}),
                     project_id=2, message_id=1,
-                    meta={"hash": "synthetic-hash", "engine_version": 4})
+                    meta={"hash": "synthetic-hash", "engine_version": 4,
+                          "projection_version": PROJECTION_VERSION})
     assert structured_view.structured_lines(db.db, 1) == []
 
 
@@ -316,7 +319,7 @@ def test_legacy_artifact_without_project_uses_message_scope(db):
 
 @pytest.mark.parametrize("field", ["summary", "points", "events", "labs",
                                  "symptoms", "meds", "requests",
-                                 "canonical_facts"])
+                                 "canonical_facts", "vital_flags"])
 @pytest.mark.parametrize("value", [7, "wrong-shape", {"bad": 1}, None])
 def test_malformed_selected_fields_keep_other_structured_content(db, field, value):
     content = {"summary": "合成要約", "points": ["合成要点"], field: value}
@@ -419,7 +422,8 @@ def test_empty_current_facts_do_not_restore_rule_events_or_vitals(db, kind):
                                               "vitals": {"spo2": 10}}),
                     project_id=1, message_id=1, meta={"hash": "synthetic-hash"})
     db.artifact_add(kind, "{}", project_id=1, message_id=1,
-                    meta={"hash": "synthetic-hash", "engine_version": 4})
+                    meta={"hash": "synthetic-hash", "engine_version": 4,
+                          "projection_version": PROJECTION_VERSION})
     assert structured_view.structured_lines(db.db, 1) == ["区分: 添付"]
 
 
@@ -430,7 +434,8 @@ def test_absent_or_stale_facts_keep_rule_events_and_vitals(db, kind):
                     project_id=1, message_id=1, meta={"hash": "synthetic-hash"})
     if kind is not None:
         db.artifact_add(kind, "{}", project_id=1, message_id=1,
-                        meta={"hash": "synthetic-stale", "engine_version": 4})
+                        meta={"hash": "synthetic-stale", "engine_version": 4,
+                              "projection_version": PROJECTION_VERSION})
     assert structured_view.structured_lines(db.db, 1) == ["区分: 訪問", "バイタル: HR 72"]
 
 
@@ -444,3 +449,36 @@ def test_plain_summary_uses_one_fixed_order():
                        "依頼: 医師へ合成確認", "薬剤: 合成薬 5mg[開始]",
                        "症状: 合成症状", "バイタル: BT 37.0", "次回予定: 合成日",
                        "区分: 依頼"]
+
+
+@pytest.mark.parametrize("field", ["jev", "extracted"])
+@pytest.mark.parametrize("value", [[], {}, 7, True, "wrong-verdict"])
+def test_malformed_qc_verdict_never_stops_display_or_vetoes_urgency(db, field, value):
+    source = db.artifact_add("extract_llm", json.dumps({"urgency": "high"}),
+        project_id=1, message_id=1, meta={"hash": "synthetic-hash"})
+    verdict = {"extracted": "high", "jev": "routine", "confidence": 0.99, field: value}
+    db.artifact_add("extract_qc", json.dumps({"urgency": verdict}),
+        project_id=1, message_id=1,
+        meta={"hash": "synthetic-hash", "source_artifact_id": source})
+    assert structured_view.urgency_qc_disagreement(db.db, 1) is None
+    assert structured_view.urgency_qc_suffix(db.db, 1) == ""
+
+
+@pytest.mark.parametrize("key", [[], {}, 7, None])
+def test_malformed_vital_flag_key_keeps_valid_summary(db, key):
+    joined = _render(db, {"summary": "合成要約",
+        "vital_flags": [{"key": key, "value": 98}]})
+    assert joined == "合成要約"
+
+
+@pytest.mark.parametrize("plain", [False, True])
+def test_all_layouts_use_the_same_urgency_label(plain):
+    assert structured_view._head_lines({}, {}, "llm", plain=plain) == ["🚨 緊急度高"]
+
+
+def test_legacy_held_urgency_keeps_the_reason_without_model_source_label(db):
+    with db.db:
+        db.db.execute("UPDATE messages SET body_text='本人は落ち着いています。' WHERE message_id=1")
+    joined = _render(db, {"urgency": "high", "summary": "合成要約"})
+    assert "対象人物・時点の根拠を確認。元の判定は高" in joined
+    assert "AI判定" not in joined and "AI抽出" not in joined

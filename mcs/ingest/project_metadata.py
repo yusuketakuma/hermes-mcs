@@ -31,6 +31,7 @@ if __name__ == "__main__":
     import _mcs_path  # noqa: F401
 
 from mcs_adapter import MCSError, SchemaError, _valid_id
+from mcs_util import loads_dict
 
 DATASETS = ("care_team", "medication_periods", "observation_items",
             "observation_values", "consultations")
@@ -440,7 +441,9 @@ def _clinical_items(db, project_id, karte_id):
     if row is None:
         return None, {}
     try:
-        payload = json.loads(row["content"])
+        payload = loads_dict(row["content"])
+        if payload is None:
+            return None, {}
         if (payload.get("contract") != "project-metadata/1" or payload.get("scope") != "karte"
                 or payload.get("complete") is not True
                 or payload.get("reason") is not None or payload.get("http_status") is not None):
@@ -532,10 +535,7 @@ def sync_clinical_metadata(ledger, adapter, *, enabled=False, deadline):
         if row is None:
             break
         pid, kid = row["project_id"], row["karte_id"]
-        try:
-            state = json.loads(row["content"] or "{}")
-        except (TypeError, ValueError):
-            state = {}
+        state = loads_dict(row["content"]) or {}
         if (not isinstance(state, dict) or state.get("karte_id") != kid
                 or state.get("phase") not in ("medication_periods", "observation_items", "observation_values")
                 or type(state.get("item_cursor", 0)) is not int or state.get("item_cursor", 0) < 0):

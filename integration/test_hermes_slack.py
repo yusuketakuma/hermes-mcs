@@ -134,7 +134,7 @@ def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypa
     for name in ("slack_render", "flags", "cmd_int", "cmd_results"):
         (data_root / name).mkdir(parents=True)
     (data_root / "flags" / "notify.json").write_text(json.dumps({
-        "interactive": True, "transport": "slack",
+        "interactive": True, "transport": "slack", "route_epoch": 1,
     }))
     settings["data_root"] = str(data_root)
     configure(settings)
@@ -346,7 +346,7 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
         (root / name).mkdir(parents=True)
     dirs = slack_paths.ensure_dirs(str(root))
     (root / "flags" / "notify.json").write_text(json.dumps({
-        "interactive": True, "transport": "slack",
+        "interactive": True, "transport": "slack", "route_epoch": 1,
     }))
     reg = registry.Registry(dirs["state"], scope=scope)
     worker = DeliveryWorker(
@@ -425,3 +425,91 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
             if r.get("phase") == "receipt" and r.get("part_id")]
     assert {r["part_id"] for r in rows} \
         == {"thread", "body:0001", "body:0002", "attach:0001"}
+
+
+def test_real_sdk_broadcasts_a_new_post_on_an_existing_card(tmp_path, monkeypatch):
+    """Late reply over the REAL AsyncWebClient: an update render's first
+    chunk of a post new to the card goes to the card's original thread
+    once, with reply_broadcast=true in the wire JSON; a replay re-binds
+    that reply from conversations.replies instead of posting again."""
+    from hermes_plugin.mcs_delivery import registry
+    from hermes_plugin.mcs_slack import paths as slack_paths
+    from hermes_plugin.mcs_slack.delivery import (
+        DeliveryWorker, SlackCardAdapter)
+    from plugins.platforms.slack.adapter import SlackAdapter
+    from slack_sdk.web import async_base_client
+    from slack_sdk.web.async_client import AsyncWebClient
+
+    monkeypatch.setattr(socket.socket, "connect",
+                        lambda *_: (_ for _ in ()).throw(
+                            AssertionError("no network in integration test")))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    root_ts = "1790000000.000001"           # the card posted days earlier
+    replies, seen = [], []
+
+    async def fake_http(**request):
+        method = request["api_url"].rsplit("/", 1)[-1]
+        seen.append((method, request["retry_handlers"], request["req_args"]))
+        if method == "auth.test":
+            data = {"ok": True, "team_id": "T_SYNTHETIC",
+                    "bot_id": "B_INT", "user_id": "U_BOT"}
+        elif method == "chat.postMessage":
+            js = request["req_args"]["json"]
+            ts = f"1790000000.{len(seen):06d}"
+            replies.append({"ts": ts, "text": js["text"], "bot_id": "B_INT",
+                            "thread_ts": js["thread_ts"]})
+            data = {"ok": True, "channel": js["channel"], "ts": ts}
+        elif method == "conversations.replies":
+            data = {"ok": True, "messages": [
+                {"ts": root_ts, "text": "<card>", "bot_id": "B_INT"},
+                *replies]}
+        else:
+            data = {"ok": True}
+        return {"data": data, "headers": {}, "status_code": 200}
+
+    monkeypatch.setattr(async_base_client, "_request_with_session", fake_http)
+    client = AsyncWebClient(token="bot-synthetic")
+    native_adapter = object.__new__(SlackAdapter)
+    native_adapter._team_clients = {"T_SYNTHETIC": client}
+    native_adapter._channel_team = {}
+    native_adapter._app = SimpleNamespace(client=object())
+    adapter = SlackCardAdapter(
+        native_adapter._app, native_adapter=native_adapter,
+        team_id="T_SYNTHETIC", application_id="A_SYNTHETIC",
+        channel_id="C_SYNTHETIC", profile="cco",
+        allowed_user_ids={"U_OPERATOR"})
+    scope = {"transport": "slack", "profile": "cco",
+             "application_id": "A_SYNTHETIC", "team_id": "T_SYNTHETIC",
+             "channel_id": "C_SYNTHETIC"}
+    root = tmp_path / "mcs-data"
+    for name in ("slack_render", "flags", "cmd_int", "cmd_results"):
+        (root / name).mkdir(parents=True)
+    dirs = slack_paths.ensure_dirs(str(root))
+    worker = DeliveryWorker(
+        sender=adapter, settings=scope, root=str(root),
+        reg=registry.Registry(dirs["state"], scope=scope),
+        worker_id=registry.new_worker_id(), log=lambda *_a, **_k: None)
+    spec = _spec()
+    spec["op"] = "update"
+    spec["delivery"].update(scope)
+    part = {"part_id": "body:0002", "kind": "body_part", "name": "m:202#1"}
+    text = "synthetic late reply body"
+
+    async def send_twice():
+        assert await adapter.bind()
+        first = await worker._body_part(
+            spec, text, {"thread_id": root_ts, "history": None,
+                         "consumed": set()}, part)
+        again = await worker._body_part(
+            spec, text, {"thread_id": root_ts, "history": None,
+                         "consumed": set()}, part)
+        return first, again
+
+    first, again = asyncio.run(send_twice())
+    posts = [r for m, _, r in seen if m == "chat.postMessage"]
+    assert len(posts) == 1
+    assert posts[0]["json"]["thread_ts"] == root_ts
+    assert posts[0]["json"]["reply_broadcast"] is True
+    assert first == {"result": "delivered", "remote_id": replies[0]["ts"]}
+    assert again == first                    # re-bound, never re-posted
+    assert all(handlers == [] for m, handlers, _ in seen if m != "auth.test")

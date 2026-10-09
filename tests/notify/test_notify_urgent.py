@@ -9,6 +9,7 @@ import notify_urgent
 import structured_view
 from ledger import Ledger
 from mcs_signals import record_station_staff
+from semantic_projection import PROJECTION_VERSION
 from notify_testkit import (
     CFG, NOW, _add_request, _click, _deliver, _dispatch, _extract, _intent,
     _msg, _patient, _signal_row, _spec, led,
@@ -142,7 +143,8 @@ def _fact(store, *, mid=100, urgency="high", at=NOW - 600, kind="extract_llm", *
         content_hash = store.db.execute("SELECT content_hash FROM messages WHERE message_id=?",
                                         (mid,)).fetchone()[0]
         store.artifact_add(kind, json.dumps(content), project_id=1, message_id=mid,
-                           meta={"hash": content_hash, "engine_version": 4, **meta})
+                           meta={"hash": content_hash, "engine_version": 4,
+                                 "projection_version": PROJECTION_VERSION, **meta})
     else:
         _extract(store, mid, content, kind=kind, **meta)
     aid = store.db.execute("SELECT max(artifact_id) FROM artifacts").fetchone()[0]

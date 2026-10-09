@@ -87,8 +87,10 @@ def delivery():
                           ("📝 タスク 1件 · スタンプ 👀2 🙆1 · 自分 1投稿", INK, False)])
     s.template(66, y, ["確認する", "担当する", "タスク作成", "MCSで開く", "その他の操作"])
     s.bot(588, 245)
-    y = s.block(610, 286, [(f"↳ 山田 花子 · 10-01 09:40 {SENDER}", INK, True), *summary,
-                           (RULE, MUTED, False), (BODY, INK, False)])
+    # layout 2: a non-editable post carries the header and body only — the
+    # summary stays on the card (notify_cards include_summary)
+    y = s.block(610, 286, [(f"↳ 山田 花子 · 10-01 09:40 {SENDER}", INK, True),
+                           (BODY, INK, False)])
     s.bot(588, y + 10)
     s.rect(610, y + 51, 422, 100, "#fff", 9, "#d5e1e5")
     s.rect(626, y + 67, 390, 68, "#f0f5f1", 8)
@@ -104,8 +106,10 @@ def task_confirm():
     s.panel(568, "② タスクの確認と確定", "「確定する」を選ぶまで登録されません")
     s.text(44, 252, "「その他の操作」を押したとき", 16, GREEN, True)
     s.bot(44, 266)
-    s.template(66, s.block(66, 304, [(HEADING, INK, True)]), ["患者の記録まとめ", "誤りを報告", "自分のタスク", "未確認一覧",
-                         "この患者を検索", "全体の新着集計"])
+    # cards.secondary keeps notify_cards._action_rows order (open tasks shown)
+    s.template(66, s.block(66, 304, [(HEADING, INK, True)]),
+               ["タスク一覧", "患者の記録まとめ", "誤りを報告", "全体の新着集計",
+                "自分のタスク", "未確認一覧", "この患者を検索"])
     s.text(44, 600, "「タスク作成」を押したとき", 16, GREEN, True)
     s.bot(44, 614)
     s.bubble(66, 652, "タスク内容\n中止する場合は「取消」。", height=83)

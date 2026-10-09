@@ -155,3 +155,31 @@ def test_legacy_patient_table_without_karte_id_keeps_metadata_state_unknown(cont
         records = read_model.read_model(db.db, scope=scope)["project_metadata"]["records"]
         assert [row["state"] for row in records] == ["unknown", "not_fetched"]
         assert all(row["patient_context"] == [] for row in records)
+
+
+@pytest.mark.parametrize("kind", ["extract_v1", "extract_llm"])
+def test_legacy_message_bound_context_without_project_id_is_current(context_db, kind):
+    db = context_db
+    items = extract_context(BODY)
+    aid = db.artifact_add(kind, json.dumps({"patient_context": items}),
+                          message_id=1, meta={"hash": _hash_of(db, 1)})
+    detail = read_model.read_model(db.db, scope="detail", project_id=1)
+    row = detail["records"][0]
+    assert row["extraction"][kind] == {"state": "current", "artifact_id": aid}
+    assert len(row["patient_context"]) == len(items)
+    message = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    assert read_model.message_patient_context(db.db, message) == row["patient_context"]
+    aggregate = read_model.read_model(db.db, project_id=1)
+    assert aggregate["coverage"]["extraction"][kind]["current"] == 1
+    assert "架空" not in json.dumps(aggregate, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("kind", ["canonical_projection", "semantic_facts_v4"])
+def test_published_context_still_requires_explicit_project_binding(context_db, kind):
+    db = context_db
+    db.artifact_add(kind, json.dumps({"canonical_facts": [], "patient_context": extract_context(BODY)}),
+                    message_id=1, meta={"hash": _hash_of(db, 1), "engine_version": 4,
+                                        "projection_version": read_model.PROJECTION_VERSION})
+    row = read_model.read_model(db.db, scope="detail", project_id=1)["records"][0]
+    assert row["extraction"][kind]["state"] == "pending"
+    assert row["patient_context"] == []

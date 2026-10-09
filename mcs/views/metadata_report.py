@@ -48,7 +48,7 @@ def _watch(reader, now, project_id, shadow_checks):
     return {"available": True, "due": len(targets),
             "due_never_attempted": len(targets) - len(checked),
             "oldest_shadow_check_age_s":
-                round(now - min(checked)) if checked else None}
+                round(now - min(checked)) if checked and None not in checked else None}
 
 
 def build_report(reader, now=None, *, project_id=None) -> dict:
@@ -78,18 +78,19 @@ def build_report(reader, now=None, *, project_id=None) -> dict:
         cap = _decode_metadata(sources.get("capture"))
         sh = _decode_metadata(sources.get("shadow"))
         if "shadow" in sources:
-            shadow_checks[mid] = sources["shadow"][1]
+            shadow_checks[mid] = sh["checked_at"]
         cap_seen = cap["reactions"] is not None
-        if sh["checked_at"] is None:
-            counts["shadow_not_attempted" if cap_seen
-                   else "capture_without_reactions"] += 1
-            continue
         if sh["last_error"]:
             counts["shadow_failed"] += 1
             raw = sources["shadow"][2]
             # codes only: anything not code-shaped is never echoed
             for code in str(raw).split(","):
                 failures[code if _CODE.fullmatch(code) else "metadata_error"] += 1
+            continue
+        if sh["checked_at"] is None and sh["reactions"] is None:
+            counts["shadow_check_time_unknown" if "shadow" in sources else
+                   "shadow_not_attempted" if cap_seen
+                    else "capture_without_reactions"] += 1
             continue
         if sh["reactions"] is None:
             counts["shadow_invalid" if sh["reactions_status"] == "invalid"
@@ -110,7 +111,8 @@ def build_report(reader, now=None, *, project_id=None) -> dict:
         self_diff.update(t if t in REACTION_LABELS else "unknown" for t in flag_types)
         outcome = "mismatch" if diff_types or flag_types else "match"
         counts[outcome] += 1
-        newer = ("capture_newer" if cap["checked_at"] > sh["checked_at"] else
+        newer = ("check_time_unknown" if cap["checked_at"] is None or sh["checked_at"] is None else
+                 "capture_newer" if cap["checked_at"] > sh["checked_at"] else
                  "shadow_newer" if cap["checked_at"] < sh["checked_at"] else
                  "same_time")
         direction[f"{outcome}_{newer}"] += 1
@@ -134,9 +136,10 @@ def render_text(rep) -> str:
         body = ", ".join(f"{k}={v}" for k, v in rep[key].items()) or "なし"
         lines.append(f"{title}: {body}")
     w = rep["watch"]
+    age = "不明" if w.get("oldest_shadow_check_age_s") is None else f"{w['oldest_shadow_check_age_s']}秒"
     lines.append("監視集合: 読取り不可" if not w["available"] else
                  f"監視集合: 期限到来{w['due']}件（未試行{w['due_never_attempted']}件）"
-                 f"・shadow最古経過 {w['oldest_shadow_check_age_s']}秒")
+                 f"・shadow最古経過 {age}")
     lines.append(rep["note"])
     return "\n".join(lines)
 

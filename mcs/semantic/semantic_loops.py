@@ -33,7 +33,8 @@ def _candidate_identity(candidate: dict) -> str:
 
 def _current_meta(meta: dict, fingerprint: str, policy: str) -> bool:
     return (meta.get("fingerprint") == fingerprint
-            and meta.get("policy_fingerprint") == policy)
+            and meta.get("policy_fingerprint") == policy
+            and not meta.get("invalidated"))
 
 
 def _valid_candidate(candidate: dict, meta: dict) -> bool:
@@ -80,6 +81,18 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
         member = members.get(mid)
         if member is None:
             continue
+        # This generation's rows of the re-evaluated message, by identity:
+        # an item the facts still yield keeps (or revives) its row, one they
+        # no longer yield stops being current but stays as history.
+        own = {}
+        for row in _candidate_rows():
+            meta = _object(row["meta"])
+            if row["message_id"] == mid \
+                    and meta.get("fingerprint") == fp \
+                    and meta.get("policy_fingerprint") == policy:
+                own.setdefault(_candidate_identity(_object(row["content"])),
+                               []).append((row["artifact_id"], meta))
+        wanted = set()
         for fact in facts:
             if fact["kind"] not in ("explicit_request", "pending_item", "schedule") \
                     or fact["polarity"] == "negated":
@@ -92,8 +105,6 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                                 "fact": fact, "registry": jev.REGISTRY_VERSION,
                                 "source_fingerprint": fp,
                                 "policy_fingerprint": policy})
-            if key in seen_candidates:
-                continue
             candidate = {
                 "loop_id": "loop_" + key[:12], "account_scope": account,
                 "project_id": project_id, "root_id": root,
@@ -107,6 +118,20 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                 "history": [{"state": "PROPOSED", "at": int(time.time()),
                              "trigger_message_id": mid}],
             }
+            identity = _candidate_identity(candidate)
+            wanted.add(identity)
+            rows = own.get(identity)
+            if rows:
+                if all(meta.get("invalidated") for _, meta in rows):
+                    # the item came back: revive its newest row, no duplicate
+                    with ledger.db:
+                        ledger.db.execute(
+                            "UPDATE artifacts SET meta=json_remove(meta,"
+                            "'$.invalidated','$.invalidated_reason') "
+                            "WHERE artifact_id=?", (rows[-1][0],))
+                continue
+            if key in seen_candidates:
+                continue
             ledger.artifact_add(
                 KIND_LOOP, json.dumps(candidate, ensure_ascii=False),
                 project_id=project_id, message_id=mid, model=jev.JEV_MODEL,
@@ -115,6 +140,15 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                       "registry": jev.REGISTRY_VERSION})
             seen_candidates.add(key)
             created += 1
+        dropped = [aid for identity, rows in own.items() if identity not in wanted
+                   for aid, meta in rows if not meta.get("invalidated")]
+        if dropped:
+            with ledger.db:
+                ledger.db.executemany(
+                    "UPDATE artifacts SET meta=json_set(meta,"
+                    "'$.invalidated',json('true'),'$.invalidated_reason',"
+                    "'reinterpreted') WHERE artifact_id=?",
+                    [(aid,) for aid in dropped])
 
     # A new sibling/reply changes the whole-thread fingerprint.  Preserve
     # the historical candidate, but materialize a current-generation copy
@@ -128,7 +162,8 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
     }
     for row in candidate_rows:
         meta = _object(row["meta"])
-        if _current_meta(meta, fp, policy):
+        # a reinterpreted-away row is history, never a fork source
+        if meta.get("invalidated") or _current_meta(meta, fp, policy):
             continue
         # Legacy artifacts without both bindings cannot be promoted to a
         # current generation without re-proving their provenance.

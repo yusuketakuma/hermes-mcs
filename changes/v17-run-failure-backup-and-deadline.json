@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "MCS障害中も日次バックアップを続け、時間切れで取得しなかった患者を未完了として表示",
+  "summary": "MCSの通信障害や手動の再ログイン待ちで収集が失敗する間も、日次バックアップの期限を過ぎていればローカルのバックアップと整理を実行します。未読の取得が時間切れで途中終了したときは、取得しなかった患者を未完了として記録し、収集状況が完了と表示されないようにしました。",
+  "upgrade": "追加設定は不要です。収集処理（Hermesではgatewayのcron、独立実行ではhost）へ更新を反映してください。失敗時の終了コード、通知、MCSへの追加通信は変わらず、バックアップが一度もない初回は従来どおり次の正常な収集で作成します。",
+  "details": ["run_checkのSessionExpired・MCSErrorの失敗経路で、maintenance.backup_overdue()が真のときだけ既存の_housekeeping（日次バックアップ・ログ整理・添付と残骸の整理）を例外を隔離して実行し、失敗理由はerrorsに残す。更新側がロックを取った経路では実行しない。", "stage_unreadが時間切れで中断したとき、まだ取得していない患者のproject_idをresult['incomplete']へ加え、収集状況をincompleteにする。取得していない患者の保存状態は変更しない。"],
+  "refs": ["mcs/ingest/run_check.py", "tests/ingest/test_run_check_failure_paths.py"]
+}

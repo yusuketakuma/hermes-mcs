@@ -549,10 +549,9 @@ SIGNAL_TYPE_LABEL = {
 }
 SIGNAL_STATE_LABEL = {"open": "未確認", "resolved": "解消",
                       "dismissed": "却下"}
-# The AI verdict carries 🚨 plus words so it never reads weaker than the
-# icon-only lexical rule match.
-URGENCY_TAG = {"llm": "🚨［緊急度高・AI判定］", "rule": "🚨"}
-# layout 2 / previews / notices: plain words, no source qualifier
+# One spelling on every surface and layout, no source qualifier (owner
+# 2026-10-09): the model verdict carries 🚨 plus words so it never reads
+# weaker than the icon-only lexical rule match.
 URGENCY_PLAIN = {"llm": "🚨 緊急度高", "rule": "🚨"}
 LAYOUT2_URGENCY = URGENCY_PLAIN
 
@@ -700,7 +699,9 @@ def _signal_compact(db, pid, contents: list, plain: bool = False) -> list:
                    if message is not None and mid is not None and s.get("project_id") == pid
                    else None)
         if urgency:
-            line += (URGENCY_PLAIN[urgency] + " ") if plain else URGENCY_TAG[urgency]
+            # the worded verdict needs a separator before the note
+            line += URGENCY_PLAIN[urgency] + (
+                " " if plain or urgency == "llm" else "")
             if urgency == "llm":
                 line += structured_view.urgency_qc_suffix(db, mid)
         lines.append(f"・{line}{s.get('note') or ''}（{signal_state(s)}）")
@@ -843,7 +844,7 @@ def _card_content(db, card, *, cfg=None) -> dict:
         first = msgs[0] if msgs else {}
         urgency = {structured_view.message_urgency(db, m["message_id"])
                    for m in msgs if m["body_state"] != "deleted"}
-        tag = next((URGENCY_TAG[u] for u in ("llm", "rule") if u in urgency), "")
+        tag = next((URGENCY_PLAIN[u] for u in ("llm", "rule") if u in urgency), "")
         urgent = bool(tag)
         context = _thread_context(db, card, msgs)
         if layout >= 2:

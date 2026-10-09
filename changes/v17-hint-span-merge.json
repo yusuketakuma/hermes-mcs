@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "別の箇所の同じ表現を一つの事実にまとめる問題を修正",
+  "summary": "投稿の解析で、規則による候補とモデルが抽出した事実が同じ文言でも、本文の別の箇所を根拠にしている場合はまとめないようにしました。これまでは同じ投稿内の過去と現在の記載や別の区切りの記載が一つに結合され、別の区切りの確認項目が根拠のない事実で完了扱いになることがありました。",
+  "upgrade": "追加設定は不要です。解析処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。モデル、取得範囲、通知、既読化、承認条件は変わりません。修正前に保存された解析結果は、更新後の定期処理で保存済みの区切り結果から順に作り直されます（v17-hint-rebuild-and-loop-currency）。",
+  "details": [
+    "semantic_extraction.extract_facts_v2は、extract_v1の候補を種類と文言が一致し、かつ候補の根拠範囲がモデルの事実の根拠範囲に含まれる場合だけ結合する。根拠範囲を一意に特定できない候補は結合せず、従来どおり破棄する。同じ箇所を指す場合の確認項目リンクの付け替えは維持する。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_extraction.py",
+    "tests/semantic/test_semantic_hint_span_merge.py",
+    "tests/semantic/test_semantic_facts_v2.py"
+  ]
+}

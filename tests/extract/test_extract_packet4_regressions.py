@@ -16,6 +16,7 @@ import extract_bench
 import extract_llm
 import rollup
 import structured_view
+from semantic_projection import PROJECTION_VERSION
 from extract_testkit import _hash, _ledger, _message
 
 
@@ -115,7 +116,7 @@ def test_empty_current_fact_source_never_revives_rule_vitals(db, kind):
                     meta={"hash": _hash(db), "rule_version": extract.RULE_VERSION})
     db.artifact_add(kind, "{}", project_id=1, message_id=1,
                     meta={"hash": _hash(db), "extract_version": extract_llm.EXTRACT_VERSION,
-                          "engine_version": 4})
+                          "engine_version": 4, "projection_version": PROJECTION_VERSION})
     assert rollup.build_rollup(db, 1).get("latest_vitals") is None
 
 

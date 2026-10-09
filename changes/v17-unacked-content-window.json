@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "巡回だけで古いカードが未確認一覧に戻る問題を修正",
+  "summary": "定期巡回で順番を更新しただけの古いカードを、直近7日の未確認一覧へ戻さなくなりました。最近作成したカードや表示内容を更新したカードは引き続き対象です。",
+  "upgrade": "追加設定は不要です。一覧の読取りから有効です。カード・確認記録は削除せず、巡回の公平性と対象プロジェクトの制限は維持します。",
+  "details": [
+    "notify_views.unacked_viewはカード作成日時または表示manifestの作成日時で対象期間を確認する。",
+    "sweepのupdated_at更新は走査順の調整に使用し、最近の内容更新の証拠に使わない。"
+  ],
+  "refs": [
+    "mcs/notify/notify_views.py",
+    "tests/notify/test_unacked_content_window.py",
+    "tests/notify/test_card_extras.py"
+  ]
+}

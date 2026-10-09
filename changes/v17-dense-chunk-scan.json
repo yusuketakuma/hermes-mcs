@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "薬剤などの長い列挙を分割する負荷を抑制",
+  "summary": "長い文章を抽出前に分割するとき、各区切りで文章の残り全体をコピーする処理をなくします。原文の全文字と薬剤・用量のまとまり、分割結果を維持します。",
+  "upgrade": "抽出workerと、Hermesのgatewayまたは独立hostを更新後に再起動してください。分割契約の版・抽出世代・モデル・上限は変更しません。",
+  "details": ["区切り位置から次の項目の範囲を検索し、局所文字列だけを切り出す。", "改変前の実装との完全合成200ケースの分割一致と、既存の原文保全・再開・根拠の契約を照合する。"],
+  "refs": ["mcs/extract/clinical_chunking.py", "tests/extract/test_clinical_chunk_planning.py"]
+}

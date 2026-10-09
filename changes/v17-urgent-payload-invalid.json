@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "壊れた緊急度再確認の通知記録で送信処理が止まり続けないよう修正",
+  "summary": "緊急度高の再確認候補の通知記録が壊れていた場合に、送信前の確認が例外で止まり、同じ送信指示を繰り返し取り直していた問題を修正しました。壊れた記録は送信しない確定の判断として一度記録し、送信指示を片付けます。壊れた記録があってもほかの通知の判定は止まらず、1日の上限や同じ部屋の待機時間の計算にはその記録も数えます。",
+  "upgrade": "追加設定は不要です。通知処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。正常な通知の送信条件、元の投稿が変わった場合の扱い、送信済み・送信中の記録は変わりません。",
+  "details": [
+    "notify_urgent.check_delivery は payload が JSON として読めない、object でない、または送信直前の比較に使う message_id・hash・shadow・base_event_id（正の整数）・stage（E1 または E2:正の整数）が欠けているか形式が違う場合に例外ではなく ok=false・reason=urgent_payload_invalid を返す。_history はすべての行を残し、読めない payload や型の違う項目は不明として扱う。日次上限と部屋の冷却時間には行ごと数え、shadow かどうか不明な行は両方のモードで数える。",
+    "notify_transport._begin_check は urgent_payload_invalid だけ理由を保ち、_FINAL_DENIALS に加えたため、拒否が送信試行として記録され、使えない送信指示ファイルは削除される。ほかの不可理由はこれまでどおり urgent_source_changed として一時的な拒否のまま。"
+  ],
+  "refs": [
+    "mcs/notify/notify_urgent.py",
+    "mcs/notify/notify_transport.py",
+    "tests/notify/test_urgent_payload_invalid.py"
+  ]
+}

@@ -6,7 +6,8 @@ one-way and explicitly lossy: fields that have no v2 analogue stay
 None rather than being invented. Categories with no legacy slot
 (allergy, adverse events, vitals, preferences, observations) remain
 in ``canonical_facts`` with their evidence and validation state.
-Only VERIFIED facts project — unverified work never surfaces.
+Only VERIFIED facts enter the persisted legacy projection. Assessment
+and Loop inputs retain unverified candidates without upgrading their status.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from __future__ import annotations
 # canonical document: writers store it in the row meta and reuse an
 # existing projection only when the version matches, so a reprocessed
 # message never keeps serving an older projection's clinical semantics.
-PROJECTION_VERSION = 3
+PROJECTION_VERSION = 5
 
 
 def projection_current(meta: dict, doc_hash: str) -> bool:
@@ -66,6 +67,8 @@ def project_v2_facts(doc: dict, *, request_details: bool = False) -> list:
     ``request_details=True`` is staging-only: feeding its assignee/time
     values into persisted Loop identities requires an owner decision.
     """
+    from semantic_llm import _iso_date
+
     def _mid(v):
         # v2 doc JSON carries message ids as strings; bundle members key
         # on ints — a string id makes audit lookup fail on good evidence
@@ -87,8 +90,11 @@ def project_v2_facts(doc: dict, *, request_details: bool = False) -> list:
                   if ref in evidence_by_id]
         ev = evidence_by_id[ev_ids[0]] if ev_ids else None
         event_time = fact.get("event_time", "unknown")
-        occurred = event_time if isinstance(event_time, str) \
-            and event_time[:1].isdigit() else None
+        occurred = _iso_date(event_time)
+        kind = _V2_TO_V1_KIND.get(fact.get("kind"), "other")
+        if fact.get("kind") == "care_event" and fact.get("workflow_status") not in (
+                "planned", "ordered", "pending", "considering", "on_hold", "in_progress"):
+            kind = "observation"
         legacy_ev = {
             "evidence_id": ev["evidence_id"],
             "message_id": _mid(ev.get("message_id", message_id)),
@@ -100,7 +106,7 @@ def project_v2_facts(doc: dict, *, request_details: bool = False) -> list:
         } if ev else None
         out.append({
             "fact_id": fact["fact_id"],
-            "kind": _V2_TO_V1_KIND.get(fact.get("kind"), "other"),
+            "kind": kind,
             "statement": fact["statement"],
             "subject_ref": fact.get("subject", "unknown"),
             "drug_ref": _v2_drug_ref(fact["statement"])
@@ -313,12 +319,14 @@ def project_v2_doc_legacy(doc: dict, *, request_details: bool = False) -> dict:
                         out["events"].append(event)
                     break
         elif kind == "request_pending":
-            due = fact.get("event_time")
-            due = due if isinstance(due, str) and due[:1].isdigit() \
-                else None
+            from semantic_llm import _iso_date
+            event_time = fact.get("event_time")
+            due = _iso_date(event_time)
             item = {"to": "不明", "from": None,
                     "action": fact.get("statement") or "",
                     "due": due, "unverified": uncertain or negated}
+            if due is None and isinstance(event_time, str) and event_time not in ("", "unknown"):
+                item["due_text"] = event_time
             if request_details:
                 from semantic_facts import request_details as bound_details
                 details = bound_details(fact, [

@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "修正後の解析結果で、該当なしと判定した区分を確認済みにしない",
+  "summary": "解析の一回限りの修正で、モデルが該当なしと判定していた区分に新しい事実が加わった場合、その区分を確認済みにせず、抽出時と同じく判断の分かれる状態として残すようにしました。これまでは修正後の結果だけ網羅が完了扱いになり得ました。",
+  "upgrade": "追加設定は不要です。解析処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。修正の回数、監査、通知、モデルは変わりません。更新前の修正で該当なしの区分が確認済みになっていた解析結果は、修正記録と修正前の結果で確認できたものだけ、定期処理が表示・要約・追跡候補を古い状態として保留し、再利用しません。自動の再解析や再修正は行わず、手動の再試行で作り直します。その際も修正は再度行われず、網羅が満たされなければ人の確認待ちになります。単に修正済みの結果や、確認の材料が足りない結果はそのままです。",
+  "details": [
+    "semantic_extraction.repair_facts_v2は確認項目の状態を付け直す際、explicit_no_factの項目に修正後の事実が結び付いたらambiguousにする。covered、open、未完了・失敗した区切りの扱いは従来どおり。",
+    "semantic_v4.reproject_staleは、fact_sourceがcanonicalのとき、REPROJECT_LIMITの残り件数で最新の修正済みsemantic_facts_v2を一度だけ確認しrepair_checkedを記録する。同じ世代の完了した修正記録のdoc_hashが一つに定まり、それと一致する修正前の文書の状態がすべて同じで、修正前・修正後の文書がどちらも正規の形式を満たし、同じ投稿・同じ版・同じ世代に結び付き、同じ確認項目がexplicit_no_factからcoveredへ変わっている場合だけheldとし（不正または結び付かない候補が1つでもあれば判断しない）、同じ投稿・同じ世代の表示、要約、監査、網羅確認、事実監査、追跡候補を無効にし、文書を再利用しない印を付ける。モデル・Jevの呼び出し、再投入、修正記録の変更は行わない。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_extraction.py",
+    "tests/semantic/test_repair_absence_contradiction.py",
+    "mcs/semantic/semantic_v4.py",
+    "tests/semantic/test_repair_absence_hold.py"
+  ]
+}

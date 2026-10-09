@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "失敗時の記録とボタン操作の取込みが途中で止まる問題を修正",
+  "summary": "収集の失敗を記録するときにデータベースへ書けなくても、状態ファイルと終了コードで失敗を報告するようにしました。ボタン操作の取込みで、処理済みのコマンドファイルを移動・削除できなかった場合も、残りの操作は続けて処理し、そのファイルは次回に回して理由を記録します。",
+  "upgrade": "追加設定は不要です。収集処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。元のエラー、終了コード、通知、ロックを失った場合にデータベースへ書かない条件は変わりません。",
+  "details": [
+    "run_checkの_fail_runはエラー内容を先に記録し、実行記録の書込み失敗をrun_record_failedとして残して処理を続ける。更新側がロックを取得した場合の実行記録も同様にし、ロックを取り戻せなかった場合は従来どおり何も書かない。",
+    "notify_cmds.drain_int_commandsは結果の公開後にコマンドファイルの隔離・削除が失敗したとき、cmd_int_consume_failedを記録してファイルを残し、同じ取込みの残りの操作を処理する。適用した操作によるカード表示の更新は、結果の公開やファイルの消費に失敗した場合もその取込みの中で行う。"
+  ],
+  "refs": [
+    "mcs/ingest/run_check.py",
+    "mcs/notify/notify_cmds.py",
+    "tests/ingest/test_run_check_failure_paths.py",
+    "tests/notify/test_cmd_int_consume_failure.py"
+  ]
+}

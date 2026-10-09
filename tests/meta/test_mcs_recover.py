@@ -358,13 +358,28 @@ def test_gateway_restart_oserror_keeps_bookkeeping(rec, tmp_path,
              "applied": [{"plugin_changed": True, "command_id": "cid-done"}]}
     rec._save_state(state)
 
-    def broken_popen(args, **kwargs):
-        raise OSError("launchctl missing")
-    monkeypatch.setattr(rec.subprocess, "Popen", broken_popen)
-    assert rec.recover() == 0
+    notices = []
+    monkeypatch.setattr(rec, "_notify", notices.append)
+    original_popen = subprocess.Popen
+
+    def broken_restart(args, **kwargs):
+        # only the detached gateway restart request fails to start; any
+        # owned git still runs against the temporary repository
+        if len(args) > 2 and args[1:4] == ["-I", "-c", rec._GATEWAY_RESTART_PROGRAM]:
+            raise OSError("synthetic launchctl missing")
+        return original_popen(args, **kwargs)
+    monkeypatch.setattr(rec.subprocess, "Popen", broken_restart)
+    assert rec.recover() == 1                     # a lost request is not success
     after = rec._load_state()
     assert after["executed"]["cid-done"]["result"] == "applied"
-    assert after["stages"] == []
+    assert after["stages"] == []                  # bookkeeping is never undone
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
+    assert report["result"] == "restart_request_failed"
+    assert report["completed"] == "resumed_done"
+    assert "synthetic" not in json.dumps(report)  # no OS diagnostic text
+    assert any("再起動" in text for text in notices)
+    restart = json.loads(Path(rec.DATA, "gateway_restart.json").read_text())
+    assert restart["status"] == "failed" and "synthetic" not in json.dumps(restart)
 
 
 @pytest.mark.parametrize("content", [
@@ -569,6 +584,20 @@ def test_restore_db_holds_without_consent(rec, tmp_path, monkeypatch):
     assert report["backup_schema"] == 7
 
 
+def _rollback_journal(rec, backup):
+    """The production precondition of a DB replace: a rollback-shaped
+    applying journal (recover only replaces from that journal)."""
+    state = rec._load_state()
+    state["applying"] = {"tag": "v1.1.0", "sha": "b" * 40, "prev_sha": "a" * 40,
+                         "rollback": True, "backup_path": str(backup), "at": time.time()}
+    rec._save_state(state)
+
+
+def _journal_kept(rec):
+    applying = rec._load_state()["applying"]
+    assert applying["rollback"] is True and "restore_staging" not in applying
+
+
 @pytest.mark.parametrize("separator", ["#", "?", "%23"])
 def test_restore_uses_exact_backup_path_with_uri_delimiters(
         rec, tmp_path, monkeypatch, separator):
@@ -589,7 +618,9 @@ def test_restore_uses_exact_backup_path_with_uri_delimiters(
     report = json.loads((tmp_path / "data" / "restore_report.json").read_text())
     assert report["backup_schema"] == 7
     _consent(rec, live, back)
+    _rollback_journal(rec, back)
     assert rec._restore_db(str(back)) is None
+    _journal_kept(rec)
     assert rec._db_version(str(live)) == 7
 
 
@@ -615,7 +646,9 @@ def test_restore_measures_and_approves_exact_live_uri_path(
     assert report["stored_since_backup"]["messages"] == 2
     assert live.read_bytes() == before
     _consent(rec, live, back)
+    _rollback_journal(rec, back)
     assert rec._restore_db(str(back)) is None
+    _journal_kept(rec)
     assert rec._db_version(str(live)) == 7
     assert decoy.read_bytes() == decoy_before
 
@@ -672,7 +705,9 @@ def test_restore_db_verify_mismatch(rec, tmp_path, monkeypatch):
     monkeypatch.setattr(rec, "_db_version",
                         lambda p: 7 if p == str(back) else 8)
     _consent(rec, live, back)
+    _rollback_journal(rec, back)
     assert rec._restore_db(str(back)) == "restore_verify_failed"
+    _journal_kept(rec)
 
 
 def test_restore_db_replaces_and_verifies(rec, tmp_path, monkeypatch):
@@ -682,7 +717,9 @@ def test_restore_db_replaces_and_verifies(rec, tmp_path, monkeypatch):
     _mk_db(back, 7)
     monkeypatch.setattr(rec, "LEDGER", str(live))
     _consent(rec, live, back)
+    _rollback_journal(rec, back)
     assert rec._restore_db(str(back)) is None
+    _journal_kept(rec)
     assert rec._db_version(str(live)) == 7
     marker = json.loads((tmp_path / "data"
                          / "restore_pending.json").read_text())

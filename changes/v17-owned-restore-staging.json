@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "DB復元の一時コピーを更新記録に結び付け、中断後も確実に片付ける",
+  "summary": "更新のロールバックでDBを復元するとき、作成した一時コピーを中身のコピーを始める前に更新記録へ登録し、復元が中断された場合も次の復元時にその登録と完全に一致するファイルだけを削除します。名前や時刻だけで古いファイルを消すことはなく、一致を確認できないファイルは残して復元を保留します。",
+  "upgrade": "追加設定は不要です。復旧本体はcheckout外に置かれるため、更新時は従来のrecovery_tool_changedの手順で復旧本体を同期してください。この変更より前に残った一時コピーは自動では削除しません。更新記録がない状態や記録が壊れている状態ではDBを置き換えず、既存の復旧報告と承認待ちの保留で扱います。",
+  "details": ["両方の_replace_databaseで、一時ファイル作成直後のdevice・inode・uidと名前をupdate_state.jsonのapplying.restore_stagingへfsync付きで保存し、保存できた後にだけバックアップをコピーする。", "次の復元時はupdate.lockとrun.lockの保持下で、記録と同じ名前・通常ファイル・リンク数1・自分のuid・同じdevice/inodeのファイルだけを削除し、名前が消えていれば記録だけを外す。記録の形式不正・身元不一致・シンボリックリンク・ハードリンク・他ユーザーのファイルは触らずに保留する。", "成功時と失敗時の後始末も同じ一致確認を行い、元の失敗理由を隠さない。"],
+  "refs": ["mcs/ops/mcs_update.py", "deployment/recovery/mcs_recover.py", "tests/ops/test_restore_staging_ownership.py"]
+}
