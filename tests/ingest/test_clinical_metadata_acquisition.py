@@ -455,20 +455,29 @@ def test_mapping_changes_during_get_cannot_publish_clinical_rows(world):
 
 
 @pytest.mark.parametrize("kind", ["progress", "definition"])
-def test_deep_stored_metadata_cannot_block_other_patients(world, kind):
+def test_deep_stored_metadata_cannot_block_other_patients(world, kind, monkeypatch):
     db, client, wire, _ = world
-    # SQLite accepts this depth while Python cannot decode it at this call depth.
+    # The C decoder depth limit varies by Python version; inject its failure.
     raw = ('{"dataset":"observation_items","entity_id":10,"karte_id":10,'
            '"synthetic_unused":' + '[' * 998 + '0' + ']' * 998 + '}')
     assert db.db.execute("SELECT json_valid(?)", (raw,)).fetchone()[0] == 1
-    with pytest.raises(RecursionError):
-        json.loads(raw)
+    original_loads = json.loads
+    failures = []
+
+    def decode(content, *args, **kwargs):
+        if content == raw:
+            failures.append(content)
+            raise RecursionError("synthetic decoder depth failure")
+        return original_loads(content, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", decode)
     stored_kind = (metadata.CLINICAL_PROGRESS_KIND if kind == "progress"
                    else metadata.ARTIFACT_KIND)
     aid = db.artifact_add(stored_kind, raw, project_id=1)
     if kind == "definition":
         assert metadata._clinical_items(db.db, 1, 10) == (None, {})
     stats = run(db, client)
+    assert failures
     assert stats["requests"] > 0
     assert any("/kartes/20/" in call["url"] for call in wire.calls)
     if kind == "definition":
