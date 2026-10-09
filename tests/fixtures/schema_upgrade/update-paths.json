@@ -3,7 +3,7 @@
   "synthetic": true,
   "origins": "origins.json",
   "target": {
-    "version": "v1.0.16",
+    "version": "v1.0.17",
     "code": "current workspace updater",
     "schema": "ledger.SCHEMA_VERSION"
   },
@@ -94,6 +94,11 @@
     },
     {
       "release": "v1.0.15",
+      "updater": true,
+      "standalone": true
+    },
+    {
+      "release": "v1.0.16",
       "updater": true,
       "standalone": true
     }
@@ -385,6 +390,18 @@
     },
     {
       "source": "v1.0.15",
+      "runtime": "standalone",
+      "entry": "host",
+      "external_plan": "standalone_external_apply"
+    },
+    {
+      "source": "v1.0.16",
+      "runtime": "hermes",
+      "entry": "target_bootstrap",
+      "external_plan": null
+    },
+    {
+      "source": "v1.0.16",
       "runtime": "standalone",
       "entry": "host",
       "external_plan": "standalone_external_apply"

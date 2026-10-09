@@ -1,8 +1,8 @@
 {
   "format": 1,
   "synthetic": true,
-  "origin_method": "For each local release tag, run only Ledger._init, _migrate, _migrate_body, _script and _backfill_v3 against an empty in-memory SQLite DB. Inline SCHEMA constants from mcs_requests and notify_cards at the same tag, not current modules. Export sqlite_master SQL (tables, explicit indexes, triggers), excluding SQLite internal and FTS shadow tables; append the actual historical user_version. No patient data or historical database was read. Identical DDL is shared; every release remains a separate test parameter. Revalidated 2026-10-06 against current local v1.0.0-v1.0.13 tags: ledger and dependency blob hashes match every recorded source_sha256; DDL generated from the same schema-only methods matches every fixture sqlite_master entry after whitespace normalization, excluding SQLite internal and FTS shadow tables. Updated v1.0.3-v1.0.12 commit mappings to the current tag commits; source and fixture hashes are unchanged. This verifies current tag schema equivalence, not the historical updater binaries or the historical 26-path runner. v1.0.14 added on 2026-10-06 by the same schema-only extraction at exact tag 3d9e324bd8fdf493213a4df506d62ccca8edf24a; shape-8 adds only thread_read_marks to shape-7 while retaining schema 9, all earlier sqlite_master definitions normalized equal. v1.0.15 added 2026-10-08 from the exact released tag Ledger._init on an empty synthetic SQLite DB in an offline bounded container. All prior shape-8 definitions normalized equal; six new explicit indexes require separate shape-9. Historical fixtures are unchanged.",
-  "coverage": "Released v1.0.0 through v1.0.15; manual source update through v1.0.2; original initialized schemas, not intermediate migration states.",
+  "origin_method": "For each local release tag, run only Ledger._init, _migrate, _migrate_body, _script and _backfill_v3 against an empty in-memory SQLite DB. Inline SCHEMA constants from mcs_requests and notify_cards at the same tag, not current modules. Export sqlite_master SQL (tables, explicit indexes, triggers), excluding SQLite internal and FTS shadow tables; append the actual historical user_version. No patient data or historical database was read. Identical DDL is shared; every release remains a separate test parameter. Revalidated 2026-10-06 against current local v1.0.0-v1.0.13 tags: ledger and dependency blob hashes match every recorded source_sha256; DDL generated from the same schema-only methods matches every fixture sqlite_master entry after whitespace normalization, excluding SQLite internal and FTS shadow tables. Updated v1.0.3-v1.0.12 commit mappings to the current tag commits; source and fixture hashes are unchanged. This verifies current tag schema equivalence, not the historical updater binaries or the historical 26-path runner. v1.0.14 added on 2026-10-06 by the same schema-only extraction at exact tag 3d9e324bd8fdf493213a4df506d62ccca8edf24a; shape-8 adds only thread_read_marks to shape-7 while retaining schema 9, all earlier sqlite_master definitions normalized equal. v1.0.15 added 2026-10-08 from the exact released tag Ledger._init on an empty synthetic SQLite DB in an offline bounded container. All prior shape-8 definitions normalized equal; six new explicit indexes require separate shape-9. Historical fixtures are unchanged. v1.0.16 added 2026-10-09 by the same schema-only extraction at exact tag 746ca0d6fde61fc1f6ec3aa5146f48815132d837: only Ledger._init of the exported tag on an empty synthetic SQLite DB (no relation guards), tables/indexes/triggers ordered by type then name; the identical extractor reproduces shape-9 byte for byte from v1.0.15. shape-10 adds only notification_cards.layout to shape-9 while retaining schema 9. Historical fixtures are unchanged.",
+  "coverage": "Released v1.0.0 through v1.0.16; manual source update through v1.0.2; original initialized schemas, not intermediate migration states.",
   "historical_number_evidence": "All supported release tags declare schema 7 (v1.0.0-v1.0.10), 8 (v1.0.11-v1.0.12), or 9 (v1.0.13-v1.0.14). Additionally schema 5 is fully evidenced by pre-release commit 6b532e5:adapter/ledger.py and adapter/mcs_requests.py and represented separately, without claiming automatic release update eligibility. Local SCHEMA_VERSION history jumps 5 to 7 at 3e51b36; complete original schema 0-4 and 6 source definitions are not evidenced by this history. Comments/compatibility branches alone do not establish those fixtures. Current SCHEMA_VERSION is imported dynamically by tests.",
   "pre_release_shapes": [
     {
@@ -329,6 +329,26 @@
       "schema_version": 9,
       "fixture": "shape-9.sql",
       "fixture_sha256": "4e41624542322d2629b9874048d662b31b0d2fae61dcfdfd4184b27c10d8fa1e",
+      "update_route": "automatic"
+    },
+    {
+      "release": "v1.0.16",
+      "commit": "746ca0d6fde61fc1f6ec3aa5146f48815132d837",
+      "source": "mcs/core/ledger.py",
+      "source_sha256": "d0ff171e2381bb0fa176290e626ea8221516e6b5cc47e0148c193d0612515388",
+      "dependencies": [
+        {
+          "source": "mcs/ops/mcs_requests.py",
+          "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
+        },
+        {
+          "source": "mcs/notify/notify_cards.py",
+          "source_sha256": "d33f08788f1134994e732d872578ff0bc9783109bc8599ddfa563aaf7023678b"
+        }
+      ],
+      "schema_version": 9,
+      "fixture": "shape-10.sql",
+      "fixture_sha256": "896d0b430b945d39396065f37945618a85f0e32f16e18f0bbae6a4a989303a49",
       "update_route": "automatic"
     }
   ]
