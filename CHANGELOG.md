@@ -6,6 +6,507 @@
 
 ## [Unreleased]
 
+## [1.0.17] — 2026-10-09
+
+**遅れて届く返信の通知と、抽出・更新・復旧の停止を修正**
+
+新機能を追加せず、既存の収集・抽出・通知・更新・復旧を安定化する版です。遅れて届く返信を元スレッドとチャンネルへ通知し、破損した保存記録による停止や古い結果の誤表示を修正しました。更新後はgateway・host・使用中のアダプター・抽出worker・復旧本体への反映確認が必要です。
+
+| 変更 | 以前 | 今回 | 利用者のメリット |
+|---|---|---|---|
+| 遅れて届く返信 | 元スレッドには届くがチャンネル通知が出ない場合がある | 元スレッドへの新規投稿をチャンネルにも通知 | 後日届いた返信に気づける |
+| 保存記録の破損 | 一部の記録で抽出・通知処理が止まる | 確認できない記録を保留し、正常な後続処理を続ける | 一件の破損で他の連絡が止まるのを防ぐ |
+| 更新・復旧の判定 | 中断や失敗が完了扱いになる経路がある | 承認・保存・処理の終了を確認してから完了する | 復旧途中の状態を見落としにくい |
+
+### 改善
+
+- **緊急度と薬剤の表示をそろえる**
+  旧カードを含めて緊急度高の表記をそろえ、薬剤の未確認状態を読み取りやすくしました。通知先ごとの操作メニューと説明図も、実装の順序に合わせました。判定条件や臨床上の閾値は変更しません。
+
+### 不具合修正
+
+- **時間がたってから届いた返信も通知する**
+  Slackでは、過去のメイン書込みへの返信を元の通知スレッドに新しく投稿し、チャンネルにも通知します。解析による既存投稿の更新や再試行で、同じ通知を増やしません。
+
+- **一件の壊れた記録で収集・通知・解析を止めない**
+  深すぎるJSON、範囲外の整数、不正な配送進捗や通知IDを安全に扱い、正常な後続処理を継続します。最新の連携サマリーを読めない場合は古い登録内容を復活させず、未確認として表示します。履歴取得でのセッション失効と、処理そのものの停止も区別します。
+
+- **測定値・予定・依頼候補の取り違えを防ぐ**
+  血圧の片側欠落、長い数値の一部だけの採用、原文と一致しない集約値を修正しました。療養上の出来事や相対日付を確定した予定へ混ぜず、現在の原文と合わない依頼候補は古い状態として保留します。記録がないことを、対応がなかったことと断定しません。
+
+- **解析の再試行と保存済み結果の再利用を整合させる**
+  実行枠の所有プロセスを取り違える問題、形式指定の拒否を早く確定失敗にする問題、長文の完了区間や修正後の項目を失う問題を修正しました。保存済みの監査済み結果から表示を作り直す経路も整え、古い結果や途中結果を現在の完了結果として使いません。
+
+- **更新・バックアップ・復旧の失敗を正しく残す**
+  Gitや更新後処理の時間切れでは、子プロセスの終了を確認します。バックアップと復旧の失敗理由を記録し、DB復元は損失報告と対象バックアップに束縛した人承認を維持します。接続情報をエラー表示へ含めず、復元後に対象プロジェクトを確認できない配送保留を解除しません。
+
+### 動作・設定の変更
+
+- **保存済み結果の表示・抽出世代を更新する**
+  ルール19・LLM抽出7・集約の期間確認8・閲覧用投影5へ更新します。既存本文は通常の処理枠で順次再処理します。モデル、取得10分間隔、トークンと呼出時間の上限、既読化と人承認の条件は維持します。
+
+### 更新時の注意
+
+- Hermesはgatewayと抽出worker2本、独立実行は使用中のhost・通知アダプターとworkerへ反映して再起動してください。checkout外の復旧本体も、既存の`recovery_tool_changed`手順で同期します。復旧Pythonと機能のopt-outを維持してください。
+- Slackのチャンネル通知は、新しく取り込まれた返信の最初の本文投稿が対象です。過去の返信を一斉再送しません。実際の端末通知はSlackと端末の通知設定に従います。通知には患者名・本文が含まれるためプレビュー設定を確認してください。
+- 古い抽出結果は通常枠で順次更新されるため、一時的な滞留が生じ得ます。保存履歴・正式な依頼・通知履歴・過去ログは保持し、失敗確定・結果不明の配送や過去の再試行上限を自動で戻しません。
+- `fact_source=canonical`の環境では、保存済みの監査済み文書から表示用情報を少しずつ作り直します。この作り直し自体はモデル・外部評価を呼びません。原文が変わったスレッドは通知なしで一度だけ再解析へ進み、一時停止中の患者は受付だけで実行は保留します。失敗済み・人の確認待ち・修正済みの解析は自動で再解析せず、手動の再試行を使います。
+- 旧版の修正で「該当なし」の区分を誤って確認済みにした結果は、修正記録と修正前の結果で確認できるものだけ採用を保留します。自動で再修正せず、手動再試行でも網羅が満たされなければ人の確認待ちです。確認の材料が足りない結果を推測で書き換えません。
+- DB schemaは9を維持します。破壊的なDB復元は更新承認と別の個別同意を必要とします。この版より前に残った復旧用の一時コピーは自動削除せず、壊れた更新記録や配送進捗を成功へ補完しません。Git操作の後始末には最大約2秒の停止猶予と5秒以内の回収が加わります。
+- 旧ラベルのカードはSlack・Discordでは既存投稿を更新し、LINE WORKSでは対象カードごとに「更新版」を一度追加します。復旧によるLINE WORKS再起動は、Hermes接続でLINE WORKSを対話先に使う環境だけが対象です。
+- LLM受付制御は既定無効です。有効な環境には起動時刻の列を加法的に追加します。旧受付枠や起動時刻を読めない枠は従来のプロセス番号判定を維持し、動作中・結果不明・閉じた受付を自動解放・再開しません。
+- 公式医薬品masterは当該リリースで更新を確認し、20260930版を継続同梱します。私有辞書の承認・有効化は別途必要です。新規導入と公開済み全過去版からの更新は合成回帰で検証し、旧版の手動条件と非互換downgradeの制限を維持します。
+
+### 技術詳細
+
+<details>
+<summary>技術詳細・根拠を表示</summary>
+
+#### LLM受付制御で再利用されたプロセス番号を所有者と誤認しない
+
+- Linuxは/proc/PID/statの起動時刻、macOSはLC_ALL=C・TZ=UTCで実行するps -o lstartを、1回1秒・1回の回収あたり合計2秒以内で読み取る。
+- 起動時刻は固定形式（Linuxは対象PIDの記録の22番目の数値、macOSは曜日と実在日付まで一致するC形式の日時）だけを採用し、破損・未知形式・方式の異なる記録同士・読取り失敗・秒単位で区別できない再利用では解放しない。
+- 同じプロセス番号は1回の回収で1度だけ照会し、fork後の子プロセスは自分の起動時刻を記録する。
+- 根拠: mcs/core/llm_admission.py、tests/core/test_llm_admission_reclaim.py
+
+#### バックアップの警報で保持上限と暗号化ツールの不備を区別
+
+- 新しい失敗理由の保存・health出力を既存の監視警報へ接続する。
+- 新鮮な異常記録と既存のbackup_failed/backup_not_verifiedが一致するときだけ、有限の固定理由を表示する。例外の生テキストや不明な値は表示しない。
+- 根拠: mcs/ingest/health_watch.py、tests/ingest/test_health_watch.py
+
+#### バックアップ失敗の理由を状態と診断に表示
+
+- mcs_backupが発生させる固定コード58種だけを記録・公開し、例外の本文・パス・設定値は保存しない。未知の内容はbackup_io_or_policy_failedとして記録する。
+- status()にlast_failure_code、run_checkのバックアップ診断にfailure_codeを追加し、既存のreasonsは維持する。
+- 根拠: mcs/ops/mcs_backup.py、mcs/ingest/run_check.py、tests/ops/test_mcs_backup.py、tests/ops/test_backup_integration.py
+
+#### 別々の測定の血圧を組み合わせて表示しない
+
+- extract_llm._vitals_guardと保存済み結果を読むextract.patient_vitalsで、収縮期と拡張期が両方あるときは本文に同じA/Bの組として書かれているかを確認し、各側に異なる値が複数あり組を確かめられない場合は両方を除く。片側だけの値や、収縮期・拡張期が1回だけ明示された記載は従来どおり扱う。
+- 表示時の確認は本人の記載範囲だけを対象にし、家族の測定の組を本人の組として扱わない。組の根拠はBP・血圧・mmHgのラベルに結びつく記載だけで、値の大小やしきい値では判断しない（ラベルのない日付などは組として数えない）。
+- _nearest_vital_labelがラベル探索の範囲を文字列の切り出しで作っていたため、BPのBが範囲外になると残るPを脈拍と判定していた問題を、本文上の範囲検索に修正した。
+- 収縮期と拡張期が同じ値（例 BP80/80）のとき拡張期を収縮期の記述と誤って除いていた問題を、値がその側の位置にもある場合はその側として扱うよう修正した。
+- 組の確認に使う数値は既存の抽出と同じ書式（小数・全角の小数点を含む）で読み、小数の別測定どうしも組み合わせない。丸め・単位換算・範囲の推定は行わない。
+- 根拠: mcs/extract/v4/extract_llm.py、mcs/extract/v1/extract.py、tests/extract/test_bp_pair_guard.py
+
+#### 薬剤の確認画面から抽出元の表記を削除
+
+- notify_views.meds_viewの未確認行の注記をカード要約の「薬剤候補（未確認）」と同じ出所なしの表記へ揃える。
+- layout 1の既存カードの緊急度表記は所有者決定（2026-10-08）どおり変更しない。
+- 根拠: mcs/notify/notify_views.py、tests/notify/test_card_drug_views.py、tests/extract/test_alert_subject_guard.py
+
+#### 読めない取得記録で臨床データの収集が止まる問題を修正
+
+- 進捗と項目定義のJSON読取りに既存のloads_dictを使用し、SQLiteが有効と判定してもPythonで解釈できない深いJSONを不採用にする。
+- 根拠: mcs/ingest/project_metadata.py、tests/ingest/test_clinical_metadata_acquisition.py
+
+#### 薬剤などの長い列挙を分割する負荷を抑制
+
+- 区切り位置から次の項目の範囲を検索し、局所文字列だけを切り出す。
+- 改変前の実装との完全合成200ケースの分割一致と、既存の原文保全・再開・根拠の契約を照合する。
+- 根拠: mcs/extract/clinical_chunking.py、tests/extract/test_clinical_chunk_planning.py
+
+#### Discordで無効になったカードの更新依頼が失敗したときの案内を修正
+
+- 更新依頼の書込みでOSErrorが起きた場合、interaction_resultにoutcome=refresh_publish_failedを記録し、既存の汎用失敗文言を返す。
+- 成功時の案内・記録と、権限のない操作で依頼を作らない動作は維持する。
+- 根拠: adapters/discord/actions.py、tests/adapters/discord/test_mcs_discord.py
+
+#### 失敗時の記録とボタン操作の取込みが途中で止まる問題を修正
+
+- run_checkの_fail_runはエラー内容を先に記録し、実行記録の書込み失敗をrun_record_failedとして残して処理を続ける。更新側がロックを取得した場合の実行記録も同様にし、ロックを取り戻せなかった場合は従来どおり何も書かない。
+- notify_cmds.drain_int_commandsは結果の公開後にコマンドファイルの隔離・削除が失敗したとき、cmd_int_consume_failedを記録してファイルを残し、同じ取込みの残りの操作を処理する。適用した操作によるカード表示の更新は、結果の公開やファイルの消費に失敗した場合もその取込みの中で行う。
+- 根拠: mcs/ingest/run_check.py、mcs/notify/notify_cmds.py、tests/ingest/test_run_check_failure_paths.py、tests/notify/test_cmd_int_consume_failure.py
+
+#### 出力形式の指定を拒否されただけで要約が確定失敗になる問題を修正
+
+- semantic.llm_chatは、長い出力として記録済みのプロンプトでjson_object指定がHTTP 400、404、422で拒否され、長い要求に必要な残り時間が無い場合に、prompt_rejectedではなく再試行可能な失敗（None）を返す。要求は送信済みのため試行回数は消費し、形式指定なしの記録と長い出力の記録は保持する。
+- 根拠: mcs/semantic/semantic.py、tests/semantic/test_semantic_llm_retry.py
+
+#### 更新中のGit時間切れで残るロックがロールバックを止める問題を修正
+
+- mcs_update._gitとmcs_recover._gitは自分専用のセッションでGitを起動し、時間切れ・中断時はまだ回収していない自分のセッションだけにSIGTERM、猶予後にSIGKILLを送り、回収する。既存の_stop_update_childの動作は変えない。
+- 戻り値、git_timeout・git_spawn_failedの理由、失敗時の診断出力の非表示、復旧本体の失敗時None、GIT_CEILING_DIRECTORIESとGit環境の扱いは変えない。
+- 根拠: mcs/ops/mcs_update.py、deployment/recovery/mcs_recover.py、tests/ops/test_git_timeout_cleanup.py、tests/ops/test_update_error_output.py、tests/ops/test_mcs_update.py
+
+#### DBの関係保護の確認済み表示を厳密化
+
+- ledger_audit.guard_statusは行数だけでなく、artifactsとattachmentsの双方が一度ずつ存在することを確認する。
+- 根拠: mcs/core/ledger_audit.py、tests/core/test_guard_status_relations.py
+
+#### 修正前の解析結果から作られた表示・要約・追跡候補が最新のまま残る問題を修正
+
+- semantic_extraction.FACTS_V2_BUILD（hint-span/1）を新規保存のsemantic_facts_v2のmetaに記録し、修正後の結果を作り直しの対象から外す。rebuild_facts_v2_cachedはモデル・Jev・書込みを行わず、区切り結果が無い、事前判定が保存されていない、区切り方が変わる場合は作り直さない。
+- semantic_v4.reproject_staleは、build無しでextract_v1と他の出所を併記した事実を持つ最新のsemantic_facts_v2を、REPROJECT_LIMITの残り件数だけ処理し、hint_rebuildにsame、replaced、skippedと理由、historyのいずれかを一度だけ記録する。replacedとskippedでは、同じ投稿・同じ世代の表示すべて（同じ世代の別の古い表示が最新に戻らないように）と、同じ世代の要約・監査・網羅確認・事実監査・追跡候補をinvalidatedにし、要約はstaleにする。失敗済み、待機中、人の確認待ち、修正済み、対象範囲外は再投入しない。fact_sourceがcanonical以外では何もしない。 対象の選択は事実の配列の要素が辞書で出所が文字列のものだけを読み、形の違う要素が混ざった文書でも処理全体を止めず、その文書だけを作り直せない理由付きで保留する。
+- semantic_drainは作り直せなかった文書を再利用・公開せず、すでに使った網羅の再試行を引き継ぐ。修正後の文書にはbuildを記録する。semantic_store._currentはinvalidatedの行を再利用しない。
+- semantic_loops.update_loopsは再評価した投稿の候補を同一性で照合し、出なくなった候補をinvalidatedにし、戻った候補は同じ行を復帰させる。invalidatedの候補は最新世代へコピーしない。他の投稿の候補と新しい返信によるコピーは保持する。request_loops.current_candidateはinvalidatedの候補をloop_candidate_staleとして拒否する。再投影で表示を作り直した投稿の候補も同じ照合を行う。
+- 根拠: mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_v4.py、mcs/semantic/semantic_drain.py、mcs/semantic/semantic_store.py、mcs/semantic/semantic_loops.py、mcs/ops/request_loops.py、tests/semantic/test_hint_rebuild_pass.py、tests/semantic/test_loop_reinterpretation.py
+
+#### 別の箇所の同じ表現を一つの事実にまとめる問題を修正
+
+- semantic_extraction.extract_facts_v2は、extract_v1の候補を種類と文言が一致し、かつ候補の根拠範囲がモデルの事実の根拠範囲に含まれる場合だけ結合する。根拠範囲を一意に特定できない候補は結合せず、従来どおり破棄する。同じ箇所を指す場合の確認項目リンクの付け替えは維持する。
+- 根拠: mcs/semantic/semantic_extraction.py、tests/semantic/test_semantic_hint_span_merge.py、tests/semantic/test_semantic_facts_v2.py
+
+#### 履歴の取り込み中にログインが切れても、取り込みを失敗扱いにしない
+
+- job_ops.run_history_jobs は merge_full_replies が SessionExpired を返したとき stalls を加算しない（deadline 打ち切りと同じ扱い）。例外は従来どおりジョブ状態を記録した後に送出する。run_reconcile_jobs は以前から stall 計上の前に送出しており変更しない。
+- 根拠: mcs/ingest/job_ops.py、tests/ingest/test_history_session_expiry_not_stall.py
+
+#### 壊れた通知を保留しても後続通知を止めない
+
+- notify_flush._hold_eventのnew_messages救済対象は配列中の既存positive検証に合格するIDだけにする。型の異なるmessage_idsは救済せず保留し、同じ検証済みID配列を再利用する。
+- 救済は未配信の証明があるときのみ、rescue_ofによる1回限りの条件を維持する。signal/digestの救済条件とunknown deliveryのrescue=Falseは変えない。
+- 根拠: mcs/notify/notify_flush.py、tests/notify/test_deep_progress_isolation.py
+
+#### 取得できない処理時間やトークン数を0として記録する問題を修正
+
+- integrityのusage/timingsは実際に提供された項目だけを保持する。
+- 集計のprompt_msとpredicted_msの取得有無を個別に判定し、非有限の合計は未知として、有効なほかの測定値を保持する。
+- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_integrity_partial_metrics.py
+
+#### 応答時間集計の差分から少人数の結果を推定しにくくする
+
+- 補完抑制を件数だけでなく、投稿側・返信側それぞれの人数と患者ルーム数にも適用する。
+- 個別の氏名・識別子を出力せず、既存の読取り専用集計と返却形式を維持する。
+- 根拠: mcs/views/mcs_stats.py、tests/views/test_interaction_latency.py
+
+#### 別の記録の血圧を組み合わせる問題を修正
+
+- extract_llm._mergeの血圧2キーを一つの測定として扱い、後のchunkが血圧を含む場合は両キーを入れ替える。
+- 血圧以外の新しい測定値だけを含むchunkは、以前の血圧を変更しない。
+- 成功済みの旧extract_version=6も既存pending_predと書込み側_currentの世代判定により再処理対象になる。JSON出力schemaは変えない。
+- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_merge_bp_readings.py
+
+#### 古い通知記録が壊れていてもDB更新を停止しない
+
+- ledger._migrate_bodyは既存loads_dictで保存JSONを読み、ValueError・RecursionErrorを含めて読めないものを通知済みの根拠から除く。
+- message_idsは既存のpositive検証を使い、bool・文字列・小数・SQLite整数の範囲外を除外する。正常IDの900件分割・共通timestamp・移行失敗時のrollback・schema version更新の境界は維持する。
+- 根拠: mcs/core/ledger.py、tests/core/test_migration_bind_bounds.py
+
+#### 読めない通知記録で添付の取得を停止しない
+
+- ledger.pending_notify_message_idsが既存loads_dictで保存JSONを読み、既存positiveでSQLite範囲内の投稿IDだけを優先順位へ渡す。通知を削除・既読化・再送せず、対象stateとnext_try条件は維持する。
+- 根拠: mcs/core/ledger.py、tests/core/test_core_misc.py、mcs/ingest/run_check.py
+
+#### DB復元の一時コピーを更新記録に結び付け、中断後も確実に片付ける
+
+- 両方の_replace_databaseで、一時ファイル作成直後のdevice・inode・uidと名前をupdate_state.jsonのapplying.restore_stagingへfsync付きで保存し、保存できた後にだけバックアップをコピーする。
+- 次の復元時はupdate.lockとrun.lockの保持下で、記録と同じ名前・通常ファイル・リンク数1・自分のuid・同じdevice/inodeのファイルだけを削除し、名前が消えていれば記録だけを外す。記録の形式不正・身元不一致・シンボリックリンク・ハードリンク・他ユーザーのファイルは触らずに保留する。
+- 成功時と失敗時の後始末も同じ一致確認を行い、元の失敗理由を隠さない。
+- 根拠: mcs/ops/mcs_update.py、deployment/recovery/mcs_recover.py、tests/ops/test_restore_staging_ownership.py
+
+#### 復元後の配送確認で、対象プロジェクトを確認できない保留を解除しない
+
+- hermes_plugin._card_resolution は render が無い保留のプロジェクトを、card（signal・digest は既存の _card_projects と同じ coverage 経由）と保留の events_json が指す notify_outbox 行の project_id から求め、要求に含まれる値は使わない。1件も求まらなければ project_unknown、範囲外が含まれれば project_not_allowed。壊れた scope_json は例外ではなく hold_scope_corrupt で拒否する。
+- events_json は解除処理と同じ notify_transport.hold_events で読み、正の整数IDの配列でなければ hold_events_corrupt で拒否する。無効な要素を飛ばして残りの通知だけで範囲を判定しない。空の配列は card からプロジェクトを確認できれば従来どおり扱う。
+- 根拠: hermes_plugin/__init__.py、tests/plugin/test_card_resolution_lost_hold_scope.py、mcs/notify/notify_transport.py
+
+#### 実施済みの出来事と相対的な期限の読み替えを修正
+
+- care_eventをscheduleへ写すのは未完了の予定・指示等のworkflowだけに限定し、実施済みや状態不明の出来事はobservationへ写す。
+- occurred_atとrequests.dueは既存の絶対日付の検証・正規化を通す。相対・不正な日付はtime_text/due_textに保持する。
+- PROJECTION_VERSIONを5へ更新する。
+- 根拠: mcs/semantic/semantic_projection.py、tests/semantic/test_canonical_projection.py
+
+#### 旧形式の抽出結果が抽出待ちと表示される問題を修正
+
+- 全体の読取りと投稿単位の患者背景読取りを、投稿IDが一意な旧形式の記録を許容する共通の抽出契約に揃える。canonical_projectionとsemantic_facts_v4の明示的なproject_id照合は維持する。
+- 根拠: mcs/views/read_model.py、tests/views/test_patient_context_view.py
+
+#### DB復元後の配送確認で、取り消したカードを戻さない
+
+- notify_transport._rebind_apply は render 行が失われた保留で card が revoked のとき、delivery_state を変えない。mark_delivered で card に message_id が無ければそれだけを記録し、既存の revoke 再描画が削除できるようにする。mark_not_sent で送信待ちに戻した通知は、既存の配信処理が revoked の card を抑止する。
+- 保留の events_json は notify_transport.hold_events が正の整数IDだけの JSON 配列として読み、bool・文字列・小数・範囲外の整数・配列以外・読めない JSON を含めば None を返す。_rebind_check はこれを hold_events_corrupt として拒否し、受領記録以外は書き換えない。_rebind_apply も同じ関数で読み、無効な ID を除いた一部だけを戻すことはしない。
+- 根拠: mcs/notify/notify_transport.py、tests/notify/test_rebind_revoked_card.py
+
+#### 復旧時の保留に読めない数値があっても確認処理を停止しない
+
+- notify_transport._rebind_checkの保存scope_json読取りで、JSON構文エラーに加えて整数変換のValueErrorもhold_scope_corruptとして扱う。すべての書込みはこの確認の後で行い、拒否時は受領記録のみ残す。
+- 根拠: mcs/notify/notify_transport.py、tests/notify/test_rebind_revoked_card.py
+
+#### 更新承認と復元承認の確認で受付記録を一括読込みしない
+
+- scan_pending_approvals、_restore_consent、mcs_recover._consent_forのfetchallを同じORDER BYのカーソル逐次読みに置き換え、接続はfinallyで必ず閉じる。
+- 最新の一致する復元承認を見つけた後も残りの行を解析せず読み切り、途中で読めない行があれば従来どおり承認なしとする。
+- 根拠: mcs/ops/mcs_update.py、deployment/recovery/mcs_recover.py、tests/ops/test_recovery_corrupt_receipts.py
+
+#### 更新後・復旧後のLINE WORKS再起動漏れと再起動要求失敗の見落としを修正
+
+- mcs_recoverのpost-merge再開と完了済み後処理でmcs_update.restart_servicesと同じくgateway条件とLINE WORKS再起動を実行し、前版へ戻すだけの完了では従来どおりアダプターを再起動しない。
+- mcs_update.restart_lineworksは起動できなかった再起動要求を固定文の更新通知で知らせ、実行モードが不正な設定では例外にせず何もしない。
+- 復旧処理は再起動要求の保存失敗・起動失敗をrestart_request_failedとして報告と通知に残し、終了コード1を返す。記録済みの更新状態は戻さない。
+- 根拠: deployment/recovery/mcs_recover.py、mcs/ops/mcs_update.py、tests/ops/test_recovery_adapter_restart.py、tests/ops/test_update_rollback_guards.py
+
+#### 修正後の解析結果で、該当なしと判定した区分を確認済みにしない
+
+- semantic_extraction.repair_facts_v2は確認項目の状態を付け直す際、explicit_no_factの項目に修正後の事実が結び付いたらambiguousにする。covered、open、未完了・失敗した区切りの扱いは従来どおり。
+- semantic_v4.reproject_staleは、fact_sourceがcanonicalのとき、REPROJECT_LIMITの残り件数で最新の修正済みsemantic_facts_v2を一度だけ確認しrepair_checkedを記録する。同じ世代の完了した修正記録のdoc_hashが一つに定まり、それと一致する修正前の文書の状態がすべて同じで、修正前・修正後の文書がどちらも正規の形式を満たし、同じ投稿・同じ版・同じ世代に結び付き、同じ確認項目がexplicit_no_factからcoveredへ変わっている場合だけheldとし（不正または結び付かない候補が1つでもあれば判断しない）、同じ投稿・同じ世代の表示、要約、監査、網羅確認、事実監査、追跡候補を無効にし、文書を再利用しない印を付ける。モデル・Jevの呼び出し、再投入、修正記録の変更は行わない。
+- 根拠: mcs/semantic/semantic_extraction.py、tests/semantic/test_repair_absence_contradiction.py、mcs/semantic/semantic_v4.py、tests/semantic/test_repair_absence_hold.py
+
+#### 復旧処理の復元承認をアップデート処理と同じ条件で確認
+
+- deployment/recovery/mcs_recover.pyにmcs_update._approval_receiptと同じ判定（重複キー・NaN等の拒否、16384文字上限、command_id一致、outcome=applied、error無し、scheduled=true）を自己完結で追加し、backup_schemaは真偽値を除く整数だけを受け付ける。
+- 両方の判定経路へ同じ不正記録10種と、新しい不正記録が先にあっても正しい承認だけを採用する回帰を追加する。
+- 根拠: deployment/recovery/mcs_recover.py、tests/ops/test_recovery_corrupt_receipts.py
+
+#### DB復元後の配送照合が、読めない通知記録で止まり続けないようにする
+
+- notify_reconcile.reconcile_after_restore はテキスト経路の outbox progress を共通の mcs_util.loads_dict で読み、JSON 不正・RecursionError・object 以外のいずれも、従来の ValueError と同じく skip する。行の state・next_try・progress は書き換えない。
+- 根拠: mcs/notify/notify_reconcile.py、tests/notify/test_reconcile_unreadable_text_progress.py
+
+#### 不正な再試行時刻で待機処理が止まる問題を修正
+
+- extract_llm._next_retryの集約対象をJSONの数値型かつ有限値に限定する。
+- 従来受け付けていた有限値の範囲、最早時刻、上限に達した試行の除外は維持する。
+- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_retry_timestamp.py
+
+#### 患者集約に原文と一致しないバイタル値が残る問題を修正
+
+- 患者限定の旧形式互換が、原文に測定名がある項目の不一致値を再追加しないようにする。測定記述のない旧形式の信頼済み出力・未対応拡張の既存契約は保持する。
+- 旧集約の期間版だけが古い場合はバイタル欄だけを読み直し、他の旧形式情報を巻き込んで消さない。既存の人物・投影の無効化条件は維持する。
+- 根拠: mcs/extract/clinical_values.py、mcs/extract/rollup.py、tests/extract/test_clinical_scope_review.py、tests/extract/test_rollup_canonical.py
+
+#### MCS障害中も日次バックアップを続け、時間切れで取得しなかった患者を未完了として表示
+
+- run_checkのSessionExpired・MCSErrorの失敗経路で、maintenance.backup_overdue()が真のときだけ既存の_housekeeping（日次バックアップ・ログ整理・添付と残骸の整理）を例外を隔離して実行し、失敗理由はerrorsに残す。更新側がロックを取った経路では実行しない。
+- stage_unreadが時間切れで中断したとき、まだ取得していない患者のproject_idをresult['incomplete']へ加え、収集状況をincompleteにする。取得していない患者の保存状態は変更しない。
+- 根拠: mcs/ingest/run_check.py、tests/ingest/test_run_check_failure_paths.py
+
+#### 意味チェックの再試行抑制記録の上書きを防止
+
+- 既存の形式拒否記録と同じ非ブロッキングファイル排他を使い、読取り・更新・原子的保存を保護する。
+- 同じモデルとプロンプトの抑制段階は最大値を保持し、古い処理で降格させない。競合・保存失敗時は既存記録を維持する。
+- 根拠: mcs/semantic/semantic.py、tests/semantic/test_semantic_llm_retry.py
+
+#### 読めない意味チェックのジョブが新着保管を止めないように修正
+
+- ledger._semantic_seed_txは既存loads_dictで保存payloadを読み、JSON構文エラーの従来の空object扱いをValueError・RecursionErrorにも適用する。解析できない旧targetsやoriginを推測して復元せず、実際に保管した入力から現在の世代を作る。
+- 正常なpayloadで入力世代が同じときは使い切った予算を再開せず、入力変更時だけ既存規則に従う。新着保管とjob登録の同一transaction、通知eligible/provenance/notification_freeの条件を維持する。
+- 根拠: mcs/core/ledger.py、tests/core/test_core_misc.py、tests/semantic/test_semantic_manual_retry.py
+
+#### 長すぎるIDで設定確認が終了する問題を修正
+
+- 整数変換でValueErrorとなるIDを、既存のプロジェクトID受付拒否またはDiscordチャンネルID設定エラーへ変換する。
+- 根拠: mcs/ops/mcs_setup.py、tests/ops/test_setup_integer_input.py
+
+#### 独立実行の初期設定で、不正なproject IDを黙って除外しない
+
+- mcs_setup.cmd_initは、runtime_modeがstandaloneで --plugin-project-ids が指定されたとき、Hermes接続と同じ _project_ids_yaml で全体を検証し、不正ならキーチェーン・.env・config.jsonへの書込みより前に終了コード1で止める。
+- 到達しない定期ジョブ用launchd plistの生成（_cron_plist と _desired_agents の分岐）を削除し、説明を独立実行の単一ホスト構成に合わせた。_calendar、CRON_TIMEOUT_S、_TIMEOUT_PL は独立実行の定期実行が使うため残す。
+- 根拠: mcs/ops/mcs_setup.py、tests/ops/test_mcs_setup_standalone_project_ids.py
+
+#### 読めないアラート記録を候補なしと扱う問題を修正
+
+- 最新行の不明状態を既存のsignal_state_corruptコードで返し、brain_exportは出力の置換や整理を始める前に状態不明を拒否する。正常に測定できた0件は従来どおり扱う。
+- 根拠: mcs/ops/mcs_signals.py、mcs/ops/brain_export.py、tests/ops/test_mcs_signals.py、tests/ops/test_brain_export.py
+
+#### 時間を置いて届いた返信も、Slackのチャンネルに通知する
+
+- adapters/slack/delivery.DeliveryWorker._body_part は spec.op が update で、本文パートが prior_remote_id を持たず、名前が m:ID#1（そのカードに新しく加わる投稿の先頭部分）のときだけ chat.postMessage に reply_broadcast=True を付ける。create、書き換えと書換え不能時の再投稿、2つ目以降の分割、添付の見出し、signal と legacy の投稿、既存返信への再結合は従来どおりスレッド内だけに投稿する。
+- 根拠: adapters/slack/delivery.py、tests/adapters/slack/test_slack_late_reply_broadcast.py、tests/adapters/slack/test_slack_delayed_reply_flow.py
+
+#### 壊れたスナップショット日時で出力が途中終了する問題を修正
+
+- brain_exportの日時変換で範囲外の値を既存のValueError報告経路へ揃え、未処理の例外で終了させない。スナップショットの有限値の検証と、暦として表示できるかの検証を分離する。
+- 根拠: mcs/ops/brain_export.py、tests/ops/test_brain_export.py
+
+#### 不正な抽出・監査データで通知表示が止まる問題を修正
+
+- structured_viewの共通読取り処理で測定値フラグを配列に限定し、緊急度監査の双方の判定を既存enumで検証する。
+- カード・通常通知・再確認通知の共通呼出元を維持する。
+- 根拠: mcs/views/structured_view.py、tests/views/test_structured_view.py
+
+#### 読めない保存サマリーがあっても取得・抽出を停止しない
+
+- ledger.karte_summary_currentの保存content/meta読取り、karte_summary_storeの既存meta照合でValueErrorとRecursionErrorを捕捉する。旧記録への自動修復や古いサマリーへのフォールバックは行わない。
+- 根拠: mcs/core/ledger.py、tests/core/test_core_misc.py
+
+#### 患者の記録まとめで、読めない連携サマリーの記録があっても表示を続け、古いサマリーを出さない
+
+- notify_views._karte_summary_from_artifact は SQL の json_valid 条件を外して最新の karte_summary 行だけを選び、JSON 不正・RecursionError（Python 3.11 で SQLite の深さ上限内の入れ子）・object 以外を None として扱う。None は従来どおり「連携サマリー（MCS）: 未取得」と表示する。
+- 根拠: mcs/notify/notify_views.py、tests/notify/test_summary_unreadable_karte_summary.py
+
+#### 取得できない返信があるスレッドを記録するように修正
+
+- run_checkのstage_thread_readは、サーバー側にあって未保存の返信のうち取得ジョブがfailedのものがあれば、thread_read: reply_failedをerrorsへ1スレッドにつき1回追加する。本文やIDは含めず、スレッドは既読確認・既読化の対象にしないまま次回も候補に残る。
+- 根拠: mcs/ingest/run_check.py、tests/ingest/test_thread_read_reply_failed.py
+
+#### 巡回だけで古いカードが未確認一覧に戻る問題を修正
+
+- notify_views.unacked_viewはカード作成日時または表示manifestの作成日時で対象期間を確認する。
+- sweepのupdated_at更新は走査順の調整に使用し、最近の内容更新の証拠に使わない。
+- 根拠: mcs/notify/notify_views.py、tests/notify/test_unacked_content_window.py、tests/notify/test_card_extras.py
+
+#### 読めないアラートの集約記録で新しい通知まで止まる問題を修正
+
+- 待機ダイジェストへの追加前に既存のloads_dictで保存JSONを検証し、読み取れない行へ結合せず新しい通知を登録する。既存のsignal keyによる重複抑制を先に通す。
+- 根拠: mcs/ops/mcs_signals.py、tests/ops/test_mcs_signals.py
+
+#### 更新前の無視ファイル検査が失敗した理由を保持
+
+- check-ignoreの起動失敗と時間切れを既存check_ignore_failedへ揃える。
+- 例外の生テキストを表示せず、その他の事前検査とfail-closedを維持する。
+- 根拠: mcs/ops/mcs_update.py、tests/ops/test_update_recovery_stability.py
+
+#### 破損した保存データで復旧処理が無報告のまま止まる問題を修正
+
+- 保存DBの版を確認できないときは、復元同意待ちマーカーを新しく作る前に既存のエスカレーションへ進む。
+- 損失報告の遅延SQLite読取り失敗と報告保存失敗を既存UpdateErrorへ変換し、状態報告・保留の経路で扱う。既存の同意待ちは解除しない。
+- 根拠: mcs/ops/mcs_update.py、tests/ops/test_update_recovery_stability.py
+
+#### 更新準備のGitエラーに接続情報を表示しないよう修正
+
+- 移植可能な更新ランチャーのGit失敗表示から未加工のstderrを除き、操作名と終了コードだけを返す。
+- 根拠: scripts/mcs_upgrade.py、tests/ops/test_mcs_upgrade.py
+
+#### 緊急度の表示からAI判定・AI抽出の表記をなくし、すべてのカードで同じ表記に統一
+
+- notify_render.URGENCY_TAGを廃止し、layout 1のスレッドカード見出しとシグナル行もURGENCY_PLAIN（llmは🚨 緊急度高、ruleは🚨）を使う。シグナル行では文言付きの表示と注記の間に空白を入れ、ruleの🚨と注記の並びは従来どおり。
+- structured_view.URGENCY_LABELのllmもURGENCY_LABEL_PLAINと同じ🚨 緊急度高にし、判断保留の説明を「元の判定は高」に変える。
+- 表示内容の変化はカードの表示世代を一度進め、既存の描き直し経路（Slack・Discordは編集、LINE WORKSは更新版の新規投稿）で反映される。新しい通知イベントは作らない。
+- 根拠: mcs/notify/notify_render.py、mcs/views/structured_view.py、tests/notify/test_layout1_urgency_label.py、docs/screenshots/discord-card.svg、docs/screenshots/slack-card.svg
+
+#### 壊れた緊急度再確認の通知記録で送信処理が止まり続けないよう修正
+
+- notify_urgent.check_delivery は payload が JSON として読めない、object でない、または送信直前の比較に使う message_id・hash・shadow・base_event_id（正の整数）・stage（E1 または E2:正の整数）が欠けているか形式が違う場合に例外ではなく ok=false・reason=urgent_payload_invalid を返す。_history はすべての行を残し、読めない payload や型の違う項目は不明として扱う。日次上限と部屋の冷却時間には行ごと数え、shadow かどうか不明な行は両方のモードで数える。
+- notify_transport._begin_check は urgent_payload_invalid だけ理由を保ち、_FINAL_DENIALS に加えたため、拒否が送信試行として記録され、使えない送信指示ファイルは削除される。ほかの不可理由はこれまでどおり urgent_source_changed として一時的な拒否のまま。
+- 根拠: mcs/notify/notify_urgent.py、mcs/notify/notify_transport.py、tests/notify/test_urgent_payload_invalid.py
+
+#### 測定値の数字を途中まで抽出する問題を修正
+
+- RULE_VERSIONを19、PERIOD_CHECK_VERSIONを8へ更新。
+- ASCIIと全角の数字・小数点を数値境界として扱い、現在値の原文照合にも共通判定を使用。
+- 根拠: mcs/extract/v1/extract.py、mcs/extract/rollup.py、tests/extract/test_v1_numeric_boundaries.py
+
+#### 無効になった依頼候補を現在の候補として表示する問題を修正
+
+- Loop表示のcurrentとadoption_eligibleへinvalidatedの拒否条件を適用する。
+- 根拠: mcs/views/mcs_view.py、tests/views/test_view_invalidated_loop.py
+
+#### 読めない保存JSONで確認画面が途中終了する問題を修正
+
+- JSONの構文エラーに限らず、整数の解釈上限によるValueErrorも既存の不明・拒否経路へ揃える。解析の上限を緩和せず、原文・承認記録の削除も行わない。
+- 根拠: mcs/views/mcs_view.py、tests/views/test_view_corrupt_state.py
+
+
+#### 個別の適用条件と履歴記録
+
+- **LLM受付制御で再利用されたプロセス番号を所有者と誤認しない** — LLM受付制御は既定で無効のため、既定設定では影響はありません。有効にしている場合も追加操作は不要で、受付記録の保存先に起動時刻の列が自動追加されます。更新前の受付枠と、起動時刻を読み取れない枠は従来どおりプロセス番号だけで判定し、動作中の所有プロセスの枠・結果不明の枠・閉じた受付を自動で解放・再開しません。
+  記録: `changes/archive/1.0.17/v17-admission-owner-identity.json`
+- **バックアップの警報で保持上限と暗号化ツールの不備を区別** — 更新後は収集・監視workerとgatewayまたは独立hostを再起動してください。警報の重複抑制、通知先、バックアップの無効状態・保持・削除・人承認の条件は変更しません。
+  記録: `changes/archive/1.0.17/v17-backup-alert-cause.json`
+- **バックアップ失敗の理由を状態と診断に表示** — 追加設定は不要です。次の失敗から理由が記録され、成功すると消えます。自動削除・オフサイト通信・暗号化の導入・有効化は行いません。
+  記録: `changes/archive/1.0.17/v17-backup-failure-reason.json`
+- **別々の測定の血圧を組み合わせて表示しない** — 追加設定は不要です。保存済みの抽出結果は表示時に同じ確認を通ります。抽出worker、収集処理、Hermesのgatewayまたは独立実行のhostを更新後に再起動してください。原文の数値は変更・削除しません。
+  記録: `changes/archive/1.0.17/v17-blood-pressure-pair.json`
+- **薬剤の確認画面から抽出元の表記を削除** — 追加設定は不要です。収集処理（Hermesではgatewayとrunner、独立実行ではhost）へ更新を反映すると、次に開いた一覧から適用されます。保存済みカードの表示は変わらず、再描画や再投稿は起きません。
+  記録: `changes/archive/1.0.17/v17-chat-source-labels.json`
+- **読めない取得記録で臨床データの収集が止まる問題を修正** — 追加設定は不要です。clinical_metadataを有効にしている場合に適用されます。既存の項目定義の履歴は削除しません。
+  記録: `changes/archive/1.0.17/v17-clinical-metadata-corrupt-json.json`
+- **薬剤などの長い列挙を分割する負荷を抑制** — 抽出workerと、Hermesのgatewayまたは独立hostを更新後に再起動してください。分割契約の版・抽出世代・モデル・上限は変更しません。
+  記録: `changes/archive/1.0.17/v17-dense-chunk-scan.json`
+- **Discordで無効になったカードの更新依頼が失敗したときの案内を修正** — 追加設定は不要です。Hermesではgateway、独立実行ではhostを更新後に再起動してください。権限確認・既存の更新依頼の内容・人承認の条件は変わりません。
+  記録: `changes/archive/1.0.17/v17-discord-refresh-publish-failure.json`
+- **失敗時の記録とボタン操作の取込みが途中で止まる問題を修正** — 追加設定は不要です。収集処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。元のエラー、終了コード、通知、ロックを失った場合にデータベースへ書かない条件は変わりません。
+  記録: `changes/archive/1.0.17/v17-failure-record-and-command-consume.json`
+- **出力形式の指定を拒否されただけで要約が確定失敗になる問題を修正** — 追加設定は不要です。解析処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。形式指定なしの要求が拒否された場合を確定失敗とする扱い、試行回数の上限、モデル、通知は変わりません。
+  記録: `changes/archive/1.0.17/v17-format-refusal-retry.json`
+- **更新中のGit時間切れで残るロックがロールバックを止める問題を修正** — 追加設定は不要です。復旧本体はcheckout外に置かれるため、更新時は従来のrecovery_tool_changedの手順で復旧本体を同期してください。各Git操作の時間上限は変わらず、時間切れ時の後始末に最大約2秒の停止猶予と5秒以内の回収が加わります。他のプロセスや既存のロックファイルは操作せず、ディスク停止などでGitが応答しない場合は従来どおり既存の復旧処理で扱います。
+  記録: `changes/archive/1.0.17/v17-git-timeout-cleanup.json`
+- **DBの関係保護の確認済み表示を厳密化** — 追加設定は不要です。診断・表示の読取りから有効です。DBの書換えや記録の削除は行いません。
+  記録: `changes/archive/1.0.17/v17-guard-status-relations.json`
+- **修正前の解析結果から作られた表示・要約・追跡候補が最新のまま残る問題を修正** — 追加設定は不要です。解析処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。作り直しは既存の再投影処理と同じ回・同じ件数上限で少しずつ進み、モデルと外部評価の呼び出しは行いません。内容が変わった投稿のスレッドは通知なしで一度だけ再解析に入り、監査を通った後に表示と要約が作り直されます。失敗済み、人の確認待ち、修正済みの解析は自動で再解析せず再試行の回数も戻さないため、古い表示は古い状態として残り、手動の再試行で作り直せます。一時停止中の患者は受付だけ行い、実行は停止を保ちます。fact_sourceがcanonicalの場合だけ動作します。正式な依頼と通知の履歴は変わりません。
+  記録: `changes/archive/1.0.17/v17-hint-rebuild-and-loop-currency.json`
+- **別の箇所の同じ表現を一つの事実にまとめる問題を修正** — 追加設定は不要です。解析処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。モデル、取得範囲、通知、既読化、承認条件は変わりません。修正前に保存された解析結果は、更新後の定期処理で保存済みの区切り結果から順に作り直されます（v17-hint-rebuild-and-loop-currency）。
+  記録: `changes/archive/1.0.17/v17-hint-span-merge.json`
+- **履歴の取り込み中にログインが切れても、取り込みを失敗扱いにしない** — 追加設定は不要です。取り込み処理の更新を反映してください。すでに失敗で止まった取り込みは、従来どおり取り込み依頼をもう一度出すと再開します。
+  記録: `changes/archive/1.0.17/v17-history-session-expiry-not-stall.json`
+- **壊れた通知を保留しても後続通知を止めない** — 追加設定は不要です。通知処理の更新を反映してください。未送信と確認できない通知の自動再送は行わず、送信記録と保留理由を維持します。
+  記録: `changes/archive/1.0.17/v17-hold-invalid-message-ids.json`
+- **取得できない処理時間やトークン数を0として記録する問題を修正** — 追加設定は不要です。解析処理への反映後に作る測定記録から有効です。過去の数値を推測して補正しません。通常の解析結果の更新手順は従来どおりです。医療上の抽出結果・モデル・予算・通知条件は変わりません。
+  記録: `changes/archive/1.0.17/v17-integrity-partial-metrics.json`
+- **応答時間集計の差分から少人数の結果を推定しにくくする** — 所有者の集計公開条件と既定の無効状態は変更しません。更新後は集計を実行するgatewayまたは独立hostを再起動してください。条件不足の集計では従来より表示が少なくなる場合があります。
+  記録: `changes/archive/1.0.17/v17-latency-residual-privacy.json`
+- **別の記録の血圧を組み合わせる問題を修正** — 追加設定は不要です。解析処理へ更新を反映してください。抽出世代を7へ更新するため、現行canonical結果で置き換えられていない旧世代の解析は、既存の対象範囲・予算・再試行条件で再処理されます。一時的に解析待ちが増える場合があります。原文は削除しません。モデル・通知条件・医療上の閾値は変わりません。
+  記録: `changes/archive/1.0.17/v17-merge-bp-readings.json`
+- **古い通知記録が壊れていてもDB更新を停止しない** — 追加設定は不要です。通知済み境界を再構築するスキーマ7より前のDBを更新する場合に適用されます。元の通知記録やメッセージは削除しません。
+  記録: `changes/archive/1.0.17/v17-migration-notification-evidence.json`
+- **読めない通知記録で添付の取得を停止しない** — 追加設定は不要です。収集処理の更新を反映してください。添付の取得・配送条件や、送信結果不明の通知を保留する条件は変わりません。
+  記録: `changes/archive/1.0.17/v17-notify-attachment-priority-evidence.json`
+- **DB復元の一時コピーを更新記録に結び付け、中断後も確実に片付ける** — 追加設定は不要です。復旧本体はcheckout外に置かれるため、更新時は従来のrecovery_tool_changedの手順で復旧本体を同期してください。この変更より前に残った一時コピーは自動では削除しません。更新記録がない状態や記録が壊れている状態ではDBを置き換えず、既存の復旧報告と承認待ちの保留で扱います。
+  記録: `changes/archive/1.0.17/v17-owned-restore-staging.json`
+- **復元後の配送確認で、対象プロジェクトを確認できない保留を解除しない** — Hermes の gateway を再起動して plugin の更新を反映してください。対象プロジェクトを確認できない古い保留は /mcs からは解除できず、運用者がコマンドファイル経由の既存手順で確認します。ユーザー・チャンネル・権限の条件は変わりません。
+  記録: `changes/archive/1.0.17/v17-plugin-lost-hold-project-scope.json`
+- **実施済みの出来事と相対的な期限の読み替えを修正** — 追加設定は不要です。投影版を更新し、既存の有界な再投影処理で旧版の表示を更新します。保存履歴と人が登録した正式な依頼は変更しません。過去に作成された依頼候補の不採用処理は、同じ安定化作業の世代照合で扱います。
+  記録: `changes/archive/1.0.17/v17-projection-care-dates.json`
+- **旧形式の抽出結果が抽出待ちと表示される問題を修正** — 追加操作は不要です。保存済み記録は変更しません。extract_v1・extract_llmの旧形式の記録を、読取りモデル・詳細表示・集計・出力で確認する場合に適用されます。
+  記録: `changes/archive/1.0.17/v17-readmodel-legacy-binding.json`
+- **DB復元後の配送確認で、取り消したカードを戻さない** — 追加設定は不要です。通知処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。取り消していないカードの確認・解除、運用者の確認手順、通知の条件は変わりません。
+  記録: `changes/archive/1.0.17/v17-rebind-keeps-revoked.json`
+- **復旧時の保留に読めない数値があっても確認処理を停止しない** — 追加設定は不要です。更新した通知処理から有効になります。人による確認・理由・受領記録の条件は維持します。
+  記録: `changes/archive/1.0.17/v17-rebind-scope-integer.json`
+- **更新承認と復元承認の確認で受付記録を一括読込みしない** — 追加設定は不要です。復旧本体はcheckout外に置かれるため、更新時は従来のrecovery_tool_changedの手順で復旧本体を同期してください。受付記録の削除・保持期限・読取り行の省略は行いません。
+  記録: `changes/archive/1.0.17/v17-receipt-scan-stream.json`
+- **更新後・復旧後のLINE WORKS再起動漏れと再起動要求失敗の見落としを修正** — 復旧本体はcheckout外に置かれるため、更新時は従来のrecovery_tool_changedの手順で復旧本体を同期してください。LINE WORKSの再起動はHermes接続でLINE WORKSを対話先にしている場合だけ行い、独立実行・他の通知先・不明な実行モードでは行いません。
+  記録: `changes/archive/1.0.17/v17-recovery-adapter-restart.json`
+- **修正後の解析結果で、該当なしと判定した区分を確認済みにしない** — 追加設定は不要です。解析処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。修正の回数、監査、通知、モデルは変わりません。更新前の修正で該当なしの区分が確認済みになっていた解析結果は、修正記録と修正前の結果で確認できたものだけ、定期処理が表示・要約・追跡候補を古い状態として保留し、再利用しません。自動の再解析や再修正は行わず、手動の再試行で作り直します。その際も修正は再度行われず、網羅が満たされなければ人の確認待ちになります。単に修正済みの結果や、確認の材料が足りない結果はそのままです。
+  記録: `changes/archive/1.0.17/v17-repair-absence-contradiction.json`
+- **復旧処理の復元承認をアップデート処理と同じ条件で確認** — 復旧本体はcheckout外に置かれるため、更新時は従来のrecovery_tool_changedの手順で復旧本体を同期してください。承認の操作手順・必要な承認・正しい既存の承認記録の扱いは変わりません。
+  記録: `changes/archive/1.0.17/v17-restore-consent-validation.json`
+- **DB復元後の配送照合が、読めない通知記録で止まり続けないようにする** — 追加設定は不要です。通知処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。読めない記録の通知は送信も再送もされず、元の状態のまま残ります。正常な保留記録の扱い、人による確認と解除の手順は変わりません。
+  記録: `changes/archive/1.0.17/v17-restore-reconcile-unreadable-progress.json`
+- **不正な再試行時刻で待機処理が止まる問題を修正** — 追加設定は不要です。解析処理への反映後に有効です。不正な保存記録は削除・書換えず、再試行予算や対象の選択条件は変更しません。
+  記録: `changes/archive/1.0.17/v17-retry-timestamp.json`
+- **患者集約に原文と一致しないバイタル値が残る問題を修正** — 更新後はgatewayまたは独立hostと抽出workerを再起動してください。集約の版を8へ更新し、通常処理で再構築します。版が記録されている古い集約は読取り時にバイタル欄を再確認します。履歴・基本情報・版のない旧信頼済み集約・未対応拡張・無関係な薬剤情報は保持し、通知カードを一斉再投稿しません。
+  記録: `changes/archive/1.0.17/v17-rollup-vital-grounding.json`
+- **MCS障害中も日次バックアップを続け、時間切れで取得しなかった患者を未完了として表示** — 追加設定は不要です。収集処理（Hermesではgatewayのcron、独立実行ではhost）へ更新を反映してください。失敗時の終了コード、通知、MCSへの追加通信は変わらず、バックアップが一度もない初回は従来どおり次の正常な収集で作成します。
+  記録: `changes/archive/1.0.17/v17-run-failure-backup-and-deadline.json`
+- **意味チェックの再試行抑制記録の上書きを防止** — Hermesではgatewayと抽出worker、独立実行ではhostを更新後に再起動してください。保存形式・上限・モデル・人承認の条件は変わりません。
+  記録: `changes/archive/1.0.17/v17-semantic-long-mark-race.json`
+- **読めない意味チェックのジョブが新着保管を止めないように修正** — 追加設定は不要です。収集・意味チェック処理の更新を反映してください。正常なジョブの再試行回数、手動による追加試行枠、通知の対象条件は変わりません。
+  記録: `changes/archive/1.0.17/v17-semantic-seed-json-boundary.json`
+- **長すぎるIDで設定確認が終了する問題を修正** — 追加設定は不要です。有効なIDの受付条件は変更せず、不正なIDは修正する必要があります。
+  記録: `changes/archive/1.0.17/v17-setup-integer-input.json`
+- **独立実行の初期設定で、不正なproject IDを黙って除外しない** — 追加設定は不要です。正しいproject IDだけを指定した初期設定の結果は変わりません。カンマ区切りに加えて [7,8] の形式も受け付けます。
+  記録: `changes/archive/1.0.17/v17-setup-standalone-project-ids.json`
+- **読めないアラート記録を候補なしと扱う問題を修正** — 追加操作は不要です。signalsの読取り結果にerrorsを追加します。signal_state_corruptは一部の最新記録を読み取れないことを示し、表示できる候補件数が0でも候補の不在を確認した意味ではありません。出力がsignal_state_invalidで止まる場合は管理者が保存記録を確認してください。記録の自動削除や過去の候補の復活は行いません。
+  記録: `changes/archive/1.0.17/v17-signal-unknown-read.json`
+- **時間を置いて届いた返信も、Slackのチャンネルに通知する** — 追加設定は不要です。Hermesのgatewayまたは独立実行のhostを再起動して更新を反映してください。新しい通知カードの投稿、配信済み投稿の書き換え、長い本文の続き、添付、Discord・LINE WORKSの表示は変わりません。反映前に届いた返信は再送されません。
+  記録: `changes/archive/1.0.17/v17-slack-late-reply-broadcast.json`
+- **壊れたスナップショット日時で出力が途中終了する問題を修正** — 追加操作は不要です。日付として表示できない値で出力が止まる場合はsnapshot_time_unrepresentableを返します。通常の公開スナップショットの読取りは変わりません。
+  記録: `changes/archive/1.0.17/v17-snapshot-time-validation.json`
+- **不正な抽出・監査データで通知表示が止まる問題を修正** — 追加設定は不要です。適用後の表示・通知から有効です。保存済みの抽出・監査記録は削除しません。
+  記録: `changes/archive/1.0.17/v17-structured-qc-shapes.json`
+- **読めない保存サマリーがあっても取得・抽出を停止しない** — 追加設定は不要です。取得・抽出処理の更新を反映してください。過去の記録は保持し、正常なサマリーの重複保存抑制と未登録・未取得の区別は維持します。
+  記録: `changes/archive/1.0.17/v17-summary-json-boundary.json`
+- **患者の記録まとめで、読めない連携サマリーの記録があっても表示を続け、古いサマリーを出さない** — 追加設定は不要です。通知処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。保存済みの記録は削除・変更しません。正常に読める最新のサマリー、登録なし（空）、未取得の表示は変わりません。
+  記録: `changes/archive/1.0.17/v17-summary-unreadable-karte-summary.json`
+- **取得できない返信があるスレッドを記録するように修正** — 追加設定は不要です。収集処理へ更新を反映してください。既読化・再試行・取得範囲の条件と、失敗した取得ジョブを自動で再開しない動作は変わりません。
+  記録: `changes/archive/1.0.17/v17-thread-read-reply-failed.json`
+- **巡回だけで古いカードが未確認一覧に戻る問題を修正** — 追加設定は不要です。一覧の読取りから有効です。カード・確認記録は削除せず、巡回の公平性と対象プロジェクトの制限は維持します。
+  記録: `changes/archive/1.0.17/v17-unacked-content-window.json`
+- **読めないアラートの集約記録で新しい通知まで止まる問題を修正** — 追加設定は不要です。signals.notifyを有効にし、ダイジェスト通知を利用している場合に適用されます。既存の送信済み・送信結果不明の記録は変更しません。
+  記録: `changes/archive/1.0.17/v17-unreadable-signal-digest.json`
+- **更新前の無視ファイル検査が失敗した理由を保持** — 更新workerとgatewayまたは独立hostを更新後に再起動してください。検査の時間上限、更新・人承認・既存ファイル保全の条件は変更しません。
+  記録: `changes/archive/1.0.17/v17-update-ignore-preflight-error.json`
+- **破損した保存データで復旧処理が無報告のまま止まる問題を修正** — 更新後はgatewayまたは独立hostと更新workerを再起動してください。未読化・復元の人承認と理由・受領記録、未確認の損失を推測しない条件は維持します。
+  記録: `changes/archive/1.0.17/v17-update-unreadable-restore.json`
+- **更新準備のGitエラーに接続情報を表示しないよう修正** — 追加操作は不要です。対象版の更新ランチャーを利用する場合に適用されます。認証設定と更新・ロールバックの承認条件は変わりません。
+  記録: `changes/archive/1.0.17/v17-upgrade-git-error-redaction.json`
+- **緊急度の表示からAI判定・AI抽出の表記をなくし、すべてのカードで同じ表記に統一** — 追加設定は不要です。通知処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。緊急度の判定方法、通知の条件、既読化、承認は変わりません。以前の形式のカードのうちAIの判定で緊急度高と表示していたものは、定期処理で表示が一度だけ更新されます。SlackとDiscordでは既存の投稿がそのまま書き換わり、新しい通知は送りません。LINE WORKSは投稿を書き換えられないため、該当するカードが「🔄 更新版」として一度だけ新しく投稿されます。
+  記録: `changes/archive/1.0.17/v17-urgency-label-unify.json`
+- **壊れた緊急度再確認の通知記録で送信処理が止まり続けないよう修正** — 追加設定は不要です。通知処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。正常な通知の送信条件、元の投稿が変わった場合の扱い、送信済み・送信中の記録は変わりません。
+  記録: `changes/archive/1.0.17/v17-urgent-payload-invalid.json`
+- **測定値の数字を途中まで抽出する問題を修正** — 追加設定は不要です。適用後の定期処理で旧ルール抽出と集計を更新します。保存済み集計の読取り時も測定値を再確認し、原文や患者プロフィールは変更しません。対応範囲外の数値表記は原文に残り、ルールの測定値欄には採用しません。
+  記録: `changes/archive/1.0.17/v17-v1-numeric-boundaries.json`
+- **無効になった依頼候補を現在の候補として表示する問題を修正** — 追加設定は不要です。無効化済みの候補の表示はSTALEとなります。候補の作成・更新・正式依頼への採用条件は、同じ世代照合の修正と合わせて検証します。
+  記録: `changes/archive/1.0.17/v17-view-invalidated-loop.json`
+- **読めない保存JSONで確認画面が途中終了する問題を修正** — 追加操作は不要です。保存記録は変更しません。読めない通知操作の承認記録は、既存のreceipt_corruptを返します。
+  記録: `changes/archive/1.0.17/v17-view-json-validation.json`
+
+</details>
+
 ## [1.0.16] — 2026-10-08
 
 **次回予定・薬剤・詳細情報を確認しやすくし、通知の重複と停止を修正**
