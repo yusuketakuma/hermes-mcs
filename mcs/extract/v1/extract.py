@@ -323,7 +323,11 @@ _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬
 _MED_PERIOD = re.compile(
     r"(?<![\d/])(?:(\d{4})/)?(\d{1,2}/\d{1,2})"
     r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
-RULE_VERSION = 19
+# Facility/provider names and service explanations are not encounter evidence.
+ENCOUNTER_CUE = (r"(?:診察|往診|診療)(?!医|所|科|機関|方針|報酬|体制|契約|情報|録|券|室|"
+                 r"の(?:説明|方針|契約|案内|資料)|について(?:の)?(?:説明|案内|資料)|"
+                 r"に関する(?:説明|案内|資料))|診て(?:くれ|いただ|もら)")
+RULE_VERSION = 20
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問(?:診療)?|診察|往診)")
@@ -486,7 +490,7 @@ def extract_message(body: str, posted_at: str) -> dict:
     # --- events ---
     ev = set()
     event_patterns = {
-        "visit": r"訪問(?:し|した|時|実施|致し)", "exam": r"診察|往診|診療",
+        "visit": r"訪問(?:し|した|時|実施|致し)", "exam": ENCOUNTER_CUE,
         "admission": r"入院|退院|搬送|急性期",
         "eol": r"看取り|緩和|終末期|ACP|オピオイド|モルヒネ|逝去|お亡くなり|亡くなっ|死亡確認|息を引き取|心肺停止",
         "care": r"デイ|ショートステイ|ケアプラン|要介護|介護度",
@@ -615,12 +619,14 @@ def extract_message(body: str, posted_at: str) -> dict:
 
     # --- requests to other professions ---
     reqs = []
+    sentences = list(re.finditer(r"[^。！？!?;；\r\n]+", body))
     for pat, kind in _REQUESTS:
         m = re.search(pat, body)
         if m:
-            reqs.append({"kind": kind,
-                         "ctx": body[max(0, m.start() - 20):m.end() + 10]
-                             .replace("\n", " ").strip()[:80]})
+            ctx = next((s[0].strip() for s in sentences
+                        if s.start() <= m.start() and m.end() <= s.end()), "")
+            if ctx and not any(r["ctx"] == ctx for r in reqs):
+                reqs.append({"kind": kind, "ctx": ctx})
     if reqs:
         out["requests"] = reqs[:6]
 

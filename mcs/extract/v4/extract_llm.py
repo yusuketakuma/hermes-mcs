@@ -40,6 +40,7 @@ import bounded_http
 import clinical_values
 import clinical_chunking
 import extraction_refresh
+import extract
 from clinical_chunking import PLAN_VERSION, plan_chunks
 import local_llm
 import patient_context
@@ -78,6 +79,7 @@ PATIENT_CONTEXT_VERSION = 2
 _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
     for name, path in (("extract_llm", __file__),
+                       ("extract", extract.__file__),
                        ("clinical_values", clinical_values.__file__),
                        ("clinical_chunking", clinical_chunking.__file__),
                        ("extraction_refresh", extraction_refresh.__file__),
@@ -841,7 +843,7 @@ _EVENT_CUES = {
     "discharge": re.compile(r"退院|出院|退所|退館"),
     "transfer": re.compile(r"転院|転棟|転所|搬送|施設間|移動|移り"),
     "exam": re.compile(
-        r"外来|診察|診療|受診|往診|検査|採血|レントゲン|エコー|心電図|"
+        r"外来|" + extract.ENCOUNTER_CUE + r"|受診|検査|採血|レントゲン|エコー|心電図|"
         r"CT|MRI|血液検査|尿検査|処置"),
     "visit": re.compile(r"訪問|往診|来訪|訪れ|伺|参り|到着|向かい|家に来"),
 }
