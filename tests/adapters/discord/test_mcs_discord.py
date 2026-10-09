@@ -2210,6 +2210,29 @@ def test_unknown_token_unauthorized_no_refresh(world):
     assert not list((world.data / "cmd_int").glob("*.json"))
 
 
+def test_unknown_token_refresh_publish_failure_is_reported(world, monkeypatch):
+    """A refresh that never reached the inbox must not promise a card
+    update — the user sees the send failure and the journal records it."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    msg = bot.channels[42].sent[0]
+    act = world.mkactions(reg, bot)
+
+    def fail(*_a):
+        raise OSError("disk full")
+    monkeypatch.setattr(envelopes, "publish_command", fail)
+    ix = FakeInteraction("mcs:a:" + "ff" * 16, message_id=msg.id)
+    asyncio.run(act.on_interaction(ix))
+    assert ix.response.message["ephemeral"] is True
+    assert "送信に失敗" in ix.response.message["content"]
+    assert "更新します" not in ix.response.message["content"]
+    outcomes = [f["outcome"] for e, f in world.logs
+                if e == "interaction_result" and f["action"] == "refresh"]
+    assert outcomes == ["refresh_publish_failed"]
+
+
 # ---------- D4: thread failure separation (RC18) ------------------------------
 
 def test_thread_failure_keeps_body(world, monkeypatch):

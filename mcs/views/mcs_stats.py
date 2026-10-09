@@ -1286,6 +1286,7 @@ def st_interaction_latency(db, scope, *, profession_map=None, privacy_policy=Non
                             "no_observed_reply", "invalid_reply_time",
                             "negative_latency", "valid_time_pairs", "unknown_role_pairs"), 0)
     groups = {}
+    residual_roots, residual_replies, residual_projects = set(), set(), set()
     for row in rows:
         counts["roots"] += 1
         if not timed(row["root_ts"]):
@@ -1315,6 +1316,11 @@ def st_interaction_latency(db, scope, *, profession_map=None, privacy_policy=Non
                    row["reply_profession"], row["reply_ts"])
         if start is None or end is None:
             counts["unknown_role_pairs"] += 1
+            if type(row["root_actor"]) is int and row["root_actor"] > 0:
+                residual_roots.add(row["root_actor"])
+            if type(row["reply_actor"]) is int and row["reply_actor"] > 0:
+                residual_replies.add(row["reply_actor"])
+            residual_projects.add(row["project_id"])
             continue
         group = groups.setdefault((start, end), {"times": [], "roots": set(),
                                                "replies": set(), "projects": set()})
@@ -1330,6 +1336,9 @@ def st_interaction_latency(db, scope, *, profession_map=None, privacy_policy=Non
                 or min(len(group["roots"]), len(group["replies"])) < privacy_policy["min_actors"]
                 or len(group["projects"]) < privacy_policy["min_projects"]):
             suppressed = True
+            residual_roots.update(group["roots"])
+            residual_replies.update(group["replies"])
+            residual_projects.update(group["projects"])
             continue
         times = sorted(group["times"])
         cells.append({"from_roles": list(start), "to_roles": list(end), "n": len(times),
@@ -1340,13 +1349,15 @@ def st_interaction_latency(db, scope, *, profession_map=None, privacy_policy=Non
     # suppressed count, so both are withheld whenever a cell can be suppressed.
     # valid itself is roots minus the other exclusions, so the residual
     # valid - released n (= unknown + suppressed) gets complementary
-    # suppression: below min_pairs, every role cell is withheld.
-    # ponytail: residual is checked on pair count only, not actors/projects.
+    # suppression: the residual must meet every owner threshold too.
     if privacy_policy is None or suppressed:
         counts["unknown_role_pairs"] = None
         sources = None
     residual = counts["valid_time_pairs"] - sum(c["n"] for c in cells)
-    if cells and suppressed and residual < privacy_policy["min_pairs"]:
+    if cells and suppressed and (
+            residual < privacy_policy["min_pairs"]
+            or min(len(residual_roots), len(residual_replies)) < privacy_policy["min_actors"]
+            or len(residual_projects) < privacy_policy["min_projects"]):
         cells = []
     result = _result("partial", scope, {
         "coverage": counts, "role_sources": sources,

@@ -115,7 +115,7 @@ merge 後の `services` が置き換える。`reinstall` 経路では `--install
 | `tree_dirty` | `git -C "$REPO" status --short` を示し、**【ユーザー確認】**。他の作業者の変更の可能性がある。勝手に退避・破棄しない |
 | `config: …` / `new_config: …` | 現在 / 移行先の設定検証エラー。キーと理由を示し、承認後に `"$PY" "$REPO/mcs/ops/mcs_setup.py" init --set KEY=JSON` で直す（秘密値は扱わない） |
 | `update_in_progress_or_interrupted` | 前回の更新が途中。`"$PY" "$REPO/mcs/ops/mcs_update.py" status` を示し、`recover` を実行してから再計画 |
-| `restore_consent_pending` | DB 復元の人承認待ち。[INSTALLATION.md](INSTALLATION.md) の復元承認手順をユーザーが行う |
+| `restore_consent_pending` | DB 復元の人承認待ち。[バックアップ・復元ガイド §8](BACKUP.md#consent) の損失報告・バックアップhashに束縛された復元承認手順をユーザーが行う |
 | `hermes_not_resolvable` / `standalone_interpreter_unavailable` | 実行基盤が無い。`./install.sh --preflight` の `fix:` を確認しユーザーと対処 |
 | `insufficient_disk` | DB の2倍+64MB の空きが必要。ユーザーに空き容量の確保を依頼 |
 | `not_fast_forward: …` | checkout が移行先の祖先でない（ローカルコミットや新しすぎる版）。**【ユーザー確認】** |

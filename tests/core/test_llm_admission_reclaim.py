@@ -168,4 +168,211 @@ def test_concurrent_init_migrates_a_legacy_store_once(tmp_path, monkeypatch):
     con = sqlite3.connect(path)
     cols = {r[1] for r in con.execute("PRAGMA table_info(permits)")}
     con.close()
-    assert {"owner_pid", "admitted_at"} <= cols
+    assert {"owner_pid", "admitted_at", "owner_started"} <= cols
+
+
+# ---------- owner identity: a reused pid is not the recorded owner ----------
+
+PS_OLD = "ps:Thu Jan 1 00:00:00 1970"
+PS_NEW = "ps:Fri Oct 9 01:23:45 2026"
+PROC_OLD, PROC_NEW = "proc:1000", "proc:2000"
+
+
+def _owned(broker, permit_id, started):
+    with broker.db:
+        broker.db.execute("UPDATE permits SET owner_started=? WHERE permit_id=?",
+                          (started, permit_id))
+
+
+def _probe(monkeypatch, broker, value):
+    monkeypatch.setattr(adm, "_proc_started", lambda p: value)
+    broker._identity = None        # re-read this process's identity
+
+
+def test_permits_record_owner_start_identity(broker):
+    acq = broker.acquire("mcs.extract", "BACKLOG")
+    started = broker._permit(acq["permit_id"])["owner_started"]
+    assert started and started == adm._proc_started(os.getpid())
+    assert adm._identity_scheme(started) in ("proc", "ps")
+
+
+@pytest.mark.parametrize("recorded,current", [(PS_OLD, PS_NEW),
+                                              (PROC_OLD, PROC_NEW)])
+def test_reused_pid_of_expired_owner_is_reclaimed(broker, monkeypatch,
+                                                  recorded, current):
+    # the recorded owner died and its pid now names this live process
+    pid = _sent_rt(broker, os.getpid(), adm.LEASE_S + 1)
+    _owned(broker, pid, recorded)
+    _probe(monkeypatch, broker, current)
+    assert broker.acquire("mcs.extract", "BACKLOG")["admitted"]
+    assert _state(broker, pid) == ("fenced", "owner_dead")
+    assert not broker.overlap()
+
+
+def test_reused_pid_of_waiting_rt_releases_waiting_flag(broker, monkeypatch):
+    bg = broker.acquire("mcs.extract", "BACKLOG")
+    rt = broker.acquire("gbrain.query", "RT")
+    assert rt["reason"] == "waiting"
+    broker.terminal(bg["permit_id"], "done")
+    with broker.db:
+        broker.db.execute(
+            "UPDATE permits SET created_at=created_at-?, owner_started=?"
+            " WHERE permit_id=?", (adm.LEASE_S + 1, PROC_OLD, rt["permit_id"]))
+    _probe(monkeypatch, broker, PROC_NEW)
+    assert broker.acquire("mcs.extract", "BACKLOG")["admitted"]
+    assert broker.status()["rt_waiting"] == 0
+
+
+@pytest.mark.parametrize("recorded,current,age", [
+    (PS_OLD, PS_OLD, adm.LEASE_S * 10),        # still the recorded owner
+    (None, PS_NEW, adm.LEASE_S * 10),          # legacy row: identity unknown
+    (PS_OLD, None, adm.LEASE_S * 10),          # probe unreadable/ambiguous
+    (PS_OLD, PS_NEW, 1),                       # lease not expired
+    ("ps:old", PS_NEW, adm.LEASE_S * 10),      # corrupt stored identity
+    ("garbage", PROC_NEW, adm.LEASE_S * 10),   # unknown stored scheme
+    (PROC_OLD, PS_NEW, adm.LEASE_S * 10),      # cross-scheme: not comparable
+    (PS_OLD, PROC_NEW, adm.LEASE_S * 10),
+    ("proc:01", PROC_NEW, adm.LEASE_S * 10),   # non-canonical number
+])
+def test_live_or_unprovable_owner_is_never_reclaimed(broker, monkeypatch,
+                                                     recorded, current, age):
+    pid = _sent_rt(broker, os.getpid(), age)
+    _owned(broker, pid, recorded)
+    _probe(monkeypatch, broker, current)
+    assert broker.acquire("mcs.extract", "BACKLOG")["reason"] == "rt_pending"
+    assert _state(broker, pid) == ("sent", None)
+
+
+def test_identity_probe_runs_once_per_owner_per_pass(broker, monkeypatch):
+    calls = []
+    other = 900001
+    with broker.db:
+        broker.db.executemany(
+            "INSERT INTO permits(epoch,client,cls,state,created_at,"
+            "owner_pid,owner_started) VALUES(?,?,?,?,?,?,?)",
+            [(broker.epoch(), "gbrain.query", "RT", "sent",
+              time.time() - adm.LEASE_S - 1, other, PS_OLD)] * 3)
+    monkeypatch.setattr(adm, "_pid_alive", lambda p: True)
+    monkeypatch.setattr(adm, "_proc_started",
+                        lambda p: calls.append(p) or PS_OLD)
+    assert broker.acquire("mcs.extract", "BACKLOG")["reason"] == "rt_pending"
+    assert calls == [other]
+
+
+def test_identity_probes_stop_at_the_pass_budget(broker, monkeypatch):
+    with broker.db:
+        broker.db.executemany(
+            "INSERT INTO permits(epoch,client,cls,state,created_at,"
+            "owner_pid,owner_started) VALUES(?,?,?,?,?,?,?)",
+            [(broker.epoch(), "gbrain.query", "RT", "sent",
+              time.time() - adm.LEASE_S - 1, 900000 + i, PS_OLD)
+             for i in range(adm.RECLAIM_BATCH)])
+    monkeypatch.setattr(adm, "PROBE_BUDGET_S", -1.0)
+    monkeypatch.setattr(adm, "_pid_alive", lambda p: True)
+    monkeypatch.setattr(adm, "_proc_started", lambda p: pytest.fail("probed"))
+    assert broker.acquire("mcs.extract", "BACKLOG")["reason"] == "rt_pending"
+
+
+def test_forked_handle_records_its_own_identity(broker, monkeypatch):
+    broker.acquire("mcs.extract", "BACKLOG")          # caches this pid
+    monkeypatch.setattr(adm.os, "getpid", lambda: 424242)
+    monkeypatch.setattr(adm, "_proc_started", lambda p: f"proc:{p}")
+    acq = broker.acquire("mcs.extract", "BACKLOG")
+    row = broker._permit(acq["permit_id"])
+    assert (row["owner_pid"], row["owner_started"]) == (424242, "proc:424242")
+
+
+def _stat(pid=123, comm=b"a b) c", start=b"22", pad=60):
+    fields = [b"S"] + [str(i).encode() for i in range(4, pad)]
+    if len(fields) > 19:
+        fields[19] = start
+    return str(pid).encode() + b" (" + comm + b") " + b" ".join(fields)
+
+
+def test_proc_stat_start_parsing_is_strict():
+    assert adm._stat_start(_stat(), 123) == "proc:22"
+    assert adm._stat_start(_stat(), 124) is None            # other pid
+    assert adm._stat_start(_stat(start=b"2x"), 123) is None
+    assert adm._stat_start(_stat(start=b"022"), 123) is None
+    assert adm._stat_start(_stat(start=b"9" * 21), 123) is None
+    assert adm._stat_start(_stat(pad=20), 123) is None       # truncated
+    assert adm._stat_start(b"123 (x S 4 5", 123) is None    # no ')'
+    assert adm._stat_start(b"garbage", 123) is None
+    assert adm._stat_start(b"\xff" + _stat(), 123) is None
+
+
+def _ps(monkeypatch, stdout, returncode=0):
+    class Done:
+        pass
+    done = Done()
+    done.stdout, done.returncode = stdout, returncode
+    monkeypatch.setattr(adm.os.path, "exists", lambda p: False)
+    monkeypatch.setattr(adm.subprocess, "run", lambda *a, **k: done)
+
+
+@pytest.mark.parametrize("stdout,token", [
+    (b"Thu Jan  1 00:00:00 1970\n", PS_OLD),
+    (b"Fri Oct  9 01:23:45 2026\n", PS_NEW),
+    (b"Sat Feb 29 23:59:59 2020\n", "ps:Sat Feb 29 23:59:59 2020"),
+])
+def test_ps_lstart_accepts_only_the_fixed_c_utc_form(monkeypatch, stdout, token):
+    _ps(monkeypatch, stdout)
+    assert adm._proc_started(4321) == token
+
+
+@pytest.mark.parametrize("stdout,returncode", [
+    (b"", 0),
+    (b"Thu Jan  1 00:00:00 1970\n", 1),                    # ps failed
+    (b"Thu Jan 32 00:00:00 1970\n", 0),                    # invalid day
+    (b"Fri Feb 29 00:00:00 2019\n", 0),                    # not a leap year
+    (b"Mon Jan  1 00:00:00 1970\n", 0),                    # weekday mismatch
+    (b"Thu Jan  1 24:00:00 1970\n", 0),                    # invalid hour
+    (b"Thu Jan  1 00:00:00 1970 x\n", 0),                  # trailing text
+    (b"Thu Jan  1 00:00:00 1970\nThu Jan  1 00:00:00 1970\n", 0),
+    (b"Do  1 Jan 00:00:00 1970\n", 0),                     # localized
+    ("Thu Jan  1 00:00:00 1970　".encode(), 0),        # non-ASCII
+    (b"Thu Jan 1 00:00 1970\n", 0),                        # short
+])
+def test_ps_lstart_rejects_anything_else(monkeypatch, stdout, returncode):
+    _ps(monkeypatch, stdout, returncode)
+    assert adm._proc_started(4321) is None
+
+
+def test_ps_probe_failure_is_none(monkeypatch):
+    monkeypatch.setattr(adm.os.path, "exists", lambda p: False)
+
+    def boom(*a, **k):
+        raise adm.subprocess.TimeoutExpired("ps", 1)
+    monkeypatch.setattr(adm.subprocess, "run", boom)
+    assert adm._proc_started(4321) is None
+
+
+def test_proc_started_of_gone_or_invalid_pid_is_none():
+    assert adm._proc_started(_dead_pid()) is None
+    for bad in (None, 0, -1, True, "1"):
+        assert adm._proc_started(bad) is None
+
+
+def test_legacy_store_gains_nullable_owner_started(tmp_path):
+    import sqlite3
+    path = str(tmp_path / "adm.db")
+    con = sqlite3.connect(path)
+    con.execute(
+        "CREATE TABLE permits(permit_id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " epoch INTEGER NOT NULL, client TEXT NOT NULL, cls TEXT NOT NULL,"
+        " job_gen TEXT, request_id TEXT, state TEXT NOT NULL, token TEXT,"
+        " created_at REAL NOT NULL, admitted_at REAL, sent_at REAL,"
+        " terminal_at REAL, outcome TEXT, proof TEXT, owner_pid INTEGER)")
+    con.execute(
+        "INSERT INTO permits(epoch,client,cls,state,created_at,admitted_at,"
+        "owner_pid) VALUES(1,'mcs.extract','BACKLOG','terminal',1,1,1)")
+    con.commit()
+    con.close()
+    b = adm.Broker(path)
+    try:
+        cols = {r[1] for r in b.db.execute("PRAGMA table_info(permits)")}
+        assert "owner_started" in cols
+        assert b.db.execute(
+            "SELECT owner_started FROM permits").fetchone()[0] is None
+    finally:
+        b.close()

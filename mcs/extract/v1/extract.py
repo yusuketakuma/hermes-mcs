@@ -278,9 +278,12 @@ def patient_vitals(values, body, *, patient_name=None):
             actual = ({"sbp": int(match[1]), "dbp": int(match[2])} if key == "sbp" else
                       {key: float(match[1].replace("．", ".")) if "." in match[1].replace("．", ".")
                        else int(match[1])})
-            for field, value in actual.items():
-                if type(values.get(field)) in (int, float) and values[field] == value:
-                    kept[field] = value
+            present = [field for field in actual if type(values.get(field)) in (int, float)]
+            if len(present) == 2 and any(values[field] != actual[field] for field in present):
+                continue            # both sides cached: only this whole reading may match
+            for field in present:
+                if values[field] == actual[field]:
+                    kept[field] = actual[field]
     # Partial LLM blood pressures still need their own label, side and patient span.
     from extract_llm import _bp_side, _nearest_vital_label, _vitals_guard
     partial = {key: values[key] for key in ("sbp", "dbp")
@@ -298,6 +301,12 @@ def patient_vitals(values, body, *, patient_name=None):
             continue
         if side in partial and grounded.get(side) == partial[side] == float(match[0].replace("．", ".")):
             kept[side] = partial[side]
+    from extract_llm import _bp_pair_unproven
+    if "sbp" in kept and "dbp" in kept and _bp_pair_unproven(
+            body, kept["sbp"], kept["dbp"],
+            keep=lambda s, e: patient_source_scope(
+                body, s, e, patient_name=patient_name) == "patient"):
+        del kept["sbp"], kept["dbp"]  # two readings never make one pair
     return kept
 _REQUESTS = ((r"ご?確認(?:を|お願い|ください|をお願い)", "confirm"),
              (r"(?:ご)?連絡(?:ください|をお願い|いただき)", "contact"),
@@ -314,7 +323,7 @@ _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬
 _MED_PERIOD = re.compile(
     r"(?<![\d/])(?:(\d{4})/)?(\d{1,2}/\d{1,2})"
     r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
-RULE_VERSION = 18
+RULE_VERSION = 19
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問(?:診療)?|診察|往診)")
@@ -335,16 +344,16 @@ _PLANNED_BEFORE = re.compile(r"次回|予定(?!通り|どおり)|明日|明後�
 _PLANNED_IF = re.compile(r"予定(?:通り|どおり)なら[　\s、,，]*$")
 _PLANNED_AFTER = re.compile(r"[　\s]*(?:の|を)?[　\s]*(?:予定|します|いたします|致します)")
 _VITAL_PATTERNS = {
-    "bt":   r"(?:体温|BT)[:：は]?\s*(\d{2}(?:[.．]\d)?)\s*[℃度]?",
+    "bt":   r"(?:体温|BT)[:：は]?\s*(\d{2}(?:[.．]\d)?)(?![\d.．])\s*[℃度]?",
     # 不整脈 is a finding, not a pulse label ("不整脈は20回" ≠ HR 20)
-    "hr":   r"(?:脈拍|(?<!静)(?<!動)(?<!整)脈|HR|心拍数?)[:：は]?\s*(\d{2,3})",
-    "rr":   r"(?:呼吸(?:数)?|RR)[:：は]?\s*(\d{1,2})",
-    "sbp":  r"(?:血圧|BP)[:：は]?\s*(\d{2,3})\s*[/／]\s*(\d{2,3})",
+    "hr":   r"(?:脈拍|(?<!静)(?<!動)(?<!整)脈|HR|心拍数?)[:：は]?\s*(\d{2,3})(?![\d.．])",
+    "rr":   r"(?:呼吸(?:数)?|RR)[:：は]?\s*(\d{1,2})(?![\d.．])",
+    "sbp":  r"(?:血圧|BP)[:：は]?\s*(\d{2,3})\s*[/／]\s*(\d{2,3})(?![\d.．])",
     # a number followed by a flow unit is oxygen delivery (酸素10L),
     # never a saturation reading
-    "spo2": r"(?:SpO2|Spo2|SPO2|spo2|酸素)[:：は]?\s*(\d{2,3})(?![\d.])"
+    "spo2": r"(?:SpO2|Spo2|SPO2|spo2|酸素)[:：は]?\s*(\d{2,3})(?![\d.．])"
             r"(?!\s*(?:[LＬlℓ]|リットル))\s*[%％]?",
-    "bs":   r"(?:血糖|BS|Glu)[:：は]?\s*(\d{2,3})",
+    "bs":   r"(?:血糖|BS|Glu)[:：は]?\s*(\d{2,3})(?![\d.．])",
 }
 
 

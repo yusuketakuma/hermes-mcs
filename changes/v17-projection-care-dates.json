@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "実施済みの出来事と相対的な期限の読み替えを修正",
+  "summary": "実施済みの退院・転倒などの記録を、今後の予定として依頼候補へ読み替えないようにしました。「3日前」「3日後まで」などは確定した日付の欄へ入れず、原文の時間表現として保持します。",
+  "upgrade": "追加設定は不要です。投影版を更新し、既存の有界な再投影処理で旧版の表示を更新します。保存履歴と人が登録した正式な依頼は変更しません。過去に作成された依頼候補の不採用処理は、同じ安定化作業の世代照合で扱います。",
+  "details": ["care_eventをscheduleへ写すのは未完了の予定・指示等のworkflowだけに限定し、実施済みや状態不明の出来事はobservationへ写す。", "occurred_atとrequests.dueは既存の絶対日付の検証・正規化を通す。相対・不正な日付はtime_text/due_textに保持する。", "PROJECTION_VERSIONを5へ更新する。"],
+  "refs": ["mcs/semantic/semantic_projection.py", "tests/semantic/test_canonical_projection.py"]
+}

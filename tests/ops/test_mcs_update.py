@@ -972,6 +972,20 @@ def test_recover_removes_orphan_marker(updater, tmp_path, monkeypatch):
     assert not Path(mcs_update.MARKER_PATH).exists()
 
 
+def _rollback_journal(updater, backup):
+    """The production precondition of a DB replace: a rollback-shaped
+    applying journal (apply bail / rollback() / recover all write one)."""
+    state = updater.load_state()
+    state["applying"] = {"tag": "v1.1.0", "sha": "b" * 40, "prev_sha": "a" * 40,
+                         "rollback": True, "backup_path": str(backup), "at": time.time()}
+    updater.save_state(state)
+
+
+def _journal_kept(updater):
+    applying = updater.load_state()["applying"]
+    assert applying["rollback"] is True and "restore_staging" not in applying
+
+
 def test_restore_db_removes_wal_sidecars(updater, tmp_path, monkeypatch):
     """Restoring over a WAL-mode DB must delete -wal/-shm first — a
     stale WAL replayed against the restored file corrupts it (F9)."""
@@ -992,7 +1006,9 @@ def test_restore_db_removes_wal_sidecars(updater, tmp_path, monkeypatch):
     # valid_mcs_db is the live-schema gate — stub it to accept both
     monkeypatch.setattr(_ledger, "valid_mcs_db", lambda p: True)
     _seed_consent(live, back)
+    _rollback_journal(mcs_update, back)
     mcs_update._restore_db(back)
+    _journal_kept(mcs_update)
     assert not Path(live + "-wal").exists()
     assert not Path(live + "-shm").exists()
     # _restore_db opens a Ledger for reconcile, which migrates the
@@ -1156,7 +1172,9 @@ def test_restore_uses_exact_backup_path_with_uri_delimiters(
     assert error.value.report["stored_since_backup"]["messages"] == 2
     assert live.read_bytes() == before
     _seed_consent(str(live), str(back))
+    _rollback_journal(updater, back)
     updater._restore_db(str(back))
+    _journal_kept(updater)
     assert updater._db_version(str(live)) == 7
 
 
@@ -1178,7 +1196,9 @@ def test_restore_measures_and_approves_exact_live_uri_path(
     assert error.value.report["stored_since_backup"]["messages"] == 2
     assert live.read_bytes() == before
     _seed_consent(str(live), str(back))
+    _rollback_journal(updater, back)
     updater._restore_db(str(back))
+    _journal_kept(updater)
     assert updater._db_version(str(live)) == 7
     assert decoy.read_bytes() == decoy_before
 
@@ -1819,13 +1839,14 @@ def test_recover_escalates_when_services_reconcile_hangs(
 # must decide instead of escaping with drainers down and the marker up.
 
 def _hang_git(monkeypatch):
-    real_run = subprocess.run
+    # _git's process boundary is the owned-session runner
+    real_owned = mcs_update._run_owned
 
-    def run(argv, *a, **k):
+    def run(argv, timeout, env, stdin=None):
         if argv[0] == "git":
-            raise subprocess.TimeoutExpired(argv, k.get("timeout"))
-        return real_run(argv, *a, **k)
-    monkeypatch.setattr(mcs_update.subprocess, "run", run)
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return real_owned(argv, timeout, env, stdin)
+    monkeypatch.setattr(mcs_update, "_run_owned", run)
 
 
 def test_recover_git_failure_escalates_outside_consent_hold(
@@ -1867,7 +1888,7 @@ def test_recover_git_failure_keeps_consent_hold_then_converges(
     notices = []
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda text, **k: notices.append(text) or True)
-    real_run = subprocess.run
+    real_owned = mcs_update._run_owned
     _hang_git(monkeypatch)
     assert updater.recover_interrupted() == 1
     assert restarts == [] and notices == []
@@ -1879,7 +1900,7 @@ def test_recover_git_failure_keeps_consent_hold_then_converges(
     assert "cid-rb" not in state.get("executed", {})
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
     assert report["result"] == "restore_consent_blocked"
-    monkeypatch.setattr(mcs_update.subprocess, "run", real_run)
+    monkeypatch.setattr(mcs_update, "_run_owned", real_owned)
     _seed_consent(live, back)
     assert updater.recover_interrupted() == 0
     assert updater.load_state()["executed"]["cid-rb"]["result"] \
@@ -2299,7 +2320,7 @@ def test_marker_only_hold_survives_git_failure(
     notices = []
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda text, **k: notices.append(text) or True)
-    real_run = subprocess.run
+    real_owned = mcs_update._run_owned
     _hang_git(monkeypatch)
     assert updater.recover_interrupted() == 1
     assert restarts == [] and notices == []
@@ -2313,7 +2334,7 @@ def test_marker_only_hold_survives_git_failure(
         "result"] == "restore_consent_blocked"
     if unreadable:
         return                  # only a human can repair the marker
-    monkeypatch.setattr(mcs_update.subprocess, "run", real_run)
+    monkeypatch.setattr(mcs_update, "_run_owned", real_owned)
     _seed_consent(live, back)
     assert updater.recover_interrupted() == 0
     assert updater.load_state()["executed"]["cid-rb"]["result"] \

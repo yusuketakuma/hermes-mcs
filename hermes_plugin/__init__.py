@@ -554,6 +554,21 @@ def _control_reference(view, payload):
     return None
 
 
+def _hold_projects(db, hold, card, events) -> list:
+    """Projects a restore hold whose render is gone still proves: its card
+    (signal/digest cards through their coverage, like a live render) and
+    the outbox rows of its held events. Never taken from the request."""
+    import notify_transport
+    pids = set(notify_transport._card_projects(db, {"card_id": hold["card_id"]}, card)) \
+        if hold["card_id"] is not None else set()
+    for event_id in events:
+        row = db.execute("SELECT project_id FROM notify_outbox WHERE event_id=?",
+                         (event_id,)).fetchone()
+        if row is not None and type(row[0]) is int and row[0] > 0:
+            pids.add(row[0])
+    return sorted(pids)
+
+
 def _card_resolution(view, settings, identity, payload):
     """Derive recovery scope from the stored render/hold, never native input."""
     import notify_cards
@@ -568,7 +583,15 @@ def _card_resolution(view, settings, identity, payload):
                           (payload["delivery_id"],)).fetchone()
     if render is None and hold is None:
         return "delivery_not_found"
-    scope = notify_cards.stored_scope(render) if render else json.loads(hold["scope_json"])
+    if render:
+        scope = notify_cards.stored_scope(render)
+    else:
+        try:
+            scope = json.loads(hold["scope_json"] or "{}")
+        except (ValueError, TypeError, RecursionError):
+            return "hold_scope_corrupt"
+        if not isinstance(scope, dict):
+            return "hold_scope_corrupt"
     transport = identity.get("transport", "discord")
     if scope.get("transport", "discord") != transport:
         return "scope_mismatch"
@@ -579,8 +602,19 @@ def _card_resolution(view, settings, identity, payload):
         return "scope_mismatch"
     row = render if render is not None else hold
     card = notify_cards._card_row(db, row["card_id"]) if row["card_id"] is not None else None
-    pids = notify_transport._card_projects(db, render, card) if render else (
-        [card["project_id"]] if card and card["project_id"] else [])
+    if render:
+        pids = notify_transport._card_projects(db, render, card)
+    else:
+        # the same strict reading the rebind writes use: never authorize a
+        # subset of a list the writer would read differently
+        events = notify_transport.hold_events(hold)
+        if events is None:
+            return "hold_events_corrupt"
+        pids = _hold_projects(db, hold, card, events)
+    if not render and not pids:
+        # the render is gone and nothing stored names a project: the
+        # deployment's project scope cannot be checked, so never resolve
+        return "project_unknown"
     if any(not projects.project_allowed(settings, pid) for pid in pids):
         return "project_not_allowed"
     for key, value in scope.items():

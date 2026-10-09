@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "更新中のGit時間切れで残るロックがロールバックを止める問題を修正",
+  "summary": "更新や復旧で実行するGitが時間切れになったとき、自分が起動したGitの処理だけを先に通常停止させ、Gitが自分の作業ロックを片付けられるようにしました。これにより、時間切れの直後のロールバックがロックファイルのために失敗しにくくなります。停止しない場合は従来どおり強制終了し、必ず回収します。",
+  "upgrade": "追加設定は不要です。復旧本体はcheckout外に置かれるため、更新時は従来のrecovery_tool_changedの手順で復旧本体を同期してください。各Git操作の時間上限は変わらず、時間切れ時の後始末に最大約2秒の停止猶予と5秒以内の回収が加わります。他のプロセスや既存のロックファイルは操作せず、ディスク停止などでGitが応答しない場合は従来どおり既存の復旧処理で扱います。",
+  "details": ["mcs_update._gitとmcs_recover._gitは自分専用のセッションでGitを起動し、時間切れ・中断時はまだ回収していない自分のセッションだけにSIGTERM、猶予後にSIGKILLを送り、回収する。既存の_stop_update_childの動作は変えない。", "戻り値、git_timeout・git_spawn_failedの理由、失敗時の診断出力の非表示、復旧本体の失敗時None、GIT_CEILING_DIRECTORIESとGit環境の扱いは変えない。"],
+  "refs": ["mcs/ops/mcs_update.py", "deployment/recovery/mcs_recover.py", "tests/ops/test_git_timeout_cleanup.py", "tests/ops/test_update_error_output.py", "tests/ops/test_mcs_update.py"]
+}

@@ -6,6 +6,18 @@ import extract
 import extract_llm
 
 
+@pytest.mark.parametrize("body,values,expected", [
+    ("本人の血圧120/80を測定しました。", {"sbp": 180, "dbp": 80}, {"dbp": 80}),
+    ("本人の血圧120/80を測定しました。", {"sbp": 120, "dbp": 80}, {"sbp": 120, "dbp": 80}),
+    ("本人は落ち着いています。", {"sbp": 180}, {"sbp": 180}),
+    ("本人の体温36.5℃を測定しました。", {"bt": 38.0}, {}),
+    ("本人は落ち着いています。", {"temp": 37.1}, {"temp": 37.1}),
+    ("母の体温37.1。本人は落ち着いています。", {"bt": 37.1, "temp": 37.1}, {}),
+])
+def test_rollup_vitals_keep_only_grounded_supported_fields(body, values, expected):
+    assert clinical_values.patient_current_vitals(values, body) == expected
+
+
 @pytest.mark.parametrize("label", ["体重", "身長", "weight", "height", "Glu", "BNP", "合成薬A", "架空内服A"])
 def test_possessive_family_surface_is_not_patient(label):
     body = f"母の{label}45。本人の{label}60。"

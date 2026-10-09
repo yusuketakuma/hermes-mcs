@@ -38,8 +38,8 @@ def _git(repo: str, *args: str, binary: bool = False):
     except OSError as exc:
         raise SystemExit(f"git {args[0]} failed: {exc.strerror}") from None
     if r.returncode != 0:
-        err = r.stderr if not binary else r.stderr.decode(errors="replace")
-        raise SystemExit(f"git {args[0]} failed: {err.strip()[:200]}")
+        # Git can echo credential-bearing remote URLs; keep diagnostics fixed.
+        raise SystemExit(f"git {args[0]} failed (exit {r.returncode})")
     return r.stdout
 
 

@@ -9,7 +9,7 @@ import time
 from mcs_requests import payload_hash
 from mcs_util import loads_dict
 import semantic_jev as jev
-from semantic_policy import (KIND_ASSESS, KIND_FACT_PROJ, KIND_USAGE,
+from semantic_policy import (KIND_ASSESS, KIND_USAGE,
                              POLICY_VERSION, SCHEMA_VERSION)
 
 
@@ -155,7 +155,9 @@ def _current(ledger, kind: str, message_id: int, fp: str, policy=None):
             continue
         if kind == KIND_ASSESS and meta.get("fact_id") is not None:
             continue
-        if kind == KIND_FACT_PROJ and meta.get("invalidated"):
+        # an invalidated row (projection expiry, or a summary/audit/coverage
+        # held after its canonical document was rebuilt) is never reused
+        if meta.get("invalidated"):
             continue
         if meta.get("fingerprint") == fp and (
                 policy is None or meta.get("policy_fingerprint") == policy):

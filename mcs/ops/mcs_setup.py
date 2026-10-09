@@ -505,8 +505,12 @@ def _validate_standalone_scope(cfg: dict) -> list[str]:
             errors.append(f"notify.{transport}.project_ids: positive integer list required (or project_ids_auto=true)")
         if transport == "discord" and "allowed_chat_ids" in scope:
             chats = scope["allowed_chat_ids"]
-            if not (isinstance(chats, list) and chats and all(
-                    isinstance(chat, str) and chat.isdecimal() and int(chat) > 0 for chat in chats)):
+            try:
+                valid_chats = isinstance(chats, list) and chats and all(
+                    isinstance(chat, str) and chat.isdecimal() and int(chat) > 0 for chat in chats)
+            except ValueError:
+                valid_chats = False
+            if not valid_chats:
                 errors.append("notify.discord.allowed_chat_ids: non-empty channel identifier list required")
         if transport == "discord" and "allowed_role_ids" in scope:
             roles = scope["allowed_role_ids"]
@@ -1253,9 +1257,12 @@ def _project_ids_yaml(text: str) -> str | None:
     if text.startswith("["):
         text = text.strip("[]")
     items = [x.strip().strip("'\"") for x in text.split(",") if x.strip()]
-    if not items or not all(x.isdecimal() and int(x) > 0 for x in items):
+    try:
+        if not items or not all(x.isdecimal() and int(x) > 0 for x in items):
+            return None
+        return json.dumps([int(x) for x in items])
+    except ValueError:
         return None
-    return json.dumps([int(x) for x in items])
 
 
 def _apply_plugin_integration(cfg: dict, args) -> bool:
@@ -1596,6 +1603,17 @@ def cmd_init(args) -> int:
         print("init: recovery_python " + why + " — nothing written")
         return 1
     checked_recovery = cfg.get("recovery_python")
+    # standalone keeps the plugin grants in config.json: an id list it
+    # cannot honour whole is refused like the Hermes path, before any
+    # secret, .env or config write — never silently narrowed
+    standalone_projects = None
+    if mcs_runtime.standalone(cfg) and getattr(args, "plugin_project_ids", None):
+        literal = _project_ids_yaml(args.plugin_project_ids)
+        if literal is None:
+            print("init: --plugin-project-ids: 正の整数の project ID を"
+                  "カンマ区切りで指定してください — nothing written")
+            return 1
+        standalone_projects = json.loads(literal)
 
     # secrets come from the environment (or getpass) — never argv flags,
     # which persist in shell history and `ps` (FIX-SU1)
@@ -1689,9 +1707,8 @@ def cmd_init(args) -> int:
                               ("plugin_project_ids", "project_ids")):
                 value = getattr(args, flag, None)
                 if value:
-                    items = _csv_list([value])
-                    scope[key] = [int(v) for v in items if v.isdecimal()] \
-                        if key == "project_ids" else items
+                    scope[key] = standalone_projects if key == "project_ids" \
+                        else _csv_list([value])
         else:
             ignored += ["--plugin-" + f[7:].replace("_", "-") for f in
                         ("plugin_user_ids", "plugin_chat_ids",
@@ -2660,6 +2677,10 @@ def _calendar(schedule: str) -> list[dict]:
             for h in expand(hour, 24) for m in expand(minute, 60)]
 
 
+# The standalone host's scheduler (mcs_standalone.runtime) wraps each job in
+# this cap: hermes cron killed a script after 3600s, and a host that never
+# starts a job still running would otherwise stop it for good after one
+# wedged tick. The wrapper kills the job's process group.
 CRON_TIMEOUT_S = 3600      # = hermes cron's script timeout
 _TIMEOUT_PL = ("my $t = shift; my $p = 0;"
                # launchd's SIGTERM (bootout, logout) must reach the job too
@@ -2668,26 +2689,6 @@ _TIMEOUT_PL = ("my $t = shift; my $p = 0;"
                " if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 }"
                " $SIG{ALRM} = sub { kill 'TERM', -$p; sleep 5; kill 'KILL', -$p; exit 124 };"
                " alarm $t; waitpid($p, 0); exit($? >> 8)")
-
-
-def _cron_plist(label: str, script: str, schedule: str, cfg: dict) -> str:
-    """Standalone replacement for one `hermes cron` job (--deliver local:
-    output only goes to a log). launchd never starts a second instance
-    of a job that is still running."""
-    log = os.path.join(HOME, "data", "cron.log")
-    return plistlib.dumps({
-        "Label": label,
-        # hermes cron killed a script after 3600s; launchd has no timeout and
-        # never starts a job that is still running, so one wedged tick would
-        # stop the job for good. The cap kills the wrapper's process group.
-        "ProgramArguments": ["/usr/bin/perl", "-e", _TIMEOUT_PL, str(CRON_TIMEOUT_S),
-                             "/bin/bash", os.path.join(_scripts_dir(cfg), script)],
-        "StartCalendarInterval": _calendar(schedule),
-        # the CDP Chrome a collection tick starts must outlive the tick
-        # (hermes cron never killed it); launchd would reap the group
-        "AbandonProcessGroup": True,
-        "StandardOutPath": log, "StandardErrorPath": log,
-    }).decode("utf-8")
 
 
 def _agent_labels(cfg: dict) -> list[str]:
@@ -3007,15 +3008,12 @@ def _sync_scripts(subs, manifest, note, dry, directory=None) -> None:
 
 
 def _desired_agents(subs, cfg) -> dict[str, str]:
-    """label -> rendered plist: repo templates plus, in standalone mode,
-    one calendar agent per CRON_JOBS entry."""
+    """label -> rendered plist from the repo launchagents templates. The
+    standalone runtime is one supervised host whose own scheduler runs
+    every job (mcs_standalone.runtime), so no per-job agent exists."""
     pdir = os.path.join(REPO_ROOT, "deployment", "launchagents")
-    jobs = {_cron_label(script): (script, sched) for _, sched, script in CRON_JOBS}
     out = {}
     for label in _agent_labels(cfg):
-        if label in jobs:
-            out[label] = _cron_plist(label, *jobs[label], cfg)
-            continue
         out[label] = _render_template(
             Path(pdir, label + ".plist").read_text(encoding="utf-8"),
             {key: xml_escape(value, quote=False) for key, value in subs.items()})

@@ -12,7 +12,7 @@
   <text x="189" y="67" font-size="9" fill="#dbdee1" text-anchor="middle">APP</text>
   <text x="222" y="67" font-size="11" fill="#b5bac1">今日 10:02</text>
   <rect x="76" y="90" width="690" height="439" rx="8" fill="#2b2d31" stroke="#1e1f22"/>
-  <text x="92" y="118" font-size="14" fill="#ffffff" font-weight="bold">💬 山田 花子（あおぞら）· 起点 10-01 ［緊急度高・AI判定］</text>
+  <text x="92" y="118" font-size="14" fill="#ffffff" font-weight="bold">💬 山田 花子（あおぞら）· 起点 10-01 🚨 緊急度高</text>
   <text x="92" y="139" font-size="11" fill="#b5bac1">2投稿 · 📎 1 · @自分宛て</text>
   <text x="92" y="156" font-size="11" fill="#b5bac1">🆕 返信+1</text>
   <line x1="92" y1="168" x2="750" y2="168" stroke="#4e5058" stroke-width="1"/>

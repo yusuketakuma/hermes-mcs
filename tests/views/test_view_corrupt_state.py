@@ -12,6 +12,7 @@ from response_observation_view import get_response_observation_list
 from views_testkit import SCHEMA, SNAP_TS, _extract, _message, _msg
 
 DEEP = "[" * 1500 + "0" + "]" * 1500
+BIGINT = '{"synthetic_unused":' + "9" * 5000 + "}"
 COMMAND = "11111111-1111-4111-8111-111111111111"
 DIGEST = "f" * 64
 
@@ -60,8 +61,9 @@ def test_status_latest_corrupt_summary_never_revives_old(store, tmp_path, field)
         view.close()
 
 
+@pytest.mark.parametrize("raw", [DEEP, BIGINT], ids=["deep", "integer_limit"])
 @pytest.mark.parametrize("field", ["content", "meta", "event_meta"])
-def test_loops_deep_payload_cannot_break_listing(store, tmp_path, field):
+def test_loops_deep_payload_cannot_break_listing(store, tmp_path, field, raw):
     store.save_messages([_message(1)], project_id=1, notify=False)
     candidate = store.artifact_add("loop_candidate", '{"state":"OPEN"}',
                                    project_id=1, message_id=1, meta={})
@@ -74,7 +76,7 @@ def test_loops_deep_payload_cannot_break_listing(store, tmp_path, field):
         target = candidate
     with store.db:
         store.db.execute(f"UPDATE artifacts SET {field}=? WHERE artifact_id=?",
-                         (DEEP, target))
+                         (raw, target))
     view = _view(store, tmp_path)
     try:
         result = view.read("loops", project=1)
@@ -86,8 +88,8 @@ def test_loops_deep_payload_cannot_break_listing(store, tmp_path, field):
         view.close()
 
 
-@pytest.mark.parametrize("raw", ["{broken", "[]", "null", DEEP],
-                         ids=["malformed", "array", "null", "deep"])
+@pytest.mark.parametrize("raw", ["{broken", "[]", "null", DEEP, BIGINT],
+                         ids=["malformed", "array", "null", "deep", "integer_limit"])
 @pytest.mark.parametrize("kind", ["receipt", "notification"])
 def test_corrupt_receipt_has_stable_rejection(store, tmp_path, raw, kind):
     with store.db:
@@ -151,9 +153,11 @@ def test_stats_deep_sqlite_valid_extraction_has_stable_result():
         db.close()
 
 
-def test_qc_deep_feedback_cannot_break_redacted_listing(store, tmp_path):
+@pytest.mark.parametrize("padding", ["[" * 990 + "0" + "]" * 990, "9" * 5000],
+                         ids=["deep", "integer_limit"])
+def test_qc_deep_feedback_cannot_break_redacted_listing(store, tmp_path, padding):
     store.save_messages([_message(1)], project_id=1, notify=False)
-    raw = '{"note":' + "[" * 990 + "0" + "]" * 990 + "}"
+    raw = '{"note":' + padding + "}"
     assert store.db.execute("SELECT json_valid(?)", (raw,)).fetchone()[0] == 1
     store.artifact_add("extract_feedback_v1", raw, project_id=1, message_id=1, meta={})
     view = _view(store, tmp_path)
@@ -165,12 +169,14 @@ def test_qc_deep_feedback_cannot_break_redacted_listing(store, tmp_path):
         view.close()
 
 
-def test_qc_deep_annotation_cannot_break_listing(store, tmp_path):
+@pytest.mark.parametrize("padding", ["[" * 990 + "0" + "]" * 990, "9" * 5000],
+                         ids=["deep", "integer_limit"])
+def test_qc_deep_annotation_cannot_break_listing(store, tmp_path, padding):
     store.save_messages([_message(1)], project_id=1, notify=False)
     revision = store.db.execute("SELECT content_hash FROM messages").fetchone()[0]
     source = store.artifact_add("extract_llm", "{}", project_id=1, message_id=1,
                                meta={"hash": revision, "extract_version": extract_llm.EXTRACT_VERSION})
-    raw = '{"qc":"unevaluated","padding":' + "[" * 990 + "0" + "]" * 990 + "}"
+    raw = '{"qc":"unevaluated","padding":' + padding + "}"
     store.artifact_add("extract_qc", raw, project_id=1, message_id=1,
                        meta={"hash": revision, "extract_version": extract_llm.EXTRACT_VERSION,
                              "source_artifact_id": source})

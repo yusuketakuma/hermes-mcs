@@ -184,8 +184,8 @@ LLM・サービスの追加probeは明示した範囲だけに限る。`init` �
   `user_version` なら auto は中止（旧コードが migrated DB を拒否する
   ため code-only rollback 不能）。notify は DB 復元の消失を明示して承認待ち
 - **ロールバック**: 失敗/不合格/`unverifiable`（検証不能）→
-  `reset --hard prev_sha` + 外科的削除（tag-fileset∩untracked）→
-  （schema_bump 時のみ）`preupdate-*` DB 復元 → manifest スナップ
+  `reset --hard prev_sha`（両ロック・処理停止下で追跡済みファイルを復旧し、未追跡ファイルは追加削除しない）→
+  （schema_bump 時のみ）損失報告と対象backupに束縛した `ops.restore_approve` の人承認後に `preupdate-*` DB 復元 → manifest スナップ
   ショット駆動のサービス復元（membership=recover.py、コンテンツ=
   旧コード services）→ drainer/gateway 再起動 → 通知。
   **中断復旧はジャーナル+実測（HEAD/porcelain/stale .git lock）で判定**
@@ -240,8 +240,8 @@ grace をこの仕様から補わない。`status` は私有ローカル記録�
 | 収集run 重複/クラッシュ | run.lock / 次回 tick | 次回 run が差分継続（cursor/attempts は durable） | ✅自己治癒 |
 | 通知配送失敗 | outbox state | `next_try` リトライ（3600s）・永久不可は `outbox_hold` | ✅ |
 | カード配送クラッシュ | claim 残存 | `notify_transport` の claim 回収・`ops.card_resolve` | ✅/人手 |
-| apply 中断📋 | `applying`/`stages` 残存 or watchdog stale 検出 | stages+HEAD+porcelain+stale `.git` lock のジャーナル判定 → reset+外科削除 / 段階追走 / merge --abort / 人へ。repo 外の `mcs_recover.py` が新版破損時も起動可能 | ✅+人手 |
-| apply 不合格・検証不能📋 | 事後差分 check / `unverifiable` | 自動 rollback（reset+外科削除+（schema_bump 時）DB 復元+snapshot reconcile+restart）→ 通知 | ✅ |
+| apply 中断📋 | `applying`/`stages` 残存 or watchdog stale 検出 | stages+HEAD+porcelain+stale `.git` lock のジャーナル判定 → 追跡済みファイルのreset（未追跡ファイルの追加削除なし） / 段階追走 / merge --abort / 人へ。repo 外の `mcs_recover.py` が新版破損時も起動可能 | ✅+人手 |
+| apply 不合格・検証不能📋 | 事後差分 check / `unverifiable` | rollback（追跡済みファイルのreset+（schema_bump 時）束縛された人承認後のDB 復元+snapshot reconcile+restart）→ 通知 | ✅ |
 | DB 破損 | `valid_mcs_db` 失敗 | backups/ から人が復元（原本上書き禁止・別配置で検証後） | 人手のみ |
 | 端末喪失・暗号化 offsite からの回復 | 独立 SHA receipt・MAC・schema/件数・鮮度の検証 | 外部 escrow 鍵を明示 FD で入力→`drill`→`restore`。新規私有配置限定、DBより先に `awaiting_consent` を保持 | 人手。配置後も稼働再開しない |
 | schema_bump 更新📋 | 事前互換判定 | auto 中止。notify 承認時のみ適用し、rollback は DB 復元（消失を明示） | 人手 |

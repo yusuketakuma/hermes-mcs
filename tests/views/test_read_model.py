@@ -377,8 +377,9 @@ def test_malformed_newer_projection_keeps_usable_current_row(tmp_path):
 
 
 @pytest.mark.parametrize("kind", ["canonical_projection", "semantic_facts_v4"])
-@pytest.mark.parametrize("version,current", [(3, False), (None, False), ("4", False),
-                                            (4, True), (4.0, True)])
+@pytest.mark.parametrize("version,current", [(PROJECTION_VERSION - 1, False), (None, False),
+                                            (str(PROJECTION_VERSION), False),
+                                            (PROJECTION_VERSION, True), (float(PROJECTION_VERSION), True)])
 def test_machine_read_model_uses_the_same_public_projection_version(tmp_path, kind, version, current):
     db = _db(tmp_path, (1,))
     try:

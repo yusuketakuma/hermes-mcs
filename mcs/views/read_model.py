@@ -174,7 +174,9 @@ def _message_records(db, project_id):
                 "('extract_v1','extract_llm','canonical_projection',"
                 "'semantic_facts_v4') AND a.message_id IN (" + ph + ") "
                 "ORDER BY a.artifact_id DESC", mids):
-            if a["project_id"] != pid_by_mid[a["message_id"]]:
+            # Legacy rows bind through the globally unique message ID.
+            if a["project_id"] != pid_by_mid[a["message_id"]] and not (
+                    a["project_id"] is None and a["kind"] in ("extract_v1", "extract_llm")):
                 continue
             arts_by_mid.setdefault(a["message_id"], []).append(a)
         for msg in rows:
@@ -280,7 +282,8 @@ def message_patient_context(db, message, scope="detail", *, by_kind=None, art_ro
     if art_rows is None:
         art_rows = db.execute(
             "SELECT artifact_id,kind,content,meta FROM artifacts "
-            "WHERE project_id=? AND message_id=? AND kind IN "
+            "WHERE (project_id=? OR (project_id IS NULL AND kind IN "
+            "('extract_v1','extract_llm'))) AND message_id=? AND kind IN "
             "('extract_v1','extract_llm','canonical_projection','semantic_facts_v4') "
             "ORDER BY artifact_id DESC", (message["project_id"], message["message_id"])).fetchall()
     if by_kind is None:

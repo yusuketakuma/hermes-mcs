@@ -1,0 +1,8 @@
+{
+  "category": "security",
+  "title": "復旧処理の復元承認をアップデート処理と同じ条件で確認",
+  "summary": "中断した更新を復旧する常駐処理は、DB復元の承認記録をアップデート処理と同じ厳密さで確認します。拒否・エラー付き・別の操作IDを名乗る・あいまいなJSON・型が違う記録を承認として扱わず、新しい不正な記録が以前の正しい承認を置き換えることもありません。",
+  "upgrade": "復旧本体はcheckout外に置かれるため、更新時は従来のrecovery_tool_changedの手順で復旧本体を同期してください。承認の操作手順・必要な承認・正しい既存の承認記録の扱いは変わりません。",
+  "details": ["deployment/recovery/mcs_recover.pyにmcs_update._approval_receiptと同じ判定（重複キー・NaN等の拒否、16384文字上限、command_id一致、outcome=applied、error無し、scheduled=true）を自己完結で追加し、backup_schemaは真偽値を除く整数だけを受け付ける。", "両方の判定経路へ同じ不正記録10種と、新しい不正記録が先にあっても正しい承認だけを採用する回帰を追加する。"],
+  "refs": ["deployment/recovery/mcs_recover.py", "tests/ops/test_recovery_corrupt_receipts.py"]
+}

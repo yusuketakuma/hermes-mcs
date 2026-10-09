@@ -1,0 +1,22 @@
+{
+  "category": "fixed",
+  "title": "修正前の解析結果から作られた表示・要約・追跡候補が最新のまま残る問題を修正",
+  "summary": "別の箇所の同じ表現を一つにまとめていた修正前の解析結果を、定期処理が保存済みの区切り結果だけで作り直すようにしました。内容が変わらないものはそのまま使い、変わるものや作り直せないものは、古い解析結果から作られた表示・要約・監査・網羅確認・追跡候補を最新扱いから外し、送信待ちの要約も保留します。また、再解釈で出なくなった追跡候補は履歴として残したまま、最新扱い・最新世代へのコピー・採用の対象から外します。",
+  "upgrade": "追加設定は不要です。解析処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。作り直しは既存の再投影処理と同じ回・同じ件数上限で少しずつ進み、モデルと外部評価の呼び出しは行いません。内容が変わった投稿のスレッドは通知なしで一度だけ再解析に入り、監査を通った後に表示と要約が作り直されます。失敗済み、人の確認待ち、修正済みの解析は自動で再解析せず再試行の回数も戻さないため、古い表示は古い状態として残り、手動の再試行で作り直せます。一時停止中の患者は受付だけ行い、実行は停止を保ちます。fact_sourceがcanonicalの場合だけ動作します。正式な依頼と通知の履歴は変わりません。",
+  "details": [
+    "semantic_extraction.FACTS_V2_BUILD（hint-span/1）を新規保存のsemantic_facts_v2のmetaに記録し、修正後の結果を作り直しの対象から外す。rebuild_facts_v2_cachedはモデル・Jev・書込みを行わず、区切り結果が無い、事前判定が保存されていない、区切り方が変わる場合は作り直さない。",
+    "semantic_v4.reproject_staleは、build無しでextract_v1と他の出所を併記した事実を持つ最新のsemantic_facts_v2を、REPROJECT_LIMITの残り件数だけ処理し、hint_rebuildにsame、replaced、skippedと理由、historyのいずれかを一度だけ記録する。replacedとskippedでは、同じ投稿・同じ世代の表示すべて（同じ世代の別の古い表示が最新に戻らないように）と、同じ世代の要約・監査・網羅確認・事実監査・追跡候補をinvalidatedにし、要約はstaleにする。失敗済み、待機中、人の確認待ち、修正済み、対象範囲外は再投入しない。fact_sourceがcanonical以外では何もしない。 対象の選択は事実の配列の要素が辞書で出所が文字列のものだけを読み、形の違う要素が混ざった文書でも処理全体を止めず、その文書だけを作り直せない理由付きで保留する。",
+    "semantic_drainは作り直せなかった文書を再利用・公開せず、すでに使った網羅の再試行を引き継ぐ。修正後の文書にはbuildを記録する。semantic_store._currentはinvalidatedの行を再利用しない。",
+    "semantic_loops.update_loopsは再評価した投稿の候補を同一性で照合し、出なくなった候補をinvalidatedにし、戻った候補は同じ行を復帰させる。invalidatedの候補は最新世代へコピーしない。他の投稿の候補と新しい返信によるコピーは保持する。request_loops.current_candidateはinvalidatedの候補をloop_candidate_staleとして拒否する。再投影で表示を作り直した投稿の候補も同じ照合を行う。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_extraction.py",
+    "mcs/semantic/semantic_v4.py",
+    "mcs/semantic/semantic_drain.py",
+    "mcs/semantic/semantic_store.py",
+    "mcs/semantic/semantic_loops.py",
+    "mcs/ops/request_loops.py",
+    "tests/semantic/test_hint_rebuild_pass.py",
+    "tests/semantic/test_loop_reinterpretation.py"
+  ]
+}

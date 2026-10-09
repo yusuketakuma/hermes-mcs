@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "DB復元後の配送確認で、取り消したカードを戻さない",
+  "summary": "DB復元後に保留された配送を運用者が確認して解除するとき、復元で送信記録が失われていたカードが取り消し済み（患者のアーカイブなど）でも、配信済みや送信待ちに戻していた問題を修正しました。取り消したカードは取り消したままにし、配信済みと確認された場合は削除のためにそのメッセージだけを結び付けます。保留された通知の一覧が壊れている場合は、何も書き換えずに確認を拒否します。",
+  "upgrade": "追加設定は不要です。通知処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。取り消していないカードの確認・解除、運用者の確認手順、通知の条件は変わりません。",
+  "details": [
+    "notify_transport._rebind_apply は render 行が失われた保留で card が revoked のとき、delivery_state を変えない。mark_delivered で card に message_id が無ければそれだけを記録し、既存の revoke 再描画が削除できるようにする。mark_not_sent で送信待ちに戻した通知は、既存の配信処理が revoked の card を抑止する。",
+    "保留の events_json は notify_transport.hold_events が正の整数IDだけの JSON 配列として読み、bool・文字列・小数・範囲外の整数・配列以外・読めない JSON を含めば None を返す。_rebind_check はこれを hold_events_corrupt として拒否し、受領記録以外は書き換えない。_rebind_apply も同じ関数で読み、無効な ID を除いた一部だけを戻すことはしない。"
+  ],
+  "refs": [
+    "mcs/notify/notify_transport.py",
+    "tests/notify/test_rebind_revoked_card.py"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "category": "security",
+  "title": "復元後の配送確認で、対象プロジェクトを確認できない保留を解除しない",
+  "summary": "Hermes の /mcs から DB 復元後の保留を解除するとき、送信記録が失われカードからプロジェクトが分からない場合にプロジェクト範囲の確認を通過していた問題を修正しました。保留されたカードと通知からプロジェクトを確認し、範囲外なら拒否、どのプロジェクトか確認できない場合も拒否します。",
+  "upgrade": "Hermes の gateway を再起動して plugin の更新を反映してください。対象プロジェクトを確認できない古い保留は /mcs からは解除できず、運用者がコマンドファイル経由の既存手順で確認します。ユーザー・チャンネル・権限の条件は変わりません。",
+  "details": [
+    "hermes_plugin._card_resolution は render が無い保留のプロジェクトを、card（signal・digest は既存の _card_projects と同じ coverage 経由）と保留の events_json が指す notify_outbox 行の project_id から求め、要求に含まれる値は使わない。1件も求まらなければ project_unknown、範囲外が含まれれば project_not_allowed。壊れた scope_json は例外ではなく hold_scope_corrupt で拒否する。",
+    "events_json は解除処理と同じ notify_transport.hold_events で読み、正の整数IDの配列でなければ hold_events_corrupt で拒否する。無効な要素を飛ばして残りの通知だけで範囲を判定しない。空の配列は card からプロジェクトを確認できれば従来どおり扱う。"
+  ],
+  "refs": [
+    "hermes_plugin/__init__.py",
+    "tests/plugin/test_card_resolution_lost_hold_scope.py",
+    "mcs/notify/notify_transport.py"
+  ]
+}

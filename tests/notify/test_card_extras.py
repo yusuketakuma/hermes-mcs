@@ -132,8 +132,9 @@ def test_unacked_lists_until_acknowledged(led):
 
 def test_unacked_leaves_out_old_cards(led):
     spec = _delivered_card(led)
-    led.db.execute("UPDATE notification_cards SET updated_at=?",
-                   (NOW - notify_views.UNACKED_WINDOW_S - 1,))
+    old = NOW - notify_views.UNACKED_WINDOW_S - 1
+    led.db.execute("UPDATE notification_cards SET created_at=?,updated_at=?", (old, old))
+    led.db.execute("UPDATE notification_view_manifests SET created_at=?", (old,))
     led.db.commit()
     assert _click(led, spec, "unacked")["list"]["items"] == []
 

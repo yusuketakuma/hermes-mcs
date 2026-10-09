@@ -29,6 +29,8 @@ Design contract:
   backend evidence. The one exception is a hard-killed owner: a permit
   whose lease (``LEASE_S``, well past any client deadline) expired AND
   whose recording process no longer exists (its socket closed with it)
+  — no process with that pid, or one whose kernel start identity
+  provably differs from the recorded one (a reused pid) —
   is fenced as ``owner_dead`` during acquisition, so a SIGKILL'd
   request cannot hold its class while other handles keep the store
   open. A live owner's permit is never reclaimed.
@@ -51,10 +53,13 @@ Design contract:
 """
 from __future__ import annotations
 
+import datetime
 import hashlib
 import fcntl
 import os
+import re
 import sqlite3
+import subprocess
 import time
 from contextlib import contextmanager
 from functools import wraps
@@ -107,6 +112,89 @@ def _pid_alive(pid) -> bool:
     return True
 
 
+# Owner start identity separates a reused pid from the recorded owner.
+# ps runs with a fixed locale/zone so the same process always yields the
+# same token; each probe is bounded and a whole reclaim pass is capped.
+_PS_ENV = {"PATH": "/bin:/usr/bin", "LC_ALL": "C", "TZ": "UTC"}
+PROBE_TIMEOUT_S = 1.0
+PROBE_BUDGET_S = 2.0
+
+
+_DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_TICKS = re.compile(r"0|[1-9][0-9]{0,19}", re.ASCII)
+_PROC_TOKEN = re.compile(r"proc:(?:0|[1-9][0-9]{0,19})", re.ASCII)
+# raw C-locale ``lstart``: day of month space-padded to two columns
+_PS_LSTART = re.compile(
+    r"[A-Z][a-z]{2} [A-Z][a-z]{2} [ 1-3][0-9] [0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r" [0-9]{4}", re.ASCII)
+_PS_TOKEN = re.compile(
+    r"ps:([A-Z][a-z]{2}) ([A-Z][a-z]{2}) ([1-9]|[12][0-9]|3[01])"
+    r" (?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9] ([0-9]{4})", re.ASCII)
+
+
+def _identity_scheme(token) -> str | None:
+    """``"proc"`` or ``"ps"`` for a well-formed start identity token;
+    None for anything else (legacy, corrupt or unknown scheme)."""
+    if not isinstance(token, str):
+        return None
+    if _PROC_TOKEN.fullmatch(token):
+        return "proc"
+    m = _PS_TOKEN.fullmatch(token)
+    if m is None or m[2] not in _MONTHS:
+        return None
+    try:
+        day = datetime.date(int(m[4]), _MONTHS.index(m[2]) + 1, int(m[3]))
+    except ValueError:
+        return None
+    return "ps" if _DAYS[day.weekday()] == m[1] else None
+
+
+def _stat_start(raw: bytes, pid: int) -> str | None:
+    """Start time (field 22, clock ticks since boot) of ``pid``'s Linux
+    ``/proc/<pid>/stat`` record, or None when the record is malformed."""
+    head = f"{pid} (".encode("ascii")
+    _, sep, tail = raw.rpartition(b")")
+    fields = tail.split()
+    if not raw.startswith(head) or not sep or len(fields) < 20:
+        return None
+    try:
+        ticks = fields[19].decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    return "proc:" + ticks if _TICKS.fullmatch(ticks) else None
+
+
+def _proc_started(pid) -> str | None:
+    """Kernel start identity of ``pid`` — None whenever it cannot be read
+    unambiguously (gone, unreadable, malformed or timed out)."""
+    if type(pid) is not int or pid <= 0:
+        return None
+    if os.path.exists("/proc/self/stat"):
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as handle:
+                return _stat_start(handle.read(4096), pid)
+        except OSError:
+            return None
+    try:
+        out = subprocess.run(["/bin/ps", "-o", "lstart=", "-p", str(pid)],
+                             env=_PS_ENV, capture_output=True,
+                             timeout=PROBE_TIMEOUT_S, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0 or not isinstance(out.stdout, bytes):
+        return None
+    try:
+        text = out.stdout.decode("ascii").strip()
+    except UnicodeDecodeError:
+        return None
+    if not _PS_LSTART.fullmatch(text):
+        return None
+    token = "ps:" + " ".join(text.split())
+    return token if _identity_scheme(token) == "ps" else None
+
+
 def _connect(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
     try:
@@ -143,6 +231,7 @@ class Broker:
         # count — beyond it a permit defers ('class_full'), never
         # queues silently past the backend's parallel width
         self.slots = max(1, int(slots))
+        self._identity = None       # (pid, start identity) of this process
         # A fresh process owns epoch recovery only when no other broker
         # handle is alive. Shared lifetime locks let other clients join
         # the current epoch without fencing an in-flight request.
@@ -198,13 +287,18 @@ class Broker:
                 terminal_at REAL,
                 outcome TEXT,
                 proof TEXT,
-                owner_pid INTEGER)""")
+                owner_pid INTEGER,
+                owner_started TEXT)""")
             cols = {r[1] for r in self.db.execute(
                 "PRAGMA table_info(permits)")}
             if "owner_pid" not in cols:
                 # pre-existing rows keep NULL: their owner is unprovable
                 self.db.execute(
                     "ALTER TABLE permits ADD COLUMN owner_pid INTEGER")
+            if "owner_started" not in cols:
+                # NULL keeps the pid-only liveness verdict for old rows
+                self.db.execute(
+                    "ALTER TABLE permits ADD COLUMN owner_started TEXT")
             if "admitted_at" not in cols:
                 self.db.execute(
                     "ALTER TABLE permits ADD COLUMN admitted_at REAL")
@@ -352,10 +446,11 @@ class Broker:
                         "rt_waiting+1 WHERE singleton=1")
                     cur = self.db.execute(
                         "INSERT INTO permits(epoch,client,cls,job_gen,"
-                        "request_id,state,created_at,owner_pid)"
-                        " VALUES(?,?,?,?,?,'waiting',?,?)",
+                        "request_id,state,created_at,owner_pid,"
+                        "owner_started)"
+                        " VALUES(?,?,?,?,?,'waiting',?,?,?)",
                         (epoch, client, cls, job_gen, request_id,
-                         time.time(), os.getpid()))
+                         time.time(), *self._owner()))
                     return {"admitted": False, "reason": "waiting",
                             "permit_id": cur.lastrowid,
                             "epoch": epoch}
@@ -374,17 +469,21 @@ class Broker:
         now = time.time()
         epoch = self._meta()["epoch"]
         stale = self.db.execute(
-            "SELECT permit_id,cls,state,owner_pid FROM permits"
+            "SELECT permit_id,cls,state,owner_pid,owner_started FROM permits"
             " WHERE epoch=? AND state IN"
             " ('reserved','admitted','sent','unknown','cancel_pending',"
             "'waiting') AND owner_pid IS NOT NULL"
             " AND COALESCE(sent_at,admitted_at,created_at)<?"
             " ORDER BY permit_id LIMIT ?",
             (epoch, now - LEASE_S, RECLAIM_BATCH)).fetchall()
-        # ponytail: pid reuse can make a dead owner look alive (the
-        # permit stays until the epoch fence); it never frees a live one.
+        # ponytail: an owner whose start identity is unreadable (old row,
+        # probe failure, same-second reuse under ps) stays until the epoch
+        # fence; a live recorded owner is never freed.
+        probes = {}
+        budget = time.monotonic() + PROBE_BUDGET_S
         for p in stale:
-            if _pid_alive(p["owner_pid"]):
+            if _pid_alive(p["owner_pid"]) and not self._replaced(
+                    p["owner_pid"], p["owner_started"], probes, budget):
                 continue
             self.db.execute(
                 "UPDATE permits SET state='fenced', outcome='owner_dead',"
@@ -402,16 +501,42 @@ class Broker:
             " AND COALESCE(terminal_at,created_at)<?",
             (PRUNE_BATCH, *TERMINAL, now - RETENTION_S))
 
+    def _owner(self) -> tuple:
+        """(pid, start identity) recorded on this process's permits —
+        re-read after a fork so a child never inherits its parent's."""
+        pid = os.getpid()
+        if self._identity is None or self._identity[0] != pid:
+            self._identity = (pid, _proc_started(pid))
+        return self._identity
+
+    def _replaced(self, pid, recorded, probes, budget) -> bool:
+        """True only when a live ``pid`` provably belongs to a process
+        other than the recorded owner — both identities well-formed in
+        the same scheme and different. Each pid is probed at most once
+        per pass, and none after the pass budget."""
+        scheme = _identity_scheme(recorded)
+        if scheme is None:
+            return False
+        if pid == os.getpid():
+            current = self._owner()[1]
+        else:
+            if pid not in probes:
+                probes[pid] = (_proc_started(pid)
+                               if time.monotonic() < budget else None)
+            current = probes[pid]
+        return _identity_scheme(current) == scheme and current != recorded
+
     def _admit(self, epoch, client, cls, job_gen, request_id) -> dict:
         """Insert an 'admitted' permit — created_at == admitted_at since
         the permit never waited."""
         now = time.time()
         cur = self.db.execute(
             "INSERT INTO permits(epoch,client,cls,job_gen,"
-            "request_id,state,created_at,admitted_at,owner_pid)"
-            " VALUES(?,?,?,?,?,'admitted',?,?,?)",
+            "request_id,state,created_at,admitted_at,owner_pid,"
+            "owner_started)"
+            " VALUES(?,?,?,?,?,'admitted',?,?,?,?)",
             (epoch, client, cls, job_gen, request_id, now, now,
-             os.getpid()))
+             *self._owner()))
         return {"admitted": True, "permit_id": cur.lastrowid,
                 "epoch": epoch}
 

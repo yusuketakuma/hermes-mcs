@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "無効になった依頼候補を現在の候補として表示する問題を修正",
+  "summary": "抽出結果の修正などで無効になった依頼候補は、原文と設定が一致していても過去の候補として表示し、採用できない状態にするようにしました。保存された履歴と正式な依頼は保持します。",
+  "upgrade": "追加設定は不要です。無効化済みの候補の表示はSTALEとなります。候補の作成・更新・正式依頼への採用条件は、同じ世代照合の修正と合わせて検証します。",
+  "details": ["Loop表示のcurrentとadoption_eligibleへinvalidatedの拒否条件を適用する。"],
+  "refs": ["mcs/views/mcs_view.py", "tests/views/test_view_invalidated_loop.py"]
+}

@@ -94,6 +94,12 @@ def test_backup_health_requires_drill_and_keeps_records_out_of_output(
         report = run_check._health(with_db, {"errors": []}, "ok", cfg=config)
         assert report["overall"] == "degraded"
         assert report["backup"]["reasons"] == ["backup_failed"]
+        assert report["backup"]["failure_code"] is None       # cause not recorded
+        state.update(last_error="backup_retention_capacity")
+        state_path.write_text(json.dumps(state))
+        detail = run_check._backup_health(config, 100)
+        assert detail["reasons"] == ["backup_failed"]
+        assert detail["failure_code"] == "backup_retention_capacity"
         assert "backup_not_verified" in report["state_reasons"]
     finally:
         with_db.close()

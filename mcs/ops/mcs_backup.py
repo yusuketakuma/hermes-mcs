@@ -114,6 +114,42 @@ class BackupError(MaintenanceError):
     """A stable reason token, never OpenSSL stderr, key material or DB rows."""
 
 
+# The finite set of fixed failure codes this module raises — the only
+# causes recorded in backup_state.json or published by status(). Any other
+# exception text (paths, settings, OS messages) is never recorded.
+FAILURE_CODES = frozenset({
+    "backup_authentication_failed", "backup_bundle_size_or_type_invalid",
+    "backup_cipher_failed", "backup_cipher_header_invalid",
+    "backup_cipher_unavailable", "backup_copy_limit_exceeded",
+    "backup_copy_size_or_type_invalid", "backup_destination_identity_changed",
+    "backup_directory_not_private", "backup_drill_requires_new_local_directory",
+    "backup_escrow_already_exists", "backup_explicit_snapshot_required",
+    "backup_foreign_key_failed", "backup_format_invalid",
+    "backup_human_escrow_required", "backup_inspection_budget_exhausted",
+    "backup_inspection_budget_invalid", "backup_inspection_size_or_type_invalid",
+    "backup_integrity_failed", "backup_invalid_database", "backup_invalid_metric",
+    "backup_inventory_mismatch", "backup_io_or_policy_failed",
+    "backup_key_already_exists", "backup_key_required", "backup_keychain_key_invalid",
+    "backup_keychain_readback_failed", "backup_keychain_store_failed",
+    "backup_keychain_unavailable", "backup_manifest_invalid",
+    "backup_medium_inspection_limit", "backup_medium_inventory_type_invalid",
+    "backup_no_valid_daily_snapshot", "backup_payload_invalid",
+    "backup_plain_checksum_failed", "backup_plain_size_mismatch",
+    "backup_policy_file_not_private_or_bounded", "backup_policy_required",
+    "backup_readback_failed", "backup_receipt_mismatch", "backup_record_invalid",
+    "backup_record_not_private_or_bounded",
+    "backup_records_require_separate_trusted_directory",
+    "backup_restore_destination_collision", "backup_restore_parent_changed",
+    "backup_restore_requires_new_local_directory", "backup_retention_capacity",
+    "backup_rpo_exceeded_or_unknown", "backup_scratch_must_be_separate",
+    "backup_source_changed", "backup_source_requires_separate_directory",
+    "backup_state_busy", "backup_state_identity_changed",
+    "backup_state_lock_not_private", "backup_state_policy_mismatch",
+    "backup_static_snapshot_required", "backup_truncated",
+    "backup_trusted_receipt_required",
+})
+
+
 def _finite_number(value) -> bool:
     if type(value) not in (int, float):
         return False
@@ -313,7 +349,19 @@ def status(state_dir: str, policy: BackupPolicy
     # A later verify/drill success must not hide a failed offsite attempt.
     out["last_attempt_failed"] = "failed" in (
         state.get("last_action_status"), state.get("last_offsite_status"))
+    # The offsite cause first: a later verify success must not hide it.
+    cause = (state.get("last_offsite_error") if state.get("last_offsite_status") == "failed"
+             else state.get("last_error") if state.get("last_action_status") == "failed"
+             else None)
+    out["last_failure_code"] = (cause if isinstance(cause, str) and cause in FAILURE_CODES
+                                else None)
     return out
+
+
+def _failure_code(exc: BaseException) -> str:
+    """The recorded cause: a known fixed code, else the generic token."""
+    code = str(exc) if isinstance(exc, BackupError) else None
+    return code if code in FAILURE_CODES else "backup_io_or_policy_failed"
 
 
 def _record_success(records: _Records, state, action: str, result) -> None:
@@ -322,6 +370,7 @@ def _record_success(records: _Records, state, action: str, result) -> None:
               "last_attempt_at": now}
     update.pop("last_error", None)
     if action == "offsite":
+        update.pop("last_offsite_error", None)
         update.update(last_offsite_at=now, last_verify_at=now,
                       last_offsite_status="ok", last_offsite_attempt_at=now,
                       receipt=result,
@@ -1223,12 +1272,15 @@ def main(argv: list[str] | None = None, *,
                                     drill_destination=args.destination
                                     if args.action == "drill" else None)
                 _record_success(records, state, args.action, result)
-            except (BackupError, OSError, ValueError, TypeError, sqlite3.Error, RecursionError):
+            except (BackupError, OSError, ValueError, TypeError, sqlite3.Error,
+                    RecursionError) as exc:
                 now = time.time()
+                code = _failure_code(exc)
                 failed = {"last_action": args.action, "last_action_status": "failed",
-                          "last_attempt_at": now}
+                          "last_attempt_at": now, "last_error": code}
                 if args.action == "offsite":
-                    failed.update(last_offsite_status="failed", last_offsite_attempt_at=now)
+                    failed.update(last_offsite_status="failed", last_offsite_attempt_at=now,
+                                  last_offsite_error=code)
                 records.write("backup_state.json", {**state, **failed})
                 raise
         print(json.dumps(result, sort_keys=True))

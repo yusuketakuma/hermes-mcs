@@ -510,6 +510,10 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
                 out = {"outcome": "rejected",
                        "error": f"crash:{type(e).__name__}",
                        "command_id": cid}
+        if not error and req.get("op") not in TRANSPORT_OPS:
+            # dispatched: its card changes are re-rendered in THIS drain
+            # even when the answer or the file consume below fails
+            card_actions = True
         out.setdefault("command_id", cid)
         out["processed_at"] = time.time()
         # Separate each click's response from the durable mutation identity.
@@ -535,14 +539,19 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
             result.setdefault("errors", []).append(
                 f"result_publish_failed:{safe}:{type(e).__name__}")
             continue                       # keep the command file
-        if error:
-            os.replace(path, path + ".invalid")   # forensic quarantine
-        else:
-            os.unlink(path)
+        try:
+            if error:
+                os.replace(path, path + ".invalid")   # forensic quarantine
+            else:
+                os.unlink(path)
+        except OSError as e:
+            # the answer is published; the file stays for the next drain
+            # (receipts keep a replay idempotent) and the rest proceeds
+            result.setdefault("errors", []).append(
+                f"cmd_int_consume_failed:{safe}:{type(e).__name__}")
+            continue
         result["commands"] = result.get("commands", 0) + 1
         done += 1
-        if not error and req.get("op") not in TRANSPORT_OPS:
-            card_actions = True
     if card_actions:
         # applied actions change card content (triage footer, signal
         # state via request.create / ops.signal_dismiss) — re-render

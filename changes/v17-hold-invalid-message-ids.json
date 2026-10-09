@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "壊れた通知を保留しても後続通知を止めない",
+  "summary": "通知の投稿ID欄が整数・真偽値・小数などの不正な型だと、通知を保留する処理まで例外になり後続通知が止まる問題を修正しました。不正な通知は元の内容を保持して保留し、正常な後続通知を処理します。",
+  "upgrade": "追加設定は不要です。通知処理の更新を反映してください。未送信と確認できない通知の自動再送は行わず、送信記録と保留理由を維持します。",
+  "details": [
+    "notify_flush._hold_eventのnew_messages救済対象は配列中の既存positive検証に合格するIDだけにする。型の異なるmessage_idsは救済せず保留し、同じ検証済みID配列を再利用する。",
+    "救済は未配信の証明があるときのみ、rescue_ofによる1回限りの条件を維持する。signal/digestの救済条件とunknown deliveryのrescue=Falseは変えない。"
+  ],
+  "refs": [
+    "mcs/notify/notify_flush.py",
+    "tests/notify/test_deep_progress_isolation.py"
+  ]
+}

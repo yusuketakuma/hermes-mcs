@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sqlite3
 import time
 from datetime import datetime
@@ -205,13 +206,34 @@ def _engagement(db, row, cfg, now):
     return None
 
 
+def _payload_view(raw) -> tuple[dict, bool | None]:
+    """(scalar fields, shadow) of one stored notice payload. A payload that
+    cannot be read as an object, or a field of the wrong type, is unknown
+    ({} / None) — never an exception, and never a reason to drop the row."""
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError, RecursionError):
+        return {}, None
+    if not isinstance(payload, dict):
+        return {}, None
+    view = {k: payload[k] for k in ("message_id", "hash", "stage")
+            if type(payload.get(k)) in (int, str)}
+    shadow = payload.get("shadow", False)
+    return view, shadow if type(shadow) is bool else None
+
+
 def _history(db: sqlite3.Connection, shadow) -> list[dict]:
-    """payloadは1回だけ解析し ``p`` に保持する（tickごとの再解析を避ける）。"""
-    return [dict(r, p=json.loads(r["payload"])) for r in db.execute("""
-        SELECT event_id,project_id,state,created_at,updated_at,payload
-        FROM notify_outbox WHERE kind='urgent_notice' AND json_valid(payload)
-          AND COALESCE(json_extract(payload,'$.shadow'),0)=? ORDER BY event_id""",
-        (int(shadow),))]
+    """payloadは1回だけ解析し ``p`` に保持する（tickごとの再解析を避ける）。
+    読めないpayloadの行も日次上限・部屋の冷却時間の計算に残し、shadowが
+    不明な行は両方のmodeに数える（破損で上限を迂回しない）。"""
+    rows = []
+    for r in db.execute("""
+            SELECT event_id,project_id,state,created_at,updated_at,payload
+            FROM notify_outbox WHERE kind='urgent_notice' ORDER BY event_id"""):
+        view, mode = _payload_view(r["payload"])
+        if mode is None or mode is bool(shadow):
+            rows.append(dict(r, p=view))
+    return rows
 
 
 def _stage(row: sqlite3.Row, base: sqlite3.Row, history: list[dict],
@@ -351,10 +373,20 @@ def check_delivery(ledger, cfg, event, *, now=None):
     opts = settings(cfg)
     if opts is None or opts["mode"] != "on":
         return {"ok": False, "reason": "urgency_escalation_disabled"}
-    payload = json.loads(event["payload"])
+    # a corrupted notice is an answer every caller can act on (suppress,
+    # deny, stale), never an exception that leaves it claimable forever
+    try:
+        payload = json.loads(event["payload"])
+    except (ValueError, TypeError, RecursionError):
+        return {"ok": False, "reason": "urgent_payload_invalid"}
     if (not isinstance(payload, dict) or not positive(payload.get("message_id"))
-            or not valid_hash(payload.get("hash")) or payload.get("shadow") is not False):
-        raise ValueError("urgent_payload_invalid")
+            or not valid_hash(payload.get("hash")) or payload.get("shadow") is not False
+            or not positive(payload.get("base_event_id"))
+            or not isinstance(payload.get("stage"), str)
+            or re.fullmatch(r"E1|E2:[1-9][0-9]*", payload["stage"]) is None):
+        # every field the send-time comparison reads must be well formed,
+        # or a malformed notice would read as a transient source change
+        return {"ok": False, "reason": "urgent_payload_invalid"}
     now = time.time() if now is None else now
     candidate, reason = _eligible(
         ledger, cfg, opts, payload["message_id"], now, excluding=event["event_id"])

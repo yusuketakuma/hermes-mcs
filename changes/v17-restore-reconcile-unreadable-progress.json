@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "DB復元後の配送照合が、読めない通知記録で止まり続けないようにする",
+  "summary": "DB復元後の配送照合で、テキスト通知の処理記録の一部が深く入れ子になった読めない内容だと照合が毎回途中で失敗し、送信の保留が解けず、ボタン操作の処理も止まり続ける問題を修正しました。読めない記録は従来の読めない記録と同じく照合の対象外として扱い、照合を最後まで行います。",
+  "upgrade": "追加設定は不要です。通知処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。読めない記録の通知は送信も再送もされず、元の状態のまま残ります。正常な保留記録の扱い、人による確認と解除の手順は変わりません。",
+  "details": [
+    "notify_reconcile.reconcile_after_restore はテキスト経路の outbox progress を共通の mcs_util.loads_dict で読み、JSON 不正・RecursionError・object 以外のいずれも、従来の ValueError と同じく skip する。行の state・next_try・progress は書き換えない。"
+  ],
+  "refs": [
+    "mcs/notify/notify_reconcile.py",
+    "tests/notify/test_reconcile_unreadable_text_progress.py"
+  ]
+}

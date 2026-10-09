@@ -662,6 +662,7 @@ class Ledger:
             self.db.execute(
                 "ALTER TABLE messages ADD COLUMN notified_at REAL")
         if old_version < 7:
+            from mcs_requests import positive
             # reconstruct the old "stored == notified" boundary precisely:
             # mark read messages (can never notify) plus every message
             # already covered by an outbox intent. Unread messages with no
@@ -676,17 +677,14 @@ class Ledger:
             for r in self.db.execute(
                     "SELECT payload FROM notify_outbox "
                     "WHERE kind='new_messages'"):
-                try:
-                    pl = json.loads(r["payload"] or "{}")
-                except (json.JSONDecodeError, TypeError):
-                    continue
-                if not isinstance(pl, dict):
+                pl = loads_dict(r["payload"] or "{}")
+                if pl is None:
                     # a quarantined non-object payload must not abort the
                     # whole migration (F07) — it carries no usable ids
                     continue
                 ids = pl.get("message_ids")
                 if isinstance(ids, list):
-                    intended.update(i for i in ids if type(i) is int)
+                    intended.update(i for i in ids if positive(i))
             now = time.time()
             self.db.execute(
                 "UPDATE messages SET notified_at=? WHERE is_unread=0",
@@ -1806,7 +1804,7 @@ class Ledger:
         now = time.time()
         row = self._karte_summary_row(project_id)
         if row:
-            with suppress(json.JSONDecodeError, TypeError):
+            with suppress(ValueError, TypeError, RecursionError):
                 meta = json.loads(row["meta"] or "{}")
                 if isinstance(meta, dict) and meta.get("sha256") == sha:
                     meta["fetched_at"] = now
@@ -1873,7 +1871,7 @@ class Ledger:
         try:
             content = json.loads(row["content"])
             meta = json.loads(row["meta"] or "{}")
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             return None
         if not isinstance(content, dict):
             return None
@@ -2212,11 +2210,7 @@ class Ledger:
             source_generation = self._semantic_source_generation(
                 project_id, root)
             if existing is not None:
-                try:
-                    old_pl = json.loads(existing["payload"] or "{}")
-                except (json.JSONDecodeError, TypeError):
-                    old_pl = {}
-                old_pl = old_pl if isinstance(old_pl, dict) else {}
+                old_pl = loads_dict(existing["payload"] or "{}") or {}
                 stored_targets = old_pl.get("targets")
                 old_targets = ({x for x in stored_targets if type(x) is int}
                                if isinstance(stored_targets, list) else set())
@@ -2451,19 +2445,17 @@ class Ledger:
     def pending_notify_message_ids(self) -> list[int]:
         """message_ids referenced by unsent notify events — their
         attachments jump the download queue so flush() can attach them."""
+        from mcs_requests import positive
         out = []
         for r in self.db.execute("""
           SELECT payload FROM notify_outbox
           WHERE kind='new_messages' AND state IN ('pending','failed')
             AND next_try IS NOT NULL
         """):
-            try:
-                p = json.loads(r["payload"])
-            except (json.JSONDecodeError, TypeError):
-                continue
-            ids = p.get("message_ids") if isinstance(p, dict) else None
+            p = loads_dict(r["payload"])
+            ids = p.get("message_ids") if p is not None else None
             if isinstance(ids, list):
-                out.extend(m for m in ids if type(m) is int)
+                out.extend(m for m in ids if positive(m))
         return out
 
     # ---------- notify outbox ----------

@@ -108,6 +108,7 @@ def test_legacy_only_rollup_cache_is_unchanged(tmp_path, monkeypatch):
     db = _seeded_two(tmp_path)
     try:
         cached = {"medications": [{"name": "legacy fixture", "dose": "unchanged"}],
+                  "latest_vitals": {"at": "2026-09-22", "sbp": 128, "dbp": 70},
                   "profile_extension": {"display": "synthetic profile kept"}}
         monkeypatch.setattr(rollup, "build_rollup", lambda *_args, **_kwargs: pytest.fail("legacy cache rebuilt"))
         assert rollup.current_cached_refs(db.db, 1, cached, {}) == cached

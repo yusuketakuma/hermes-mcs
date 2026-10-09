@@ -149,6 +149,15 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         report["recorded_state_reasons"] = reasons
         reasons = None
     report["state_reasons"] = reasons
+    backup = h.get("backup")
+    if (isinstance(backup, dict) and backup.get("state") in ("degraded", "failed")
+            and report["status"] in ("degraded", "failed")):
+        cause = backup.get("failure_code")
+        backup_reasons = backup.get("reasons")
+        if (isinstance(cause, str) and cause in _BACKUP_FAILURE_JA
+                and isinstance(backup_reasons, list) and "backup_failed" in backup_reasons
+                and reasons is not None and "backup_not_verified" in reasons):
+            report["backup_failure_code"] = cause
     last_ok = h.get("last_ok_at")
     report["last_ok_at"] = (last_ok if _finite_number(last_ok)
                             and last_ok >= 0 else None)
@@ -387,6 +396,15 @@ _STATUS_JA = {"degraded": "一部に異常があります", "failed": "収集が
 _SEVERE = frozenset({"failed", "stale", "missing", "corrupt"})
 _CHECK = "python3 mcs/ops/mcs_setup.py check"
 # code -> (what happened, in plain words / what to do next)
+_BACKUP_FAILURE_JA = {
+    "backup_retention_capacity": (
+        "前回のバックアップは保持上限で失敗しました",
+        "保存済みバックアップと保持条件を管理者が確認"),
+    "backup_cipher_unavailable": (
+        "前回のバックアップで暗号化ツールを利用できませんでした",
+        "バックアップ設定とOpenSSLの実行環境を確認"),
+}
+
 _REASON_JA = {
     "run_failed": ("収集の実行が失敗しました",
                    f"data/run_check.log の末尾を確認。続く場合は {_CHECK}"),
@@ -479,6 +497,10 @@ def _reason_rows(report: dict, reasons) -> list[str]:
     for code in reasons:
         base = code.split(":")[0]
         meaning, action = _REASON_JA.get(base, (code, f"{_CHECK} で確認"))
+        if base == "backup_not_verified":
+            cause = report.get("backup_failure_code")
+            if isinstance(cause, str) and cause in _BACKUP_FAILURE_JA:
+                meaning, action = _BACKUP_FAILURE_JA[cause]
         extra = ""
         if base == "notification_pending":
             n = report.get("notify_pending")

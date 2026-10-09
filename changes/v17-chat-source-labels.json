@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "薬剤の確認画面から抽出元の表記を削除",
+  "summary": "「薬剤を確認」で本人だけに表示する一覧の未確認の薬剤は「（ルール抽出・未確認）」ではなく「（未確認）」と表示します。未確認であることの表示、候補の選び方、辞書候補の扱いは変わりません。",
+  "upgrade": "追加設定は不要です。収集処理（Hermesではgatewayとrunner、独立実行ではhost）へ更新を反映すると、次に開いた一覧から適用されます。保存済みカードの表示は変わらず、再描画や再投稿は起きません。",
+  "details": ["notify_views.meds_viewの未確認行の注記をカード要約の「薬剤候補（未確認）」と同じ出所なしの表記へ揃える。", "layout 1の既存カードの緊急度表記は所有者決定（2026-10-08）どおり変更しない。"],
+  "refs": ["mcs/notify/notify_views.py", "tests/notify/test_card_drug_views.py", "tests/extract/test_alert_subject_guard.py"]
+}

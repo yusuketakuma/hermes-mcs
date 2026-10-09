@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "旧形式の抽出結果が抽出待ちと表示される問題を修正",
+  "summary": "患者グループIDを省略した旧形式の抽出記録でも、投稿IDと原文の一致を確認して読取り、患者背景と抽出状況に反映するようにしました。別の患者グループに明示的に結び付いた結果は採用せず、現行の公開解析結果には引き続き明示的なグループの照合を要求します。",
+  "upgrade": "追加操作は不要です。保存済み記録は変更しません。extract_v1・extract_llmの旧形式の記録を、読取りモデル・詳細表示・集計・出力で確認する場合に適用されます。",
+  "details": ["全体の読取りと投稿単位の患者背景読取りを、投稿IDが一意な旧形式の記録を許容する共通の抽出契約に揃える。canonical_projectionとsemantic_facts_v4の明示的なproject_id照合は維持する。"],
+  "refs": ["mcs/views/read_model.py", "tests/views/test_patient_context_view.py"]
+}

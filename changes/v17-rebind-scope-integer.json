@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "復旧時の保留に読めない数値があっても確認処理を停止しない",
+  "summary": "DB復元後の保留に、JSONとして解釈できない巨大な整数が含まれる場合も、例外で処理を停止せず確認を拒否します。カードと通知の状態を変更せず、保留を維持します。",
+  "upgrade": "追加設定は不要です。更新した通知処理から有効になります。人による確認・理由・受領記録の条件は維持します。",
+  "details": [
+    "notify_transport._rebind_checkの保存scope_json読取りで、JSON構文エラーに加えて整数変換のValueErrorもhold_scope_corruptとして扱う。すべての書込みはこの確認の後で行い、拒否時は受領記録のみ残す。"
+  ],
+  "refs": [
+    "mcs/notify/notify_transport.py",
+    "tests/notify/test_rebind_revoked_card.py"
+  ]
+}

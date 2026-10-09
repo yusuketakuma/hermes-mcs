@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "更新前の無視ファイル検査が失敗した理由を保持",
+  "summary": "更新前にGitの無視ファイル検査を実行できない場合や、検査が時間切れになった場合、予期しない例外として終了せず検査失敗の理由を記録します。確認できない更新は従来どおり許可しません。",
+  "upgrade": "更新workerとgatewayまたは独立hostを更新後に再起動してください。検査の時間上限、更新・人承認・既存ファイル保全の条件は変更しません。",
+  "details": ["check-ignoreの起動失敗と時間切れを既存check_ignore_failedへ揃える。", "例外の生テキストを表示せず、その他の事前検査とfail-closedを維持する。"],
+  "refs": ["mcs/ops/mcs_update.py", "tests/ops/test_update_recovery_stability.py"]
+}

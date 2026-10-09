@@ -241,10 +241,8 @@ def _canonical_finding_lines(llm: dict, *, context=(None, None, "patient")) -> l
 
 # Where high urgency came from: a lexical rule match is only the 🚨 icon —
 # not a clinical assessment — while the AI verdict adds its wording.
-# owner 2026-10-08: no "(AI抽出)" style qualifiers on anything new; the
-# legacy wording stays only for layout-1 cards so their faces never drift
 URGENCY_LABEL_PLAIN = {"llm": "🚨 緊急度高", "rule": "🚨"}   # one spelling on every surface
-URGENCY_LABEL = {"llm": "🚨 緊急度: 高（AI抽出）",
+URGENCY_LABEL = {"llm": "🚨 緊急度高",
                  "rule": "🚨"}
 
 
@@ -365,7 +363,9 @@ def urgency_qc_disagreement(db, mid: int) -> dict | None:
         f"   {current_extract_pred('a', 'm2')})"
         " ORDER BY q.artifact_id DESC LIMIT 1", (mid,)).fetchone()
     urg = (_content_dict(row) or {}).get("urgency")
-    if not isinstance(urg, dict) or urg.get("jev") is None \
+    if not isinstance(urg, dict) \
+            or urg.get("jev") not in ("high", "routine", "unclear") \
+            or urg.get("extracted") not in ("high", "routine", "unclear") \
             or urg.get("jev") == urg.get("extracted"):
         return None
     return urg
@@ -711,7 +711,7 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
     if details["held"]:
         lines.append("急ぎの確認依頼（本人の緊急状態とは別）" if details["kind"] == "request" else
                      "緊急度: 要確認（対象人物・時点の根拠を確認）" if plain else
-                     "緊急度: 要確認（対象人物・時点の根拠を確認。元のAI判定は高）")
+                     "緊急度: 要確認（対象人物・時点の根拠を確認。元の判定は高）")
     elif details["kind"] == "request":
         lines.append("急ぎの確認依頼（本人の緊急状態とは別）")
     context = _source_context(db, mid)
@@ -721,10 +721,10 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
     vital_context = ("", patient_name, default) if db is None else context
     if (line := _vital_line(selected, v1, vital_context[0], patient_name=patient_name, default=default)) is not None:
         lines.append(line)
+    vital_flags = llm.get("vital_flags") or ext.get("vital_flags") or []
     flags = [_VFLAG_LABEL.get(f["key"], f["key"]) + f" {f['value']:g}"
-             for f in (llm.get("vital_flags") or ext.get("vital_flags")
-                       or [])
-             if isinstance(f, dict) and f.get("key") in _VFLAG_LABEL
+             for f in (vital_flags if isinstance(vital_flags, list) else [])
+             if isinstance(f, dict) and _label(_VFLAG_LABEL, f.get("key"))
              and type(f.get("value")) in (int, float)
              and _scoped_vitals({f["key"]: f["value"]}, vital_context).get(f["key"]) == f["value"]]
     if flags and body:

@@ -787,6 +787,10 @@ def extract_facts_resumable(llm_fn, member: dict,
 KIND_CHUNK_V2 = "semantic_extraction_chunk_v2"
 SCHEMA_VERSION_V2 = "semantic-extraction/v2"
 CATEGORY_VERDICTS = ("none", "one", "multiple", "ambiguous")
+# Build of the stored semantic_facts_v2 document's hint merge.  A stored
+# document without it that carries a merged extract_v1 fact predates the
+# evidence-span rule and is rebuilt from its cached chunks (hint-span/1).
+FACTS_V2_BUILD = "hint-span/1"
 
 # extract_v1 fields that signal a mandatory category inside one text
 # span.  Used to catch a model verdict of "none" that deterministic
@@ -1223,10 +1227,11 @@ def extract_facts_v2(llm_fn, member: dict,
         obligations=obligations, provenance="extract_v1")
     seen = {}
     for fact in facts:
-        seen[(fact["kind"], sf._normalize_name(fact["statement"]))] = fact
+        seen.setdefault((fact["kind"], sf._normalize_name(fact["statement"])),
+                        []).append(fact)
     for fact in hint_facts:
         key = (fact["kind"], sf._normalize_name(fact["statement"]))
-        existing = seen.get(key)
+        existing = _hint_target(seen.get(key, ()), fact)
         if existing is not None:
             if "extract_v1" not in existing["provenance"]:
                 existing["provenance"] += "+extract_v1"
@@ -1253,7 +1258,7 @@ def extract_facts_v2(llm_fn, member: dict,
                     ob["fact_ids"] = [fid for fid in ob["fact_ids"]
                                       if fid != fact["fact_id"]]
         else:
-            seen[key] = fact
+            seen.setdefault(key, []).append(fact)
             facts.append(fact)
 
     facts = _merge_dupe_facts(facts)
@@ -1352,6 +1357,19 @@ def _v2_obligations(manifest: dict) -> dict:
                 "fact_ids": [],
             }
     return obligations
+
+
+def _hint_target(candidates, hint: dict):
+    """The same-wording fact an extract_v1 hint corroborates, or None.
+
+    Only a fact whose evidence span contains the hint's own span: the same
+    wording elsewhere (another chunk, or a past vs current mention in one
+    chunk) is a different statement."""
+    hint_ev = hint["_evidence"]
+    return next((f for f in candidates
+                 if hint_ev is not None and f["_evidence"] is not None
+                 and f["_evidence"]["start"] <= hint_ev["start"]
+                 and hint_ev["end"] <= f["_evidence"]["end"]), None)
 
 
 def _merge_dupe_facts(facts: list) -> list:
@@ -1488,6 +1506,63 @@ def _jev_obligations(manifest: dict, obligations: dict,
 # obligations are re-linked from fact references and never silently
 # upgraded: an obligation that loses all facts drops covered -> open.
 # ---------------------------------------------------------------------
+
+
+class _NoWrite(Exception):
+    """A cached-only rebuild tried to persist something."""
+
+
+class _ReadOnlyLedger:
+    def __init__(self, ledger):
+        self._ledger = ledger
+        self.db = ledger.db
+
+    def __getattr__(self, name):
+        if name.startswith("artifact_add"):
+            raise _NoWrite(name)
+        return getattr(self._ledger, name)
+
+
+class _StoredPreflightOnly:
+    """Jev stand-in for a rebuild: stored chunk preflight is reused by the
+    extractor itself, so any evaluate() call means one was not stored."""
+    calls = 0
+
+    def evaluate(self, *args, **kwargs):
+        self.calls += 1
+        raise RuntimeError("preflight_not_stored")
+
+
+def rebuild_facts_v2_cached(member: dict, ledger, source_fingerprint: str,
+                            project_id, stored_doc: dict, stored_meta: dict):
+    """Re-derive a stored canonical document from its cached chunks only.
+
+    No model call, no Jev call and no write: returns ``(doc, None)`` or
+    ``(None, reason)`` — ``chunk_cache_miss`` (a chunk is not cached),
+    ``jev_preflight_uncached`` (a Jev-adjudicated document whose chunk
+    preflight was not stored) or ``manifest_changed`` (the chunk plan
+    would be rewritten)."""
+    llm_calls = []
+
+    def refuse(prompt):
+        llm_calls.append(1)
+        raise RuntimeError("cached_only_rebuild")
+    jev_used = any(o.get("source") == "jev_pre"
+                   for o in stored_doc.get("obligations") or [])
+    jev = _StoredPreflightOnly() if jev_used else None
+    try:
+        result = extract_facts_v2(
+            refuse, member, None, ledger=_ReadOnlyLedger(ledger),
+            source_fingerprint=source_fingerprint, project_id=project_id,
+            jev_client=jev,
+            retry_coverage=bool(stored_meta.get("coverage_retry")))
+    except _NoWrite:
+        return None, "manifest_changed"
+    if llm_calls or not result["extraction_complete"]:
+        return None, "chunk_cache_miss"
+    if jev is not None and jev.calls:
+        return None, "jev_preflight_uncached"
+    return result["doc"], None
 
 
 def repair_facts_v2(llm_fn, member: dict, doc: dict,
@@ -1679,6 +1754,10 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
             ob["status"] = "failed"
         elif owner_status == "pending":
             ob["status"] = "open"
+        elif ob["fact_ids"] and ob["status"] == "explicit_no_fact":
+            # an adjudicated absence now contradicted by a repaired fact is
+            # ambiguous, exactly as at extraction — never covered
+            ob["status"] = "ambiguous"
         elif ob["fact_ids"] and ob["status"] not in ("ambiguous", "failed"):
             # ambiguous/failed were held open by verdicts or jev_pre;
             # links alone never upgrade them.

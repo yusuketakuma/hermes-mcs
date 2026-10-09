@@ -28,6 +28,27 @@ def _fact(fid, kind, statement, quote="引用"):
             "validation_status": "verified"}
 
 
+def test_rollup_and_cached_reader_do_not_resurrect_contradictory_vitals(db):
+    body = "本人の血圧120/80を測定しました。"
+    db.save_messages([_message(mid=1, body=body,
+                               posted_at="2026-10-09T00:00:00+09:00")])
+    db.artifact_add("extract_llm", json.dumps({"vitals": {"sbp": 180, "dbp": 80}}),
+                    project_id=1, message_id=1, meta={"hash": _hash(db, 1)})
+    current = rollup.build_rollup(db, 1)
+    assert current["latest_vitals"] == {"at": "2026-10-09T00:00:00+09:00", "dbp": 80}
+    old = {**current, "latest_vitals": {"at": "2026-10-09T00:00:00+09:00",
+                                      "sbp": 180, "dbp": 80},
+           "profile_extension": {"text": "架空の補足"},
+           "medications": [{"name": "架空の旧薬", "dose": "旧形式を保持"}]}
+    meta = {"period_check_version": rollup.PERIOD_CHECK_VERSION - 1}
+    before = db.db.total_changes
+    safe = rollup.current_cached_refs(db.db, 1, old, meta)
+    assert safe["latest_vitals"] == current["latest_vitals"]
+    assert safe["profile_extension"] == old["profile_extension"]
+    assert safe["medications"] == old["medications"]
+    assert db.db.total_changes == before
+
+
 def _add(db, mid, kind, content, posted):
     db.save_messages([_message(mid=mid, body="合成本文",
                                posted_at=posted)])

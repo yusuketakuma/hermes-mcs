@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "更新承認と復元承認の確認で受付記録を一括読込みしない",
+  "summary": "更新の承認確認と、DB復元の承認確認（アップデート処理と独立した復旧処理）は、受付記録を同じ順序で1行ずつ読むようになり、記録が増えてもメモリ使用量が増え続けません。採用する承認、無効な記録の扱い、読めない記録があった場合に承認なしとして止まる動作は変わりません。",
+  "upgrade": "追加設定は不要です。復旧本体はcheckout外に置かれるため、更新時は従来のrecovery_tool_changedの手順で復旧本体を同期してください。受付記録の削除・保持期限・読取り行の省略は行いません。",
+  "details": ["scan_pending_approvals、_restore_consent、mcs_recover._consent_forのfetchallを同じORDER BYのカーソル逐次読みに置き換え、接続はfinallyで必ず閉じる。", "最新の一致する復元承認を見つけた後も残りの行を解析せず読み切り、途中で読めない行があれば従来どおり承認なしとする。"],
+  "refs": ["mcs/ops/mcs_update.py", "deployment/recovery/mcs_recover.py", "tests/ops/test_recovery_corrupt_receipts.py"]
+}

@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "Discordで無効になったカードの更新依頼が失敗したときの案内を修正",
+  "summary": "無効になったボタンを押してカード更新の依頼を保存できなかった場合、「カードを更新します」と案内せず送信失敗を本人だけに表示し、操作記録にも失敗を残します。",
+  "upgrade": "追加設定は不要です。Hermesではgateway、独立実行ではhostを更新後に再起動してください。権限確認・既存の更新依頼の内容・人承認の条件は変わりません。",
+  "details": ["更新依頼の書込みでOSErrorが起きた場合、interaction_resultにoutcome=refresh_publish_failedを記録し、既存の汎用失敗文言を返す。", "成功時の案内・記録と、権限のない操作で依頼を作らない動作は維持する。"],
+  "refs": ["adapters/discord/actions.py", "tests/adapters/discord/test_mcs_discord.py"]
+}

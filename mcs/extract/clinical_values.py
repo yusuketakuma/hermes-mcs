@@ -42,11 +42,23 @@ def patient_item_scope(item, body, *, patient_name=None, surface=None, default="
 
 
 def patient_current_vitals(values, body, *, patient_name=None):
-    """Keep grounded patient values, with the existing unscoped parsed-output compatibility."""
+    """Keep source-consistent vitals and the trusted unscoped legacy contract."""
     import extract
     kept = extract.patient_vitals(values, body, patient_name=patient_name)
     if isinstance(values, dict) and patient_item_scope({}, body, patient_name=patient_name) == "patient":
-        return dict(values)
+        # A source-labelled measurement overrides unscoped parsed compatibility.
+        # Unmentioned/legacy fields keep their existing trusted-output contract.
+        from extract_llm import _bp_side, _nearest_vital_label
+        observed = set()
+        for match in re.finditer(r"\d+(?:[.．]\d+)?", body):
+            label = _nearest_vital_label(body, *match.span())
+            if label == "bp":
+                side = _bp_side(body, *match.span())
+                observed.update((side,) if side else ("sbp", "dbp"))
+            elif label:
+                observed.add(label)
+        return {**{key: value for key, value in values.items() if key not in observed},
+                **kept}
     return kept
 
 

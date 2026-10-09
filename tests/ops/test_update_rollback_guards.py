@@ -133,6 +133,43 @@ def test_standalone_restart_leaves_lineworks_to_the_host(monkeypatch):
     assert requested == [cfg]
 
 
+def test_known_lineworks_kickstart_failure_is_announced(monkeypatch):
+    notices = []
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda text, **k: notices.append(text) or True)
+
+    def missing(argv, **k):
+        raise OSError("synthetic launchctl missing")
+    monkeypatch.setattr(mcs_update.subprocess, "Popen", missing)
+    assert mcs_update.restart_lineworks({"notify": {"interactive": "lineworks"}}) is None
+    assert len(notices) == 1 and "LINE WORKS" in notices[0]
+    assert "synthetic" not in notices[0]             # fixed text, no OS message
+
+
+def test_issued_lineworks_kickstart_raises_no_notice(monkeypatch):
+    notices, started = [], []
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda text, **k: notices.append(text) or True)
+    monkeypatch.setattr(mcs_update.subprocess, "Popen",
+                        lambda argv, **k: started.append((argv, k)))
+    mcs_update.restart_lineworks({"notify": {"interactive": "lineworks"}})
+    assert notices == [] and len(started) == 1
+    assert started[0][1]["start_new_session"] is True   # never killed with us
+
+
+@pytest.mark.parametrize("cfg", [
+    {}, {"notify": "lineworks"}, {"notify": {"interactive": "discord"}},
+    {"runtime_mode": "standalone", "notify": {"interactive": "lineworks"}},
+    {"runtime_mode": "synthetic-invalid", "notify": {"interactive": "lineworks"}},
+])
+def test_lineworks_refresh_is_a_quiet_noop_outside_its_config(monkeypatch, cfg):
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda *a, **k: pytest.fail("no notice"))
+    monkeypatch.setattr(mcs_update.subprocess, "Popen",
+                        lambda *a, **k: pytest.fail("no launchctl"))
+    assert mcs_update.restart_lineworks(cfg) is None
+
+
 def test_release_notes_fetch_refuses_redirects(monkeypatch):
     import mcs_util
     seen = []

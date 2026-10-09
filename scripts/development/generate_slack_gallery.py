@@ -194,8 +194,9 @@ def menu():
     x, y = s.app()
     y = s.card(x, y)
     s.actions(x, y)
-    labels = ("患者の記録まとめ", "誤りを報告", "タスク一覧", "自分のタスク",
-              "未確認一覧", "この患者を検索", "全体の新着集計")
+    # notify_cards._action_rows order; the card has open tasks (📝 タスク 1件)
+    labels = ("タスク一覧", "患者の記録まとめ", "誤りを報告", "全体の新着集計",
+              "自分のタスク", "未確認一覧", "この患者を検索")
     mx, my = x + 378, y + 48
     s.rect(mx, my, 300, 18 + 42 * len(labels), "#fff", 8, "#aebbb2")
     for i, label in enumerate(labels):

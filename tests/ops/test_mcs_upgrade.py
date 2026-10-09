@@ -470,3 +470,18 @@ def test_extracted_current_updater_imports_with_recovery_helper(tmp_path, monkey
         capture_output=True, text=True, check=True)
     assert "rollback" in out.stdout
     assert (tmp_path / helper).read_bytes() == files[helper]
+
+
+@pytest.mark.parametrize("binary", [False, True])
+def test_launcher_git_failure_never_reports_remote_credential_text(tmp_path, monkeypatch, binary):
+    launcher = _launcher()
+    secret = "SYNTHETIC_CREDENTIAL_CANARY"
+    text = "fatal: unable to access https://fictional:" + secret + "@example.invalid/repo"
+    monkeypatch.setattr(launcher.subprocess, "run", lambda *a, **kw:
+                        subprocess.CompletedProcess(a[0], 128, b"" if binary else "",
+                                                    text.encode() if binary else text))
+    with pytest.raises(SystemExit) as failure:
+        launcher._git(str(tmp_path), "fetch", binary=binary)
+    assert "git fetch failed" in str(failure.value)
+    assert secret not in str(failure.value)
+    assert "example.invalid" not in str(failure.value)

@@ -95,7 +95,7 @@ def test_new_detail_contract_marks_results_and_repends_existing_v5(db):
     old = {"hash": row["content_hash"], "extract_version": 5}
     db.artifact_add("extract_llm", json.dumps({"summary": "旧合成概要"}),
                     project_id=1, message_id=1, meta=old)
-    assert extract_llm.EXTRACT_VERSION == 6
+    assert extract_llm.EXTRACT_VERSION == 7
     assert not extract_llm._current(db, 1, row["content_hash"])
     content = {"patient_context": [item()]}
     assert extract_llm._replace_current(db, row, json.dumps(content))

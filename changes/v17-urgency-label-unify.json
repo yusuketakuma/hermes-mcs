@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "緊急度の表示からAI判定・AI抽出の表記をなくし、すべてのカードで同じ表記に統一",
+  "summary": "以前の形式で作られたカードに残っていた「🚨［緊急度高・AI判定］」「🚨 緊急度: 高（AI抽出）」の表示を、ほかのカードや通知と同じ「🚨 緊急度高」に変えました。判断を保留したときの説明も「元の判定は高」に変わります。機械照合だけによる表示は従来どおり 🚨 です。",
+  "upgrade": "追加設定は不要です。通知処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。緊急度の判定方法、通知の条件、既読化、承認は変わりません。以前の形式のカードのうちAIの判定で緊急度高と表示していたものは、定期処理で表示が一度だけ更新されます。SlackとDiscordでは既存の投稿がそのまま書き換わり、新しい通知は送りません。LINE WORKSは投稿を書き換えられないため、該当するカードが「🔄 更新版」として一度だけ新しく投稿されます。",
+  "details": [
+    "notify_render.URGENCY_TAGを廃止し、layout 1のスレッドカード見出しとシグナル行もURGENCY_PLAIN（llmは🚨 緊急度高、ruleは🚨）を使う。シグナル行では文言付きの表示と注記の間に空白を入れ、ruleの🚨と注記の並びは従来どおり。",
+    "structured_view.URGENCY_LABELのllmもURGENCY_LABEL_PLAINと同じ🚨 緊急度高にし、判断保留の説明を「元の判定は高」に変える。",
+    "表示内容の変化はカードの表示世代を一度進め、既存の描き直し経路（Slack・Discordは編集、LINE WORKSは更新版の新規投稿）で反映される。新しい通知イベントは作らない。"
+  ],
+  "refs": [
+    "mcs/notify/notify_render.py",
+    "mcs/views/structured_view.py",
+    "tests/notify/test_layout1_urgency_label.py",
+    "docs/screenshots/discord-card.svg",
+    "docs/screenshots/slack-card.svg"
+  ]
+}

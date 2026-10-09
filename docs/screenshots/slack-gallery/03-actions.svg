@@ -46,11 +46,11 @@
 <text x="240" y="620.2" font-size="18" fill="#1264a3">MCSで開く</text>
 <rect x="618" y="592.2" width="300" height="312" rx="8" fill="#fff" stroke="#aebbb2"/>
 <rect x="625" y="602.2" width="286" height="38" rx="4" fill="#e5f3ec"/>
-<text x="642" y="628.2" font-size="19" fill="#087f5b" font-weight="bold">患者の記録まとめ</text>
-<text x="642" y="670.2" font-size="19" fill="#202124">誤りを報告</text>
-<text x="642" y="712.2" font-size="19" fill="#202124">タスク一覧</text>
-<text x="642" y="754.2" font-size="19" fill="#202124">自分のタスク</text>
-<text x="642" y="796.2" font-size="19" fill="#202124">未確認一覧</text>
-<text x="642" y="838.2" font-size="19" fill="#202124">この患者を検索</text>
-<text x="642" y="880.2" font-size="19" fill="#202124">全体の新着集計</text>
+<text x="642" y="628.2" font-size="19" fill="#087f5b" font-weight="bold">タスク一覧</text>
+<text x="642" y="670.2" font-size="19" fill="#202124">患者の記録まとめ</text>
+<text x="642" y="712.2" font-size="19" fill="#202124">誤りを報告</text>
+<text x="642" y="754.2" font-size="19" fill="#202124">全体の新着集計</text>
+<text x="642" y="796.2" font-size="19" fill="#202124">自分のタスク</text>
+<text x="642" y="838.2" font-size="19" fill="#202124">未確認一覧</text>
+<text x="642" y="880.2" font-size="19" fill="#202124">この患者を検索</text>
 </svg>

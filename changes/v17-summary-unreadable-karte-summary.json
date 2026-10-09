@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "患者の記録まとめで、読めない連携サマリーの記録があっても表示を続け、古いサマリーを出さない",
+  "summary": "患者の記録まとめで、最新の連携サマリーの保存記録が読めない内容だった場合、表示全体が失敗するか、古いサマリーが最新のように表示される問題を修正しました。最新の記録が読めないときは連携サマリーを「未取得」として表示し、古い内容や「空」には置き換えません。",
+  "upgrade": "追加設定は不要です。通知処理とHermesのgatewayまたは独立実行のhostへ更新を反映してください。保存済みの記録は削除・変更しません。正常に読める最新のサマリー、登録なし（空）、未取得の表示は変わりません。",
+  "details": [
+    "notify_views._karte_summary_from_artifact は SQL の json_valid 条件を外して最新の karte_summary 行だけを選び、JSON 不正・RecursionError（Python 3.11 で SQLite の深さ上限内の入れ子）・object 以外を None として扱う。None は従来どおり「連携サマリー（MCS）: 未取得」と表示する。"
+  ],
+  "refs": [
+    "mcs/notify/notify_views.py",
+    "tests/notify/test_summary_unreadable_karte_summary.py"
+  ]
+}

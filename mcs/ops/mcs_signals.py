@@ -39,6 +39,7 @@ from mcs_queries import (CHANGE_ACTIONS, CHANGE_ACTIONS_SQL, DAY_S,
 from structured_view import message_urgency
 from clinical_values import patient_item_scope
 from extract import patient_source_scope
+from mcs_util import loads_dict
 
 ARTIFACT_KIND = "signal_v1"
 FEEDBACK_KIND = "signal_feedback_v1"
@@ -1574,8 +1575,8 @@ def _digest_add(ledger, key, now, th, interval_h):
              AND NOT EXISTS(SELECT 1 FROM notification_intent_batches b
                             WHERE b.event_id=notify_outbox.event_id)
            ORDER BY event_id DESC LIMIT 1""").fetchone()
-    if row:
-        pl = json.loads(row["payload"])
+    pl = loads_dict(row["payload"]) if row else None
+    if pl is not None:
         keys = pl.setdefault("signal_keys", [])
         if key not in keys:
             keys.append(key)
@@ -1770,5 +1771,7 @@ def current_open(db, project_id=None, limit=50):
                   "overrides": pc.get("policy")}
     return {"total": len(items), "returned": min(len(items), limit),
             "truncated": len(items) > limit, "items": items[:limit],
+            "errors": ["signal_state_corrupt"] if any(
+                state is None for state in latest.values()) else [],
             "pipeline_last_run_at": last_run,
             "thresholds": _thresholds(db), "policy": policy}

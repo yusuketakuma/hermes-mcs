@@ -1318,3 +1318,78 @@ def test_corrupt_optional_metadata_does_not_block_recapture(tmp_path, raw, sourc
                 assert get_message_metadata(db.db, 1)["reactions_status"] == "observed"
     finally:
         db.close()
+
+
+CORRUPT_SUMMARY_JSON = [
+    '{"synthetic":' + '1' * 5000 + '}',
+    '{"synthetic":' + '[' * 10000 + '0' + ']' * 10000 + '}',
+]
+
+
+@pytest.mark.parametrize("column", ["content", "meta"])
+@pytest.mark.parametrize("raw", CORRUPT_SUMMARY_JSON, ids=["integer_limit", "deep_json"])
+def test_corrupt_summary_json_is_unknown(tmp_path, column, raw):
+    db = _ledger(tmp_path)
+    db.karte_summary_store(1, 10, _summary())
+    with db.db:
+        db.db.execute(f"UPDATE artifacts SET {column}=? WHERE kind='karte_summary'", (raw,))
+    assert db.karte_summary_current(1) is None
+    assert db.db.execute(f"SELECT {column} FROM artifacts WHERE kind='karte_summary'").fetchone()[0] == raw
+    db.close()
+
+
+@pytest.mark.parametrize("raw", CORRUPT_SUMMARY_JSON, ids=["integer_limit", "deep_json"])
+def test_fresh_summary_recovers_from_corrupt_metadata_without_erasing_history(tmp_path, raw):
+    db = _ledger(tmp_path)
+    db.karte_summary_store(1, 10, _summary())
+    with db.db:
+        db.db.execute("UPDATE artifacts SET meta=? WHERE kind='karte_summary'", (raw,))
+    assert db.karte_summary_store(1, 10, _summary()) is True
+    assert db.karte_summary_current(1)["comment"] == _summary()["comment"]
+    rows = db.db.execute("SELECT meta FROM artifacts WHERE kind='karte_summary' ORDER BY artifact_id").fetchall()
+    assert len(rows) == 2 and rows[0][0] == raw
+    assert db.karte_summary_store(1, 10, _summary()) is False
+    db.close()
+
+
+@pytest.mark.parametrize("invalid_payload", [
+    '{"synthetic":' + '1' * 5000 + '}',
+    '{"synthetic":' + '[' * 10000 + '0' + ']' * 10000 + '}',
+    json.dumps({"message_ids": [2**63, -(2**63) - 1, True, "100", 1.0]}),
+], ids=["integer_limit", "deep_json", "unusable_ids"])
+def test_bad_notify_evidence_does_not_stop_attachment_priorities(tmp_path, invalid_payload):
+    db = _ledger(tmp_path)
+    db.outbox_add("new_messages", 1, {"message_ids": [100]})
+    with db.db:
+        db.db.execute("INSERT INTO notify_outbox(kind,project_id,payload,state,next_try) "
+                      "VALUES('new_messages',1,?,'pending',0)", (invalid_payload,))
+    priorities = db.pending_notify_message_ids()
+    assert priorities == [100]
+    assert db.attachments_due(priority_mids=priorities) == []
+    assert db.db.execute("SELECT payload FROM notify_outbox ORDER BY event_id DESC LIMIT 1").fetchone()[0] == invalid_payload
+    db.close()
+
+
+@pytest.mark.parametrize("raw", [
+    "{",
+    '{"synthetic":' + '1' * 5000 + '}',
+    '{"synthetic":' + '[' * 10000 + '0' + ']' * 10000 + '}',
+], ids=["legacy_syntax_error", "integer_limit", "deep_json"])
+def test_unreadable_semantic_seed_does_not_rollback_new_reply(tmp_path, raw):
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.save_messages([_message(mid=1, body="合成の親投稿")], project_id=1, semantic=True)
+    job = db.db.execute("SELECT job_id FROM fetch_jobs WHERE kind='semantic'").fetchone()[0]
+    with db.db:
+        db.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?", (raw, job))
+    db.save_messages([_message(mid=2, parent_id=1, body="合成の新しい返信")],
+                     project_id=1, semantic=True)
+    assert db.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 2
+    row = db.db.execute("SELECT job_id,state,payload FROM fetch_jobs WHERE kind='semantic'").fetchone()
+    payload = json.loads(row["payload"])
+    assert row["job_id"] == job and row["state"] == "pending"
+    assert payload["targets"] == [2]
+    assert payload["source_generation"] == db._semantic_source_generation(1, 1)
+    assert not payload.get("eligible")
+    assert db.db.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0] == 0
+    db.close()

@@ -736,3 +736,30 @@ def test_legacy_snapshot_with_family_source_never_exports_patient_current_values
     text = (out / "patients" / "p1.md").read_text()
     assert "SYNTH summary v1" in text
     assert "120/80" not in text and "SYNTH-med" not in text
+
+
+def test_unknown_signal_state_preserves_previous_exports(env, capsys):
+    snap, out = env
+    brain_export.run(out, snap)
+    before = {str(p.relative_to(out)): p.read_bytes()
+              for p in out.rglob("*") if p.is_file()}
+    with sqlite3.connect(snap) as conn:
+        conn.execute("UPDATE artifacts SET content='{broken' WHERE kind='signal_v1'")
+    assert brain_export.main(["--out", str(out), "--snapshot", str(snap)]) == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "signal_state_invalid"
+    assert {str(p.relative_to(out)): p.read_bytes()
+            for p in out.rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.parametrize("timestamp", [1e308, 253402268400.0])
+def test_unrenderable_snapshot_time_is_rejected_before_exports(env, capsys, timestamp):
+    snap, out = env
+    brain_export.run(out, snap)
+    before = {str(p.relative_to(out)): p.read_bytes()
+              for p in out.rglob("*") if p.is_file()}
+    with sqlite3.connect(snap) as conn:
+        conn.execute("UPDATE snapshot_meta SET generated_at=?", (timestamp,))
+    assert brain_export.main(["--out", str(out), "--snapshot", str(snap)]) == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "snapshot_time_unrepresentable"
+    assert {str(p.relative_to(out)): p.read_bytes()
+            for p in out.rglob("*") if p.is_file()} == before

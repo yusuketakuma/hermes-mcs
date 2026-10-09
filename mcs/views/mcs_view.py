@@ -420,7 +420,7 @@ class View:
         for row in page["items"]:
             try:
                 content = json.loads(row.pop("content") or "{}")
-            except (json.JSONDecodeError, TypeError, RecursionError):
+            except (ValueError, TypeError, RecursionError):
                 content = {}
             if not isinstance(content, dict):
                 content = {}
@@ -460,7 +460,7 @@ class View:
         for r in extract_feedback(self.db, pid, limit=20):
             try:
                 c = json.loads(r["content"] or "{}")
-            except (json.JSONDecodeError, TypeError, RecursionError):
+            except (ValueError, TypeError, RecursionError):
                 c = {}
             c = c if isinstance(c, dict) else {}
             # ids, field and state only — the note/actor stay in the ledger
@@ -632,7 +632,7 @@ class View:
                 (pid, limit)):
             try:
                 cand = json.loads(r["content"])
-            except (json.JSONDecodeError, TypeError, RecursionError):
+            except (ValueError, TypeError, RecursionError):
                 continue
             if not isinstance(cand, dict):
                 continue
@@ -641,7 +641,7 @@ class View:
                 origin = {}
             try:
                 candidate_meta = json.loads(r["meta"] or "{}")
-            except (json.JSONDecodeError, TypeError, RecursionError):
+            except (ValueError, TypeError, RecursionError):
                 candidate_meta = {}
             if not isinstance(candidate_meta, dict):
                 candidate_meta = {}
@@ -656,7 +656,7 @@ class View:
             candidate_fp = candidate_meta.get(
                 "source_fingerprint", candidate_meta.get("fingerprint"))
             current = bool(
-                source and bundle
+                source and bundle and not candidate_meta.get("invalidated")
                 and origin.get("revision") == source["content_hash"]
                 and candidate_fp == bundle["source_fingerprint"]
                 and policy
@@ -677,7 +677,7 @@ class View:
                 try:
                     ev = json.loads(e["content"])
                     meta = json.loads(e["meta"] or "{}")
-                except (json.JSONDecodeError, TypeError, RecursionError):
+                except (ValueError, TypeError, RecursionError):
                     continue
                 if not isinstance(ev, dict):
                     continue
@@ -771,7 +771,7 @@ class View:
             return {"outcome": "rejected", "error": "command_id_conflict"}
         try:
             receipt = json.loads(row["receipt_json"])
-        except (json.JSONDecodeError, TypeError, RecursionError):
+        except (ValueError, TypeError, RecursionError):
             receipt = None
         if not isinstance(receipt, dict):
             return {"outcome": "rejected", "error": "receipt_corrupt"}

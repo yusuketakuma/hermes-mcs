@@ -452,12 +452,8 @@ def test_remembered_long_output_format_retry_rechecks_remaining_budget(
         return {"status": 200, "text": '{"facts": []}', "finish_reason": "stop"}
 
     monkeypatch.setattr(local_llm, "chat", chat)
-    if status == 400 and expected_calls == 1:
-        with pytest.raises(semantic.runtime.LLMRejected):
-            semantic.llm_chat("synthetic", timeout=450)
-        out = None
-    else:
-        out = semantic.llm_chat("synthetic", timeout=450)
+    # every format refusal, 400 included, is retryable — never prompt_rejected
+    out = semantic.llm_chat("synthetic", timeout=450)
     assert len(calls) == expected_calls
     assert out == (None if expected_calls == 1 else '{"facts": []}')
     assert all(c["max_tokens"] == semantic.LLM_LONG_MAX_TOKENS for c in calls)
@@ -634,7 +630,35 @@ assert semantic._probe_format("http://127.0.0.1:1", "synthetic-model") == "plain
     assert result.returncode == 0, result.stderr
 
 
-def test_constrained_long_rejection_returns_terminal_summary(monkeypatch, tmp_path):
+def test_budget_short_format_refusal_retries_plain_on_the_next_attempt(monkeypatch, tmp_path):
+    """A json_object refusal is not a refusal of the prompt: without budget
+    for the plain long call this attempt is a retryable model failure, and
+    the next adequately funded attempt sends the plain request."""
+    import local_llm
+    _long_env(monkeypatch, tmp_path, [], True)
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(semantic, "_FMT_PATH", str(tmp_path / "data" / "fmt.json"))
+    monkeypatch.setattr(semantic, "_FMT_MODE", "object")
+    semantic._long_mark(semantic._long_key(semantic.llm_conf()[1], "synthetic"), 1)
+    clock = [0.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    def chat(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs["response_format"] is not None:
+            clock[0] += 51.0
+            return {"status": 400}
+        return {"status": 200, "text": '{"facts": []}', "finish_reason": "stop"}
+
+    monkeypatch.setattr(local_llm, "chat", chat)
+    assert semantic.llm_chat("synthetic", timeout=450) is None
+    assert semantic.llm_chat("synthetic", timeout=450) == '{"facts": []}'
+    assert [c["response_format"] for c in calls] == [{"type": "json_object"}, None]
+    assert all(c["max_tokens"] == semantic.LLM_LONG_MAX_TOKENS for c in calls)
+
+
+def test_constrained_long_rejection_is_a_retryable_summary_failure(monkeypatch, tmp_path):
     import local_llm
     _long_env(monkeypatch, tmp_path, [], True)
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
@@ -658,9 +682,9 @@ def test_constrained_long_rejection_returns_terminal_summary(monkeypatch, tmp_pa
         summary, reason = semantic.summarize(
             lambda prompt: semantic.llm_chat(prompt, timeout=450),
             bundle, 1, [], {}, return_reason=True)
-        assert summary["_input_oversize"] is True
-        assert summary["claims"] == []
-        assert reason is None  # not the retryable "model" failure
+        # a json_object refusal is not an oversize prompt: no terminal stub
+        assert summary is None
+        assert reason == "model"
         assert len(calls) == 1
     finally:
         db.close()
@@ -721,6 +745,26 @@ def test_format_mark_lock_contention_preserves_previous_state(monkeypatch, tmp_p
         fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
         semantic._remember_plain("http://127.0.0.1:2", "synthetic-model")
     assert Path(semantic._FMT_PATH).read_bytes() == original
+
+
+def test_long_mark_cannot_downgrade_a_completed_long_retry(monkeypatch, tmp_path):
+    monkeypatch.setattr(semantic, "_LONG_PATH", str(tmp_path / "long.json"))
+    semantic._long_mark("synthetic-prompt", 2)
+    semantic._long_mark("synthetic-other", 1)
+    semantic._long_mark("synthetic-prompt", 1)
+    assert semantic._long_marks() == {"synthetic-other": 1, "synthetic-prompt": 2}
+
+
+def test_long_mark_contention_does_not_overwrite_another_worker(monkeypatch, tmp_path):
+    import fcntl
+    from pathlib import Path
+    monkeypatch.setattr(semantic, "_LONG_PATH", str(tmp_path / "long.json"))
+    semantic._long_mark("synthetic-prompt", 2)
+    original = Path(semantic._LONG_PATH).read_bytes()
+    with open(semantic._LONG_PATH + ".lock", "a") as owner:
+        fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        semantic._long_mark("synthetic-other", 1)
+    assert Path(semantic._LONG_PATH).read_bytes() == original
 
 
 def test_format_mark_retention_is_bounded(monkeypatch, tmp_path):

@@ -44,9 +44,9 @@ DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "patient_rollup"
 STALE_DAYS = 21          # message unseen this long while siblings refresh
 # Bump when persisted rollup content changes shape: dirty_projects()
-# rebuilds every row stamped with another version (5: empty fact-source vitals).
+# rebuilds every row stamped with another version (8: whole-number vital boundaries).
 # Rebuilds rewrite artifacts; automatic card rendering does not read patient_rollup.
-PERIOD_CHECK_VERSION = 6
+PERIOD_CHECK_VERSION = 8
 # #20-C thread-level reply_state: strongest reply kind seen in the thread
 # after the request, from another sender. View-only, never a transition.
 _REPLY_STAGE = {k: i for i, k in enumerate(
@@ -581,15 +581,22 @@ def current_cached_refs(db, project_id: int, roll: dict, meta) -> dict:
                                        "AND body_state='full'", (project_id,)))
     projection_stale = ((not isinstance(meta, dict) or meta.get("projection_version") != PROJECTION_VERSION)
                         and _has_projection(db, project_id))
-    if scoped or projection_stale:
+    # Unstamped legacy caches retain their trusted-output contract. Known
+    # earlier rollup generations must not bypass the new vital read gate.
+    clinical_stale = ("latest_vitals" in out and isinstance(meta, dict)
+                      and "period_check_version" in meta
+                      and meta["period_check_version"] != PERIOD_CHECK_VERSION)
+    if scoped or projection_stale or clinical_stale:
         reader = object.__new__(LedgerReader)
         reader.db = db
         try:
             current = build_rollup(reader, project_id)
         except sqlite3.OperationalError:
             current = {}  # a legacy snapshot cannot prove scoped current fields
-        for key in ("latest_vitals", "recent_labs", "current_med_period", "medications",
-                    "unverified_medications", "planned_medications", "recent_symptoms"):
+        clinical_keys = (("latest_vitals", "recent_labs", "current_med_period", "medications",
+                          "unverified_medications", "planned_medications", "recent_symptoms")
+                         if scoped or projection_stale else ("latest_vitals",))
+        for key in clinical_keys:
             if key in current:
                 out[key] = current[key]
             else:

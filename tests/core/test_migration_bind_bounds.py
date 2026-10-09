@@ -73,3 +73,23 @@ def test_later_batch_failure_rolls_back_earlier_batch_and_version(tmp_path, monk
         db.commit()
     with closing(ledger.Ledger(str(path))) as retried:
         assert retried.db.execute("SELECT COUNT(*) FROM messages WHERE notified_at IS NOT NULL").fetchone()[0] == len(ids)
+
+
+@pytest.mark.parametrize("invalid_payload", [
+    '{"message_ids":[' + '1' * 5000 + ']}',
+    '{"synthetic":' + '[' * 10000 + '0' + ']' * 10000 + '}',
+    json.dumps({"message_ids": [2**63, -(2**63) - 1, True, "900001300", 1.0]}),
+], ids=["integer_parse_limit", "deep_json", "unusable_ids"])
+def test_unusable_old_notification_evidence_does_not_block_upgrade(tmp_path, invalid_payload):
+    path, version, ids = historical_database(tmp_path)
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("INSERT INTO notify_outbox(kind,project_id,payload) "
+                   "VALUES('new_messages',900000001,?)", (invalid_payload,))
+        db.commit()
+    assert version < 7
+    with closing(ledger.Ledger(str(path))) as db:
+        assert db.db.execute("PRAGMA user_version").fetchone()[0] == ledger.SCHEMA_VERSION
+        marked = db.db.execute("SELECT message_id FROM messages WHERE notified_at IS NOT NULL").fetchall()
+        assert {row[0] for row in marked} == set(ids)
+        assert db.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == len(ids) + 1
+        assert db.db.execute("SELECT payload FROM notify_outbox ORDER BY event_id DESC LIMIT 1").fetchone()[0] == invalid_payload

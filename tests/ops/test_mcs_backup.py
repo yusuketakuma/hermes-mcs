@@ -795,3 +795,123 @@ def test_later_verify_success_does_not_hide_offsite_failure(world, tmp_path, cap
     assert backup.main(["offsite", *args, "--keychain", "--snapshot", str(world[0])],
                        keychain_reader=lambda: KEY) == 0
     assert backup.status(str(tmp_path / "records"), world[3])["last_attempt_failed"] is False
+
+
+# ---------- failure cause: only finite known codes are recorded ----------
+
+def _failure(tmp_path, world):
+    status = backup.status(str(tmp_path / "records"), world[3])
+    state = json.loads((tmp_path / "records" / "backup_state.json").read_text())
+    return status, state
+
+
+def test_capacity_failure_records_its_code_and_success_clears_it(world, tmp_path, capsys):
+    args = _cli_args(world, tmp_path)
+    policy_path = Path(args[1])
+    assert backup.main(["offsite", *args, "--keychain", "--snapshot", str(world[0])],
+                       keychain_reader=lambda: KEY) == 0
+    policy_path.write_text(json.dumps({**asdict(world[3]), "max_snapshots": 1,
+                                       "scheduled": False}))
+    assert backup.main(["offsite", *args, "--keychain", "--snapshot", str(world[0])],
+                       keychain_reader=lambda: KEY) == 1
+    capsys.readouterr()
+    status, state = _failure(tmp_path, world)
+    assert status["last_attempt_failed"] is True
+    assert status["last_failure_code"] == "backup_retention_capacity"
+    assert state["last_error"] == state["last_offsite_error"] == "backup_retention_capacity"
+    policy_path.write_text(json.dumps({**asdict(world[3]), "scheduled": False}))
+    assert backup.main(["offsite", *args, "--keychain", "--snapshot", str(world[0])],
+                       keychain_reader=lambda: KEY) == 0
+    capsys.readouterr()
+    status, state = _failure(tmp_path, world)
+    assert status["last_attempt_failed"] is False and status["last_failure_code"] is None
+    assert "last_error" not in state and "last_offsite_error" not in state
+
+
+def test_cipher_unavailable_is_recorded_and_survives_a_later_verify(world, tmp_path,
+                                                                   monkeypatch, capsys):
+    args = _cli_args(world, tmp_path)
+    assert backup.main(["offsite", *args, "--keychain", "--snapshot", str(world[0])],
+                       keychain_reader=lambda: KEY) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    real = backup.OPENSSL
+    monkeypatch.setattr(backup, "OPENSSL", str(tmp_path / "no-openssl"))
+    assert backup.main(["offsite", *args, "--keychain", "--snapshot", str(world[0])],
+                       keychain_reader=lambda: KEY) == 1
+    monkeypatch.setattr(backup, "OPENSSL", real)
+    assert backup.main(["verify", *args, "--keychain", "--bundle", receipt["bundle"],
+                        "--sha256", receipt["sha256"]], keychain_reader=lambda: KEY) == 0
+    status, state = _failure(tmp_path, world)
+    assert status["last_attempt_failed"] is True
+    assert status["last_failure_code"] == "backup_cipher_unavailable"
+    assert "last_error" not in state                  # the verify itself succeeded
+
+
+@pytest.mark.parametrize("raised", [
+    backup.BackupError("backup_/private/PRIVATE_PATH_CANARY"),
+    backup.BackupError("PRIVATE_PATH_CANARY"),
+    OSError("/private/PRIVATE_PATH_CANARY"),
+    ValueError("PRIVATE_PATH_CANARY"),
+])
+def test_unknown_failure_text_is_never_recorded_as_a_code(world, tmp_path, monkeypatch,
+                                                         capsys, raised):
+    args = _cli_args(world, tmp_path)
+
+    def boom(*a, **k):
+        raise raised
+    monkeypatch.setattr(backup, "offsite", boom)
+    assert backup.main(["offsite", *args, "--keychain", "--snapshot", str(world[0])],
+                       keychain_reader=lambda: KEY) == 1
+    capsys.readouterr()
+    status, state = _failure(tmp_path, world)
+    assert status["last_failure_code"] == "backup_io_or_policy_failed"
+    assert "PRIVATE_PATH_CANARY" not in json.dumps(state)
+
+
+def test_tampered_recorded_code_is_not_published(world, tmp_path):
+    records = tmp_path / "records"
+    records.mkdir(mode=0o700)
+    state = records / "backup_state.json"
+    state.write_text(json.dumps({"v": 1, "policy_id": world[3].policy_id,
+                                 "last_action": "offsite", "last_action_status": "failed",
+                                 "last_offsite_status": "failed",
+                                 "last_offsite_error": "PRIVATE_PATH_CANARY",
+                                 "last_error": "backup_not_a_known_code"}))
+    state.chmod(0o600)
+    status = backup.status(str(records), world[3])
+    assert status["last_attempt_failed"] is True and status["last_failure_code"] is None
+
+
+@pytest.mark.parametrize("field", ["last_error", "last_offsite_error"])
+@pytest.mark.parametrize("value,expected", [
+    ("backup_retention_capacity", "backup_retention_capacity"),
+    ("backup_unknown_code", None), (None, None), (["backup_retention_capacity"], None),
+    ({"code": "backup_retention_capacity"}, None), (True, None), (7, None), (1.5, None),
+])
+def test_recorded_cause_of_any_shape_never_crashes_status(world, tmp_path, field,
+                                                          value, expected):
+    records = tmp_path / "records"
+    records.mkdir(mode=0o700)
+    state = {"v": 1, "policy_id": world[3].policy_id, "last_action": "verify"}
+    if field == "last_offsite_error":
+        state.update(last_offsite_status="failed", last_action_status="failed",
+                     last_error="backup_cipher_failed")   # offsite cause wins
+    else:
+        state.update(last_action_status="failed")
+    state[field] = value
+    (records / "backup_state.json").write_text(json.dumps(state))
+    (records / "backup_state.json").chmod(0o600)
+    status = backup.status(str(records), world[3])
+    assert status["last_attempt_failed"] is True
+    assert status["last_failure_code"] == expected
+
+
+def test_every_raised_backup_code_is_in_the_known_set():
+    import ast
+    source = Path(backup.__file__).read_text(encoding="utf-8")
+    raised = {node.args[0].value for node in ast.walk(ast.parse(source))
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+              and node.func.id in ("BackupError", "_InspectionBudgetExhausted")
+              and node.args and isinstance(node.args[0], ast.Constant)}
+    assert raised and raised <= backup.FAILURE_CODES
+    assert "backup_io_or_policy_failed" in backup.FAILURE_CODES

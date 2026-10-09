@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "DBの関係保護の確認済み表示を厳密化",
+  "summary": "関係保護の記録が重複していて必要な種類が欠ける場合、確認済みではなく確認できない状態として表示します。正常な2種類の記録と件数の扱いは変わりません。",
+  "upgrade": "追加設定は不要です。診断・表示の読取りから有効です。DBの書換えや記録の削除は行いません。",
+  "details": [
+    "ledger_audit.guard_statusは行数だけでなく、artifactsとattachmentsの双方が一度ずつ存在することを確認する。"
+  ],
+  "refs": [
+    "mcs/core/ledger_audit.py",
+    "tests/core/test_guard_status_relations.py"
+  ]
+}

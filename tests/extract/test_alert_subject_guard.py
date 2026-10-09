@@ -132,8 +132,12 @@ def test_cached_high_for_family_never_becomes_patient_high_across_read_surfaces(
         detail = structured_view.message_urgency_details(db.db, 1)
         assert detail["held"] and detail["verdict"] == "unclear"
         assert structured_view.message_urgency(db.db, 1) is None
-        assert "緊急度: 高（AI抽出）" not in "\n".join(structured_view.structured_lines(db.db, 1))
-        assert "要確認" in "\n".join(structured_view.structured_lines(db.db, 1))
+        for plain in (False, True):
+            lines = structured_view.structured_lines(db.db, 1, plain=plain)
+            # no high-urgency head on either the legacy or the plain surface
+            assert not any(line.startswith("🚨") for line in lines)
+            assert any(line.startswith("緊急度: 要確認（対象人物・時点の根拠を確認")
+                       for line in lines)
         assert "母" in db.db.execute("SELECT body_text FROM messages WHERE message_id=1").fetchone()[0]
     finally:
         db.close()

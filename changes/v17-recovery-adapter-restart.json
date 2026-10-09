@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "更新後・復旧後のLINE WORKS再起動漏れと再起動要求失敗の見落としを修正",
+  "summary": "独立した復旧処理が中断した更新の後処理を完了したとき、通常の更新と同じくLINE WORKSの常駐アダプターを再起動し、古いアダプターが新しいカードを保留し続けないようにします。アダプター・独立実行・gatewayの再起動要求を起動または保存できなかった場合は成功として扱わず、更新では通知、復旧では報告と通知に残します。再起動の完了そのものは従来どおり待ちません。",
+  "upgrade": "復旧本体はcheckout外に置かれるため、更新時は従来のrecovery_tool_changedの手順で復旧本体を同期してください。LINE WORKSの再起動はHermes接続でLINE WORKSを対話先にしている場合だけ行い、独立実行・他の通知先・不明な実行モードでは行いません。",
+  "details": [
+    "mcs_recoverのpost-merge再開と完了済み後処理でmcs_update.restart_servicesと同じくgateway条件とLINE WORKS再起動を実行し、前版へ戻すだけの完了では従来どおりアダプターを再起動しない。",
+    "mcs_update.restart_lineworksは起動できなかった再起動要求を固定文の更新通知で知らせ、実行モードが不正な設定では例外にせず何もしない。",
+    "復旧処理は再起動要求の保存失敗・起動失敗をrestart_request_failedとして報告と通知に残し、終了コード1を返す。記録済みの更新状態は戻さない。"
+  ],
+  "refs": [
+    "deployment/recovery/mcs_recover.py",
+    "mcs/ops/mcs_update.py",
+    "tests/ops/test_recovery_adapter_restart.py",
+    "tests/ops/test_update_rollback_guards.py"
+  ]
+}

@@ -16,6 +16,10 @@ three slots), and a fake external consumer:
   -> the read model and the governed external contract reading the
      SAME snapshot generation.
 
+The late reply above arrives after its MCS parent but before the first
+Slack dispatch. Replies arriving after Slack delivery are covered by
+``tests/adapters/slack/test_slack_delayed_reply_flow.py``.
+
 Recoverable failure is injected at each boundary (Jev transient,
 mid-part worker crash, restore consent hold, lost journal). Synthetic
 only: no real MCS, no real Jev, no platform API, no Keychain, no

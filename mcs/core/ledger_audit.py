@@ -49,7 +49,7 @@ def guard_status(db: sqlite3.Connection) -> GuardReport:
             "WHERE relation IN ('artifacts','attachments') ORDER BY relation").fetchall()
     except sqlite3.Error:
         return unknown
-    if len(rows) != 2:
+    if len(rows) != 2 or {row[0] for row in rows} != {"artifacts", "attachments"}:
         return unknown
     relations: list[GuardRelation] = []
     for relation, mode, existing, shadow in rows:

@@ -301,7 +301,12 @@ class Actions:
                 self._result_log(interaction, "refresh",
                                  {"outcome": "refresh_published"})
             except OSError:
-                pass
+                self._result_log(interaction, "refresh",
+                                 {"outcome": "refresh_publish_failed"})
+                await self._ephemeral(
+                    interaction,
+                    "送信に失敗しました。もう一度操作してください。")
+                return
             await self._ephemeral(
                 interaction,
                 "この操作は無効化されています。カードを更新しますので、"
