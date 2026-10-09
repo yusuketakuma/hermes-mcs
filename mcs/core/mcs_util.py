@@ -437,9 +437,14 @@ class RunLockLost(BaseException):
     the generic ``except Exception`` retry paths must not charge an
     attempt for it — the drain catches it explicitly."""
 
-    def __init__(self, held: bool):
-        super().__init__("run_lock_held" if held else "run_lock_timeout")
+    def __init__(self, held: bool, updated: bool = False):
+        super().__init__("run_lock_held" if held
+                         else "run_lock_timeout_updated" if updated
+                         else "run_lock_timeout")
         self.held = held
+        # an updater ran while the bounded wait was expiring: the lock
+        # is not held, but this code is stale and must not stay resident
+        self.updated = updated
 
 
 RUN_LOCK_REACQUIRE_S = 150.0
@@ -452,14 +457,17 @@ def _updater_state() -> tuple:
 
 
 @contextmanager
-def unlocked_transport(ledger, lock_fd, wait_s: float | None = None):
+def unlocked_transport(ledger, lock_fd, wait_s: float | None = None,
+                       deadline: float | None = None):
     """Release the run lock during transport and reacquire before DB work.
 
-    The reacquire is bounded (``wait_s``, default RUN_LOCK_REACQUIRE_S)
-    and refuses a lock won right after an updater — same rule as
-    run_check._wait_run_lock: an update marker that appeared or a code
-    stamp that moved during the window raises RunLockLost(held=True);
-    an expired wait raises RunLockLost(held=False)."""
+    The reacquire is bounded (``wait_s``, default RUN_LOCK_REACQUIRE_S,
+    never past the caller's absolute ``deadline``) and refuses a lock won
+    right after an updater — same rule as run_check._wait_run_lock: an
+    update marker that appeared or a code stamp that moved during the
+    window raises RunLockLost(held=True); an expired wait raises
+    RunLockLost(held=False), with ``updated`` set when the same check
+    fails during the expiry."""
     if lock_fd is None:
         yield
         return
@@ -472,13 +480,16 @@ def unlocked_transport(ledger, lock_fd, wait_s: float | None = None):
     finally:
         until = time.monotonic() + (
             RUN_LOCK_REACQUIRE_S if wait_s is None else wait_s)
+        if deadline is not None:
+            until = min(until, deadline)
         while True:
             try:
                 fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
                 if time.monotonic() >= until:
-                    raise RunLockLost(held=False) from None
+                    raise RunLockLost(
+                        held=False, updated=_updater_state() != before) from None
                 time.sleep(RUN_LOCK_POLL_S)
         if _updater_state() != before:
             raise RunLockLost(held=True)

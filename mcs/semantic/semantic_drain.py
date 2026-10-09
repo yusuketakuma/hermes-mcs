@@ -1419,6 +1419,14 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int) -> tuple[list, list, dict]:
 
 
 _BACKLOG_INVALIDATE_S = 300.0
+# A backlog worker releases the run lock around every model/Jev call and
+# must retake it before persisting the result. The tick (run_check) can
+# hold that lock for its whole RUN_DEADLINE_S (480 s) after waiting
+# LOCK_WAIT_S (150 s) itself; with the shared 150 s reacquire bound a call
+# ending inside that window was abandoned (run_lock_lost), leaving the
+# job untouched and exiting the resident (2026-10-09). Outwait a full
+# tick instead — never past the pass deadline run_due was given.
+RUN_LOCK_REACQUIRE_S = 660.0
 _JOB_LOCK_BUCKETS = 1024
 _invalidated_at: float | None = None
 
@@ -1453,6 +1461,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     cfg_path, when given, re-validates config between jobs so an OFF
     flip mid-run takes effect at the next job boundary (AT-060)."""
     import semantic
+    started_at = time.perf_counter()
     if lane not in (None, "realtime", "backlog"):
         raise ValueError("semantic_lane_invalid")
     if type(max_jobs) is not int or not 1 <= max_jobs <= 32:
@@ -1504,6 +1513,11 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         out["circuit_open_s"] = round(circuit_s)
         return out
     drain_started = time.perf_counter()
+    # maintenance ahead of the job loop, and jobs skipped without a
+    # transition — both invisible from the run record until 2026-10-09
+    out["preamble_s"] = round(drain_started - started_at, 3)
+    out["lock_skipped"] = {}
+    out["floor_skipped"] = {}
     out["job_metrics"] = []
     oldest = ledger.db.execute(
         "SELECT MIN(created_at) FROM fetch_jobs "
@@ -1533,10 +1547,13 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             max_attempts=scfg["max_attempts_per_try"])
     from mcs_util import unlocked_transport
     original_llm = llm_fn
+    # the tick keeps the shared default: it never has a tick to outwait
+    reacquire_s = RUN_LOCK_REACQUIRE_S if lane == "backlog" else None
 
     @wraps(original_llm)
     def unlocked_llm(*args, **kwargs):
-        with unlocked_transport(ledger, run_lock_fd):
+        with unlocked_transport(ledger, run_lock_fd, wait_s=reacquire_s,
+                                deadline=deadline):
             return original_llm(*args, **kwargs)
 
     llm_fn = unlocked_llm
@@ -1546,7 +1563,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         original_http = jev_client._http_request
 
         def unlocked_http(*args, **kwargs):
-            with unlocked_transport(ledger, run_lock_fd):
+            with unlocked_transport(ledger, run_lock_fd, wait_s=reacquire_s,
+                                    deadline=deadline):
                 return original_http(*args, **kwargs)
 
         jev_client._http_request = unlocked_http
@@ -1633,6 +1651,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 break
             with _job_lock(ledger, job["job_id"]) as held:
                 if not held:
+                    out["lock_skipped"][job["kind"]] = \
+                        out["lock_skipped"].get(job["kind"], 0) + 1
                     continue
                 token = runtime.JobToken.from_row(job)
                 payload = runtime.parse_payload(job)
@@ -1669,6 +1689,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                                     min(runtime.LLM_CALL_RESERVE_S,
                                         float(scfg["job_budget_seconds"]) * 2 / 3))
                 if time.monotonic() > floor:
+                    out["floor_skipped"][job["kind"]] = \
+                        out["floor_skipped"].get(job["kind"], 0) + 1
                     if job["kind"] == QC_JOB_KIND:
                         out["deferred"] += 1
                         break
@@ -1752,7 +1774,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     # claim is the _job_lock flock released on return),
                     # later jobs are not started, and the caller ends the
                     # tick/batch on out["run_lock_lost"].
-                    out["run_lock_lost"] = "held" if e.held else "timeout"
+                    out["run_lock_lost"] = ("held" if e.held
+                                            else "updated" if e.updated
+                                            else "timeout")
                     result["errors"].append("semantic: run_lock_lost")
                     return out
                 except Exception as e:
@@ -1803,6 +1827,14 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     "jev_error": _jev_error_brief(
                         getattr(jev_client, "last_error", None))
                     if status not in (None, "done") else None,
+                    # last local-model failure code of this pass (never
+                    # text) — a long call ending "retry" was undiagnosable
+                    # from the run record (2026-10-09). Module-level and
+                    # latest-wins: only a pass that actually called the
+                    # model may report it, or a cached/QC pass would wear
+                    # the previous job's code.
+                    "llm_error": semantic.last_llm_failure()
+                    if status not in (None, "done") and llm_s > 0 else None,
                 })
                 if status == "done":
                     out["done_by_kind"][job["kind"]] = \

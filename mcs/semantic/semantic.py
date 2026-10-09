@@ -280,6 +280,22 @@ def _long_mark(key: str, level: int) -> None:
         pass
 
 
+_LLM_FAILURE: str | None = None
+
+
+def last_llm_failure() -> str | None:
+    """Failure code of the latest llm_chat call, or None after a success.
+
+    Run records carry the code only — never model text."""
+    return _LLM_FAILURE
+
+
+def _failed(code: str | None):
+    global _LLM_FAILURE
+    _LLM_FAILURE = code
+    return None
+
+
 def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
              max_tokens: int = LLM_MAX_TOKENS) -> str | None:
     """One local-llama.cpp chat call via the shared loopback adapter.
@@ -292,6 +308,7 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
     ``_DEFERRED``)."""
     endpoint, model = llm_conf()
     err_out: dict = {}
+    _failed(None)
     if local_llm.admission_enabled():
         # T20: route through the RT/BACKLOG admission boundary — the
         # registered route binds the class; the response shape carries
@@ -313,16 +330,17 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
         key = _long_key(model, prompt)
         level = _long_marks().get(key, 0)
         if level >= 2:
-            return None       # even the long ceiling stopped on length
+            return _failed("long_ceiling")   # even the long ceiling stopped on length
         timeout = call_deadline - time.monotonic()
         if timeout <= 0:
-            return None
+            return _failed("deadline")
         if level and timeout < _LONG_MIN_CALL_S:
+            _failed("long_output_needs_budget")
             raise runtime.LLMNotSent("long_output_needs_budget")
         while True:
             timeout = call_deadline - time.monotonic()
             if timeout <= 0:
-                return None
+                return _failed("deadline")
             response = local_llm.chat(
                 prompt, endpoint=endpoint, model=model,
                 timeout=timeout, deadline=call_deadline,
@@ -344,7 +362,7 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
                 if timeout <= 0:
                     # A format refusal is not a plain-prompt rejection.
                     # Exhausted work stays retryable without another send.
-                    return None
+                    return _failed("format_rejected")
                 if level and timeout < _LONG_MIN_CALL_S:
                     # The rejected request already left: do not report a
                     # free not-sent defer, or send a long call that cannot
@@ -352,7 +370,7 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
                     # so this is a retryable model failure, never the plain
                     # HTTP 400 terminal rejection; plain is remembered and
                     # the mark kept for a later adequately sized try.
-                    return None
+                    return _failed("format_rejected")
                 continue
             if response is not None \
                     and response.get("finish_reason") == "length":
@@ -363,18 +381,21 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
                     continue  # one long-ceiling retry in what is left
             break
     if response is None and err_out.get("kind") == "unreachable":
+        _failed("unreachable")
         raise runtime.LLMNotSent("llm_unreachable")
     if response is not None and response.get("status") == 400:
         # the server definitively rejected the request (context
         # oversize under a fixed slot, or a malformed body) — retrying
         # the same input can never succeed, so this is terminal, not a
         # retryable model failure
+        _failed("prompt_rejected")
         raise runtime.LLMRejected("prompt_rejected")
     # canonical acceptance: a length-truncated or empty completion is an
     # incomplete result, never a success payload — even when its text
     # happens to parse (C05)
-    if local_llm.acceptance_error(response) is not None:
-        return None
+    acceptance = local_llm.acceptance_error(response)
+    if acceptance is not None:
+        return _failed(acceptance)
     return response["text"]
 
 

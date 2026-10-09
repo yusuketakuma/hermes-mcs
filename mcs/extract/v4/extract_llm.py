@@ -3821,10 +3821,12 @@ def _main() -> int:
                         print(json.dumps({"semantic": sem,
                                           "ts": time.time()},
                                          ensure_ascii=False), flush=True)
-                        if sem.get("run_lock_lost"):
-                            # an updater won the run lock mid-transport: exit
-                            # so launchd / the standalone host respawns this
-                            # resident on the new code instead of re-locking
+                        if sem.get("run_lock_lost") in ("held", "updated"):
+                            # an updater ran mid-transport: exit so launchd /
+                            # the standalone host respawns this resident on
+                            # the new code instead of re-locking. A plain
+                            # reacquire timeout under unchanged code left the
+                            # job pending — stay resident.
                             return 0
                 except Exception as e:
                     # a transient failure ('database is locked') must not
