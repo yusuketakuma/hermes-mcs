@@ -98,6 +98,8 @@ async def _call(fn, **kwargs):
     return await fn(**kwargs)
 
 
+# first chunk of one MCS post in a thread card (notify_cards._body_groups)
+_NEW_POST = re.compile(r"m:[1-9][0-9]{0,18}#1")
 # chat.update rejections that prove the prior reply cannot be edited
 _REPOST_ON_UPDATE = frozenset({"message_not_found", "cant_update_message",
                                "edit_window_closed"})
@@ -436,12 +438,22 @@ class DeliveryWorker(_BaseWorker):
         if sender is None:
             return {"result": "not_sent",
                     "error_code": "retry_policy_unknown"}
+        # a post new to an already delivered card also shows in the
+        # channel: an edit of the old card notifies nobody, so a late
+        # reply would otherwise reach only the thread's followers
+        broadcast = ({"reply_broadcast": True}
+                     if spec["op"] == "update" and part is not None
+                     and part.get("kind") == "body_part"
+                     and not part.get("prior_remote_id")
+                     and _NEW_POST.fullmatch(str(part.get("name") or ""))
+                     else {})
         try:
             response = await _call(
                 sender.chat_postMessage,
                 channel=self._settings["channel_id"],
                 thread_ts=thread_ts, text=text, link_names=False,
-                mrkdwn=False, unfurl_links=False, unfurl_media=False)
+                mrkdwn=False, unfurl_links=False, unfurl_media=False,
+                **broadcast)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
