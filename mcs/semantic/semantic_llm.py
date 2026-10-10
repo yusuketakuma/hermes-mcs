@@ -188,6 +188,13 @@ _SUMMARY_PROMPT = """あなたは在宅医療チャット記録の要約器で�
 {"claims":[...], "limitations":[...]} のみ出力。
 JSON:"""
 
+_FORMAT_REPAIR_SUFFIX = """
+前回の出力はJSONの形式が不正でした。形式を直して同じ入力から再生成してください。
+limitations は文字列だけの配列（補足なしなら []）。object・null・数値を入れない。
+claims は根拠候補に対応する主張を重複なくまとめ、必要な事実を省略しない。
+原文と事実候補の内容は変えず、JSONを一度だけ出力して閉じてください。
+JSON:"""
+
 _REPAIR_SUFFIX = """
 前回の出力は監査で不合格でした。修正点:
 %s
@@ -241,7 +248,8 @@ def _oversize_stub(bundle: dict, target_id: int) -> dict:
 def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
               verdicts: dict, feedback: list | None = None,
               deadline: float | None = None,
-              return_reason: bool = False, *, error_out: dict | None = None):
+              return_reason: bool = False, *, error_out: dict | None = None,
+              format_repair: bool = False):
     """Local-LLM summary in the common Claim schema. Jev verdicts are
     context for the writer, never forced truth (§15.3). The FULL target
     body and thread context are passed untruncated; if the prompt would
@@ -276,7 +284,9 @@ def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
     prompt = _SUMMARY_PROMPT % (json.dumps(target_input, ensure_ascii=False),
                                 ctx, _facts_brief(facts),
                                 _verdicts_brief(verdicts))
-    if feedback:
+    if format_repair:
+        prompt += _FORMAT_REPAIR_SUFFIX
+    elif feedback:
         prompt += _REPAIR_SUFFIX % "\n".join(feedback[:10])
     if deadline is not None and time.monotonic() > deadline:
         return result(None, "deadline")

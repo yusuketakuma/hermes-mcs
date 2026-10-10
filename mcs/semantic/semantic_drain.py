@@ -933,12 +933,41 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             if candidate and candidate["meta"].get("publication_mode") == scfg["summary_mode"]:
                 summary = candidate["content"]
             else:
+                format_repair_id = None
                 try:
                     summary, summary_reason = summarize(
                         llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
                         deadline=deadline, return_reason=True,
                         error_out=summary_error)
-                except (runtime.LLMNotSent, runtime.RuntimeBudget) as e:
+                    if summary is None and summary_reason == "model" \
+                            and summary_error.get("code") \
+                            and _current(ledger, "semantic_summary_format_repair",
+                                         mid, fp, policy) is None:
+                        if _PASS_REASON.get("summary_validation_error") is None:
+                            _PASS_REASON["summary_validation_error"] = summary_error["code"]
+                        guard("summary_format_repair_reservation")
+                        format_repair_id = ledger.artifact_add(
+                            "semantic_summary_format_repair",
+                            json.dumps({"target_message_id": mid}),
+                            project_id=pid, message_id=mid,
+                            model=semantic.llm_model(),
+                            meta={"fingerprint": fp, "policy_fingerprint": policy,
+                                  "repair_count": 1})
+                        summary, summary_reason = summarize(
+                            llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
+                            format_repair=True,
+                            deadline=deadline, return_reason=True,
+                            error_out=summary_error)
+                except runtime.RuntimeGuardError as e:
+                    if format_repair_id is not None and (
+                            isinstance(e, runtime.LLMNotSent)
+                            or e.stage in _PRE_DISPATCH_STAGES):
+                        with ledger.db:
+                            ledger.db.execute(
+                                "DELETE FROM artifacts WHERE artifact_id=?",
+                                (format_repair_id,))
+                    if not isinstance(e, (runtime.LLMNotSent, runtime.RuntimeBudget)):
+                        raise
                     # the local model never got (or ran out of budget
                     # for) this target's request: stop here like any
                     # incomplete pass, so targets already audited are
@@ -1927,8 +1956,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     if status not in (None, "done") and llm_s > 0 else None,
                     "retry_reason": _PASS_REASON["code"]
                     if status != "done" else None,
-                    "summary_validation_error": _PASS_REASON["summary_validation_error"]
-                    if status != "done" else None,
+                    "summary_validation_error": _PASS_REASON["summary_validation_error"],
                 })
                 if status == "done":
                     out["done_by_kind"][job["kind"]] = \
