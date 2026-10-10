@@ -57,6 +57,20 @@ def _eval_chunked(jev_client, state: dict, questions: dict,
     return merged
 
 
+# Receipt of a shadow v2 comparison that ran for a source + policy and
+# stayed incomplete (the incomplete document itself is never stored).
+KIND_SHADOW_V2 = "semantic_shadow_v2"
+
+
+def _shadow_v2_tried(ledger, mid: int, fp: str, policy: str) -> bool:
+    """This source + policy already ran the current v2 extraction in shadow
+    and it stayed incomplete — a receipt, never a completed document."""
+    from semantic_extraction import v2_generation
+    row = _current(ledger, KIND_SHADOW_V2, mid, fp, policy)
+    return (row is not None and row["content"].get("status") == "incomplete"
+            and row["meta"].get("generation") == v2_generation())
+
+
 def _jev_failure_class(error) -> str:
     """Classify an evaluation failure for durable job scheduling.
 
@@ -207,7 +221,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
     fact_source = scfg.get("fact_source", "legacy")
     v2_doc = None
     if fact_source != "legacy":
-        from semantic_extraction import extract_facts_v2
+        from semantic_extraction import extract_facts_v2, v2_generation
         from semantic_projection import project_v2_facts
         prev_v2 = _current(ledger, KIND_FACTS_V2, mid, fp)
         if prev_v2 is not None:
@@ -266,6 +280,11 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
             if fact_source == "canonical":
                 v4.record_stage(ledger, pid, mid, fp, policy,
                                 "s1_extract", "reused")
+        elif fact_source == "shadow" and _shadow_v2_tried(
+                ledger, mid, fp, policy):
+            # this source + policy already ran its shadow comparison and it
+            # stayed incomplete (receipt below) — a retry does not re-run it
+            pass
         else:
             if time.monotonic() > deadline - 5:
                 return {"outcome": "incomplete", "v2_doc": None}
@@ -282,6 +301,26 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                             if v2_result["failure_reason"] == "model"
                             else "incomplete", "v2_doc": None}
                 v2_doc = None      # shadow: incomplete doc not stored
+                if v2_result["failure_reason"] != "deadline":
+                    # Without a durable mark every retry re-extracted each
+                    # finished target until a multi-target job could no
+                    # longer reach the next one (2026-10-10). The receipt
+                    # says "incomplete", never complete; a time-out instead
+                    # resumes from the persisted chunks next pass.
+                    ledger.artifact_add(
+                        KIND_SHADOW_V2,
+                        json.dumps({"status": "incomplete",
+                                    "failure_reason":
+                                        v2_result["failure_reason"],
+                                    "chunks_completed":
+                                        v2_result["chunks_completed"],
+                                    "chunks_total":
+                                        v2_result["chunks_total"]}),
+                        project_id=pid, message_id=mid,
+                        model=semantic.llm_model(),
+                        meta={"fingerprint": fp,
+                              "policy_fingerprint": policy,
+                              "generation": v2_generation()})
             else:
                 v2_doc = v2_result["doc"]
                 from semantic_extraction import FACTS_V2_BUILD

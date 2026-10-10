@@ -43,6 +43,14 @@ def _chunk_generation(model: str, prompt_template: str, *, chunk_size: int = 300
     return f"{model}|{_sha256(prompt_template)[:16]}|plan:{clinical_chunking.PLAN_VERSION}|size:{chunk_size}"
 
 
+def v2_generation() -> str:
+    """Identity of the default v2 extraction (model + prompt + chunk plan);
+    a change means an earlier attempt says nothing about a new one."""
+    import semantic
+    import semantic_llm
+    return _chunk_generation(semantic.llm_model(), semantic_llm._FACT_V2_PROMPT)
+
+
 def _chunk_specs(source: str, chunk_size: int, chunker) -> list[dict]:
     if type(chunk_size) is not int or chunk_size <= 0:
         raise ValueError("chunk_size_invalid")
