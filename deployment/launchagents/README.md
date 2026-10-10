@@ -6,7 +6,7 @@ cmd/cmd_int取込、抽出worker2本と接続を所有する。Hermes cronや個
 導入・切替は[独立モードの手順](../../docs/guides/STANDALONE.md)を参照。
 以下のHermes cron構成と配置先は`runtime_mode=hermes`（未指定の既存設定）のもの。
 
-収集ジョブは **hermes cron（標準スケジューラ）6件 + launchd 5件** の
+収集ジョブは **hermes cron（標準スケジューラ）6件 + launchd 6件** の
 ハイブリッド。別途、LLM サーバ常駐用の `ai.mcs.llamaserver.plist`
 （KeepAlive サーバであってジョブではない。install.sh 所有・stage 4 で
 配置）が同ディレクトリにある。
@@ -26,6 +26,7 @@ services 所有の launchd は同 `AGENT_LABELS`。変更時は両方を合わ�
 | 更新中断の復旧 `mcs_recover.py --if-stale` | 15分間隔 | launchd `org.mcs.recovery`（独立・install.sh 所有） |
 | コマンド取込 `run_check.py --json --download-files --mark-read` | `data/cmd/` WatchPaths（イベント駆動） | launchd `local.mcs-cmd` |
 | 対話カードコマンド `run_check.py --json --commands-only` | `data/cmd_int/` WatchPaths（イベント駆動） | launchd `local.mcs-int` |
+| ヘルス監視の予備 `health_watch.py` | 300秒間隔（hermes cron が詰まっても警報する。flock・重複抑止は cron 側と共有） | launchd `local.mcs-health` |
 | 抽出・semantic/QC 常駐drainer（slot 0） | KeepAlive・24時間・idle poll 120s | launchd `ai.mcs.extract-drainer` |
 | 抽出・semantic/QC 常駐drainer（slot 2） | KeepAlive・24時間・idle poll 120s | launchd `ai.mcs.extract-drainer-2` |
 
@@ -45,7 +46,7 @@ wrapperスクリプトの正本は `deployment/scripts/`（`__PYTHON__`/`__REPO_
 ## セットアップ
 
 **自動化（推奨）**: `~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py services` が下記の
-手順をすべて実行する（冪等・`--dry-run` で確認可）。launchd 4件の
+手順をすべて実行する（冪等・`--dry-run` で確認可）。launchd 5件の
 bootstrap と hermes cron 6件の登録は既存分をスキップする。plist 本文・
 cron スケジュールの差分は reconcile する（loaded でも内容が違えば
 bootout→bootstrap、schedule 差分は `hermes cron edit`、desired 外の

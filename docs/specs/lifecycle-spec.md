@@ -80,7 +80,7 @@ Keychain 'mcs-adapter'               MCS パスワード
 ```
 
 常駐: `local.mcs-cmd`（cmd drain）・`local.mcs-int`（card drain）・
-`ai.mcs.extract-drainer{,-2}`・`ai.mcs.llamaserver`・`ai.hermes.gateway`・
+`ai.mcs.extract-drainer{,-2}`・`local.mcs-health`（hermes cron 非依存のヘルス監視）・`ai.mcs.llamaserver`・`ai.hermes.gateway`・
 `org.mcs.recovery`📋（更新 watchdog・install.sh 所有・gateway 非依存）。
 定期: cron `mcs_check`（10分）・`mcs_deep`（毎時10分・40分のdurable drain）・
 `mcs_llm_catchup`・`llamacpp daily restart`・`mcs_update`📋（日次）。
@@ -126,7 +126,7 @@ pip install・モデル DL の `.part`）は続きから収束する。
   初回は `services`・`check` の手動再実行は不要（未登録・drift の復旧時は別）
 
 `services`（冪等）: `deployment/scripts/*.sh` レンダリング →
-launchd 4件 bootstrap（差分は bootout+bootstrap 案内）→ cron を
+launchd 5件 bootstrap（差分は bootout+bootstrap 案内）→ cron を
 script 名で dedup 登録（現行5件 + 📋`mcs_update`）→
 `interactive=discord|slack` なら gateway を `status`→未 supervised なら
 `install`+`start`。📋manifest 記録・reconcile・atomic render は
@@ -139,7 +139,7 @@ exit 1。
 `check`（exit 1 で失敗）: 実行基盤（services 用インタプリタ・
 launchd PATH での `hermes` 解決・`org.mcs.recovery` の導入/drift/
 `repo_path`/ロード・llama-server agent のロード）→ config 型検証 →
-Keychain・Chrome・LLM・トークン解決・launchd 4件・gateway
+Keychain・Chrome・LLM・トークン解決・launchd 5件・gateway
 supervised（discord/slack 時）→ wrapper drift の順に検証し、末尾に
 `blockers (N) — fix in this order` を出す。現行`doctor`は読取り専用の診断で、
 `check`・Keychain・原本DBへアクセスしない。選択Python/SQLite・設定・

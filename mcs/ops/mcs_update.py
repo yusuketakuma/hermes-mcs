@@ -94,7 +94,7 @@ INSTALL_ARGS = frozenset({"--no-llm", "--no-brew", "--no-plugin",
                           "--no-recovery"})
 REINSTALL_ERRORS = ("install_sh_changed", "standalone_requirements_changed")
 T_INSTALL = 3600
-WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int")
+WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int", "local.mcs-health")
 # S5: only the labels listed above are touched; install.sh-owned
 # ai.mcs.llamaserver / org.mcs.recovery must never be.
 PROTECTED = ("data/", "config.json", ".env", "chrome-profile/", "venv/", "models/")

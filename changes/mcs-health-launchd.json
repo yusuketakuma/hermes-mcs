@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "Hermes の定期実行が止まっても MCS の停止を警報する予備のヘルス監視を追加",
+  "summary": "Hermes の定期実行を同時に1本ずつ動かす設定（cron.max_parallel_jobs: 1）では、長い処理が1本あると MCS の収集もヘルス監視も一緒に止まり、警報が出ませんでした。Hermes の定期実行とは独立した launchd のヘルス監視（local.mcs-health、5分間隔）を追加し、収集が止まったときに同じ通知先へ警報を送ります。",
+  "upgrade": "`mcs_setup.py services`（install.sh・更新でも自動実行）で local.mcs-health が配置・起動されます。設定変更は不要です。既存の Hermes 定期実行のヘルス監視はそのまま残り、二重に動いても排他と重複抑止で警報は1回だけになります。独立モード（runtime_mode=standalone）では従来どおり単一ホストが監視し、この launchd 項目は配置しません。",
+  "details": [
+    "launchd 項目は health_watch.py を5分ごとに実行し、ログは data/health_watch.log に出力します。警報の内容と送信先は既存のヘルス監視と同じです。",
+    "更新後の再読み込み（mcs_update）と更新中断からの復旧（mcs_recover）が、この項目を既知の監視として扱い、削除しません。",
+    "完全合成のテストで、サービス配置・更新・復旧の各一覧にこの項目が含まれることと、plist の実行間隔・実行対象を確認します。"
+  ],
+  "refs": ["deployment/launchagents/local.mcs-health.plist", "mcs/ops/mcs_setup.py", "mcs/ops/mcs_update.py", "deployment/recovery/mcs_recover.py"]
+}

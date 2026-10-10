@@ -108,3 +108,22 @@ def test_detached_updater_drops_the_launchd_job_identity(monkeypatch, tmp_path):
     monkeypatch.setenv("MCS_JOB_PID", "1")
     mcs_update.spawn_detached()
     assert "XPC_SERVICE_NAME" not in seen["env"] and "MCS_JOB_PID" not in seen["env"]
+
+
+def test_the_hermes_independent_health_watch_is_known_everywhere():
+    """local.mcs-health keeps alerting when one long hermes cron job blocks
+    the rest; services render it, the updater reloads it and recovery must
+    never delete it."""
+    import plistlib
+    from pathlib import Path
+
+    import mcs_setup
+    recover = _load()
+    assert "local.mcs-health" in mcs_setup.AGENT_LABELS
+    assert set(mcs_setup.AGENT_LABELS) <= recover.KNOWN_AGENT_LABELS
+    assert "local.mcs-health" in mcs_update.WATCHER_LABELS
+    body = Path(mcs_setup.REPO_ROOT, "deployment", "launchagents",
+                "local.mcs-health.plist").read_bytes()
+    plist = plistlib.loads(body)
+    assert plist["StartInterval"] == 300 and plist["RunAtLoad"] is False
+    assert plist["ProgramArguments"][1].endswith("/mcs/ingest/health_watch.py")

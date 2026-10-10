@@ -2600,9 +2600,13 @@ def configured_cron_jobs(cfg: dict) -> list[tuple[str, str, str]]:
 
 
 # RESIDENT = KeepAlive drainers the updater quiesces/restarts itself;
-# WATCHER = WatchPaths triggers — verified loaded, never keep-alive.
+# WATCHER = WatchPaths/StartInterval jobs — verified loaded, never keep-alive.
+# local.mcs-health repeats the hermes cron health watch (CRON_JOBS, shared
+# with standalone) so alerts still go out when hermes cron itself stalls
+# (one long cron job blocks the rest); health_watch.py's flock and dedup
+# state make the pair safe.
 RESIDENT_LABELS = ["ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2"]
-WATCHER_LABELS = ["local.mcs-cmd", "local.mcs-int"]
+WATCHER_LABELS = ["local.mcs-cmd", "local.mcs-int", "local.mcs-health"]
 AGENT_LABELS = WATCHER_LABELS + RESIDENT_LABELS
 # install.sh-owned labels that must never enter MCS ownership (S5).
 EXCLUDED_LABELS = frozenset({"ai.mcs.llamaserver", "org.mcs.recovery"})

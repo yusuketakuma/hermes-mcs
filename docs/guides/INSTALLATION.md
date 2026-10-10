@@ -525,9 +525,9 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 
 ## 6. スケジュール構成（Path A 導入後）
 
-収集ジョブは **hermes cron 6件 + launchd 5件** のハイブリッド
-（services 所有: cron 6件と launchd 4件 `local.mcs-cmd`・`local.mcs-int`・
-`ai.mcs.extract-drainer`・`ai.mcs.extract-drainer-2`。install.sh 所有:
+収集ジョブは **hermes cron 6件 + launchd 6件** のハイブリッド
+（services 所有: cron 6件と launchd 5件 `local.mcs-cmd`・`local.mcs-int`・
+`ai.mcs.extract-drainer`・`ai.mcs.extract-drainer-2`・`local.mcs-health`。install.sh 所有:
 復旧 watchdog `org.mcs.recovery`。別に LLM サーバ常駐の
 `ai.mcs.llamaserver` / `ai.hermes.llamacpp`）。
 

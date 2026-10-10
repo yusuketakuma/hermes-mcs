@@ -1001,12 +1001,12 @@ def test_services_renders_bootstraps_and_registers(monkeypatch, tmp_path):
     # wrapper scripts rendered with placeholders substituted
     s = (tmp_path / "scripts" / "mcs_check.sh").read_text()
     assert "__PYTHON__" not in s and "/h/venv/bin/python" in s
-    # all 4 launchd plists rendered and bootstrapped
+    # every launchd plist rendered and bootstrapped
     for label in mcs_setup.AGENT_LABELS:
         body = (tmp_path / "agents" / f"{label}.plist").read_text()
         assert "__REPO__" not in body
     boots = [a for a in calls if a[:2] == ["launchctl", "bootstrap"]]
-    assert len(boots) == 4
+    assert len(boots) == len(mcs_setup.AGENT_LABELS) == 5
     # cron: the job whose script is already registered is skipped;
     # the other 5 (incl. the update check) are created
     creates = [" ".join(a) for a in calls
@@ -1024,7 +1024,7 @@ def test_services_renders_bootstraps_and_registers(monkeypatch, tmp_path):
     offsite = tmp_path / "scripts" / "mcs_offsite.sh"
     assert offsite.is_file() and "ENABLED=0" in offsite.read_text()
     assert not any("mcs_offsite.sh" in command for command in creates)
-    assert len(manifest["agents"]) == 4
+    assert len(manifest["agents"]) == len(mcs_setup.AGENT_LABELS)
     assert len(manifest["cron"]) == 6
 
 
