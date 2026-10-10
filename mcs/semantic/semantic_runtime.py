@@ -463,12 +463,14 @@ class _GuardedLLM:
 
 
 class _GuardedJev:
-    def __init__(self, client, guard):
+    def __init__(self, client, guard, cutoff=None):
         self._client = client
         self._guard = guard
+        self._cutoff = cutoff
 
     def evaluate(self, state, questions, deadline):
         _call_guard(self._guard, "jev_attempt")
+        _jev_cutoff(self._cutoff)
         try:
             value = self._client.evaluate(state, questions, deadline)
         except Exception as error:
@@ -489,17 +491,23 @@ class _HookedJev:
     Keeping hooks scoped to the call avoids leaking one job's identity into a
     client reused for the next job in the same drain.
     """
-    def __init__(self, client, guard, reserve):
+    def __init__(self, client, guard, reserve, cutoff=None):
         self._client = client
         self._guard = guard
         self._reserve = reserve
+        self._cutoff = cutoff
 
     def evaluate(self, state, questions, deadline):
         old_before = getattr(self._client, "before_attempt", None)
         old_after = getattr(self._client, "after_result", None)
         old_reserve = getattr(self._client, "reserve_fn", None)
-        self._client.before_attempt = \
-            lambda: _call_guard(self._guard, "jev_attempt")
+        attempt_s = float(getattr(self._client, "attempt_timeout", 0) or 0)
+
+        def before_attempt():
+            _call_guard(self._guard, "jev_attempt")
+            _jev_cutoff(self._cutoff, attempt_s)
+
+        self._client.before_attempt = before_attempt
         self._client.after_result = \
             lambda: _call_guard(self._guard, "jev_result")
         self._client.reserve_fn = self._reserve
@@ -526,7 +534,16 @@ def guarded_llm(fn, guard, deadline, timeout_cap=None, call_reserve=None):
     return _GuardedLLM(fn, guard, deadline, timeout_cap, call_reserve)
 
 
-def bind_jev(client, guard, reserve=None):
+def _jev_cutoff(cutoff, attempt_s: float = 0.0) -> None:
+    """A Jev request (or internal retry) may not start when it could still
+    be in flight at ``cutoff`` — a free defer of the pass, like a follow-up
+    model call that cannot fit. The answer itself is accepted until the
+    caller's deadline, so waiting to retake the run lock never voids it."""
+    if cutoff is not None and time.monotonic() + attempt_s >= cutoff:
+        raise RuntimeBudgetShort("jev_next_call")
+
+
+def bind_jev(client, guard, reserve=None, cutoff=None):
     """Guard injected clients and hook real Jev retries at each POST.
 
     The Jev adapter marks itself hookable.  Other clients are wrapped at the
@@ -536,8 +553,8 @@ def bind_jev(client, guard, reserve=None):
     if client is None:
         return None, lambda: None
     if not getattr(client, "_mcs_jev_hookable", False):
-        return _GuardedJev(client, guard), lambda: None
-    return _HookedJev(client, guard, reserve), lambda: None
+        return _GuardedJev(client, guard, cutoff), lambda: None
+    return _HookedJev(client, guard, reserve, cutoff), lambda: None
 
 
 def usage_reserver(ledger, token: JobToken, *, kind: str,

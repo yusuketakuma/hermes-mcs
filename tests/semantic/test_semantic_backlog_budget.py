@@ -311,19 +311,23 @@ def test_a_lifted_call_ending_past_the_job_deadline_is_not_saved(tmp_path, monke
     inside run_due's 930 s, with the run lock retaken, is still refused by
     the post-call guard — no artifact built from it — and charges one
     bounded attempt; lifting the cap never extends the job deadline. The
-    in-time run is the control that the same result is otherwise saved."""
+    in-time run is the control that the same result is otherwise saved.
+    (The call's own timeout ends a commit reserve earlier; "late" runs past
+    both.)"""
     clock = [1000.0]
     monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    cfg = _cfg("shadow", job_budget_seconds=900)
+    reserve = semantic_drain._backlog_commit_reserve(
+        semantic.semantic_config(cfg)[0])
 
     def llm(prompt, timeout=None):
-        clock[0] += timeout + 5 if late else 10
+        clock[0] += timeout + reserve + 5 if late else 10
         return _llm(prompt)
 
     db = _seeded(tmp_path)
     try:
         before = _result_rows(db)
-        out = semantic.run_due(db, _cfg("shadow", job_budget_seconds=900),
-                               {"errors": []}, clock[0] + 930,
+        out = semantic.run_due(db, cfg, {"errors": []}, clock[0] + 930,
                                jev_client=_FakeJev(), llm_fn=llm,
                                lane="backlog", max_jobs=1)
         row = db.db.execute(

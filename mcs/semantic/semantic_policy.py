@@ -128,7 +128,10 @@ def semantic_config(cfg: dict) -> tuple[dict, list]:
             else:
                 out[key] = v
     for key, lo, hi in (("attempt_timeout_seconds", 1.0, 60.0),
-                        ("job_budget_seconds", 5.0, 900.0),
+                        # 1260 s holds a full backlog commit reserve
+                        # (semantic_drain); the pass (+30 s) stays well
+                        # inside llm_admission.LEASE_S (1800 s)
+                        ("job_budget_seconds", 5.0, 1260.0),
                         ("match_threshold", 0.0, 1.0),
                         ("nomatch_threshold", 0.0, 1.0)):
         if key in block:

@@ -240,10 +240,11 @@ def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
 LLM_LONG_MAX_TOKENS = 8192
 _LONG_PATH = os.path.join(HOME, "data", "semantic_long_output.json")
 _LONG_MAX = 500
-# a long-ceiling call measured ~320 s alone: with less budget it would
-# only time out and burn an attempt, so it is not sent (free defer —
-# the background lanes take it; a tick lane never can)
-_LONG_MIN_CALL_S = 400.0
+# a long-ceiling call measured ~320 s alone (2026-10-01) and 587 s on
+# 2026-10-10: with less budget it would only time out and burn an
+# attempt, so it is not sent (free defer — the background lanes take it;
+# a tick lane never can)
+_LONG_MIN_CALL_S = 620.0
 
 
 def _long_key(model: str, prompt: str) -> str:

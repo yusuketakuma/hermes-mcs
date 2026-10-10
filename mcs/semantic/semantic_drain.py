@@ -648,6 +648,12 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     pid, root = job["project_id"], job["message_id"]
     token = runtime.JobToken.from_row(job)
     deadline = runtime.job_deadline(scfg, deadline)
+    # Stages and their result guards keep the job deadline. In the backlog
+    # lane every unlocked transport (local model and Jev) must end a commit
+    # reserve earlier, so its result can wait out a tick's hold on the run
+    # lock and still be written in time.
+    transport_deadline = deadline - (_backlog_commit_reserve(scfg)
+                                     if lane == "backlog" else 0.0)
     pl = loads_dict(job["payload"])
     if pl is None:
         return "failed"
@@ -703,11 +709,13 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     # through the same identity check.  A real Jev client additionally gets
     # a hook before each internal retry attempt and a durable reservation
     # immediately before the POST.
-    jev_client, _ = runtime.bind_jev(jev_client, guard, reserve_fn)
+    jev_client, _ = runtime.bind_jev(
+        jev_client, guard, reserve_fn,
+        cutoff=transport_deadline if lane == "backlog" else None)
     llm_fn = runtime.guarded_llm(
         # a backlog worker owns its slot: one long-output call may use the
-        # job deadline instead of burning 600 s per attempt (2026-10-10)
-        llm_fn, guard, deadline,
+        # transport deadline instead of burning 600 s per attempt (2026-10-10)
+        llm_fn, guard, transport_deadline,
         timeout_cap=None if lane == "backlog" else semantic.LLM_TIMEOUT,
         # one long canonical generation (~300 s) or two thirds of the
         # per-job budget, whichever is smaller — a follow-up call that
@@ -1541,6 +1549,22 @@ _BACKLOG_INVALIDATE_S = 300.0
 # job untouched and exiting the resident (2026-10-09). Outwait a full
 # tick instead — never past the pass deadline run_due was given.
 RUN_LOCK_REACQUIRE_S = 660.0
+# A tick holds the run lock for up to ~520 s (2026-10-10: run 4380 held it
+# 518 s). Backlog work stops this long before the job deadline, so a
+# result can wait out a tick and still be written in time — never after.
+BACKLOG_COMMIT_RESERVE_S = 540.0
+# what a resumed pass may spend before its first (long-output) call
+_LONG_START_S = 60.0
+
+
+def _backlog_commit_reserve(scfg: dict) -> float:
+    """The commit reserve the job budget affords while a long-output call
+    still fits the work window: full from a ~1220 s budget, partial below
+    (220 s at 900 s), never squeezing the long call out."""
+    import semantic
+    budget = float(scfg["job_budget_seconds"])
+    return min(BACKLOG_COMMIT_RESERVE_S,
+               max(0.0, budget - semantic._LONG_MIN_CALL_S - _LONG_START_S))
 # kind this resident backlog worker served last (in-process; a restart
 # simply starts with semantic again)
 _BACKLOG_TURN = {"kind": None}
@@ -1844,6 +1868,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 floor = deadline - (15.0 if job["kind"] == QC_JOB_KIND else
                                     min(runtime.LLM_CALL_RESERVE_S,
                                         float(scfg["job_budget_seconds"]) * 2 / 3))
+                if lane == "backlog":
+                    floor -= _backlog_commit_reserve(scfg)
                 if time.monotonic() > floor:
                     out["floor_skipped"][job["kind"]] = \
                         out["floor_skipped"].get(job["kind"], 0) + 1

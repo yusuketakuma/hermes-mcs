@@ -508,6 +508,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `semantic.project_ids` | list[int] | — | 対象プロジェクトID（mode が off 以外では必須） |
 | `semantic.extract_qc` | choice | `off` | `annotate`=抽出結果への Jev 監査注記 |
 | `semantic.daily_request_budget` | int | 既定 | Jev 呼出の1日上限 |
+| `semantic.job_budget_seconds` | num | 既定 | 意味解析の1ジョブの時間予算・秒（5〜1260）。バックログでは1220以上で、通信後に実行ロックを取り直す余裕540秒を全量確保 |
 | `update.mode` | choice | `off` | `off`/`notify`/`auto` — 自己更新ポリシー |
 | `update.auto_delay_h` | num | — | auto 時の適用遅延（0=検出次第即適用） |
 | `update.include_prerelease` | bool | `false` | プレリリースを更新対象に含める |

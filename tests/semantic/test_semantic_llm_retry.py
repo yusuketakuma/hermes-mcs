@@ -453,12 +453,12 @@ def test_remembered_long_output_format_retry_rechecks_remaining_budget(
 
     monkeypatch.setattr(local_llm, "chat", chat)
     # every format refusal, 400 included, is retryable — never prompt_rejected
-    out = semantic.llm_chat("synthetic", timeout=450)
+    out = semantic.llm_chat("synthetic", timeout=670)
     assert len(calls) == expected_calls
     assert out == (None if expected_calls == 1 else '{"facts": []}')
     assert all(c["max_tokens"] == semantic.LLM_LONG_MAX_TOKENS for c in calls)
     if expected_calls == 2:
-        assert calls[1]["timeout"] == 400.0
+        assert calls[1]["timeout"] == 620.0
         assert calls[1]["response_format"] is None
     assert semantic._long_marks()[semantic._long_key(
         semantic.llm_conf()[1], "synthetic")] == 1
@@ -477,7 +477,7 @@ def test_length_stop_retries_once_at_long_ceiling_then_stops_spending(
     assert _ceilings(bodies) == [short, long_]
     assert out == ('{"facts": []}' if long_ok else None)
     bodies.clear()
-    out = semantic.llm_chat("抽出 JSON:", timeout=450)
+    out = semantic.llm_chat("抽出 JSON:", timeout=670)
     if long_ok:
         # remembered: the next attempt starts at the long ceiling
         assert _ceilings(bodies) == [long_]
@@ -500,7 +500,7 @@ def test_length_stop_without_time_left_uses_long_ceiling_next_attempt(
     with pytest.raises(semantic.runtime.LLMNotSent):
         semantic.llm_chat("抽出 JSON:", timeout=300)
     assert len(bodies) == 1
-    assert semantic.llm_chat("抽出 JSON:", timeout=450) == '{"facts": []}'
+    assert semantic.llm_chat("抽出 JSON:", timeout=670) == '{"facts": []}'
     assert _ceilings(bodies)[-1] == semantic.LLM_LONG_MAX_TOKENS
 
 
@@ -569,13 +569,13 @@ def test_format_rejection_plain_survives_worker_restart(monkeypatch, tmp_path):
         return {"status": 200, "text": "{}", "finish_reason": "stop"}
 
     monkeypatch.setattr(local_llm, "chat", chat)
-    assert semantic.llm_chat("synthetic", timeout=450) is None
+    assert semantic.llm_chat("synthetic", timeout=670) is None
     assert len(calls) == 1
     # A separate worker has no in-memory probe result. The durable mark
     # must avoid spending another constrained request on the same server.
     monkeypatch.setattr(semantic, "_FMT_MODE", None)
     monkeypatch.setattr(semantic, "_FMT_TS", 0.0)
-    assert semantic.llm_chat("synthetic", timeout=450) == "{}"
+    assert semantic.llm_chat("synthetic", timeout=670) == "{}"
     assert len(calls) == 2
     assert calls[-1]["response_format"] is None
     assert calls[-1]["max_tokens"] == semantic.LLM_LONG_MAX_TOKENS
@@ -652,8 +652,8 @@ def test_budget_short_format_refusal_retries_plain_on_the_next_attempt(monkeypat
         return {"status": 200, "text": '{"facts": []}', "finish_reason": "stop"}
 
     monkeypatch.setattr(local_llm, "chat", chat)
-    assert semantic.llm_chat("synthetic", timeout=450) is None
-    assert semantic.llm_chat("synthetic", timeout=450) == '{"facts": []}'
+    assert semantic.llm_chat("synthetic", timeout=670) is None
+    assert semantic.llm_chat("synthetic", timeout=670) == '{"facts": []}'
     assert [c["response_format"] for c in calls] == [{"type": "json_object"}, None]
     assert all(c["max_tokens"] == semantic.LLM_LONG_MAX_TOKENS for c in calls)
 
@@ -680,7 +680,7 @@ def test_constrained_long_rejection_is_a_retryable_summary_failure(monkeypatch, 
     try:
         bundle = semantic.thread_bundle(db, 1, 1, [1])
         summary, reason = semantic.summarize(
-            lambda prompt: semantic.llm_chat(prompt, timeout=450),
+            lambda prompt: semantic.llm_chat(prompt, timeout=670),
             bundle, 1, [], {}, return_reason=True)
         # a json_object refusal is not an oversize prompt: no terminal stub
         assert summary is None
@@ -710,7 +710,7 @@ def test_format_persistence_time_is_charged_to_retry_budget(monkeypatch, tmp_pat
 
     monkeypatch.setattr(local_llm, "chat", chat)
     monkeypatch.setattr(semantic, "_remember_plain", remember)
-    assert semantic.llm_chat("synthetic", timeout=450) is None
+    assert semantic.llm_chat("synthetic", timeout=670) is None
     assert len(calls) == 1  # 399s, not the pre-persistence 400s
 
 
