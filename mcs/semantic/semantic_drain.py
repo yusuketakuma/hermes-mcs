@@ -334,6 +334,8 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                                         v2_result.get("dropped_in_failed_chunk"),
                                     "dropped_reasons":
                                         v2_result.get("dropped_reasons"),
+                                    "null_contexts_omitted":
+                                        v2_result.get("null_contexts_omitted"),
                                     "chunks_completed":
                                         v2_result["chunks_completed"],
                                     "chunks_total":
@@ -357,7 +359,10 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                         "open_obligations": len(
                             v2_doc["coverage"]
                             ["open_obligation_ids"]),
-                        "build": FACTS_V2_BUILD}
+                        "build": FACTS_V2_BUILD,
+                        # newly normalised this run (reused chunks excluded)
+                        "null_contexts_omitted":
+                            v2_result.get("null_contexts_omitted", 0)}
                 if coverage_retry or spent:
                     # the bounded retry already ran — a still-incomplete
                     # doc is flagged for human review and never

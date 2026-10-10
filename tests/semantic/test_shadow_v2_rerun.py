@@ -7,7 +7,7 @@ import pytest
 import semantic
 import semantic_drain
 import semantic_extraction
-from semantic_testkit import NO_FACTS, _FakeJev, _cfg, _llm, _llm_v2, _seeded
+from semantic_testkit import NO_FACTS, _FakeJev, _cfg, _llm, _llm_v2, _seeded, _seeded_two
 
 
 def _incomplete_v2(prompt):
@@ -232,6 +232,77 @@ def test_the_receipt_says_which_model_stop_it_was(tmp_path, monkeypatch, llm, fa
                                 and r["llm_failure"] == failure
                                 and r["dropped_in_failed_chunk"] == dropped
                                 and r["dropped_reasons"] == reasons
+                                for r in receipts)
+    finally:
+        db.close()
+
+
+def _with_context(value):
+    """The synthetic v2 documents with every fact carrying patient_context=value."""
+    def llm(prompt):
+        if "原子事実抽出器" not in prompt:
+            return _llm(prompt)
+        doc = json.loads(_llm_v2(prompt))
+        for fact in doc["facts"]:
+            fact["patient_context"] = value
+        return json.dumps(doc, ensure_ascii=False)
+    return llm
+
+
+def test_a_null_patient_context_is_left_out_not_a_failed_chunk(tmp_path):
+    db = _seeded_two(tmp_path)    # bodies the v2 stub returns facts for
+    try:
+        _passes(db, _with_context(None), configs=({},))
+        assert _receipts(db) == []
+        rows = db.db.execute("SELECT content, meta FROM artifacts "
+                             "WHERE kind='semantic_facts_v2'").fetchall()
+        assert rows
+        for content, meta in rows:
+            facts = json.loads(content)["facts"]
+            assert facts and all("patient_context" not in f for f in facts)
+            # the stub's one LLM fact per body; hint facts are not LLM output
+            assert json.loads(meta)["null_contexts_omitted"] == 1
+    finally:
+        db.close()
+
+
+def test_a_null_beside_an_invalid_context_is_counted_apart(tmp_path):
+    def mixed(prompt):
+        if "原子事実抽出器" not in prompt:
+            return _llm(prompt)
+        doc = json.loads(_llm_v2(prompt))
+        if doc["facts"]:
+            null_fact = dict(doc["facts"][0], patient_context=None)
+            bad_fact = dict(doc["facts"][0], patient_context=[],
+                            statement=doc["facts"][0]["statement"] + "（合成）")
+            doc["facts"] = [null_fact, bad_fact]
+        return json.dumps(doc, ensure_ascii=False)
+
+    db = _seeded_two(tmp_path)
+    try:
+        _passes(db, mixed, configs=({},))
+        receipts = [json.loads(r[0]) for r in _receipts(db)]
+        assert receipts and all(r["null_contexts_omitted"] >= 1
+                                and r["dropped_reasons"] == {"context_shape": 1}
+                                and sum(r["dropped_reasons"].values())
+                                == r["dropped_in_failed_chunk"]
+                                for r in receipts)
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("value,reason", [
+    ([], "context_shape"), ("", "context_shape"), ({}, "context_ungrounded"),
+])
+def test_only_null_is_left_out(tmp_path, value, reason):
+    """Empty but non-null values still fail the chunk as before."""
+    db = _seeded_two(tmp_path)    # bodies the v2 stub returns facts for
+    try:
+        _passes(db, _with_context(value), configs=({},))
+        receipts = [json.loads(r[0]) for r in _receipts(db)]
+        assert receipts and all(r["dropped_in_failed_chunk"] > 0
+                                and set(r["dropped_reasons"]) == {reason}
+                                and r["null_contexts_omitted"] == 0
                                 for r in receipts)
     finally:
         db.close()

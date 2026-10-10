@@ -851,14 +851,16 @@ def _normalise_facts_v2(items: list, member: dict, source: str, semantic,
                         *, spec: dict, manifest: dict,
                         atom_owner: dict, obligations: dict,
                         provenance: str = "local_llm",
-                        drop_reasons: dict | None = None) -> tuple[list, int]:
+                        drop_reasons: dict | None = None,
+                        omitted: dict | None = None) -> tuple[list, int]:
     """Model items -> contract facts for one chunk.
 
     ``kind``/``statement`` are identity: malformed values drop the item
     and fail the chunk.  Quality enums degrade to ``unknown`` rather than
     destroying the fact.  ``obligations`` maps (chunk_id, category) to
     the obligation row being accumulated so fact links land on it.
-    ``drop_reasons`` (optional) counts each drop by a fixed code.
+    ``drop_reasons`` (optional) counts each drop by a fixed code;
+    ``omitted`` (optional) counts optional fields left out, never drops.
     """
     facts = []
     dropped = 0
@@ -952,7 +954,12 @@ def _normalise_facts_v2(items: list, member: dict, source: str, semantic,
             fact["action"] = _enum_or_unknown(item.get("action"),
                                               sf.MED_ACTIONS)
         fact.update(sf.request_details(item, [ev_rec["quote"]] if ev_rec else []))
-        if "patient_context" in item:
+        if "patient_context" in item and item["patient_context"] is None:
+            # an explicit JSON null claims nothing: the same as leaving the
+            # optional field out (the prompt asks to omit it), not a defect
+            if omitted is not None:
+                omitted["context_null"] = omitted.get("context_null", 0) + 1
+        elif "patient_context" in item:
             raw = item["patient_context"]
             if isinstance(raw, dict) and not set(raw) - {"category", "text", "details"} and ev_rec:
                 candidate = {**raw, "evidence": ev_rec["quote"], "subject": sf.context_subject(subject)}
@@ -1152,6 +1159,7 @@ def extract_facts_v2(llm_fn, member: dict,
     failed_dropped = 0
     failure_reason = None
     drop_reasons: dict = {}
+    omitted: dict = {}
     model = semantic.llm_model()
 
     for spec in specs:
@@ -1207,7 +1215,8 @@ def extract_facts_v2(llm_fn, member: dict,
         chunk_facts, chunk_dropped = _normalise_facts_v2(
             items, member, source, semantic, spec=spec,
             manifest=manifest, atom_owner=atom_owner,
-            obligations=obligations, drop_reasons=drop_reasons)
+            obligations=obligations, drop_reasons=drop_reasons,
+            omitted=omitted)
         if chunk_dropped:
             # A failed chunk must not leave fact links on obligations for
             # facts that never enter the document.
@@ -1358,6 +1367,7 @@ def extract_facts_v2(llm_fn, member: dict,
         **_chunk_progress(specs, completed, reused, failed,
                           failure_reason, failed_dropped, source_fp),
         "dropped_reasons": drop_reasons,     # the failed chunk's, by code
+        "null_contexts_omitted": omitted.get("context_null", 0),
         **({"generation": generation} if request_following else {}),
     }
 
