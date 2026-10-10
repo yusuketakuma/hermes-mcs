@@ -122,6 +122,62 @@ def _validate_usage(raw) -> dict:
     return usage
 
 
+def _validate_answer(qid: str, q: dict, a) -> dict:
+    """One answer of a validated response, or JevError("{qid}:<reason>")."""
+    if not isinstance(a, dict):
+        raise JevError("protocol_error", f"{qid}:not_object")
+    qtype = q.get("type")
+    if a.get("type") != qtype:
+        raise JevError("protocol_error", f"{qid}:type_invalid")
+    if qtype == "noul":
+        noul = _finite(a.get("noul"))
+        if noul is None or not 0.0 <= noul <= 1.0:
+            raise JevError("protocol_error", f"{qid}:noul_invalid")
+        return {"type": "noul", "noul": noul}
+    elif qtype == "choice":
+        options = set(q.get("criteria") or {})
+        choice = a.get("choice")
+        if not isinstance(choice, str) or choice not in options:
+            raise JevError("protocol_error", f"{qid}:choice_invalid")
+        conf = _finite(a.get("confidence"))
+        if conf is None or not 0.0 <= conf <= 1.0:
+            raise JevError("protocol_error", f"{qid}:confidence_invalid")
+        dist = a.get("probabilities")
+        if not isinstance(dist, dict):
+            raise JevError("protocol_error", f"{qid}:probabilities_missing")
+        # one fixed code per broken rule (2026-10-10: a single code could
+        # not tell a Jev defect from a too-strict check); same rules
+        probs = {}
+        for k, v in dist.items():
+            p = _finite(v)
+            if k not in options:
+                reason = "probabilities_option_unknown"
+            elif p is None or not 0.0 <= p <= 1.0:
+                reason = "probabilities_value_invalid"
+            else:
+                probs[k] = p
+                continue
+            raise JevError("protocol_error", f"{qid}:{reason}")
+        if set(probs) != options:
+            reason = "probabilities_option_missing"
+        elif abs(sum(probs.values()) - 1.0) > 1e-6:
+            # the size of the gap helps investigate rounding vs. an unnormalised
+            # distribution; a fixed bin, never the value
+            reason = ("probabilities_sum_off_lt_1e-3"
+                      if abs(sum(probs.values()) - 1.0) < 1e-3
+                      else "probabilities_sum_off_ge_1e-3")
+        elif probs[choice] < max(probs.values()):
+            reason = "probabilities_choice_not_max"
+        else:
+            reason = None
+        if reason is not None:
+            raise JevError("protocol_error", f"{qid}:{reason}")
+        return {"type": "choice", "choice": choice,
+                "confidence": conf, "distribution": probs}
+    else:
+        raise JevError("protocol_error", f"{qid}:unknown_type")
+
+
 def validate_answers(raw: dict, questions: dict, model: str) -> dict:
     """Strict response validation. Returns {"answers": {qid: parsed},
     "model": str}. Raises JevError(protocol_error|model_mismatch).
@@ -144,61 +200,19 @@ def validate_answers(raw: dict, questions: dict, model: str) -> dict:
     if got != want:
         raise JevError("protocol_error",
                        "answers_missing" if want - got else "answers_extra")
-    out = {}
+    out, failed, first = {}, [], None
     for qid, q in questions.items():
-        a = answers[qid]
-        if not isinstance(a, dict):
-            raise JevError("protocol_error", f"{qid}:not_object")
-        qtype = q.get("type")
-        if a.get("type") != qtype:
-            raise JevError("protocol_error", f"{qid}:type_invalid")
-        if qtype == "noul":
-            noul = _finite(a.get("noul"))
-            if noul is None or not 0.0 <= noul <= 1.0:
-                raise JevError("protocol_error", f"{qid}:noul_invalid")
-            out[qid] = {"type": "noul", "noul": noul}
-        elif qtype == "choice":
-            options = set(q.get("criteria") or {})
-            choice = a.get("choice")
-            if not isinstance(choice, str) or choice not in options:
-                raise JevError("protocol_error", f"{qid}:choice_invalid")
-            conf = _finite(a.get("confidence"))
-            if conf is None or not 0.0 <= conf <= 1.0:
-                raise JevError("protocol_error", f"{qid}:confidence_invalid")
-            dist = a.get("probabilities")
-            if not isinstance(dist, dict):
-                raise JevError("protocol_error", f"{qid}:probabilities_missing")
-            # one fixed code per broken rule (2026-10-10: a single code could
-            # not tell a Jev defect from a too-strict check); same rules
-            probs = {}
-            for k, v in dist.items():
-                p = _finite(v)
-                if k not in options:
-                    reason = "probabilities_option_unknown"
-                elif p is None or not 0.0 <= p <= 1.0:
-                    reason = "probabilities_value_invalid"
-                else:
-                    probs[k] = p
-                    continue
-                raise JevError("protocol_error", f"{qid}:{reason}")
-            if set(probs) != options:
-                reason = "probabilities_option_missing"
-            elif abs(sum(probs.values()) - 1.0) > 1e-6:
-                # the size of the gap helps investigate rounding vs. an unnormalised
-                # distribution; a fixed bin, never the value
-                reason = ("probabilities_sum_off_lt_1e-3"
-                          if abs(sum(probs.values()) - 1.0) < 1e-3
-                          else "probabilities_sum_off_ge_1e-3")
-            elif probs[choice] < max(probs.values()):
-                reason = "probabilities_choice_not_max"
-            else:
-                reason = None
-            if reason is not None:
-                raise JevError("protocol_error", f"{qid}:{reason}")
-            out[qid] = {"type": "choice", "choice": choice,
-                        "confidence": conf, "distribution": probs}
-        else:
-            raise JevError("protocol_error", f"{qid}:unknown_type")
+        try:
+            out[qid] = _validate_answer(qid, q, answers[qid])
+        except JevError as error:
+            failed.append(qid)
+            first = first or error
+    if first is not None:
+        # The first defect is reported as before; the response's other
+        # answers passed the same checks, so a caller may keep them and ask
+        # only the failed questions again (evaluate_once_more).
+        first.answers, first.failed = out, failed
+        raise first
     result = {"answers": out, "model": got_model}
     if usage is not None:
         result["usage"] = usage
@@ -218,13 +232,20 @@ def evaluate_once_more(client, state: dict, questions: dict,
     malformed answer — often transient (2026-10-10: medication-detail
     rejections cleared on the job's retry), where retrying the job costs a
     whole pass and an attempt. Any other failure, a second defect and the
-    runtime guards on the second send propagate as before."""
+    runtime guards on the second send propagate as before. When the
+    response's other answers were valid, only the failed questions are
+    asked again and the valid answers are kept."""
     try:
         return client.evaluate(state, questions, deadline)
     except JevError as error:
         if not is_answer_defect(error):
             raise
-    return client.evaluate(state, questions, deadline)
+        kept = getattr(error, "answers", None)
+        failed = getattr(error, "failed", None)
+    if not (kept and failed):
+        return client.evaluate(state, questions, deadline)
+    again = client.evaluate(state, {q: questions[q] for q in failed}, deadline)
+    return {**again, "answers": {**kept, **again["answers"]}}
 
 
 def verdict_for(noul: float, match: float = MATCH_THRESHOLD,
