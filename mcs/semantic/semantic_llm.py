@@ -241,7 +241,7 @@ def _oversize_stub(bundle: dict, target_id: int) -> dict:
 def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
               verdicts: dict, feedback: list | None = None,
               deadline: float | None = None,
-              return_reason: bool = False):
+              return_reason: bool = False, *, error_out: dict | None = None):
     """Local-LLM summary in the common Claim schema. Jev verdicts are
     context for the writer, never forced truth (§15.3). The FULL target
     body and thread context are passed untruncated; if the prompt would
@@ -251,9 +251,15 @@ def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
 
     ``return_reason=True`` preserves the normal result while identifying a
     deadline/resource wait versus an unsuccessful model response.  Existing
-    callers keep the original ``dict | None`` return shape by default."""
+    callers keep the original ``dict | None`` return shape by default.
+    ``error_out`` receives a fixed validation code, never response content."""
 
-    def result(value, reason: str | None = None):
+    if error_out is not None:
+        error_out.pop("code", None)
+
+    def result(value, reason: str | None = None, validation_code=None):
+        if error_out is not None and validation_code is not None:
+            error_out["code"] = validation_code
         return (value, reason) if return_reason else value
 
     target = next((m for m in bundle["members"]
@@ -287,19 +293,19 @@ def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
         return result(None, "deadline")
     raw = _json_block(response or "")
     if raw is None:
-        return result(None, "model")
+        return result(None, "model", "json_object_invalid")
     claims_in = raw.get("claims")
     if not isinstance(claims_in, list):
-        return result(None, "model")
+        return result(None, "model", "claims_not_list")
     claims = []
     for i, c in enumerate(claims_in):
         if not isinstance(c, dict):
-            return result(None, "model")
+            return result(None, "model", "claim_not_object")
         text, section = c.get("text"), c.get("section")
         kind = c.get("claim_kind", "reported_fact")
         refs = c.get("fact_refs")
         if not isinstance(text, str) or not text.strip():
-            return result(None, "model")
+            return result(None, "model", "claim_text_invalid")
         if section not in CLAIM_SECTIONS:
             section = "other"
         if kind not in CLAIM_KINDS:
@@ -326,7 +332,7 @@ def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
         limitations = []
     if not isinstance(limitations, list) \
             or any(not isinstance(x, str) for x in limitations):
-        return result(None, "model")
+        return result(None, "model", "limitations_invalid")
     attachment_count = sum(len(m.get("attachments", [])) for m in bundle["members"])
     if attachment_count:
         limitations.append(f"対象投稿・文脈に添付{attachment_count}件があります。添付内容は解析していません。")

@@ -884,6 +884,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             incomplete = True
             break
         summary_reason = None
+        summary_error = {}
         if existing is not None:
             summary = existing["content"]
             if existing["meta"].get("input_oversize"):
@@ -896,7 +897,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 try:
                     summary, summary_reason = summarize(
                         llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
-                        deadline=deadline, return_reason=True)
+                        deadline=deadline, return_reason=True,
+                        error_out=summary_error)
                 except (runtime.LLMNotSent, runtime.RuntimeBudget) as e:
                     # the local model never got (or ran out of budget
                     # for) this target's request: stop here like any
@@ -906,6 +908,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     summary, summary_reason = None, "not_sent"
         if summary is None:
             _why(f"summary_{summary_reason}")
+            if _PASS_REASON.get("summary_validation_error") is None:
+                _PASS_REASON["summary_validation_error"] = summary_error.get("code")
             # same dedup as the assess wait-state above: a persistent
             # local-LLM outage defers without stacking identical
             # PENDING rows on every drain
@@ -1800,6 +1804,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 timed_llm, llm_acc = _timed_llm(llm_fn)
                 art0 = _last_stage_artifact(ledger, job["project_id"])
                 _PASS_REASON["code"] = None
+                _PASS_REASON["summary_validation_error"] = None
                 try:
                     if job["kind"] == QC_JOB_KIND:
                         status = _process_qc_job(
@@ -1882,6 +1887,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     "llm_error": semantic.last_llm_failure()
                     if status not in (None, "done") and llm_s > 0 else None,
                     "retry_reason": _PASS_REASON["code"]
+                    if status != "done" else None,
+                    "summary_validation_error": _PASS_REASON["summary_validation_error"]
                     if status != "done" else None,
                 })
                 if status == "done":

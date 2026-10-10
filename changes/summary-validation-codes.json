@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "要約の出力が受け入れられなかった箇所を確認可能にする",
+  "summary": "意味解析の再試行理由が summary_model の場合、JSON・claims・claim本文・limitations のどこで要約の検証に失敗したかを、固定のコードで実行記録に残します。生成内容や原文をログへ保存せず、失敗原因を調べられます。",
+  "upgrade": "更新後に抽出worker2本（Hermesでは ai.mcs.extract-drainer / -2、独立モードでは host）を再起動してください。gateway・設定の変更は不要です。要約の受入基準、モデル、取得範囲、予算、試行回数、人承認の条件は変更しません。",
+  "details": [
+    "既存の summary_model 分類と戻り値を保持し、job_metrics に summary_validation_error を追加する。",
+    "コードは5種類の検証箇所だけを表し、応答本文・動的なキー名・入力値は含めない。完了・別ジョブへ理由が混ざらない。",
+    "完全合成の回帰で各拒否条件、正常応答、既存の失敗契約、後続QCへの理由持越し防止を検証する。"
+  ],
+  "refs": ["mcs/semantic/semantic_llm.py", "mcs/semantic/semantic_drain.py", "tests/semantic/test_summary_validation_diagnostics.py"]
+}
