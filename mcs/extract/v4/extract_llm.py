@@ -1505,12 +1505,13 @@ def _llm_call(prompt: str, deadline: float | None = None,
                 request_fn=_opener_request, error_out=err_out)
         if response is None and (err_out.get("kind") == "unreachable"
                                  or (deadline is not None
-                                     and time.monotonic() >= deadline)):
-            # Connection refused — the server is down/starting, so the
-            # call never happened and consumed nothing. Defer like a
-            # deadline expiry instead of burning a retry attempt on
-            # every selected message (a llama restart or reboot used to
-            # stampede attempts on whole batches).
+                                     and time.monotonic() >= deadline)) \
+                or response is not None and response.get("status") == 503:
+            # Connection refused or 503 (still loading the model) — the
+            # server is down/starting, so the call did no work and
+            # consumed nothing. Defer like a deadline expiry instead of
+            # burning a retry attempt on every selected message (a llama
+            # restart or reboot used to stampede attempts on whole batches).
             return _DEFERRED
         status = response.get("status") if response else None
         # 4xx rejects THE REQUEST — walk down one rung and retry; the

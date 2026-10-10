@@ -138,7 +138,8 @@ def llm_model(cfg: dict | None = None) -> str:
 # load decode runs ~3-5 t/s — a single call was measured at 322s
 # (2026-09-27), so anything below ~450 still turns legitimate v2
 # documents into retrying "model" failures.  The drain also uses this
-# constant as its per-call timeout_cap.
+# constant as its per-call timeout_cap, except in the backlog lane, where
+# a call is bounded by the job deadline instead.
 LLM_TIMEOUT = 600
 
 # v2 fact documents (facts + evidence + category_presence) and v4
@@ -241,7 +242,7 @@ _LONG_PATH = os.path.join(HOME, "data", "semantic_long_output.json")
 _LONG_MAX = 500
 # a long-ceiling call measured ~320 s alone: with less budget it would
 # only time out and burn an attempt, so it is not sent (free defer —
-# the 450 s background lanes take it; a tick lane never can)
+# the background lanes take it; a tick lane never can)
 _LONG_MIN_CALL_S = 400.0
 
 
@@ -383,6 +384,11 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
     if response is None and err_out.get("kind") == "unreachable":
         _failed("unreachable")
         raise runtime.LLMNotSent("llm_unreachable")
+    if response is not None and response.get("status") == 503:
+        # llama-server answers 503 while it is still loading the model
+        # (daily restart): no work was done, so defer like a refused connection
+        _failed("unavailable")
+        raise runtime.LLMNotSent("llm_unavailable")
     if response is not None and response.get("status") == 400:
         # the server definitively rejected the request (context
         # oversize under a fixed slot, or a malformed body) — retrying

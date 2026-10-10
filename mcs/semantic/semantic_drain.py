@@ -62,13 +62,15 @@ def _jev_failure_class(error) -> str:
 
     ``resource`` means no external request should be counted as a failed
     input (daily cap, missing key, or exhausted job budget).  All other Jev
-    retryable failures use finite job retries; permanent failures stop the
-    generation until explicitly reseeded.
+    retryable failures use finite job retries, as does one malformed
+    answer (``_malformed_answer``) at every evaluation site; permanent
+    failures stop the generation until explicitly reseeded.
     """
     if getattr(error, "kind", "") in {"budget_exceeded", "no_api_key",
                                       "payment_required"}:
         return "resource"
-    return "retry" if getattr(error, "retryable", False) else "failed"
+    return "retry" if getattr(error, "retryable", False) \
+        or _malformed_answer(error) else "failed"
 
 
 def _jev_fail_flag(error) -> str | None:
@@ -586,7 +588,7 @@ def _publish_v4(ledger, pid: int, mid: int, fp: str, policy: str,
 def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                        cfg_path: str | None = None,
                        config_generation: str | None = None,
-                       reserve_fn=None) -> str:
+                       reserve_fn=None, lane: str | None = None) -> str:
     """One semantic job -> durable artifacts + job state transition.
     Returns 'done'|'deferred'|'retry'|'failed'."""
     import semantic
@@ -650,7 +652,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     # immediately before the POST.
     jev_client, _ = runtime.bind_jev(jev_client, guard, reserve_fn)
     llm_fn = runtime.guarded_llm(
-        llm_fn, guard, deadline, timeout_cap=semantic.LLM_TIMEOUT,
+        # a backlog worker owns its slot: one long-output call may use the
+        # job deadline instead of burning 600 s per attempt (2026-10-10)
+        llm_fn, guard, deadline,
+        timeout_cap=None if lane == "backlog" else semantic.LLM_TIMEOUT,
         # one long canonical generation (~300 s) or two thirds of the
         # per-job budget, whichever is smaller — a follow-up call that
         # cannot fit defers the pass instead of overrunning it
@@ -788,8 +793,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         if not event_details["complete"] and event_details["failure_reason"] != "invalid":
             incomplete = True
             error = getattr(jev_client, "last_error", None)
-            if error is not None and _jev_failure_class(error) == "failed" \
-                    and not _malformed_answer(error):
+            if error is not None and _jev_failure_class(error) == "failed":
                 hard_fail = True
             elif event_details["failure_reason"] != "deadline" and (
                     error is None or _jev_failure_class(error) != "resource"):
@@ -816,8 +820,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             if not coverage["evaluated"]:
                 incomplete = True
                 error = getattr(jev_client, "last_error", None)
-                if error is not None and _jev_failure_class(error) == "failed" \
-                        and not _malformed_answer(error):
+                if error is not None and _jev_failure_class(error) == "failed":
                     hard_fail = True
                 elif (error is not None and _jev_failure_class(error) == "retry"
                       or coverage.get("failure_reason") == "model"):
@@ -1177,7 +1180,7 @@ NOT_SENT_BACKOFF_S = 3600
 def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                  cfg_path: str | None = None,
                  config_generation: str | None = None,
-                 reserve_fn=None) -> str:
+                 reserve_fn=None, lane: str | None = None) -> str:
     """Preserve stale workers while bounding timeouts after dispatched work."""
     requests_before = jev_client.requests_made if jev_client is not None else 0
     llm_started = False
@@ -1196,7 +1199,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
         status = _process_job_inner(
             ledger, scfg, job, jev_client, tracked_llm, deadline,
             cfg_path=cfg_path, config_generation=config_generation,
-            reserve_fn=reserve_fn)
+            reserve_fn=reserve_fn, lane=lane)
         from extraction_refresh import refresh_extraction_cards
         refresh_extraction_cards(ledger, job["project_id"], job["message_id"])
         return status
@@ -1427,6 +1430,9 @@ _BACKLOG_INVALIDATE_S = 300.0
 # job untouched and exiting the resident (2026-10-09). Outwait a full
 # tick instead — never past the pass deadline run_due was given.
 RUN_LOCK_REACQUIRE_S = 660.0
+# kind this resident backlog worker served last (in-process; a restart
+# simply starts with semantic again)
+_BACKLOG_TURN = {"kind": None}
 _JOB_LOCK_BUCKETS = 1024
 _invalidated_at: float | None = None
 
@@ -1621,14 +1627,23 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                         "COALESCE(json_extract(payload,'$.eligible'),0)=1")
             # Fresh arrivals use realtime. Background workers may also finish
             # older arrival-seeded jobs; a per-job flock excludes double work.
-            where = f"AND kind=? AND {eligible}" if lane == "realtime" else ""
-            params = (JOB_KIND,) if lane == "realtime" else ()
-            order = "updated_at DESC, job_id DESC" if lane == "realtime" else "job_id"
-            rows = ledger.db.execute(
-                f"SELECT * FROM fetch_jobs WHERE state='pending' AND next_try<=? "
-                f"AND kind IN ({','.join('?' * len(kinds))}) {where} "
-                f"ORDER BY {order} LIMIT ?",
-                (time.time(), *kinds, *params, max_jobs + 8)).fetchall()
+            if lane == "realtime":
+                rows = ledger.db.execute(
+                    f"SELECT * FROM fetch_jobs WHERE state='pending' AND next_try<=? "
+                    f"AND kind=? AND {eligible} "
+                    f"ORDER BY updated_at DESC, job_id DESC LIMIT ?",
+                    (time.time(), JOB_KIND, max_jobs + 8)).fetchall()
+            else:
+                # Re-extraction re-pends QC rows under their old (low) job_id;
+                # one job_id order let them win every pass and no semantic job
+                # ran for hours (2026-10-10). Each kind keeps oldest-first, and
+                # the kind this worker served last goes second.
+                rows = [row for kind in sorted(
+                            kinds, key=lambda k: k == _BACKLOG_TURN["kind"])
+                        for row in ledger.db.execute(
+                            "SELECT * FROM fetch_jobs WHERE state='pending' "
+                            "AND next_try<=? AND kind=? ORDER BY job_id LIMIT ?",
+                            (time.time(), kind, max_jobs + 8)).fetchall()]
             # Include extra candidates so another worker's current job cannot
             # hide the next runnable item. Work remains bounded by max_jobs.
             qc_jobs = [j for j in rows if j['kind'] == QC_JOB_KIND]
@@ -1743,6 +1758,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 # fairness counters count jobs that were actually served, not
                 # selections lost to circuit/budget/pause breaks (T14)
                 selected[cohort_of[id(job)]] += 1
+                if lane == "backlog":
+                    _BACKLOG_TURN["kind"] = job["kind"]
                 req0 = jev_client.requests_made if jev_client is not None else 0
                 usage_before = dict(getattr(jev_client, "usage_totals", {}))
                 job_started = time.perf_counter()
@@ -1766,7 +1783,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                             ledger, scfg, job, timed_jev, timed_llm, deadline,
                             cfg_path=cfg_path,
                             config_generation=cfg_generation,
-                            reserve_fn=reserve_fn)
+                            reserve_fn=reserve_fn, lane=lane)
                 except mcs_util.RunLockLost as e:
                     # An updater won the lock in a transport window (or the
                     # bounded reacquire expired). Write nothing: the job

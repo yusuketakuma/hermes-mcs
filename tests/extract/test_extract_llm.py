@@ -1478,6 +1478,21 @@ def test_unreachable_endpoint_defers_not_fails(tmp_path, monkeypatch):
     db.close()
 
 
+def test_loading_server_defers_not_fails(tmp_path, monkeypatch):
+    """A 503 (llama-server still loading after its daily restart) did no
+    work either — defer like a refused connection."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=1, body="本文1")])
+    monkeypatch.setattr(extract_llm, "_probe_format", lambda **kw: "plain")
+    monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+    monkeypatch.setattr(extract_llm.local_llm, "chat", lambda prompt, **kw: {
+        "text": None, "finish_reason": None, "usage": None, "status": 503})
+    res = extract_llm.run_pending(db, limit=10, budget_s=120)
+    assert res["done"] == 0 and res["failed"] == 0
+    assert res["deferred"] == 1
+    db.close()
+
+
 def test_transport_error_still_fails(tmp_path, monkeypatch):
     """A non-refused transport failure (e.g. a timeout that consumed
     real server work) is NOT deferred — it stays on the normal failure

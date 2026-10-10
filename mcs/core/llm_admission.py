@@ -90,8 +90,9 @@ DEFAULT_ROUTES = {
 OCCUPYING = ("reserved", "admitted", "sent", "unknown",
              "cancel_pending")
 TERMINAL = ("terminal", "fenced")
-# Occupancy lease: 3x the longest client timeout (semantic LLM_TIMEOUT
-# 600s). Only combined with a dead owner process is expiry acted on.
+# Occupancy lease: 2x the longest client timeout (a backlog semantic
+# call is bounded by its job budget, at most 900 s). Only combined with
+# a dead owner process is expiry acted on.
 LEASE_S = 1800.0
 # Terminal rows older than this are pruned, a bounded batch per acquire.
 RETENTION_S = 7 * 86400.0

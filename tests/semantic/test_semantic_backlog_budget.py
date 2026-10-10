@@ -240,3 +240,126 @@ def test_llm_chat_records_its_failure_code(monkeypatch, tmp_path, response, code
     # a different prompt: the length mark above binds to the first one
     assert semantic.llm_chat("完全合成の別の本文", timeout=30) == "{\"ok\":1}"
     assert semantic.last_llm_failure() is None
+
+
+@pytest.mark.parametrize("status,code", [(503, "unavailable"), (500, "http_status")])
+def test_a_loading_server_defers_without_an_attempt(monkeypatch, tmp_path, status, code):
+    """2026-10-10 04:03: the daily llama-server restart answered 503
+    (Loading model) and the pass was charged an attempt. A 503 did no
+    work, like a refused connection; other HTTP errors stay failures."""
+    monkeypatch.setattr(semantic, "llm_conf", lambda: ("http://127.0.0.1:8080/v1/chat/completions", "m"))
+    monkeypatch.setattr(semantic, "_probe_format", lambda *a, **k: "plain")
+    monkeypatch.setattr(semantic, "_LONG_PATH", str(tmp_path / "long.json"))
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(local_llm, "chat", lambda *a, **k: {
+        "text": None, "finish_reason": None, "usage": None, "status": status})
+    if status == 503:
+        with pytest.raises(semantic.runtime.LLMNotSent):
+            semantic.llm_chat("完全合成の本文", timeout=30)
+    else:
+        assert semantic.llm_chat("完全合成の本文", timeout=30) is None
+    assert semantic.last_llm_failure() == code
+
+
+@pytest.mark.parametrize("lane,lifted", [("backlog", True), ("realtime", False),
+                                         (None, False)])
+def test_only_the_backlog_lane_lifts_the_per_call_cap(tmp_path, monkeypatch, lane, lifted):
+    """2026-10-10: a long-output call needing more than 600 s burned an
+    attempt every pass. The backlog lane bounds one call by the job deadline
+    (at most job_budget_seconds); realtime, the tick and direct runs keep
+    semantic.LLM_TIMEOUT."""
+    clock = [1000.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    timeouts = []
+
+    def llm(prompt, timeout=None):
+        timeouts.append(timeout)
+        return _llm(prompt)
+
+    db = _seeded(tmp_path)
+    try:
+        if lane == "realtime":
+            with db.db:
+                db.db.execute(
+                    "UPDATE fetch_jobs SET payload=json_set(payload,'$.eligible',1) "
+                    "WHERE kind='semantic'")
+        semantic.run_due(db, _cfg("shadow", job_budget_seconds=900), {"errors": []},
+                         clock[0] + 930, jev_client=_FakeJev(), llm_fn=llm,
+                         lane=lane, max_jobs=1)
+        assert timeouts and timeouts[0] <= 900
+        assert (timeouts[0] > semantic.LLM_TIMEOUT) is lifted
+    finally:
+        db.close()
+
+
+# artifacts built from a local-model result (facts, summary, publication)
+_RESULT_KINDS = ("semantic_facts", "semantic_facts_v2", "semantic_summary",
+                 "semantic_candidate", "canonical_projection", "v4_stage",
+                 "loop_candidate", "notify_plan")
+
+
+def _result_rows(db):
+    marks = ",".join("?" * len(_RESULT_KINDS))
+    return db.db.execute(
+        f"SELECT COUNT(*) FROM artifacts WHERE kind IN ({marks})",
+        _RESULT_KINDS).fetchone()[0]
+
+
+@pytest.mark.parametrize("late", [False, True])
+def test_a_lifted_call_ending_past_the_job_deadline_is_not_saved(tmp_path, monkeypatch, late):
+    """Review condition: a result returning after the 900 s job deadline but
+    inside run_due's 930 s, with the run lock retaken, is still refused by
+    the post-call guard — no artifact built from it — and charges one
+    bounded attempt; lifting the cap never extends the job deadline. The
+    in-time run is the control that the same result is otherwise saved."""
+    clock = [1000.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+
+    def llm(prompt, timeout=None):
+        clock[0] += timeout + 5 if late else 10
+        return _llm(prompt)
+
+    db = _seeded(tmp_path)
+    try:
+        before = _result_rows(db)
+        out = semantic.run_due(db, _cfg("shadow", job_budget_seconds=900),
+                               {"errors": []}, clock[0] + 930,
+                               jev_client=_FakeJev(), llm_fn=llm,
+                               lane="backlog", max_jobs=1)
+        row = db.db.execute(
+            "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
+        if late:
+            assert tuple(row) == ("pending", 1)
+            assert out["job_metrics"][0]["status"] == "retry"
+            assert _result_rows(db) == before
+        else:
+            assert out["job_metrics"][0]["status"] == "done"
+            assert _result_rows(db) > before
+    finally:
+        db.close()
+
+
+def test_a_lifted_call_whose_lock_is_not_retaken_keeps_its_attempt(tmp_path, monkeypatch):
+    """Review condition: when the run lock cannot be retaken after a long
+    call, nothing is written and the attempt count is unchanged (the GPU
+    time and any Jev calls already made are still spent)."""
+    @contextmanager
+    def lost(ledger, lock_fd, wait_s=None, deadline=None):
+        yield
+        raise mcs_util.RunLockLost(held=False)
+
+    monkeypatch.setattr(mcs_util, "unlocked_transport", lost)
+    db = _seeded(tmp_path)
+    try:
+        before = _result_rows(db)
+        out = semantic.run_due(db, _cfg("shadow", job_budget_seconds=900),
+                               {"errors": []}, time.monotonic() + 930,
+                               jev_client=_FakeJev(), llm_fn=_llm,
+                               lane="backlog", max_jobs=1)
+        assert out["run_lock_lost"] == "timeout"
+        row = db.db.execute(
+            "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
+        assert tuple(row) == ("pending", 0)
+        assert _result_rows(db) == before
+    finally:
+        db.close()

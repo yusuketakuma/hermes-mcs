@@ -1758,6 +1758,45 @@ def test_malformed_detail_answer_retries_bounded_instead_of_failing(tmp_path,
     db.close()
 
 
+@pytest.mark.parametrize("code,expected", [
+    ("relation:probabilities_invalid", "retry"),
+    ("status:probabilities_invalid", "retry"),
+    ("has_symptom_state:probabilities_invalid", "retry"),
+    ("claim_0:choice_invalid", "retry"),
+    ("answers_missing", "failed"),
+    ("", "failed")])
+def test_per_answer_defect_retries_at_every_jev_site(code, expected):
+    """2026-10-10: a loop-relation reply with a bad distribution failed
+    its job at once — the 2026-09-30 per-answer rule lived only at the
+    medication-detail and coverage sites. The shared classifier now
+    applies it to fact/claim audit, propositions, loops and QC alike;
+    whole-envelope protocol errors stay terminal."""
+    import semantic_drain
+    error = jev.JevError("protocol_error", code)
+    assert semantic_drain._jev_failure_class(error) == expected
+
+
+def test_malformed_claim_audit_answer_retries_bounded(tmp_path):
+    class ClaimFlaky(_FakeJev):
+        def evaluate(self, state, questions, deadline):
+            for qid, q in questions.items():
+                if q.get("criteria") == jev.CLAIM_SUPPORT_OPTIONS:
+                    self.requests_made += 1
+                    self.last_error = jev.JevError(
+                        "protocol_error", f"{qid}:probabilities_invalid")
+                    raise self.last_error
+            return super().evaluate(state, questions, deadline)
+
+    db = _seeded(tmp_path)
+    fake = ClaimFlaky()
+    semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                     time.monotonic() + 300, jev_client=fake, llm_fn=_llm)
+    job = db.db.execute(
+        "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
+    assert job["state"] == "pending" and job["attempts"] == 1
+    db.close()
+
+
 @pytest.mark.parametrize("replacement_state", ["pending", "failed"])
 def test_revive_preserves_job_changed_after_selection(
         tmp_path, monkeypatch, replacement_state):

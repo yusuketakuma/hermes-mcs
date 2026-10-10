@@ -121,3 +121,32 @@ def test_jev_receipt_is_committed_before_unlocked_transport(tmp_path, monkeypatc
     finally:
         os.close(fd)
         db.close()
+
+
+def test_backlog_alternates_so_reseeded_qc_cannot_starve_semantic(tmp_path, monkeypatch):
+    """2026-10-10: re-extraction re-pends old QC rows under their original
+    (low) job_id; in plain job_id order they won every backlog pass and no
+    semantic job ran for hours. The backlog lane alternates kinds."""
+    db = _seeded(tmp_path)
+    db.db.execute("UPDATE fetch_jobs SET job_id=100 WHERE kind='semantic'")
+    db.db.execute(
+        "INSERT INTO fetch_jobs(job_id,kind,project_id,message_id,payload,"
+        "state,attempts,next_try,created_at,updated_at) "
+        "VALUES (5,'extract_qc',1,1,'{}','pending',0,0,0,0)")
+    db.db.commit()
+    seen = []
+    monkeypatch.setattr(semantic_drain, '_BACKLOG_TURN', {'kind': None})
+    monkeypatch.setattr(semantic_drain, '_qc_seed', lambda *a, **k: 0)
+    # 'stale' leaves both rows pending, as a QC re-pend does
+    monkeypatch.setattr(semantic, '_process_job',
+                        lambda *a, **k: seen.append('semantic') or 'stale')
+    monkeypatch.setattr(semantic_drain, '_process_qc_job',
+                        lambda *a, **k: seen.append('extract_qc') or 'stale')
+    try:
+        for _ in range(3):
+            semantic.run_due(db, _cfg(extract_qc='annotate'), {'errors': []},
+                             time.monotonic() + 480, jev_client=_FakeJev(),
+                             llm_fn=_llm, max_jobs=1, lane='backlog')
+        assert seen == ['semantic', 'extract_qc', 'semantic']
+    finally:
+        db.close()
