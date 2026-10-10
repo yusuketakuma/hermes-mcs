@@ -615,6 +615,8 @@ class View:
         advisory only — promotion to a formal request goes through the
         human-confirmed request path, never automatic (INV-11)."""
         from semantic import thread_bundle
+        import semantic_jev as jev
+        from semantic_loops import _rejected_pair
         from request_loops import valid_origin_evidence
 
         if type(limit) is not int or not 1 <= limit <= 200:
@@ -665,6 +667,7 @@ class View:
             cand["adoption_eligible"] = current and valid_origin_evidence(
                 origin, members.get(r["message_id"]))
             events = []                       # (created_at, event)
+            evaluated_pairs = set()
             for e in self.db.execute(
                     "SELECT content,meta,created_at FROM artifacts "
                     "WHERE kind='loop_event' AND project_id=? "
@@ -681,10 +684,6 @@ class View:
                     continue
                 if not isinstance(ev, dict):
                     continue
-                # 'unrelated' evaluations are recorded for dedup but are
-                # not user-facing relations — hide them
-                if ev.get("relation") == "unrelated":
-                    continue
                 trigger_id = ev.get("trigger_message_id")
                 trigger = members.get(trigger_id) if requests.positive(trigger_id) else None
                 ev["stale"] = not (
@@ -695,11 +694,47 @@ class View:
                     and meta.get("policy_fingerprint") == policy
                     and ev.get("origin_revision") == origin.get("revision")
                     and ev.get("trigger_revision") == trigger["revision"])
+                confidence = jev._finite(ev.get("confidence"))
+                if (not ev["stale"] and confidence is not None
+                        and 0 <= confidence <= 1
+                        and isinstance(ev.get("relation"), str)
+                        and isinstance(ev.get("reported_relation"), str)
+                        and ev.get("relation") in jev.LOOP_RELATION_OPTIONS
+                        and ev.get("reported_relation") in jev.LOOP_RELATION_OPTIONS):
+                    evaluated_pairs.add((trigger_id, ev["trigger_revision"]))
+                if ev.get("relation") == "unrelated":
+                    # Keep unrelated evaluations for dedup, hide them from the display.
+                    continue
                 if ev.get("loop_artifact_id") == r["artifact_id"] or (
                         ev.get("loop_artifact_id") is None
                         and ev.get("loop_origin_id") == r["message_id"]):
                     events.append((e["created_at"], ev))
             cand["relation_events"] = [ev for _, ev in events[:5]]
+            # shortcut: suppression uses the existing 50-event window;
+            # query older matching events if long histories need exact counts.
+            unavailable = set()
+            if current:
+                for rejection in self.db.execute(
+                        "SELECT content,meta FROM artifacts WHERE kind='loop_relation_rejected' "
+                        "AND project_id=? AND CASE WHEN json_valid(content) THEN "
+                        "json_extract(content,'$.loop_artifact_id')=? ELSE 0 END",
+                        (pid, r["artifact_id"])):
+                    receipt, meta = loads_dict(rejection["content"]), loads_dict(rejection["meta"])
+                    if not receipt or not meta or not isinstance(meta.get("retry_scope"), str):
+                        continue
+                    parsed = _rejected_pair(receipt, meta, policy, meta["retry_scope"])
+                    if not parsed or meta.get("fingerprint") != bundle["source_fingerprint"]:
+                        continue
+                    (loop_id, trigger_id, revision), _ = parsed
+                    trigger = members.get(trigger_id)
+                    if (loop_id == r["artifact_id"] and trigger
+                            and revision == trigger["revision"]
+                            and (trigger_id, revision) not in evaluated_pairs):
+                        unavailable.add((trigger_id, revision))
+            cand["relation_evaluation_unavailable"] = len(unavailable)
+            cand["relation_evaluation_notice"] = (
+                f"後続の投稿{len(unavailable)}件について関係評価を取得できませんでした"
+                if unavailable else None)
             # a completion/cancellation report relation promotes the
             # candidate to RESOLUTION_CANDIDATE for display — the stored
             # artifact stays immutable (§17.3). History is derived the
