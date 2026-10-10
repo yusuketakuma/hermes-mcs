@@ -1834,3 +1834,130 @@ def test_revive_preserves_job_changed_after_selection(
         assert out["revived"] == 0
     finally:
         db.close()
+
+
+# ---------- claim audit batching ----------
+# The summary claim audit sends its claims together, up to
+# max_questions_per_request per request. Each question names its claim
+# and the exact evidence entries it may use, so another claim's sources
+# in the same request never widen its scope.
+def _claim_case(n, shared=False):
+    """n synthetic claims, each citing its own post's quote — or all citing
+    one shared quote."""
+    members, facts, claims = [], [], []
+    for i in range(n):
+        body = f"合成の記録{i}です。続きの文があります。"
+        members.append({"message_id": i + 1, "parent_id": None, "revision": 1,
+                        "posted_at": "2026-01-01T00:00:00",
+                        "sender": {"type": "synthetic"}, "body_original": body})
+        ev = "ev_shared" if shared else f"ev_{i}"
+        if not shared or i == 0:
+            facts.append({"_evidence": {"evidence_id": ev, "message_id": i + 1,
+                                        "quote": body[:7], "start_codepoint": 0,
+                                        "end_codepoint": 7}})
+        claims.append({"claim_id": f"claim_1_{i}", "claim_kind": "reported_fact",
+                       "text": f"合成の主張{i}", "evidence_refs": [ev]})
+    return {"members": members}, {"claims": claims, "_facts": facts}
+
+
+class _ClaimCapture(_FakeJev):
+    def __init__(self, fail_on=None, **kw):
+        super().__init__(**kw)
+        self.sent = []
+        self.fail_on = fail_on
+
+    def evaluate(self, state, questions, deadline):
+        self.sent.append((state, questions))
+        if len(self.sent) == self.fail_on:
+            self.requests_made += 1
+            raise jev.JevError("transport", "synthetic", retryable=True)
+        return super().evaluate(state, questions, deadline)
+
+
+def test_claims_share_requests_up_to_the_configured_size():
+    bundle, summary = _claim_case(13)
+    client = _ClaimCapture(choice_map={"claim_1_12": "not_supported"})
+    findings, evaluated = semantic.audit_claims(client, bundle, summary,
+                                             time.monotonic() + 60, 0.7, 12)
+    assert evaluated
+    assert [len(q) for _, q in client.sent] == [12, 1]
+    assert len(summary["_claim_audit"]) == 13
+    assert findings == [{"code": "claim_not_supported", "claim": "claim_1_12",
+                         "confidence": 0.9}]
+
+
+def test_each_question_names_only_its_own_claim_and_evidence():
+    bundle, summary = _claim_case(2)
+    client = _ClaimCapture()
+    semantic.audit_claims(client, bundle, summary, time.monotonic() + 60)
+    [(state, questions)] = client.sent
+    assert state["target"]["claims"] == [{"id": "claim_1_0", "text": "合成の主張0"},
+                                         {"id": "claim_1_1", "text": "合成の主張1"}]
+    assert {e["id"] for e in state["context"]} == {
+        "ev_0", "ev_0_ctx", "ev_0_meta", "ev_1", "ev_1_ctx", "ev_1_meta"}
+    first = questions["claim_1_0"]["instructions"]
+    assert "id claim_1_0 " in first and "entries: ev_0, ev_0_ctx, ev_0_meta)" in first
+    assert "ev_1" not in first
+    assert "合成の主張0" not in first                 # claim text stays data
+
+
+def test_a_shared_source_is_sent_once():
+    bundle, summary = _claim_case(3, shared=True)
+    client = _ClaimCapture()
+    semantic.audit_claims(client, bundle, summary, time.monotonic() + 60)
+    [(state, questions)] = client.sent
+    assert [e["id"] for e in state["context"]] == [
+        "ev_shared", "ev_shared_ctx", "ev_shared_meta"]
+    assert all("entries: ev_shared, ev_shared_ctx, ev_shared_meta)" in q["instructions"]
+               for q in questions.values())
+
+
+def test_a_claim_without_evidence_cites_none():
+    bundle, summary = _claim_case(1)
+    summary["claims"][0]["evidence_refs"] = []
+    client = _ClaimCapture()
+    semantic.audit_claims(client, bundle, summary, time.monotonic() + 60)
+    [(state, questions)] = client.sent
+    assert state["context"] == []
+    assert "(state.context entries: none)" in questions["claim_1_0"]["instructions"]
+
+
+def test_a_failed_request_leaves_the_audit_unevaluated():
+    bundle, summary = _claim_case(3)
+    client = _ClaimCapture(fail_on=2, choice_map={"claim_1_1": "contradicts"})
+    findings, evaluated = semantic.audit_claims(client, bundle, summary,
+                                             time.monotonic() + 60, 0.7, 2)
+    assert not evaluated
+    assert findings == [{"code": "claim_contradicts", "claim": "claim_1_1",
+                         "confidence": 0.9},
+                        {"code": "support_unevaluated", "claim": "claim_1_2"}]
+    assert client.last_error.kind == "transport"
+
+
+@pytest.mark.parametrize("size", [-1, 0, 49, True, 1.5, "12", None])
+def test_an_invalid_request_size_leaves_the_audit_unevaluated(size):
+    bundle, summary = _claim_case(2)
+    client = _ClaimCapture()
+    findings, evaluated = semantic.audit_claims(client, bundle, summary,
+                                                time.monotonic() + 60, 0.7, size)
+    assert (findings, evaluated) == ([{"code": "support_unevaluated"}], False)
+    assert client.sent == []
+
+
+def test_the_drain_passes_the_configured_request_size(tmp_path, monkeypatch):
+    seen = []
+    real = semantic.audit_claims
+
+    def audit_spy(*args):
+        seen.append(args[5])
+        return real(*args)
+
+    monkeypatch.setattr(semantic, "audit_claims", audit_spy)
+    db = _seeded(tmp_path)
+    try:
+        out = semantic.run_due(db, _cfg("shadow", max_questions_per_request=5),
+                               {"errors": []}, time.monotonic() + 300,
+                               jev_client=_FakeJev(), llm_fn=_llm)
+        assert out["done"] == 1 and seen and set(seen) == {5}
+    finally:
+        db.close()
