@@ -834,7 +834,7 @@ def test_format_rejection_cannot_retry_after_budget_expires(monkeypatch, status,
     assert calls[0]["deadline"] == 1004.0
 
 
-@pytest.mark.parametrize("limitations", [0, 1, False, True, "", "synthetic limitation",
+@pytest.mark.parametrize("limitations", [0, 1, False, True,
                                          {}, {"synthetic": "limitation"}, ["valid", 1]])
 def test_summarize_rejects_malformed_limitations(tmp_path, limitations):
     db = _seeded(tmp_path)
@@ -843,6 +843,26 @@ def test_summarize_rejects_malformed_limitations(tmp_path, limitations):
         response = json.dumps({"claims": [], "limitations": limitations})
         assert semantic.summarize(lambda _prompt: response, bundle, 1, [], {},
                                   return_reason=True) == (None, "model")
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("limitation", ["", "完全合成の補足。\n数量は記載されていません。"])
+def test_summarize_preserves_a_single_limitation_string_and_claims(tmp_path, limitation):
+    db = _seeded(tmp_path)
+    try:
+        bundle = semantic.thread_bundle(db, 1, 1, [1])
+        claim = {"section": "other", "text": "完全合成の確認事項",
+                 "claim_kind": "limitation", "fact_refs": [],
+                 "status": "not_stated", "polarity": "uncertain"}
+        response = json.dumps({"claims": [claim], "limitations": limitation})
+        errors = {}
+        summary, reason = semantic.summarize(lambda _: response, bundle, 1, [], {},
+                                            return_reason=True, error_out=errors)
+        assert reason is None and errors == {}
+        assert summary["limitations"] == [limitation]
+        assert len(summary["claims"]) == 1
+        assert all(summary["claims"][0][k] == v for k, v in claim.items())
     finally:
         db.close()
 

@@ -330,9 +330,12 @@ def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
     limitations = raw.get("limitations", [])
     if limitations is None:
         limitations = []
-    if not isinstance(limitations, list) \
-            or any(not isinstance(x, str) for x in limitations):
-        return result(None, "model", "limitations_invalid")
+    elif isinstance(limitations, str):
+        limitations = [limitations]  # preserve the whole supplement, never discard it
+    if not isinstance(limitations, list):
+        return result(None, "model", "limitations_not_list")
+    if any(not isinstance(x, str) for x in limitations):
+        return result(None, "model", "limitations_item_not_str")
     attachment_count = sum(len(m.get("attachments", [])) for m in bundle["members"])
     if attachment_count:
         limitations.append(f"対象投稿・文脈に添付{attachment_count}件があります。添付内容は解析していません。")
