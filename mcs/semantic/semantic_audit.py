@@ -66,33 +66,41 @@ def audit_code(bundle: dict, facts: list, summary: dict) -> list:
     return findings
 
 
+# Claims share a request, so each question names its claim and the exact
+# evidence entries it may use: another claim's sources in the same state
+# never widen its scope (AT-011).
+_CLAIM_QUESTION = (
+    "Does the claim with id {claim} in state.target.claims follow from its "
+    "cited source spans (state.context entries: {entries})? Judge only this "
+    "claim and only against those entries; the other claims and entries in "
+    "this request are not its evidence. Each evidence "
+    "entry pairs the exact quote (role=evidence_quote) with its "
+    "surrounding original-text window (role=evidence_context) — "
+    "a verbatim quote negated or conditioned by neighboring "
+    "text does NOT support the claim. evidence_metadata identifies "
+    "the source sender, posting time, revision and parent relation; "
+    "use it to check attribution and relative dates. Judge target, value, "
+    "polarity and tense together — a same-topic claim with "
+    "different drug/dose does not match (AT-024/025/028).")
+
+
 def audit_claims(jev_client, bundle: dict, summary: dict,
-                 deadline: float, match_threshold: float = jev.MATCH_THRESHOLD) -> tuple[list, bool]:
+                 deadline: float, match_threshold: float = jev.MATCH_THRESHOLD,
+                 per_request: int = 12) -> tuple[list, bool]:
     """Per-claim Jev support check (supports/contradicts/not_supported/
-    ambiguous). Returns (findings, evaluated) — evaluated=False means
-    the check could not run, i.e. PENDING rather than a silent PASS."""
+    ambiguous), up to per_request claims in one request. Returns
+    (findings, evaluated) — evaluated=False means the check could not
+    run, i.e. PENDING rather than a silent PASS."""
     findings = []
-    if jev_client is None or not _probability(match_threshold):
+    # per_request has semantic_policy's max_questions_per_request bound; an
+    # invalid size must not skip every claim and pass (range() runs empty)
+    if jev_client is None or not _probability(match_threshold) \
+            or type(per_request) is not int or not 1 <= per_request <= 48:
         return [{"code": "support_unevaluated"}], False
     claims = [c for c in summary["claims"]
               if c["claim_kind"] != "limitation"]
     if not claims:
         return findings, True
-    # one request per claim keeps question scope unambiguous (§13.2)
-    questions = {}
-    for c in claims:
-        questions[c["claim_id"]] = jev.choice_question(
-            "Does the claim in state.target.text follow from the "
-            "provided source spans in state.context? Each evidence "
-            "entry pairs the exact quote (role=evidence_quote) with its "
-            "surrounding original-text window (role=evidence_context) — "
-            "a verbatim quote negated or conditioned by neighboring "
-            "text does NOT support the claim. evidence_metadata identifies "
-            "the source sender, posting time, revision and parent relation; "
-            "use it to check attribution and relative dates. Judge target, value, "
-            "polarity and tense together — a same-topic claim with "
-            "different drug/dose does not match (AT-024/025/028).",
-            jev.CLAIM_SUPPORT_OPTIONS)
     members = {m["message_id"]: m for m in bundle["members"]}
     ev_ctx = {}
     for f in summary.get("_facts", []):
@@ -116,54 +124,65 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
         metadata = {key: src.get(key) for key in
                     ("message_id", "parent_id", "revision", "posted_at", "sender")} if src else None
         ev_ctx[ev["evidence_id"]] = (quote, win, metadata)
-    for c in claims:
-        ctx = []
-        for ev in c["evidence_refs"]:
-            quote, win, metadata = ev_ctx.get(ev, ("", "", None))
-            ctx.append({"id": ev, "role": "evidence_quote",
-                        "text": quote})
-            if win and win != quote:
-                ctx.append({"id": f"{ev}_ctx",
-                            "role": "evidence_context", "text": win})
-            if metadata is not None:
-                ctx.append({"id": f"{ev}_meta", "role": "evidence_metadata",
-                            "text": json.dumps(metadata, ensure_ascii=False)})
-        state = {"target": {"id": c["claim_id"], "text": c["text"]},
-                 "context": ctx}
+    for start in range(0, len(claims), per_request):
+        chunk = claims[start:start + per_request]
+        ctx, questions = {}, {}
+        for c in chunk:
+            cited = []
+            for ev in c["evidence_refs"]:
+                quote, win, metadata = ev_ctx.get(ev, ("", "", None))
+                entries = [{"id": ev, "role": "evidence_quote",
+                            "text": quote}]
+                if win and win != quote:
+                    entries.append({"id": f"{ev}_ctx",
+                                    "role": "evidence_context", "text": win})
+                if metadata is not None:
+                    entries.append({"id": f"{ev}_meta", "role": "evidence_metadata",
+                                    "text": json.dumps(metadata, ensure_ascii=False)})
+                for entry in entries:
+                    ctx[entry["id"]] = entry      # a shared source is sent once
+                    cited.append(entry["id"])
+            questions[c["claim_id"]] = jev.choice_question(
+                _CLAIM_QUESTION.format(claim=c["claim_id"],
+                                       entries=", ".join(cited) or "none"),
+                jev.CLAIM_SUPPORT_OPTIONS)
+        state = {"target": {"id": "claims",
+                            "claims": [{"id": c["claim_id"], "text": c["text"]}
+                                       for c in chunk]},
+                 "context": list(ctx.values())}
         try:
-            out = jev.evaluate_once_more(
-                jev_client, state, {c["claim_id"]: questions[c["claim_id"]]},
-                deadline)
+            out = jev.evaluate_once_more(jev_client, state, questions, deadline)
         except jev.JevError as error:
             with suppress(Exception):
                 jev_client.last_error = error
             return findings + [{"code": "support_unevaluated",
-                                "claim": c["claim_id"]}], False
-        ans = out["answers"][c["claim_id"]]
-        if (not isinstance(ans, dict)
-                or not isinstance(ans.get("choice"), str)
-                or ans["choice"] not in jev.CLAIM_SUPPORT_OPTIONS
-                or not _probability(ans.get("confidence"))):
-            return findings + [{"code": "support_unevaluated",
-                                "claim": c["claim_id"]}], False
-        # raw answers ride on the summary's private channel so the
-        # drain can persist them into the audit artifact's meta —
-        # accumulated confidences feed threshold calibration (§22).
-        raw = summary.setdefault("_claim_audit", {})
-        raw[c["claim_id"]] = {"choice": ans["choice"],
-                              "confidence": ans["confidence"]}
-        if ans["confidence"] < match_threshold:
-            findings.append({"code": "claim_low_confidence",
-                             "claim": c["claim_id"],
-                             "confidence": ans["confidence"]})
-        if ans["choice"] in ("contradicts", "not_supported"):
-            findings.append({"code": "claim_" + ans["choice"],
-                             "claim": c["claim_id"],
-                             "confidence": ans["confidence"]})
-        elif ans["choice"] == "ambiguous":
-            findings.append({"code": "claim_ambiguous",
-                             "claim": c["claim_id"],
-                             "confidence": ans["confidence"]})
+                                "claim": chunk[0]["claim_id"]}], False
+        for c in chunk:
+            ans = out["answers"][c["claim_id"]]
+            if (not isinstance(ans, dict)
+                    or not isinstance(ans.get("choice"), str)
+                    or ans["choice"] not in jev.CLAIM_SUPPORT_OPTIONS
+                    or not _probability(ans.get("confidence"))):
+                return findings + [{"code": "support_unevaluated",
+                                    "claim": c["claim_id"]}], False
+            # raw answers ride on the summary's private channel so the
+            # drain can persist them into the audit artifact's meta —
+            # accumulated confidences feed threshold calibration (§22).
+            raw = summary.setdefault("_claim_audit", {})
+            raw[c["claim_id"]] = {"choice": ans["choice"],
+                                  "confidence": ans["confidence"]}
+            if ans["confidence"] < match_threshold:
+                findings.append({"code": "claim_low_confidence",
+                                 "claim": c["claim_id"],
+                                 "confidence": ans["confidence"]})
+            if ans["choice"] in ("contradicts", "not_supported"):
+                findings.append({"code": "claim_" + ans["choice"],
+                                 "claim": c["claim_id"],
+                                 "confidence": ans["confidence"]})
+            elif ans["choice"] == "ambiguous":
+                findings.append({"code": "claim_ambiguous",
+                                 "claim": c["claim_id"],
+                                 "confidence": ans["confidence"]})
     return findings, True
 
 

@@ -1051,8 +1051,9 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         for _attempt in range(2):      # initial + at most one repair
             code_f = (audit_code(bundle, facts, summary) + coverage_by_target.get(mid, [])
                       + detail_findings.get(mid, []))
-            jev_f, evaluated = semantic.audit_claims(jev_client, bundle,
-                                            summary, deadline, scfg["match_threshold"])
+            jev_f, evaluated = semantic.audit_claims(
+                jev_client, bundle, summary, deadline, scfg["match_threshold"],
+                scfg["max_questions_per_request"])
             if not evaluated and jev_client is not None:
                 flag = _jev_fail_flag(getattr(jev_client, "last_error",
                                               None))
