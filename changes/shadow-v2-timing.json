@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "試行運転の比較抽出（shadow v2）にかかった時間をログに出す",
+  "summary": "意味解析の1回の処理ごとに、試行運転の比較抽出を行った回数・かかった秒数・途中で終わった件数をログに出します。比較抽出は評価のためだけに動いているため、処理全体のどれだけを占めているかを確かめ、間引くかどうかを判断する材料にします。処理の内容は変わりません。",
+  "upgrade": "抽出worker2本（Hermesでは ai.mcs.extract-drainer / -2、独立モードでは host）を更新後に再起動してください。設定・gateway・通知pluginの変更は不要です。",
+  "details": [
+    "run_due の出力に shadow_v2（calls・incomplete・s）を追加します。s はLLMの生成、Jevの事前確認、実行ロックの取り直しを含む経過秒数です。fact_source が shadow のときだけ数え、固定の数値だけで本文や識別子は含めません。",
+    "workerのログとtickの run.log にだけ出し、semantic_drain_run の記録やDBには保存しません。",
+    "完全合成のテストで、比較抽出の回数と秒数、途中で終わった件数、shadow 以外では0のままであること、記録に保存されないことを確認します。"
+  ],
+  "refs": ["mcs/semantic/semantic_drain.py", "tests/semantic/test_run_lock_diag.py"]
+}

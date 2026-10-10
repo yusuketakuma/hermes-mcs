@@ -101,6 +101,10 @@ def _jev_fail_flag(error) -> str | None:
 # never content. A ~600 s pass ended "retry" with neither llm_error nor
 # jev_error, so the run record could not say why (2026-10-10).
 _PASS_REASON: dict = {"code": None}
+# Log-only (never in the drain_run artifact): what the shadow v2 comparison
+# cost this run_due pass. It is evaluation only, so its share decides
+# whether sampling it would speed the backlog (2026-10-10).
+_SHADOW_V2: dict = {"pass": None}
 
 
 def _why(code: str) -> bool:
@@ -291,10 +295,20 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
             if fact_source == "canonical":
                 v4.record_stage(ledger, pid, mid, fp, policy,
                                 "s1_extract", "start")
-            v2_result = extract_facts_v2(
-                llm_fn, member, deadline - 5, ledger=ledger,
-                source_fingerprint=fp, project_id=pid,
-                jev_client=jev_client, retry_coverage=coverage_retry or spent)
+            started = time.monotonic()
+            shadow = _SHADOW_V2["pass"] if fact_source == "shadow" else None
+            complete = False
+            try:
+                v2_result = extract_facts_v2(
+                    llm_fn, member, deadline - 5, ledger=ledger,
+                    source_fingerprint=fp, project_id=pid,
+                    jev_client=jev_client, retry_coverage=coverage_retry or spent)
+                complete = v2_result["extraction_complete"]
+            finally:
+                if shadow is not None:      # a raised call ended incomplete too
+                    shadow["calls"] += 1
+                    shadow["incomplete"] += 0 if complete else 1
+                    shadow["s"] += time.monotonic() - started
             if not v2_result["extraction_complete"]:
                 if fact_source == "canonical":
                     return {"outcome": "retryable"
@@ -1697,6 +1711,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     transport = out["transport"] = {
         "llm_transport_s": 0.0, "llm_reacquire_s": 0.0,
         "jev_transport_s": 0.0, "jev_reacquire_s": 0.0}
+    _SHADOW_V2["pass"] = out["shadow_v2"] = {"calls": 0, "incomplete": 0, "s": 0.0}
 
     def _unlocked(kind, call, *args, **kwargs):
         started, ended = time.monotonic(), None
@@ -2136,6 +2151,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 result["errors"].append("semantic: metrics_persist_failed")
         return out
     finally:
+        _SHADOW_V2["pass"] = None
         if original_http is not None:
             jev_client._http_request = original_http
 

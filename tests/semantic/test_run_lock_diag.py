@@ -8,7 +8,9 @@ import pytest
 
 import mcs_util
 import semantic
-from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
+import semantic_drain
+import semantic_runtime as runtime
+from semantic_testkit import _cfg, _FakeJev, _llm, _llm_v2, _seeded
 
 KEYS = {"llm_transport_s", "llm_reacquire_s", "jev_transport_s", "jev_reacquire_s"}
 
@@ -109,5 +111,71 @@ def test_short_calls_add_up_instead_of_rounding_away(lock_env, monkeypatch):
         assert len(calls) >= 2
         assert out["transport"]["llm_transport_s"] == pytest.approx(0.04 * len(calls))
         assert out["transport"]["llm_reacquire_s"] == 0
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("complete", [True, False])
+def test_a_pass_reports_what_the_shadow_v2_comparison_cost(tmp_path, monkeypatch, complete):
+    """Log-only: the shadow comparison is evaluation only, so its time per
+    pass is reported (never persisted) to size what sampling it would save."""
+    clock = [1000.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    sent = []
+
+    def model(prompt):
+        if "原子事実抽出器" in prompt:              # a shadow v2 chunk
+            sent.append(1)
+            clock[0] += 30.0
+            return _llm_v2(prompt) if complete else "not a document"
+        return _llm(prompt)
+
+    db = _seeded(tmp_path)
+    try:
+        out = semantic.run_due(db, _cfg("shadow", fact_source="shadow"),
+                               {"errors": []}, clock[0] + 480,
+                               jev_client=_FakeJev(), llm_fn=model)
+        shadow = out["shadow_v2"]
+        assert shadow["calls"] >= 1 and sent
+        assert shadow["s"] == pytest.approx(30.0 * len(sent))
+        assert shadow["incomplete"] == (0 if complete else shadow["calls"])
+        [run] = db.db.execute("SELECT content FROM artifacts "
+                              "WHERE kind='semantic_drain_run'").fetchall()
+        assert "shadow_v2" not in json.loads(run[0])     # log only
+        # released with the pass: a later direct _fact_stage cannot add to it
+        assert semantic_drain._SHADOW_V2["pass"] is None
+    finally:
+        db.close()
+
+
+def test_a_shadow_call_ended_by_the_budget_counts_as_incomplete(tmp_path, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+
+    def model(prompt):
+        if "原子事実抽出器" in prompt:
+            clock[0] += 30.0
+            raise runtime.RuntimeBudgetShort("synthetic")
+        return _llm(prompt)
+
+    db = _seeded(tmp_path)
+    try:
+        out = semantic.run_due(db, _cfg("shadow", fact_source="shadow"),
+                               {"errors": []}, clock[0] + 480,
+                               jev_client=_FakeJev(), llm_fn=model)
+        assert out["shadow_v2"] == {"calls": 1, "incomplete": 1, "s": 30.0}
+        assert out["deferred"] == 1 and out["done"] == 0   # still propagates
+        assert semantic_drain._SHADOW_V2["pass"] is None
+    finally:
+        db.close()
+
+
+def test_other_fact_sources_report_no_shadow_cost(tmp_path):
+    db = _seeded(tmp_path)
+    try:
+        out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                               time.monotonic() + 480, jev_client=_FakeJev(),
+                               llm_fn=_llm)
+        assert out["shadow_v2"] == {"calls": 0, "incomplete": 0, "s": 0.0}
     finally:
         db.close()
