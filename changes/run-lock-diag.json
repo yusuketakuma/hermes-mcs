@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "意味解析の実行ロック喪失を調べるための時間をログに出す",
+  "summary": "意味解析の1回の処理で、ローカルLLM・外部評価の呼出しにかかった時間と、その後に実行ロックを取り直すまで待った時間を分けてログに出します。ロックを取り直せずに処理を中断したときは、その呼出しの種類と、待てた時間の上限をログに残します。処理の内容・期限・再試行の扱いは変わりません。",
+  "upgrade": "抽出worker2本（Hermesでは ai.mcs.extract-drainer / -2、独立モードでは host）を更新後に再起動してください。設定・gateway・通知pluginの変更は不要です。",
+  "details": [
+    "run_due の出力に transport（llm_transport_s・llm_reacquire_s・jev_transport_s・jev_reacquire_s、処理全体の秒数の合計）を追加する。ロック喪失時は run_lock_lost_detail（kind・transport_s・reacquire_s・window_s）を追加する。いずれも固定の数値と種類だけで、本文・患者・ジョブの識別子は含めない。",
+    "これらはworkerのログとtickの run.log にだけ出し、semantic_drain_run の記録やDBには保存しない。job_metrics の llm_s はロックの取り直しを待った時間を含む従来の定義のまま。",
+    "合成テストで、通常の処理で時間が出ること、記録に保存されないこと、ロック喪失時に待てた時間の上限が出ることを確認する。"
+  ],
+  "refs": ["mcs/semantic/semantic_drain.py", "tests/semantic/test_run_lock_diag.py"]
+}

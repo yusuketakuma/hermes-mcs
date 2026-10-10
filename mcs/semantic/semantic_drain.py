@@ -1666,12 +1666,41 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     original_llm = llm_fn
     # the tick keeps the shared default: it never has a tick to outwait
     reacquire_s = RUN_LOCK_REACQUIRE_S if lane == "backlog" else None
+    # Log-only (never in the drain_run artifact, no job identity): seconds
+    # in transport vs. waiting to retake the run lock, and the window a
+    # lost reacquire had — llm_s includes both (2026-10-10: losses landed
+    # inside a tick's hold with ~30 s of the pass left).
+    transport = out["transport"] = {
+        "llm_transport_s": 0.0, "llm_reacquire_s": 0.0,
+        "jev_transport_s": 0.0, "jev_reacquire_s": 0.0}
+
+    def _unlocked(kind, call, *args, **kwargs):
+        started, ended = time.monotonic(), None
+        try:
+            with unlocked_transport(ledger, run_lock_fd, wait_s=reacquire_s,
+                                    deadline=deadline):
+                try:
+                    return call(*args, **kwargs)
+                finally:
+                    ended = time.monotonic()
+        except mcs_util.RunLockLost:
+            if ended is not None:
+                wait = mcs_util.RUN_LOCK_REACQUIRE_S if reacquire_s is None \
+                    else reacquire_s
+                out["run_lock_lost_detail"] = {
+                    "kind": kind, "transport_s": round(ended - started, 1),
+                    "reacquire_s": round(time.monotonic() - ended, 1),
+                    "window_s": round(max(0.0, min(wait, deadline - ended)), 1)}
+            raise
+        finally:
+            if ended is not None:
+                # raw sums: rounding each call would drop short calls
+                transport[f"{kind}_transport_s"] += ended - started
+                transport[f"{kind}_reacquire_s"] += time.monotonic() - ended
 
     @wraps(original_llm)
     def unlocked_llm(*args, **kwargs):
-        with unlocked_transport(ledger, run_lock_fd, wait_s=reacquire_s,
-                                deadline=deadline):
-            return original_llm(*args, **kwargs)
+        return _unlocked("llm", original_llm, *args, **kwargs)
 
     llm_fn = unlocked_llm
     original_http = None
@@ -1680,9 +1709,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         original_http = jev_client._http_request
 
         def unlocked_http(*args, **kwargs):
-            with unlocked_transport(ledger, run_lock_fd, wait_s=reacquire_s,
-                                    deadline=deadline):
-                return original_http(*args, **kwargs)
+            return _unlocked("jev", original_http, *args, **kwargs)
 
         jev_client._http_request = unlocked_http
     try:
