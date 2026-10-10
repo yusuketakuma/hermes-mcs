@@ -207,12 +207,22 @@ def _one_invalid_fact(prompt):
     return _llm(prompt)
 
 
-@pytest.mark.parametrize("llm,failure,dropped", [
-    (_incomplete_v2, None, 0),          # unparsable document
-    (_length_stop, "length_stop", 0),   # the LLM call itself failed
-    (_one_invalid_fact, None, 1),       # a fact failed the chunk's validation
+def _two_invalid_facts(prompt):
+    if "原子事実抽出器" in prompt:
+        return json.dumps({"facts": [{"kind": "not_a_kind", "statement": "合成"},
+                                     {"kind": "medication_event", "statement": ""}],
+                           "category_presence": dict(NO_FACTS)})
+    return _llm(prompt)
+
+
+@pytest.mark.parametrize("llm,failure,dropped,reasons", [
+    (_incomplete_v2, None, 0, {}),          # unparsable document
+    (_length_stop, "length_stop", 0, {}),   # the LLM call itself failed
+    (_one_invalid_fact, None, 1, {"statement_invalid": 1}),
+    (_two_invalid_facts, None, 2, {"kind_invalid": 1, "statement_invalid": 1}),
 ])
-def test_the_receipt_says_which_model_stop_it_was(tmp_path, monkeypatch, llm, failure, dropped):
+def test_the_receipt_says_which_model_stop_it_was(tmp_path, monkeypatch, llm, failure,
+                                                  dropped, reasons):
     monkeypatch.setattr(semantic, "_LLM_FAILURE", None)   # llm_chat resets it per call
     db = _seeded(tmp_path)
     try:
@@ -221,6 +231,7 @@ def test_the_receipt_says_which_model_stop_it_was(tmp_path, monkeypatch, llm, fa
         assert receipts and all(r["failure_reason"] == "model"
                                 and r["llm_failure"] == failure
                                 and r["dropped_in_failed_chunk"] == dropped
+                                and r["dropped_reasons"] == reasons
                                 for r in receipts)
     finally:
         db.close()

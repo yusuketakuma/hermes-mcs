@@ -850,16 +850,24 @@ def _resolve_evidence(quote, piece, piece_start, source, semantic):
 def _normalise_facts_v2(items: list, member: dict, source: str, semantic,
                         *, spec: dict, manifest: dict,
                         atom_owner: dict, obligations: dict,
-                        provenance: str = "local_llm") -> tuple[list, int]:
+                        provenance: str = "local_llm",
+                        drop_reasons: dict | None = None) -> tuple[list, int]:
     """Model items -> contract facts for one chunk.
 
     ``kind``/``statement`` are identity: malformed values drop the item
     and fail the chunk.  Quality enums degrade to ``unknown`` rather than
     destroying the fact.  ``obligations`` maps (chunk_id, category) to
     the obligation row being accumulated so fact links land on it.
+    ``drop_reasons`` (optional) counts each drop by a fixed code.
     """
     facts = []
     dropped = 0
+
+    def drop(code: str) -> int:
+        if drop_reasons is not None:
+            drop_reasons[code] = drop_reasons.get(code, 0) + 1
+        return 1
+
     project_id = str(member.get("project_id"))
     message_id = member["message_id"]
     revision = member.get("revision", "")
@@ -869,13 +877,15 @@ def _normalise_facts_v2(items: list, member: dict, source: str, semantic,
     piece_start = spec["start"]
     for item in items:
         if not isinstance(item, dict):
-            dropped += 1
+            dropped += drop("item_not_object")
             continue
         statement = item.get("statement")
         kind = item.get("kind")
-        if not isinstance(statement, str) or not statement.strip() \
-                or kind not in sf.FACT_KINDS:
-            dropped += 1
+        if not isinstance(statement, str) or not statement.strip():
+            dropped += drop("statement_invalid")
+            continue
+        if kind not in sf.FACT_KINDS:
+            dropped += drop("kind_invalid")
             continue
         statement = statement.strip()
         role = item.get("subject_role")
@@ -950,9 +960,11 @@ def _normalise_facts_v2(items: list, member: dict, source: str, semantic,
                     fact["patient_context"] = sf.validate_patient_context(
                         {"subject": subject, "patient_context": candidate}, [ev_rec["quote"]])
                 except sf.ContractError:
-                    dropped += 1  # Optional claims that failed grounding still block chunk publication.
+                    # Optional claims that failed grounding still block chunk publication.
+                    dropped += drop("context_ungrounded")
             else:
-                dropped += 1
+                dropped += drop("context_no_evidence" if isinstance(raw, dict) and not ev_rec
+                                else "context_shape")
         if obligation_ids:
             obligations[oid]["fact_ids"].append(fact["fact_id"])
         facts.append(fact)
@@ -1139,6 +1151,7 @@ def extract_facts_v2(llm_fn, member: dict,
     failed = []
     failed_dropped = 0
     failure_reason = None
+    drop_reasons: dict = {}
     model = semantic.llm_model()
 
     for spec in specs:
@@ -1194,7 +1207,7 @@ def extract_facts_v2(llm_fn, member: dict,
         chunk_facts, chunk_dropped = _normalise_facts_v2(
             items, member, source, semantic, spec=spec,
             manifest=manifest, atom_owner=atom_owner,
-            obligations=obligations)
+            obligations=obligations, drop_reasons=drop_reasons)
         if chunk_dropped:
             # A failed chunk must not leave fact links on obligations for
             # facts that never enter the document.
@@ -1344,6 +1357,7 @@ def extract_facts_v2(llm_fn, member: dict,
         "extraction_complete": complete,
         **_chunk_progress(specs, completed, reused, failed,
                           failure_reason, failed_dropped, source_fp),
+        "dropped_reasons": drop_reasons,     # the failed chunk's, by code
         **({"generation": generation} if request_following else {}),
     }
 

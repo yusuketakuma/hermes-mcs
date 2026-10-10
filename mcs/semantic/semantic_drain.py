@@ -332,6 +332,8 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                                     "llm_failure": semantic.last_llm_failure(),
                                     "dropped_in_failed_chunk":
                                         v2_result.get("dropped_in_failed_chunk"),
+                                    "dropped_reasons":
+                                        v2_result.get("dropped_reasons"),
                                     "chunks_completed":
                                         v2_result["chunks_completed"],
                                     "chunks_total":

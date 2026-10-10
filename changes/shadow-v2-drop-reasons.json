@@ -1,0 +1,11 @@
+{
+  "category": "added",
+  "title": "評価用の事実抽出比較（shadow v2）で事実が除外された理由を記録する",
+  "summary": "評価専用の事実抽出比較（shadow v2）が、事実の検証による除外で完了しなかったとき、その記録に除外の理由ごとの件数（種類の値が不正、本文が空、患者背景の根拠不一致など）を残します。比較が完了しない原因がモデルの出力なのか検証条件なのかを、本文を扱わずに判断できるようにするためです。",
+  "upgrade": "抽出worker2本（Hermesでは ai.mcs.extract-drainer / -2、独立モードでは host）を更新後に再起動してください。設定・gatewayの変更は不要です。除外の判定、比較の実行条件、保存済みの結果は変わりません。",
+  "details": [
+    "理由は固定コード（item_not_object、statement_invalid、kind_invalid、context_ungrounded、context_no_evidence、context_shape）と件数だけで、本文やモデルの出力は含みません。",
+    "完全合成のテストで、種類の値が不正な事実と本文が空の事実が、それぞれの理由として記録されることを確認します。"
+  ],
+  "refs": ["mcs/semantic/semantic_extraction.py", "mcs/semantic/semantic_drain.py", "tests/semantic/test_shadow_v2_rerun.py"]
+}
