@@ -363,3 +363,55 @@ def test_a_lifted_call_whose_lock_is_not_retaken_keeps_its_attempt(tmp_path, mon
         assert _result_rows(db) == before
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("llm,expected", [
+    # the summary model answered, but not with a usable claims document
+    (lambda prompt, timeout=None: "要約できません" if "要約器" in prompt
+     else _llm(prompt), "summary_model"),
+    (_llm, None),
+])
+def test_run_record_names_why_a_pass_will_retry(tmp_path, llm, expected):
+    """2026-10-10: a ~600 s pass ended "retry" with neither llm_error nor
+    jev_error, so the run record could not say why the job kept burning
+    attempts. job_metrics.retry_reason names the first cause (a code,
+    never content); a pass that completed carries none."""
+    db = _seeded(tmp_path)
+    try:
+        out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                               time.monotonic() + 300, jev_client=_FakeJev(),
+                               llm_fn=llm, lane="backlog", max_jobs=1)
+        metrics = out["job_metrics"][0]
+        assert metrics["retry_reason"] == expected
+        assert metrics["status"] == ("retry" if expected else "done")
+    finally:
+        db.close()
+
+
+def test_retry_reason_is_per_job_and_keeps_the_first_cause(tmp_path, monkeypatch):
+    """Review condition: the reason is shared module state, so it must be
+    reset per job — a later job that stops without a recorded cause must
+    not inherit the earlier job's code — and the first cause of a pass wins."""
+    import json
+    db = _seeded(tmp_path)
+    payload = json.loads(db.db.execute(
+        "SELECT payload FROM fetch_jobs WHERE kind='semantic'").fetchone()[0])
+    db.job_add("semantic", 1, 2, payload=payload)
+    db.db.commit()
+    passes = iter([("first", "second", "retry"), (None, None, "deferred")])
+
+    def process(*a, **k):
+        first, second, status = next(passes)
+        if first:
+            semantic_drain._why(first)
+            semantic_drain._why(second)
+        return status
+
+    monkeypatch.setattr(semantic, "_process_job", process)
+    try:
+        out = semantic.run_due(db, _cfg("shadow"), {"errors": []},
+                               time.monotonic() + 300, jev_client=_FakeJev(),
+                               llm_fn=_llm, lane="backlog", max_jobs=2)
+        assert [m["retry_reason"] for m in out["job_metrics"]] == ["first", None]
+    finally:
+        db.close()
