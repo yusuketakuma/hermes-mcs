@@ -1662,11 +1662,14 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 # one job_id order let them win every pass and no semantic job
                 # ran for hours (2026-10-10). Each kind keeps oldest-first, and
                 # the kind this worker served last goes second.
+                # QC re-seeding refreshes next_try: its new generation must
+                # queue behind QC that was already waiting, despite an old id.
                 rows = [row for kind in sorted(
                             kinds, key=lambda k: k == _BACKLOG_TURN["kind"])
                         for row in ledger.db.execute(
                             "SELECT * FROM fetch_jobs WHERE state='pending' "
-                            "AND next_try<=? AND kind=? ORDER BY job_id LIMIT ?",
+                            "AND next_try<=? AND kind=? ORDER BY "
+                            f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
                             (time.time(), kind, max_jobs + 8)).fetchall()]
             # Include extra candidates so another worker's current job cannot
             # hide the next runnable item. Work remains bounded by max_jobs.

@@ -150,3 +150,47 @@ def test_backlog_alternates_so_reseeded_qc_cannot_starve_semantic(tmp_path, monk
         assert seen == ['semantic', 'extract_qc', 'semantic']
     finally:
         db.close()
+
+
+def test_reseeded_old_qc_cannot_overtake_a_waiting_qc(tmp_path, monkeypatch):
+    """A refreshed extraction queues a new QC generation, even when its
+    job row predates another QC that has been waiting longer."""
+    db = _seeded(tmp_path)
+    clock = [time.time()]
+    db.db.execute("UPDATE fetch_jobs SET state='done' WHERE kind='semantic'")
+    for job_id, mid in ((5, 1), (100, 2)):
+        db.db.execute(
+            "INSERT INTO fetch_jobs(job_id,kind,project_id,message_id,payload,"
+            "state,attempts,next_try,created_at,updated_at) "
+            "VALUES (?,'extract_qc',1,?,'{}','pending',0,?,0,0)",
+            (job_id, mid, clock[0] - 10))
+    db.db.commit()
+    seen = []
+    monkeypatch.setattr(semantic_drain.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(semantic_drain, '_BACKLOG_TURN', {'kind': None})
+
+    def reseed(ledger, now):
+        # Same generation timing as _qc_seed's ON CONFLICT update.
+        with ledger.db:
+            ledger.db.execute(
+                "UPDATE fetch_jobs SET state='pending',attempts=0,"
+                "next_try=?,updated_at=? WHERE job_id=5", (now, now))
+
+    def process(ledger, scfg, job, *args, **kwargs):
+        seen.append(job['message_id'])
+        with ledger.db:
+            ledger.db.execute("UPDATE fetch_jobs SET state='done' WHERE job_id=?",
+                              (job['job_id'],))
+        return 'done'
+
+    monkeypatch.setattr(semantic_drain, '_qc_seed', reseed)
+    monkeypatch.setattr(semantic_drain, '_process_qc_job', process)
+    try:
+        for _ in range(3):
+            semantic.run_due(db, _cfg(extract_qc='annotate'), {'errors': []},
+                             time.monotonic() + 480, jev_client=_FakeJev(),
+                             llm_fn=_llm, max_jobs=1, lane='backlog')
+            clock[0] += 1
+        assert seen == [2, 1, 1]
+    finally:
+        db.close()
