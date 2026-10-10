@@ -24,6 +24,7 @@ import re
 import sqlite3
 import tempfile
 import time
+from time import monotonic
 import uuid
 from pathlib import Path
 from contextlib import suppress
@@ -2686,6 +2687,9 @@ class LedgerReader(Ledger):
             raise
 
 
+SNAPSHOT_VERIFY_TIMEOUT_S = 30.0
+
+
 def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
     """Verified point-in-time copy for read-only consumers.
     backup -> tmp -> quick_check -> atomic rename; consumers never see a
@@ -2712,7 +2716,7 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
                 dst.close()
         finally:
             src.close()
-        if not valid_mcs_db(tmp):
+        if not valid_mcs_db(tmp, deadline=monotonic() + SNAPSHOT_VERIFY_TIMEOUT_S):
             return None
         publish_tmp(tmp, dest)
         # A reader keeps its old inode or opens the complete new generation.
@@ -2774,14 +2778,18 @@ def reaction_actor_summary(db, message_id, *, now=None) -> dict:
     return out
 
 
-def valid_mcs_db(path: str) -> bool:
+def valid_mcs_db(path: str, *, deadline: float | None = None) -> bool:
     """Validate a static recovery/publication candidate without sidecars."""
     if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        return False
+    if deadline is not None and monotonic() >= deadline:
         return False
     uri = Path(path).resolve().as_uri() + "?mode=ro&immutable=1"
     try:
         db = sqlite3.connect(uri, uri=True)
         try:
+            if deadline is not None:
+                db.set_progress_handler(lambda: int(monotonic() >= deadline), 1000)
             if db.execute("PRAGMA quick_check").fetchone()[0] != "ok" \
                     or db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
                 return False
@@ -2853,7 +2861,7 @@ def valid_mcs_db(path: str) -> bool:
                         f"SELECT 1 FROM {table} GROUP BY {key_check[1]} "
                         "HAVING COUNT(*) > 1 LIMIT 1").fetchone():
                     return False
-            return True
+            return deadline is None or monotonic() < deadline
         finally:
             db.close()
     except (OSError, sqlite3.DatabaseError):

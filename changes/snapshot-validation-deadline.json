@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "snapshot公開時のDB検証に期限を設ける",
+  "summary": "読取り用snapshotの整合性確認に30秒の期限を付けます。確認が長引いた場合は新しいsnapshotを公開せず、前の公開済みsnapshotを保持して次の定期処理で更新を試みます。整合性や保存形式の検証を省略せず、長い検証による実行ロックの保持を抑えます。",
+  "upgrade": "設定変更は不要です。定期処理を更新後のコードへ切り替えてください。期限超過した処理は従来のsnapshot検証失敗と同じく部分終了として記録され、公開済みsnapshotは保持されます。回復用DBの通常検証に期限は付けません。",
+  "details": [
+    "snapshot候補にだけ単調時計の期限を渡し、SQLite VMの進捗監視で期限超過時に中断します。quick_check・journal_mode・schema・必須列・重複キーの条件は変更しません。",
+    "期限切れの候補は失敗として扱い、候補の私有一時ファイルを削除して公開先を置き換えません。",
+    "SQLiteの進捗で監視するソフト期限です。OSの単一I/O自体が止まった場合に30秒ちょうどで終了する保証ではありません。",
+    "完全合成の回帰で、期限超過時の失敗、VM中断、期限なしの既存回復検証、前snapshotと私有ファイルの保持・片付けを確認します。"
+  ],
+  "refs": ["mcs/core/ledger.py", "tests/core/test_ledger_candidate_validation.py", "tests/core/test_core_misc.py"]
+}

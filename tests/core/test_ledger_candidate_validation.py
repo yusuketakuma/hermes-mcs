@@ -1,10 +1,40 @@
 """Static recovery validation accepts migratable generations, not partial DBs."""
 
 import sqlite3
+import time
+import ledger
 
 import pytest
 
 from ledger import Ledger, SCHEMA_VERSION, valid_mcs_db
+
+
+def test_expired_candidate_validation_fails_closed(tmp_path):
+    path = tmp_path / 'candidate.db'
+    Ledger(str(path)).close()
+    assert valid_mcs_db(str(path))
+    assert not valid_mcs_db(str(path), deadline=time.monotonic() - 1)
+    assert valid_mcs_db(str(path))
+
+
+def test_candidate_validation_interrupts_at_sqlite_progress(tmp_path, monkeypatch):
+    path = tmp_path / 'candidate.db'
+    Ledger(str(path)).close()
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE validation_probe(value TEXT)')
+        db.executemany('INSERT INTO validation_probe VALUES(?)',
+                       [(f'synthetic-{i}',) for i in range(5000)])
+    assert valid_mcs_db(str(path))
+    calls = []
+
+    def clock():
+        calls.append(1)
+        return 0.0 if len(calls) == 1 else 2.0
+
+    monkeypatch.setattr(ledger, 'monotonic', clock)
+    assert not valid_mcs_db(str(path), deadline=1.0)
+    assert len(calls) >= 2
+    assert valid_mcs_db(str(path))
 
 
 @pytest.mark.parametrize("version", range(SCHEMA_VERSION + 1))
