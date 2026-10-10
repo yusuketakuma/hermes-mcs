@@ -415,3 +415,92 @@ def test_retry_reason_is_per_job_and_keeps_the_first_cause(tmp_path, monkeypatch
         assert [m["retry_reason"] for m in out["job_metrics"]] == ["first", None]
     finally:
         db.close()
+
+
+def _admitted_per_pass(monkeypatch, passes, base=None):
+    """Run the resident over `passes` (each advancing the clock by just over
+    half SEMANTIC_FIRST_S) and return the admission set of every extraction."""
+    clock = [1000.0]
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: clock[0])
+    admitted = []
+    passes = [*passes, KeyboardInterrupt("synthetic stop")]
+
+    def background(*a):
+        clock[0] += extract_llm.SEMANTIC_FIRST_S / 2 + 1
+        result = passes.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return {"errors": [], **result}
+
+    class DB:
+        def execute(self, sql, params=()):
+            assert "notified_at" in sql
+            return [(7,)]
+
+    _resident(monkeypatch, [], background, ("--stop-after", "100000"))
+    monkeypatch.setattr(extract_llm, "Ledger",
+                        lambda *a: type("L", (), {"db": DB(), "close": lambda self: None})())
+    monkeypatch.setattr(extract_llm, "legacy_admissions",
+                        lambda *a: None if base is None else set(base))
+    monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **k: admitted.append(
+        k.get("admitted_ids")) or {"done": 1, "failed": 0, "left": 1, "selected": 1})
+    with pytest.raises(KeyboardInterrupt):
+        extract_llm.main()
+    return admitted
+
+
+@pytest.mark.parametrize("base", [None, {7, 9}, {9}, set()])
+def test_semantic_work_goes_first_while_semantic_jobs_run(monkeypatch, base):
+    """Owner decision 2026-10-10: semantic backlog before re-extraction.
+    After a pass that ran a semantic job, the resident extracts only
+    recently notified arrivals (the tick's realtime set); once no semantic
+    job has run for SEMANTIC_FIRST_S, re-extraction resumes. A restricted
+    admission set (e.g. a canonical cohort) is only narrowed, never widened."""
+    import run_check
+    assert extract_llm._ARRIVAL_CARRY_S == run_check.REALTIME_CARRY_S
+    admitted = _admitted_per_pass(monkeypatch, [
+        {"job_metrics": [{"kind": "semantic", "status": "done"}]},
+        {"job_metrics": [{"kind": "extract_qc", "status": "done"}]},  # QC turn
+        {"job_metrics": []}], base)                                   # nothing due
+    # the base admission, then only its recent arrivals (semantic ran; still
+    # inside the window after the QC turn), then the base again once expired
+    narrowed = {7} if base is None else base & {7}
+    assert admitted == [base, narrowed, narrowed, base]
+
+
+def test_semantic_passes_that_only_wait_do_not_hold_re_extraction(monkeypatch):
+    """Review condition: a semantic job that keeps deferring without work
+    (a resource wait, an LLM that was never sent) must not extend the
+    window forever — re-extraction resumes SEMANTIC_FIRST_S after the last
+    pass that did semantic work."""
+    admitted = _admitted_per_pass(monkeypatch, [
+        {"job_metrics": [{"kind": "semantic", "status": "retry"}]},
+        {"job_metrics": [{"kind": "semantic", "status": "deferred"}]},
+        {"job_metrics": [{"kind": "semantic", "status": "deferred_backoff"}]}])
+    assert admitted == [None, {7}, {7}, None]
+
+
+def test_a_semantic_pass_does_not_idle_on_an_empty_extraction(monkeypatch):
+    """While semantic goes first the restricted extraction usually selects
+    nothing; a semantic pass that ended without progress must not then
+    trigger the 120 s queue-drained poll."""
+    sleeps = []
+    passes = [{"job_metrics": [{"kind": "semantic", "status": "retry"}]},
+              KeyboardInterrupt("stop")]
+
+    def background(*a):
+        result = passes.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return {"errors": [], **result}
+
+    _resident(monkeypatch, [], background, ("--stop-after", "100000"))
+    monkeypatch.setattr(extract_llm, "Ledger", lambda *a: type("L", (), {
+        "db": type("DB", (), {"execute": lambda self, *a: []})(),
+        "close": lambda self: None})())
+    monkeypatch.setattr(extract_llm.time, "sleep", sleeps.append)
+    monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **k: {
+        "done": 0, "failed": 0, "left": 0, "selected": 0})
+    with pytest.raises(KeyboardInterrupt):
+        extract_llm.main()
+    assert sleeps and max(sleeps) <= 1
