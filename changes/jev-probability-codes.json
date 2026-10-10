@@ -4,7 +4,7 @@
   "summary": "Jevの選択式回答の確率分布を検証で受け付けなかったとき、これまでは理由がすべて probabilities_invalid でした。未知の選択肢・値の型や範囲・選択肢の不足・合計・選んだ回答が最大確率でない、のどれに当たるかを固定のコードで実行記録に残し、Jev側の不具合か検証の厳しさかを調べられるようにしました。受け付ける条件は変更しません。",
   "upgrade": "抽出worker2本（Hermesでは ai.mcs.extract-drainer / -2、独立モードでは host）を更新後に再起動してください。設定・gateway・通知pluginの変更は不要です。検証の基準、再試行の扱い、試行回数、予算、人承認の条件は変更しません。",
   "details": [
-    "semantic_jev.validate_answers の確率分布の拒否理由を probabilities_option_unknown / probabilities_value_invalid / probabilities_option_missing / probabilities_sum_invalid / probabilities_choice_not_max に分ける。応答本文・選択肢名・値は含めない。",
+    "semantic_jev.validate_answers の確率分布の拒否理由を probabilities_option_unknown / probabilities_value_invalid / probabilities_option_missing / probabilities_sum_off_lt_1e-3・probabilities_sum_off_ge_1e-3 / probabilities_choice_not_max に分ける。応答本文・選択肢名・値は含めない。",
     "コードは従来どおり「質問ID:理由」の形で、1問だけの不正応答として上限つきで再試行する分類は変わらない。同率で選んだ回答や合計の許容誤差など、受け付ける条件は変更しない。",
     "合成テストで、各拒否条件が対応するコードになること、正しい分布と同率の選択は従来どおり受け付けることを確認する。"
   ],

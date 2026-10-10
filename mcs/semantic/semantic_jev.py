@@ -184,7 +184,11 @@ def validate_answers(raw: dict, questions: dict, model: str) -> dict:
             if set(probs) != options:
                 reason = "probabilities_option_missing"
             elif abs(sum(probs.values()) - 1.0) > 1e-6:
-                reason = "probabilities_sum_invalid"
+                # the size of the gap helps investigate rounding vs. an unnormalised
+                # distribution; a fixed bin, never the value
+                reason = ("probabilities_sum_off_lt_1e-3"
+                          if abs(sum(probs.values()) - 1.0) < 1e-3
+                          else "probabilities_sum_off_ge_1e-3")
             elif probs[choice] < max(probs.values()):
                 reason = "probabilities_choice_not_max"
             else:
