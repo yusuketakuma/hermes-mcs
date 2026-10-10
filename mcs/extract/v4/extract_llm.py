@@ -3634,6 +3634,24 @@ def _admission_closed(reasons) -> None:
               file=sys.stderr, flush=True)
 
 
+# Owner decision 2026-10-10: the semantic backlog goes before
+# re-extraction. For this long after the last pass that did semantic work,
+# a semantic resident extracts only recently notified arrivals; when no
+# such pass happens (none due, or only waiting), re-extraction resumes.
+SEMANTIC_FIRST_S = 1800.0
+_ARRIVAL_CARRY_S = 86400      # = run_check.REALTIME_CARRY_S (pinned by a test)
+# run_due statuses of a pass that did semantic work or spent an attempt; a
+# job that only waited (deferred / deferred_backoff / stale) does not count
+_SEMANTIC_WORK = ("done", "retry", "failed", "deferred_short", "error")
+
+
+def _recent_arrivals(ledger) -> set:
+    """Arrivals the tick's realtime slot still owns (notified recently)."""
+    return {r[0] for r in ledger.db.execute(
+        "SELECT message_id FROM messages WHERE notified_at >= ?",
+        (time.time() - _ARRIVAL_CARRY_S,))}
+
+
 def _background_semantic(ledger, stop=None):
     """Serve one oldest semantic/QC job on this worker's background slot."""
     import semantic_drain
@@ -3777,6 +3795,7 @@ def _main() -> int:
             total = {"done": 0, "failed": 0, "left": 0}
             elastic = _SLOT_OVERRIDE == _ELASTIC_SLOT
             gate: dict = {}
+            semantic_first_until = 0.0
 
             def held() -> bool:
                 """Elastic gate with one log line per hold/resume."""
@@ -3808,6 +3827,9 @@ def _main() -> int:
                 # existing claim leases exclude the other worker's item.
                 try:
                     adm, vpol = _admitted()
+                    if args.semantic and time.monotonic() < semantic_first_until:
+                        recent = _recent_arrivals(led)
+                        adm = recent if adm is None else adm & recent
                     r = run_pending(led, limit=1 if args.semantic else 8,
                                     budget_s=min(budget, 900),
                                     oldest_first=False,
@@ -3817,11 +3839,19 @@ def _main() -> int:
                                     shard=shard, batch_k=args.batch,
                                     admitted_ids=adm)
                     sem = None
+                    ran_semantic = False
                     if args.semantic and not held():
                         sem = _background_semantic(led, stop)
                         print(json.dumps({"semantic": sem,
                                           "ts": time.time()},
                                          ensure_ascii=False), flush=True)
+                        ran_semantic = any(
+                            m.get("kind") == "semantic"
+                            and m.get("status") in _SEMANTIC_WORK
+                            for m in sem.get("job_metrics") or [])
+                        if ran_semantic:
+                            semantic_first_until = (time.monotonic()
+                                                    + SEMANTIC_FIRST_S)
                         if sem.get("run_lock_lost") in ("held", "updated"):
                             # an updater ran mid-transport: exit so launchd /
                             # the standalone host respawns this resident on
@@ -3843,7 +3873,9 @@ def _main() -> int:
                 total["left"] = r["left"]
                 print(json.dumps({**r, "ts": time.time()}, ensure_ascii=False),
                       flush=True)
-                if sem and (sem.get("done") or sem.get("progressed")):
+                # a semantic-first pass extracts little: do not idle on it
+                if sem and (sem.get("done") or sem.get("progressed")
+                            or ran_semantic):
                     pause(1)
                     continue
                 if r["left"] == 0 or (
