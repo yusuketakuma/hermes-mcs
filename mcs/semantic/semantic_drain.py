@@ -326,6 +326,12 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                         json.dumps({"status": "incomplete",
                                     "failure_reason":
                                         v2_result["failure_reason"],
+                                    # codes/counts only: which "model" stop
+                                    # it was (LLM failure code, or facts
+                                    # dropped by the chunk's validation)
+                                    "llm_failure": semantic.last_llm_failure(),
+                                    "dropped_in_failed_chunk":
+                                        v2_result.get("dropped_in_failed_chunk"),
                                     "chunks_completed":
                                         v2_result["chunks_completed"],
                                     "chunks_total":

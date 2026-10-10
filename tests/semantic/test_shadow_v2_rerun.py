@@ -1,4 +1,5 @@
 """A shadow v2 comparison runs once per source + policy, not once per retry."""
+import json
 import time
 
 import pytest
@@ -6,7 +7,7 @@ import pytest
 import semantic
 import semantic_drain
 import semantic_extraction
-from semantic_testkit import _FakeJev, _cfg, _llm, _llm_v2, _seeded
+from semantic_testkit import NO_FACTS, _FakeJev, _cfg, _llm, _llm_v2, _seeded
 
 
 def _incomplete_v2(prompt):
@@ -189,5 +190,37 @@ def test_a_malformed_receipt_does_not_skip_the_comparison(tmp_path, content):
                 (content, semantic_drain.KIND_SHADOW_V2))
         assert _passes(db, _incomplete_v2, configs=({},)) == [targets]
         assert len(_receipts(db)) == 3 * targets      # earlier rows are kept
+    finally:
+        db.close()
+
+
+def _length_stop(prompt):
+    if "原子事実抽出器" in prompt:
+        return semantic._failed("length_stop")
+    return _llm(prompt)
+
+
+def _one_invalid_fact(prompt):
+    if "原子事実抽出器" in prompt:
+        return json.dumps({"facts": [{"kind": "not_a_kind"}],
+                           "category_presence": dict(NO_FACTS)})
+    return _llm(prompt)
+
+
+@pytest.mark.parametrize("llm,failure,dropped", [
+    (_incomplete_v2, None, 0),          # unparsable document
+    (_length_stop, "length_stop", 0),   # the LLM call itself failed
+    (_one_invalid_fact, None, 1),       # a fact failed the chunk's validation
+])
+def test_the_receipt_says_which_model_stop_it_was(tmp_path, monkeypatch, llm, failure, dropped):
+    monkeypatch.setattr(semantic, "_LLM_FAILURE", None)   # llm_chat resets it per call
+    db = _seeded(tmp_path)
+    try:
+        _passes(db, llm, configs=({},))
+        receipts = [json.loads(r[0]) for r in _receipts(db)]
+        assert receipts and all(r["failure_reason"] == "model"
+                                and r["llm_failure"] == failure
+                                and r["dropped_in_failed_chunk"] == dropped
+                                for r in receipts)
     finally:
         db.close()
