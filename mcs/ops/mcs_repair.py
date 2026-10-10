@@ -250,33 +250,17 @@ def plan(snapshot: str | Path, *, nonce: str | None = None,
               (RULE_VERSION,))
         # Same dirty criterion as rollup, evaluated at published snapshot time.
         counts["dirty_rollups"] = None
-        if binding and supported({"patients": "project_id",
-                                  "messages": "project_id updated_seen",
-                                  "artifacts": "kind project_id meta created_at"}):
-            from rollup import PERIOD_CHECK_VERSION
-            count("dirty_rollups",
-                  {"patients": "project_id", "messages": "project_id updated_seen",
-                   "artifacts": "kind project_id meta created_at"},
-                  """SELECT COUNT(*) FROM patients p LEFT JOIN (
-                    SELECT project_id,
-                    MAX(CASE WHEN json_valid(meta) THEN json_extract(meta,'$.generated_at') END) g,
-                    MAX(CASE WHEN json_valid(meta) THEN
-                      json_extract(meta,'$.period_check_version') END) v,
-                    MAX(CASE WHEN json_valid(meta) THEN
-                      json_extract(meta,'$.next_med_period_check') END) n
-                    FROM artifacts WHERE kind='patient_rollup' GROUP BY project_id
-                  ) r ON r.project_id=p.project_id
-                  WHERE EXISTS (SELECT 1 FROM messages m WHERE m.project_id=p.project_id)
-                  AND (typeof(r.g) NOT IN ('integer','real') OR r.g<0 OR r.g>=1e12
-                    OR r.v IS NOT ? OR (r.n IS NOT NULL AND (
-                      typeof(r.n) NOT IN ('integer','real') OR r.n<0 OR r.n>=1e12 OR r.n<=?))
-                    OR COALESCE((SELECT MAX(a.created_at) FROM artifacts a
-                      WHERE a.project_id=p.project_id AND a.kind IN (
-                        'extract_v1','extract_llm','canonical_projection',
-                        'semantic_facts_v4','karte_summary')),0)>r.g
-                    OR COALESCE((SELECT MAX(m.updated_seen) FROM messages m
-                      WHERE m.project_id=p.project_id),0)>r.g)""",
-                  (PERIOD_CHECK_VERSION, binding["generated_at"]))
+        if binding and supported({
+                "patients": "project_id patient_name karte_id project_type",
+                "messages": "project_id message_id posted_at posted_at_ts content_hash "
+                            "body_text sender_id sender_name sender_type parent_id body_state updated_seen",
+                "artifacts": "artifact_id content kind project_id meta created_at"}):
+            from rollup import dirty_projects
+            try:
+                counts["dirty_rollups"] = len(dirty_projects(
+                    reader, now=binding["generated_at"]))
+            except (sqlite3.DatabaseError, TypeError, ValueError, RecursionError):
+                pass
 
         def group(key, table, column, allowed):
             groups[key] = None

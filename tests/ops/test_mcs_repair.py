@@ -18,6 +18,8 @@ from extract import RULE_VERSION
 from mcs_requests import SCHEMA
 from rollup import PERIOD_CHECK_VERSION
 from test_ledger_audit import _database
+import drug_map
+import rollup
 
 NONCE = "00000000-0000-4000-8000-000000000013"
 OPERATOR = hashlib.sha256(b"synthetic-operator").hexdigest()
@@ -42,8 +44,11 @@ def world(tmp_path):
         db.executescript("""
           ALTER TABLE patients ADD COLUMN history_floor INTEGER;
           ALTER TABLE patients ADD COLUMN coverage_ts INTEGER;
+          ALTER TABLE patients ADD COLUMN karte_id INTEGER;
           ALTER TABLE messages ADD COLUMN content_hash TEXT;
           ALTER TABLE messages ADD COLUMN updated_seen REAL;
+          ALTER TABLE messages ADD COLUMN posted_at_ts REAL;
+          ALTER TABLE messages ADD COLUMN body_text TEXT;
           ALTER TABLE fetch_jobs ADD COLUMN reason_code TEXT;
           ALTER TABLE attachments ADD COLUMN error TEXT;
           DELETE FROM fetch_jobs;
@@ -53,10 +58,14 @@ def world(tmp_path):
           UPDATE attachments SET state='downloaded';
         """)
         db.execute("INSERT INTO snapshot_meta VALUES(1,?,100)", (NONCE,))
+        db.row_factory = sqlite3.Row
         db.execute("INSERT INTO artifacts(kind,project_id,meta,created_at) "
                    "VALUES('patient_rollup',1,?,100)",
                    (json.dumps({"generated_at": 100,
-                                "period_check_version": PERIOD_CHECK_VERSION}),))
+                                "period_check_version": PERIOD_CHECK_VERSION,
+                                "med_ref_sig": "0:",
+                                "med_ref_generation": drug_map.generation_signature(db),
+                                "message_sig": rollup._message_source_signature(db, 1, 100)}),))
         db.commit()
     private = tmp_path / "private"
     private.mkdir(mode=0o700)
@@ -125,6 +134,21 @@ def test_plan_is_deterministic_readonly_and_never_trusts_floor(world):
     assert "SYNTHETIC_PRIVATE" not in json.dumps(result)
     assert "project_id" not in json.dumps(result)
     assert "SELECT " not in json.dumps(result)
+
+
+def test_rollup_count_ignores_reobservation_but_detects_metadata_change(world):
+    snapshot = world['snapshot']
+    _change(snapshot, 'UPDATE messages SET updated_seen=200')
+    before = _hash(snapshot)
+    assert repair.plan(snapshot, nonce=NONCE)['counts']['dirty_rollups'] == 0
+    assert _hash(snapshot) == before
+    _change(snapshot, 'UPDATE messages SET sender_name=? WHERE message_id=101', ('別の合成名',))
+    assert repair.plan(snapshot, nonce=NONCE)['counts']['dirty_rollups'] == 1
+
+
+def test_rollup_count_is_unknown_when_snapshot_lacks_input_columns(world):
+    _change(world['snapshot'], 'ALTER TABLE messages RENAME COLUMN body_text TO legacy_body_text')
+    assert repair.plan(world['snapshot'], nonce=NONCE)['counts']['dirty_rollups'] is None
 
 
 def test_plan_aggregates_evidenced_candidates_without_private_values(world):

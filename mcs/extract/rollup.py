@@ -17,6 +17,7 @@ Called by run_check for patients that received new messages this tick.
 """
 import argparse
 from datetime import date, datetime, timedelta
+import hashlib
 import json
 import os
 import re
@@ -614,6 +615,28 @@ def _newest_source_ts(ledger, project_id: int) -> float:
         " WHERE project_id=:p), 0))", {"p": project_id}).fetchone()[0]
 
 
+def _message_source_signature(db, project_id, now):
+    """Rollup inputs and deletion heuristic, excluding mere message observation time."""
+    from read_model import _registered_data
+    patient = db.execute("SELECT patient_name,karte_id,project_type FROM patients WHERE project_id=?",
+                         (project_id,)).fetchone()
+    context = db.execute("SELECT artifact_id,kind,meta FROM artifacts WHERE project_id=? "
+                         "AND kind IN ('karte_summary','project_metadata_v1') ORDER BY artifact_id",
+                         (project_id,)).fetchall()
+    rows = db.execute("""
+      SELECT message_id, posted_at, posted_at_ts, content_hash,
+        CASE WHEN content_hash IS NULL THEN body_text END,
+        sender_id, sender_name, sender_type, parent_id, body_state, updated_seen
+      FROM messages WHERE project_id=? ORDER BY posted_at_ts DESC, message_id DESC
+    """, (project_id,)).fetchall()
+    cutoff = ((rows[0][-1] or now) if rows else now) - STALE_DAYS * 86400
+    possibly_deleted = [r[0] for r in rows if (r[-1] or 0) < cutoff][:20]
+    payload = (tuple(patient) if patient else None, [tuple(a) for a in context],
+               _registered_data(db, "aggregate", project_id, None),
+               [tuple(r[:-1]) for r in rows], possibly_deleted)
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
+
+
 def rebuild(ledger, project_id: int) -> int:
     """Atomic replace — a crash between delete and insert must not leave
     a patient with NO rollup (Oracle B22). An unchanged rebuild (all
@@ -621,6 +644,7 @@ def rebuild(ledger, project_id: int) -> int:
     meta.generated_at when a newer source would otherwise keep it dirty."""
     # sign before building: a rewrite racing the build stays dirty (M5)
     ref_generation = generation_signature(ledger.db)
+    message_sig = _message_source_signature(ledger.db, project_id, time.time())
     has_projection = _has_projection(ledger.db, project_id)
     ref_sig = ledger.db.execute(_REF_SIG_SQL.format(pid="?"),
                                 (REF_KIND, project_id)).fetchone()[0]
@@ -656,8 +680,10 @@ def rebuild(ledger, project_id: int) -> int:
                     # stays dirty
                     g = om.get("generated_at")
                     if type(g) not in (int, float) or not 0 <= g < 1e12 \
-                            or _newest_source_ts(ledger, project_id) > g:
+                            or _newest_source_ts(ledger, project_id) > g \
+                            or om.get("message_sig") != message_sig:
                         om["generated_at"] = d["generated_at"]
+                        om["message_sig"] = message_sig
                         ledger.db.execute(
                             "UPDATE artifacts SET meta=? WHERE artifact_id=?",
                             (json.dumps(om), old[0]["artifact_id"]))
@@ -671,6 +697,7 @@ def rebuild(ledger, project_id: int) -> int:
             (KIND, project_id, None,
              json.dumps(d, ensure_ascii=False), "rules-v1",
              json.dumps({"generated_at": d["generated_at"],
+                         "message_sig": message_sig,
                          "period_check_version": PERIOD_CHECK_VERSION,
                          "projection_version": PROJECTION_VERSION,
                          "next_med_period_check":
@@ -680,7 +707,7 @@ def rebuild(ledger, project_id: int) -> int:
     return cur.lastrowid
 
 
-def dirty_projects(ledger) -> list:
+def dirty_projects(ledger, *, now=None) -> list:
     """Patients whose rollup is missing or older than its newest source
     (message/artifact). Rolls forward artifact-only changes too — an LLM
     pass landing after the last message must still refresh (Oracle B23).
@@ -689,7 +716,7 @@ def dirty_projects(ledger) -> list:
     content is unchanged never advances generated_at (M5)."""
     rows = ledger.db.execute("""
       SELECT p.project_id, r.g AS gen, r.period_version, r.next_check,
-        r.projection_version,
+        r.projection_version, r.message_sig,
         EXISTS(SELECT 1 FROM artifacts a WHERE a.project_id=p.project_id
           AND a.kind IN ('canonical_projection','semantic_facts_v4')) AS has_projection,
         r.ref_sig, r.ref_generation, ({sig}) AS cur_ref_sig,
@@ -697,11 +724,11 @@ def dirty_projects(ledger) -> list:
           WHERE a.project_id=p.project_id
             AND a.kind IN ('extract_v1','extract_llm',
                            'canonical_projection',
-                           'semantic_facts_v4','karte_summary','project_metadata_v1')) AS art_ts,
-        (SELECT MAX(m.updated_seen) FROM messages m
-          WHERE m.project_id=p.project_id) AS msg_ts
+                           'semantic_facts_v4','karte_summary','project_metadata_v1')) AS art_ts
       FROM patients p
         LEFT JOIN (SELECT project_id,
+                   MAX(CASE WHEN json_valid(meta)
+                            THEN json_extract(meta,'$.message_sig') END) message_sig,
                    MAX(CASE WHEN json_valid(meta)
                             THEN json_extract(meta,'$.generated_at') END) g,
                    MAX(CASE WHEN json_valid(meta)
@@ -725,7 +752,7 @@ def dirty_projects(ledger) -> list:
                     WHERE m3.project_id=p.project_id)
     """.replace("{sig}", _REF_SIG_SQL.format(pid="p.project_id")),
         (REF_KIND, KIND)).fetchall()
-    now = time.time()
+    now = time.time() if now is None else now
     ref_generation = generation_signature(ledger.db)
     return [x["project_id"] for x in rows
             if type(x["gen"]) not in (int, float)
@@ -739,7 +766,9 @@ def dirty_projects(ledger) -> list:
                 or not 0 <= x["next_check"] < 1e12
                 or x["next_check"] <= now))
             or (x["art_ts"] or 0) > x["gen"]
-            or (x["msg_ts"] or 0) > x["gen"]]
+            or not isinstance(x["message_sig"], str)
+            or x["message_sig"] != _message_source_signature(
+                ledger.db, x["project_id"], now)]
 
 
 def rebuild_many(ledger, project_ids, dirty_only: bool = False,
