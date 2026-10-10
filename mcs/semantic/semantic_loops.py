@@ -9,6 +9,37 @@ import semantic_jev as jev
 
 KIND_LOOP = "loop_candidate"
 KIND_LOOP_EVENT = "loop_event"
+# A pair whose relation answer Jev returned malformed: an INCOMPLETE
+# receipt (fixed code only), never a relation result.
+KIND_LOOP_REJECTED = "loop_relation_rejected"
+# Per-answer reasons semantic_jev.validate_answers raises as "{qid}:<reason>";
+# anything else is stored as "unknown", never as free text.
+_ANSWER_REJECT_CODES = frozenset((
+    "not_object", "type_invalid", "noul_invalid", "choice_invalid",
+    "confidence_invalid", "probabilities_missing",
+    "probabilities_option_unknown", "probabilities_value_invalid",
+    "probabilities_option_missing", "probabilities_sum_off_lt_1e-3",
+    "probabilities_sum_off_ge_1e-3", "probabilities_choice_not_max",
+    "unknown_type"))
+
+
+def _rejected_pair(receipt: dict, meta: dict, policy: str, scope: str):
+    """(pair, code) of a well-formed receipt for this policy + retry scope,
+    else None — a damaged row is kept as history but never trusted."""
+    ids = (receipt.get("loop_artifact_id"), receipt.get("trigger_message_id"))
+    revision, code = receipt.get("trigger_revision"), receipt.get("code")
+    if (meta.get("policy_fingerprint") != policy
+            or meta.get("retry_scope") != scope
+            or meta.get("registry") != jev.REGISTRY_VERSION
+            or meta.get("invalidated")
+            or receipt.get("status") != "INCOMPLETE"
+            or not all(type(i) is int and i > 0 for i in ids)
+            or not isinstance(revision, str) or not revision
+            or not (code == "unknown" or (
+                isinstance(code, str) and code.startswith("relation:")
+                and code[len("relation:"):] in _ANSWER_REJECT_CODES))):
+        return None
+    return (*ids, revision), code
 
 
 def _object(value):
@@ -47,8 +78,15 @@ def _valid_candidate(candidate: dict, meta: dict) -> bool:
 
 
 def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
-                 scfg, deadline):
+                 scfg, deadline, *, retry_scope: str = "",
+                 rejections: list | None = None):
     """Return (created, complete); unfinished relation pairs resume on retry.
+
+    A pair whose answer Jev returned malformed is recorded as rejected for
+    ``retry_scope`` and the remaining pairs are still evaluated; the pass
+    stays incomplete. Within one scope the pair is not re-sent; a new
+    retry scope (human retry command) evaluates it again. Each rejection
+    appends ``{"code", "cached"}`` to ``rejections``.
 
     A candidate is identified by its evidence revision, not just its wording.
     Relation results additionally bind the trigger and context generation.
@@ -225,6 +263,20 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                 and all(isinstance(value, str) for value in identity[2:])):
             seen_pairs.add(identity)
 
+    rejected = {}
+    for row in ledger.db.execute(
+            "SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? "
+            "AND CASE WHEN json_valid(meta) AND json_type(meta)='object' "
+            "THEN json_extract(meta,'$.fingerprint') END=?",
+            (KIND_LOOP_REJECTED, project_id, fp)):
+        found = _rejected_pair(_object(row["content"]), _object(row["meta"]),
+                               policy, retry_scope)
+        if found is not None:
+            rejected[found[0]] = found[1]
+    if rejections is None:
+        rejections = []
+    rejections_before = len(rejections)
+
     candidates = _candidate_rows()
     targets = [m for m in members.values() if m["role"] == "target"]
     pairs = 0
@@ -252,6 +304,10 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                    target["revision"], fp, policy)
             if key in seen_pairs:
                 continue
+            code = rejected.get(key[:3])
+            if code is not None:
+                rejections.append({"code": code, "cached": True})
+                continue
             if pairs >= 40 or time.monotonic() >= deadline:
                 return created, False
             qid = "relation"
@@ -278,8 +334,32 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
             try:
                 answer = jev_client.evaluate(
                     state, {qid: question}, deadline)["answers"][qid]
-            except jev.JevError:
-                return created, False
+            except jev.JevError as error:
+                detail = str(getattr(error, "detail", "") or "")
+                # per-answer defect (same discriminator as
+                # semantic_drain._malformed_answer): record it and go on to
+                # the next pair; any other failure stops the pass as before
+                if getattr(error, "kind", "") != "protocol_error" \
+                        or ":" not in detail:
+                    return created, False
+                reason = detail.partition(":")[2]
+                code = (f"relation:{reason}" if reason in _ANSWER_REJECT_CODES
+                        else "unknown")
+                ledger.artifact_add(
+                    KIND_LOOP_REJECTED, json.dumps(
+                        {"status": "INCOMPLETE",
+                         "loop_artifact_id": row["artifact_id"],
+                         "trigger_message_id": target["message_id"],
+                         "trigger_revision": target["revision"],
+                         "code": code}),
+                    project_id=project_id, message_id=target["message_id"],
+                    model=jev.JEV_MODEL,
+                    meta={"fingerprint": fp, "policy_fingerprint": policy,
+                          "registry": jev.REGISTRY_VERSION,
+                          "retry_scope": retry_scope, "jev_requests": 1})
+                rejections.append({"code": code, "cached": False})
+                pairs += 1
+                continue
             relation = answer["choice"]
             try:
                 origin_time = datetime.fromisoformat(source["posted_at"] or "")
@@ -308,4 +388,4 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                       "jev_requests": 1})
             seen_pairs.add(key)
             pairs += 1
-    return created, True
+    return created, len(rejections) == rejections_before

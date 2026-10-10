@@ -1161,11 +1161,26 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         # kept OUT of the commit tx because matching makes Jev calls
         # (no network inside a DB transaction, §6.2); replay-safe via
         # candidate_fp and pair dedup.
+        rejections = []
+        scope = pl.get("retry_command_id")
         _, loops_done = update_loops(ledger, pid, bundle,
                                      facts_by_target, jev_client,
-                                     scfg, deadline)
+                                     scfg, deadline,
+                                     retry_scope=scope if isinstance(scope, str) else "",
+                                     rejections=rejections)
+        flag = _jev_fail_flag(getattr(jev_client, "last_error", None)) \
+            if not loops_done and jev_client is not None else None
+        if rejections:
+            if _PASS_REASON.get("loops_rejected") is None:
+                _PASS_REASON["loops_rejected"] = rejections[0]["code"]
+            if flag is None:
+                # Only cached rejections, or a later pair's success reset
+                # last_error: the known rejection is the cause — a bounded
+                # retry, never a free defer that would loop forever. A
+                # later hard/resource failure keeps its own handling below.
+                _why("loops_jev_rejected")
+                retryable_failure = True
         if not loops_done and jev_client is not None:
-            flag = _jev_fail_flag(getattr(jev_client, "last_error", None))
             _why(f"loops_jev_{flag}")
             resource_wait |= flag == "resource"
             retryable_failure |= flag == "retryable"
@@ -1873,6 +1888,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 art0 = _last_stage_artifact(ledger, job["project_id"])
                 _PASS_REASON["code"] = None
                 _PASS_REASON["summary_validation_error"] = None
+                _PASS_REASON["loops_rejected"] = None
                 try:
                     if job["kind"] == QC_JOB_KIND:
                         status = _process_qc_job(
@@ -1957,6 +1973,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     "retry_reason": _PASS_REASON["code"]
                     if status != "done" else None,
                     "summary_validation_error": _PASS_REASON["summary_validation_error"],
+                    "loops_rejected": _PASS_REASON["loops_rejected"],
                 })
                 if status == "done":
                     out["done_by_kind"][job["kind"]] = \
