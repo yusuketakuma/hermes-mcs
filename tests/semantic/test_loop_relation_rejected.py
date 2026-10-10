@@ -73,7 +73,7 @@ def test_a_rejected_pair_is_recorded_and_later_pairs_still_run(tmp_path):
                                 "trigger_revision", "code"}
         assert receipt["status"] == "INCOMPLETE"
         assert receipt["trigger_message_id"] == 2 and receipt["code"] == CODE
-        assert meta["retry_scope"] == "cmd-a" and meta["jev_requests"] == 1
+        assert meta["retry_scope"] == "cmd-a" and meta["jev_requests"] == 2
     finally:
         db.close()
 
@@ -229,5 +229,118 @@ def test_a_known_rejection_retries_only_when_nothing_else_failed(
             "SELECT attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()[0]
         if charged is not None:
             assert attempts == attempts0 + (1 if charged else 0)
+    finally:
+        db.close()
+
+
+class _FlakyJev(_FakeJev):
+    """Trigger m2 gets the given outcomes in order (an error to raise, or
+    None for a valid answer); every other trigger is answered."""
+
+    def __init__(self, *outcomes, on_call=None, target="m2"):
+        super().__init__()
+        self.outcomes = list(outcomes)
+        self.m2 = 0
+        self.on_call = on_call
+        self.target = target
+
+    def evaluate(self, state, questions, deadline):
+        if state["target"]["id"] == self.target:
+            self.m2 += 1
+            if self.on_call:
+                self.on_call()
+            outcome = self.outcomes.pop(0)
+            if outcome is not None:
+                self.requests_made += 1
+                raise outcome
+        return super().evaluate(state, questions, deadline)
+
+
+REJECT = jev.JevError("protocol_error", CODE)
+
+
+def test_a_transient_rejection_is_asked_again_and_recovers(tmp_path):
+    """Per-answer defects are sometimes transient (2026-10-10: medication
+    detail rejections cleared on the job's retry). The pair is asked once
+    more in the same pass; a valid answer is a normal relation event."""
+    db, config, bundle, facts = _two_pairs(tmp_path)
+    try:
+        client = _FlakyJev(REJECT, None)
+        complete, rejections = _run(db, config, bundle, facts, client, "cmd-a")
+        assert complete is True and rejections == [] and client.m2 == 2
+        events = _rows(db, semantic_loops.KIND_LOOP_EVENT)
+        assert sorted(e["trigger_message_id"] for e, _ in events) == [2, 3]
+        assert [m["jev_requests"] for e, m in events
+                if e["trigger_message_id"] == 2] == [2]
+        assert _rows(db, semantic_loops.KIND_LOOP_REJECTED) == []
+    finally:
+        db.close()
+
+
+def test_a_repeated_rejection_is_recorded_after_one_reask(tmp_path):
+    db, config, bundle, facts = _two_pairs(tmp_path)
+    try:
+        client = _FlakyJev(REJECT, REJECT)
+        complete, rejections = _run(db, config, bundle, facts, client, "cmd-a")
+        assert complete is False and client.m2 == 2
+        assert rejections == [{"code": CODE, "cached": False}]
+        assert len(_rows(db, semantic_loops.KIND_LOOP_REJECTED)) == 1
+        events = _rows(db, semantic_loops.KIND_LOOP_EVENT)
+        assert [e["trigger_message_id"] for e, _ in events] == [3]
+    finally:
+        db.close()
+
+
+def test_a_different_failure_on_the_reask_stops_the_pass(tmp_path):
+    db, config, bundle, facts = _two_pairs(tmp_path)
+    try:
+        client = _FlakyJev(REJECT, jev.JevError("auth_error", "unauthorized"))
+        complete, rejections = _run(db, config, bundle, facts, client, "cmd-a")
+        assert complete is False and rejections == [] and client.m2 == 2
+        assert _rows(db, semantic_loops.KIND_LOOP_REJECTED) == []
+        assert _rows(db, semantic_loops.KIND_LOOP_EVENT) == []
+    finally:
+        db.close()
+
+
+def test_no_room_to_ask_again_leaves_the_pair_for_a_later_pass(tmp_path, monkeypatch):
+    """The first malformed answer arrives at the deadline: no re-ask and no
+    receipt — the pair stays unevaluated and a later pass asks it afresh."""
+    clock = [1000.0]
+    monkeypatch.setattr(semantic_loops.time, "monotonic", lambda: clock[0])
+
+    def at_deadline():
+        clock[0] = 1030.0
+
+    db, config, bundle, facts = _two_pairs(tmp_path)
+    try:
+        client = _FlakyJev(REJECT, on_call=at_deadline)
+        rejections = []
+        _, complete = semantic_loops.update_loops(
+            db, 1, bundle, facts, client, config, 1030.0,
+            retry_scope="cmd-a", rejections=rejections)
+        assert complete is False and rejections == [] and client.m2 == 1
+        assert _rows(db, semantic_loops.KIND_LOOP_REJECTED) == []
+    finally:
+        db.close()
+
+
+def test_a_first_rejection_on_the_last_call_of_the_cap_is_not_recorded(tmp_path, monkeypatch):
+    """Review condition: the pass may send _PAIR_CAP calls. When the first
+    malformed answer uses the last one, there is no room for the re-ask:
+    no receipt, the pass is incomplete, and the next pass asks again."""
+    monkeypatch.setattr(semantic_loops, "_PAIR_CAP", 2)
+    db, config, bundle, facts = _two_pairs(tmp_path)
+    try:
+        client = _FlakyJev(REJECT, target="m3")     # m2 answers, then m3
+        complete, rejections = _run(db, config, bundle, facts, client, "cmd-a")
+        assert complete is False and rejections == [] and client.m2 == 1
+        assert _rows(db, semantic_loops.KIND_LOOP_REJECTED) == []
+        assert [e["trigger_message_id"] for e, _ in _rows(
+            db, semantic_loops.KIND_LOOP_EVENT)] == [2]
+        complete, rejections = _run(db, config, bundle, facts, _FakeJev(), "cmd-a")
+        assert complete is True and rejections == []
+        assert sorted(e["trigger_message_id"] for e, _ in _rows(
+            db, semantic_loops.KIND_LOOP_EVENT)) == [2, 3]
     finally:
         db.close()

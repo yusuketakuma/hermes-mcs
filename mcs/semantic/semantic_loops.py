@@ -12,6 +12,8 @@ KIND_LOOP_EVENT = "loop_event"
 # A pair whose relation answer Jev returned malformed: an INCOMPLETE
 # receipt (fixed code only), never a relation result.
 KIND_LOOP_REJECTED = "loop_relation_rejected"
+# Relation calls one pass may send (a re-ask counts as a call).
+_PAIR_CAP = 40
 # Per-answer reasons semantic_jev.validate_answers raises as "{qid}:<reason>";
 # anything else is stored as "unknown", never as free text.
 _ANSWER_REJECT_CODES = frozenset((
@@ -308,7 +310,7 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
             if code is not None:
                 rejections.append({"code": code, "cached": True})
                 continue
-            if pairs >= 40 or time.monotonic() >= deadline:
+            if pairs >= _PAIR_CAP or time.monotonic() >= deadline:
                 return created, False
             qid = "relation"
             question = jev.choice_question(
@@ -331,17 +333,29 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                                "sender": m["sender"]} for m in members.values()
                               if m["message_id"] != target["message_id"]],
             }
-            try:
-                answer = jev_client.evaluate(
-                    state, {qid: question}, deadline)["answers"][qid]
-            except jev.JevError as error:
-                detail = str(getattr(error, "detail", "") or "")
-                # per-answer defect (same discriminator as
-                # semantic_drain._malformed_answer): record it and go on to
-                # the next pair; any other failure stops the pass as before
-                if getattr(error, "kind", "") != "protocol_error" \
-                        or ":" not in detail:
-                    return created, False
+            answer, detail = None, ""
+            for asked in range(2):
+                try:
+                    answer = jev_client.evaluate(
+                        state, {qid: question}, deadline)["answers"][qid]
+                    break
+                except jev.JevError as error:
+                    detail = str(getattr(error, "detail", "") or "")
+                    # per-answer defect (same discriminator as
+                    # semantic_drain._malformed_answer); any other failure
+                    # stops the pass as before
+                    if getattr(error, "kind", "") != "protocol_error" \
+                            or ":" not in detail:
+                        return created, False
+                    pairs += 1                   # every sent call counts
+                    if asked == 0 and (pairs >= _PAIR_CAP
+                                       or time.monotonic() >= deadline):
+                        # no room to ask again: leave the pair unevaluated
+                        # (no receipt) so a later pass asks it afresh
+                        return created, False
+            # A defect can be transient (a re-ask answered validly): only a
+            # second malformed answer in the same pass is recorded.
+            if answer is None:
                 reason = detail.partition(":")[2]
                 code = (f"relation:{reason}" if reason in _ANSWER_REJECT_CODES
                         else "unknown")
@@ -356,9 +370,8 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                     model=jev.JEV_MODEL,
                     meta={"fingerprint": fp, "policy_fingerprint": policy,
                           "registry": jev.REGISTRY_VERSION,
-                          "retry_scope": retry_scope, "jev_requests": 1})
+                          "retry_scope": retry_scope, "jev_requests": 2})
                 rejections.append({"code": code, "cached": False})
-                pairs += 1
                 continue
             relation = answer["choice"]
             try:
@@ -385,7 +398,7 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                 model=jev.JEV_MODEL,
                 meta={"fingerprint": fp, "policy_fingerprint": policy,
                       "registry": jev.REGISTRY_VERSION,
-                      "jev_requests": 1})
+                      "jev_requests": asked + 1})
             seen_pairs.add(key)
             pairs += 1
     return created, len(rejections) == rejections_before
