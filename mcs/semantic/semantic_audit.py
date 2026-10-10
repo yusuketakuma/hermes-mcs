@@ -131,8 +131,8 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
         state = {"target": {"id": c["claim_id"], "text": c["text"]},
                  "context": ctx}
         try:
-            out = jev_client.evaluate(
-                state, {c["claim_id"]: questions[c["claim_id"]]},
+            out = jev.evaluate_once_more(
+                jev_client, state, {c["claim_id"]: questions[c["claim_id"]]},
                 deadline)
         except jev.JevError as error:
             with suppress(Exception):
@@ -218,8 +218,8 @@ def evaluate_source_fact_coverage(jev_client, source_text: str, facts: list,
                                 "text": statement})
         state = {"target": {"id": str(target_id), "text": source_text},
                  "context": context}
-        response = jev_client.evaluate(
-            state, {question_id: question}, deadline)
+        response = jev.evaluate_once_more(
+            jev_client, state, {question_id: question}, deadline)
         answer = response.get("answers", {}).get(question_id)
         choice = answer.get("choice") if isinstance(answer, dict) else None
         confidence = answer.get("confidence") if isinstance(answer, dict) else None
@@ -376,7 +376,8 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
         state = {"target": {"id": fid, "text": _fact_audit_target(fact)},
                  "context": ctx}
         try:
-            out = jev_client.evaluate(state, {fid: question}, deadline)
+            out = jev.evaluate_once_more(jev_client, state, {fid: question},
+                                         deadline)
         except RuntimeGuardError:
             raise
         except Exception as error:

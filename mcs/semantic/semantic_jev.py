@@ -205,6 +205,28 @@ def validate_answers(raw: dict, questions: dict, model: str) -> dict:
     return result
 
 
+def is_answer_defect(error) -> bool:
+    """A protocol_error raised while validating ONE answer: every per-answer
+    code is ``{qid}:<reason>`` and no envelope code carries a colon."""
+    return getattr(error, "kind", "") == "protocol_error" \
+        and ":" in str(getattr(error, "detail", "") or "")
+
+
+def evaluate_once_more(client, state: dict, questions: dict,
+                       deadline: float) -> dict:
+    """``client.evaluate()``, asking the same request once more after a
+    malformed answer — often transient (2026-10-10: medication-detail
+    rejections cleared on the job's retry), where retrying the job costs a
+    whole pass and an attempt. Any other failure, a second defect and the
+    runtime guards on the second send propagate as before."""
+    try:
+        return client.evaluate(state, questions, deadline)
+    except JevError as error:
+        if not is_answer_defect(error):
+            raise
+    return client.evaluate(state, questions, deadline)
+
+
 def verdict_for(noul: float, match: float = MATCH_THRESHOLD,
                 nomatch: float = NOMATCH_THRESHOLD) -> str:
     """Three-valued verdict; NO_MATCH means 'proposition not supported

@@ -52,7 +52,7 @@ def _eval_chunked(jev_client, state: dict, questions: dict,
     merged = {"answers": {}}
     for i in range(0, len(keys), max(1, limit)):
         part = {k: questions[k] for k in keys[i:i + limit]}
-        out = jev_client.evaluate(state, part, deadline)
+        out = jev.evaluate_once_more(jev_client, state, part, deadline)
         merged["answers"].update(out["answers"])
     return merged
 
@@ -1384,8 +1384,7 @@ def _malformed_answer(error) -> bool:
     per-answer code is ``{qid}:<reason>`` and no envelope code carries
     a colon (semantic_jev.validate_answers), so the colon is the
     discriminator."""
-    return getattr(error, "kind", "") == "protocol_error" \
-        and ":" in str(getattr(error, "detail", "") or "")
+    return jev.is_answer_defect(error)
 
 
 def _jev_error_brief(error) -> dict | None:

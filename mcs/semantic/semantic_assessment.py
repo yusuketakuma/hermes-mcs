@@ -288,8 +288,8 @@ def evaluate_medication_events(ledger, bundle: dict, target_id, facts: list,
                         "quote and same-thread context. The target statement and "
                         "its status/polarity are unverified extraction candidates, "
                         "not authoritative source facts.", options)
-                    response = jev_client.evaluate(
-                        state, {dimension: question}, deadline)
+                    response = jev.evaluate_once_more(
+                        jev_client, state, {dimension: question}, deadline)
                 except RuntimeGuardError:
                     raise
                 except Exception as error:

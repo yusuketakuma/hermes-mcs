@@ -1072,7 +1072,7 @@ def jev_preflight(jev_client, chunk_text: str, deadline,
              "absent": "the category is not represented",
              "uncertain": "presence cannot be decided"})
     state = {"target": {"id": chunk_id, "text": chunk_text}}
-    response = jev_client.evaluate(state, questions, deadline)
+    response = jev.evaluate_once_more(jev_client, state, questions, deadline)
     answers = response.get("answers") if isinstance(response, dict) \
         else None
     if not isinstance(answers, dict):
