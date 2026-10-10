@@ -949,6 +949,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                         error_out=summary_error)
                     if summary is None and summary_reason == "model" \
                             and summary_error.get("code") \
+                            and semantic.last_llm_failure() != "length_stop" \
                             and _current(ledger, "semantic_summary_format_repair",
                                          mid, fp, policy) is None:
                         if _PASS_REASON.get("summary_validation_error") is None:

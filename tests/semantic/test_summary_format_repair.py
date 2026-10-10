@@ -148,6 +148,39 @@ def test_a_valid_first_summary_needs_no_format_repair(tmp_path):
         db.close()
 
 
+@pytest.mark.parametrize('failure', ['length_stop', None])
+def test_truncated_output_preserves_format_repair_for_a_real_format_error(
+        tmp_path, monkeypatch, failure):
+    monkeypatch.setattr(semantic, '_LLM_FAILURE', None)
+    db = _db(tmp_path)
+    calls = []
+
+    def model(prompt):
+        if '要約器' in prompt:
+            calls.append(prompt)
+            semantic._failed(failure if len(calls) == 1 else None)
+            if len(calls) == 1:
+                return None
+        return _llm(prompt)
+
+    try:
+        first = _run(db, model)
+        truncated = failure == 'length_stop'
+        assert len(calls) == (1 if truncated else 2)
+        assert bool(db.artifacts('semantic_summary_format_repair', message_id=1)) == (not truncated)
+        if truncated:
+            assert first['job_metrics'][0]['status'] == 'retry'
+            assert not db.artifacts('semantic_summary', message_id=1)
+            assert _run(db, model)['done'] == 1
+            assert len(calls) == 2
+            assert not db.artifacts('semantic_summary_format_repair', message_id=1)
+        else:
+            assert first['done'] == 1
+        assert db.artifacts('semantic_summary', message_id=1)
+    finally:
+        db.close()
+
+
 def test_an_unsent_initial_summary_never_reserves_format_repair(tmp_path):
     db = _db(tmp_path)
 
