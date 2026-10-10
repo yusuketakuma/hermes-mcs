@@ -168,18 +168,29 @@ def validate_answers(raw: dict, questions: dict, model: str) -> dict:
             dist = a.get("probabilities")
             if not isinstance(dist, dict):
                 raise JevError("protocol_error", f"{qid}:probabilities_missing")
+            # one fixed code per broken rule (2026-10-10: a single code could
+            # not tell a Jev defect from a too-strict check); same rules
             probs = {}
             for k, v in dist.items():
                 p = _finite(v)
-                if k not in options or p is None or not 0.0 <= p <= 1.0:
-                    raise JevError("protocol_error",
-                                   f"{qid}:probabilities_invalid")
-                probs[k] = p
-            if set(probs) != options \
-                    or abs(sum(probs.values()) - 1.0) > 1e-6 \
-                    or probs[choice] < max(probs.values()):
-                raise JevError("protocol_error",
-                               f"{qid}:probabilities_invalid")
+                if k not in options:
+                    reason = "probabilities_option_unknown"
+                elif p is None or not 0.0 <= p <= 1.0:
+                    reason = "probabilities_value_invalid"
+                else:
+                    probs[k] = p
+                    continue
+                raise JevError("protocol_error", f"{qid}:{reason}")
+            if set(probs) != options:
+                reason = "probabilities_option_missing"
+            elif abs(sum(probs.values()) - 1.0) > 1e-6:
+                reason = "probabilities_sum_invalid"
+            elif probs[choice] < max(probs.values()):
+                reason = "probabilities_choice_not_max"
+            else:
+                reason = None
+            if reason is not None:
+                raise JevError("protocol_error", f"{qid}:{reason}")
             out[qid] = {"type": "choice", "choice": choice,
                         "confidence": conf, "distribution": probs}
         else:
