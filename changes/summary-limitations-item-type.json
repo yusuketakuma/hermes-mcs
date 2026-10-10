@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "要約の補足欄で拒否した要素の型を記録する",
+  "summary": "要約の補足欄に文字列以外が含まれるとき、拒否した最初の要素がオブジェクト・配列・null・真偽値・数値のどれかを固定コードで記録します。本文や値を記録せず、残る生成形式の問題を調べられます。要約の受入条件は変わりません。",
+  "upgrade": "抽出worker2本を更新後に再起動してください。設定・gatewayの変更は不要です。臨床上の検証条件、再試行上限、予算、人承認経路は変更しません。",
+  "details": [
+    "limitations_item_not_str を固定のJSON型別コードに分けます。文字列以外の要素を削除・変換して要約を受け入れる変更はありません。",
+    "完全合成の各型で、従来と同じmodel失敗を返し、診断に本文・キー・値を含めないことを確認します。"
+  ],
+  "refs": ["mcs/semantic/semantic_llm.py", "tests/semantic/test_summary_validation_diagnostics.py"]
+}

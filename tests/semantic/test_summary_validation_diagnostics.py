@@ -17,7 +17,12 @@ from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
     ('{"claims":[{"text":""}]}', "claim_text_invalid"),
     ('{"claims":[{"text":4}]}', "claim_text_invalid"),
     ('{"claims":[],"limitations":{"text":"SYNTHETIC_PRIVATE_RESPONSE"}}', "limitations_not_list"),
-    ('{"claims":[],"limitations":[4]}', "limitations_item_not_str"),
+    ('{"claims":[],"limitations":[4]}', "limitations_item_number"),
+    ('{"claims":[],"limitations":[0.5]}', "limitations_item_number"),
+    ('{"claims":[],"limitations":[true]}', "limitations_item_boolean"),
+    ('{"claims":[],"limitations":[null]}', "limitations_item_null"),
+    ('{"claims":[],"limitations":[[]]}', "limitations_item_array"),
+    ('{"claims":[],"limitations":[{"text":"SYNTHETIC_PRIVATE_RESPONSE"}]}', "limitations_item_object"),
 ])
 def test_summary_validation_codes_keep_the_existing_failure_contract(tmp_path, response, expected):
     db = _seeded(tmp_path)

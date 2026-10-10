@@ -6,7 +6,7 @@
   "details": [
     "単一文字列を [文字列] にするだけで、文字の削除や補足内容の省略はしない。claims と既存の配列形式は変えない。",
     "数値・bool・object・配列内の非文字列は引き続き拒否し、内容を捨てて成功扱いにしない。",
-    "残る形式違反は limitations_not_list と limitations_item_not_str の固定コードで区別する。本文・値・動的キーは記録しない。",
+    "残る形式違反は limitations_not_list と配列要素の型別コード limitations_item_object / array / null / boolean / number で区別する。本文・値・動的キーは記録しない。",
     "完全合成の回帰で、単一文字列・空文字列・改行を含む補足とclaimsの保存、他形式の拒否を確認する。"
   ],
   "refs": ["mcs/semantic/semantic_llm.py", "tests/semantic/test_semantic_llm_retry.py", "tests/semantic/test_summary_validation_diagnostics.py"]

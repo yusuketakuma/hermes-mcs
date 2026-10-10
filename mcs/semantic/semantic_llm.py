@@ -334,8 +334,13 @@ def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
         limitations = [limitations]  # preserve the whole supplement, never discard it
     if not isinstance(limitations, list):
         return result(None, "model", "limitations_not_list")
-    if any(not isinstance(x, str) for x in limitations):
-        return result(None, "model", "limitations_item_not_str")
+    for item in limitations:
+        if not isinstance(item, str):
+            # Fixed JSON type only; never disclose keys or values.
+            code = {dict: "object", list: "array", type(None): "null",
+                    bool: "boolean", int: "number", float: "number"}.get(
+                        type(item), "unknown")
+            return result(None, "model", f"limitations_item_{code}")
     attachment_count = sum(len(m.get("attachments", [])) for m in bundle["members"])
     if attachment_count:
         limitations.append(f"対象投稿・文脈に添付{attachment_count}件があります。添付内容は解析していません。")
