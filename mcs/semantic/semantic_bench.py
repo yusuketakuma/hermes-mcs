@@ -125,6 +125,7 @@ def _run_case(case: dict, llm_fn, jev_client=None,
             "facts_dropped": dropped,
             "n_claims": len(summary["claims"]) if summary else 0,
             "summary_reason": s_reason,
+            **({"deferred": True} if summary is None else {}),
             "findings": [f.get("code") for f in findings],
             "claims": [c.get("text") for c in
                        (summary["claims"] if summary else [])]}

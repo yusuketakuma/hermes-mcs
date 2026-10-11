@@ -187,7 +187,9 @@ def require_fragment(root, base):
     )
     paths = result.stdout.splitlines()
     runtime = any((p.startswith(("mcs/", "hermes_plugin/", "adapters/", "lineworks_adapter/", "mcs_standalone/", "deployment/"))
-                   and not p.endswith(".md")) or p == "install.sh" for p in paths)
+                   and not p.endswith(".md")) or p in {
+                       "install.sh", "scripts/mcs", "scripts/install_local.py",
+                       "scripts/mcs_upgrade.py", "scripts/keychain_to_env.py"} for p in paths)
     new_fragment = any(re.fullmatch(r"changes/[^/]+\.json", p)
                        and (root / p).is_file() for p in paths)
     if runtime and not new_fragment:

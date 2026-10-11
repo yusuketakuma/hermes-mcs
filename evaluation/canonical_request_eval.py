@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sqlite3
 import sys
 import time
@@ -289,7 +290,8 @@ def capacity_report(days):
             raise ValueError("capacity_jobs_invalid")
         day_jobs = [evaluation._finite_number(value, "job_llm_s")
                     for value in day["job_llm_s"]]
-        jobs_complete = jobs_complete and sum(day_jobs) == totals[-1]
+        jobs_complete = jobs_complete and math.isclose(
+            sum(day_jobs), totals[-1], rel_tol=0, abs_tol=1e-9)
         jobs.extend(day_jobs)
         skips.append(evaluation._finite_number(day["slot_busy"], "slot_busy", integer=True))
     if len(set(dates)) != len(dates) or dates != sorted(dates):

@@ -342,6 +342,41 @@ def _bootstraps(stub_root, label):
             if c.startswith("launchctl bootstrap") and label in c]
 
 
+@pytest.mark.parametrize("root_value", ["empty", "different"])
+def test_install_refuses_unsupported_data_root_before_writes(tmp_path, root_value):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    other = tmp_path / "other-root"
+    env["MCS_ROOT"] = "" if root_value == "empty" else str(other)
+    result = _run(env, None, "--mode", "standalone", "--no-brew", "--no-llm")
+    assert result.returncode != 0
+    assert "MCS_ROOT" in result.stderr
+    assert list(home.iterdir()) == []
+    assert not other.exists()
+    assert not hermes_home.exists()
+    assert not any(call.startswith(("git clone", "uv ", "launchctl bootstrap"))
+                   for call in _calls(stub_root))
+
+
+@pytest.mark.parametrize("root_value", ["unset", "default", "normalized", "physical", "tilde"])
+def test_install_accepts_default_data_root_spellings(tmp_path, root_value):
+    home, _, _, env = _world(tmp_path)
+    env.pop("MCS_ROOT", None)
+    if root_value == "default":
+        env["MCS_ROOT"] = str(home / ".mcs")
+    elif root_value == "normalized":
+        env["MCS_ROOT"] = str(home) + "/./.mcs/"
+    elif root_value == "physical":
+        alias = tmp_path / "home-alias"
+        alias.symlink_to(home, target_is_directory=True)
+        env["MCS_ROOT"] = str(alias / ".mcs")
+    elif root_value == "tilde":
+        env["MCS_ROOT"] = "~/.mcs"
+    result = _run(env, None, "--mode", "standalone", "--no-brew", "--no-llm",
+                  "--no-services", "--no-recovery")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / ".mcs/venv").is_dir()
+
+
 @pytest.mark.parametrize("runtime", ["unsafe", "unknown", "failed", "unsupported"])
 @pytest.mark.parametrize("mode", ["install", "preflight", "dry-run"])
 def test_recovery_runtime_gate_fails_before_watchdog_installation(

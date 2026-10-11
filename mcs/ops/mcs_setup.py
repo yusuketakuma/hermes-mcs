@@ -2723,7 +2723,8 @@ _TIMEOUT_PL = ("my $t = shift; my $p = 0;"
                " $p = fork; die unless defined $p;"
                " if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 }"
                " $SIG{ALRM} = sub { kill 'TERM', -$p; sleep 5; kill 'KILL', -$p; exit 124 };"
-               " alarm $t; waitpid($p, 0); exit($? >> 8)")
+               " alarm $t; waitpid($p, 0); my $s = $?;"
+               " exit(($s & 127) ? 128 + ($s & 127) : ($s >> 8))")
 
 
 def _agent_labels(cfg: dict) -> list[str]:

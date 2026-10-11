@@ -143,6 +143,26 @@ class ReleaseNotesTest(unittest.TestCase):
                 notes.require_fragment(root, "base")
 
 
+    def test_runtime_scripts_require_fragments_but_development_scripts_do_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = ("scripts/mcs", "scripts/install_local.py", "scripts/mcs_upgrade.py",
+                     "scripts/keychain_to_env.py")
+            for path in paths:
+                with self.subTest(path=path):
+                    result = subprocess.CompletedProcess([], 0, path + "\n", "")
+                    with patch.object(notes.subprocess, "run", return_value=result), self.assertRaises(ValueError):
+                        notes.require_fragment(root, "base")
+            result = subprocess.CompletedProcess([], 0, "scripts/development/update_readme.py\n", "")
+            with patch.object(notes.subprocess, "run", return_value=result):
+                notes.require_fragment(root, "base")
+            (root / "changes").mkdir()
+            (root / "changes/001.json").write_text(json.dumps(self.item()), encoding="utf-8")
+            result = subprocess.CompletedProcess([], 0, "\n".join(paths) + "\nchanges/001.json\n", "")
+            with patch.object(notes.subprocess, "run", return_value=result):
+                notes.require_fragment(root, "base")
+
+
     def test_release_commit_archives_count_only_for_a_new_version(self):
         def scenario(path, payload, version="1.0.1"):
             with tempfile.TemporaryDirectory() as tmp:

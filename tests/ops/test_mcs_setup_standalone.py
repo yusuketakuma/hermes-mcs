@@ -276,6 +276,26 @@ def test_cron_timeout_wrapper_kills_the_whole_job(tmp_path):
     assert ok.returncode == 3                     # normal exits pass through
 
 
+@pytest.mark.parametrize("signal_name", ["SIGTERM", "SIGKILL"])
+def test_cron_timeout_wrapper_preserves_child_signal_failure(signal_name):
+    import signal
+    import subprocess
+    import sys
+
+    child = "import os, signal, sys; os.kill(os.getpid(), getattr(signal, sys.argv[1]))"
+    proc = subprocess.run(["/usr/bin/perl", "-e", mcs_setup._TIMEOUT_PL, "30",
+                           sys.executable, "-c", child, signal_name], timeout=10)
+    assert proc.returncode == 128 + getattr(signal, signal_name)
+
+
+def test_cron_timeout_wrapper_preserves_success():
+    import subprocess
+
+    proc = subprocess.run(["/usr/bin/perl", "-e", mcs_setup._TIMEOUT_PL, "30",
+                           "/bin/sh", "-c", "exit 0"], timeout=10)
+    assert proc.returncode == 0
+
+
 @pytest.mark.parametrize("target,ok", [
     ("slack:C0SYNTHETIC", True), ("slack:G0SYNTHETIC", True), ("slack:D0SYNTHETIC", True),
     ("slack:U0SYNTHETIC", False), ("slack:#general", False), ("slack:general", False),

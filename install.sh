@@ -138,6 +138,32 @@ link_target() {
 }
 
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
+if [ "${MCS_ROOT+x}" = x ]; then
+    [ -n "$MCS_ROOT" ] || die "MCS_ROOT is empty; unset MCS_ROOT before installing (data root is ~/.mcs)"
+    case "$MCS_ROOT" in
+        \~/*) _mcs_root="$HOME/${MCS_ROOT#\~/}" ;;
+        *) _mcs_root="$MCS_ROOT" ;;
+    esac
+    _mcs_root="$(abspath "$_mcs_root")"
+    # Match the runtime's lexical normalization before resolving symlinks.
+    _mcs_root="$(awk 'BEGIN {
+        n = split(ARGV[1], parts, "/"); top = 0
+        for (i = 1; i <= n; i++) {
+            if (parts[i] == "" || parts[i] == ".") continue
+            if (parts[i] == "..") { if (top > 0) top--; continue }
+            stack[++top] = parts[i]
+        }
+        out = ""; for (i = 1; i <= top; i++) out = out "/" stack[i]
+        print (out == "" ? "/" : out)
+    }' "$_mcs_root")"
+    _mcs_default="$(physpath "$HOME/.mcs")"
+    _mcs_root="$(physpath "$_mcs_root" 2>/dev/null)" \
+        || die "MCS_ROOT is unsupported by the installer; unset MCS_ROOT (data root is ~/.mcs)"
+    [ "$_mcs_root" = "$_mcs_default" ] \
+        || die "MCS_ROOT is unsupported by the installer; unset MCS_ROOT (data root is ~/.mcs)"
+fi
+MCS_ROOT="$(abspath "$HOME")/.mcs"
+export MCS_ROOT
 if [ -e "$HOME/.mcs/config.json" ] || [ -L "$HOME/.mcs/config.json" ]; then
     MODE_PY="$HOME/.mcs/venv/bin/python3"
     if [ ! -x "$MODE_PY" ]; then MODE_PY="$(command -v python3 || true)"; fi
