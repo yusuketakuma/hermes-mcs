@@ -144,6 +144,21 @@ _UPDATE_ENV_STRIP = (
     "HERMES_GATEWAY", "HERMES_GATEWAY_MODE", "HERMES_GATEWAY_DETACHED",
     "HERMES_CRON_JOB", "HERMES_JOB_ID", "HERMES_QUIET", "TERMINAL_CWD")
 _UPDATE_PM_ENV = "_MCS_UPDATE_PM"   # post-merge child handshake token
+# Python runtime migration (1.0.18): the updater keeps running on the old
+# interpreter while install.sh rebuilds the venv. The held run.lock FD is
+# the proof install.sh checks before moving an established venv aside.
+RUNTIME_MIN = (3, 14)
+RUN_LOCK_FD_ENV = "MCS_UPDATE_RUN_LOCK_FD"
+RUNTIME_BACKUP_ENV = "MCS_UPDATE_RUNTIME_BACKUP"
+MIGRATION_INSTALL_ARGS = ("--no-llm", "--no-plugin")
+# mirror install.sh: a migration accepts the current pin as is and moves only
+# the previous pins (HERMES_PIN / HERMES_PREVIOUS_PINS)
+HERMES_PIN = "6f35b1ed84536f7e7fd2f605f7779dd051cce05f"
+HERMES_PREVIOUS_PINS = frozenset({"fd50a275e2616118c48fe07e7e1c878782b15ccd",
+                                  "1e8fbfe6b41399a46e232f6cde5618cfdfa2729a",
+                                  "16390dc80d248b7b49554c0cde52caf22e1fc3d8"})
+_SERVICES_PYTHON: str | None = None   # rebuilt runtime after a migration
+_HELD_RUN_LOCK_FD: int | None = None  # apply's run.lock, inherited by post-merge
 # bail reasons that mean "we never attempted" — do NOT consume the
 # receipt or poison attempts[]; the next check may legitimately retry
 _TRANSIENT_BAIL = frozenset({"run_lock_timeout", "update_lock_busy"})
@@ -480,7 +495,8 @@ def precheck_local(cfg: dict) -> list[str]:
     import mcs_setup
     # an owned idle watchdog whose explicit selection drifted is repaired by
     # the post-merge `services`; anything else still blocks before merge
-    errors.extend(mcs_setup.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO))
+    errors.extend(mcs_setup.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO,
+                                                 allow_runtime_migration=True))
     if cfg.get("runtime_mode") == "standalone":
         if mcs_setup._standalone_py_problem(cfg):
             errors.append("standalone_interpreter_unavailable")
@@ -488,7 +504,36 @@ def precheck_local(cfg: dict) -> list[str]:
         hermes = mcs_setup._hermes_exe(cfg)
         if not mcs_setup._hermes_ok(hermes):
             errors.append("hermes_not_resolvable")
+    problem = _migration_checkout_problem(cfg)
+    if problem:
+        errors.append("runtime_migration: " + problem)
     return errors
+
+
+def _migration_checkout_problem(cfg: dict) -> str | None:
+    """Refuse before merge what install.sh would refuse mid-migration."""
+    try:
+        venv, checkout = _runtime_venv(cfg)
+    except (ValueError, KeyError, OSError):
+        return None          # the runtime gate already reports a bad selection
+    if checkout is None or not _needs_migration(venv):
+        return None
+    def git(*args):
+        return subprocess.run(["git", "-C", checkout, *args], capture_output=True,
+                              text=True, timeout=30)
+    try:
+        head = git("rev-parse", "HEAD")
+        branch = git("symbolic-ref", "-q", "HEAD")
+        dirty = git("status", "--porcelain", "--untracked-files=no")
+    except (OSError, subprocess.TimeoutExpired):
+        return "hermes_checkout_unreadable"
+    if head.returncode != 0 or dirty.returncode != 0:
+        return "hermes_checkout_unreadable"
+    if head.stdout.strip() not in HERMES_PREVIOUS_PINS | {HERMES_PIN}:
+        return "hermes_checkout_unknown_commit"
+    if branch.returncode == 0 or dirty.stdout.strip():
+        return "hermes_checkout_branch_or_dirty"
+    return None
 
 
 def _norm(path: str) -> str:
@@ -1287,7 +1332,7 @@ def _record_attempt(state: dict, tag: str | None, result: str,
 def _services_reconcile() -> None:
     try:
         r = _run_owned(
-            [sys.executable, os.path.join(REPO, "mcs", "ops", "mcs_setup.py"),
+            [_SERVICES_PYTHON or sys.executable, os.path.join(REPO, "mcs", "ops", "mcs_setup.py"),
              "services"], 120, os.environ.copy(), stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
         raise UpdateError("services_failed: unavailable_or_timeout") from None
@@ -1349,12 +1394,19 @@ def _reinstall(applying: dict) -> None:
     if not applying.get("reinstall") or applying.get("reinstall_done"):
         return
     args = [a for a in applying.get("install_args") or [] if a in INSTALL_ARGS]
+    env, fds = os.environ.copy(), ()
+    migration = applying.get("runtime_migration")
+    if migration:
+        env[RUNTIME_BACKUP_ENV] = migration["backup_path"]
+        fds = (int(env[RUN_LOCK_FD_ENV]),)
+    else:
+        env.pop(RUN_LOCK_FD_ENV, None)   # no migration: no venv move allowed
     try:
         child = subprocess.Popen(
             ["/bin/sh", os.path.join(REPO, "install.sh"), *args,
              "--no-services"], stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            start_new_session=True)
+            env=env, pass_fds=fds, start_new_session=True)
     except OSError as e:
         raise UpdateError(f"install_failed: {e}") from e
     try:
@@ -1370,14 +1422,125 @@ def _reinstall(applying: dict) -> None:
     applying["reinstall_done"] = True
 
 
+def _free_sibling(path: str, suffix: str) -> str:
+    candidate, n = path + suffix, 0
+    while os.path.lexists(candidate):
+        n += 1
+        candidate = f"{path}{suffix}.{n}"
+    return candidate
+
+
+def _runtime_version(venv: str) -> tuple[str, tuple[int, int]] | None:
+    """(interpreter, (major, minor)) reported by the venv, or None if unknown."""
+    for name in ("python3", "python"):
+        exe = os.path.join(venv, "bin", name)
+        if os.access(exe, os.X_OK):
+            try:
+                out = subprocess.run(
+                    [exe, "-I", "-c", "import sys; print(*sys.version_info[:2])"],
+                    capture_output=True, text=True, timeout=30)
+                major, minor = map(int, out.stdout.split())
+            except (OSError, subprocess.TimeoutExpired, ValueError):
+                return None
+            return (exe, (major, minor)) if out.returncode == 0 else None
+    return None
+
+
+def _needs_migration(venv: str) -> bool:
+    """Only a runtime that runs and reports an older Python is migrated."""
+    found = _runtime_version(venv)
+    return found is not None and found[1] < RUNTIME_MIN
+
+
+def _runtime_python(venv: str) -> str | None:
+    """The rebuilt venv's interpreter when it reports >= RUNTIME_MIN."""
+    found = _runtime_version(venv)
+    return found[0] if found and found[1] >= RUNTIME_MIN else None
+
+
+def _runtime_venv(cfg: dict) -> tuple[str, str | None]:
+    """(venv, Hermes checkout or None) of the interpreter services run."""
+    import mcs_setup
+    venv = os.path.dirname(os.path.dirname(os.path.abspath(
+        mcs_setup._service_subs(cfg)["PYTHON"])))
+    if cfg.get("runtime_mode") == "standalone":
+        return venv, None
+    checkout = os.path.dirname(venv)     # <hermes-agent>/venv
+    # .git is a directory in a clone and a file in a linked worktree
+    return venv, checkout if os.path.lexists(os.path.join(checkout, ".git")) else None
+
+
+def _plan_runtime_migration(state: dict, held_fd: int | None = None) -> None:
+    """Journal the venv move BEFORE install.sh may perform it. The apply
+    parent decides (so its post-merge timeout includes T_INSTALL); the
+    child only re-checks when an older parent could not."""
+    applying = state["applying"]
+    if applying.get("runtime_migration"):
+        return
+    venv, checkout = _runtime_venv(load_config())
+    if not _needs_migration(venv):
+        return
+    if held_fd is None and not os.environ.get(RUN_LOCK_FD_ENV, "").isdecimal():
+        # An older updater parent cannot hand over run.lock: roll back and
+        # leave the boundary to scripts/mcs_upgrade.py.
+        raise UpdateError("runtime_migration_requires_upgrade_tool")
+    migration = {"venv": venv, "backup_path": _free_sibling(venv, ".pre-python314"),
+                 "updater_python": ".".join(map(str, sys.version_info[:3]))}
+    if checkout:
+        head = subprocess.run(["git", "-C", checkout, "rev-parse", "HEAD"],
+                              capture_output=True, text=True, timeout=30)
+        if head.returncode != 0 or not HEX_RE.fullmatch(head.stdout.strip()):
+            raise UpdateError("runtime_migration_checkout_unreadable")
+        migration.update(checkout=checkout, checkout_head=head.stdout.strip())
+    applying["runtime_migration"] = migration
+    args = list(applying.get("install_args") or [])
+    applying["install_args"] = args + [a for a in MIGRATION_INSTALL_ARGS if a not in args]
+    applying["reinstall"] = True
+    journal(state, "runtime_migration")
+
+
+def _use_migrated_runtime(migration: dict) -> None:
+    """Drive services with the rebuilt venv; the old path was moved aside."""
+    global _SERVICES_PYTHON
+    python = _runtime_python(migration["venv"])
+    if python is None or not os.path.isdir(migration["backup_path"]):
+        raise UpdateError("runtime_migration_unverified")
+    _SERVICES_PYTHON = python
+
+
+def _restore_runtime(entry: dict) -> None:
+    """Undo a runtime migration: keep the new venv aside, restore the old."""
+    migration = entry.get("runtime_migration") or {}
+    venv, backup = migration.get("venv"), migration.get("backup_path")
+    if venv and backup and os.path.isdir(backup) and not os.path.islink(backup):
+        if os.path.lexists(venv):
+            os.rename(venv, _free_sibling(venv, ".python314-aside"))
+        os.rename(backup, venv)
+    checkout, head = migration.get("checkout"), migration.get("checkout_head")
+    if checkout and head:
+        # install.sh may have moved the checkout before (or without) the venv;
+        # the old venv's editable install expects the pre-migration source
+        now = subprocess.run(["git", "-C", checkout, "rev-parse", "HEAD"],
+                             capture_output=True, text=True, timeout=30)
+        if now.returncode == 0 and now.stdout.strip() == head:
+            return
+        r = subprocess.run(["git", "-C", checkout, "checkout", "-q", "--detach", head],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            raise UpdateError("runtime_restore_checkout_failed")
+
+
 def _post_merge(state: dict) -> int:
     """Post-merge stages, run as a NEW-code subprocess while the parent
     (old code) holds both locks (--locks-held)."""
     applying = state["applying"]
     try:
+        _plan_runtime_migration(state)
         if applying.get("reinstall") and not applying.get("reinstall_done"):
             _reinstall(applying)
             journal(state, "reinstall")      # persists reinstall_done
+        if applying.get("runtime_migration"):
+            _use_migrated_runtime(applying["runtime_migration"])
         _services_reconcile()
         journal(state, "services")
         problems = restart_agents()
@@ -1399,6 +1562,8 @@ def _post_merge(state: dict) -> int:
         "reinstall": applying.get("reinstall", False),
         "reinstall_done": applying.get("reinstall_done", False),
         "manifest_snapshot": applying.get("manifest_snapshot"),
+        **({"runtime_migration": applying["runtime_migration"]}
+           if applying.get("runtime_migration") else {}),
         "command_id": applying.get("command_id"), "at": time.time()})
     state["stages"].append({"stage": "done", "at": time.time()})
     state["applying"] = None
@@ -1451,6 +1616,8 @@ def _rollback_applying(entry, prev_sha, command_id) -> dict:
         "schema_bump": entry.get("schema_bump"),
         "backup_path": entry.get("backup_path"),
         "manifest_snapshot": entry.get("manifest_snapshot"),
+        **({"runtime_migration": entry["runtime_migration"]}
+           if entry.get("runtime_migration") else {}),
         "command_id": command_id,
         "at": time.time()}
 
@@ -1486,13 +1653,18 @@ def _run_post_merge(sha: str) -> None:
     env = {k: v for k, v in os.environ.items()
            if k not in _UPDATE_ENV_STRIP}
     env[_UPDATE_PM_ENV] = sha       # child handshake token (L17)
+    env.pop(RUN_LOCK_FD_ENV, None)
+    run_fd = _HELD_RUN_LOCK_FD
+    if run_fd is not None:
+        env[RUN_LOCK_FD_ENV] = str(run_fd)
     # the merged checkout's updater, not __file__: scripts/mcs_upgrade.py
     # runs this module from a temp copy of the target tag
     child = subprocess.Popen(
         [sys.executable, os.path.join(REPO, "mcs", "ops", "mcs_update.py"),
          "--post-merge"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env=env, start_new_session=True)
+        env=env, pass_fds=() if run_fd is None else (run_fd,),
+        start_new_session=True)
     try:
         cout, cerr = child.communicate(
             timeout=T_POST_MERGE + (T_INSTALL if (load_state().get(
@@ -1527,6 +1699,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
     reliably means the writer died. run.lock is taken second (after
     the long pre-checks) — run.lock holders (drainer ticks) never
     block on update.lock, so no lock-order inversion exists."""
+    global _HELD_RUN_LOCK_FD
     if not tag or not SEMVER_RE.fullmatch(tag):
         print("apply: bad tag", tag)
         return 2
@@ -1546,7 +1719,9 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         return 2
     cfg = load_config()
     import mcs_setup
-    runtime_errors = mcs_setup.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO)
+    # the old interpreter is allowed here: post-merge migrates it (1.0.18)
+    runtime_errors = mcs_setup.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO,
+                                                   allow_runtime_migration=True)
     if reinstall and "--no-recovery" not in install_args \
             and mcs_setup.recovery_repair_pending(cfg):
         # install.sh stops on that drift after merge; services repairs it
@@ -1766,7 +1941,9 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             raise UpdateError("merge_verify_failed")
 
         # post-merge under NEW code; parent keeps both locks held.
+        _plan_runtime_migration(state, run_fd)
         journal(state, "post_merge")
+        _HELD_RUN_LOCK_FD = run_fd
         _run_post_merge(sha)
 
         state = load_state()
@@ -1791,6 +1968,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             return bail(str(e))
         return bail(f"unexpected:{type(e).__name__}")
     finally:
+        _HELD_RUN_LOCK_FD = None
         if quiesced and not consent_hold:
             _remove_marker()
         for fd in (run_fd, upd_fd):
@@ -1923,6 +2101,7 @@ def _rollback_tree(entry: dict, on_hold=None) -> None:
     _git_out(["reset", "--hard", prev])
     if _head_sha() != prev or not _tree_clean():
         raise UpdateError("rollback_verify_failed")
+    _restore_runtime(entry)
     if entry.get("schema_bump") and entry.get("backup_path"):
         _restore_db(entry["backup_path"], on_hold=on_hold)
     _cancel_unsent_notices()
@@ -2721,6 +2900,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     save_state(state)
             try:
                 if applying.get("rollback"):
+                    _restore_runtime(applying)
                     problems = _reconcile_membership(applying.get("manifest_snapshot"))
                     if problems:
                         return escalate("membership: " + ",".join(problems))
@@ -2729,6 +2909,11 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     # an interrupted install.sh is never re-run unattended
                     # (operator-only) — a human finishes the upgrade
                     return escalate("reinstall_incomplete")
+                if applying.get("runtime_migration") and not applying.get("rollback"):
+                    try:
+                        _use_migrated_runtime(applying["runtime_migration"])
+                    except UpdateError as e:
+                        return escalate(str(e))
                 _services_reconcile()
                 problems = drainers(_drainers_key(state, head))
                 errors = _postcheck(state, target)

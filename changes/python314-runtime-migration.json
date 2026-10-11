@@ -1,0 +1,13 @@
+{
+  "category": "changed",
+  "title": "更新ツールでPython 3.14の実行環境へ移行できるようにしました",
+  "summary": "scripts/mcs_upgrade.py で 1.0.18 へ更新すると、実行環境（venv）がPython 3.14未満の場合に、定期処理と抽出workerを止めた状態のまま旧環境を退避してPython 3.14で作り直します。途中で失敗した場合は旧環境とHermesのcheckoutを元に戻します。",
+  "upgrade": "1.0.18 への更新は scripts/mcs_upgrade.py（更新ツール）で行ってください。1.0.17 以前の自動更新（mode=auto）ではPythonの切替を行わず、更新を取り消して元の版に戻り、更新ツールの利用を通知します。Hermesのcheckoutが過去の固定commit以外・ブランチ上・変更ありの場合は、適用前の確認で止まります（checkoutは書き換えません）。退避した旧環境（venv 名に .pre-python314 を付けたフォルダ）は削除しません。",
+  "details": [
+    "更新処理が保持している実行ロック（data/run.lock）のファイル記述子を install.sh へ引き継ぎ、install.sh はその実体・所有者・ロックを確認できた場合だけ既存環境を退避して作り直す。退避先は事前に更新記録へ書く。",
+    "Hermesモードでは、過去の固定commit（Python 3.14未満でしか導入できない）にある変更なし・detachedのcheckoutだけを新しい固定commitへ進めてから導入する。",
+    "サービスの再設定は作り直した環境のPythonで行い、失敗・中断・後日の明示的なロールバックでは旧環境とcheckoutのcommitを戻す。",
+    "完全合成の venv・git・ロックで、移行要否の判定、記録、引継ぎ、検証、復元と、install.sh 側の受入・拒否を検証する。"
+  ],
+  "refs": ["mcs/ops/mcs_update.py", "install.sh", "tests/ops/test_python314_runtime_migration.py", "tests/meta/test_install_runtime_migration.py"]
+}
