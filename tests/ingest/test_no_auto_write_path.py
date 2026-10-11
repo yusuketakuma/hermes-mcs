@@ -340,6 +340,25 @@ def test_cdp_only_opens_the_unreads_and_login_pages():
     assert opened == {"/unreads", "/authentication/login"}, opened
 
 
+def test_every_cdp_json_target_is_resolvable():
+    """No _cdp_json call takes a computed target, so the page allowlist
+    above cannot be bypassed through a variable."""
+    bad = []
+    for rel, node in _calls_to("_cdp_json"):
+        target = node.args[0] if node.args else None
+        method = _method_of(node, 1) or "GET"
+        if isinstance(target, ast.Constant) and method == "GET":
+            continue
+        if method == "PUT" and _cdp_new_target(target) is not None:
+            continue
+        if method == "GET" and isinstance(target, ast.JoinedStr) \
+                and isinstance(target.values[0], ast.Constant) \
+                and target.values[0].value == "/json/close/":
+            continue
+        bad.append(f"{rel}:{node.lineno}")
+    assert not bad, f"unresolved CDP target or method: {bad}"
+
+
 def test_launchers_never_address_mcs_directly():
     """Shell/launchd entrypoints run on a schedule; any MCS traffic must go
     through the Python adapter pinned above, never a curl in a wrapper."""
@@ -389,3 +408,25 @@ def test_mark_read_is_gets_only_on_the_wire(fallback):
     assert {c["method"] for c in worker.calls} == {"GET"}
     assert all(c["data"] is None for c in worker.calls)
     assert all("timestamp=1700000000" in c["url"] for c in worker.calls[:-1])
+
+
+def test_worker_sends_the_callers_method_unchanged(monkeypatch):
+    """The worker's api sink issues exactly the method the adapter put in
+    the envelope — a GET envelope leaves the process as a bodiless GET."""
+    import mcs_util
+    import mcs_worker
+
+    sent = []
+
+    class _Opener:
+        def open(self, request, timeout=None):
+            sent.append((request.get_method(), request.data))
+            raise mcs_worker.urllib.error.HTTPError(
+                request.full_url, 404, "synthetic", {}, None)
+
+    monkeypatch.setattr(mcs_util, "no_proxy_opener", lambda *_a: _Opener())
+    result = mcs_worker._execute({
+        "operation": "api", "timeout": 1, "method": "GET", "data": None,
+        "url": mcs_adapter.API + "/projects", "headers": {}})
+    assert result["status"] == 404
+    assert sent == [("GET", None)]
