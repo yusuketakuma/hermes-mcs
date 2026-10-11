@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "通知表示の不要な補助コードを整理",
+  "summary": "通知の実行経路で使われない補助関数を削除し、テストを現行の表示処理に揃えました。通知の表示と特殊文字の保護は変わりません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "テストだけが参照していた _discord_literal を削除し、同じ presenter の文字保護を直接検証する。"
+  ],
+  "refs": [
+    "mcs/notify/notify_render.py"
+  ]
+}

@@ -286,5 +286,5 @@ def test_discord_digest_text_is_literal():
     out = notify_render.parts_text(parts, "discord")
     assert "## ＃ 題" in out and escape_md(staff).replace("<@123>", "メンバー") in out
     assert "-# － 注記 ＿x＿" in out
-    assert notify_render._discord_literal(staff) == escape_md(staff)
+    assert notify_render.presenter("discord").literal(staff) == escape_md(staff)
     assert "[link]" in notify_render.parts_text(parts, "plain")
