@@ -15,6 +15,8 @@ Usage:
   python3 extract.py --stats            # aggregate stats only
 """
 import argparse
+import bisect
+import functools
 import json
 import os
 import re
@@ -165,10 +167,15 @@ def _person_scope(person, patient_name):
     return "patient" if re.fullmatch(_SELF_PERSON, person) or known_name else "unknown"
 
 
-def patient_source_scope(body, start, end, *, patient_name=None, default="patient", provider_fields=False):
-    """Resolve an original span's reported person and explicit noncurrent scope, never from a keyword mask."""
-    if not isinstance(body, str) or not 0 <= start < end <= len(body):
-        return "unknown"
+@functools.lru_cache(maxsize=32)
+def _scope_puncts(body):
+    """Positions of the single-character _SCOPE_BREAK marks, cached per body."""
+    return tuple(m.start() for m in re.finditer(r"[。！？!?;；、,\n]", body))
+
+
+@functools.lru_cache(maxsize=32)
+def _scope_events(body, patient_name, provider_fields):
+    """Collect span-independent person/period events once per body for patient_source_scope."""
     events, assignments = [], []
     for match in _SCOPE_HEADING.finditer(body):
         label = (match[1] or match[2] or match[3] or "").strip()
@@ -210,7 +217,20 @@ def patient_source_scope(body, start, end, *, patient_name=None, default="patien
             continue  # A prescribing/measuring clinician is the actor, not the recipient.
         subject = _person_scope(person, patient_name)
         events.append((match.start(), subject, None))
-    owner = _DIRECT_OWNER.search(body[:start])
+    return tuple(events)
+
+
+def patient_source_scope(body, start, end, *, patient_name=None, default="patient", provider_fields=False):
+    """Resolve an original span's reported person and explicit noncurrent scope, never from a keyword mask."""
+    if not isinstance(body, str) or not 0 <= start < end <= len(body):
+        return "unknown"
+    # Non-str names never match (_person_scope), so None keeps the cache key hashable.
+    events = list(_scope_events(body, patient_name if isinstance(patient_name, str) else None,
+                                bool(provider_fields)))
+    # Owner phrases and break words never span these marks, so only the span's own clause is scanned.
+    puncts = _scope_puncts(body)
+    marks = bisect.bisect_left(puncts, start - 1)  # `$` may sit before a trailing newline at start-1
+    owner = _DIRECT_OWNER.search(body, puncts[marks - 1] + 1 if marks else 0, start)
     if owner is not None:
         events.append((owner.start(), _person_scope(owner["person"], patient_name), None))
     scope, period = default, "current"
@@ -224,9 +244,11 @@ def patient_source_scope(body, start, end, *, patient_name=None, default="patien
         return scope
     # Qualifiers are evaluated in the span's own source clause, not from an
     # unrelated patient's/history sentence elsewhere in the same message.
-    left = max((m.end() for m in _SCOPE_BREAK.finditer(body[:start])), default=0)
-    right = _SCOPE_BREAK.search(body[end:])
-    clause = body[left:end + right.start() if right else len(body)]
+    marks = bisect.bisect_left(puncts, start)
+    left = puncts[marks - 1] + 1 if marks else 0
+    left = max((m.end() for m in _SCOPE_BREAK.finditer(body, left, start)), default=left)
+    right = _SCOPE_BREAK.search(body, end)
+    clause = body[left:right.start() if right else len(body)]
     if _CONDITIONAL_MARK.search(clause):
         return "conditional"
     if period != "current" and not _CURRENT_MARK.search(clause):
