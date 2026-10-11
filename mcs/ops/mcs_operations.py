@@ -382,6 +382,8 @@ def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
     # invalidating a worker that captured the pre-retry payload.
     payload["retry_command_id"] = req["command_id"]
     extra = {"job_id": row["job_id"], "attempts": row["attempts"]}
+    if "reason" in req:
+        extra["reason"] = req["reason"]
     if additional is not None:
         new_limit = row["attempts"] + additional
         payload["manual_attempt_limit"] = new_limit
@@ -389,7 +391,6 @@ def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
             "old_attempt_limit": old_limit,
             "new_attempt_limit": new_limit,
             "additional_attempts": additional,
-            "reason": req["reason"],
         })
     db.execute(
         "UPDATE fetch_jobs SET state='pending',payload=?,next_try=0,updated_at=? "
