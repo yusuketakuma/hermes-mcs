@@ -1470,7 +1470,7 @@ def run_stats(db, snapshot_ts: int, args: dict) -> dict:
             else:
                 stats[name] = REGISTRY[name]["fn"](db, scope)
         except (ValueError, RecursionError, TypeError, KeyError,
-                AttributeError, OverflowError, sqlite3.Error) as e:
+                AttributeError, OverflowError, OSError, sqlite3.Error) as e:
             stats[name] = _result("unavailable", scope, {},
                                   reason=f"data_error:{type(e).__name__}")
     return {"stats": stats}

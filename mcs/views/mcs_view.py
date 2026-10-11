@@ -19,7 +19,7 @@ from ledger import LedgerReader, reaction_actor_summary
 from project_metadata_view import physician_viewed_status
 from mcs_queries import incomplete_reply_roots
 from mcs_signals import is_own_station_message
-from mcs_util import loads_dict, register_search_fold, search_fold
+from mcs_util import HOME, loads_dict, register_search_fold, search_fold
 from read_model import _snapshot_meta, message_patient_context
 from message_metadata import (
     flag_lines, get_message_metadata, get_metadata_shadow_status, is_self_sender)
@@ -982,8 +982,8 @@ class _Parser(argparse.ArgumentParser):
 def _parser():
     parser = _Parser(description=__doc__)
     parser.add_argument("--snapshot", type=Path,
-                        default=Path.home() / ".mcs/data/snapshots/ledger-snapshot.db")
-    parser.add_argument("--cmd-dir", type=Path, default=Path.home() / ".mcs/data/cmd")
+                        default=Path(HOME) / "data/snapshots/ledger-snapshot.db")
+    parser.add_argument("--cmd-dir", type=Path, default=Path(HOME) / "data/cmd")
     subs = parser.add_subparsers(dest="kind", required=True)
     for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "staff", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals", "read_model", "project_metadata", "cross_lists", "response_observations"):
         sub = subs.add_parser(kind)

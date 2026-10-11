@@ -441,3 +441,22 @@ def test_diff_reports_path_and_values():
     assert any("a.c" in d and "<missing>" in d for d in diffs)
     assert not mcs_refstats._diff({"x": 1}, {"x": 1.0000000001})
     assert mcs_refstats._diff({"x": True}, {"x": 1})  # bool ≠ int
+
+
+def test_default_paths_follow_mcs_root(tmp_path):
+    """Without --snapshot/--data-dir, capture uses MCS_ROOT, not ~/.mcs."""
+    import os
+    import subprocess
+    import sys
+    root = tmp_path / "root"
+    db = _db(tmp_path)
+    db.save_messages([_msg()], project_id=1)
+    ledger.publish_snapshot(str(tmp_path / "ledger.db"),
+                            str(root / "data" / "snapshots"))
+    proc = subprocess.run(
+        [sys.executable, mcs_refstats.__file__, "capture", "--name", "rooted",
+         "--stat", "overview"],
+        env={**os.environ, "MCS_ROOT": str(root)},
+        capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (root / "data" / "refstats" / "pending" / "rooted.json").is_file()
