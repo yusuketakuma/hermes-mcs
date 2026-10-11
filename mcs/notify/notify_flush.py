@@ -36,6 +36,7 @@ import mcs_runtime
 import mcs_signals
 import semantic_send_gate
 import structured_view
+from mcs_queries import HOLD_PROGRESS_SET
 from mcs_util import CONF_PATH, html_to_text, load_config
 from mcs_requests import positive
 from notify_render import (SECTION_RULE, _extraction_failed, _signal_evidence,
@@ -43,6 +44,10 @@ from notify_render import (SECTION_RULE, _extraction_failed, _signal_evidence,
 # Re-exported send-gate verdicts — the canonical definitions live in
 # semantic_send_gate (the send-time semantic policy layer); the legacy
 # private names stay so existing tests and flush() catches are stable.
+# Some private names are also cross-module API, so renames must reach:
+# health_watch (_target, _send_argv, _send, _SendFailed, _SendUsage),
+# semantic_lifecycle (_MAX_LEN, _target, _delivery_fingerprint) and
+# notify_reconcile (_ALERT_KINDS, _hold_event).
 from semantic_send_gate import (
     DeferredSend as _DeferredSend,
     FreezeSend as _FreezeSend,
@@ -388,12 +393,8 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         return text, []
     if ev["kind"] == "signal":
         return _signal_notice_text(ledger, payload), []
-    if ev["kind"] == "urgent_notice":
-        import notify_urgent
-        checked = notify_urgent.check_delivery(ledger, _config(), ev, now=time.time())
-        if not checked["ok"]:
-            raise _StaleSend(checked["reason"])
-        return notify_urgent.render_text(checked, ledger.db), []
+    # urgent_notice never reaches the text path: flush moves a never-begun
+    # one to the card route and holds a begun one (see flush)
     if ev["kind"] == "attachment_followup":
         return _followup_files(ledger, payload, ev["project_id"])
     return _message_notice(ledger, ev, payload)
@@ -580,18 +581,9 @@ def _hold_event(ledger, ev, cfg, proven_undelivered=False,
                            (ev["event_id"],)).fetchone()
     if ev is None:
         return
-    # Store only a stable code alongside the existing receipt; never replace
-    # its in-flight evidence with a guessed negative acknowledgement.
-    try:
-        progress = json.loads(ev["progress"] or "{}")
-    except (ValueError, TypeError, RecursionError):
-        progress = None
-    if not isinstance(progress, dict):
-        progress = {"invalid_progress": ev["progress"]}
-    progress["hold_reason"] = reason
-    ledger.db.execute(
-        "UPDATE notify_outbox SET progress=? WHERE event_id=?",
-        (json.dumps(progress), ev["event_id"]))
+    # The hold stores only a stable code alongside the existing receipt
+    # (HOLD_PROGRESS_SET); never replace its in-flight evidence with a
+    # guessed negative acknowledgement.
     if rescue and (proven_undelivered or _send_never_began(ev)) \
             and not _has_sent_progress(ev):
         try:
@@ -633,11 +625,11 @@ def _hold_event(ledger, ev, cfg, proven_undelivered=False,
                             ledger, payload, time.time(), interval_h,
                             origin_id=ev["event_id"])
                     ledger.db.execute(
-                        "UPDATE notify_outbox SET state='failed',"
-                        "next_try=NULL,updated_at=? WHERE event_id=?",
-                        (time.time(), ev["event_id"]))
+                        "UPDATE notify_outbox SET state='failed',next_try=NULL,"
+                        f"{HOLD_PROGRESS_SET},updated_at=? WHERE event_id=?",
+                        (reason, time.time(), ev["event_id"]))
                 return
-    ledger.outbox_hold(ev["event_id"])
+    ledger.outbox_hold(ev["event_id"], reason)
 
 
 class _SendFailed(OSError):
@@ -967,12 +959,6 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
 
     def gate(i, payload) -> bool:
         """Last-moment pre-chunk gate, re-evaluated before a retry."""
-        if ev["kind"] == "urgent_notice":
-            import notify_urgent
-            checked = notify_urgent.check_delivery(ledger, _config(), ev, now=time.time())
-            if not checked["ok"]:
-                raise _StaleSend(checked["reason"])
-            return True
         if ev["kind"] == "semantic_notice":
             _semantic_gate(ledger, ev, payload,
                            in_progress=bool(start or i))
@@ -1033,11 +1019,7 @@ def _fail_event(ledger, ev, cfg, res, exc):
             _hold_event(ledger, ev, cfg, reason="deferred_after_partial")
             res["failed"] += 1
         else:
-            ledger.db.execute(
-                "UPDATE notify_outbox SET next_try=?,updated_at=? "
-                "WHERE event_id=?",
-                (time.time() + 3600, time.time(), ev["event_id"]))
-            ledger.db.commit()
+            ledger.outbox_defer(ev["event_id"], 3600)
             res["parked"] += 1
     elif isinstance(exc, _FreezeSend):
         # An accepted chunk is immutable. Keep its receipt/progress and

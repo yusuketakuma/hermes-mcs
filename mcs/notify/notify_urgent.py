@@ -410,8 +410,3 @@ def check_delivery(ledger, cfg, event, *, now=None):
             "observed_at": candidate["row"]["created_at"],
             "subject": detail["subject"], "reasons": detail["reasons"]}
 
-
-def render_text(checked, db=None):
-    """元投稿の表示と業務完了を区別した、独立した再確認候補を示す。"""
-    import alert_view
-    return alert_view.render_text(checked, db)

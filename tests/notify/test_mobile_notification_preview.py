@@ -65,12 +65,13 @@ def test_unknown_organization_is_explicit_and_not_inferred_from_patient(led):
 
 
 def test_urgent_source_preview_uses_the_same_five_fields_without_claiming_completion(led):
-    import notify_urgent
+    import alert_view
     _seed_thread(led)
     with led.db:
         led.db.execute("UPDATE messages SET sender_name='合成発信者',organization='合成所属',"
                        "posted_at='2026-10-06T08:30:00+09:00' WHERE message_id=101")
-    text = notify_urgent.render_text({"message_id": 101, "project_id": 1, "stage": "initial"}, led.db)
+    text = notify_render.parts_text(alert_view.render_parts(
+        {"message_id": 101, "project_id": 1, "stage": "initial"}, led.db))
     assert "合成発信者（合成所属） · 投稿 10-06 08:30" in text
     assert "要約処理待ち" in text and "意味しません" not in text
 

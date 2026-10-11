@@ -63,8 +63,3 @@ def render_parts(checked, db=None):
     parts["preview_text"] = "🚨 緊急度高 " + notify_render._preview_line(
         header, f"再確認候補（{subject}）: {main}", limit=393)
     return parts
-
-
-def render_text(checked, db=None):
-    """同じ表示モデルから再確認候補のテキスト通知を作る。"""
-    return notify_render.parts_text(render_parts(checked, db))

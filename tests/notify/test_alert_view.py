@@ -14,7 +14,7 @@ def test_grounded_reason_and_separate_post_observation_times(led):
     checked = {"project_id": 1, "message_id": 100, "subject": "patient",
                "reasons": ["本人は息苦しいと話しています。"], "observed_at": NOW}
     parts = alert_view.render_parts(checked, led.db)
-    text = alert_view.render_text(checked, led.db)
+    text = notify_render.parts_text(parts)
     assert "患者本人" in text and "引用: 本人は息苦しいと話しています。" in text
     assert "投稿 " in text and "判定 " in text and "AI" not in text
     assert "記録がないことは未対応・業務完了を意味しません" not in text
@@ -33,7 +33,7 @@ def test_grounded_reason_and_separate_post_observation_times(led):
 def test_unconfirmed_subject_never_labelled_patient(led, subject):
     _patient(led)
     _msg(led, 100)
-    text = alert_view.render_text({"project_id": 1, "message_id": 100, "subject": subject}, led.db)
+    text = notify_render.parts_text(alert_view.render_parts({"project_id": 1, "message_id": 100, "subject": subject}, led.db))
     assert "対象人物は未確認" in text and "患者本人" not in text
 
 
@@ -50,8 +50,8 @@ def test_unavailable_or_cross_scope_reason_never_quoted(led, body, state, pid, r
         led.db.execute("UPDATE messages SET body_state=? WHERE message_id=100", (state,))
     parts = alert_view.render_parts({"project_id": pid, "message_id": 100, "reasons": reasons}, led.db)
     assert not any(p["type"] == "quote" for p in parts["containers"])
-    assert "緊急理由の引用は未取得" in alert_view.render_text(
-        {"project_id": pid, "message_id": 100, "reasons": reasons}, led.db)
+    assert "緊急理由の引用は未取得" in notify_render.parts_text(alert_view.render_parts(
+        {"project_id": pid, "message_id": 100, "reasons": reasons}, led.db))
 
 
 def test_quotes_deduplicated_bounded_and_never_whole_body_fallback(led):
@@ -74,7 +74,7 @@ def test_long_reason_never_truncates_negation_or_subject_tail(led):
 
 @pytest.mark.parametrize("timestamp", [True, float("nan"), -1, 1e30, None])
 def test_unknown_observation_time_is_explicit(timestamp):
-    text = alert_view.render_text({"project_id": 1, "message_id": 100, "observed_at": timestamp})
+    text = notify_render.parts_text(alert_view.render_parts({"project_id": 1, "message_id": 100, "observed_at": timestamp}))
     assert "判定 日時未取得" in text and "不明" not in text
 
 
