@@ -1,5 +1,4 @@
 """Human-confirmed local requests; no network or automatic task creation."""
-import hashlib
 import json
 import os
 import re
@@ -10,6 +9,9 @@ import uuid
 from contextlib import ExitStack, suppress
 from datetime import date
 from pathlib import Path
+
+# canonical/payload_hash/positive live in core; re-exported for callers
+from mcs_util import canonical, payload_hash, positive  # noqa: F401
 
 MAX_COMMAND_BYTES = 16384
 STATUSES = ("open", "in_progress", "done", "cancelled")
@@ -33,15 +35,6 @@ CREATE TABLE IF NOT EXISTS snapshot_meta(
   singleton INTEGER PRIMARY KEY CHECK(singleton=1),
   generation_id TEXT NOT NULL, generated_at REAL NOT NULL);
 """
-
-
-def canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"),
-                      ensure_ascii=False, allow_nan=False).encode("utf-8")
-
-
-def payload_hash(value):
-    return hashlib.sha256(canonical(value)).hexdigest()
 
 
 def parse_command(raw):
@@ -71,10 +64,6 @@ def read_command(path):
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise ValueError("regular_command_file_required")
         return parse_command(stream.read(MAX_COMMAND_BYTES + 1))
-
-
-def positive(value):
-    return type(value) is int and 0 < value < 2**63
 
 
 def valid_hash(value):

@@ -23,7 +23,7 @@ import _mcs_path  # noqa: F401
 
 from semantic_facts import RELATION_TYPES
 from mcs_util import atomic_write
-from mcs_requests import payload_hash
+from mcs_util import payload_hash
 
 
 SCHEMA_VERSION = "semantic-evaluation/v3"

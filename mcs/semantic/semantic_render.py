@@ -8,10 +8,11 @@ keep working."""
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 import time
 
-from mcs_requests import payload_hash, positive
+from mcs_queries import JST
+from mcs_util import payload_hash, positive
 from mcs_util import loads_dict
 import semantic_facts as sf
 from semantic_send_gate import enforce_block_reason
@@ -187,7 +188,7 @@ def render_notice(ledger, project_id: int, root_id: int,
             return None
 
     def stamp(value):
-        return value.astimezone(timezone(timedelta(hours=9))).strftime(
+        return value.astimezone(JST).strftime(
             "%Y/%m/%d %H:%M JST") if value else "時刻不明"
 
     pat = ledger.db.execute(

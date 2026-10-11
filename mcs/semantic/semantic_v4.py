@@ -707,7 +707,7 @@ def _hold_upgraded_repairs(ledger, scfg: dict, limit: int, out: dict) -> None:
 
 
 def _doc_hash(v2_doc: dict) -> str:
-    from mcs_requests import payload_hash
+    from mcs_util import payload_hash
     return payload_hash({"f": v2_doc["facts"], "e": v2_doc["evidence"]})
 
 

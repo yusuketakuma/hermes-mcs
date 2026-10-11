@@ -18,7 +18,7 @@ from contextlib import contextmanager
 import math
 import time
 
-from mcs_requests import payload_hash
+from mcs_util import payload_hash
 from mcs_util import env_value, load_config, loads_dict
 import semantic_jev as jev
 import semantic_runtime as runtime
