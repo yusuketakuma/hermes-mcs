@@ -104,9 +104,26 @@ def test_aggregate_counts_missing_summaries_among_mixed_results(monkeypatch):
 
     aggregate = bench._aggregate([bench._run_case(case, None) for _ in range(4)])
 
-    assert aggregate == {"cases": 4, "deferred": 2, "claims": 1,
+    assert aggregate == {"cases": 4, "deferred": 2,
+                         "deferred_by_reason": {"summary_deadline": 1,
+                                                "summary_model": 1},
+                         "claims": 1,
                          "findings_total": 1, "findings_per_claim": 1.0,
                          "finding_codes": {"synthetic_finding": 1}}
+
+
+def test_aggregate_splits_deferred_cases_by_stage_and_reason():
+    results = [
+        {"deferred": True, "facts_complete": False, "extract_reason": "deadline"},
+        {"deferred": True, "facts_complete": True, "summary_reason": "model"},
+        {"deferred": True, "facts_complete": True, "summary_reason": "model"},
+        {"deferred": True, "error": "llm_not_sent"},
+        {"facts_complete": True, "summary_reason": None, "n_claims": 1},
+    ]
+    aggregate = bench._aggregate(results)
+    assert aggregate["deferred"] == 4
+    assert aggregate["deferred_by_reason"] == {
+        "extract_deadline": 1, "summary_model": 2, "llm_not_sent": 1}
 
 
 @pytest.mark.parametrize("count", [-1, 0, True])
