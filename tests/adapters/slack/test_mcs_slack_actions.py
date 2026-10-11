@@ -3,6 +3,8 @@
 import asyncio
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,7 @@ from adapters.slack.paths import notify_dirs
 from notify_cmds import validate_int
 from mcs_requests import validate as validate_human
 
+ROOT = Path(__file__).resolve().parents[3]
 TOKEN = "b" * 32
 TS = "1790000000.000001"
 SCOPE = {"transport": "slack", "profile": "cco",
@@ -1167,4 +1170,80 @@ def test_malformed_token_scope_is_denied(tmp_path, project_id, signals):
         body, action = click()
         await actions._action(ack, body, action)
         assert list(Path(dirs["cmd_int"]).glob("*.json")) == []
+    asyncio.run(scenario())
+
+
+# ---------- 📋 task list without _mcs_path, real ephemeral clicks -----------
+
+def test_task_blocks_import_without_flat_mcs_paths():
+    # Hermes loads the Slack worker with only the repo root on sys.path
+    code = ("import sys; sys.path.insert(0, sys.argv[1]);"
+            "from adapters.slack import actions;"
+            "assert '_mcs_path' not in sys.modules;"
+            "b = actions._task_blocks([{'request_id': 1, 'title': 't',"
+            " 'status': 'open', 'due_date': '2000-01-01'}]);"
+            "assert '期限切れ' in str(b)")
+    proc = subprocess.run([sys.executable, "-I", "-c", code, str(ROOT)],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_ephemeral_task_transition_click_uses_container_ts(tmp_path):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="tasks")
+        body, action = click()
+        await actions._action(ack, body, action)
+        env = command(dirs)
+        transition = "d" * 32
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", action="tasks",
+               tasks=[{"request_id": 7, "title": "合成タスク",
+                       "status": "open", "transitions": {
+                           "done": {"token": transition,
+                                    "label": "✅ 完了"}}}],
+               token_ctx={transition: {
+                   "action": "task_status", "card_key": "k" * 32,
+                   "kind": "thread", "project_id": 123}})
+        await actions.sweep_followups()
+        for file in Path(dirs["cmd_int"]).glob("*.json"):
+            file.unlink()
+        # real Slack shape: no "message", location only in container
+        body2 = {k: v for k, v in body.items() if k != "message"}
+        body2["container"] = {"type": "message", "is_ephemeral": True,
+                              "message_ts": "1790000000.000999",
+                              "channel_id": "C_SYNTHETIC"}
+        await actions._action(
+            ack, body2,
+            {"action_id": "mcs:a:" + transition, "value": transition})
+        assert command(dirs)["token"] == transition
+
+        # a card token clicked from an ephemeral container stays pinned
+        for file in Path(dirs["cmd_int"]).glob("*.json"):
+            file.unlink()
+        await actions._action(ack, body2, action)
+        assert list(Path(dirs["cmd_int"]).glob("*.json")) == []
+    asyncio.run(scenario())
+
+
+# ---------- 確定 after the interactivity kill switch ------------------------
+
+@pytest.mark.parametrize("flags", [
+    {"interactive": False, "transport": "slack"},
+    {"interactive": True, "transport": "discord"},
+    {"interactive": True, "transport": "slack", "restore_pending": True},
+])
+def test_confirm_after_kill_switch_is_denied_but_cancellable(tmp_path, flags):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="request")
+        body, (confirm_action, cancel_action) = await _to_confirm(actions, app, dirs, 123)
+        confirm_id = confirm_action["action_id"].split(":")[2]
+        Path(dirs["flags"], "notify.json").write_text(json.dumps(flags), encoding="utf-8")
+        before = len(app.client.messages)
+        await actions._confirm(ack, body, confirm_action)
+        assert [m["text"] for m in app.client.messages[before:]] == ["権限がありません。"]
+        assert not any(json.loads(p.read_text()).get("cmd") == "request.create"
+                       for p in Path(dirs["cmd_int"]).glob("*.json"))
+        await actions._confirm(ack, body, cancel_action)
+        assert app.client.messages[-1]["text"] == "取り消しました。"
+        assert reg.confirm(confirm_id) is None
     asyncio.run(scenario())
