@@ -416,3 +416,6 @@ def test_generated_summary_is_cut_at_a_word_boundary():
     assert cut.startswith("Synthetic drain engine (spec §1):")
     assert long.startswith(cut[:-1]) and not long[len(cut) - 1].isalnum()
     assert ur._first_sentence("Short synthetic summary.") == "Short synthetic summary."
+    # Unspaced text after an early space must not collapse to the first word.
+    cjk = "MCS の" + "合成" * 65
+    assert ur._first_sentence(cjk) == cjk[:118] + "…"

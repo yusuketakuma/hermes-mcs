@@ -55,8 +55,10 @@ def _first_sentence(doc: str) -> str:
     out = " ".join(parts)
     if len(out) <= 120:
         return out
-    # Cut at the last whole word so the published cell never ends mid-word.
-    return out[:118].rsplit(" ", 1)[0].rstrip(" ,;:(—–-") + "…"
+    # Cut at the last whole word so the published cell never ends mid-word;
+    # unspaced (CJK) text with an early space keeps the hard cut instead.
+    word = out[:118].rsplit(" ", 1)[0].rstrip(" ,;:(—–-")
+    return (word if len(word) >= 59 else out[:118].rstrip()) + "…"
 
 
 def _mod_docline(path: Path) -> str:
