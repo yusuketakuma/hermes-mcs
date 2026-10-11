@@ -373,7 +373,7 @@ Jevの`Choice`は同じ`state`に複数設問を送れるが、現行fact/claim�
 
 v4がPENDING/NEEDS_REVIEW、原文変更中、Jev未評価、旧参照未移行ならその対象の旧成果を上書きせず、旧版と未完了理由を表示する。cohortを繰り返して旧版の現行選択を減らし、残数・最古滞留・失敗理由を可視化する。「全件v4完了」は未処理旧版や未解決例外が残る間は宣言しない。旧生成payloadを既に上書きした対象で問題が出た場合、存在しない旧ファイルへ黙って戻さず、保存済み原文から許可済みの有限再処理または原文+pendingへ移る。原文の長期保存に必要なバックアップ/復元可能性は別の運用検証対象であり、現行のローカル日次backupだけで端末喪失への耐性を保証しない。
 
-**実装上の保留条件（2026-09-27）**: `semantic_v4.run_cohort` は原文・依存閉包を固定し、ジョブと受付receiptを同一transactionで保存する。件数上限はcohort全期間で共有し、再起動で補充しない。cohortはv3抽出器への受付許可を与えない。現在のJev adapterには送信前のtoken上限制御がないため、cohort由来の解析ジョブはモデル呼出し前に `token_budget_not_enforceable` を記録して停止する。通常の新着解析の経路とは別の保留条件であり、総call/token/retry予算の強制を実装済みとは扱わない。`retire_payloads` も、別のcleanup manifestと復旧検証を受け取る実装がない間は `cleanup_manifest_and_recovery_required` として旧payloadを保持する。変換receiptとv4 PASSだけでは物理削除を許可しない。
+**実装上の保留条件（2026-09-27）**: `semantic_v4_cohort.run_cohort` は原文・依存閉包を固定し、ジョブと受付receiptを同一transactionで保存する。件数上限はcohort全期間で共有し、再起動で補充しない。cohortはv3抽出器への受付許可を与えない。現在のJev adapterには送信前のtoken上限制御がないため、cohort由来の解析ジョブはモデル呼出し前に `token_budget_not_enforceable` を記録して停止する。通常の新着解析の経路とは別の保留条件であり、総call/token/retry予算の強制を実装済みとは扱わない。`retire_payloads` も、別のcleanup manifestと復旧検証を受け取る実装がない間は `cleanup_manifest_and_recovery_required` として旧payloadを保持する。変換receiptとv4 PASSだけでは物理削除を許可しない。
 
 ### 実測で選ぶスロット数とバックログ/リアルタイムの厳密な非重複
 

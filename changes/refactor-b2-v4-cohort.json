@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "未接続のv4変換cohort入口を別モジュールへ分離",
+  "summary": "定期処理から呼ばれていないv4変換cohortの宣言・予約・記録・削除保留の入口を、意味解析v4の本体から別モジュールへ分けました。実行中の解析が使う保留判定は本体に残り、動作は変わりません。",
+  "upgrade": "設定変更・DB移行・追加操作は不要です。",
+  "details": [
+    "declare_cohort・run_cohort・mark_item_done・retire_payloadsをsemantic_v4_cohort.pyへ移す。",
+    "hold_unbounded_job・active_legacy_admissionsとcohort読取り・item receiptはsemantic_v4に残す。"
+  ],
+  "refs": ["mcs/semantic/semantic_v4.py", "mcs/semantic/semantic_v4_cohort.py"]
+}
