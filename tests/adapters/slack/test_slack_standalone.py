@@ -31,6 +31,23 @@ def test_destinations_are_fixed_official_urls(url, websocket, allowed):
     assert standalone._url_allowed(url, websocket=websocket) is allowed
 
 
+def test_every_web_api_method_the_adapter_calls_is_allowed():
+    # the thread-root prefetch prefers conversations_history; an unlisted
+    # method turns every thread notice into thread_prefetch_failed
+    import re
+    from pathlib import Path
+    root = Path(standalone.__file__).parent
+    called = set()
+    for name in ("delivery.py", "actions.py"):
+        source = (root / name).read_text(encoding="utf-8")
+        called |= set(re.findall(
+            r"\b((?:chat|conversations|files|views|users|bots|auth)_[A-Za-z]+)\b", source))
+    assert "conversations_history" in called
+    for method in called:
+        dotted = method.replace("_", ".", 1)
+        assert standalone._url_allowed(f"https://slack.com/api/{dotted}"), method
+
+
 @pytest.fixture
 def config(monkeypatch, tmp_path):
     settings = {**SCOPE, "allowed_user_ids": frozenset({"U_SYNTHETIC"}),
