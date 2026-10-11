@@ -222,7 +222,7 @@ def test_snapshot_uses_private_independent_temporary_file(tmp_path, monkeypatch,
         assert validate(path, deadline=deadline)
         return valid
 
-    monkeypatch.setattr(ledger, "valid_mcs_db", inspect)
+    monkeypatch.setattr(ledger, "_valid_snapshot_candidate", inspect)
     result = ledger.publish_snapshot(str(source), str(output))
     assert result == (str(published) if valid else None)
     assert concurrent.read_bytes() == b"another publisher"
@@ -251,7 +251,7 @@ def test_snapshot_validation_expiry_keeps_previous_snapshot(tmp_path, monkeypatc
         assert deadline > ledger.time.monotonic()
         return validate(path, deadline=ledger.time.monotonic() - 1)
 
-    monkeypatch.setattr(ledger, 'valid_mcs_db', expired)
+    monkeypatch.setattr(ledger, '_valid_snapshot_candidate', expired)
     assert ledger.publish_snapshot(str(source), str(output)) is None
     assert published.read_bytes() == b'synthetic prior snapshot'
     assert sorted(p.name for p in output.iterdir()) == ['ledger-snapshot.db']

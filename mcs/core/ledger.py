@@ -18,10 +18,13 @@ Transactions: save_patient()/save_messages() run inside `with self.db` —
 a mid-write failure rolls back the whole block.
 """
 import hashlib
+import fcntl
 import json
 import os
 import re
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import time
 from time import monotonic
@@ -2688,6 +2691,43 @@ class LedgerReader(Ledger):
 
 
 SNAPSHOT_VERIFY_TIMEOUT_S = 30.0
+_SNAPSHOT_VALIDATION_CODE = (
+    "import sys; sys.path.insert(0, sys.argv[1]); import _mcs_path; "
+    "from ledger import valid_mcs_db; "
+    "sys.exit(0 if valid_mcs_db(sys.argv[2], deadline=float(sys.argv[3])) else 1)"
+)
+
+
+def _valid_snapshot_candidate(path: str, *, deadline: float) -> bool:
+    """Isolate candidate validation so disk waits cannot hold the publisher."""
+    if monotonic() >= deadline:
+        return False
+    try:
+        fd = os.open(os.path.join(os.path.dirname(path), '.validation.lock'),
+                     os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            child = subprocess.Popen(
+                [sys.executable, '-I', '-c', _SNAPSHOT_VALIDATION_CODE,
+                 str(Path(__file__).resolve().parents[1]), path, str(deadline)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, pass_fds=(fd,))
+            try:
+                return child.wait(timeout=max(0, deadline - monotonic())) == 0
+            except subprocess.TimeoutExpired:
+                child.kill()
+                try:
+                    child.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    # The inherited lock fences new validators until even an
+                    # uninterruptible disk wait exits and the OS closes it.
+                    pass
+                return False
+    except OSError:
+        return False
 
 
 def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
@@ -2716,7 +2756,7 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
                 dst.close()
         finally:
             src.close()
-        if not valid_mcs_db(tmp, deadline=monotonic() + SNAPSHOT_VERIFY_TIMEOUT_S):
+        if not _valid_snapshot_candidate(tmp, deadline=monotonic() + SNAPSHOT_VERIFY_TIMEOUT_S):
             return None
         publish_tmp(tmp, dest)
         # A reader keeps its old inode or opens the complete new generation.
