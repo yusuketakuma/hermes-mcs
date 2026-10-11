@@ -17,6 +17,7 @@ import base64
 import functools
 import json
 import re
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -346,7 +347,9 @@ def test_every_cdp_json_target_is_resolvable():
     bad = []
     for rel, node in _calls_to("_cdp_json"):
         target = node.args[0] if node.args else None
-        method = _method_of(node, 1) or "GET"
+        has_method = len(node.args) > 1 or any(
+            kw.arg == "method" for kw in node.keywords)
+        method = _method_of(node, 1) if has_method else "GET"
         if isinstance(target, ast.Constant) and method == "GET":
             continue
         if method == "PUT" and _cdp_new_target(target) is not None:
@@ -394,7 +397,7 @@ _CLEARED = {"project": {"is_archived": False, "oldest_unread_message": None}}
 
 
 @pytest.mark.parametrize("fallback", [False, True], ids=["strict", "fallback_plain"])
-def test_mark_read_is_gets_only_on_the_wire(fallback):
+def test_mark_read_is_gets_only_on_the_wire(fallback, monkeypatch):
     """The one state-changing operation (read clearing) sends only GETs,
     gated on the snapshot timestamp — no POST reaches the worker."""
     replies = ([(500, {})] * 3 if fallback else []) + [
@@ -407,7 +410,25 @@ def test_mark_read_is_gets_only_on_the_wire(fallback):
     assert worker.calls and all(c["operation"] == "api" for c in worker.calls)
     assert {c["method"] for c in worker.calls} == {"GET"}
     assert all(c["data"] is None for c in worker.calls)
-    assert all("timestamp=1700000000" in c["url"] for c in worker.calls[:-1])
+    for call in worker.calls[:-1]:
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(call["url"]).query)
+        assert query["timestamp"] == ["1700000000"], call["url"]
+    # The same envelopes through the real worker sink leave as GETs.
+    import mcs_util
+    import mcs_worker
+
+    sent = []
+
+    class _Opener:
+        def open(self, request, timeout=None):
+            sent.append(request.get_method())
+            raise mcs_worker.urllib.error.HTTPError(
+                request.full_url, 404, "synthetic", {}, None)
+
+    monkeypatch.setattr(mcs_util, "no_proxy_opener", lambda *_a: _Opener())
+    for call in worker.calls:
+        mcs_worker._execute(dict(call, timeout=1))
+    assert sent == ["GET"] * len(worker.calls)
 
 
 def test_worker_sends_the_callers_method_unchanged(monkeypatch):
