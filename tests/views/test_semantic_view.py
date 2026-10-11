@@ -8,7 +8,7 @@ import mcs_view
 
 
 @pytest.mark.parametrize("field", ["meta", "content"])
-def test_deep_artifact_json_preserves_other_history(tmp_path, field):
+def test_deep_artifact_json_preserves_other_history(tmp_path, field, recursion_limited_json):
     db_path = tmp_path / "ledger.db"
     store = ledger.Ledger(str(db_path))
     try:

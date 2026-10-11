@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "Python 3.14以上と、現行のHermes・依存ライブラリへ更新",
+  "summary": "実行環境をPython 3.14以上に固定し、推奨するHermes agentを公開版v0.21.6を含む版へ更新しました。独立実行用のSlack・Discord接続ライブラリと開発ツールも、2026-10-11時点の最新安定版へ揃えています。",
+  "upgrade": "更新時にPython 3.14の環境が必要です。Hermes agentは固定した版へ更新し、Python 3.13以前で作った既存の実行環境（venv）は作り直します。独立実行用の環境も同じ依存で作り直します。設定・DB・投稿データの移行はありません。",
+  "details": [
+    "Hermesの固定先は yusuketakuma/hermes-agent の 6f35b1ed（上流 v0.21.6 を含む main と、MCS用の追加変更の統合）。上流v0.21.6単体ではMCSの連携に必要なコマンド文脈の受渡しがなく、契約テストが通らないため使わない。",
+    "新しいHermesは主要な依存をPython 3.14以上でのみ導入し、開発用の依存を依存グループ（dev）に移したため、CIの導入手順を `pip install --group` へ変更した。HermesがPyYAMLを依存から外したため、連携テストの設定ファイルはJSON（YAMLとしても有効）で書く。",
+    "独立実行用の依存は aiohttp 3.14.5・multidict 7.1.0 へ更新し、Python 3.13未満向けの typing-extensions を除いた。ほかは最新版のまま。開発ツールは ruff 0.17.0・pytest 9.1.1、GitHub Actions は setup-node v7.1.0、wiki自動更新のNodeは24（LTS）、openwiki 0.7.2・jsdom 30.1.2 へ更新した（mermaid は openwiki 0.7.2 が11系を要求するため11.17.2のまま）。",
+    "Python 3.14.8 で、Hermes連携の契約テスト21件と独立実行SDKの契約テスト25件が通過することを確認した。"
+  ],
+  "refs": [
+    ".github/workflows/ci.yml",
+    "deployment/requirements-standalone.txt",
+    "integration/test_pinned_sdk_versions.py",
+    "install.sh"
+  ]
+}

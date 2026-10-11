@@ -7,7 +7,7 @@ import local_llm
 
 
 @pytest.mark.parametrize('schema', [None, {'type': 'object'}])
-def test_format_probe_rejects_deep_reply_without_raising(schema):
+def test_format_probe_rejects_deep_reply_without_raising(schema, recursion_limited_json):
     text = '{"nested":' + '[' * 20000 + '0' + ']' * 20000 + '}'
 
     def response(*args, **kwargs):

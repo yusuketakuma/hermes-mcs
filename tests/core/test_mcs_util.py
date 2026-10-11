@@ -63,7 +63,7 @@ def test_invalid_chunk_size_is_rejected(size):
         util.text_chunks("synthetic", size)
 
 
-def test_deep_json_is_not_a_stored_object():
+def test_deep_json_is_not_a_stored_object(recursion_limited_json):
     deep = '{"nested":' + '[' * 10000 + '0' + ']' * 10000 + '}'
     assert util.loads_dict(deep) is None
     assert util.json_object(deep) is None

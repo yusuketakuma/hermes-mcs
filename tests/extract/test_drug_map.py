@@ -145,7 +145,7 @@ def test_load_missing_pin_private_path_and_symlink(tmp_path):
         drug_map.load(link, expected_sha256=dictionary.sha256)
 
 
-def test_deep_dictionary_json_uses_safe_validation_error(tmp_path):
+def test_deep_dictionary_json_uses_safe_validation_error(tmp_path, recursion_limited_json):
     raw = b"[" * 10000 + b"0" + b"]" * 10000
     assert len(raw) == 20001 and len(raw) < drug_map.MAX_BYTES
     with pytest.raises(RecursionError):
@@ -222,7 +222,7 @@ def test_derive_is_pinned_idempotent_and_body_free(store, tmp_path):
 
 
 @pytest.mark.parametrize("field", ["content", "meta"])
-def test_deep_annotation_json_is_unavailable_without_writes(store, tmp_path, field):
+def test_deep_annotation_json_is_unavailable_without_writes(store, tmp_path, field, recursion_limited_json):
     _seed(store)
     drug_map.derive(store, _dictionary(tmp_path))
     assert drug_map.current_refs(store.db, 1)[0]["cands"][0]["code"] == "fiction-i1"

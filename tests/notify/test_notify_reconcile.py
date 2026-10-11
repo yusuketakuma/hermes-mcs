@@ -507,7 +507,7 @@ def test_rebind_checks_the_held_attempt_and_its_journal_witness(world, mutation,
     'synthetic-deep',
     '[]', '"synthetic"', 'null', '{"transport":[]}', '{"transport":{}}',
 ], ids=["deep", "array", "string", "null", "transport-array", "transport-object"])
-def test_rebind_rejects_corrupt_scope_with_a_durable_receipt(world, scope_json):
+def test_rebind_rejects_corrupt_scope_with_a_durable_receipt(world, scope_json, recursion_limited_json):
     if scope_json == 'synthetic-deep':
         depth = 10000  # Python 3.13's C decoder has a separate stack limit.
         scope_json = '{"profile":' + '[' * depth + '0' + ']' * depth + '}'
