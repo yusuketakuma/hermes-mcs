@@ -39,11 +39,11 @@ _STANDALONE_SDK = {
     "mcs_discord/runtime_compat.py": {"discord"},
     "mcs_slack/runtime_compat.py": {"slack_sdk", "slack_bolt"},
 }
-# Exactly the discord.py surface each independent file uses; "" lets
-# standalone.py's _sdk() hand the verified module back to its callers.
+# Exactly the discord.py surface each independent file uses; "" and
+# "ext.commands" let standalone.py's _sdk() hand the verified modules back.
 _STANDALONE_DISCORD_MEMBERS = {
     "mcs_discord/standalone.py": {"", "__version__", "Intents.none", "AllowedMentions.none",
-                                  "app_commands.Command", "ext.commands.Bot"},
+                                  "app_commands.Command", "ext.commands", "ext.commands.Bot"},
     "mcs_discord/runtime_compat.py": {"Intents.none", "Intents.default", "AllowedMentions.none",
                                       "File", "ForumChannel", "app_commands.command",
                                       "app_commands.describe", "ext.commands.Bot"},
@@ -148,7 +148,8 @@ def _module_surface(tree, module: str, permitted: set[str]) -> list[str]:
                         and parents[current].value is current:
                     current = parents[current]
                     member.append(current.attr)
-                if len(member) > len(prefix) and ".".join(member) not in permitted:
+                # A bare name is the exact import path, so it must be permitted too.
+                if ".".join(member) not in permitted:
                     bad.append(f"{use.lineno} forbidden {module} surface")
     return bad
 
