@@ -1902,14 +1902,15 @@ def _publish_specs(db, dirs, specs, now) -> list:
         path = publish_file(dirs[transport + "_render"],
                             spec["delivery_id"] + ".json",
                             canonical(spec))
-        db.execute(
-            "UPDATE notification_renders SET spec_published=1,"
-            "first_published_at=COALESCE(first_published_at,?),"
-            "updated_at=? WHERE delivery_id=?",
-            (now, now, spec["delivery_id"]))
+        # per spec: a later publish error must not leave this UPDATE in
+        # an open implicit transaction (callers' next BEGIN would fail)
+        with db:
+            db.execute(
+                "UPDATE notification_renders SET spec_published=1,"
+                "first_published_at=COALESCE(first_published_at,?),"
+                "updated_at=? WHERE delivery_id=?",
+                (now, now, spec["delivery_id"]))
         published.append(path)
-    if published:
-        db.commit()
     return published
 
 
