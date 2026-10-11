@@ -192,7 +192,7 @@ def test_disk_guard_defers_llm_lane(tmp_path, monkeypatch):
 
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
     assert calls == [] and res["done"] == 0
-    assert res["disk_free_mb"] is not None
+    assert res["disk_free_mb"] is not None and res["disk_low"] is True
     db.close()
 
 
