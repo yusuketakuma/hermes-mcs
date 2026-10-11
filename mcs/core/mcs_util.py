@@ -407,7 +407,10 @@ def acquire_run_lock(path: str | None = None) -> int | None:
     (hold it in main() scope; process exit releases it). Returns None
     when another writer holds it. Every entry point that writes the
     ledger must hold this lock so a manual CLI can never interleave
-    writes with a scheduled tick."""
+    writes with a scheduled tick. The one documented exception is the
+    resident extract_llm drainer, which takes it per result write and
+    leaves its fenced bookkeeping writes lockless (see
+    ``extract_llm._write_lock``)."""
     path = path or RUN_LOCK
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
