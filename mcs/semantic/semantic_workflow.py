@@ -130,7 +130,6 @@ def _validate_case(case) -> dict:
             _id(fid, "case_attachment_fact_id")
     return {"targets": targets, "messages": messages,
             "fact_lines": fact_lines, "pages": pages,
-            "overview_lines": card.get("overview_lines", 0),
             "attachments": attachments}
 
 
@@ -148,8 +147,7 @@ def _measure_card(case: dict, cost: dict) -> dict:
         scanned = pos if pos is not None else len(case["fact_lines"])
         for i in range(scanned):
             step += 1
-            ref = case["fact_lines"][i]["fact_id"] \
-                if i < len(case["fact_lines"]) else target
+            ref = case["fact_lines"][i]["fact_id"]
             events.append({"step": step, "unit": f"fact_line:{ref}",
                            "model_s": cost["fact_line_scan_s"]})
         if pos is None:
