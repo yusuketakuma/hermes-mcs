@@ -64,7 +64,9 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
     for path in (paths if paths is not None else
                  (os.path.join(HOME, ".env"),
                   os.path.expanduser("~/.hermes/.env"))):
-        with suppress(OSError), open(path, encoding="utf-8") as f:
+        # an undecodable (non-UTF-8) dotenv is skipped like an unreadable one
+        with suppress(OSError, UnicodeDecodeError), \
+                open(path, encoding="utf-8") as f:
             for line in f:
                 if line.startswith(key + "="):
                     v = line.split("=", 1)[1].strip()
