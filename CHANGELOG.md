@@ -6,6 +6,36 @@
 
 ## [Unreleased]
 
+## [1.0.19] — 2026-10-11
+
+**独自に管理するHermes checkoutのまま、Python 3.14へ更新できるように**
+
+1.0.18で必要になったPython 3.14への移行を、過去の固定commit以外のHermes checkoutを使う環境でも、運用者がcommitを指定して確認すれば、checkoutを書き換えずに更新ツールで行える版です。
+
+### 新機能
+
+- **Python 3.14対応済みの独自Hermes checkoutのまま更新できるように**
+  更新ツールに --keep-hermes-checkout を追加しました。運用者が指定したcommitと一致し、変更がなく、Python 3.14対応を宣言している独自のHermes checkoutは、移動せずにそのままPython 3.14の実行環境を作り直します。
+
+### 更新時の注意
+
+- 1.0.18からの更新は更新ツールで通常どおり行えます。1.0.17以前からの更新は、1.0.18と同じく更新ツール（scripts/mcs_upgrade.py）でPython 3.14へ移行します。このとき過去の固定commit以外のHermes checkoutを使っている環境は、plan と apply に --keep-hermes-checkout と、そのcheckoutの40桁のcommitを付けます。指定しない場合と、commitの不一致・ローカル変更あり・Python 3.14非対応の場合は、従来どおり更新前の確認で止まり何も変更しません。
+
+### 技術詳細
+
+<details>
+<summary>技術詳細・根拠を表示</summary>
+
+#### Python 3.14対応済みの独自Hermes checkoutのまま更新できるように
+
+- scripts/mcs_upgrade.py は40桁のcommitだけを受け付け、更新処理とinstall.shへ MCS_UPDATE_KEEP_HERMES_CHECKOUT として渡す。環境に残っていた古い値は使わない。
+- mcs_update の更新前確認と install.sh は同じ判定スクリプト（mcs/ops/requires_python_admits.py）を、venvを作るPython 3.14で実行する。HEADが指定commitと一致すること、追跡ファイルの変更がないこと、pyproject.toml の [project] の requires-python がその完全なバージョンを許すこと（以上・より大きい・以下・未満・一致・不一致の範囲指定だけを評価し、それ以外の書式は対応と見なさない）を確認する。commitの明示指定は既知の固定commitの規則より先に判定し、ブランチ上のcheckoutでも書き換えない。
+- install.sh はこの経路でも実行ロックの継承と退避先の検証が成立した場合だけ旧環境を退避して作り直す。checkoutのcommitは更新記録に残し、失敗時の復元では動かさない。
+- 完全合成のgit・venvで、一致・不一致・不正なcommit・3.14非対応・ローカル変更・ロック証明なしと、install.shと更新処理の判定の一致を検証する。
+- 根拠: scripts/mcs_upgrade.py、mcs/ops/mcs_update.py、install.sh、tests/ops/test_python314_runtime_migration.py、tests/meta/test_install_runtime_migration.py、mcs/ops/requires_python_admits.py
+
+</details>
+
 ## [1.0.18] — 2026-10-11
 
 **意味解析の滞留を解消し、収集停止の検知と更新・復旧を安定化。同梱医薬品マスターを辞書として利用可能に**
