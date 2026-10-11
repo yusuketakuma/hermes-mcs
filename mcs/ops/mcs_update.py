@@ -1285,12 +1285,14 @@ def _record_attempt(state: dict, tag: str | None, result: str,
 
 
 def _services_reconcile() -> None:
-    r = _run([sys.executable,
-              os.path.join(REPO, "mcs", "ops", "mcs_setup.py"), "services"],
-             timeout=120)
+    try:
+        r = _run_owned(
+            [sys.executable, os.path.join(REPO, "mcs", "ops", "mcs_setup.py"),
+             "services"], 120, os.environ.copy(), stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        raise UpdateError("services_failed: unavailable_or_timeout") from None
     if r.returncode != 0:
-        raise UpdateError("services_failed: "
-                          + (r.stderr or r.stdout).strip()[:200])
+        raise UpdateError(f"services_failed: exit_{r.returncode}")
 
 
 def _postcheck(state: dict, expect_sha: str) -> list[str]:

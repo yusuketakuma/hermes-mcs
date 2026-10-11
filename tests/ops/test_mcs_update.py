@@ -1812,13 +1812,13 @@ def test_recover_escalates_when_services_reconcile_hangs(
     monkeypatch.setattr(mcs_update, "WATCHER_LABELS", ())
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: True)
-    real_run = subprocess.run
+    real_run = mcs_update._run_owned
 
-    def run(argv, *a, **k):
+    def run(argv, timeout, env, stdin=None):
         if argv[0] == sys.executable:
             raise exc
-        return real_run(argv, *a, **k)
-    monkeypatch.setattr(mcs_update.subprocess, "run", run)
+        return real_run(argv, timeout, env, stdin)
+    monkeypatch.setattr(mcs_update, "_run_owned", run)
     head = _git(repo, "rev-parse", "HEAD").stdout.strip()
     state = updater._default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": head,
