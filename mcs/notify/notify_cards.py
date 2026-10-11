@@ -44,7 +44,7 @@ import mcs_runtime
 from mcs_adapter import project_url
 from mcs_queries import HOLD_PROGRESS_SET, current_fact_pred
 from mcs_requests import canonical, payload_hash, positive, valid_hash
-from mcs_util import loads_dict
+from mcs_util import fsync_dir, loads_dict
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
     _latest_signals, _mmdd, _patient_name, _preview_header, _preview_line, _signal_evidence, _source_fp,
@@ -526,11 +526,7 @@ def publish_file(directory: str, name: str, raw: bytes) -> str:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(tmp, os.path.join(directory, name))
-        dirfd = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(dirfd)
-        finally:
-            os.close(dirfd)
+        fsync_dir(directory)
     except BaseException:
         with suppress(OSError):
             os.unlink(tmp)
