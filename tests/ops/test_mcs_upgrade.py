@@ -485,3 +485,22 @@ def test_launcher_git_failure_never_reports_remote_credential_text(tmp_path, mon
     assert "git fetch failed" in str(failure.value)
     assert secret not in str(failure.value)
     assert "example.invalid" not in str(failure.value)
+
+
+def test_launcher_passes_only_a_full_confirmed_hermes_commit(tmp_path, capfd, monkeypatch):
+    repo, bare = _make_repo(tmp_path)
+    stub = ("import json, os, sys\n"
+            "print(json.dumps({'keep': os.environ.get('MCS_UPDATE_KEEP_HERMES_CHECKOUT')}))\n")
+    _release(tmp_path / "remote-work", bare, "v1.2.0",
+             {"mcs/ops/mcs_update.py": stub, "mcs/_mcs_path.py": ""})
+    _git(repo, "fetch", "-q", "--tags")
+    monkeypatch.setenv("MCS_UPDATE_KEEP_HERMES_CHECKOUT", "f" * 40)   # stale ambient value
+    launcher = _launcher()
+    assert launcher.main(["--repo", str(repo), "--no-fetch", "plan",
+                          "--keep-hermes-checkout", "a" * 40]) == 0
+    assert json.loads(capfd.readouterr().out)["keep"] == "a" * 40
+    assert launcher.main(["--repo", str(repo), "--no-fetch", "plan"]) == 0
+    assert json.loads(capfd.readouterr().out)["keep"] is None
+    with pytest.raises(SystemExit, match="40-hex"):
+        launcher.main(["--repo", str(repo), "--no-fetch", "apply",
+                       "--keep-hermes-checkout", "abc123"])
