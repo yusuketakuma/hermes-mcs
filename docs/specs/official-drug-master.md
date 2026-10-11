@@ -110,3 +110,23 @@ searchは名称・別名・識別子の正規化部分一致で参照候補を�
 `python3 scripts/development/check_drug_master_bundle.py`は原本hash・member・全行の既知形式を無通信で検証する。
 承認のない変換は`terms_unconfirmed`として保留し、私有辞書を作成・有効化しない。
 このrepoの専用`release-mcs`（リリースMCS）skillは、毎回の新しい公式更新照合を必須とする。
+
+## 2026-10-11追記: 同梱原本からの辞書作成（1.0.18）
+
+オーナーの明示指示「マスターとしてシステムで活用できるように」により、同梱原本から私有辞書へ到達する
+経路を[`mcs drug install-bundled`](../../mcs/ops/mcs_drug.py)として追加した。上記の境界は変更しない。
+
+- 版・layout・ZIP SHA・memberは同梱manifestから、`as_of`は実行日から機械的に埋める。
+  `terms_checked_on`・`status_policy.confirmed_by`は運用者の必須入力、`approved_by`は任意入力で、
+  manifestの`reference_checked_on`や同梱物から作らない。`terms_record`は省略時に利用条件URLを記録する。
+- status policyはR08rec1の医薬品節に基づく変更区分0/3/5と日付番兵0/99999999を、
+  `--confirmed-by`の確認の下でだけ適用する。抹消1・廃止9、収載日・変更日が実行日より後の行は候補にしない。
+- 変換は既存の`convert()`で全行を検証し、結果のCSV SHAと行数がmanifestと一致しない場合は作成しない。
+  出力は既存の`write_private()`で`data/drug-map/`へ新規0600作成し、同じ内容が既にあれば上書きせずそれを示す。
+- 設定（`drug_map`）・DB・通信・稼働サービスは変更しない。有効化は運用者が既存の
+  `mcs_setup.py init --set 'drug_map=...'`で行い、その後の定期処理で既存の導出が新しい辞書世代へ照合し直す。
+- `mcs drug status`は同梱版と設定中の辞書（dict_idに含まれる原本SHA）を比べ、未設定・不一致・
+  未承認（参考のみ）・承認済みを読取り専用で示す。更新で新しい公式版が同梱された場合の再作成判断に使う。
+
+合成回帰は[同梱経路](../../tests/ops/test_mcs_drug_bundled.py)。同梱された公開原本そのものも
+実行時converterで全行変換できることを一時HOMEで確認し、行やnameをテストへ転記しない。

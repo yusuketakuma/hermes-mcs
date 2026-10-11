@@ -10,7 +10,9 @@
 
 ## 同梱と有効化
 
-リポジトリのcheckoutを利用する既存の導入・更新経路で、このZIPとmanifestもシステム版と一緒に配布されます。新しい本番辞書への変換・私有設定への反映・有効化を自動で行う機能ではありません。既存の承認済み辞書を更新する際は、各運用者が既存の私有pinで出典・SHA・版・利用条件・変更区分・期限の意味を確認し、辞書差分を確認してください。
+リポジトリのcheckoutを利用する既存の導入・更新経路で、このZIPとmanifestもシステム版と一緒に配布されます。同梱だけでは私有設定への反映・有効化を自動で行いません。
+
+`mcs drug install-bundled --terms-checked-on 日付 --confirmed-by 確認者 [--approved-by 承認者]` は、このmanifestから版・SHA・member・layoutを読み、運用者が入力した利用条件の確認日と変更区分・日付番兵の確認者でpinを組み立て、既存converterで全行を変換して `data/drug-map/` に新規0600の私有辞書を作ります。`--approved-by` を省略した辞書は参考の照会・検索専用です。設定・DB・通信は変更せず、使う場合は表示された `mcs_setup.py init --set 'drug_map=...'` を運用者が実行します。`mcs drug status` で同梱版と設定中の辞書の対応を確認できます。使い方は[利用ガイド](../../docs/guides/USER_GUIDE.md#同梱マスターを辞書として使う)を参照してください。
 
 運用者の `approved_by`・`terms_checked_on`・`confirmed_by` を同梱manifestへ記録しません。辞書の有効化は既存の人承認と明示的な私有設定の経路を使います。未承認の辞書を照会・比較しても実運用で承認済みにはなりません。
 
