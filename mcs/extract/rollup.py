@@ -568,9 +568,12 @@ def current_cached_refs(db, project_id: int, roll: dict, meta) -> dict:
     # fields on the same read-only connection; preserve profiles and metadata.
     patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
     name = patient[0] if patient else None
-    scoped = any(patient_item_scope({}, row[0], patient_name=name) != "patient"
-                 for row in db.execute("SELECT body_text FROM messages WHERE project_id=? "
-                                       "AND body_state='full'", (project_id,)))
+    # A current-version cache was built by build_rollup with these guards;
+    # source changes reach it through dirty_projects, not per-read rebuilds.
+    legacy = not isinstance(meta, dict) or meta.get("period_check_version") != PERIOD_CHECK_VERSION
+    scoped = legacy and any(patient_item_scope({}, row[0], patient_name=name) != "patient"
+                            for row in db.execute("SELECT body_text FROM messages WHERE project_id=? "
+                                                  "AND body_state='full'", (project_id,)))
     projection_stale = ((not isinstance(meta, dict) or meta.get("projection_version") != PROJECTION_VERSION)
                         and _has_projection(db, project_id))
     # Unstamped legacy caches retain their trusted-output contract. Known
