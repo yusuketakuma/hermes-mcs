@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "カード送信指示の書き出し失敗後に通知処理が止まる問題を修正",
+  "summary": "複数のカード送信指示を書き出す途中でディスク容量不足などにより失敗すると、データベースの処理が開いたまま残り、その後の操作受付や通知の処理が失敗し続けることがありました。書き出せた指示ごとに記録を確定するようにしたため、失敗後も処理が続き、書き出せなかった指示は従来どおり後で再度書き出されます。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "mcs/notify/notify_cards.py の _publish_specs は、spec ファイルを1件公開するたびに spec_published=1 の更新を with db で確定する。以前はループの後でまとめて commit していたため、2件目以降の publish_file が OSError を投げると1件目の UPDATE が暗黙のトランザクションとして開いたまま残り、次の BEGIN IMMEDIATE が失敗した。",
+    "公開済みの spec は公開済みとして記録が残るため、不要な再公開は起きない。公開できなかった spec は spec_published=0 のままで、recover と watchdog が従来どおり再公開する。"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "tests/notify/test_notify_parts.py"
+  ]
+}
