@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "更新の中止時にデータベースの復元が終わっていないのに通知を書き込む問題を修正",
+  "summary": "データベース構造が変わる更新を中止して元に戻す処理で、データベースの復元に失敗した場合でも、中止の通知を送信待ちとしてデータベースへ書き込んでいた問題を修正しました。復元が終わるまでは中断復旧と同じく書込みを止めたままにし、通知は送らず更新レポート（escalate）だけに記録します。更新記録・停止の目印・復元待ちの状態は従来どおり残り、次回の復旧処理で復元を再試行します。",
+  "upgrade": "追加操作は不要です。この状態になった場合は `mcs_update.py status` の更新レポートで確認し、バックアップを確かめてから復旧してください。",
+  "details": [
+    "mcs/ops/mcs_update.py の apply の bail は、スキーマ巻戻しが失敗し applying.restore_incomplete を記録したとき、_enqueue_notice を呼ばず _report(\"escalate\", reason, writers_stopped=True) を書いて 1 を返す。recover_interrupted の restore_incomplete 経路と同じ report-only の凍結。",
+    "executed[command_id]=failed・試行記録・applying ジャーナル・quiesce マーカーは従来どおり保持する。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_update.py",
+    "tests/ops/test_bugfix_r3_11_bail_schema_rollback.py"
+  ]
+}
