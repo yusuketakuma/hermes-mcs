@@ -326,6 +326,7 @@ def search_query(fields: dict) -> str | None:
 
 
 LIST_SHOW = 15             # ephemeral rows before 「他N件」
+SCOPE_CHANGED_TEXT = "表示できる患者の範囲が変わりました。もう一度操作してください。"
 
 
 def list_messages(result: dict, allowed, markdown: bool = True, *,
@@ -373,6 +374,11 @@ def view_answer(result: dict | None, allowed,
     if not result or result.get("outcome") != "applied" \
             or result.get("modal"):
         return None
+    scope = result.get("projects")
+    if isinstance(scope, list) and not all(allowed(p) for p in scope):
+        # counted over projects this deployment no longer serves (a click
+        # queued before its scope narrowed): never send those totals
+        return [(SCOPE_CHANGED_TEXT, None)]
     # markdown=False callers send plain text (Slack plain_text / LINE
     # WORKS): no "**" or "*" markup may reach them
     plain = plain or not markdown
