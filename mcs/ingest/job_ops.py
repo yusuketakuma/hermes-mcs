@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass
 from contextlib import suppress
 
-from mcs_adapter import MCSError, SessionExpired
+from mcs_adapter import MCSError, SessionExpired, thread_page_budget
 from ledger import TERMINAL_BODY_STATES
 from mcs_util import HOME, loads_dict
 import mcs_requests
@@ -277,9 +277,8 @@ def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
                 and len({t.message_id for t in m.replies}) >= m.reply_count):
             continue
         try:
-            kwargs = ({"max_pages": (m.reply_count + 9) // 10}
-                      if m.reply_count > 100 else {})
-            full = adapter.fetch_thread(m.project_id, m.message_id, **kwargs)
+            full = adapter.fetch_thread(m.project_id, m.message_id,
+                                        **thread_page_budget(m.reply_count))
         except SessionExpired as e:
             result.error = e
             result.checkpoint_safe = False
@@ -421,13 +420,16 @@ def run_reply_jobs(adapter, ledger, result, deadline,
             if job["kind"] == "thread" or ledger.job_state(
                     "reply", job["project_id"], job["message_id"]) == "pending":
                 pl["page"] = next_page
-                ledger.job_defer(job["job_id"], 300, payload=pl,
-                                 reason_code=_job_failure_reason(window_error))
-                if not isinstance(window_error, SessionExpired) and not (
+                reason = _job_failure_reason(window_error)
+                # an auth loss or a deadline cut after progress is no failure
+                if isinstance(window_error, SessionExpired) or (
                         window_error.kind == "deadline_exceeded"
                         and next_page > page):
-                    ledger.job_retry(job["job_id"],
-                                     reason_code=_job_failure_reason(window_error))
+                    ledger.job_defer(job["job_id"], 300, payload=pl,
+                                     reason_code=reason)
+                else:
+                    ledger.job_retry(job["job_id"], 300, payload=pl,
+                                     reason_code=reason)
             result["errors"].append(f"thread {job['parent_id']}: {window_error.kind}")
             if isinstance(window_error, SessionExpired):
                 raise window_error
@@ -457,8 +459,8 @@ def run_reply_jobs(adapter, ledger, result, deadline,
                 (job["project_id"], job["parent_id"])).fetchone()[0]
             if parent and complete < (parent["reply_count"] or 0):
                 pl["page"] = 1
-                ledger.job_defer(job["job_id"], 0, payload=pl)
-                ledger.job_retry(job["job_id"], reason_code="replies_missing")
+                ledger.job_retry(job["job_id"], 300, payload=pl,
+                                 reason_code="replies_missing")
                 result["errors"].append(
                     f"thread {job['parent_id']}: replies_missing")
             else:
@@ -467,8 +469,8 @@ def run_reply_jobs(adapter, ledger, result, deadline,
             # An incomplete target on an earlier page must be revisited
             # on the next attempt, not retried forever at the tail.
             pl["page"] = 1
-            ledger.job_defer(job["job_id"], 0, payload=pl)
-            ledger.job_retry(job["job_id"], reason_code="replies_missing")
+            ledger.job_retry(job["job_id"], 300, payload=pl,
+                             reason_code="replies_missing")
 
 
 def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
