@@ -12,9 +12,7 @@ from dataclasses import dataclass
 import inspect
 import json
 import math
-import socket
 import time
-import urllib.error
 import uuid
 from contextlib import suppress
 
@@ -284,9 +282,9 @@ def _circuit_failure_class(error) -> str | None:
         return "http_429"
     if kind in ("transport", "timeout"):
         return kind
-    if isinstance(error, TimeoutError | socket.timeout):
+    if isinstance(error, TimeoutError):
         return "timeout"
-    if isinstance(error, OSError | urllib.error.URLError):
+    if isinstance(error, OSError):      # URLError included
         return "transport"
     return None
 
