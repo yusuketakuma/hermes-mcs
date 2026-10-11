@@ -247,16 +247,7 @@ def admitted_chat(client_route: str, prompt: str, *,
         broker.mark_unknown(pid, "interrupted")
         raise
     if response is None:
-        if err_out.get("kind") == "unreachable":
-            # connection refused — provably never reached the backend
-            broker.terminal(pid, "not_sent", proof="unreachable")
-        elif err_out.get("kind") == "protocol":
-            # HTTP 200 with an unusable body — the backend finished
-            broker.terminal(pid, "done", proof="malformed_200")
-        else:
-            # transport failure — the backend may still be decoding;
-            # unknown, never assumed free
-            broker.mark_unknown(pid, "transport")
+        _retire_failed_send(broker, pid, err_out.get("kind"), "")
     else:
         broker.terminal(pid,
                         "done" if response.get("status") == 200
@@ -309,14 +300,27 @@ def admitted_probe_format(client_route: str, endpoint: str, model: str,
         # neither completion nor that the backend stopped decoding.
         p = broker._permit(pid)
         if p is not None and p["state"] == "sent":
-            if err_out.get("kind") == "unreachable":
-                broker.terminal(pid, "not_sent", proof="unreachable")
-            elif err_out.get("kind") == "protocol":
-                broker.terminal(pid, "done", proof="probe_malformed_200")
-            elif err_out.get("kind"):
-                broker.mark_unknown(pid, "probe_transport")
+            if err_out.get("kind"):
+                _retire_failed_send(broker, pid, err_out["kind"], "probe_")
             else:
                 broker.terminal(pid, "done", proof="probe_returned")
+
+
+def _retire_failed_send(broker, pid: int, kind: str | None,
+                        proof_prefix: str) -> None:
+    """Retire a sent permit whose request produced no usable answer.
+
+    Only a refused connection proves the backend never saw the request,
+    and only an HTTP 200 with an unusable body proves it finished; any
+    other failure leaves the permit ``unknown`` so it keeps occupying
+    its class (the module's fail-closed rule)."""
+    if kind == "unreachable":
+        broker.terminal(pid, "not_sent", proof="unreachable")
+    elif kind == "protocol":
+        broker.terminal(pid, "done", proof=f"{proof_prefix}malformed_200")
+    else:
+        # the backend may still be decoding — never assumed free
+        broker.mark_unknown(pid, f"{proof_prefix}transport")
 
 
 def bounded_request(endpoint: str, method: str, body, timeout: float,
@@ -326,12 +330,6 @@ def bounded_request(endpoint: str, method: str, body, timeout: float,
     absolute deadline."""
     return bounded_http.bounded_http_request(
         endpoint, method, body, timeout, api_key=None, deadline=deadline)
-
-
-def _default_request(endpoint: str, method: str, body, timeout: float,
-                     deadline: float | None):
-    """Use a reaped worker so a slow response cannot extend the deadline."""
-    return bounded_request(endpoint, method, body, timeout, deadline)
 
 
 def _usage_dict(usage) -> dict | None:
@@ -418,7 +416,8 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
         body["response_format"] = response_format
     if extra_payload:
         body.update(extra_payload)
-    send = request_fn or _default_request
+    # a reaped worker, so a slow response cannot extend the deadline
+    send = request_fn or bounded_request
     try:
         status, _headers, raw = send(endpoint, "POST", body, timeout,
                                      deadline)
