@@ -359,25 +359,15 @@ preserve_old_venv() {
 
 recovery_runtime_ok() {  # <probe host Python>; never substitutes the template's executable
     "$1" -I -B -c '
-import json, os, plistlib, stat, sys
+import os, plistlib, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1] + "/mcs")
 import _mcs_path
 import mcs_setup
-cfg = {}
-path = Path(sys.argv[3])
-if os.path.lexists(path):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, "rb") as stream:
-        st = os.fstat(stream.fileno())
-        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > 65536:
-            raise SystemExit("recovery config size/ownership/type invalid")
-        raw = stream.read(65537)
-    if len(raw) > 65536:
-        raise SystemExit("recovery config too large")
-    cfg = json.loads(raw)
-    if not isinstance(cfg, dict):
-        raise SystemExit("recovery config must be an object")
+try:
+    cfg = mcs_setup._owner_config(sys.argv[3])
+except ValueError as exc:
+    raise SystemExit("recovery config " + str(exc)) from None
 if sys.argv[4]:
     cfg["recovery_python"] = sys.argv[4]
 if sys.argv[5] == "1" and "recovery_python" not in cfg:
@@ -937,26 +927,23 @@ fi
 # Persist explicit selections only; never discard an unreadable config.
 if [ "$RUNTIME_EXPLICIT" -eq 1 ] || [ -n "$RECOVERY_OPTION" ]; then
     "$MCS_PY" - "$REPO" "$RUNTIME_MODE" "$RECOVERY_OPTION" <<'PYMODE'
-import json, os, sys
+import json, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "mcs"))
 import _mcs_path
+import mcs_setup
 from mcs_util import CONF_PATH, atomic_write
-path = Path(CONF_PATH)
 try:
-    cfg = json.loads(path.read_text()) if path.exists() else {}
-except (OSError, ValueError):
-    raise SystemExit("config.json unreadable — repair it before selecting a runtime")
-if not isinstance(cfg, dict):
-    raise SystemExit("config.json must be an object")
+    cfg = mcs_setup._owner_config(CONF_PATH)
+except ValueError as exc:
+    raise SystemExit(f"config.json {exc} — repair it before selecting a runtime") from None
 cfg["runtime_mode"] = sys.argv[2]
 if sys.argv[3]:
     cfg["recovery_python"] = sys.argv[3]
-import mcs_setup
 why = mcs_setup._init_recovery_problem(cfg, sys.argv[1])
 if why:
     raise SystemExit("desired recovery " + why + " — config not written")
-atomic_write(str(path), lambda handle: json.dump(cfg, handle, ensure_ascii=False, indent=2), 0o600)
+atomic_write(CONF_PATH, lambda handle: json.dump(cfg, handle, ensure_ascii=False, indent=2), 0o600)
 PYMODE
 fi
 

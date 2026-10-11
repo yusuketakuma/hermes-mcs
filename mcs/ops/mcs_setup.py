@@ -1562,6 +1562,29 @@ def _guard_config(yes: bool) -> bool:
     return True
 
 
+def _owner_config(path, limit=65536) -> dict:
+    """Read config.json for install.sh: a regular file the user owns, bounded, a JSON object."""
+    if not os.path.lexists(path):
+        return {}
+    try:
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+            st = os.fstat(stream.fileno())
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > limit:
+                raise ValueError("size/ownership/type invalid")
+            raw = stream.read(limit + 1)
+    except OSError:
+        raise ValueError("unreadable") from None
+    if len(raw) > limit:
+        raise ValueError("too large")
+    try:
+        cfg = json.loads(raw)
+    except (ValueError, RecursionError):
+        raise ValueError("not valid JSON") from None
+    if not isinstance(cfg, dict):
+        raise ValueError("must be an object")
+    return cfg
+
+
 def _init_recovery_problem(cfg, update_repo=None) -> str | None:
     """Why the configured recovery interpreter is unusable, or None (install.sh shares it)."""
     if "recovery_python" not in cfg:
