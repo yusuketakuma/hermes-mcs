@@ -1696,7 +1696,11 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
                       deadline, run_id, semantic=sem_on,
                       notify_max_age_s=notify_max_age_s)
     probe_after = result.pop("self_probe_after", None)
-    if not args.no_backfill:
+    if args.no_backfill:
+        # no backfill to finish the probe's walk this run
+        result["errors"].extend(f"probe {pid}: history_incomplete"
+                                for pid in probe_after or {})
+    else:
         _with_relogin(adapter, ledger, result, "backfill",
                       stage_backfill, adapter, ledger, result, deadline,
                       run_id, semantic=sem_on,
