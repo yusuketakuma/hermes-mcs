@@ -1,85 +1,72 @@
 {
-  "version": "1.0.17",
+  "version": "1.0.18",
   "sections": {
     "features": {
-      "notes": "2026-10-09、v1.0.16との差分56記録と共有source受入を照合。新機能なし。遅延Slack返信は元threadへの新規本文投稿をbroadcast、既存投稿の解析更新と再試行は追加通知しない。ルール19/LLM7/期間8/投影5へ更新。モデル、取得600秒、既読化、人承認、外部評価の既定offを維持。壊れた入力は未知/保留、正常な後続を継続する。臨床精度と実API全取得は合成成功から推定しない。",
+      "notes": "2026-10-11、v1.0.17以降の34記録（統合候補release/1.0.18-candidate）をsourceと照合。新機能は同梱公式医薬品masterからの私有辞書作成（mcs drug install-bundled / status、運用者の確認日・確認者必須、承認者なしは参考専用、config/DB/通信は不変）と、Hermes cronに依存しないlaunchdヘルス監視local.mcs-health。README機能表の薬剤行をinstall-bundledへ更新。意味解析の滞留修正・Jev聞き直し・要約形式修復・ルール20はREADMEの機能説明を変えないため本文は維持し、最新更新の生成要約に記載。モデル・取得10分・既読化・人承認・Jev既定offは不変。",
       "sources": [
         "README.md",
+        "mcs/ops/mcs_drug.py",
+        "mcs/ops/import_drug_master.py",
+        "mcs/extract/drug_map.py",
+        "deployment/launchagents/local.mcs-health.plist",
+        "mcs/ingest/health_watch.py",
+        "mcs/semantic/semantic_drain.py",
+        "mcs/semantic/semantic_jev.py",
         "mcs/extract/v1/extract.py",
-        "mcs/extract/v4/extract_llm.py",
-        "mcs/extract/patient_context.py",
-        "mcs/extract/rollup.py",
-        "mcs/semantic/semantic_audit.py",
-        "mcs/semantic/semantic_projection.py",
-        "mcs/notify/notify_cards.py",
-        "mcs/notify/notify_views.py",
-        "adapters/slack/delivery.py",
-        "mcs/notify/notify_reconcile.py"
+        "CHANGELOG.md"
       ]
     },
     "demos": {
-      "notes": "2026-10-09、Slack8画面を先頭に維持し、現行actions/cards/rendererへ照合。03メニュー順と旧緊急度ラベル、LINE WORKS01本文中心/02タスク一覧の順序を生成元から修正してSVG/PNG/ハッシュを同期。本人限定、確認後の確定、架空データを維持。7PNGを視認し03は同hashの先行視認を再利用。絵文字はrenderer差があり、実Slack端末の画面や受信とは区別。本版は新規操作を導入しないため、比較表と既存説明図で変更を説明し、架空の旧実画面を増やさない。",
+      "notes": "2026-10-11、この版は画面・ボタン・カード構成・表示条件を変更しない（変更はmcs_drug CLI・worker・監視・更新/復旧・保存JSON読取り）。Slack8画面とLINE WORKS説明図の生成元（adapters/*/cards.py・notify_render/views）に1.0.17からの差分がないことを確認し、画像・hashは再生成しない。関係評価の取得失敗件数はmcs viewのloops出力だけでカードには出さない。",
       "sources": [
         "README.md",
         "docs/screenshots/slack-gallery/README.md",
         "docs/screenshots/lineworks-gallery/README.md",
-        "scripts/development/generate_slack_gallery.py",
-        "scripts/development/generate_lineworks_gallery.py",
         "adapters/slack/cards.py",
-        "adapters/discord/cards.py",
         "adapters/lineworks/cards.py",
-        "mcs/notify/notify_render.py",
-        "mcs/notify/notify_views.py"
+        "mcs/notify/notify_views.py",
+        "mcs/views/mcs_view.py"
       ]
     },
     "quickstart": {
-      "notes": "2026-10-09、installer/共通CLI/setup/doctor/upgradeの既存入口と安全条件を照合。更新ガイドは1.0.17へ合わせ、旧1.0.16注意は履歴として保持。現行公開v1.0.16のlayout列を持つ原DDLから合成fixtureを作成し、更新元manifestを全17公開版/Hermes17+standalone7へ拡張し、新規21parameterとcore/ops3,065件の成功を確認。新規導入の隔離HOME/合成DB/stub、固定SDKの実importと実接続の違いを維持。実brew/実MCS操作は検証範囲外。",
+      "notes": "2026-10-11、install.sh・mcs CLI・setup/doctor・更新/復旧の入口は不変。install.sh・更新が実行するmcs_setup.py servicesがHermesモードでlocal.mcs-healthを配置し、standaloneでは配置しない。更新元manifestをv1.0.17追加の全18公開版・Hermes18+standalone8へ拡張（v1.0.17はshape-10とDDL同一）し、target v1.0.18。サービス再設定は所有プロセス群の停止へ統一。INSTALLATION/UPGRADE_AGENTを1.0.18へ更新し、薬剤辞書の作成手順はUSER_GUIDEへ案内。実brew・実MCS・実機更新は検証範囲外。",
       "sources": [
         "README.md",
         "install.sh",
-        "scripts/mcs",
-        "scripts/mcs_upgrade.py",
-        "mcs/ops/mcs_update.py",
         "mcs/ops/mcs_setup.py",
+        "mcs/ops/mcs_update.py",
+        "deployment/recovery/mcs_recover.py",
         "docs/guides/INSTALLATION.md",
-        "docs/guides/SETUP_AGENT.md",
         "docs/guides/UPGRADE_AGENT.md",
+        "docs/guides/USER_GUIDE.md",
         "tests/fixtures/schema_upgrade/origins.json",
-        "tests/fixtures/schema_upgrade/update-paths.json",
-        "tests/fixtures/schema_upgrade/shape-10.sql"
+        "tests/fixtures/schema_upgrade/update-paths.json"
       ]
     },
     "safety": {
-      "notes": "2026-10-09、復元同意/reason/receipt/backup束縛、起動所有者、配送scope、結果不明hold、失効カードをsourceと失敗回帰へ照合。深いJSONや範囲外IDで後続を止めず、未確認を0件や成功にしない。共有本文と添付/端末プレビュー/任意Jev送信の説明を維持。元DBと過去ログを削除せず、合成fixtureだけを使う。公式master原本配布と私有辞書の人承認/有効化は分離。",
+      "notes": "2026-10-11、外部送信先は増えない（install-bundledは無通信、Jevの送信内容は主張検査をまとめるだけで範囲不変、既定off維持）。私有辞書は運用者の確認日・確認者・承認者を入力として要求し、manifestのreference_checked_onから作らない。0600新規作成・上書きなし・config/DB変更なし。辞書候補は処方・成分・同等性を確定しない。公開用snapshotは別プロセス検証で期限超過時に前回を保持し、整合性検証を省略しない。読めない保存記録を0件や成功に読み替えない。既読化・人承認・no-redirect/no-proxyは不変。",
       "sources": [
         "README.md",
         "SECURITY.md",
-        "adapters/common/worker.py",
-        "mcs/notify/notify_cmds.py",
-        "mcs/notify/notify_transport.py",
-        "mcs/core/mcs_queries.py",
-        "mcs/semantic/semantic_runtime.py",
-        "mcs/semantic/semantic_store.py",
-        "mcs/ingest/run_check.py",
+        "mcs/ops/mcs_drug.py",
         "resources/drug-master/README.md",
-        "docs/specs/official-drug-master.md"
+        "docs/specs/official-drug-master.md",
+        "mcs/core/ledger.py",
+        "mcs/semantic/semantic_render.py",
+        "mcs/views/mcs_stats.py"
       ]
     },
     "docs": {
-      "notes": "2026-10-09、READMEの機能・導入・安全・更新・開発導線を照合。1.0.17受入票と更新手順へリンクし、復元承認の誤参照をBACKUP#consentへ修正。lifecycleの廃止済み未追跡削除手順を現行コードへ整合。生成releaseはCHANGELOGから同期し、56件の個別技術根拠/適用条件を保持して本文を利用目的ごとに編集。旧版ノート/旧archive/ライセンスは保持。公開と本番反映は別receiptで確認。",
+      "notes": "2026-10-11、最新更新の生成要約をCHANGELOG 1.0.18から同期。34記録の技術根拠は折りたたみに保持し、本文は利用目的ごとに編集。導入・更新ガイドの対象版と受入票リンクを1.0.18へ更新、USER_GUIDEに同梱master辞書の節を追加、resources/drug-master/READMEと出所仕様に作成経路を追記。旧版ノート・archive・ライセンスは保持。",
       "sources": [
         "README.md",
-        "LICENSE",
         "CHANGELOG.md",
         "docs/guides/USER_GUIDE.md",
-        "docs/guides/SETUP_AGENT.md",
+        "docs/guides/INSTALLATION.md",
         "docs/guides/UPGRADE_AGENT.md",
-        "docs/development/acceptance/ACCEPTANCE_1.0.16.md",
-        "docs/development/README_MAINTENANCE.md",
-        "docs/development/RELEASE_NOTES.md",
-        "scripts/development/readme_release.py",
-        "scripts/development/release_notes.py",
-        "docs/development/acceptance/ACCEPTANCE_1.0.17.md"
+        "docs/development/acceptance/ACCEPTANCE_1.0.18.md",
+        "resources/drug-master/README.md",
+        "docs/specs/official-drug-master.md"
       ]
     }
   }

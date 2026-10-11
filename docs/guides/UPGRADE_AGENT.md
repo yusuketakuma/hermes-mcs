@@ -1,10 +1,17 @@
 # MCS 更新実行手順書（AIエージェント用）
 
-このガイドはv1.0.17仕様のinstall/update/setup/doctorと復旧手順に対応する。
-1.0.17の合成検証・公開・実機反映の状況は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.17.md)で追跡する。
+このガイドはv1.0.18仕様のinstall/update/setup/doctorと復旧手順に対応する。
+1.0.18の合成検証・公開・実機反映の状況は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.18.md)で追跡する。
 過去の1.0.13実機受入計画は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)に残す。
 
-### 1.0.17への更新で確認すること
+### 1.0.18への更新で確認すること
+
+- Hermesでは抽出worker2本とgateway、独立実行ではhostを更新・再起動します。新しいヘルス監視`local.mcs-health`は更新が実行する`mcs_setup.py services`で配置され、独立実行では配置しません。
+- 必須の設定変更はありません。ルール20へ更新し、旧ルール結果を通常処理で順次再生成します。更新後の最初の定期処理は患者集計の署名の初回更新で一時的に長くなります。DB schemaは9のままです。
+- 試行上限で失敗済みの意味解析ジョブは自動で戻らず、既存の人承認による再試行を使います。サービス再設定の失敗は固定の理由と終了コードで記録されるため、詳細は`mcs_setup.py services`を手動で実行して確認します。
+- 同梱医薬品masterの辞書は自動では作成・有効化されません。使う場合は[利用ガイド](USER_GUIDE.md#同梱マスターを辞書として使う)の`mcs drug install-bundled`を運用者が実行します。
+
+### 1.0.17への更新で確認すること（過去版の注意）
 
 - 新機能を加えない安定化版です。gatewayまたは使用中の独立host・通知アダプターと抽出worker2本を更新・再起動し、checkout外の復旧本体も既存の手順で同期します。Hermes agent本体の更新は含みません。
 - ルール19・LLM抽出7・集約期間確認8・閲覧投影5へ更新し、既存本文を通常枠で順次再処理します。モデル・取得10分・既読化・人承認の条件は維持します。古い修正結果や結果不明の配送を自動で再試行・再送しません。
@@ -41,7 +48,7 @@ v1.0.0〜1.0.2は手動更新条件を保持し、standaloneの外部applyは阻
 schema巻戻しの個別復旧同意を更新承認で代用できません。
 
 [更新経路manifest](../../tests/fixtures/schema_upgrade/update-paths.json)は過去26経路の根拠と、
-現行16公開版・22構成のplan/apply/rollback/bootstrap/reinstall回帰を区別します。
+現行18公開版・26構成のplan/apply/rollback/bootstrap/reinstall回帰を区別します。
 テストは完全合成でGit履歴に依存しませんが、旧target updater全体の26経路再実行、
 実Git・host協調停止・SDK導入・実機配備を検証したものではありません。
 launcherの選択runtime追随とbackup lifecycleは合成回帰で検証し、
