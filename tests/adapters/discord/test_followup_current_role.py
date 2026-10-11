@@ -64,3 +64,25 @@ def test_delayed_followup_checks_current_role(world, monkeypatch, current, cache
     assert guild.fetches == (1 if guild_known else 0)
     if not delivered:
         assert ("followup_dropped", {"reason": "role_check"}) in logs
+
+
+def test_unauthorized_followup_drop_is_logged(world, monkeypatch):  # noqa: F811
+    """A followup the sweep can no longer authorize (here: card settings
+    without the required guild_id) is dropped with a log, never silently."""
+    world.seed()
+    world.dispatch(cfg={"notify": {**CFG["notify"], "card_thread": False}})
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction(f"mcs:a:{world.token(spec, 'body')}",
+                         message_id=bot.channels[42].sent[0].id)
+    monkeypatch.setattr(actions_mod, "RESULT_WAIT_S", 0)
+    asyncio.run(act.on_interaction(ix))
+    assert len(reg.followups()) == 1
+    act._settings = {k: v for k, v in SETTINGS.items() if k != "guild_id"}
+    logs = []
+    act._log = lambda event, **kw: logs.append((event, kw))
+    asyncio.run(act.sweep_followups())
+    assert not reg.followups()
+    assert ("followup_dropped", {"reason": "unauthorized"}) in logs

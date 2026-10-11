@@ -209,7 +209,7 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
         profile: mcs                 # runner 側 discord scope と一致させる
         application_id: "<discord app id>"
         channel_id: "<配送先 channel id>"
-        guild_id: "<guild id>"       # scope が guild を pin する場合
+        guild_id: "<guild id>"       # 必須。runner 側 discord scope と一致させる
         # 任意: このロールを持つメンバーもカードを操作できる
         # （channel・project の確認はユーザー許可と同じ）
         allowed_role_ids: ["<guild role id>"]

@@ -745,6 +745,7 @@ class Actions:
                 continue                         # expired — dropped
             if not self._followup_authorized(rec):
                 self._reg.drop_followup(cid)
+                self._log("followup_dropped", reason="unauthorized")
                 continue
             result = await asyncio.to_thread(
                 paths.read_result, self._dirs["cmd_results"], cid)
