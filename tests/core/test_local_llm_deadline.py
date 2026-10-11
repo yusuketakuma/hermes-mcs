@@ -27,7 +27,9 @@ def test_every_local_request_uses_deadline_and_reaps_worker(monkeypatch, entry):
             processes.append(self)
 
         def communicate(self, input=None, timeout=None):
-            if timeout is not None:
+            # the request carries the envelope; the post-kill reap (bounded
+            # by its own timeout) sends nothing
+            if input is not None:
                 self.envelope = json.loads(input)
                 self.timeout = timeout
                 raise subprocess.TimeoutExpired(self.command, timeout)
