@@ -428,6 +428,8 @@ class LocalSink:
 
     def receive(self, envelope: dict) -> str:
         _validate_envelope(envelope)
+        # a new sink root is private; an existing one is never chmodded
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         eid = envelope["envelope_id"]
         dest = self.root / "envelopes" / f"{eid}.json"
         if dest.exists():
@@ -562,7 +564,10 @@ class GovernedExporter:
 
     def __init__(self, state_dir):
         self.dir = Path(state_dir)
-        (self.dir / "journal").mkdir(mode=0o700, parents=True, exist_ok=True)
+        # mkdir's mode applies only to the leaf: create the state dir itself
+        # private first, or the next C1 run refuses it as shared
+        self.dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (self.dir / "journal").mkdir(mode=0o700, exist_ok=True)
 
     @contextmanager
     def _locked(self):
@@ -752,7 +757,8 @@ class GovernedExporter:
     def import_receipts(self, path, sink: LocalSink):
         """Reconcile manually supplied JSON/NDJSON receipts; never send."""
         source = Path(path)
-        files = sorted(p for p in source.iterdir() if p.is_file()) \
+        files = sorted(p for p in source.iterdir()
+                       if p.is_file() and not p.is_symlink() and not p.name.startswith(".")) \
             if source.is_dir() else [source]
         receipts = []
         for file in files:
