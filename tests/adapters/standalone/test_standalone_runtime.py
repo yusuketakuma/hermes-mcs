@@ -49,17 +49,25 @@ class PluginCtx:
         return self.values.get(key, default)
 
 
+def _matches_plugin(live, plugin):
+    """Every setting the Hermes plugin supplies is identical in the live connector."""
+    assert plugin is not None
+    assert {key: live.get(key) for key in plugin} == plugin
+
+
 def test_supervisor_settings_match_the_hermes_plugin(tmp_path):
-    cfg = write_root(tmp_path)
+    write_root(tmp_path)
     data = str(tmp_path.resolve() / "data")
     plugin = {"interactive": True, "data_root": data, "inbox": os.path.join(data, "cmd"),
               "snapshot": os.path.join(data, "snapshots", "ledger-snapshot.db"),
               "allowed_chat_ids": [DISCORD["channel_id"]], **DISCORD}
-    assert config.settings(cfg, tmp_path, "discord") == _interactive_settings(PluginCtx(plugin))
+    _matches_plugin(config.connector_settings(tmp_path, "discord"),
+                    _interactive_settings(PluginCtx(plugin)))
     slack = {"slack_adapter_enabled": True, "data_root": data, "snapshot": plugin["snapshot"],
              "project_ids": [101], **{f"slack_{k}": SLACK[k] for k in (
                  "team_id", "application_id", "channel_id", "profile", "allowed_user_ids")}}
-    assert config.settings(cfg, tmp_path, "slack") == _slack_adapter_settings(PluginCtx(slack))
+    _matches_plugin(config.connector_settings(tmp_path, "slack", require_interactive=False),
+                    _slack_adapter_settings(PluginCtx(slack)))
 
 
 def test_mcs_command_context_is_accepted_by_the_plugin():

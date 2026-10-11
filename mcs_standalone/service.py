@@ -40,7 +40,7 @@ def status(root, *, now=None):
                 or not math.isfinite(value["updated_at"]):
             raise ValueError
         age = (time.time() if now is None else now) - value["updated_at"]
-        if (not isinstance(value, dict) or not -2 <= age <= STATUS_TTL
+        if (not -2 <= age <= STATUS_TTL
                 or not pid_exists(value.get("pid"))
                 or not isinstance(value.get("generation"), str)
                 or len(value["generation"]) != 32
