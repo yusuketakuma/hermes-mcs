@@ -22,6 +22,7 @@ import _mcs_path  # noqa: F401
 
 from ledger import JOB_REASON_CODES, LedgerReader
 from ledger_audit import AuditReport, audit_db
+from mcs_queries import REPLY_GAP
 from mcs_requests import canonical, valid_hash, valid_uuid
 from mcs_util import has_sqlite_sidecars
 
@@ -68,13 +69,6 @@ class RepairParser(argparse.ArgumentParser):
 
     def error(self, message):
         super().error("repair_arguments_invalid")
-
-# Same criterion as the view and the thread job (full or tombstone);
-# not a claim about what the API's reply_count means.
-REPLY_GAP = """m.parent_id IS NULL AND m.reply_count >
-    (SELECT COUNT(*) FROM messages r WHERE r.project_id=m.project_id
-     AND r.parent_id=m.message_id AND r.body_state IN ('full','deleted'))"""
-
 
 def _hash_file(path: str | Path) -> str:
     """Hash an explicit regular file, refusing symlinks and live sidecars."""

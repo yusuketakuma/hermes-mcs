@@ -56,7 +56,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 from ledger import static_contract_ok, valid_mcs_db  # noqa: E402
 from maintenance import MaintenanceError  # noqa: E402
-from mcs_repair import REPLY_GAP  # noqa: E402
+from mcs_queries import REPLY_GAP  # noqa: E402
 from mcs_util import (  # noqa: E402
     atomic_write, file_sha256, has_sqlite_sidecars, publish_tmp)
 import notify_cards  # noqa: E402
