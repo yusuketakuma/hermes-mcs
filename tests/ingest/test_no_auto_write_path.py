@@ -206,6 +206,20 @@ def test_endpoint_holders_open_no_connection_of_their_own():
                             "HTTPConnection", "build_opener"}, rel
 
 
+def test_adapter_builds_no_writing_request():
+    """Besides the worker sink, the adapter's own urllib Requests (attachment
+    download and its same-host redirect) are bodiless GETs."""
+    requests = [node for node in ast.walk(_parse(ADAPTER))
+                if isinstance(node, ast.Call)
+                and (getattr(node.func, "attr", None) == "Request"
+                     or getattr(node.func, "id", None) == "Request")]
+    assert requests, "adapter download Request vanished — re-point this test"
+    bad = [node.lineno for node in requests
+           if len(node.args) > 1
+           or any(kw.arg in ("data", "method") for kw in node.keywords)]
+    assert not bad, f"adapter Request with a body or method at {bad}"
+
+
 def test_mcs_origin_literal_is_confined():
     """Only the adapter (network) and the view (link/provenance check)
     name the MCS origin, so no other module can build its own client."""
@@ -249,6 +263,17 @@ def _enclosing_function(tree, target):
 
 
 DOM_ACTION = re.compile(r"\.click\(|\.submit\(|\.requestSubmit\(|dispatchEvent\(")
+BROWSER_NETWORK = re.compile(
+    r"\bfetch\(|XMLHttpRequest|sendBeacon|new WebSocket|\.open\(['\"]POST")
+
+
+def test_injected_scripts_use_no_browser_networking():
+    """An injected script cannot write through the page's own network
+    stack (fetch/XHR/beacon/socket) either."""
+    hits = [f"{rel}:{node.lineno}" for rel in _production_files()
+            for node, text in _string_constants(_parse(rel))
+            if BROWSER_NETWORK.search(text)]
+    assert not hits, hits
 
 
 def test_dom_clicks_exist_only_in_the_login_form():
