@@ -483,6 +483,19 @@ def impact_summary(cur_sha: str, tag: str) -> list[str]:
     return notes
 
 
+def _tag_is_newer(tag, sha, cur_sha) -> bool:
+    """Whether the latest tag is ahead of HEAD. HEAD already containing it
+    (a checkout ahead of the tag) is not newer; only an exit-0 ancestry
+    proof suppresses — missing objects (128) or a git failure keep the
+    notice/auto path."""
+    newer = bool(tag and sha and sha != cur_sha)
+    if newer and cur_sha:
+        with suppress(UpdateError):
+            newer = _git(["merge-base", "--is-ancestor", sha, "HEAD"]
+                         ).returncode != 0
+    return newer
+
+
 # -------------------------------------------------------------- gates
 
 def precheck_local(cfg: dict) -> list[str]:
@@ -3184,20 +3197,9 @@ def _drainers_key(state: dict, head: str | None) -> str:
     return hashlib.sha256(json.dumps(
         [state.get("applying"), state.get("stages"), head or None],
         sort_keys=True, default=str).encode()).hexdigest()[:32]
+
+
 # -------------------------------------------------------------------- CLI
-
-def _tag_is_newer(tag, sha, cur_sha) -> bool:
-    """Whether the latest tag is ahead of HEAD. HEAD already containing it
-    (a checkout ahead of the tag) is not newer; only an exit-0 ancestry
-    proof suppresses — missing objects (128) or a git failure keep the
-    notice/auto path."""
-    newer = bool(tag and sha and sha != cur_sha)
-    if newer and cur_sha:
-        with suppress(UpdateError):
-            newer = _git(["merge-base", "--is-ancestor", sha, "HEAD"]
-                         ).returncode != 0
-    return newer
-
 
 def cmd_check() -> int:
     """Daily driver: detect -> notify -> pending approvals -> auto.
