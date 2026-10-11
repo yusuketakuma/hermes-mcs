@@ -5,8 +5,9 @@
 target-version = "py314"
 
 [tool.ruff.lint]
-# CI (.github/workflows/ci.yml) runs a bare `ruff check` — keep the
-# selection here so local runs and CI use the same rule set.
+# CI (.github/workflows/ci.yml) runs `make lint` (ruff over the Makefile's
+# LINT_PATHS) — keep the selection here so local runs and CI use the same
+# rule set.
 select = ["E4", "E7", "E9", "F"]
 
 [tool.pytest.ini_options]

@@ -20,17 +20,6 @@ _BOUNDARY = "_mcs_discord_boundary"
 _CURRENT = "_mcs_standalone_current"
 
 
-def check_sdk():
-    """Inspect the optional SDK locally; never log in or contact Discord."""
-    from importlib.metadata import PackageNotFoundError, version
-    try:
-        installed = version("discord.py")
-    except PackageNotFoundError:
-        installed = None
-    return {"ok": installed == SDK_VERSION, "version": installed,
-            "required": SDK_VERSION}
-
-
 def _sdk():
     try:
         import discord

@@ -1035,7 +1035,6 @@ def open_tasks(db, card) -> list:
          card["root_message_id"])).fetchall()
 
 
-FOOTER_TASKS = 3
 FOOTER_ACKERS = 8
 
 
