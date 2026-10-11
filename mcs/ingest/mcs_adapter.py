@@ -1831,6 +1831,11 @@ class MCSAdapter:
                             raise SchemaError("history: created_at invalid") from e
                         newest = parent_ts
                         for t in nm.replies:
+                            if not t.posted_at:
+                                # an undated reply may be newer than since —
+                                # keep the parent, like an undated parent
+                                newest = float("inf")
+                                break
                             try:
                                 newest = max(newest, datetime.fromisoformat(
                                     t.posted_at).timestamp())
