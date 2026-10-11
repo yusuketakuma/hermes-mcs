@@ -7,10 +7,10 @@ import time
 
 import pytest
 
-import ledger as ledger_mod
 import mcs_signals
 from semantic_projection import PROJECTION_VERSION
 from ops_testkit import DAY, NOW, _extract_v1, _msg
+from common_testkit import ledger_fixture
 
 
 @pytest.mark.parametrize("raw", ["{broken", "[" * 1500 + "0" + "]" * 1500,
@@ -57,11 +57,7 @@ def test_corrupt_latest_roster_never_revives_prior_membership(led, raw):
     assert led.db.total_changes == before
 
 
-@pytest.fixture
-def led(tmp_path):
-    lg = ledger_mod.Ledger(str(tmp_path / "ledger.db"))
-    yield lg
-    lg.db.close()
+led = ledger_fixture()
 
 
 def _extract_llm(db, mid, chash, meds, events=None):

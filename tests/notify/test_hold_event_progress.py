@@ -3,15 +3,11 @@ import json
 
 import pytest
 
-from ledger import Ledger
 import notify_flush
+from common_testkit import ledger_fixture
 
 
-@pytest.fixture
-def store(tmp_path):
-    ledger = Ledger(str(tmp_path / "ledger.db"))
-    yield ledger
-    ledger.close()
+store = ledger_fixture(name="store")
 
 
 def _row(store, eid):

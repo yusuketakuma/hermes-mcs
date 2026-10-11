@@ -6,12 +6,11 @@ tests/ sys.path bootstrap."""
 import json
 
 import extract_llm
-import ledger
 import mcs_adapter
+from common_testkit import make_ledger
 
 
-def _ledger(tmp_path):
-    return ledger.Ledger(str(tmp_path / "ledger.db"))
+_ledger = make_ledger
 
 
 def _message(mid=1, body="body", state="full", project_id=1,

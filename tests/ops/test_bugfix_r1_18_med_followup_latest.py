@@ -2,18 +2,13 @@
 so message_ids[-1] (group key / urgency) is the latest mention."""
 import json
 
-import pytest
 
-import ledger as ledger_mod
 import mcs_signals
 from ops_testkit import DAY, NOW, _msg
+from common_testkit import ledger_fixture
 
 
-@pytest.fixture
-def led(tmp_path):
-    lg = ledger_mod.Ledger(str(tmp_path / "ledger.db"))
-    yield lg
-    lg.db.close()
+led = ledger_fixture()
 
 
 def _extract_llm(db, mid, chash, meds):

@@ -13,13 +13,13 @@ import semantic
 import semantic_evaluation as evaluation
 import semantic_facts as sf
 import semantic_jev as jev
+from common_testkit import make_ledger
 
 
 BODY = "明日からカロナール300mgを1日3回に変更します。確認お願いします。"
 
 
-def _ledger(tmp_path):
-    return ledger.Ledger(str(tmp_path / "ledger.db"))
+_ledger = make_ledger
 
 
 def _message(mid=1, pid=1, parent=None, body=BODY, unread=True):

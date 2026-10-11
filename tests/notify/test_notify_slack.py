@@ -16,6 +16,7 @@ from notify_testkit import (
     _seed_thread, _signal_row, _token_for, _uuid,
 )
 from slack_testkit import SCOPE, SLACK
+from common_testkit import ledger_fixture
 
 # flag-off variant — the ephemeral body-button contract survives as the
 # escape hatch for deployments without card threads
@@ -39,13 +40,7 @@ def _pin_wall_clock(monkeypatch):
     monkeypatch.setattr(cards.time, "time", lambda: NOW)
 
 
-@pytest.fixture(name="led")
-def slack_ledger(tmp_path):
-    root = tmp_path / "data"
-    root.mkdir()
-    instance = ledger.Ledger(str(root / "ledger.db"))
-    yield instance
-    instance.close()
+slack_ledger = ledger_fixture(data_dir=True)
 
 
 def _command(render, op="transport_begin", **overrides):
