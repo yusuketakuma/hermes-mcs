@@ -6,6 +6,10 @@
 
 ### 1.0.18への更新で確認すること
 
+- 1.0.18はPython 3.14以上が必要です。更新は必ず更新ツール（`scripts/mcs_upgrade.py`、下記の手順）で行います。更新ツールは定期処理とworkerを止めた状態のまま、3.14未満の実行環境（venv）を`<venv>.pre-python314`へ退避して3.14で作り直し、Hermesのcheckoutが過去の固定commitにあれば新しい固定commitへ進めます。失敗・中断時は旧環境とcheckoutを戻します。退避した旧環境は削除しません。
+- 1.0.17以前の自動更新（`update.mode=auto`）は実行環境を移行できないため、1.0.18の適用を取り消して元の版に戻り、更新ツールの利用を通知します。通知を受けたら下記の手順で更新ツールを実行してください。
+- Hermesのcheckoutが過去の固定commit・新しい固定commit以外、ブランチ上、またはローカル変更ありの場合は、`plan`の事前確認で`runtime_migration: hermes_checkout_*`として止まり、何も変更しません。checkoutを固定commitへ揃えてから再実行します。
+- 復旧watchdogのPythonもPython 3.14以上とSQLiteのWAL-reset修正が必要です。既存の選択が`/usr/bin/python3`（3.9系）などの場合、事前確認で`recovery_runtime: runtime Python version unsupported`として止まります。`brew install python@3.14`の後、`mcs_setup.py init --yes --recovery-python /opt/homebrew/bin/python3.14`（実在する絶対パス）で選び直してから更新します。
 - Hermesでは抽出worker2本とgateway、独立実行ではhostを更新・再起動します。新しいヘルス監視`local.mcs-health`は更新が実行する`mcs_setup.py services`で配置され、独立実行では配置しません。
 - 必須の設定変更はありません。ルール20へ更新し、旧ルール結果を通常処理で順次再生成します。更新後の最初の定期処理は患者集計の署名の初回更新で一時的に長くなります。DB schemaは9のままです。
 - 試行上限で失敗済みの意味解析ジョブは自動で戻らず、既存の人承認による再試行を使います。サービス再設定の失敗は固定の理由と終了コードで記録されるため、詳細は`mcs_setup.py services`を手動で実行して確認します。
@@ -79,7 +83,7 @@ launcherの選択runtime追随とbackup lifecycleは合成回帰で検証し、
 |---|---|---|---|
 | 1 | checkout | `git -C ~/.mcs rev-parse --show-toplevel`（別の場所に導入した場合はそのパス。以下 `$REPO`） | パスが出る |
 | 2 | 導入形態 | `python3 -c "import json;print(json.load(open('$HOME/.mcs/config.json')).get('runtime_mode','hermes'))"` | `hermes` か `standalone` |
-| 3 | Python | hermes: `PY=~/.hermes/hermes-agent/venv/bin/python` / standalone: `PY=~/.mcs/venv/bin/python3`。`$PY -V` | 3.10 以上 |
+| 3 | Python | hermes: `PY=~/.hermes/hermes-agent/venv/bin/python` / standalone: `PY=~/.mcs/venv/bin/python3`。`$PY -V` | 3.10 以上（更新ツールの入口。1.0.18 への更新で 3.14 未満の venv は 3.14 へ移行される） |
 
 素の `python3`（macOS の 3.9 系）で更新処理を実行しない。
 

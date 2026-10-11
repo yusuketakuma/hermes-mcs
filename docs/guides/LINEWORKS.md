@@ -22,7 +22,7 @@ PY=~/.hermes/hermes-agent/venv/bin/python
 ```
 
 Hermesなしの形態（Path B）の場合は、同ガイドのB-1〜B-4で本体・Pythonと
-定期実行を設定し、`PY=python3.13`を使います。LINE WORKSの接続手順は共通です。
+定期実行を設定し、`PY=python3.14`を使います。LINE WORKSの接続手順は共通です。
 通知を送る実行には`--no-notify`を付けません。カード・操作を使う場合は
 独立アダプターも常駐させます。テキストだけなら常駐は不要です。
 

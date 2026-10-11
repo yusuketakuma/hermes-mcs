@@ -82,7 +82,7 @@ MCS ログインは依存導入を妨げないため、初回収集の直前に�
 以下を順に確認する。Path B と決まっている場合は install.sh に
 `--mode standalone`を付ける。不合格は【失敗時】
 の指示に従う。**Python の事前確認はしない** — 新規 Mac の `python3` は
-3.9 系で、Path A では `install.sh` が `python@3.13` と hermes-agent の
+3.9 系で、Path A では `install.sh` が `python@3.14` と hermes-agent の
 venv を用意する。MCS のスクリプト（`mcs_setup.py` 等）は素の `python3` で
 実行しない（Path A は `~/.hermes/hermes-agent/venv/bin/python`、
 Path B は `~/.mcs/venv/bin/python3`）。
@@ -151,7 +151,7 @@ Phase 1 の `--preflight` が exit 0 であることが前提。
 （`1/6 brew:` 〜 `6/6 recovery:`）が出て exit 0。加えて:
 
 ```bash
-~/.hermes/hermes-agent/venv/bin/python -V        # 3.11〜3.13（以後の mcs_setup はこのインタプリタ）
+~/.hermes/hermes-agent/venv/bin/python -V        # 3.14（以後の mcs_setup はこのインタプリタ）
 ls -la ~/.hermes/plugins/mcs-discord-commands    # symlink がこの checkout の hermes_plugin/ を指す
 curl -sf -m 3 http://127.0.0.1:8080/v1/models    # llama-server 応答（--no-llm なら自前サーバ）
 cat ~/.mcs-recovery/repo_path                    # この checkout の絶対パス（--no-recovery 以外）
@@ -238,7 +238,7 @@ INSTALLATION.md 付録A を案内する（Developer Portal での手順を
 
 - **対話（推奨・初回）:** ユーザー自身の端末で
   `~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py init`
-  を実行してもらう（`mcs_setup` は Python ≥3.10 必須 — install.sh が
+  を実行してもらう（`mcs_setup` は Python ≥3.14 必須 — install.sh が
   用意した venv インタプリタ）。全項目が
   説明付きで順に出る。
 - **非対話:** エージェントが収集した値で実行（secrets は §0-1 経由）:

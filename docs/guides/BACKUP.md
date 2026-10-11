@@ -117,7 +117,7 @@ health は `run_check.HOME/data` の記録、描画 wrapper は `DATA` の記録
 ## 3. CLI の準備と鍵の初回 escrow
 
 以下の shell 変数は、担当者が確認した値を指定する。
-`PY` は動作確認済み Python 3.10 以上、`REPO` は対象コードの絶対パス、
+`PY` は動作確認済み Python 3.14 以上（install.sh が用意した venv）、`REPO` は対象コードの絶対パス、
 `POLICY` は承認済み policy、`STATE_DIR` はローカル記録先、
 `SNAPSHOT_DIR` は私有の日次 backup ディレクトリ。
 ここでは保存先、日付、閾値、予定時刻の具体値を仮定しない。

@@ -103,7 +103,7 @@ pip install・モデル DL の `.part`）は続きから収束する。
 
 | 段 | 内容 | 失敗時 |
 |---|---|---|
-| brew | git/python@3.13/uv/llama.cpp/Chrome(cask) | 停止（brew 不在・導入失敗） |
+| brew | git/python@3.14/uv/llama.cpp/Chrome(cask) | 停止（brew 不在・導入失敗） |
 | hermes | pin commit clone + venv（`hermes` が PATH にあっても作成）+ `~/.local/bin/hermes` shim | 停止 |
 | plugin | `~/.hermes/plugins/` symlink + `plugins enable` | 停止 |
 | LLM | `:8080` 応答済 or hermes管理 plist 既存なら skip（hermes 管理 agent が未ロードなら warn で bootstrap 案内）。else モデル DL（再開可・任意 `MCS_MODEL_SHA256` 照合）+ `ai.mcs.llamaserver` bootstrap。plist 変更時は応答中なら warn で再読込を保留 | 停止 |

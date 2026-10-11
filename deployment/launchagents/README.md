@@ -71,7 +71,7 @@ plist を `~/.hermes/hermes-agent/venv/bin/python` で起動するよう描画�
 **復旧 watchdog（install.sh が別系統で所有）**: `org.mcs.recovery`
 は hermes cron に乗らない独立 launchd agent（StartInterval 900、
 選択した独立Pythonで `~/.mcs-recovery/mcs_recover.py --if-stale`）。
-既定の`/usr/bin/python3`も含め、Python 3.9以上とSQLiteのWAL修正を
+既定（`/opt/homebrew/bin/python3.14`・`/usr/local/bin/python3.14`・`/usr/bin/python3.14`の順で最初に実行できるもの）も含め、Python 3.14以上とSQLiteのWAL修正を
 事前に検証する。必要なら`install.sh --recovery-python /absolute/path/to/python`
 または`mcs setup init --recovery-python /absolute/path/to/python`で
 `recovery_python`を明示する。更新対象のcheckoutやvenvに依存するPythonは使えない。
@@ -89,7 +89,7 @@ gateway死亡・新版破損でも動くことが目的のため、通常のmani
 ~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py services
 ```
 
-（mcs_setup は Python ≥3.10 必須。`/usr/bin/python3` は 3.9 系で動かない —
+（mcs_setup の実行は Python ≥3.14 必須。`/usr/bin/python3` は 3.9 系で動かない —
 install.sh が作る venv インタプリタを使う）
 
 配置先パスは shell・XML ごとにエスケープしてテンプレートへ埋め込むため、
