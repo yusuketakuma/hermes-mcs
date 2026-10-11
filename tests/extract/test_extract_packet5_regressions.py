@@ -75,6 +75,11 @@ def test_utc_suffix_preserves_the_same_rule_dates_as_explicit_utc_offset(stamp):
     assert extract.extract_message(_BODY, stamp + "Z") == expected
 
 
+def test_date_only_utc_suffix_stays_an_invalid_posting_anchor():
+    # "Z" names an instant only with a time; a bare date must not gain one
+    assert extract.extract_message(_BODY, "2026-01-02Z") == extract.extract_message(_BODY, "not-a-date")
+
+
 @pytest.mark.parametrize("stamp", ["2026-01-02", "2026-01-02T00:30:00"])
 def test_date_and_naive_posting_anchors_keep_existing_rule_dates(stamp):
     result = extract.extract_message(_BODY, stamp)
