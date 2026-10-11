@@ -9,7 +9,7 @@ import sqlite3
 import sys
 import time
 from contextlib import contextmanager, suppress
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from stat import S_ISREG
 
@@ -23,7 +23,7 @@ import mcs_signals
 import mcs_view
 import read_model
 from export_schema import project_record
-from mcs_queries import item_unverified
+from mcs_queries import JST, item_unverified
 from drug_map import candidate_note
 from rollup import current_cached_refs
 import mcs_util
@@ -36,7 +36,6 @@ OUT_DIR = HOME / "data" / "exports"
 # they expire on a bounded retention; the original ledger/messages are
 # never touched by this sweep (T15)
 EXPORT_RETENTION_DAYS = 62
-_JST = timezone(timedelta(hours=9))
 HONESTY = ("候補・数値は公開スナップショット由来です。"
            "記録の欠如は対応の欠如を意味しません。")
 FACTS_HEADER = ("| # | claim | kind | who | weight | since | source "
@@ -108,7 +107,7 @@ def _fm(title: str) -> str:
 
 def _jst(timestamp: float, pattern: str) -> str:
     try:
-        return datetime.fromtimestamp(timestamp, _JST).strftime(pattern)
+        return datetime.fromtimestamp(timestamp, JST).strftime(pattern)
     except (OverflowError, OSError, ValueError):
         raise ValueError("snapshot_time_unrepresentable") from None
 
@@ -339,7 +338,7 @@ def _sweep_exports(out_dir: Path, now: float) -> list:
                         name, dir_fd=directory, follow_symlinks=False).st_mode):
                     continue
                 try:
-                    day = datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=_JST).timestamp()
+                    day = datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=JST).timestamp()
                 except (ValueError, OverflowError):
                     continue
                 if day >= cutoff:

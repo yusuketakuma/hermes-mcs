@@ -91,23 +91,22 @@ def _approved_policy(db):
     (non-empty str command_id + actor recorded by _apply_signal_policy_tx).
     A bare artifact insert cannot move thresholds — same identity
     boundary as the command envelope."""
-    row = db.execute(
-        "SELECT artifact_id, content FROM artifacts WHERE kind=? "
-        "ORDER BY artifact_id DESC LIMIT 1",
-        (POLICY_KIND,)).fetchone()
-    if row is None:
-        return None
-    try:
-        content = json.loads(row["content"])
-    except (ValueError, TypeError, RecursionError):
-        return None  # Never revive a prior approval past an unreadable latest row.
-    if not (isinstance(content, dict)
+    artifact_id, content = _latest_artifact(db, POLICY_KIND)
+    # Never revive a prior approval past an unreadable latest row.
+    if not (content is not None
             and isinstance(content.get("command_id"), str)
             and content["command_id"]
             and isinstance(content.get("actor"), str)
             and content["actor"]):
         return None
-    return row["artifact_id"], content
+    return artifact_id, content
+
+
+def _latest_artifact(db, kind):
+    """(artifact_id, content dict) of the newest artifact of kind; (None, None) when absent, content None when unreadable."""
+    row = db.execute("SELECT artifact_id, content FROM artifacts WHERE kind=? "
+                     "ORDER BY artifact_id DESC LIMIT 1", (kind,)).fetchone()
+    return (row["artifact_id"], loads_dict(row["content"])) if row else (None, None)
 
 
 def _thresholds(db):
@@ -146,15 +145,7 @@ def _latest_self_profile(db):
     """Most recent self_profile artifact (written from the MCS
     /users/self response by record_self_profile) — the fetched default
     for self identity. Returns {} when absent or unparsable."""
-    row = db.execute(
-        "SELECT content FROM artifacts WHERE kind=? "
-        "ORDER BY artifact_id DESC LIMIT 1",
-        (SELF_PROFILE_KIND,)).fetchone()
-    try:
-        d = json.loads(row["content"]) if row else {}
-    except (ValueError, TypeError, RecursionError):
-        return {}
-    return d if isinstance(d, dict) else {}
+    return _latest_artifact(db, SELF_PROFILE_KIND)[1] or {}
 
 
 def record_self_profile(db, prof) -> bool:
@@ -190,15 +181,8 @@ STATION_STAFF_KIND = "station_staff_v1"
 def latest_station_staff(db) -> list:
     """The newest stored MCS station roster (station_staff_v1) — [] when
     absent or unparsable."""
-    row = db.execute(
-        "SELECT content FROM artifacts WHERE kind=? "
-        "ORDER BY artifact_id DESC LIMIT 1",
-        (STATION_STAFF_KIND,)).fetchone()
-    try:
-        d = json.loads(row["content"]) if row else {}
-    except (ValueError, TypeError, RecursionError):
-        return []
-    staff = d.get("staff") if isinstance(d, dict) else None
+    d = _latest_artifact(db, STATION_STAFF_KIND)[1]
+    staff = d.get("staff") if d is not None else None
     return [s for s in staff if isinstance(s, dict)] \
         if isinstance(staff, list) else []
 

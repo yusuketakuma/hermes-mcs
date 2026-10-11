@@ -1,6 +1,7 @@
 """Wholly fictional cp932 42-column masters; no real master rows or services."""
 from copy import deepcopy
 import csv
+from datetime import date
 import hashlib
 import io
 import json
@@ -161,6 +162,16 @@ def test_pin_layout_types_and_metadata_fail_before_any_output(tmp_path, damage):
     with pytest.raises(importer.MasterError):
         importer.convert(path, pin)
     assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+
+
+def test_pin_as_of_floor_follows_the_edition(tmp_path):
+    assert importer.EDITION_DATE.strftime("%Y%m%d") == importer.EDITION
+    path, pin = _input(tmp_path)
+    pin["as_of"] = pin["terms_checked_on"] = importer.EDITION_DATE.isoformat()
+    importer.convert(path, pin)
+    pin["as_of"] = date.fromordinal(importer.EDITION_DATE.toordinal() - 1).isoformat()
+    with pytest.raises(importer.MasterError, match="pin_edition_or_member"):
+        importer.convert(path, pin)
 
 
 @pytest.mark.parametrize("members", [
