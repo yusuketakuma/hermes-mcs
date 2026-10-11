@@ -740,6 +740,8 @@ def st_med_change_followup(db, scope):
         if not follow:
             no_follow.append({"project_id": pid, "message_id": mid})
     return _result("ok", scope, {
+        # a count kept in the export's ratio shape (value is 1.0 whenever
+        # counted); never derive a no-follow-up rate from it
         "change_mentions_7d_plus": _ratio(total, total, "messages"),
         "no_followup_record": _items(
             sorted(no_follow, key=lambda r: r["message_id"]),
@@ -748,7 +750,10 @@ def st_med_change_followup(db, scope):
                   "request registered against the message — neither "
                   "proves a clinical response occurred",
                   "absence is reported as 'not confirmable in records', "
-                  "not as missed work"]})
+                  "not as missed work",
+                  "change_mentions_7d_plus counts mentions in its numerator; "
+                  "its value is always 1.0 and is not a follow-up or "
+                  "missed-work rate"]})
 
 
 def st_transition_reconciliation(db, scope):
@@ -904,6 +909,8 @@ def st_card_parts(db, scope):
         "renders_incomplete": incomplete,
         "notes": ["complete requires every planned part delivered — "
                   "a settled card alone never counts",
+                  "--as-of/--since/--until/--project do not apply: counts "
+                  "are every render's current part state in the snapshot",
                   "unavailable attachments are pre-settled not_sent "
                   "parts: visible in by_state, never silently omitted"]})
 
