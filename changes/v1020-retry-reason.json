@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "通常の再試行で入力した理由が受領記録に残らない問題を修正",
+  "summary": "抽出ジョブの再試行（ops.retry）で理由を入力しても、試行回数を追加しない通常の再試行では受領記録に理由が保存されていなかった問題を修正しました。入力された理由は、試行回数の追加の有無にかかわらず受領記録に残ります。",
+  "upgrade": "追加操作は不要です。修正前に実行した再試行の受領記録には理由が残っていないため、後から補完されません。",
+  "details": [
+    "mcs/ops/mcs_operations.py の _apply_retry_tx は、additional_attempts を指定した場合だけ reason を受領の extra に入れていた。reason が要求に含まれていれば常に extra に入れる。",
+    "理由は通常の再試行では従来どおり任意入力。試行回数を追加する場合に必須である点、受領の冪等性（要求の payload_hash で判定）は変わらない。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_operations.py",
+    "tests/ops/test_mcs_operations.py"
+  ]
+}

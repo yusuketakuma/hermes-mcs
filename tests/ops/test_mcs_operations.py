@@ -55,6 +55,29 @@ def test_ops_retry_preserves_attempts_and_receipt_is_idempotent(tmp_path):
     db.close()
 
 
+def test_ops_retry_records_optional_reason_in_receipt(tmp_path):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    db.ensure_patient(1)
+    payload = {"generation": "g1", "targets": [42]}
+    job_id = db.job_add("semantic", 1, 42, payload=payload)
+    db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=2 "
+                  "WHERE job_id=?", (job_id,))
+    db.db.commit()
+    req = _command(
+        "ops.retry", job_id=job_id, reason="synthetic restart note",
+        expected_payload_hash=mcs_requests.payload_hash(payload),
+    )
+
+    receipt = mcs_requests.apply_command(db, req)
+    stored = json.loads(db.db.execute(
+        "SELECT receipt_json FROM command_receipts WHERE command_id=?",
+        (req["command_id"],)).fetchone()[0])
+    assert receipt["outcome"] == "applied"
+    assert receipt["reason"] == stored["reason"] == "synthetic restart note"
+    assert "additional_attempts" not in stored
+    db.close()
+
+
 def test_ops_scan_deepens_existing_history_without_resetting_cursor(tmp_path):
     db = Ledger(str(tmp_path / "ledger.db"))
     db.ensure_patient(1)
