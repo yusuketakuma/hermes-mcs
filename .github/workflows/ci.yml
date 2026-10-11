@@ -126,8 +126,9 @@ jobs:
       # the plugin contract is validated against ONE pinned Hermes ref —
       # floating 'latest upstream' would let unrelated upstream drift
       # break (or silently change) the lane (F23)
-      # Release prerequisite: advance this pin and install.sh together
-      # whenever the companion Hermes changes are republished.
+      # Release prerequisite: advance this pin with install.sh and
+      # mcs_update.HERMES_PIN whenever the companion Hermes changes are
+      # republished (tests/meta/test_install_runtime_migration.py checks all three).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: yusuketakuma/hermes-agent
