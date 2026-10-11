@@ -534,7 +534,7 @@ def _hermes_ok(exe: str) -> bool:
 
 
 def _run(argv: list, *, timeout: int = 60, input_text: str | None = None,
-         cwd: str | None = None):
+         cwd: str | None = None, env: dict | None = None):
     """subprocess.run bounded by `timeout` — a wedged launchd, a keychain
     prompt this context cannot show, or a stuck gateway must fail the
     check, not hang the session. Timeout yields a returncode=124 result
@@ -543,7 +543,8 @@ def _run(argv: list, *, timeout: int = 60, input_text: str | None = None,
     raising."""
     try:
         return subprocess.run(argv, input=input_text, capture_output=True,
-                              text=True, timeout=timeout, **({"cwd": cwd} if cwd else {}))
+                              text=True, timeout=timeout, **({"cwd": cwd} if cwd else {}),
+                              **({"env": env} if env is not None else {}))
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
             argv, 124, "", f"timed out after {timeout}s")
@@ -586,19 +587,27 @@ def _plugin_newer_than_gateway(status_out: str) -> bool:
     Unparseable states fail
     open to False (no warning) rather than a false alarm."""
     m = re.search(r"PID\s+(\d+)", status_out or "")
-    if not m:
-        return False
-    r = _run(["ps", "-o", "lstart=", "-p", m.group(1)])
-    if r.returncode != 0:
-        return False
-    stamp = re.sub(r"\s+", " ", (r.stdout or "").strip())
-    try:
-        started = time.mktime(
-            time.strptime(stamp, "%a %b %d %H:%M:%S %Y"))
-    except (ValueError, OverflowError):
+    started = _process_started_at(int(m.group(1))) if m else None
+    if started is None:
         return False
     newest = _gateway_sources_mtime()
     return newest is not None and newest > started
+
+
+def _process_started_at(pid: int) -> float | None:
+    """Local-time start of `pid` from `ps -o lstart=`, or None when unknown.
+
+    LC_ALL=C keeps the stamp in the English format strptime parses
+    (a ja_JP locale prints the weekday in kanji)."""
+    r = _run(["ps", "-o", "lstart=", "-p", str(pid)], timeout=10,
+             env={**os.environ, "LC_ALL": "C"})
+    if r.returncode != 0:
+        return None
+    stamp = re.sub(r"\s+", " ", (getattr(r, "stdout", "") or "").strip())
+    try:
+        return time.mktime(time.strptime(stamp, "%a %b %d %H:%M:%S %Y"))
+    except (ValueError, OverflowError):
+        return None
 
 
 def _gateway_sources_mtime() -> float | None:
@@ -609,7 +618,7 @@ def _gateway_sources_mtime() -> float | None:
     # loads (Python sources and the plugin manifest) represent code the
     # running process hasn't picked up; a docs-only edit (README) never
     # needs a restart.
-    for source in ("hermes_plugin", "adapters/common", "adapters/slack", "adapters/discord"):
+    for source in mcs_runtime.GATEWAY_SOURCE_DIRS:
         for base, dirs, files in os.walk(os.path.join(REPO_ROOT, source)):
             dirs[:] = [d for d in dirs if d != "__pycache__"]
             for name in files:
@@ -738,7 +747,9 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
             # worker serves cards without companion thread bodies
             # (2026-09 incident); surface the pending restart here
             warnings.append(
-                "hermes_plugin/ is newer than the running gateway — "
+                "gateway-loaded sources (" + ", ".join(
+                    d + "/" for d in mcs_runtime.GATEWAY_SOURCE_DIRS)
+                + ") are newer than the running gateway — "
                 "`hermes gateway restart` so workers load current code")
     sem = cfg.get("semantic")
     if isinstance(sem, dict) and sem.get("mode", "off") != "off" \
@@ -2456,14 +2467,7 @@ def _doctor_source(cfg: dict, *, probe: bool) -> dict:
                 pids.add(int(match.group(1)))
         if len(pids) == 1:
             running["pid"] = pids.pop()
-            r = _run(["ps", "-o", "lstart=", "-p", str(running["pid"])], timeout=10)
-            if r.returncode == 0:
-                try:
-                    running["started_at"] = time.mktime(time.strptime(
-                        re.sub(r"\s+", " ", (getattr(r, "stdout", "") or "").strip()),
-                        "%a %b %d %H:%M:%S %Y"))
-                except (ValueError, OverflowError):
-                    pass
+            running["started_at"] = _process_started_at(running["pid"])
             # A PID/start time proves liveness, never the SHA of loaded code.
             running["status"] = "running_revision_unknown"
     modified = _gateway_sources_mtime()

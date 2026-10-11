@@ -1,6 +1,7 @@
 """mcs_setup.validate_config — the typesafe required-condition gate."""
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -406,6 +407,9 @@ def test_queue_warning_uses_the_exact_database_read_only(monkeypatch, tmp_path, 
     ("adapters/slack/actions.py", True),
     ("adapters/discord/delivery.py", True),
     ("adapters/lineworks/actions.py", False),
+    # the plugin imports mcs/ modules in-process (notify_cards, ledger, ...)
+    ("mcs/notify/notify_cards.py", True),
+    ("mcs/core/mcs_runtime.py", True),
 ])
 def test_plugin_newer_ignores_pycache(monkeypatch, tmp_path, source, needs_restart):
     """The gateway regenerates __pycache__ at load — pyc mtimes are
@@ -439,6 +443,28 @@ def test_plugin_newer_ignores_pycache(monkeypatch, tmp_path, source, needs_resta
     # Newer Hermes-owned source warns; the independent LINE worker does not.
     os.utime(src, (started + 100, started + 100))
     assert mcs_setup._plugin_newer_than_gateway("PID 123 running") is needs_restart
+
+
+def test_process_start_is_parsed_in_the_c_locale(monkeypatch):
+    """`ps -o lstart=` follows LC_ALL/LANG (ja_JP prints a weekday in
+    kanji); both the check warning and doctor must still parse it."""
+    import time
+    stamp = "Sun Oct 11 16:24:47 2026"
+
+    def ps(argv, **kw):
+        if argv[0] == "launchctl":
+            return SimpleNamespace(returncode=0, stdout="pid = 123\n")
+        c_locale = (kw.get("env") or {}).get("LC_ALL") == "C"
+        return SimpleNamespace(returncode=0, stdout=stamp if c_locale else "\u65e5 10/11 16:24:47 2026")
+    monkeypatch.setenv("LC_ALL", "ja_JP.UTF-8")
+    monkeypatch.setattr(mcs_setup, "_run", ps)
+    started = time.mktime(time.strptime(stamp, "%a %b %d %H:%M:%S %Y"))
+    monkeypatch.setattr(mcs_setup, "_gateway_sources_mtime", lambda: started + 60)
+    assert mcs_setup._plugin_newer_than_gateway("PID 123 running") is True
+    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
+    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1, stdout=""))
+    gateway = mcs_setup._doctor_source({}, probe=True)["gateway"]
+    assert gateway["started_at"] == started and gateway["restart_required"] is True
 
 
 @pytest.mark.parametrize("service", [mcs_setup.KEYCHAIN_SERVICE, "mcs-backup"])
