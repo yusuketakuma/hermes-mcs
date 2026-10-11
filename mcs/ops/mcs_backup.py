@@ -65,6 +65,7 @@ ITERATIONS = 600000
 OPENSSL = "/usr/bin/openssl"
 CHUNK = 65536
 MAX_HEADER = 65536
+MAX_REASON = 2000  # keeps the escrow witness well under MAX_HEADER
 SUITE = "aes-256-cbc+pbkdf2-sha256-600000+hmac-sha256"
 KEYCHAIN_SERVICE = "mcs-backup"
 SECURITY = "/usr/bin/security"
@@ -275,7 +276,8 @@ def keygen(state_dir: str, *, show_escrow: bool, confirm_human: bool,
     retries cannot silently replace a possibly stored key. No key is recorded.
     """
     if (show_escrow is not True or confirm_human is not True
-            or not isinstance(reason, str) or not reason.strip()):
+            or not isinstance(reason, str) or not reason.strip()
+            or len(reason) > MAX_REASON):
         raise BackupError("backup_human_escrow_required")
     records = _records(state_dir)
     with _record_lock(records):
@@ -289,7 +291,8 @@ def keygen(state_dir: str, *, show_escrow: bool, confirm_human: bool,
         account = "key-" + os.urandom(16).hex()
         witness = {"v": 1, "service": KEYCHAIN_SERVICE, "account": account,
                    "created_at": time.time(), "status": "pending",
-                   "escrow_displayed": False, "custody_confirmed": False}
+                   "escrow_displayed": False, "custody_confirmed": False,
+                   "reason": reason}
         records.check()
         with (records.root / "key_escrow.json").open("xb") as stream:
             os.chmod(stream.name, 0o600)
