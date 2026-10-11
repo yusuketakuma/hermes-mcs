@@ -63,25 +63,6 @@ def channel(cfg, target):
     return transport, channel_id
 
 
-def settings(cfg, root, transport):
-    """Build the same Supervisor settings supplied by the Hermes plugin."""
-    data = str(Path(root).expanduser().resolve() / "data")
-    scope = cfg["notify"][transport]
-    out = {"data_root": data, "profile": scope["profile"],
-           "application_id": scope["application_id"], "channel_id": scope["channel_id"],
-           "snapshot": os.path.join(data, "snapshots", "ledger-snapshot.db"),
-           "allowed_user_ids": frozenset(scope["allowed_user_ids"]),
-           "project_ids": frozenset(scope.get("project_ids") or ())}
-    if scope.get("project_ids_auto") is True:
-        out["project_ids_auto"] = True
-    if transport == "slack":
-        return {**out, "transport": "slack", "team_id": scope["team_id"]}
-    return {**out, "inbox": os.path.join(data, "cmd"), "guild_id": scope["guild_id"],
-            "allowed_chat_ids": frozenset(scope.get("allowed_chat_ids") or [scope["channel_id"]]),
-            "allowed_role_ids": frozenset(r for r in scope.get("allowed_role_ids") or ()
-                                          if r != scope["guild_id"])}
-
-
 def transports(root):
     cfg = load(root)
     notify = cfg.get("notify", {})
