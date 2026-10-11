@@ -49,7 +49,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from project_metadata import MetadataFetch
 
-from mcs_util import atomic_write, env_value, load_config, no_proxy_opener
+from mcs_util import (RETRY_LATER_4XX, atomic_write, env_value, load_config,
+                      no_proxy_opener)
 from mcs_worker import WorkerError, bounded_call
 
 BASE = "https://www.medical-care.net"
@@ -1996,7 +1997,8 @@ class MCSAdapter:
                 raise
             if isinstance(e, urllib.error.HTTPError):
                 raise MCSError("http_error", status=e.code,
-                               retryable=e.code in (408, 429) or e.code >= 500) from e
+                               retryable=e.code in RETRY_LATER_4XX
+                               or e.code >= 500) from e
             raise MCSError(_disk_kind(e), retryable=True) from e
 
     # ---------- write (guarded) ----------

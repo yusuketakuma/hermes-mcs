@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "添付取得と取得ワーカーで HTTP 425 を再試行対象として扱うよう修正",
+  "summary": "MCS が HTTP 425（Too Early）を返したとき、添付ファイルの取得と取得ワーカーはこれを再試行しない失敗として扱っていました。ジョブ台帳と同じく、408・425・429 を「時間をおいて再試行する」状態として扱うようにしました。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "mcs/ingest/mcs_adapter.py の添付取得と mcs/ingest/mcs_worker.py の HTTP エラー応答は、mcs_util.RETRY_LATER_4XX（408・425・429）で retryable を判定する。それ以外の 4xx は従来どおり再試行しない。"
+  ],
+  "refs": [
+    "mcs/ingest/mcs_adapter.py",
+    "mcs/ingest/mcs_worker.py",
+    "mcs/core/mcs_util.py",
+    "tests/ingest/test_v1020_retry_later_4xx.py"
+  ]
+}
