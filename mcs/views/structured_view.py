@@ -1,7 +1,7 @@
 """Structured display view over extraction artifacts.
 
 Shared formatter for the extract_v1/extract_llm artifacts — used by the
-text notify_flush (_fmt's 📋 要約 section) and the interactive card
+text notify_flush (_fmt_row's 📋 要約 section) and the interactive card
 renderer (notify_render._structured_block). Keeping one implementation
 means the suppression rules (negated/resolved symptoms, other-person
 meds, unverified-medication labelling) and the freshness gate can never
@@ -143,6 +143,9 @@ _ROUTE_JP = {"oral": "内服", "topical": "外用", "injection": "注射",
              "infusion": "点滴", "inhalation": "吸入", "tube": "経管",
              "other": "その他"}
 _LAB_FLAG_JP = {"high": "高", "low": "低"}
+# source-scope labels shared by the finding and lab renderers
+_SUBJECT_JP = {"family": "家族", "other": "本人以外", "unknown": "未確認"}
+_TIME_SCOPE_JP = {"past": "過去の報告", "planned": "予定", "conditional": "条件・可能性の記載"}
 
 
 # Canonical-only categories: these v2 kinds have no legacy slot, so
@@ -224,12 +227,12 @@ def _canonical_finding_lines(llm: dict, *, context=(None, None, "patient")) -> l
         seen.add(fid)
         scope = _item_scope({"evidence": f.get("evidence_quote")}, context, statement)
         if scope in ("family", "other", "unknown"):
-            f = {**f, "subject": {"family": "家族", "other": "本人以外", "unknown": "未確認"}[scope]}
+            f = {**f, "subject": _SUBJECT_JP[scope]}
         attrs = [f"{name}:{f[key]}" for key, name in
                  (("subject", "対象"), *_LINE_ATTRS, ("event_time", "時点"))
                  if isinstance(f.get(key), str) and f[key].strip()]
         if scope in ("past", "planned", "conditional"):
-            attrs.append("原文:" + {"past": "過去の報告", "planned": "予定", "conditional": "条件・可能性の記載"}[scope])
+            attrs.append("原文:" + _TIME_SCOPE_JP[scope])
         qualifier = f"（{'、'.join(attrs)}）" if attrs else ""
         line = f"{label}｜{qualifier}{statement.strip()}"
         quote = f.get("evidence_quote")
@@ -242,8 +245,6 @@ def _canonical_finding_lines(llm: dict, *, context=(None, None, "patient")) -> l
 # Where high urgency came from: a lexical rule match is only the 🚨 icon —
 # not a clinical assessment — while the AI verdict adds its wording.
 URGENCY_LABEL_PLAIN = {"llm": "🚨 緊急度高", "rule": "🚨"}   # one spelling on every surface
-URGENCY_LABEL = {"llm": "🚨 緊急度高",
-                 "rule": "🚨"}
 
 
 def _typed_urgency_reasons(document, reasons, context):
@@ -388,12 +389,12 @@ _VFLAG_LABEL = {"spo2": "SpO2", "sbp": "収縮期BP", "bs": "BS"}
 
 
 def _head_lines(llm: dict | None, v1: dict, urgency: str | None = None,
-                urgency_suffix: str = "", plain: bool = False) -> list[str]:
-    return [line for _, line in _head_ranked(llm, v1, urgency, urgency_suffix, plain)]
+                urgency_suffix: str = "") -> list[str]:
+    return [line for _, line in _head_ranked(llm, v1, urgency, urgency_suffix)]
 
 
 def _head_ranked(llm: dict | None, v1: dict, urgency: str | None = None,
-                 urgency_suffix: str = "", plain: bool = False) -> list[tuple[int, str]]:
+                 urgency_suffix: str = "") -> list[tuple[int, str]]:
     """Head lines with their plain-surface rank, fixed where each line is built.
 
     The free-text summary and 要点 never go through prefix matching, so a
@@ -401,9 +402,8 @@ def _head_ranked(llm: dict | None, v1: dict, urgency: str | None = None,
     selected = llm is not None
     llm = llm or {}
     lines: list[tuple[int, str]] = []
-    labels = URGENCY_LABEL_PLAIN if plain else URGENCY_LABEL
-    if urgency in labels:
-        lines.append((0, labels[urgency] + urgency_suffix))
+    if urgency in URGENCY_LABEL_PLAIN:
+        lines.append((0, URGENCY_LABEL_PLAIN[urgency] + urgency_suffix))
     summary = llm.get("summary")
     if isinstance(summary, str) and summary.strip():
         lines.append((1, summary.strip()))
@@ -487,13 +487,13 @@ def _lab_lines(llm: dict, body: str | None = None, *, patient_name=None, default
               and lb["measured_on"] and lb["measured_on"] in evidence):
             d += f"(測定時期:{lb['measured_on']})"
         if lb.get("subject") in ("family", "other"):
-            d += "(対象:" + ("家族" if lb["subject"] == "family" else "本人以外") + ")"
+            d += "(対象:" + _SUBJECT_JP[lb["subject"]] + ")"
         elif scope in ("family", "other", "unknown"):
-            d += "(対象:" + {"family": "家族", "other": "本人以外", "unknown": "未確認"}[scope] + ")"
+            d += "(対象:" + _SUBJECT_JP[scope] + ")"
         if lb.get("status") in ("past", "planned"):
-            d += "(過去の報告)" if lb["status"] == "past" else "(予定)"
+            d += "(" + _TIME_SCOPE_JP[lb["status"]] + ")"
         elif scope in ("past", "planned", "conditional"):
-            d += "(" + {"past": "過去の報告", "planned": "予定", "conditional": "条件・可能性の記載"}[scope] + ")"
+            d += "(" + _TIME_SCOPE_JP[scope] + ")"
         if isinstance(lb.get("condition"), str) and lb["condition"]:
             d += f"(条件:{lb['condition']})"
         (candidates if normalized["confirmation"] == "unverified"
@@ -715,7 +715,7 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
         if details["reasons"]:
             suffix = f" — 根拠:「{str(details['reasons'][0])[:40]}」"
         suffix += urgency_qc_suffix(db, mid)
-    head = _head_ranked(selected, v1, urgency, suffix, plain)
+    head = _head_ranked(selected, v1, urgency, suffix)
     lines: list[str] = [line for _, line in head]
     if details["held"]:
         lines.append("急ぎの確認依頼（本人の緊急状態とは別）" if details["kind"] == "request" else
