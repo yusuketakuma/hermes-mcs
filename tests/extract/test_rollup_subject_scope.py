@@ -226,3 +226,27 @@ def test_current_cache_with_mixed_scope_source_is_not_rebuilt_on_read(store, mon
     got = rollup.current_cached_refs(store.db, 1, cached, meta)
     assert json.dumps(got, ensure_ascii=False) == json.dumps(expected, ensure_ascii=False)
     assert stale == expected
+
+
+class _InPlacePattern:
+    """Record whether each match call reads the body in place rather than a copied tail."""
+
+    def __init__(self, pattern, body):
+        self.pattern, self.body, self.in_place = pattern, body, []
+
+    def match(self, string, *args):
+        self.in_place.append(string is self.body)
+        return self.pattern.match(string, *args)
+
+
+def test_person_tail_checks_read_the_body_in_place(heading_scans, monkeypatch):
+    body = "息子さんに対し看護師が合成薬Aを処方。娘さんより報告あり、" * 100 + "血圧120/80"
+    reporting = _InPlacePattern(extract._REPORTING, body)
+    actor = _InPlacePattern(extract._CLINICAL_ACTOR, body)
+    monkeypatch.setattr(extract, "_REPORTING", reporting)
+    monkeypatch.setattr(extract, "_CLINICAL_ACTOR", actor)
+    end = len(body)
+    extract.patient_source_scope(body, end - 10, end)
+    assert reporting.in_place and actor.in_place
+    # was body[match.start() + len(person):] per person mention, O(persons * body)
+    assert all(reporting.in_place + actor.in_place)
