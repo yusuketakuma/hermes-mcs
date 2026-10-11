@@ -5,7 +5,7 @@
   "upgrade": "設定変更・DB移行は不要です。通常の更新と同じく、Hermes gateway の再起動で反映されます。",
   "details": [
     "hermes_plugin/__init__.py を、MCS読込と応答形式（bridge.py）、本人確認・設定・許可確認（access.py）、依頼・操作のプレビュー・確認・受付（human_commands.py）に分割する。",
-    "既存の hermes_plugin.<名前> の参照先と、_dispatch_op の差し替え点は維持する。"
+    "既存の hermes_plugin 直下の名前の参照先と、_dispatch_op の差し替え点は維持する。"
   ],
   "refs": [
     "hermes_plugin/__init__.py",
