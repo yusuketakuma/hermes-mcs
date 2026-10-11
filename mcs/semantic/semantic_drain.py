@@ -825,14 +825,13 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                      a["noul"], scfg["match_threshold"],
                                      scfg["nomatch_threshold"])}
                              for k, a in answers.items()}
-            detail = {}
-            meta_base["jev_requests"] = (
-                jev_client.requests_made - req0) if jev_client else 0
             ledger.artifact_add(
                 KIND_ASSESS,
+                # "detail" stays in the stored shape (medication detail
+                # lives in semantic_assessment rows)
                 json.dumps({"target_message_id": mid,
                             "verdicts": verdicts[mid],
-                            "detail": detail}, ensure_ascii=False),
+                            "detail": {}}, ensure_ascii=False),
                 project_id=pid, message_id=mid, model=jev.JEV_MODEL,
                 meta={**meta_base, "technical_status": "complete"})
         if scfg["summary_mode"] == "off" and scfg["loop_mode"] == "off":
@@ -1327,14 +1326,14 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         # retry attempt so a persistent outage eventually fails rather
         # than busy-loops (AT-058)
         _why("audit_pending")
-        return "deferred" if resource_wait and not (
-            hard_fail or retryable_failure) else "retry"
+        return "deferred" if resource_wait and not retryable_failure \
+            else "retry"
     if not loops_done:
         # relation pass truncated by the pair budget/deadline — the
         # results committed above stand; the job re-runs to evaluate
         # the remaining (candidate, target) pairs (§17.2 持ち越し)
         _why("loops_incomplete")
-        return "retry" if hard_fail or retryable_failure else "deferred"
+        return "retry" if retryable_failure else "deferred"
     return "done"
 
 
@@ -1430,13 +1429,13 @@ def _jev_error_brief(error) -> dict | None:
             "class": _jev_failure_class(error)}
 
 
+# guard stages raised before a local-model request leaves (runtime)
+_PRE_DISPATCH_STAGES = ("llm_attempt", "llm_next_call", "llm")
+
 # Artifact kinds a semantic pass persists as durable stage results.
 # Scoped (kind + project) so a concurrent drainer's extract_llm rows or
 # another project's work never read as this job's progress (2026-09-30:
 # a job looped 19 passes 'progressing' on foreign writes).
-# guard stages raised before a local-model request leaves (runtime)
-_PRE_DISPATCH_STAGES = ("llm_attempt", "llm_next_call", "llm")
-
 _STAGE_KINDS = (KIND_FACT_PROJ, v4.KIND_V4_STAGE, KIND_LOOP,
                 KIND_LOOP_EVENT, KIND_PLAN)
 
@@ -2274,7 +2273,7 @@ def main() -> int:
     if not math.isfinite(args.stop_after) or args.stop_after < 0:
         ap.error("stop-after must be a finite nonnegative number")
     from ledger import Ledger
-    from mcs_util import acquire_run_lock, CONF_PATH, HOME
+    from mcs_util import acquire_run_lock, CONF_PATH, DB
     led = None
     stop = time.monotonic() + args.stop_after
     totals = {"done": 0, "deferred": 0, "failed": 0, "batches": 0}
@@ -2286,7 +2285,7 @@ def main() -> int:
                 continue
             try:
                 if led is None:
-                    led = Ledger(os.path.join(HOME, "data", "ledger.db"))
+                    led = Ledger(DB)
                     if args.revive_failed:
                         totals["revive"] = revive_failed(led)
                 cfg = load_config()

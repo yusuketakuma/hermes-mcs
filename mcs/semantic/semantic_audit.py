@@ -450,8 +450,7 @@ def audit_status_for(code_findings: list, jev_findings: list,
                                  "evidence_span_mismatch",
                                  "input_oversize", "source_fact_coverage_missing",
                                  "source_fact_coverage_ambiguous",
-                                 "source_fact_coverage_low_confidence",
-                                 "medication_detail_low_confidence")
+                                 "source_fact_coverage_low_confidence")
                 or f["code"].startswith("medication_detail_")]
     if blocking:
         return "NEEDS_REVIEW"
