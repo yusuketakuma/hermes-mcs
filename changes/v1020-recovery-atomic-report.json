@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "独立 watchdog の復旧レポートを電源断に強い書き方に統一",
+  "summary": "独立 watchdog が書く復旧レポート（recovery_report.json）も、他の状態ファイルと同じくディレクトリまで同期してから完了とします。電源断の直後でも、通知の重複抑止や drainer の再起動抑止に使う直前のレポートが失われにくくなります。",
+  "upgrade": "独立 watchdog（checkout 外の復旧本体）へ反映するには、`./install.sh` に導入時と同じ opt-out と `--no-services` を付けて再実行し、同期してください。それ以外の追加操作は不要です。",
+  "details": [
+    "mcs_recover.py 内で6か所に複製されていた JSON の原子的書込みを1つの関数にまとめた。各呼出し元の失敗時の扱い（例外・無視・False）と出力形式は変えていない。",
+    "gateway 再起動の子プロセスへ渡すプログラム文字列にも同じ関数を含める。"
+  ],
+  "refs": ["deployment/recovery/mcs_recover.py"]
+}
