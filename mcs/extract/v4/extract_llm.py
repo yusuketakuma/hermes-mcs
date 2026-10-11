@@ -2959,32 +2959,8 @@ def _ensure_v1(ledger, r, hints) -> None:
                 (r["message_id"], cur.lastrowid))
 
 
-def run_pending(ledger, limit: int = 20, budget_s: float = 180,
-                admitted_ids: set | None = None,
-                per_write_lock: bool = False, workers: int = 1,
-                shard: tuple[int, int] | None = None,
-                oldest_first: bool = False,
-                batch_k: int = 0,
-                vital_policy: dict | None = None) -> dict:
-    """Extract up to `limit` pending/stale messages within budget_s.
-    Returns {'done': n, 'left': n, 'failed': n}.
-
-    `workers` fans out the LLM calls across threads — llama.cpp assigns
-    each unpinned request to a free slot, so workers should not exceed
-    the server's slot count. All DB access stays on the calling thread
-    (a sqlite3 connection is not thread-safe): thread contexts are
-    fetched serially up front and all writes land in the serial commit
-    loop as each message/chunk completes.
-
-    `batch_k` groups context-free single-chunk rows K-to-a-call — the
-    fixed per-call cost (queue wait, spec eval, decode ramp) amortizes
-    across the backlog. Rows with thread context, saved chunk
-    checkpoints, or multi-chunk bodies always run single; items the
-    batch omits or fails per-item validation get an in-run single
-    retry, so a bad group never buries a good row. Off by default —
-    production callers (drainer CLI, the tick's derive stage) pass
-    _BATCH_K, itself 0 since batching measured net negative; --batch K
-    remains for explicit use."""
+def _validate_run_args(limit, budget_s) -> None:
+    """Reject a non-positive limit or a non-finite budget."""
     if type(limit) is not int or limit < 1:
         raise ValueError("extract_limit_invalid")
     try:
@@ -2993,9 +2969,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         valid_budget = False
     if not valid_budget:
         raise ValueError("extract_budget_invalid")
-    deadline = time.monotonic() + budget_s
-    lock = _write_lock
-    # Any artifact for an older body is stale, including retry state.
+
+
+def _gc_stale_artifacts(ledger, lock, per_write_lock: bool) -> None:
+    """Drop stale-body artifacts and leaked claims at most every _STALE_GC_S."""
     global _stale_gc_at
     with lock(per_write_lock) as held:
         if held and time.time() - _stale_gc_at >= _STALE_GC_S:
@@ -3016,6 +2993,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 " AND next_try < ?", (time.time() - 86400,))
             ledger.db.commit()
             _stale_gc_at = time.time()
+
+
+def _select_pending(ledger, limit: int, admitted_ids: set | None,
+                    shard: tuple[int, int] | None, oldest_first: bool) -> list:
+    """Select the claimable pending rows for one run_pending pass."""
     # pending = no current-version artifact, plus retriable CURRENT-
     # version error artifacts whose backoff expired (attempts < 5,
     # next_try <= now). Error rows of older schema versions neither
@@ -3050,7 +3032,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # time.time(), so it is compared against the same Python clock —
     # never SQLite's unixepoch(), which can disagree with it.
     now = time.time()
-    rows = ledger.db.execute(f"""
+    return ledger.db.execute(f"""
       SELECT m.message_id, m.project_id, m.body_text, m.content_hash,
              m.parent_id, m.posted_at, m.posted_at_ts,
              ({_qc_flagged_sql()}) AS qc_src,
@@ -3090,20 +3072,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
           shard[0] if shard else 0,
           now,
           limit or 20)).fetchall()
-    done = failed = deferred = lock_lost = 0
-    done_pids = set()
-    endpoint_down = False
-    # finished results whose per-write lock wait timed out (the tick
-    # holds the run lock for minutes) — written before returning
-    pending_writes: list = []
-    # thread contexts + any durable chunk checkpoints are loaded on the
-    # calling thread — worker threads never touch the sqlite handle
+
+
+def _prepare_jobs(ledger, rows, target, prefilter: bool) -> tuple[list, int]:
+    """Load contexts/checkpoints on the calling thread; settle prefiltered rows."""
     jobs = []
-    target = _resolved_llm()
     skipped = 0
-    # Manifest-declared conversions (admitted_ids) were explicitly
-    # requested — the prefilter never overrides them.
-    prefilter = _prefilter_enabled() and admitted_ids is None
     for r in rows:
         r = dict(r)
         r["_target"] = target
@@ -3125,6 +3099,152 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         r["_chunk_size"] = _saved_chunk_size(ledger, r, context)
         r["_splits"], saved = _saved_chunk_state(ledger, r, context, chunk_size=r["_chunk_size"])
         jobs.append((r, context, saved, hints, qc))
+    return jobs, skipped
+
+
+def _plan_units(claimed: list, batch_k: int) -> list:
+    """Group claimed rows into ("single", tup) and ("batch", [tup...]) units."""
+    units: list = []
+    group: list = []
+    for tup in claimed:
+        _index, r, ctx, saved, _h, qc, _l = tup
+        # QC-flagged/thin-retry rows take the single lane — their
+        # feedback/repair prompts differ from the shared batch
+        # envelope.
+        if batch_k >= 2 and qc is None and not r["thin_src"] \
+                and ctx is None and not saved \
+                and r["_chunk_size"] == _CHUNK_SIZE \
+                and len(plan_chunks(r["body_text"], _CHUNK_SIZE)) <= 1:
+            group.append(tup)
+            if len(group) >= batch_k:
+                units.append(("batch", group))
+                group = []
+        else:
+            if group:
+                units.append(("batch", group))
+                group = []
+            units.append(("single", tup))
+    if group:
+        units.append(("batch", group))
+    return units
+
+
+def _backlog_report(ledger, selected: int, limit: int) -> tuple:
+    """Return (left, oldest ts, newest ts) — None when the selection was full."""
+    left = age_min = age_max = None
+    if selected < (limit or 20):
+        # A short selection means the backlog is nearly drained, so the
+        # full pending scan is cheap enough to report. A full selection
+        # (the resident --all --semantic lane runs limit=1 per job)
+        # reports None = unknown instead of an O(backlog) scan per job.
+        left, age_min, age_max = ledger.db.execute(
+            "SELECT COUNT(*), MIN(m.posted_at_ts), MAX(m.posted_at_ts) "
+            f"FROM messages m WHERE {pending_pred()}").fetchone()
+    return left, age_min, age_max
+
+
+def _run_batch_call(tups, target, deadline: float,
+                    vital_policy: dict | None) -> tuple:
+    """One shared call for context-free single-chunk rows ->
+    (status, {job_index: validated}, call_meta). status "ok" may
+    still omit indices (model skipped a target); "failed" means the
+    envelope itself was unusable; "deferred" means the budget ended
+    before/during the call."""
+    notes = _note_list()
+    notes.clear()   # batch-only runs never enter llm_extract's
+                    # clear — unbounded in a resident worker
+    start = len(notes)
+    with _pin_target(target):
+        d = _llm_call(
+            _batch_prompt([(r["body_text"], r["posted_at"], hints)
+                           for _, r, _c, _s, hints, _q, _l in tups]),
+            deadline=deadline, schema=_SCHEMA_BATCH,
+            max_tokens=_BATCH_MAX_TOKENS,
+            need_s=_batch_need_s(len(tups)))
+    meta = _integrity_summary(notes[start:])
+    meta["batch"] = len(tups)
+    if d is _DEFERRED:
+        return "deferred", {}, meta
+    if not isinstance(d, dict) \
+            or not isinstance(d.get("items"), list):
+        return "failed", {}, meta
+    out = {}
+    seen = set()
+    for item in d["items"]:
+        if not isinstance(item, dict):
+            continue
+        i = item.get("i")
+        # index must route to exactly one claimed row — an
+        # unverifiable or duplicate item is dropped, never guessed
+        if type(i) is not int or not (0 <= i < len(tups)):
+            continue
+        if i in seen:
+            # Conflicting candidates have no authoritative first winner.
+            # Leave this row to the existing single-message retry path.
+            out.pop(tups[i][0], None)
+            continue
+        seen.add(i)
+        index, r = tups[i][0], tups[i][1]
+        drops: dict = {}
+        v = _validate({k: val for k, val in item.items() if k != "i"},
+                      r["body_text"], drops)
+        # an item that validates only with drops joins the residue:
+        # the single lane's repair pass gets one feedback re-ask at
+        # recovering the lost evidence/items — batch items must not
+        # settle for the degraded output a single would have repaired
+        if v is not None and not drops:
+            v.pop("reply", None)   # batch rows are context-free
+            if vital_policy:
+                _apply_vital_policy(v, r["body_text"], vital_policy)
+            out[index] = v
+    return "ok", out, meta
+
+
+def run_pending(ledger, limit: int = 20, budget_s: float = 180,
+                admitted_ids: set | None = None,
+                per_write_lock: bool = False, workers: int = 1,
+                shard: tuple[int, int] | None = None,
+                oldest_first: bool = False,
+                batch_k: int = 0,
+                vital_policy: dict | None = None) -> dict:
+    """Extract up to `limit` pending/stale messages within budget_s.
+    Returns {'done': n, 'left': n, 'failed': n}.
+
+    `workers` fans out the LLM calls across threads — llama.cpp assigns
+    each unpinned request to a free slot, so workers should not exceed
+    the server's slot count. All DB access stays on the calling thread
+    (a sqlite3 connection is not thread-safe): thread contexts are
+    fetched serially up front and all writes land in the serial commit
+    loop as each message/chunk completes.
+
+    `batch_k` groups context-free single-chunk rows K-to-a-call — the
+    fixed per-call cost (queue wait, spec eval, decode ramp) amortizes
+    across the backlog. Rows with thread context, saved chunk
+    checkpoints, or multi-chunk bodies always run single; items the
+    batch omits or fails per-item validation get an in-run single
+    retry, so a bad group never buries a good row. Off by default —
+    production callers (drainer CLI, the tick's derive stage) pass
+    _BATCH_K, itself 0 since batching measured net negative; --batch K
+    remains for explicit use."""
+    _validate_run_args(limit, budget_s)
+    deadline = time.monotonic() + budget_s
+    lock = _write_lock
+    # Any artifact for an older body is stale, including retry state.
+    _gc_stale_artifacts(ledger, lock, per_write_lock)
+    rows = _select_pending(ledger, limit, admitted_ids, shard, oldest_first)
+    done = failed = deferred = lock_lost = 0
+    done_pids = set()
+    endpoint_down = False
+    # finished results whose per-write lock wait timed out (the tick
+    # holds the run lock for minutes) — written before returning
+    pending_writes: list = []
+    # thread contexts + any durable chunk checkpoints are loaded on the
+    # calling thread — worker threads never touch the sqlite handle
+    target = _resolved_llm()
+    # Manifest-declared conversions (admitted_ids) were explicitly
+    # requested — the prefilter never overrides them.
+    prefilter = _prefilter_enabled() and admitted_ids is None
+    jobs, skipped = _prepare_jobs(ledger, rows, target, prefilter)
     metas = [None] * len(jobs)
     checkpoints = queue.SimpleQueue()
     parallel = workers > 1 and len(jobs) > 1
@@ -3340,59 +3460,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         raise
 
     def _exec_batch(tups):
-        """One shared call for context-free single-chunk rows ->
-        (status, {job_index: validated}, call_meta). status "ok" may
-        still omit indices (model skipped a target); "failed" means the
-        envelope itself was unusable; "deferred" means the budget ended
-        before/during the call."""
-        notes = _note_list()
-        notes.clear()   # batch-only runs never enter llm_extract's
-                        # clear — unbounded in a resident worker
-        start = len(notes)
-        with _pin_target(target):
-            d = _llm_call(
-                _batch_prompt([(r["body_text"], r["posted_at"], hints)
-                               for _, r, _c, _s, hints, _q, _l in tups]),
-                deadline=deadline, schema=_SCHEMA_BATCH,
-                max_tokens=_BATCH_MAX_TOKENS,
-                need_s=_batch_need_s(len(tups)))
-        meta = _integrity_summary(notes[start:])
-        meta["batch"] = len(tups)
-        if d is _DEFERRED:
-            return "deferred", {}, meta
-        if not isinstance(d, dict) \
-                or not isinstance(d.get("items"), list):
-            return "failed", {}, meta
-        out = {}
-        seen = set()
-        for item in d["items"]:
-            if not isinstance(item, dict):
-                continue
-            i = item.get("i")
-            # index must route to exactly one claimed row — an
-            # unverifiable or duplicate item is dropped, never guessed
-            if type(i) is not int or not (0 <= i < len(tups)):
-                continue
-            if i in seen:
-                # Conflicting candidates have no authoritative first winner.
-                # Leave this row to the existing single-message retry path.
-                out.pop(tups[i][0], None)
-                continue
-            seen.add(i)
-            index, r = tups[i][0], tups[i][1]
-            drops: dict = {}
-            v = _validate({k: val for k, val in item.items() if k != "i"},
-                          r["body_text"], drops)
-            # an item that validates only with drops joins the residue:
-            # the single lane's repair pass gets one feedback re-ask at
-            # recovering the lost evidence/items — batch items must not
-            # settle for the degraded output a single would have repaired
-            if v is not None and not drops:
-                v.pop("reply", None)   # batch rows are context-free
-                if vital_policy:
-                    _apply_vital_policy(v, r["body_text"], vital_policy)
-                out[index] = v
-        return "ok", out, meta
+        return _run_batch_call(tups, target, deadline, vital_policy)
 
     def _handle_batch(status, results, meta, tups):
         """Persist batch outcomes row by row; return the residue —
@@ -3420,28 +3488,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         # chunk, or checkpointed rows run single; context-free single-
         # chunk bodies batch batch_k-to-a-call so queue wait, spec
         # eval and decode overhead amortize across the backlog.
-        units: list = []
-        group: list = []
-        for tup in claimed:
-            _index, r, ctx, saved, _h, qc, _l = tup
-            # QC-flagged/thin-retry rows take the single lane — their
-            # feedback/repair prompts differ from the shared batch
-            # envelope.
-            if batch_k >= 2 and qc is None and not r["thin_src"] \
-                    and ctx is None and not saved \
-                    and r["_chunk_size"] == _CHUNK_SIZE \
-                    and len(plan_chunks(r["body_text"], _CHUNK_SIZE)) <= 1:
-                group.append(tup)
-                if len(group) >= batch_k:
-                    units.append(("batch", group))
-                    group = []
-            else:
-                if group:
-                    units.append(("batch", group))
-                    group = []
-                units.append(("single", tup))
-        if group:
-            units.append(("batch", group))
+        units = _plan_units(claimed, batch_k)
 
         def _single_future(pool, tup):
             index, r, ctx, saved, hints, qc, _lease = tup
@@ -3533,15 +3580,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         finally:
             for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
                 _release(ledger, r, lease)
-    left = age_min = age_max = None
-    if len(rows) < (limit or 20):
-        # A short selection means the backlog is nearly drained, so the
-        # full pending scan is cheap enough to report. A full selection
-        # (the resident --all --semantic lane runs limit=1 per job)
-        # reports None = unknown instead of an O(backlog) scan per job.
-        left, age_min, age_max = ledger.db.execute(
-            "SELECT COUNT(*), MIN(m.posted_at_ts), MAX(m.posted_at_ts) "
-            f"FROM messages m WHERE {pending_pred()}").fetchone()
+    left, age_min, age_max = _backlog_report(ledger, len(rows), limit)
     now_ts = time.time()
     return {"done": done, "failed": failed, "left": left,
             "selected": len(rows), "deferred": deferred,
