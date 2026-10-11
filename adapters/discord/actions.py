@@ -178,10 +178,9 @@ class Actions:
         (as Slack ``_interactive`` and LINE WORKS ``_allowed``)."""
         flags = await asyncio.to_thread(paths.read_flags, self._root)
         epoch = self._settings.get("route_epoch")
-        return (flags.get("interactive") is True
-                and flags.get("transport", "discord") == "discord"
-                and not flags.get("restore_pending")
-                and (epoch is None or flags.get("route_epoch") == epoch))
+        return paths.route_open(flags, "discord", epoch,
+                                check_epoch=epoch is not None,
+                                default_transport="discord")
 
     def _deny_reason(self, interaction, denial: str) -> None:
         """The user only sees 「権限がありません。」— the reason stays

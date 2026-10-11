@@ -144,9 +144,8 @@ class Sender:
 
     def route_current(self, spec):
         flags = paths.read_flags(self.root)
-        return (flags.get("interactive") is True and flags.get("transport") == "lineworks"
-                and not flags.get("restore_pending")
-                and flags.get("route_epoch") == spec["delivery"]["route_epoch"])
+        return paths.route_open(flags, "lineworks",
+                                spec["delivery"]["route_epoch"])
 
     async def perform(self, spec):
         if any(spec["delivery"].get(key) != self.settings[key] for key in SCOPE_KEYS) \

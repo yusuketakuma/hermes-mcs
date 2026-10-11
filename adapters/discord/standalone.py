@@ -10,7 +10,7 @@ import re
 from urllib.parse import urlsplit
 
 from adapters.common import paths, text as display_text, worker
-from hermes_plugin import _make_handler
+from hermes_plugin import _CONTEXT_FLAGS, _make_handler
 from . import cards
 from .actions import _authorizing_channel
 from .tasks import Supervisor
@@ -148,9 +148,7 @@ def _native_context(source, settings, *, slash):
     if str(user.id) not in {str(uid) for uid in settings["allowed_user_ids"]} \
             or channel not in {str(cid) for cid in settings["allowed_chat_ids"]}:
         return None
-    return {"platform": "discord", "authorized": True, "internal": False,
-            "is_bot": False, "via_upstream_relay": False, "native_input": True,
-            "user_id": str(user.id), "chat_id": channel,
+    return {**_CONTEXT_FLAGS, "user_id": str(user.id), "chat_id": channel,
             "scope_id": str(guild) if guild is not None else None,
             "profile": settings.get("profile"),
             "message_id": None if slash else str(source.id)}

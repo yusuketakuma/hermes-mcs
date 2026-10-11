@@ -284,10 +284,8 @@ class Actions:
         flags = await asyncio.to_thread(
             paths.read_flags, os.path.dirname(self._dirs["flags"]))
         epoch = self._settings.get("route_epoch")
-        return (flags.get("interactive") is True
-                and flags.get("transport") == "slack"
-                and not flags.get("restore_pending")
-                and (epoch is None or flags.get("route_epoch") == epoch))
+        return paths.route_open(flags, "slack", epoch,
+                                check_epoch=epoch is not None)
 
     def _client(self):
         # The adapter vends a send-safe snapshot of the shared native
