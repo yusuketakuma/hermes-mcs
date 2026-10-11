@@ -71,34 +71,31 @@ def scan_journals(dirs: dict) -> tuple[dict, bool]:
         for name in names:
             file_rows: dict[str, list] = {}
             tainted = False
-            try:
-                with open(os.path.join(state_dir, name), "rb") as fh:
-                    for raw in fh:
-                        terminated = raw.endswith(b"\n")
-                        raw = raw.strip()
-                        if not raw:
-                            continue
-                        if not terminated:
-                            tainted = True
-                        try:
-                            row = json.loads(raw)
-                        except (ValueError, RecursionError):
-                            tainted = True
-                            continue
-                        if not isinstance(row, dict):
-                            tainted = True
-                            continue
-                        if row.get("phase") not in _JOURNAL_PHASES:
-                            tainted = True
-                        aid = row.get("attempt_id")
-                        if isinstance(aid, str) and aid:
-                            file_rows.setdefault(aid, []).append(row)
-                        else:
-                            tainted = True
-            except OSError:
-                # An inaccessible journal can contain an effect lost by
-                # the restored DB. Do not clear the global restore hold.
-                raise
+            # an OSError propagates: an inaccessible journal can contain an
+            # effect lost by the restored DB, so the global restore hold stays
+            with open(os.path.join(state_dir, name), "rb") as fh:
+                for raw in fh:
+                    terminated = raw.endswith(b"\n")
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    if not terminated:
+                        tainted = True
+                    try:
+                        row = json.loads(raw)
+                    except (ValueError, RecursionError):
+                        tainted = True
+                        continue
+                    if not isinstance(row, dict):
+                        tainted = True
+                        continue
+                    if row.get("phase") not in _JOURNAL_PHASES:
+                        tainted = True
+                    aid = row.get("attempt_id")
+                    if isinstance(aid, str) and aid:
+                        file_rows.setdefault(aid, []).append(row)
+                    else:
+                        tainted = True
             incomplete = incomplete or tainted
             for aid, rows in file_rows.items():
                 rec = out.setdefault(aid, {"rows": [], "tainted": False})
@@ -150,7 +147,7 @@ def _apply_hold(db, aid, delivery_id, reason, dirs, now,
                  else {})
     spec = _read_spec(dirs, delivery_id)
     events = _spec_events(spec)
-    if scope is None or not scope:
+    if not scope:
         d = spec.get("delivery") if isinstance(spec, dict) else {}
         scope = {k: d.get(k) for k in
                  ("profile", "application_id", "guild_id",
