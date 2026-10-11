@@ -192,8 +192,8 @@ def test_chunk_checkpoint_requires_same_interpretation_context(db):
     db.save_messages([_message()])
     row = db.db.execute("SELECT * FROM messages").fetchone()
     extract_llm._persist_chunks(db, row, {0: {"summary": "合成"}}, "元の文脈")
-    assert extract_llm._saved_chunks(db, row, "元の文脈")
-    assert not extract_llm._saved_chunks(db, row, "変更後の文脈")
+    assert extract_llm._saved_chunk_state(db, row, "元の文脈")[1]
+    assert not extract_llm._saved_chunk_state(db, row, "変更後の文脈")[1]
 
 
 def test_chunk_merge_preserves_restart_and_separate_subjects():

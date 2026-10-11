@@ -2780,11 +2780,6 @@ def _saved_chunk_state(ledger, r, context=None, *, chunk_size=None):
     return splits, saved
 
 
-def _saved_chunks(ledger, r, context: str | None = None, *, chunk_size: int | None = None) -> dict:
-    """Completed source-bound roots or split leaves, including valid empty results."""
-    return _saved_chunk_state(ledger, r, context, chunk_size=chunk_size)[1]
-
-
 def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                     chunk_size: int | None = None, splits=None, split_size=None):
     """Durable root/leaf checkpoints and local split plans, written by the caller."""

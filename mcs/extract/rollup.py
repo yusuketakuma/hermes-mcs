@@ -483,15 +483,6 @@ def _symptom_ts(m, v1: dict, lm: dict, ts,
             sym_pos.setdefault(t, ts)
 
 
-def msgs_by_ts(msgs, ts: float) -> str:
-    # callers map NULL posted_at_ts to 0 (unparseable posted_at), so match
-    # on the same coercion — otherwise ts=0 finds no row and the symptom's
-    # 'last' renders as the literal string "0" (FIX-RU1)
-    for m in msgs:
-        if (m["posted_at_ts"] or 0) == ts:
-            return m["posted_at"] or f"msg:{m['message_id']}"
-    return str(ts)
-
 
 # derive replaces med_ref by DELETE+INSERT, so any rewrite raises MAX(id)
 # and any removal lowers COUNT: together they change on every edit (M5).
