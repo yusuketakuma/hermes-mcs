@@ -4,7 +4,7 @@ POSTを呼べないことをテストで固定する").
 
 Today the whole MCS surface is read-only: every API call is a GET, read
 state clears only as a side effect of the snapshot-gated message GET, and
-the only DOM interaction is the login form in ``auto_login``. These tests
+the only DOM interaction is the login form in ``_auto_login`` (behind ``auto_login``). These tests
 pin that, so a future human-approved write (1.1.x) has to arrive as a
 deliberate, reviewed change to this file rather than slipping in through
 a scheduled job, a card button, or a delivery adapter.
@@ -179,8 +179,8 @@ def _enclosing_function(tree, target):
 
 
 def test_dom_clicks_exist_only_in_the_login_form():
-    """The one scripted click is the login submit inside auto_login;
-    no other injected script presses, submits or dispatches anything."""
+    """The one scripted click is the login submit inside _auto_login (the
+    body auto_login wraps with the login backoff); no other injected script presses, submits or dispatches anything."""
     owners = []
     for rel in _production_files():
         tree = _parse(rel)
@@ -189,7 +189,7 @@ def test_dom_clicks_exist_only_in_the_login_form():
                 fn = _enclosing_function(tree, node)
                 owners.append((rel, fn.name if fn else None))
     assert owners, "auto_login script vanished — re-point this test"
-    assert set(owners) == {(ADAPTER, "auto_login")}, owners
+    assert set(owners) == {(ADAPTER, "_auto_login")}, owners
 
 
 def test_cdp_only_opens_the_unreads_and_login_pages():
