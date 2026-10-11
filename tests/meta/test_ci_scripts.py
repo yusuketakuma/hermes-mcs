@@ -288,6 +288,7 @@ def test_from_import_cannot_bypass_sdk_and_asyncio_surface(monkeypatch, tmp_path
 @pytest.mark.parametrize(("source", "hardcoded"), [
     ('target = cfg.get("notify_target") or "slack:C0123ABCDEF"\n', True),
     ('THREAD = "slack:G0123ABCDEF:1700000000.000100"\n', True),
+    ('DM = "slack:W0123ABCDEF"\n', True),
     ('target = cfg.get("notify_target") or "discord:123456789012"\n', True),
     ('HELP = "hermes send target (e.g. slack:C0CHANNELID, discord:1234)"\n', False),
     ('HELP = "slack:C0CHANNELID: the channel to post to"\n', False),
@@ -300,6 +301,14 @@ def test_notify_gate_catches_baked_in_slack_destination(monkeypatch, tmp_path, s
     path.write_text(source)
     monkeypatch.setattr(gates, "_py_files", lambda *args: [path])
     assert bool(gates.gate_notify_fail_closed()) is hardcoded
+
+
+def test_notify_gate_scans_independent_entry_points(monkeypatch):
+    gates = _load("ci_notify_scope", "ci/gates.py")
+    seen = []
+    monkeypatch.setattr(gates, "_py_files", lambda *dirs: seen.extend(dirs) or [])
+    gates.gate_notify_fail_closed()
+    assert {gates.STANDALONE, gates.ROOT / "lineworks_adapter"} <= set(seen)
 
 
 @pytest.mark.parametrize("filename", ["standalone.py", "runtime_compat.py"])
