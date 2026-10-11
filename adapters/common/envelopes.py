@@ -55,6 +55,22 @@ def command_queued(cmd_int_dir: str, command_id: str) -> bool:
 
 # ---------- transport envelopes ------------------------------------
 
+# envelope version per transport (Discord's v1 carries no transport field)
+_VERSION = {"discord": 1, "slack": 2, "lineworks": 3}
+
+
+def _stamp_scope(env: dict, delivery: dict) -> dict:
+    """Stamp the sealed render's guild / transport scope onto ``env`` —
+    applied last, so no caller-supplied field can override it."""
+    if delivery.get("guild_id"):
+        env["guild_id"] = delivery["guild_id"]
+    if delivery.get("transport") in ("slack", "lineworks"):
+        transport = delivery["transport"]
+        env.update(version=_VERSION[transport], transport=transport,
+                   team_id=delivery["team_id"])
+    return env
+
+
 def transport_begin(claim: dict) -> dict:
     """claim carries spec + worker identity; every echoed field is one
     the runner re-checks against the stored render."""
@@ -70,13 +86,7 @@ def transport_begin(claim: dict) -> dict:
            "profile": delivery.get("profile"),
            "application_id": delivery.get("application_id"),
            "channel_id": delivery.get("channel_id")}
-    if delivery.get("guild_id"):
-        env["guild_id"] = delivery["guild_id"]
-    if delivery.get("transport") in ("slack", "lineworks"):
-        transport = delivery["transport"]
-        env.update(version=2 if transport == "slack" else 3,
-                   transport=transport, team_id=delivery["team_id"])
-    return env
+    return _stamp_scope(env, delivery)
 
 
 def _receipt_env(claim: dict, op: str, result: str, attempt_id: str,
@@ -98,13 +108,7 @@ def _receipt_env(claim: dict, op: str, result: str, attempt_id: str,
     if extra:
         env.update(extra)
     env["result"] = result
-    if delivery.get("guild_id"):
-        env["guild_id"] = delivery["guild_id"]
-    if delivery.get("transport") in ("slack", "lineworks"):
-        transport = delivery["transport"]
-        env.update(version=2 if transport == "slack" else 3,
-                   transport=transport, team_id=delivery["team_id"])
-    return env
+    return _stamp_scope(env, delivery)
 
 
 def transport_receipt(claim: dict, result: str,
@@ -171,7 +175,7 @@ def notification(token: str, actor: str, origin: dict,
     into the hash: a different input is a different command, never a
     command_id_conflict against the earlier receipt."""
     transport = origin.get("transport", "discord")
-    version = {"discord": 1, "slack": 2, "lineworks": 3}.get(transport)
+    version = _VERSION.get(transport)
     if version is None:
         raise ValueError("bad_transport")
     env = {"version": version,
@@ -190,7 +194,7 @@ def notification(token: str, actor: str, origin: dict,
 def refresh(actor: str, origin: dict,
             command_id: str | None = None) -> dict:
     transport = origin.get("transport", "discord")
-    version = {"discord": 1, "slack": 2, "lineworks": 3}.get(transport)
+    version = _VERSION.get(transport)
     if version is None:
         raise ValueError("bad_transport")
     return {"version": version,

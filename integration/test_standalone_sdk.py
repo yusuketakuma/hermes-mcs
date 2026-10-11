@@ -222,11 +222,10 @@ def test_slack_send_reject_is_not_sent_and_network_loss_is_unknown(slack_wire):
     assert not isinstance(unknown.value, NotSent)
 
 
-def test_slack_app_registers_the_card_handlers_without_oauth(slack_wire):
-    from adapters.slack.actions import _ACTION, _CONFIRM
+def test_slack_app_builds_without_oauth_or_sdk_retries(slack_wire):
+    # card handler registration is covered by test_slack_run_binds_...
     app = slack_runtime._app(slack_runtime._client(XOXB))
     assert app.oauth_flow is None and app.client.retry_handlers == []
-    assert _ACTION and _CONFIRM
 
 
 def test_slack_run_binds_workspace_registers_handlers_and_stops(slack_wire, tmp_path, monkeypatch):
@@ -304,6 +303,28 @@ def test_discord_forum_target_creates_a_post(discord_wire):
     assert [e[0] for e in log if "/threads" in e[1]] == ["POST"]
 
 
+def test_discord_forum_post_carries_the_files(discord_wire):
+    routes, log = discord_wire
+    routes.update(discord_routes())
+    routes[("GET", rf"/channels/{CHANNEL}$")] = (200, {
+        "id": CHANNEL, "type": 15, "guild_id": GUILD, "name": "forum", "position": 0,
+        "permission_overwrites": [], "available_tags": []})
+    thread = {"id": "8000000000000000008", "type": 11, "guild_id": GUILD, "parent_id": CHANNEL,
+              "name": "合成", "owner_id": APP, "message_count": 1, "member_count": 1,
+              "rate_limit_per_user": 0, "last_message_id": None, "thread_metadata": {
+                  "archived": False, "auto_archive_duration": 1440,
+                  "archive_timestamp": "2026-10-01T00:00:00+00:00", "locked": False},
+              "message": message("合成通知")}
+    routes[("POST", rf"/channels/{CHANNEL}/threads$")] = (201, thread)
+    assert asyncio.run(discord_runtime.send(
+        "t", CHANNEL, "合成通知", [(b"synthetic", "a.txt")])) == "9000000000000000009"
+    posts = [e for e in log if e[0] == "POST"]
+    assert len(posts) == 1 and posts[0][1].endswith("/threads")
+    fields = {f[0]["name"]: f[2] for f in posts[0][2]["data"]._fields}
+    payload = json.loads(fields["payload_json"])
+    assert [a["filename"] for a in payload["message"]["attachments"]] == ["a.txt"]
+
+
 def test_slack_text_is_escaped_and_upload_failure_keeps_the_text(slack_wire):
     routes, log = slack_wire
     routes.update({
@@ -327,7 +348,7 @@ def test_slack_app_acks_unhandled_events(slack_wire):
     assert len(app._async_listeners) == 1
 
 
-def test_discord_unsupported_channel_and_forum_files(discord_wire):
+def test_discord_unsupported_channel_is_refused_without_a_post(discord_wire):
     from mcs_standalone.host import Refused
     routes, log = discord_wire
     routes.update(discord_routes())
