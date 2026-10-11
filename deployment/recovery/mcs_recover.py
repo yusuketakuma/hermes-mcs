@@ -911,8 +911,8 @@ def _reconcile_membership(snapshot):
     setup_python = _setup_python()
     if os.path.isfile(setup_py) and setup_python:
         try:
-            result = subprocess.run([setup_python, setup_py, "services"],
-                                    capture_output=True, timeout=120)
+            result = _run_owned([setup_python, setup_py, "services"],
+                                120, os.environ.copy(), stdin=subprocess.DEVNULL)
             if result.returncode != 0:
                 problems.append("services_reconcile_failed")
         except (OSError, subprocess.TimeoutExpired):
