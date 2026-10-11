@@ -389,19 +389,28 @@ _VFLAG_LABEL = {"spo2": "SpO2", "sbp": "収縮期BP", "bs": "BS"}
 
 def _head_lines(llm: dict | None, v1: dict, urgency: str | None = None,
                 urgency_suffix: str = "", plain: bool = False) -> list[str]:
+    return [line for _, line in _head_ranked(llm, v1, urgency, urgency_suffix, plain)]
+
+
+def _head_ranked(llm: dict | None, v1: dict, urgency: str | None = None,
+                 urgency_suffix: str = "", plain: bool = False) -> list[tuple[int, str]]:
+    """Head lines with their plain-surface rank, fixed where each line is built.
+
+    The free-text summary and 要点 never go through prefix matching, so a
+    summary that begins with a label word (薬剤…, 依頼…) keeps its slot."""
     selected = llm is not None
     llm = llm or {}
-    lines: list[str] = []
+    lines: list[tuple[int, str]] = []
     labels = URGENCY_LABEL_PLAIN if plain else URGENCY_LABEL
     if urgency in labels:
-        lines.append(labels[urgency] + urgency_suffix)
+        lines.append((0, labels[urgency] + urgency_suffix))
     summary = llm.get("summary")
     if isinstance(summary, str) and summary.strip():
-        lines.append(summary.strip())
+        lines.append((1, summary.strip()))
     pts = [p.strip() for p in _items(llm, "points")
            if isinstance(p, str) and p.strip()]
     if pts:
-        lines.append("要点: " + " / ".join(pts))
+        lines.append((1, "要点: " + " / ".join(pts)))
     # LLM omissions can encode negation, subject or temporal exclusions.
     rule_events = _items(v1, "events")
     if selected:
@@ -410,7 +419,7 @@ def _head_lines(llm: dict | None, v1: dict, urgency: str | None = None,
     evs = list(dict.fromkeys(event for event in events
                              if _label(EVT_LABEL, event)))
     if evs:
-        lines.append("区分: " + "・".join(EVT_LABEL[e] for e in evs))
+        lines.append((7, "区分: " + "・".join(EVT_LABEL[e] for e in evs)))
     return lines
 
 
@@ -706,7 +715,8 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
         if details["reasons"]:
             suffix = f" — 根拠:「{str(details['reasons'][0])[:40]}」"
         suffix += urgency_qc_suffix(db, mid)
-    lines: list[str] = _head_lines(selected, v1, urgency, suffix, plain)
+    head = _head_ranked(selected, v1, urgency, suffix, plain)
+    lines: list[str] = [line for _, line in head]
     if details["held"]:
         lines.append("急ぎの確認依頼（本人の緊急状態とは別）" if details["kind"] == "request" else
                      "緊急度: 要確認（対象人物・時点の根拠を確認）" if plain else
@@ -746,7 +756,8 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
     if plain:
         # owner 2026-10-08: one fixed reading order on new cards and notices
         # (missing items are simply absent); layout-1 cards keep the old order
-        lines.sort(key=_summary_rank)
+        ranks = [rank for rank, _ in head] + [_summary_rank(line) for line in lines[len(head):]]
+        lines = [line for _, line in sorted(zip(ranks, lines), key=lambda pair: pair[0])]
     return lines
 
 
@@ -762,6 +773,7 @@ _SUMMARY_ORDER = (
 
 
 def _summary_rank(line: str) -> int:
+    # generated label lines only: head lines carry their rank from _head_ranked
     for rank, prefixes in _SUMMARY_ORDER:
         if line.startswith(prefixes):
             return rank
