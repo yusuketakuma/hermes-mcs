@@ -671,6 +671,10 @@ def _seed_outage_catchup(ledger, result, since: float) -> None:
     result["outage_catchup"] = seeded
 
 
+_REPLAYED_LISTS = ("errors", "incomplete", "coverage_gaps",
+                   "coverage_stalled", "self_probe_fetched")
+
+
 def _with_relogin(adapter, ledger, result, where: str, fn, *args,
                   **kwargs):
     """Run one adapter-bound stage with a single in-run session
@@ -682,8 +686,10 @@ def _with_relogin(adapter, ledger, result, where: str, fn, *args,
     auto_login (detail 'auto_login=…'), a run over the relogin budget,
     or a session that dies again right after recovery is not retried —
     it escalates to the run boundary."""
-    n_err = len(result.get("errors", ()))
-    n_inc = len(result.get("incomplete", ()))
+    # walk-derived lists the replay records again; save-derived counters
+    # (new_messages, backfilled, realtime_ids) stay — the deduped saves
+    # add nothing for rows the aborted attempt already stored
+    sizes = {k: len(result[k]) for k in _REPLAYED_LISTS if k in result}
     msgs = result.get("messages")
     try:
         return fn(*args, **kwargs)
@@ -699,12 +705,15 @@ def _with_relogin(adapter, ledger, result, where: str, fn, *args,
         if state != "ok":
             raise SessionExpired(f"auto_login={state}") from e
         # these stages re-walk everything, so the replay re-records them;
-        # drop the aborted attempt's incomplete/errors/messages. Job drains
+        # drop the aborted attempt's walk records and messages. Job drains
         # are excluded: a job failed or deferred by the aborted attempt is
         # not due on replay, so its recorded error must stay.
         if where in ("unread", "self_probe", "backfill"):
-            del result.get("errors", [])[n_err:]
-            del result.get("incomplete", [])[n_inc:]
+            for key in _REPLAYED_LISTS:
+                if key in sizes:
+                    del result[key][sizes[key]:]
+                else:
+                    result.pop(key, None)
             if msgs is not None:
                 result["messages"] = msgs
         try:
