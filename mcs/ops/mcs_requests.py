@@ -81,6 +81,18 @@ def valid_hash(value):
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
+# The one release-tag grammar: updater detection/notice, approval and the
+# CLI share it; scripts/mcs_upgrade.py keeps a self-contained copy.
+RELEASE_TAG_RE = re.compile(
+    r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$")
+
+
+def release_tag(value):
+    """Return whether value is a vX.Y.Z[-pre] release tag of at most 255 characters."""
+    return isinstance(value, str) and len(value) <= 255 \
+        and RELEASE_TAG_RE.fullmatch(value) is not None
+
+
 def valid_uuid(value):
     try:
         return isinstance(value, str) and str(uuid.UUID(value)) == value

@@ -5,7 +5,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
 from typing import Final
@@ -14,6 +13,7 @@ REPO: Final = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "mcs"))
 import _mcs_path  # noqa: E402, F401
 import mcs_runtime  # noqa: E402
+from mcs_requests import release_tag  # noqa: E402
 from mcs_util import load_config  # noqa: E402
 
 
@@ -69,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
                                 choices=("--no-llm", "--no-brew", "--no-plugin",
                                          "--no-recovery"))
             opts = update.parse_args(rest)
-            if opts.to and not re.fullmatch(r"v?\d+\.\d+\.\d+", opts.to):
+            if opts.to and not release_tag(opts.to):
                 update.error("--to must be a release tag")
             if opts.phase != "apply" and (opts.reinstall or opts.install_arg):
                 update.error("--reinstall/--install-arg require apply")
