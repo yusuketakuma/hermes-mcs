@@ -326,7 +326,9 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   見出しの件数が範囲外の project を数えないよう、📋・🗂 のクリックは
   静的な `project_ids`（`project_ids_auto` のときは送らない）を
   `input.projects` で渡し、runner はその範囲で数えて返す（plugin 側の
-  絞り込みは多重防御として残す）。
+  絞り込みは多重防御として残す）。runner は数えた範囲を結果の `projects`
+  に返し、遅れて届いた結果の範囲が現在の `project_ids` に含まれない
+  （待つ間に範囲が狭まった）場合、plugin は件数を出さず再操作を促す。
   入力を伴うクリックは notification envelope の任意フィールド `input`
   （`{"name"}` = 📋 の押した人の表示名、`{"query"}` = 🔎 のキーワード、各
   120 字以内。`{"projects"}` = 正の整数の配列、1000 件以内）で渡し、`command_id` の後半を actor＋input のハッシュにする

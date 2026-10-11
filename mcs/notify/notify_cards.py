@@ -2890,6 +2890,10 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
     notify_digest), recomputed per click; stored receipts drop their
     text. The 💊 target post comes from the token's render-time params,
     never from user input."""
+    if inputs.get("projects"):
+        # echo the counting scope: a delayed answer whose scope the
+        # adapter has since narrowed must not deliver these totals
+        base = {**base, "projects": inputs["projects"]}
     if action == "digest":
         if not inputs.get("query"):
             # the click opens the scope modal; its submit carries input
