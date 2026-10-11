@@ -268,7 +268,9 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
         notes.append(f"施設宛: {station}投稿")
     if unknown:
         notes.append(f"宛先不明: {unknown}投稿")
-    if not rows and not station:
+    # 観測済みの0件だけ省略する。未取得・本人ID不明（判定外の投稿あり）は残す
+    if not rows and not station and not unknown and not (
+            self_id is None and _recent_posts(db, until, ok, "")):
         return []
     return [f"{len(rows)}件（直近{OWN_POST_DAYS}日）",
             *notes, *_listed(rows)]
