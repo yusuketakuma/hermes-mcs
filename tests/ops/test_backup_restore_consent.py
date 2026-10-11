@@ -447,3 +447,17 @@ def test_encrypted_restore_cli_consent_across_processes(world, tmp_path):
     assert restore.writers_resumed(str(destination))
     assert backup.file_sha256(world[1]) == original
     assert notify_cards.restore_pending(str(destination)) is not None
+
+
+def test_oversized_receipt_is_refused_before_publication(restored):
+    report = restore.plan(str(restored), source_sha256="a" * 64)
+    with pytest.raises(restore.RestoreConsentError,
+                       match="restore_receipt_too_large"):
+        restore.approve(
+            str(restored), source_sha256="a" * 64,
+            plan_sha256=report["plan_sha256"], confirm_human=True,
+            actor="o", reason="\x01" * 2000, custody_ref="\x01" * 1000,
+            delivery_policy="hold_all")
+    assert not (restored / restore.APPROVAL).exists()
+    resumed(restored, approved(restored))
+    assert restore.writers_resumed(str(restored))
