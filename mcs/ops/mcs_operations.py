@@ -22,16 +22,11 @@ from mcs_requests import (RELEASE_TAG_RE, _text, canonical, payload_hash, positi
                           release_tag, valid_hash)
 
 
-_OPS_COMMON = {
-    "version", "cmd", "command_id", "actor", "human_confirmed", "project_id",
-}
 _FEATURE = "semantic"
 _SEMANTIC_JOB = "semantic"
 _HISTORY_JOB = "history"
 _CONTROL_ARTIFACT = "semantic_control"
 _ADOPTION_ARTIFACT = "semantic_adoption"
-_REFSTAT_ARTIFACT = "refstat_approval_v1"
-_REFSTAT_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 _MAX_ADDITIONAL_ATTEMPTS = 3
 
 
@@ -180,8 +175,8 @@ def _v_signal_policy(req: dict, base: set) -> str | None:
 def _v_refstat_approve(req: dict, base: set) -> str | None:
     if req.keys() - (base | {"name", "file_hash", "reason"}):
         return "unknown_field"
-    if not isinstance(req.get("name"), str) \
-            or not _REFSTAT_NAME_RE.fullmatch(req["name"]):
+    from mcs_refstats import _name_ok
+    if not _name_ok(req.get("name")):
         return "bad_refstat_name"
     if not valid_hash(req.get("file_hash")):
         return "bad_file_hash"
@@ -260,9 +255,9 @@ _OPS_VALIDATORS = {
 }
 
 
-def validate_ops(req: dict, common: set[str] | None = None) -> str | None:
+def validate_ops(req: dict, common: set[str]) -> str | None:
     """Validate the operation-specific portion after common identity checks."""
-    base = set(_OPS_COMMON if common is None else common)
+    base = set(common)
     handler = _OPS_VALIDATORS.get(req.get("cmd"))
     return handler(req, base) if handler else "unknown_ops_cmd"
 
@@ -427,9 +422,8 @@ def _apply_control_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
             continue
         parsed.append((row["job_id"], payload))
 
-    meta = json.dumps({"command_id": req["command_id"],
-                       "actor": req["actor"]}, ensure_ascii=False,
-                      sort_keys=True, separators=(",", ":"))
+    meta = canonical({"command_id": req["command_id"],
+                      "actor": req["actor"]}).decode("utf-8")
     cur = db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
         "created_at) VALUES(?,?,?,?,?,?,?)",
@@ -502,10 +496,8 @@ def _apply_adopt_summary_tx(db, req: dict, now: float) -> tuple[str | None, dict
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
         "created_at) VALUES(?,?,?,?,?,?,?)",
         (_ADOPTION_ARTIFACT, req["project_id"], req["message_id"],
-         json.dumps(content, ensure_ascii=False, sort_keys=True,
-                    separators=(",", ":"), allow_nan=False),
-         "human", json.dumps(meta, ensure_ascii=False, sort_keys=True,
-                              separators=(",", ":")), now),
+         canonical(content).decode("utf-8"),
+         "human", canonical(meta).decode("utf-8"), now),
     )
     return None, {
         "adoption_artifact_id": cur.lastrowid,
@@ -634,12 +626,10 @@ def _apply_signal_policy_tx(db, req: dict, now: float) -> tuple[str | None, dict
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES(?,?,NULL,?,?,?,?)",
         (POLICY_KIND, None,
-         json.dumps(content, ensure_ascii=False, sort_keys=True,
-                    separators=(",", ":"), allow_nan=False),
+         canonical(content).decode("utf-8"),
          "human",
-         json.dumps({"command_id": req["command_id"],
-                     "actor": req["actor"]}, ensure_ascii=False,
-                    sort_keys=True, separators=(",", ":")), now))
+         canonical({"command_id": req["command_id"],
+                    "actor": req["actor"]}).decode("utf-8"), now))
     return None, {"policy_artifact_id": cur.lastrowid,
                   "policy": dict(policy)}
 
@@ -743,17 +733,19 @@ def _apply_refstat_approve_tx(db, req: dict, now: float,
 
     File rollback remains armed through artifact/receipt insertion and
     the caller's COMMIT; only then can previous bytes be discarded."""
+    # the capture side owns the name rule, artifact kind and layout
+    from mcs_refstats import APPROVAL_KIND, _name_ok, _ref_path
     name, file_hash = req["name"], req["file_hash"]
     # re-asserted here too: apply_tx is public and this field reaches
     # the filesystem, unlike sibling ops' SQL-bound fields
-    if not isinstance(name, str) or not _REFSTAT_NAME_RE.fullmatch(name):
+    if not _name_ok(name):
         return "bad_refstat_name", {}
     main = db.execute("PRAGMA database_list").fetchone()["file"]
     if not main:
         return "refstat_no_data_dir", {}
-    base = os.path.join(os.path.dirname(os.path.abspath(main)), "refstats")
-    pending = os.path.join(base, "pending", name + ".json")
-    approved = os.path.join(base, "approved", name + ".json")
+    data_dir = os.path.dirname(os.path.abspath(main))
+    pending = _ref_path(data_dir, name, "pending")
+    approved = _ref_path(data_dir, name, "approved")
     if filesystem_changes is None:
         raise RuntimeError("refstat_transaction_scope_required")
     if not os.path.isfile(pending) or os.path.islink(pending):
@@ -772,13 +764,11 @@ def _apply_refstat_approve_tx(db, req: dict, now: float,
     cur = db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES(?,?,NULL,?,?,?,?)",
-        (_REFSTAT_ARTIFACT, None,
-         json.dumps(content, ensure_ascii=False, sort_keys=True,
-                    separators=(",", ":"), allow_nan=False),
+        (APPROVAL_KIND, None,
+         canonical(content).decode("utf-8"),
          "human",
-         json.dumps({"command_id": req["command_id"],
-                     "actor": req["actor"]}, ensure_ascii=False,
-                    sort_keys=True, separators=(",", ":")), now))
+         canonical({"command_id": req["command_id"],
+                    "actor": req["actor"]}).decode("utf-8"), now))
     return None, {"refstat_artifact_id": cur.lastrowid,
                   "name": name, "file_hash": file_hash}
 

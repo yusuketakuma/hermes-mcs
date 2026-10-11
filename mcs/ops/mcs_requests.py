@@ -358,12 +358,10 @@ def _apply_request_tx(db, req, pid, now):
                     "INSERT INTO artifacts(kind,project_id,message_id,"
                     "content,model,meta,created_at) VALUES(?,?,?,?,?,?,?)",
                     ("request_loop_link", pid, mid,
-                     json.dumps(link, ensure_ascii=False, sort_keys=True,
-                                separators=(",", ":"), allow_nan=False),
-                     "human", json.dumps({
+                     canonical(link).decode(),
+                     "human", canonical({
                          "command_id": req["command_id"],
-                         "actor": req["actor"]}, ensure_ascii=False,
-                         sort_keys=True, separators=(",", ":")), now),
+                         "actor": req["actor"]}).decode(), now),
                 )
     return error, rid, before, after
 
