@@ -10,9 +10,7 @@
 | `common/` | 接続先共通の基盤 | 配送 grant、journal、receipt、registry、render-spec、共通テキスト |
 
 Slack・Discord は Hermes が所有する接続・認証・allowlist を使用します。
-独立モードの接続は各接続先の `standalone.py`、保持した旧APIの実装は
-`runtime_compat.py` に置きます。旧 `mcs_standalone.*_runtime` は同じmoduleを
-返す互換入口として維持します。独立モードの導入は
+独立モードの接続は各接続先の `standalone.py` に置きます。独立モードの導入は
 [専用手順](../docs/guides/STANDALONE.md)を参照してください。
 LINE WORKS の導入・権限・callback 設定は [導入手順](../docs/guides/LINEWORKS.md)を参照してください。
 

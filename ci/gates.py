@@ -36,17 +36,12 @@ _LOCAL_MODULES = {p.stem for p in MCS.rglob("*.py")} | {"hermes_plugin", "adapte
 _STANDALONE_SDK = {
     "mcs_discord/standalone.py": {"discord"},
     "mcs_slack/standalone.py": {"aiohttp", "slack_sdk", "slack_bolt"},
-    "mcs_discord/runtime_compat.py": {"discord"},
-    "mcs_slack/runtime_compat.py": {"slack_sdk", "slack_bolt"},
 }
 # Exactly the discord.py surface each independent file uses; "" and
 # "ext.commands" let standalone.py's _sdk() hand the verified modules back.
 _STANDALONE_DISCORD_MEMBERS = {
     "mcs_discord/standalone.py": {"", "__version__", "Intents.none", "AllowedMentions.none",
                                   "app_commands.Command", "ext.commands", "ext.commands.Bot"},
-    "mcs_discord/runtime_compat.py": {"Intents.none", "Intents.default", "AllowedMentions.none",
-                                      "File", "ForumChannel", "app_commands.command",
-                                      "app_commands.describe", "ext.commands.Bot"},
 }
 _STANDALONE_ASYNC = {"Event", "FIRST_COMPLETED", "create_task", "current_task", "gather",
                      "get_running_loop", "wait", "wait_for", "TimeoutError"}
@@ -275,7 +270,7 @@ def gate_plugin_sandbox() -> list[str]:
         if independent:
             permitted |= {"asyncio"}
         environment_lines = set()
-        if independent and identity in {"mcs_slack/standalone.py", "mcs_slack/runtime_compat.py"}:
+        if independent and identity == "mcs_slack/standalone.py":
             # Only this negative membership guard is allowed. Token/value
             # reads from the ambient environment remain forbidden.
             guard = ast.dump(ast.parse(
