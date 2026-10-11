@@ -220,19 +220,15 @@ class Ledger:
 
     def _preflight(self, tables: set[str]):
         """Reject ambiguous existing rows before any persistent change."""
-        checks = (("attachments", "attachment_id", "message_id,file_id",
-                   "duplicate attachment keys"),
-                  ("read_marks", "id", "project_id,snapshot_ts",
-                   "duplicate read mark keys"))
-        for table, marker, keys, error in checks:
+        errors = {"attachments": "duplicate attachment keys",
+                  "read_marks": "duplicate read mark keys"}
+        for table in KEY_FENCES:
             if table not in tables:
                 continue
             cols = {r[1] for r in self.db.execute(
-                f"PRAGMA table_info({table})")}
-            if marker in cols and self.db.execute(
-                    f"SELECT 1 FROM {table} GROUP BY {keys} "
-                    "HAVING COUNT(*) > 1 LIMIT 1").fetchone():
-                raise MigrationError(error)
+                f'PRAGMA table_info("{table}")')}
+            if _key_fence_breached(self.db, table, cols):
+                raise MigrationError(errors[table])
 
     def _init(self):
         self.db.executescript("""
@@ -1556,27 +1552,23 @@ class Ledger:
             if publish is True and error is None and not getattr(m, "metadata_errors", []):
                 self._save_message_metadata(m, source="capture", now=now)
 
-    def _reaction_actor_watch_sql(self):
-        """Roots and replies of threads active in the last 7 days in active
-        rooms (第2層 watch set) — stamps are pressed on both."""
-        return ("""SELECT m.message_id FROM messages m
-          JOIN patients p ON p.project_id=m.project_id
-          WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
-            AND m.posted_at_ts<=?
-            AND (SELECT MAX(x.posted_at_ts) FROM messages x
-                 WHERE x.project_id=m.project_id
-                   AND x.body_state IS NOT 'deleted' AND x.posted_at_ts<=?
-                   AND COALESCE(x.parent_id,x.message_id)=COALESCE(m.parent_id,m.message_id))>=?""",
-                None)
-
     def reaction_actor_targets(self, limit=4, *, now=None):
         """Watched posts whose captured reactions changed since the last
         complete actor fetch, or whose complete set expired; failures back off."""
         now = time.time() if now is None else now
-        watch, _ = self._reaction_actor_watch_sql()
-        return self.db.execute(f"""
+        # w: roots and replies of threads active in the last 7 days in
+        # active rooms (第2層 watch set) — stamps are pressed on both.
+        return self.db.execute("""
           SELECT m.message_id,m.project_id FROM messages m
-          JOIN ({watch}) w ON w.message_id=m.message_id
+          JOIN (SELECT m.message_id FROM messages m
+            JOIN patients p ON p.project_id=m.project_id
+            WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
+              AND m.posted_at_ts<=?
+              AND (SELECT MAX(x.posted_at_ts) FROM messages x
+                   WHERE x.project_id=m.project_id
+                     AND x.body_state IS NOT 'deleted' AND x.posted_at_ts<=?
+                     AND COALESCE(x.parent_id,x.message_id)=COALESCE(m.parent_id,m.message_id))>=?
+          ) w ON w.message_id=m.message_id
           JOIN message_metadata md ON md.message_id=m.message_id AND md.source=(
             SELECT source FROM message_metadata latest
             WHERE latest.message_id=m.message_id AND latest.last_error IS NULL
@@ -1840,12 +1832,6 @@ class Ledger:
             (time.time(), project_id))
         self.db.commit()
 
-    def _karte_summary_due(self, project_id: int, flag: int):
-        self.db.execute(
-            "UPDATE patients SET karte_summary_due=? WHERE project_id=?",
-            (flag, project_id))
-        self.db.commit()
-
     def karte_summary_mark_due(self, project_id: int, due: bool = True):
         """Flag (or unflag) a project for a 連携サマリー GET on the next run.
 
@@ -1855,7 +1841,10 @@ class Ledger:
         stage on a non-retryable failure (the next new message re-arms
         it). The flag persists for a project whose karte_id is still
         unknown and fires once it is."""
-        self._karte_summary_due(project_id, 1 if due else 0)
+        self.db.execute(
+            "UPDATE patients SET karte_summary_due=? WHERE project_id=?",
+            (1 if due else 0, project_id))
+        self.db.commit()
 
     def karte_summary_due(self) -> list:
         """Projects flagged for a summary GET that have a karte_id, newest last_seen first.
@@ -2824,6 +2813,102 @@ def reaction_actor_summary(db, message_id, *, now=None) -> dict:
     return out
 
 
+# Static recovery-DB contract, one copy for valid_mcs_db, Ledger._preflight,
+# ledger_audit and the bounded backup inventory. Source columns are the ones
+# recovery cannot reconstruct (_migrate_body adds derived columns, not these).
+STATIC_SOURCE_COLUMNS = {
+    "runs": frozenset({"run_id", "started_at", "finished_at",
+                       "snapshot_ts", "status", "error"}),
+    "patients": frozenset({"project_id", "project_type", "patient_name",
+                           "disease", "station_name", "url", "last_seen"}),
+    "messages": frozenset({"message_id", "project_id", "parent_id",
+                           "sender_id", "sender_name", "sender_type",
+                           "profession", "organization", "posted_at",
+                           "body_html", "reply_count", "first_seen"}),
+}
+STATIC_BASE_COLUMNS = {
+    "attachments": frozenset({"attachment_id", "message_id", "file_id",
+                              "name", "url", "local_path", "bytes",
+                              "sha256", "state", "downloaded_at",
+                              "created_at"}),
+    "read_marks": frozenset({"project_id", "snapshot_ts", "marked_at"}),
+    "notify_outbox": frozenset({"event_id", "kind", "project_id", "payload",
+                                "state", "attempts", "next_try",
+                                "accepted_ref", "created_at", "updated_at"}),
+    "artifacts": frozenset({"artifact_id", "kind", "project_id", "message_id",
+                            "content", "model", "meta", "created_at"}),
+    "fetch_jobs": frozenset({"job_id", "kind", "project_id", "message_id",
+                             "parent_id", "payload", "state", "attempts",
+                             "next_try", "created_at", "updated_at"}),
+    "message_metadata": frozenset({"message_id", "source", "content",
+                                   "checked_at", "last_error"}),
+}
+# Pre-attachment_id table layout (no attachment_id column).
+LEGACY_ATTACHMENT_COLUMNS = frozenset({"message_id", "file_id", "name", "url",
+                                       "downloaded_path", "first_seen"})
+# table: (marker column, key) — with the marker, a duplicate key is ambiguous.
+KEY_FENCES = {"attachments": ("attachment_id", "message_id,file_id"),
+              "read_marks": ("id", "project_id,snapshot_ts")}
+
+
+def static_required_tables(version: int) -> set[str]:
+    """Tables a static ledger of this schema version must have.
+
+    Older backups may lack later tables; _init creates them on reopen."""
+    required = set(STATIC_SOURCE_COLUMNS)
+    if version >= 5:
+        required |= {"attachments", "notify_outbox", "read_marks",
+                     "artifacts", "fetch_jobs"}
+    if version >= 8:
+        required.add("message_metadata")
+    return required
+
+
+def static_required_columns(table: str, columns: set[str]) -> frozenset[str]:
+    """Columns a present contract table needs, given the columns it has."""
+    if table == "attachments" and "attachment_id" not in columns:
+        return LEGACY_ATTACHMENT_COLUMNS
+    required = STATIC_SOURCE_COLUMNS.get(table) or STATIC_BASE_COLUMNS[table]
+    if table == "read_marks" and "id" in columns:
+        required |= {"status"}
+    return required
+
+
+def _key_fence_breached(db: sqlite3.Connection, table: str, columns: set[str]) -> bool:
+    """True when a fenced table with its marker column has a duplicate key."""
+    fence = KEY_FENCES.get(table)
+    return bool(fence and fence[0] in columns and db.execute(
+        f'SELECT 1 FROM "{table}" GROUP BY {fence[1]} '
+        "HAVING COUNT(*) > 1 LIMIT 1").fetchone())
+
+
+def static_contract_ok(db: sqlite3.Connection) -> bool:
+    """True when an open static candidate meets the recovery schema contract.
+
+    Checks journal_mode=delete, the supported version, no interrupted
+    migration, the version's required tables, each present table's columns
+    and the ambiguous-key fences. SQLite errors propagate, so each caller
+    keeps its own budget, connection and failure mapping."""
+    if db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
+        return False
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    if not 0 <= version <= SCHEMA_VERSION:
+        return False
+    tables = {r[0] for r in db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if ({"attachments_v1", "read_marks_v1"} & tables
+            or not static_required_tables(version) <= tables):
+        return False
+    for table in (*STATIC_SOURCE_COLUMNS, *STATIC_BASE_COLUMNS):
+        if table not in tables:
+            continue  # _init creates absent tables for older backups.
+        columns = {row[1] for row in db.execute(f'PRAGMA table_info("{table}")')}
+        if (not static_required_columns(table, columns) <= columns
+                or _key_fence_breached(db, table, columns)):
+            return False
+    return True
+
+
 def valid_mcs_db(path: str, *, deadline: float | None = None) -> bool:
     """Validate a static recovery/publication candidate without sidecars."""
     if not os.path.isfile(path) or os.path.getsize(path) == 0:
@@ -2837,76 +2922,8 @@ def valid_mcs_db(path: str, *, deadline: float | None = None) -> bool:
             if deadline is not None:
                 db.set_progress_handler(lambda: int(monotonic() >= deadline), 1000)
             if db.execute("PRAGMA quick_check").fetchone()[0] != "ok" \
-                    or db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
+                    or not static_contract_ok(db):
                 return False
-            version = db.execute("PRAGMA user_version").fetchone()[0]
-            if not 0 <= version <= SCHEMA_VERSION:
-                return False
-            tables = {r[0] for r in db.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'")}
-            if {"attachments_v1", "read_marks_v1"} & tables:
-                return False
-            # _migrate_body adds derived columns, not these source fields.
-            # Older backups may lack tables that _init creates on reopen.
-            core_columns = {
-                "runs": {"run_id", "started_at", "finished_at",
-                         "snapshot_ts", "status", "error"},
-                "patients": {"project_id", "project_type", "patient_name",
-                             "disease", "station_name", "url", "last_seen"},
-                "messages": {"message_id", "project_id", "parent_id",
-                             "sender_id", "sender_name", "sender_type",
-                             "profession", "organization", "posted_at",
-                             "body_html", "reply_count", "first_seen"},
-            }
-            if not core_columns.keys() <= tables:
-                return False
-            if version >= 5 and not {
-                    "attachments", "notify_outbox", "read_marks",
-                    "artifacts", "fetch_jobs"} <= tables:
-                return False
-            if version >= 8 and "message_metadata" not in tables:
-                return False
-            base_columns = {
-                **core_columns,
-                "attachments": {"attachment_id", "message_id", "file_id",
-                                "name", "url", "local_path", "bytes",
-                                "sha256", "state", "downloaded_at",
-                                "created_at"},
-                "read_marks": {"project_id", "snapshot_ts", "marked_at"},
-                "notify_outbox": {"event_id", "kind", "project_id", "payload",
-                                  "state", "attempts", "next_try",
-                                  "accepted_ref", "created_at", "updated_at"},
-                "artifacts": {"artifact_id", "kind", "project_id", "message_id",
-                              "content", "model", "meta", "created_at"},
-                "fetch_jobs": {"job_id", "kind", "project_id", "message_id",
-                               "parent_id", "payload", "state", "attempts",
-                               "next_try", "created_at", "updated_at"},
-            }
-            if "message_metadata" in tables:
-                base_columns["message_metadata"] = {
-                    "message_id", "source", "content", "checked_at", "last_error"}
-            for table, required in base_columns.items():
-                if table not in tables:
-                    continue  # _init creates absent tables for older backups.
-                columns = {row[1] for row in db.execute(
-                    f"PRAGMA table_info({table})")}
-                if table == "attachments" and "attachment_id" not in columns:
-                    required = {"message_id", "file_id", "name", "url",
-                                "downloaded_path", "first_seen"}
-                elif table == "read_marks" and "id" in columns:
-                    required = required | {"status"}
-                if not required <= columns:
-                    return False
-                # Match the ambiguous-key fence in Ledger._preflight before
-                # a recovery candidate can replace the live database.
-                key_check = {
-                    "attachments": ("attachment_id", "message_id,file_id"),
-                    "read_marks": ("id", "project_id,snapshot_ts"),
-                }.get(table)
-                if key_check and key_check[0] in columns and db.execute(
-                        f"SELECT 1 FROM {table} GROUP BY {key_check[1]} "
-                        "HAVING COUNT(*) > 1 LIMIT 1").fetchone():
-                    return False
             return deadline is None or monotonic() < deadline
         finally:
             db.close()

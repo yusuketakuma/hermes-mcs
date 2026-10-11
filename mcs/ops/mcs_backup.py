@@ -54,7 +54,7 @@ import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
-from ledger import valid_mcs_db  # noqa: E402
+from ledger import static_contract_ok, valid_mcs_db  # noqa: E402
 from maintenance import MaintenanceError  # noqa: E402
 from mcs_repair import REPLY_GAP  # noqa: E402
 from mcs_util import atomic_write, file_sha256, publish_tmp  # noqa: E402
@@ -485,44 +485,9 @@ class _InspectionBudgetExhausted(BackupError):
 
 
 def _bounded_inventory_schema(db: sqlite3.Connection) -> None:
-    """Check the existing static recovery contract on the budgeted connection."""
-    from ledger_audit import SCHEMA_VERSION, _BASE, _SOURCE
-
-    if db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
+    """Check the shared static recovery contract on the budgeted connection."""
+    if not static_contract_ok(db):
         raise BackupError("backup_invalid_database")
-    version = db.execute("PRAGMA user_version").fetchone()[0]
-    tables = {row[0] for row in db.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'")}
-    if (not 0 <= version <= SCHEMA_VERSION
-            or {"attachments_v1", "read_marks_v1"} & tables
-            or not _SOURCE.keys() <= tables
-            or (version >= 5 and not {
-                "attachments", "read_marks", "notify_outbox", "artifacts", "fetch_jobs"
-            } <= tables)
-            or (version >= 8 and "message_metadata" not in tables)):
-        raise BackupError("backup_invalid_database")
-    for table, fields in {**_SOURCE, **_BASE}.items():
-        if table not in tables:
-            continue
-        columns = {row[1] for row in db.execute(f'PRAGMA table_info("{table}")')}
-        required = set(fields.split())
-        if table == "attachments":
-            required.update(
-                "attachment_id local_path bytes sha256 state downloaded_at created_at"
-                .split() if "attachment_id" in columns else
-                "downloaded_path first_seen".split())
-        if table == "read_marks" and "id" in columns:
-            required.add("status")
-        if not required <= columns:
-            raise BackupError("backup_invalid_database")
-        key = {
-            "attachments": ("attachment_id", "message_id,file_id"),
-            "read_marks": ("id", "project_id,snapshot_ts"),
-        }.get(table)
-        if key and key[0] in columns and db.execute(
-                f'SELECT 1 FROM "{table}" GROUP BY {key[1]} '
-                "HAVING COUNT(*) > 1 LIMIT 1").fetchone():
-            raise BackupError("backup_invalid_database")
 
 
 @contextmanager
