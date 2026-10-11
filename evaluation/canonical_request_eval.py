@@ -14,6 +14,7 @@ import _mcs_path  # noqa: F401,E402
 import semantic_evaluation as evaluation  # noqa: E402
 import semantic_facts as facts  # noqa: E402
 from mcs_queries import current_extract_pred, json_object_or_null  # noqa: E402
+from mcs_util import loads_dict  # noqa: E402
 from semantic_projection import project_v2_doc_legacy  # noqa: E402
 
 VERSION = "canonical-request-evaluation/1"
@@ -236,7 +237,7 @@ def shadow_compare(db):
             "SELECT a.content FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
             "WHERE a.kind='extract_llm' AND a.message_id=?" + current_extract_pred()
             + " ORDER BY a.artifact_id DESC LIMIT 1", (row["message_id"],)).fetchone()
-        legacy_doc = json.loads(legacy["content"]) if legacy is not None else None
+        legacy_doc = loads_dict(legacy["content"]) if legacy is not None else None
         if not isinstance(legacy_doc, dict) \
                 or not isinstance(legacy_doc.get("requests", []), list):
             counts["legacy_unknown"] += 1

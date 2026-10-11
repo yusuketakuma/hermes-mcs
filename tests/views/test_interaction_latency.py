@@ -225,6 +225,22 @@ def test_invalid_owner_policy_is_rejected(store, policy):
         measure(store, interaction_privacy_policy=policy)
 
 
+@pytest.mark.parametrize("options,reason", [
+    ({"profession_map": {"synthetic-role": "NAME_CANARY"}}, "bad_profession_map"),
+    ({"profession_map": []}, "bad_profession_map"),
+    ({"privacy_policy": {}}, "bad_interaction_privacy_policy"),
+])
+@pytest.mark.parametrize("entry", ["dispatcher", "stat"])
+def test_invalid_interaction_options_rejected_before_snapshot_access(options, reason, entry):
+    with pytest.raises(ValueError, match=reason):
+        if entry == "dispatcher":
+            mcs_stats.run_stats(None, NOW + 1000, {
+                "stat": "interaction_latency", "profession_map": options.get("profession_map"),
+                "interaction_privacy_policy": options.get("privacy_policy")})
+        else:
+            mcs_stats.st_interaction_latency(None, {}, **options)
+
+
 def test_published_snapshot_view_accepts_explicit_policy_and_cli_defaults_closed(
         store, tmp_path, capsys):
     # Given
