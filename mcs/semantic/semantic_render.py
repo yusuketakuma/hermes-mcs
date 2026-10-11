@@ -14,7 +14,7 @@ import time
 from mcs_requests import payload_hash, positive
 from mcs_util import loads_dict
 import semantic_facts as sf
-from semantic_send_gate import _enforce_block_reason
+from semantic_send_gate import enforce_block_reason
 
 _SECTION_LABEL = {"medication": "薬剤・処方に関する情報",
                   "status": "現在の状況（対象投稿時点）",
@@ -363,7 +363,7 @@ def _emit_degraded(ledger, scfg: dict) -> int:
             continue
         ids = ids[:500]      # a malformed fat payload must not wedge the scan
         pid = ev["project_id"]
-        if _enforce_block_reason(ledger, scfg, pid) is not None:
+        if enforce_block_reason(ledger, scfg, pid) is not None:
             continue
         marks = ",".join("?" * len(ids)) or "NULL"
         roots = {r["r"] for r in ledger.db.execute(
