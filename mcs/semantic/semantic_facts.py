@@ -2,7 +2,7 @@
 and validators.
 
 Leaf module for the canonical evidence-backed fact layer.  It imports the
-stdlib and ``mcs_requests.payload_hash`` only; every canonical semantic
+stdlib and ``mcs_util.payload_hash`` only; every canonical semantic
 stage shares these enums and stable atom/fact/relation IDs so a restart
 or a changed chunk layout never produces a different identity for the
 same source statement.  The source fingerprint itself comes from the
@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import unicodedata
 
-from mcs_requests import payload_hash
+from mcs_util import payload_hash
 
 CONTRACT_VERSION = "semantic-facts/v2"
 

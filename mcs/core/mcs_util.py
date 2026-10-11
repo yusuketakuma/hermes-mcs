@@ -251,6 +251,22 @@ def file_sha256(path) -> str:
     return h.hexdigest()
 
 
+def canonical(value) -> bytes:
+    """Canonical JSON bytes (sorted keys, compact, UTF-8, no NaN/inf) —
+    the one serialization every stored payload hash is computed over."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+
+def payload_hash(value) -> str:
+    return hashlib.sha256(canonical(value)).hexdigest()
+
+
+def positive(value) -> bool:
+    """A positive SQLite rowid-range int (bool excluded)."""
+    return type(value) is int and 0 < value < 2**63
+
+
 def loads_dict(raw) -> dict | None:
     """``json.loads(raw)`` when it yields a dict, else None — for stored
     JSON TEXT columns (not LLM output; that is ``json_object``)."""

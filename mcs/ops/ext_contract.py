@@ -52,7 +52,7 @@ from c1_envelopes import (  # noqa: E402
     encode_withdrawal, intent_hash, parse_envelope, validate_envelope)
 from export_schema import (  # noqa: E402
     FORBIDDEN_KEYS, RECORD_TYPES, TYPE_FORBIDDEN, finite_number, validate_record)
-from mcs_util import atomic_write  # noqa: E402
+from mcs_util import atomic_write, canonical  # noqa: E402
 
 AUTH_CONTRACT = "mcs-ext-auth/1"
 EXT_CONTRACT = "mcs-ext-export/1"
@@ -73,8 +73,7 @@ class ContractError(Exception):
 
 
 def _canonical(obj) -> str:
-    return json.dumps(obj, ensure_ascii=False, sort_keys=True,
-                      separators=(",", ":"), allow_nan=False)
+    return canonical(obj).decode("utf-8")
 
 
 def _sha(text: str) -> str:

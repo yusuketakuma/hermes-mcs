@@ -3,7 +3,7 @@ import json
 import time
 from datetime import datetime
 
-from mcs_requests import payload_hash
+from mcs_util import payload_hash
 from mcs_util import loads_dict
 import semantic_jev as jev
 from semantic_policy import KIND_LOOP, KIND_LOOP_EVENT

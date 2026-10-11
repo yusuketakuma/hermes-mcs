@@ -661,7 +661,7 @@ class Ledger:
             self.db.execute(
                 "ALTER TABLE messages ADD COLUMN notified_at REAL")
         if old_version < 7:
-            from mcs_requests import positive
+            from mcs_util import positive
             # reconstruct the old "stored == notified" boundary precisely:
             # mark read messages (can never notify) plus every message
             # already covered by an outbox intent. Unread messages with no
@@ -2461,7 +2461,7 @@ class Ledger:
     def pending_notify_message_ids(self) -> list[int]:
         """message_ids referenced by unsent notify events — their
         attachments jump the download queue so flush() can attach them."""
-        from mcs_requests import positive
+        from mcs_util import positive
         out = []
         for r in self.db.execute("""
           SELECT payload FROM notify_outbox

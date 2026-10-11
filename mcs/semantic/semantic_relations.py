@@ -21,7 +21,7 @@ from datetime import date, datetime
 from itertools import chain, combinations, product
 
 import semantic_facts as sf
-from mcs_requests import payload_hash
+from mcs_util import payload_hash
 
 
 WORKFLOW_ORDER = (

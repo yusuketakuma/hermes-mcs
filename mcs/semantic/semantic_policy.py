@@ -4,7 +4,7 @@ policy fingerprint. Leaf module — every other semantic_* module may
 import it; it imports none of them."""
 from __future__ import annotations
 
-from mcs_requests import payload_hash
+from mcs_util import payload_hash
 import semantic_jev as jev
 
 SCHEMA_VERSION = "2026-09-20"

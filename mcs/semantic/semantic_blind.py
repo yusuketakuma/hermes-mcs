@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 
 from semantic_evaluation import EvaluationError, _dict, _id, load_jsonl
-from mcs_requests import canonical, payload_hash
+from mcs_util import canonical, payload_hash
 
 METHODS = ("baseline", "assisted", "audited")
 

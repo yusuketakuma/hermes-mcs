@@ -16,7 +16,7 @@ import time
 import uuid
 from contextlib import suppress
 
-from mcs_requests import payload_hash
+from mcs_util import payload_hash
 from mcs_util import loads_dict
 
 
