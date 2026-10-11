@@ -1422,10 +1422,11 @@ class Ledger:
             (m.message_id,)).fetchone()
         if existing is not None and existing["project_id"] != m.project_id:
             raise ValueError("message_project_mismatch")
-        if (existing is not None and existing["content_hash"] is not None
-                and existing["body_state"] in TERMINAL_BODY_STATES
-                and m.body_state in TERMINAL_BODY_STATES
-                and existing["content_hash"] != chash):
+        edited = (existing is not None and existing["content_hash"] is not None
+                  and existing["body_state"] in TERMINAL_BODY_STATES
+                  and m.body_state in TERMINAL_BODY_STATES
+                  and existing["content_hash"] != chash)
+        if edited:
             # seed seq 1 once, then chain off the latest revision inside the
             # INSERT itself: seq and prev_content_hash come from the row
             # read under the write lock, and an edit an overlapping writer
@@ -1506,10 +1507,11 @@ class Ledger:
               m.posted_at, posted_ts, int(bool(m.is_unread)),
               m.body_html, body_text, m.body_state, chash, m.reply_count,
               now, now))
-        self._save_message_metadata(m, source="capture", now=now)
+        self._save_message_metadata(m, source="capture", now=now,
+                                    body_changed=edited)
         return 0 if existing is not None else 1
 
-    def _save_message_metadata(self, m, *, source, now):
+    def _save_message_metadata(self, m, *, source, now, body_changed=False):
         metadata = getattr(m, "metadata", {})
         errors = getattr(m, "metadata_errors", [])
         if not metadata and not errors and source == "capture":
@@ -1518,6 +1520,10 @@ class Ledger:
             "SELECT content FROM message_metadata WHERE message_id=? AND source=?",
             (m.message_id, source)).fetchone()
         content = (loads_dict(row["content"]) or {}) if row else {}
+        if body_changed:
+            # a field this capture did not re-observe belongs to the earlier
+            # body; keeping it under the new checked_at would re-bind it
+            content = {k: v for k, v in content.items() if k in metadata}
         # observed_at marks when this value was first seen: unread posts
         # are re-captured every tick, and refreshing an unchanged value
         # would re-render cards and recount digests each time.
