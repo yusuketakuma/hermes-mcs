@@ -39,7 +39,7 @@ import time
 from pathlib import Path
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every subdirectory (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
