@@ -54,6 +54,7 @@ from mcs_requests import RELEASE_TAG_RE, parse_command, release_tag  # noqa: E40
 from mcs_util import (HOME, REPO, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
                       atomic_write, launchd_bootstrap, load_config)
 from mcs_util import file_sha256 as _file_sha256  # noqa: E402
+from safe_io import fsync_dir  # noqa: E402
 
 
 def _load_gateway_restart():
@@ -945,11 +946,7 @@ def _write_marker() -> None:
         f.write(str(time.time()))
         f.flush()
         os.fsync(f.fileno())
-    dfd = os.open(DATA, os.O_RDONLY)
-    try:
-        os.fsync(dfd)
-    finally:
-        os.close(dfd)
+    fsync_dir(DATA, require_dir=False)
 
 
 def _awaiting_consent_marker() -> dict | None:
@@ -2660,11 +2657,7 @@ def _replace_database(backup_path, expected_sha, before_replace):
             raise OSError("live_sidecars_remaining")
         before_replace()
         os.replace(temporary, LEDGER)
-        dfd = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        fsync_dir(directory, require_dir=False)
     except sqlite3.Error as exc:
         raise OSError("restore_database_unverifiable") from exc
     finally:

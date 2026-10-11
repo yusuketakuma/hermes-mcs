@@ -2,7 +2,6 @@
 import json
 import os
 import re
-import stat
 import tempfile
 import time
 import uuid
@@ -12,6 +11,7 @@ from pathlib import Path
 
 # canonical/payload_hash/positive live in core; re-exported for callers
 from mcs_util import canonical, payload_hash, positive  # noqa: F401
+from safe_io import fsync_dir, read_regular_nofollow
 
 MAX_COMMAND_BYTES = 16384
 STATUSES = ("open", "in_progress", "done", "cancelled")
@@ -59,11 +59,9 @@ def parse_command(raw):
 
 
 def read_command(path):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, "rb") as stream:
-        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-            raise ValueError("regular_command_file_required")
-        return parse_command(stream.read(MAX_COMMAND_BYTES + 1))
+    return parse_command(read_regular_nofollow(
+        path, MAX_COMMAND_BYTES,
+        lambda: ValueError("regular_command_file_required"), check_size=False))
 
 
 def valid_hash(value):
@@ -374,11 +372,7 @@ def enqueue(req, cmd_dir):
         os.link(temp, temp[:-4] + ".json")  # Atomic publication without clobbering pending input.
         published = True
         os.unlink(temp)
-        directory = os.open(cmd_dir, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        fsync_dir(cmd_dir)
     except OSError:
         if not published:
             raise

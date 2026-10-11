@@ -25,6 +25,7 @@ from ledger_audit import AuditReport, audit_db
 from mcs_queries import REPLY_GAP
 from mcs_requests import canonical, valid_hash, valid_uuid
 from mcs_util import has_sqlite_sidecars
+from safe_io import read_regular_nofollow
 
 FORMAT = "mcs-repair/1"
 STAGES = ("backup", "audit", "coverage", "reconcile", "supplement", "artifacts", "rollup")
@@ -377,11 +378,9 @@ def _parse_json(raw):
 
 
 def _read_json(path):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, "rb") as stream:
-        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-            raise ValueError("regular_file_required")
-        raw = stream.read(MAX_BYTES + 1)
+    raw = read_regular_nofollow(path, MAX_BYTES,
+                                lambda: ValueError("regular_file_required"),
+                                check_size=False)
     if len(raw) > MAX_BYTES:
         raise ValueError("input_too_large")
     return _parse_json(raw)

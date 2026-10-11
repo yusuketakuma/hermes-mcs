@@ -20,11 +20,12 @@ import os
 import re
 import shutil
 import sqlite3
-import tempfile
 import time
 import unicodedata
 import urllib.request
 from contextlib import contextmanager, suppress
+
+from safe_io import atomic_write, fsync_dir  # noqa: F401  (re-exported)
 
 HOME = os.path.abspath(os.path.expanduser(os.environ.get("MCS_ROOT", "~/.mcs")))
 # checkout root; scripts/mcs_upgrade.py runs a target tag's code from a
@@ -106,15 +107,6 @@ def hermes_exe(cfg: dict, path: str | None = None) -> str:
         or os.path.expanduser("~/.local/bin/hermes")
 
 
-def fsync_dir(path) -> None:
-    """fsync a directory so a rename or link inside it survives a crash."""
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
 def publish_tmp(tmp: str, dest: str, mode: int | None = None) -> None:
     """[chmod] -> fsync tmp -> os.replace -> dir fsync for a finished tmp
     file: readers see the whole old ``dest`` or the whole new one."""
@@ -127,31 +119,6 @@ def publish_tmp(tmp: str, dest: str, mode: int | None = None) -> None:
         os.close(fd)
     os.replace(tmp, dest)
     fsync_dir(os.path.dirname(dest) or ".")
-
-
-def atomic_write(path: str, writer, mode: int | None = None,
-                 tmp_prefix: str = ".atomic.") -> None:
-    """tmp -> fsync -> [chmod] -> os.replace -> dir fsync: consumers see
-    the whole old file or the whole new one, and a mid-write crash never
-    leaves a torn file behind (tmp is unlinked on failure).  ``writer``
-    receives the open text-mode file object."""
-    parent = os.path.dirname(path) or "."
-    os.makedirs(parent, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=parent, prefix=tmp_prefix,
-                             suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            writer(f)
-            f.flush()
-            os.fsync(f.fileno())
-        if mode is not None:
-            os.chmod(tmp, mode)
-        os.replace(tmp, path)
-        fsync_dir(parent)
-    except BaseException:
-        with suppress(OSError):
-            os.unlink(tmp)
-        raise
 
 
 # ---------- LLM lane stability gates ----------

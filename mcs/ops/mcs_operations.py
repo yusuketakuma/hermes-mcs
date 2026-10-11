@@ -22,6 +22,7 @@ from mcs_requests import (RELEASE_TAG_RE, _text, canonical, payload_hash, positi
                           release_tag, valid_hash)
 # paused() is a core read (mcs_queries); re-exported for callers
 from mcs_queries import SEMANTIC_CONTROL_KIND as _CONTROL_ARTIFACT, paused
+from safe_io import fsync_dir
 
 
 _FEATURE = "semantic"
@@ -693,11 +694,7 @@ def _refstat_promotion(pending: str, approved: str, expected_hash: str):
         os.replace(staged, approved)
         staged = None
         promoted = True
-        dirfd = os.open(os.path.dirname(approved), os.O_RDONLY)
-        try:
-            os.fsync(dirfd)
-        finally:
-            os.close(dirfd)
+        fsync_dir(os.path.dirname(approved), require_dir=False)
         yield
     except BaseException:
         recovering = True

@@ -53,6 +53,7 @@ from c1_envelopes import (  # noqa: E402
 from export_schema import (  # noqa: E402
     FORBIDDEN_KEYS, RECORD_TYPES, TYPE_FORBIDDEN, finite_number, validate_record)
 from mcs_util import atomic_write, canonical  # noqa: E402
+from safe_io import fsync_dir, read_regular_nofollow  # noqa: E402
 
 AUTH_CONTRACT = "mcs-ext-auth/1"
 EXT_CONTRACT = "mcs-ext-export/1"
@@ -461,11 +462,7 @@ class LocalSink:
         path = self.root / "envelopes" / f"{envelope_id}.json"
         path.unlink(missing_ok=True)
         if path.parent.exists():
-            fd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
+            fsync_dir(path.parent, require_dir=False)
         if not self.drop_delete_ack:
             _write_json(
                 self.root / "deletions" / f"{envelope_id}.json",
@@ -950,15 +947,11 @@ class GovernedExporter:
 
 def _read_health_json(path: Path):
     """Read at most one bounded regular file without following a link or FIFO."""
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, "rb") as stream:
-        st = os.fstat(stream.fileno())
-        if not stat.S_ISREG(st.st_mode) or st.st_size > RECEIPT_MAX_BYTES:
-            raise ContractError("health_file_size_or_type")
-        raw = stream.read(RECEIPT_MAX_BYTES + 1)
-        if len(raw) > RECEIPT_MAX_BYTES:
-            raise ContractError("health_file_size_or_type")
-        return json.loads(raw)
+    raw = read_regular_nofollow(
+        path, RECEIPT_MAX_BYTES, lambda: ContractError("health_file_size_or_type"))
+    if len(raw) > RECEIPT_MAX_BYTES:
+        raise ContractError("health_file_size_or_type")
+    return json.loads(raw)
 
 
 def _journal_paths(state, max_entries=None):
@@ -1098,11 +1091,7 @@ def _write_new_receipts(path: str, bundle: str) -> None:
             os.link(tmp, path)
         except FileExistsError:
             raise ContractError("receipts_out_exists") from None
-        dfd = os.open(parent, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        fsync_dir(parent, require_dir=False)
     finally:
         with suppress(OSError):
             os.unlink(tmp)
