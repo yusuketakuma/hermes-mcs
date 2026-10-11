@@ -1,0 +1,18 @@
+{
+  "category": "security",
+  "title": "Slack・LINE WORKS のボタン操作で、対象患者の確認を Discord と同じ厳しさに統一",
+  "summary": "Slack と LINE WORKS のボタン操作で、操作対象の患者（プロジェクト）情報の形式が不正なとき、処理が異常終了したり、真偽値を患者番号として扱って許可したりする余地がありました。Discord と同じ確認に統一し、正の整数の患者番号がすべて許可範囲にある場合だけ操作を受け付けます。正しく発行されたボタンの動作は変わりません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "hermes_plugin/projects.py に context_projects と context_allowed を追加した。Discord の _context_projects をここへ移し、Discord・Slack・LINE WORKS のボタン認可が同じ判定を使う。signals の値が dict でない、患者番号が正の int でない（bool を含む）場合は拒否する。",
+    "Slack の _pinned にあった、project_ids も project_ids_auto もないときの事前判定は project_allowed と同じ結果になるため削除した。",
+    "static_scope の上限 1000 件を SCOPE_MAX と名付け、runner 側 notify_cmds.SCOPE_MAX と一致することをテストで固定した。挙動は変えていない。"
+  ],
+  "refs": [
+    "hermes_plugin/projects.py",
+    "adapters/discord/actions.py",
+    "adapters/slack/actions.py",
+    "adapters/lineworks/actions.py",
+    "tests/plugin/test_project_scope_helpers.py"
+  ]
+}

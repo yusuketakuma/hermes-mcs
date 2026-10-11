@@ -1734,6 +1734,30 @@ def test_confirm_publish_error_after_the_file_landed_keeps_the_confirm(
     assert "処理中" in cancel.response.message["content"]
 
 
+@pytest.mark.parametrize("project_id,signals", [
+    (None, {"synthetic-key": "not-a-dict"}),
+    (True, None),
+])
+def test_malformed_token_scope_is_denied(world, project_id, signals):
+    """A token context naming no valid positive int project is refused."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "request")
+    context = {**reg.token(tok), "project_id": project_id,
+               "context": {"source_message_id": 100, "source_hash": "a" * 64}}
+    if signals is not None:
+        context["context"]["signals"] = signals
+    reg.put_tokens({tok: context})
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction(f"mcs:a:{tok}", message_id=bot.channels[42].sent[0].id)
+    asyncio.run(act.on_interaction(ix))
+    assert "権限がありません" in ix.response.message["content"]
+    assert not list((world.data / "cmd_int").glob("*.json"))
+
+
 def test_confirm_expiring_before_take_never_publishes(world):
     """The TTL may lapse between the confirm lookup and taking it — the
     take must answer expiry, not queue the command from the stale
