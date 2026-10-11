@@ -36,7 +36,8 @@ def _capture(store, at, body, **fields):
     path = publish_snapshot(str(tmp_path / "synthetic.db"), str(tmp_path / str(at)))
     view = View(path)
     try:
-        return get_response_observation_list(view.db, enabled=True, max_age_s=300)["counts"]
+        result = get_response_observation_list(view.db, enabled=True, max_age_s=300)
+        return {**result["counts"], "reasons": result["unknown_reasons"]}
     finally:
         view.close()
 
@@ -64,3 +65,21 @@ def test_unedited_partial_capture_keeps_the_observed_mentions(store):
     assert _capture(store, NOW, "synthetic body", mentions=MENTION,
                     reactions=[])["self_target"] == 1
     assert _capture(store, NOW + 10, "synthetic body", reactions=[])["self_target"] == 1
+
+
+@pytest.mark.parametrize("recaptured,expected", [
+    (MENTION, "self_target"),
+    ([{"type": "user", "user": {"id": 99}}], "other_target"),
+])
+def test_edit_without_metadata_is_unknown_until_mentions_are_recaptured(
+        store, recaptured, expected):
+    assert _capture(store, NOW, "synthetic original", mentions=MENTION,
+                    reactions=[])["self_target"] == 1
+    # the discarded pre-edit mention is unobserved, not an unbound value
+    for at, fields in ((NOW + 10, {}), (NOW + 20, {"reactions": []})):
+        counts = _capture(store, at, "synthetic edited", **fields)
+        assert counts["self_target"] == 0 and counts["unknown_target"] == 1
+        assert counts["reasons"] == {"mentions_unknown": 1}
+    counts = _capture(store, NOW + 30, "synthetic edited", mentions=recaptured,
+                      reactions=[])
+    assert counts[expected] == 1 and counts["unknown_target"] == 0
