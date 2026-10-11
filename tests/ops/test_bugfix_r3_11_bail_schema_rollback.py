@@ -12,6 +12,7 @@ from test_mcs_update import updater  # noqa: F401
 def test_failed_bail_rollback_is_not_finished_as_pre_merge(
         updater, tmp_path, monkeypatch):  # noqa: F811
     import maintenance
+    notices = []
     repo, _ = _make_repo(tmp_path)
     _git(repo, "reset", "-q", "--hard", "v1.0.0")
     monkeypatch.setattr(mcs_update, "REPO", str(repo))
@@ -38,7 +39,8 @@ def test_failed_bail_rollback_is_not_finished_as_pre_merge(
     monkeypatch.setattr(mcs_update, "_services_reconcile", lambda: None)
     monkeypatch.setattr(mcs_update, "_reconcile_membership", lambda m: [])
     monkeypatch.setattr(mcs_update, "_postcheck", lambda s, e: [])
-    monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **k: True)
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda *a, **k: notices.append(a[0]) or True)
     monkeypatch.setattr(mcs_update, "restart_gateway", lambda c: None)
 
     def post_merge(_sha):
@@ -47,13 +49,21 @@ def test_failed_bail_rollback_is_not_finished_as_pre_merge(
     monkeypatch.setattr(mcs_update, "_run_post_merge", post_merge)
 
     assert mcs_update.apply("v1.1.0", sha, "cid") == 1
+    # frozen DB (restore incomplete): report only, no outbox write
+    assert notices == []
+    report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
+    assert report["result"] == "escalate" and report["writers_stopped"]
+    assert Path(mcs_update.MARKER_PATH).exists()
     st = mcs_update.load_state()
+    assert st["applying"]["restore_incomplete"] is True
+    assert st["executed"]["cid"]["result"] == "failed"
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
     # journal is rollback-shaped: target is prev, restore still owed
     assert st["applying"]["rollback"] is True
     assert st["applying"]["sha"] == before
 
     mcs_update.recover_interrupted()
+    assert notices == []
     st = mcs_update.load_state()
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
     assert report["result"] != "interrupted_pre_merge"

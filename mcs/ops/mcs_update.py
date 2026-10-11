@@ -1883,6 +1883,12 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                 "at": time.time()}
         _record_attempt(state, tag, "failed", reason)
         save_state(state)
+        if rollback_failed and state["applying"].get("restore_incomplete"):
+            # same report-only freeze as recover_interrupted's escalate: an
+            # outbox notice would write the newer-schema DB under the old
+            # code and join the later restore's loss report
+            _report("escalate", reason, writers_stopped=True)
+            return 1
         if quiesced and not rollback_failed:
             problems = restart_agents()
             _remove_marker()
