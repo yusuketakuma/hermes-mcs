@@ -410,3 +410,74 @@ def test_retiring_an_agent_with_unknown_state_keeps_its_plist(monkeypatch, tmp_p
     assert mcs_setup._agent_loaded("ai.mcs.cron.mcs-check") is None
     assert mcs_setup._retire_agents({"ai.mcs.cron.mcs-check"}, lambda m: None, False) == 1
     assert plist.exists()
+
+
+def _switch_back_env(monkeypatch, tmp_path):
+    """standalone -> hermes with a supervised gateway already running."""
+    cfg = config()
+    cfg["runtime_mode"] = "hermes"
+    calls, args = _standalone_services(monkeypatch, tmp_path, cfg, loaded={mcs_setup.STANDALONE_LABEL})
+    (tmp_path / "agents").mkdir()
+    (tmp_path / "data").mkdir()
+    (tmp_path / "agents" / (mcs_setup.STANDALONE_LABEL + ".plist")).write_text("synthetic old host")
+    manifest = tmp_path / "data" / "service_manifest.json"
+    manifest.write_text(json.dumps({"runtime_mode": "standalone",
+                                    "agents": [{"label": mcs_setup.STANDALONE_LABEL}], "cron": []}))
+    return calls, args, manifest
+
+
+def _restarts(calls):
+    return sum(a[1:3] == ["gateway", "restart"] for a in calls)
+
+
+def test_partial_switch_back_keeps_the_gateway_restart_for_the_next_run(monkeypatch, tmp_path):
+    calls, args, manifest = _switch_back_env(monkeypatch, tmp_path)
+    fixture_run = mcs_setup.subprocess.run
+    fail, creates = [True], [0]
+
+    def run(argv, **kw):
+        if argv[1:3] == ["cron", "create"]:
+            creates[0] += 1
+            if fail[0] and creates[0] == 2:
+                calls.append(list(argv))
+                return SimpleNamespace(returncode=1, stdout="", stderr="synthetic create failure")
+        if argv[1:3] == ["gateway", "status"]:
+            calls.append(list(argv))
+            return SimpleNamespace(returncode=0, stdout="supervised", stderr="")
+        return fixture_run(argv, **kw)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", run)
+    assert mcs_setup.cmd_services(args) == 1
+    assert _restarts(calls) == 0
+    saved = json.loads(manifest.read_text())
+    assert saved["runtime_mode"] == "hermes" and saved["gateway_restart_pending"] is True
+    split, fail[0] = len(calls), False
+    assert mcs_setup.cmd_services(args) == 0
+    assert _restarts(calls[split:]) == 1
+    assert "gateway_restart_pending" not in json.loads(manifest.read_text())
+
+
+def test_flags_publish_failure_fails_services_and_defers_the_switch_restart(monkeypatch, tmp_path):
+    import notify_cards
+    calls, args, manifest = _switch_back_env(monkeypatch, tmp_path)
+    fixture_run = mcs_setup.subprocess.run
+
+    def run(argv, **kw):
+        if argv[1:3] == ["gateway", "status"]:
+            calls.append(list(argv))
+            return SimpleNamespace(returncode=0, stdout="supervised", stderr="")
+        return fixture_run(argv, **kw)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", run)
+
+    publish = notify_cards.publish_flags
+
+    def broken(cfg, data):
+        raise OSError("synthetic flags write failure")
+    monkeypatch.setattr(notify_cards, "publish_flags", broken)
+    assert mcs_setup.cmd_services(args) == 1
+    assert _restarts(calls) == 0
+    saved = json.loads(manifest.read_text())   # the verified jobs are still recorded
+    assert saved["runtime_mode"] == "hermes" and saved["gateway_restart_pending"] is True
+    monkeypatch.setattr(notify_cards, "publish_flags", publish)
+    split = len(calls)
+    assert mcs_setup.cmd_services(args) == 0
+    assert _restarts(calls[split:]) == 1

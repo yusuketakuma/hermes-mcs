@@ -3537,13 +3537,18 @@ def cmd_services(args) -> int:
         _cron_label(script) for _, _, script in configured_cron_jobs(cfg))
     problems += _sync_agents(subs, prev, manifest, note, dry, cfg,
                              cron_labels | {STANDALONE_LABEL})
-    # the Hermes plugin decides from these flags whether to stand down
+    # the Hermes plugin decides from these flags whether to stand down;
+    # a failed publish fails the run but never blocks the manifest below
+    flags_failed = False
     if not dry and isinstance(cfg.get("notify"), dict) \
             and not _validate_notify(cfg["notify"]):
-        with suppress(Exception):
+        try:
             import notify_cards
             notify_cards.ensure_dirs(os.path.join(HOME, "data"))
             notify_cards.publish_flags(cfg, os.path.join(HOME, "data"))
+        except Exception as e:
+            note(f"notify flags publish failed: {type(e).__name__}: {e} — re-run services")
+            flags_failed = True
 
     if not _hermes_ok(hermes):
         note(f"cron: hermes not resolvable ({hermes}) — skipped")
@@ -3556,18 +3561,28 @@ def cmd_services(args) -> int:
         if not cron_problems:
             retire_problems = _retire_agents(cron_labels | {STANDALONE_LABEL}, note, dry)
             problems += retire_problems
-        switching = prev.get("runtime_mode") == "standalone"
-        if not switching or not (cron_problems or retire_problems):
+        # a partial switch saves runtime_mode=hermes: the pending flag keeps
+        # the restart owed until a run completes it
+        switching = prev.get("runtime_mode") == "standalone" \
+            or prev.get("gateway_restart_pending") is True
+        blocked = bool(cron_problems or retire_problems)
+        if not switching or not blocked:
             problems += _sync_gateway(cfg, hermes, note, dry)
-        if switching and not (cron_problems or retire_problems):
+        restarted = False
+        if switching and not blocked and flags_failed:
+            note("gateway: restart deferred until the notify flags publish")
+        elif switching and not blocked:
             # a gateway that loaded while standalone owned the bot skipped
             # /mcs and the card workers — reload it under the new flags
             note("gateway: restart (switched back from standalone)")
             if not dry:
                 r = _hermes_cli(hermes, "", "gateway", "restart")
-                if not (r and r.returncode == 0):
+                restarted = bool(r and r.returncode == 0)
+                if not restarted:
                     note("  gateway restart failed — run `hermes gateway restart`")
                     problems += 1
+        if switching and not restarted:
+            manifest["gateway_restart_pending"] = True
 
     _record_llm_slots(manifest, note)
     # manifest — the rollback snapshot's source of truth (R6).
@@ -3580,7 +3595,7 @@ def cmd_services(args) -> int:
         except OSError as e:
             note(f"manifest write failed: {e}")
             problems += 1
-    return 1 if problems else 0
+    return 1 if problems or flags_failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:
