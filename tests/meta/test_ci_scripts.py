@@ -281,6 +281,7 @@ def test_from_import_cannot_bypass_sdk_and_asyncio_surface(monkeypatch, tmp_path
     ('THREAD = "slack:G0123ABCDEF:1700000000.000100"\n', True),
     ('target = cfg.get("notify_target") or "discord:123456789012"\n', True),
     ('HELP = "hermes send target (e.g. slack:C0CHANNELID, discord:1234)"\n', False),
+    ('HELP = "slack:C0CHANNELID: the channel to post to"\n', False),
     ('def same(target, cid):\n return target == "slack:" + cid\n', False),
     ('def build(cid):\n return f"slack:{cid}"\n', False),
 ])
