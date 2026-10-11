@@ -338,8 +338,19 @@ class DeliveryWorker(_BaseWorker):
     def _validate_spec(self, spec):
         validate(spec)
 
+    def _retry_gate(self, spec):
+        """RETRY_ALLOWED for one send: the current authority, logged
+        when it withholds the 429 resend (the receipt says only
+        ratelimited)."""
+        async def allowed():
+            if await self._send_allowed(spec):
+                return True
+            self._log("retry_skipped", delivery_id=spec["delivery_id"])
+            return False
+        return allowed
+
     async def _perform(self, claim):
-        token = RETRY_ALLOWED.set(lambda: self._send_allowed(claim["spec"]))
+        token = RETRY_ALLOWED.set(self._retry_gate(claim["spec"]))
         try:
             outcome = await self._sender.perform(claim["spec"])
         finally:
@@ -395,7 +406,7 @@ class DeliveryWorker(_BaseWorker):
         await super()._drive_parts(claim, manifest, ctx, records)
 
     async def _attempt_part(self, claim, part, ctx):
-        token = RETRY_ALLOWED.set(lambda: self._send_allowed(claim["spec"]))
+        token = RETRY_ALLOWED.set(self._retry_gate(claim["spec"]))
         try:
             await super()._attempt_part(claim, part, ctx)
         finally:
