@@ -2868,7 +2868,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
             held the same way: only a human can repair it. The journal
             stays, so the next check / consent respawn retries. A schema
             rollback apply could not finish (applying.restore_incomplete)
-            keeps drainers down and the marker too, until a pass restores."""
+            keeps the same report-only freeze until a pass restores."""
             if held():
                 _report("restore_consent_blocked",
                         detail[:240] + " — hold kept, retried next pass")
@@ -2880,19 +2880,15 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     "at": time.time()}
                 save_state(state)
             key = _alert_key(state, detail)
-            notify, notified_at = _alert_due("escalate", key, time.time())
             if (applying or {}).get("restore_incomplete"):
                 # apply's schema rollback failed before the DB restore
                 # finished: same freeze as a consent hold (drainers down,
-                # marker kept), but no consent report exists to point at
-                _report("escalate", detail, alert_key=key,
-                        notified_at=notified_at, writers_stopped=True)
-                if notify and not _enqueue_notice(
-                        f"[MCS] 更新の中断復旧ができません（要手動対応）: {detail}"
-                        " — DB の復元が未完了のため常駐処理は停止したままです"):
-                    _report("escalate", detail, alert_key=key,
-                            writers_stopped=True)   # retry next
+                # marker kept, report only) — an outbox notice would write
+                # the newer-schema DB under the old code and join the later
+                # restore's loss report
+                _report("escalate", detail, alert_key=key, writers_stopped=True)
                 return 1
+            notify, notified_at = _alert_due("escalate", key, time.time())
             dkey = _drainers_key(state, head)
             _report("escalate", detail, alert_key=key,
                     notified_at=notified_at, drainers_key=dkey)

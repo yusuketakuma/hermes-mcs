@@ -201,7 +201,7 @@ rm -r "$WORK"
 
 - apply が非0: `status` の `attempts[$TAG].detail` を報告する。自動巻戻し済みなら checkout は元の SHA。
   `rollback failed — escalate` の場合は追加操作をせず報告する（復旧 watchdog と人の判断に委ねる）。
-  schema 変更を伴う更新では、DB 復元が完了するまで抽出処理と更新 marker を止めたままにする。
+  schema 変更を伴う更新で旧版の checkout へ戻した後なら、DB 復元が完了するまで抽出処理と更新 marker を止めたままにする（通知は復旧レポートで行う）。
   以後の `recover` も、復旧レポートが `escalate` と `writers_stopped: true` を示す間は処理を再開しない。
   使えるバックアップと復元承認がそろった `recover` で復元が完了すると、通常の再開に戻る。
 - 適用後に問題が見つかり戻す場合（ユーザー承認後）: `"$PY" "$REPO/mcs/ops/mcs_update.py" rollback`。
