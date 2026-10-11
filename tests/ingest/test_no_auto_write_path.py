@@ -455,3 +455,20 @@ def test_worker_takes_every_method_straight_from_the_envelope():
         kw = [k.value for k in node.keywords if k.arg == "method"]
         assert len(kw) == 1 and isinstance(kw[0], ast.Name) \
             and kw[0].id == "method", ast.unparse(node)
+
+
+def test_worker_boundary_never_rewrites_the_method():
+    """bounded_call serializes the adapter's payload to the subprocess;
+    it may add a timeout but never set or overwrite the method."""
+    fn = next(node for node in ast.walk(_parse(Path("mcs/ingest/mcs_worker.py")))
+              if isinstance(node, ast.FunctionDef) and node.name == "bounded_call")
+    writes = [node.lineno for node in ast.walk(fn)
+              if (isinstance(node, ast.keyword) and node.arg == "method")
+              or (isinstance(node, ast.Dict) and any(
+                  isinstance(k, ast.Constant) and k.value == "method"
+                  for k in node.keys))
+              or (isinstance(node, ast.Subscript)
+                  and isinstance(node.ctx, ast.Store)
+                  and isinstance(node.slice, ast.Constant)
+                  and node.slice.value == "method")]
+    assert not writes, f"bounded_call writes method at {writes}"
