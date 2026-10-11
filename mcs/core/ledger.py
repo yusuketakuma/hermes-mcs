@@ -2855,10 +2855,25 @@ def _valid_snapshot_candidate(path: str, *, deadline: float) -> bool:
         return False
 
 
-def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
+class _SnapshotDeadline(Exception):
+    """The copy ran into the caller's hard deadline."""
+
+
+def publish_snapshot(db_path: str, dest_dir: str, *,
+                     deadline: float | None = None) -> str | None:
     """Verified point-in-time copy for read-only consumers.
     backup -> tmp -> quick_check -> atomic rename; consumers never see a
-    half-written snapshot. Returns the published path or None."""
+    half-written snapshot. Returns the published path or None.
+    ``deadline`` (monotonic) is the caller's hard stop, e.g. its armed
+    watchdog: the copy is abandoned and the verify budget capped there,
+    so a large ledger fails this publish instead of getting the process
+    killed mid-copy on every tick."""
+    if deadline is not None and monotonic() >= deadline:
+        return None
+
+    def check_deadline(*_):
+        if deadline is not None and monotonic() >= deadline:
+            raise _SnapshotDeadline
     os.makedirs(dest_dir, mode=0o700, exist_ok=True)
     os.chmod(dest_dir, 0o700)
     dest = os.path.join(dest_dir, "ledger-snapshot.db")
@@ -2870,7 +2885,10 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
         try:
             dst = sqlite3.connect(tmp)
             try:
-                src.backup(dst)
+                try:
+                    src.backup(dst, pages=4096, progress=check_deadline)
+                except _SnapshotDeadline:
+                    return None
                 with dst:
                     dst.execute("INSERT OR REPLACE INTO snapshot_meta("
                                 "singleton,generation_id,generated_at) "
@@ -2881,8 +2899,10 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
                 dst.close()
         finally:
             src.close()
-        if not _valid_snapshot_candidate(
-                tmp, deadline=monotonic() + snapshot_verify_timeout_s(tmp)):
+        verify_by = monotonic() + snapshot_verify_timeout_s(tmp)
+        if deadline is not None:
+            verify_by = min(verify_by, deadline)
+        if not _valid_snapshot_candidate(tmp, deadline=verify_by):
             return None
         publish_tmp(tmp, dest)
         # A reader keeps its old inode or opens the complete new generation.

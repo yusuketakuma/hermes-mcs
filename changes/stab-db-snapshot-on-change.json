@@ -6,7 +6,8 @@
   "details": [
     "変更の判定は各表の最大rowidとschema_versionの比較（全件走査なし）。実行記録(runs)だけの変化は対象外。",
     "判定用の記録は data/snapshots/.publish-sig.json（0600）に保存する。",
-    "公開に失敗したときは従来どおり run を partial にし、snapshot_dirty は公開が成功したときだけ解除する。"
+    "公開に失敗したときは従来どおり run を partial にし、snapshot_dirty は公開が成功したときだけ解除する。",
+    "読取り用スナップショットの複製と検証は、プロセス監視の強制終了時刻までに打ち切る。大きな台帳でも毎回途中で強制終了されることを防ぐ。"
   ],
   "refs": [
     "mcs/core/maintenance.py",

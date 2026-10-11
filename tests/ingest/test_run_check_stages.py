@@ -1406,7 +1406,7 @@ def test_tail_command_failure_marks_run_partial(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(maintenance, "daily_backup", lambda *a: None)
     monkeypatch.setattr(maintenance, "rotate_log", lambda *a: None)
     monkeypatch.setattr(maintenance, "prune_attachments", lambda *a: 0)
-    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a: True)
+    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a, **k: True)
     calls = []
 
     def fail_tail(*args, **kwargs):
@@ -1842,7 +1842,7 @@ def test_tick_recovers_session_mid_run_and_notifies(tmp_path, monkeypatch,
     monkeypatch.setattr(maintenance, "daily_backup", lambda *a: None)
     monkeypatch.setattr(maintenance, "rotate_log", lambda *a: None)
     monkeypatch.setattr(maintenance, "prune_attachments", lambda *a: 0)
-    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a: True)
+    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a, **k: True)
     monkeypatch.setattr(
         sys, "argv", ["run_check", "--no-notify", "--no-backfill"])
 
@@ -1961,7 +1961,7 @@ def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
     monkeypatch.setattr(maintenance, "daily_backup", lambda *a: None)
     monkeypatch.setattr(maintenance, "rotate_log", lambda *a: None)
     monkeypatch.setattr(maintenance, "prune_attachments", lambda *a: 0)
-    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a: True)
+    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a, **k: True)
     # three wrapped stages each recover once, spending the whole budget;
     # the fourth expiry escalates raw (wrapper declined) to the boundary
     monkeypatch.setattr(run_check, "stage_unread", _expire_once())
@@ -2034,7 +2034,7 @@ def test_overdue_tick_defers_later_stages_but_records_run_and_health(
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **k: None)
     for name in ("publish_flags", "clear_snapshot_dirty"):
         monkeypatch.setattr(notify_cards, name, lambda *a, **k: None)
-    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a: True)
+    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a, **k: True)
     monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
     assert run_check._main() == 0
     later.assert_not_called()

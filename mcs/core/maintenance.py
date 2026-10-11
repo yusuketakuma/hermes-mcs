@@ -501,10 +501,10 @@ def prune_leftovers() -> int:
     return removed
 
 
-def publish_snapshot(db_path: str) -> bool:
+def publish_snapshot(db_path: str, *, deadline: float | None = None) -> bool:
     """Regenerate the read-only snapshot consumed by the sandboxed CCO
     (backup -> tmp -> DELETE journal -> verify -> atomic rename)."""
-    return bool(_publish_snapshot(db_path, SNAPSHOT_DIR))
+    return bool(_publish_snapshot(db_path, SNAPSHOT_DIR, deadline=deadline))
 
 
 # ---------- H4: publish the snapshot only when it would change ----------
@@ -560,7 +560,8 @@ def _recent(at, now: float, interval: float) -> bool:
 
 
 def refresh_snapshot(db_path: str, *, force: bool = False,
-                     now: float | None = None) -> str | None:
+                     now: float | None = None,
+                     deadline: float | None = None) -> str | None:
     """Publish the read-only snapshot when it would differ (H4).
 
     Every tick used to copy and quick_check the whole ledger (144 full
@@ -579,7 +580,7 @@ def refresh_snapshot(db_path: str, *, force: bool = False,
             and _recent(prev.get("published_at"), now, SNAPSHOT_MAX_AGE_S)
             and _plain_file(dest)):
         return "unchanged"
-    if not publish_snapshot(db_path):
+    if not publish_snapshot(db_path, deadline=deadline):
         return None
     if sig is None:
         with suppress(OSError):
@@ -745,6 +746,9 @@ def db_maintenance(db_path: str, *, deadline: float | None = None,
             con.execute("PRAGMA optimize=0x10002")
             state["daily_at"] = now
         if daily or retry_ckpt:
+            # pending until its outcome is known: an interrupted or failed
+            # TRUNCATE is retried next tick like a busy one
+            state["checkpoint_pending"] = True
             # busy: a reader kept the WAL from being truncated (no error)
             busy, log, done = con.execute(
                 "PRAGMA wal_checkpoint(TRUNCATE)").fetchone()

@@ -131,8 +131,26 @@ def test_snapshot_publishes_only_on_change_dirty_or_age(tmp_path, snapdir):
 
 def test_snapshot_failed_publish_is_reported(tmp_path, snapdir, monkeypatch):
     _ledger(tmp_path).close()
-    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *_a: False)
+    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *_a, **_k: False)
     assert maintenance.refresh_snapshot(str(tmp_path / "ledger.db")) is None
+
+
+def test_snapshot_stops_at_the_callers_hard_deadline(tmp_path, snapdir, monkeypatch):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(1)])
+    db.close()
+    path = str(tmp_path / "ledger.db")
+    assert maintenance.refresh_snapshot(path, deadline=time.monotonic() - 1) is None
+    seen = {}
+
+    def verify(_tmp, *, deadline):
+        seen["deadline"] = deadline
+        return False
+    monkeypatch.setattr(ledger, "_valid_snapshot_candidate", verify)
+    hard = time.monotonic() + 5
+    assert maintenance.refresh_snapshot(path, deadline=hard) is None
+    assert seen["deadline"] == hard          # never past the watchdog
+    assert not (snapdir / "ledger-snapshot.db").exists()
 
 
 def test_snapshot_verify_budget_grows_with_size(tmp_path, monkeypatch):
@@ -317,6 +335,39 @@ def test_a_checkpoint_held_off_by_a_reader_is_retried_next_tick(tmp_path, monkey
     assert out == {"checkpoint": {"busy": 0, "log": 0, "done": 0}}
     assert "checkpoint_pending" not in json.loads((tmp_path / "maint.json").read_text())
     assert maintenance.db_maintenance(path) is None
+
+
+def test_a_checkpoint_that_raises_is_still_retried(tmp_path, monkeypatch):
+    _ledger(tmp_path).close()
+    monkeypatch.setattr(maintenance, "DB_MAINT_STATE", str(tmp_path / "maint.json"))
+    real = sqlite3.connect
+
+    class Failing:
+        def __init__(self, con):
+            self._con = con
+
+        def __getattr__(self, name):
+            return getattr(self._con, name)
+
+        def __enter__(self):
+            return self._con.__enter__()
+
+        def __exit__(self, *exc):
+            return self._con.__exit__(*exc)
+
+        def execute(self, sql, *args):
+            if "wal_checkpoint" in sql:
+                raise sqlite3.OperationalError("synthetic I/O error")
+            return self._con.execute(sql, *args)
+    monkeypatch.setattr(maintenance.sqlite3, "connect",
+                        lambda *a, **k: Failing(real(*a, **k)))
+    path = str(tmp_path / "ledger.db")
+    with pytest.raises(sqlite3.OperationalError):
+        maintenance.db_maintenance(path)
+    state = json.loads((tmp_path / "maint.json").read_text())
+    assert state["checkpoint_pending"] is True and "daily_at" in state
+    monkeypatch.setattr(maintenance.sqlite3, "connect", real)
+    assert maintenance.db_maintenance(path)["checkpoint"]["busy"] == 0
 
 
 def test_db_maintenance_waits_for_time(tmp_path, monkeypatch):

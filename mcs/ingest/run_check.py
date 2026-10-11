@@ -1769,7 +1769,8 @@ def _commands_only(lock_fd, deadline) -> int:
         notify_cards.publish_flags(cfg, root)
         notify_cards.gc(ledger, cfg)
         if notify_cards.snapshot_dirty(ledger):
-            result["snapshot"] = maintenance.publish_snapshot(DB)
+            result["snapshot"] = maintenance.publish_snapshot(
+                DB, deadline=_hard_deadline())
             if result["snapshot"]:
                 notify_cards.clear_snapshot_dirty(ledger)
             else:
@@ -2159,7 +2160,8 @@ def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
         # H4: a full copy + quick_check only when the ledger changed, the
         # notification flag asks for it, or the copy is an hour old
         dirty = notify_cards.snapshot_dirty(ledger)
-        state = maintenance.refresh_snapshot(DB, force=dirty)
+        state = maintenance.refresh_snapshot(DB, force=dirty,
+                                             deadline=_hard_deadline())
         result["snapshot"] = state is not None
         result["snapshot_state"] = state
         if state is None:
