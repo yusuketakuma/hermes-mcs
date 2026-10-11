@@ -2,7 +2,8 @@
 
 Holds the one implementation of each safety-critical file pattern that
 several modules used to keep private copies of: atomic replace through
-an fsynced temp file, directory fsync after a rename or link.  Every
+an fsynced temp file, directory fsync after a rename or link, exclusive
+creation of a new file, and a bounded read that refuses links.  Every
 helper keeps the exact flags, modes, fsync points and cleanup of the
 copies it replaced; options exist only where those copies differed.
 Stdlib only and free of side effects at import, so any entry point can
