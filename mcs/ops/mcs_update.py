@@ -470,10 +470,10 @@ def impact_summary(cur_sha: str, tag: str) -> list[str]:
                      "auto モードでは適用を中止します")
     # mcs_standalone/ is loaded only by the standalone connector
     connector = ("mcs_standalone/",) if mcs_runtime.standalone(load_config()) else ()
-    if any(n.startswith(("hermes_plugin/", "adapters/common/", "adapters/slack/", "adapters/discord/",
-                         *connector)) for n in names):
+    if any(n.startswith(tuple(path + "/" for path in mcs_runtime.GATEWAY_SOURCE_DIRS)
+                        + connector) for n in names):
         notes.append("plugin 変更 — 適用後に gateway restart（standalone では ai.mcs.standalone の再起動）が必要です")
-    if any(n.startswith(("adapters/common/", "adapters/lineworks/", "lineworks_adapter/")) for n in names):
+    if any(n.startswith(("mcs/", "adapters/common/", "adapters/lineworks/", "lineworks_adapter/")) for n in names):
         notes.append("LINE WORKS 変更 — 適用後に独立アダプターの check と再起動が必要です")
     return notes
 
@@ -752,7 +752,7 @@ def precheck_tag(tag: str) -> list[str]:
 def _plugin_changed(tag: str, cfg: dict) -> bool:
     return bool(_git_out(
         ["diff", "--name-only", "-z", "HEAD", tag, "--",
-         "hermes_plugin", "adapters/common", "adapters/slack", "adapters/discord",
+         *mcs_runtime.GATEWAY_SOURCE_DIRS,
          *(["mcs_standalone"] if mcs_runtime.standalone(cfg) else [])]).strip("\0"))
 
 
@@ -1815,6 +1815,8 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                     command_id or entry.get("command_id"))
                 journal(state, "rollback")
             try:
+                # The post-merge child may have restarted writers before failing.
+                quiesce()
                 _rollback_tree(entry, lambda report: _consent_hold(
                     state, RestoreConsentPending(report), entry["backup_path"]))
                 state.pop("restore_consent", None)
@@ -1853,7 +1855,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             # must still be able to see and escalate the wedged state
             state["applying"] = None
             state["stages"] = []
-        if transient:
+        if transient and not rollback_failed:
             # never attempted: clean journal, leave the receipt
             # pending, no attempt record, no notification — the next
             # check retries
@@ -1866,7 +1868,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                 "at": time.time()}
         _record_attempt(state, tag, "failed", reason)
         save_state(state)
-        if quiesced:
+        if quiesced and not rollback_failed:
             problems = restart_agents()
             _remove_marker()
             if problems:
@@ -2018,7 +2020,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         return bail(f"unexpected:{type(e).__name__}")
     finally:
         _HELD_RUN_LOCK_FD = None
-        if quiesced and not consent_hold:
+        if quiesced and not consent_hold and not rollback_failed:
             _remove_marker()
         for fd in (run_fd, upd_fd):
             if fd is not None:
@@ -3188,7 +3190,8 @@ def cmd_check() -> int:
             tag = sha = None            # receipts still get processed
     cur_tag, cur_sha = current_version()
     notes = impact = None
-    if tag and tag != state.get("latest_tag"):
+    if tag and (tag != state.get("latest_tag")
+                or (sha and sha != cur_sha and state.get("notified_at") != tag)):
         with suppress(UpdateError):
             # fetch objects BEFORE notes/impact — otherwise the summary
             # silently runs against missing objects (dead code, F15)

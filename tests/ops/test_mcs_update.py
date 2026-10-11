@@ -1506,12 +1506,9 @@ def test_apply_consent_hold_survives_a_failing_quiesce(updater, tmp_path,
                         lambda t: ["schema_bump:7->8"])
     monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: str(back))
     monkeypatch.setattr(mcs_update, "_baseline_check", lambda c: [])
-    calls = {"n": 0}
-
     def quiesce():
-        calls["n"] += 1
         mcs_update._write_marker()
-        if calls["n"] >= 2:
+        if mcs_update.load_state().get("restore_consent"):
             raise mcs_update.UpdateError("drainer_stop_failed: synthetic")
         return []
 
