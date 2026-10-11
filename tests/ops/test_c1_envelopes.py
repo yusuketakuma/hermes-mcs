@@ -462,3 +462,15 @@ def test_v1_remains_distinct_and_its_numeric_bytes_are_unchanged():
     legacy._validate_envelope(envelope)
     with pytest.raises(legacy.ContractError):
         legacy._validate_envelope({**envelope, "contract": legacy.EXT_CONTRACT})
+
+
+# Regression: /2 envelopes must refuse an auth_id that withdraw/1 cannot carry.
+def test_builder_and_validator_share_the_withdraw_auth_id_limit():
+    assert len(_build(_records(), auth_id="a" * envs.AUTH_ID_MAX)) == 1
+    with pytest.raises(C1ContractError, match="envelope_metadata_invalid"):
+        _build(_records(), auth_id="a" * (envs.AUTH_ID_MAX + 1))
+    envelope = _build(_records())[0]
+    envelope["auth_id"] = "a" * (envs.AUTH_ID_MAX + 1)
+    _resign(envelope)
+    with pytest.raises(C1ContractError, match="envelope_metadata_invalid"):
+        envs.validate_envelope(envelope)

@@ -38,6 +38,7 @@ import semantic_send_gate
 import structured_view
 from mcs_queries import HOLD_PROGRESS_SET
 from mcs_util import CONF_PATH, html_to_text, load_config
+from mcs_util import hermes_exe as _hermes_exe
 from mcs_requests import positive
 from notify_render import (SECTION_RULE, _extraction_failed, _signal_evidence,
                            thread_stamp_row)
@@ -69,17 +70,6 @@ _ALERT_KINDS = frozenset({
 
 def _config() -> dict:
     return load_config(CONF_PATH)
-
-
-def _hermes_exe(cfg: dict) -> str:
-    """`hermes` binary for delivery. config {hermes_bin} overrides; the
-    default falls back to the standard user-local install because the
-    launchd PATH is minimal."""
-    exe = cfg.get("hermes_bin")
-    if isinstance(exe, str) and exe.strip():
-        return exe.strip()
-    return (shutil.which("hermes")
-            or os.path.expanduser("~/.local/bin/hermes"))
 
 
 def _target(cfg: dict, kind: str) -> str | None:

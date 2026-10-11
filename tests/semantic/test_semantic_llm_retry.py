@@ -172,6 +172,10 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
 def _held_admission(monkeypatch, calls):
     import local_llm
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: True)
+    # A held admission also yields the plain probe; stubbing it keeps the
+    # test from opening a real broker at the unset ("") admission path.
+    monkeypatch.setattr(local_llm, "admitted_probe_format",
+                        lambda *a, **kw: "plain")
 
     def held(route, prompt, **kw):
         calls.append(route)

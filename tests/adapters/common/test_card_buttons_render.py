@@ -8,9 +8,9 @@ import sys
 
 import pytest
 
-from hermes_plugin.mcs_delivery import envelopes, spec as spec_mod, text
-from hermes_plugin.mcs_discord import cards as discord_cards
-from hermes_plugin.mcs_slack import cards as slack_cards
+from adapters.common import envelopes, spec as spec_mod, text
+from adapters.discord import cards as discord_cards
+from adapters.slack import cards as slack_cards
 from discord_testkit import _fake_discord
 
 LINK = {"id": "link", "ui": "link", "label": "🔗 MCSで開く",

@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 
+from adapters.common import eventlog
 from adapters.common.paths import read_verified_attachment
 from .delivery import _failed, _payload, _upload_file_id
 from .tasks import Supervisor
@@ -246,9 +247,7 @@ async def _socket(client, credentials, inflight):
     return app, handler
 
 
-def _event(event, **fields):
-    logging.getLogger("mcs.standalone.slack").info(
-        "%s %s", event, json.dumps(fields, sort_keys=True))
+_event = eventlog.make_logger("mcs.standalone.slack")
 
 
 async def run(root, stopping=None):

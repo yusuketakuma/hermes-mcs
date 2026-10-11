@@ -1358,7 +1358,7 @@ def test_self_probe_incomplete_body_does_not_mark_latest(tmp_path):
 
 def test_tail_command_failure_marks_run_partial(tmp_path, monkeypatch, capsys):
     import maintenance
-    import mcs_signals
+    import self_identity
     import notify_cards
     import notify_cmds
 
@@ -1402,7 +1402,7 @@ def test_tail_command_failure_marks_run_partial(tmp_path, monkeypatch, capsys):
     for name in ("ensure_dirs", "recover", "sweep", "publish_flags",
                  "gc", "clear_snapshot_dirty"):
         monkeypatch.setattr(notify_cards, name, lambda *a, **k: None)
-    monkeypatch.setattr(mcs_signals, "record_self_profile", lambda *a: False)
+    monkeypatch.setattr(self_identity, "record_self_profile", lambda *a: False)
     monkeypatch.setattr(maintenance, "daily_backup", lambda *a: None)
     monkeypatch.setattr(maintenance, "rotate_log", lambda *a: None)
     monkeypatch.setattr(maintenance, "prune_attachments", lambda *a: 0)
@@ -1785,7 +1785,7 @@ def test_tick_recovers_session_mid_run_and_notifies(tmp_path, monkeypatch,
     point and the run completes; the session_recovered intent is queued
     for delivery (flush suppressed by --no-notify)."""
     import maintenance
-    import mcs_signals
+    import self_identity
     import notify_cards
     import notify_cmds
 
@@ -1838,7 +1838,7 @@ def test_tick_recovers_session_mid_run_and_notifies(tmp_path, monkeypatch,
         monkeypatch.setattr(notify_cards, name, lambda *a, **k: None)
     monkeypatch.setattr(notify_cmds, "drain_int_commands",
                         lambda *a, **k: None)
-    monkeypatch.setattr(mcs_signals, "record_self_profile", lambda *a: False)
+    monkeypatch.setattr(self_identity, "record_self_profile", lambda *a: False)
     monkeypatch.setattr(maintenance, "daily_backup", lambda *a: None)
     monkeypatch.setattr(maintenance, "rotate_log", lambda *a: None)
     monkeypatch.setattr(maintenance, "prune_attachments", lambda *a: 0)
@@ -1908,7 +1908,7 @@ def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
     auto_login, no extra session_recovered, a session_expired alert,
     exit 2, and the exhaustion is recorded in the run row and health."""
     import maintenance
-    import mcs_signals
+    import self_identity
     import notify_cards
     import notify_cmds
 
@@ -1957,7 +1957,7 @@ def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
         monkeypatch.setattr(notify_cards, name, lambda *a, **k: None)
     monkeypatch.setattr(notify_cmds, "drain_int_commands",
                         lambda *a, **k: None)
-    monkeypatch.setattr(mcs_signals, "record_self_profile", lambda *a: False)
+    monkeypatch.setattr(self_identity, "record_self_profile", lambda *a: False)
     monkeypatch.setattr(maintenance, "daily_backup", lambda *a: None)
     monkeypatch.setattr(maintenance, "rotate_log", lambda *a: None)
     monkeypatch.setattr(maintenance, "prune_attachments", lambda *a: 0)
@@ -2059,8 +2059,8 @@ def test_overdue_tick_defers_later_stages_but_records_run_and_health(
 def test_backup_health_database_failure_remains_machine_readable(monkeypatch):
     import sqlite3
     import mcs_backup
-    import mcs_setup
-    monkeypatch.setattr(mcs_setup, "_backup_config", lambda setting: [])
+    import backup_config
+    monkeypatch.setattr(backup_config, "validate_backup_config", lambda setting: [])
     monkeypatch.setattr(mcs_backup, "load_policy", lambda path: (object(), True))
 
     def fail(*args):

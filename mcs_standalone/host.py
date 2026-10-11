@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
-import logging
+
+from adapters.common import eventlog
 
 
 class NotSent(Exception):
@@ -73,7 +73,5 @@ def raise_ended(done, waiter):
         raise RuntimeError(f"ended:{task.get_name()}")
 
 
-def log(event, **fields):
-    """Log fixed event codes without message bodies or credentials."""
-    logging.getLogger("mcs.standalone").info(
-        "%s %s", event, json.dumps(fields, ensure_ascii=False, sort_keys=True, default=str))
+# Fixed event codes only; adapters.common.eventlog drops anything else.
+log = eventlog.make_logger("mcs.standalone")

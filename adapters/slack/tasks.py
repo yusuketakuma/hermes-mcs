@@ -81,11 +81,7 @@ class Supervisor:
             async def ready():
                 nonlocal reconciled
                 if not reconciled:
-                    self._reg.reload()
-                    with self._reg.batch():
-                        stats = await self._worker.reconcile()
-                    if any(stats.values()):
-                        self._log("reconciled", **stats)
+                    await self._worker.reload_reconcile()
                     reconciled = True
                 if await self._sender.bind():
                     return True

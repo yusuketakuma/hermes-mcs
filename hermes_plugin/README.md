@@ -22,10 +22,9 @@ Loop候補の採用も既存requestのpreview/confirmを使う。
 ## アダプターの配置
 
 Slack・Discord の接続先固有処理の正本は `adapters/slack/` と
-`adapters/discord/` にあります。`hermes_plugin/mcs_slack/` と
-`hermes_plugin/mcs_discord/` は既存 import を維持する互換入口です。
-共通の配送・承認・receipt 基盤は `adapters/common/` にあります。
-`hermes_plugin/mcs_delivery/` は既存 import を維持する互換入口です。
+`adapters/discord/` にあります。共通の配送・承認・receipt 基盤は
+`adapters/common/` にあります。`card_workers.py` は Hermes が別のパッケージ名で
+plugin を読み込んでもリポジトリのルートを `sys.path` に加え、`adapters.*` を直接 import します。
 LINE WORKS を含む構成は [接続アダプター](../adapters/README.md)を参照してください。
 
 ## 配置と設定

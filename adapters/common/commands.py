@@ -17,9 +17,7 @@ def answer(settings, raw, *, user, channel):
     if channel != settings.get("channel_id"):
         return _deny("chat_not_allowed")
     flags = paths.read_flags(settings["data_root"])
-    if (flags.get("interactive") is not True or flags.get("restore_pending")
-            or flags.get("transport") != transport
-            or flags.get("route_epoch") != settings.get("route_epoch")):
+    if not paths.route_open(flags, transport, settings.get("route_epoch")):
         return _deny("interactive_off")
     identity = {"transport": transport, "user_id": user, "chat_id": channel,
                 "scope_id": settings["team_id"], "profile": settings["profile"],

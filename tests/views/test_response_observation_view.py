@@ -432,3 +432,25 @@ def test_original_unread_flag_is_not_inferred_from_completed_ui_stamp(store, tmp
         assert item["reply"]["state"] == "not_observed"
     finally:
         view.close()
+
+
+# Unchanged metadata re-captured through save_messages stays bound to the body.
+@pytest.mark.parametrize("captures", [1, 2])
+def test_recaptured_unchanged_mentions_stay_self_target(store, tmp_path, captures):  # noqa: F811
+    ledger, clock = store
+    for i in range(captures):
+        clock[0] = NOW - 100 + 60 * i
+        m = _norm_message({"id": 1, "comment": "SYNTHETIC-BODY", "user": {"id": 22},
+                           "mentions": [{"type": "user", "user": {"id": SELF}}],
+                           "reactions": []}, 1)
+        ledger.save_messages([m], project_id=1, notify=False)
+    with ledger.db:
+        ledger.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=1",
+                          (NOW - 100,))
+    view = _view(store, tmp_path)
+    try:
+        result = _read(view)
+        assert result["counts"]["self_target"] == 1, result
+        assert result["counts"]["unknown_target"] == 0
+    finally:
+        view.close()

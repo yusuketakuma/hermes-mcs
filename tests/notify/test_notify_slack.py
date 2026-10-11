@@ -9,13 +9,14 @@ import notify_flush
 import notify_cards as cards
 import notify_cmds as cmds
 import notify_transport as transport
-from hermes_plugin.mcs_slack import cards as slack_cards
+from adapters.slack import cards as slack_cards
 from mcs_requests import canonical
 from notify_testkit import (
     CFG, NOW, _begin, _card, _dispatch as _raw_dispatch, _intent, _latest_render,
     _seed_thread, _signal_row, _token_for, _uuid,
 )
 from slack_testkit import SCOPE, SLACK
+from common_testkit import ledger_fixture
 
 # flag-off variant — the ephemeral body-button contract survives as the
 # escape hatch for deployments without card threads
@@ -39,13 +40,7 @@ def _pin_wall_clock(monkeypatch):
     monkeypatch.setattr(cards.time, "time", lambda: NOW)
 
 
-@pytest.fixture(name="led")
-def slack_ledger(tmp_path):
-    root = tmp_path / "data"
-    root.mkdir()
-    instance = ledger.Ledger(str(root / "ledger.db"))
-    yield instance
-    instance.close()
+slack_ledger = ledger_fixture(data_dir=True)
 
 
 def _command(render, op="transport_begin", **overrides):

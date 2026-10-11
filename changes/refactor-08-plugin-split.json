@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "Hermesプラグインの内部構成を整理",
+  "summary": "Hermesプラグインの本体ファイルを、認証・設定確認と、依頼・操作の確認から受付までの処理に分けました。/mcs コマンド、カード操作、人承認の確認手順と応答内容は変わりません。",
+  "upgrade": "設定変更・DB移行は不要です。通常の更新と同じく、Hermes gateway の再起動で反映されます。",
+  "details": [
+    "hermes_plugin/__init__.py を、MCS読込と応答形式（bridge.py）、本人確認・設定・許可確認（access.py）、依頼・操作のプレビュー・確認・受付（human_commands.py）に分割する。",
+    "既存の hermes_plugin 直下の名前の参照先と、_dispatch_op の差し替え点は維持する。"
+  ],
+  "refs": [
+    "hermes_plugin/__init__.py",
+    "hermes_plugin/bridge.py",
+    "hermes_plugin/access.py",
+    "hermes_plugin/human_commands.py",
+    "hermes_plugin/card_workers.py"
+  ]
+}

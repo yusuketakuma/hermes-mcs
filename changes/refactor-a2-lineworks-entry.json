@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "LINE WORKS起動入口の不要な再exportを削除",
+  "summary": "lineworks_adapter パッケージが再exportしていたLINE WORKSのクライアント類を削除し、python -m lineworks_adapter の起動入口だけを残しました。LINE WORKSの起動コマンド・設定・送受信の動作は変わりません。",
+  "upgrade": "設定変更・DB移行は不要です。独自スクリプトで lineworks_adapter から LineWorksClient などをimportしている場合は adapters.lineworks から読み込んでください。",
+  "details": [
+    "リポジトリ内に lineworks_adapter からクライアント類をimportする呼出し元はない。",
+    "起動入口が adapters.lineworks の CLI を指すことはテストで引き続き確認する。"
+  ],
+  "refs": ["lineworks_adapter/__init__.py"]
+}

@@ -8,6 +8,7 @@ import stat
 import sqlite3
 import uuid
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -15,10 +16,11 @@ import ledger
 import mcs_adapter
 import mcs_refstats
 import mcs_requests as requests
+from common_testkit import make_ledger
+import mcs_requests
 
 
-def _db(tmp_path):
-    return ledger.Ledger(str(tmp_path / "ledger.db"))
+_db = make_ledger
 
 
 def _msg(mid=1, body="test body"):
@@ -460,3 +462,84 @@ def test_default_paths_follow_mcs_root(tmp_path):
         capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert (root / "data" / "refstats" / "pending" / "rooted.json").is_file()
+
+
+# Capture at a fractional generated_at must replay identically on verify.
+GEN = 1790000000.6
+
+
+def test_capture_pins_integer_as_of_so_verify_passes(tmp_path, monkeypatch, capsys):
+    # post exactly on the 7d lower bound at int(GEN): excluded at the
+    # float as_of, included at the replayed whole-second as_of
+    ts = int(GEN) - 7 * 86400
+    iso = datetime.fromtimestamp(ts, timezone(timedelta(hours=9))).isoformat()
+    db = _db(tmp_path)
+    db.save_messages([mcs_adapter.Message(
+        message_id=1, project_id=1, parent_id=None, sender_id=1,
+        sender_name="s", sender_type="user", profession="看護師",
+        organization="", posted_at=iso, body_html="x", body_state="full",
+        is_unread=False, reply_count=0)])
+    monkeypatch.setattr(ledger.time, "time", lambda: GEN)
+    snap = ledger.publish_snapshot(str(tmp_path / "ledger.db"), str(tmp_path / "snap"))
+    monkeypatch.undo()
+    assert mcs_refstats.main(["capture", "--name", "b", "--preset", "operational",
+                              "--snapshot", str(snap), "--data-dir", str(tmp_path)]) == 0
+    r = requests.apply_command(db, _approve_req("b", _pending_hash(tmp_path, "b")))
+    assert r["outcome"] == "applied", r
+    # republish so the snapshot carries the approval artifact; the
+    # pinned as_of freezes the window, so same data must still match
+    monkeypatch.setattr(ledger.time, "time", lambda: GEN + 60)
+    snap = ledger.publish_snapshot(str(tmp_path / "ledger.db"), str(tmp_path / "snap"))
+    monkeypatch.undo()
+    capsys.readouterr()
+    rc = mcs_refstats.main(["verify", "--name", "b", "--snapshot", str(snap),
+                            "--data-dir", str(tmp_path)])
+    out = capsys.readouterr().out
+    db.close()
+    assert rc == 0, out
+
+
+# Reference approval requires an unambiguous receipt for the exact command.
+@pytest.mark.parametrize("corruption", ["duplicate", "column_hash", "json_hash", "both_hash"])
+def test_ambiguous_or_conflicting_receipt_cannot_verify_reference(tmp_path, capsys, corruption):
+    store = _db(tmp_path)
+    try:
+        _capture(tmp_path)
+        command = _approve_req("base", _pending_hash(tmp_path))
+        receipt = mcs_requests.apply_command(store, command)
+        assert receipt["outcome"] == "applied"
+        artifact_id = receipt["refstat_artifact_id"]
+        content = json.loads(store.db.execute(
+            "SELECT content FROM artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()[0])
+        raw = json.dumps(receipt)
+        if corruption == "duplicate":
+            raw = '{"outcome":"rejected",' + raw[1:]
+        if corruption in ("json_hash", "both_hash"):
+            receipt["payload_hash"] = "f" * 64
+            raw = json.dumps(receipt)
+        with store.db:
+            store.db.execute("UPDATE command_receipts SET receipt_json=? WHERE command_id=?",
+                             (raw, command["command_id"]))
+            if corruption in ("column_hash", "both_hash"):
+                store.db.execute("UPDATE command_receipts SET payload_hash=? WHERE command_id=?",
+                                 ("f" * 64, command["command_id"]))
+        assert not mcs_refstats._receipt_applied(store.db, content, artifact_id)
+    finally:
+        store.close()
+    capsys.readouterr()
+
+
+def test_maximum_unicode_actor_reason_still_verifies_reference(tmp_path, capsys):
+    store = _db(tmp_path)
+    try:
+        _capture(tmp_path)
+        command = _approve_req("base", _pending_hash(tmp_path), actor="😀" * 120, reason="😀" * 2000)
+        receipt = mcs_requests.apply_command(store, command)
+        assert receipt["outcome"] == "applied"
+        artifact_id = receipt["refstat_artifact_id"]
+        content = json.loads(store.db.execute(
+            "SELECT content FROM artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()[0])
+        assert mcs_refstats._receipt_applied(store.db, content, artifact_id)
+    finally:
+        store.close()
+    capsys.readouterr()

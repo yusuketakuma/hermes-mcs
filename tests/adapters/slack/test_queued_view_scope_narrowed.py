@@ -101,7 +101,7 @@ def test_queued_aggregate_view_respects_the_current_scope(tmp_path, monkeypatch,
 
 
 def test_queued_digest_card_over_a_narrowed_scope_sends_no_blocks(tmp_path):
-    from hermes_plugin.mcs_delivery.paths import safe_name
+    from adapters.common.paths import safe_name
     from test_mcs_slack_actions import click, command, fixture, result, submitted
 
     async def scenario():

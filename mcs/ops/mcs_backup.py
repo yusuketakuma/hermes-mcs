@@ -60,6 +60,7 @@ from mcs_queries import REPLY_GAP  # noqa: E402
 from export_schema import finite_number as _finite_number  # noqa: E402
 from mcs_util import (  # noqa: E402
     atomic_write, file_sha256, fsync_dir, has_sqlite_sidecars, publish_tmp)
+from safe_io import create_exclusive  # noqa: E402
 import notify_cards  # noqa: E402
 
 MAGIC = b"MCSBKP1\n"
@@ -645,7 +646,7 @@ def _copy_private(source: Path, target: Path, limit: int) -> None:
         st = os.fstat(src.fileno())
         if not stat.S_ISREG(st.st_mode) or st.st_size > limit:
             raise BackupError("backup_copy_size_or_type_invalid")
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        fd = create_exclusive(target, 0o600, nofollow=False)
         with os.fdopen(fd, "wb") as dst:
             remaining = limit
             while chunk := src.read(min(CHUNK, remaining + 1)):

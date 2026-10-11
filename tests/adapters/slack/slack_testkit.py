@@ -11,9 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import notify_cards as runner_cards
 import notify_cmds as runner_cmds
-from hermes_plugin.mcs_delivery import registry
-from hermes_plugin.mcs_slack import paths as slack_paths
-from hermes_plugin.mcs_slack.delivery import DeliveryWorker, SlackCardAdapter
+from adapters.common import registry
+from adapters.slack import paths as slack_paths
+from adapters.slack.delivery import DeliveryWorker, SlackCardAdapter
 
 SCOPE = {"transport": "slack", "profile": "synthetic-slack",
          "application_id": "A_SYNTHETIC", "team_id": "T_SYNTHETIC",

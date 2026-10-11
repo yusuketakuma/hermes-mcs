@@ -8,7 +8,7 @@ import notify_cards
 import notify_cmds
 import pytest
 from adapters.lineworks import delivery
-from hermes_plugin.mcs_delivery import registry
+from adapters.common import registry
 from notify_testkit import NOW, _dispatch, _intent, _latest_render, _seed_thread
 from test_lineworks_adapter import CONFIG, world
 

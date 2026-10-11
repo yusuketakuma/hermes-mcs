@@ -426,8 +426,8 @@ def _thread_context(db, card, msgs) -> str:
                            f"WHERE message_id IN ({ph})", ids).fetchone()[0]
         if files:
             parts.append(f"📎 {files}")
-        import mcs_signals
-        me = mcs_signals.self_sender_id(db)
+        import self_identity
+        me = self_identity.self_sender_id(db)
         if me is not None and any(
                 mentions_self(get_message_metadata(db, mid), me)
                 for mid in ids):

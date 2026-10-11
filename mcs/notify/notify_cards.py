@@ -35,7 +35,6 @@ import hashlib
 import json
 import os
 import secrets
-import tempfile
 import time
 import uuid
 from contextlib import suppress
@@ -45,6 +44,7 @@ from mcs_adapter import project_url
 from mcs_queries import HOLD_PROGRESS_SET, current_fact_pred
 from mcs_requests import canonical, payload_hash, positive, valid_hash
 from mcs_util import loads_dict
+from safe_io import atomic_write
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
     _latest_signals, _mmdd, _patient_name, _preview_header, _preview_line, _signal_evidence, _source_fp,
@@ -519,23 +519,11 @@ def clear_snapshot_dirty(ledger) -> None:
 
 def publish_file(directory: str, name: str, raw: bytes) -> str:
     """mkstemp -> fsync -> os.replace -> dir fsync. Never a partial file."""
-    fd, tmp = tempfile.mkstemp(prefix=".pub-", dir=directory)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(tmp, os.path.join(directory, name))
-        dirfd = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(dirfd)
-        finally:
-            os.close(dirfd)
-    except BaseException:
-        with suppress(OSError):
-            os.unlink(tmp)
-        raise
-    return os.path.join(directory, name)
+    path = os.path.join(directory, name)
+    atomic_write(path, lambda stream: stream.write(raw), binary=True,
+                 tmp_prefix=".pub-", tmp_suffix="", makedirs=False,
+                 require_dir=False)
+    return path
 
 
 def publish_flags(cfg: dict, root: str) -> bool:
@@ -1856,7 +1844,7 @@ def assignee_choices(db, limit=STAFF_CHOICES) -> list:
     in. Empty -> the plugins fall back to free text. This is the single
     swap point for another roster source."""
     from mcs_queries import staff_directory
-    from mcs_signals import _latest_self_profile, latest_station_staff
+    from self_identity import _latest_self_profile, latest_station_staff
     out, seen = [], set()
 
     def add(name, station):

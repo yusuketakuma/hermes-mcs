@@ -451,7 +451,7 @@ def seed(ledger, message_id: int, origin: str = "replay",
     row = ledger.db.execute(
         "SELECT project_id, COALESCE(parent_id,message_id) r "
         "FROM messages WHERE message_id=?", (message_id,)).fetchone()
-    from mcs_operations import paused
+    from mcs_queries import paused
     if row is None or paused(ledger.db, row["project_id"]):
         return None
     if cfg["project_ids"] is not None \
@@ -523,7 +523,7 @@ def status_report(ledger, cfg: dict | None = None) -> dict:
     loops = ledger.db.execute(
         "SELECT COUNT(*) c FROM artifacts WHERE kind=?",
         (KIND_LOOP,)).fetchone()["c"]
-    from mcs_operations import paused
+    from mcs_queries import paused
     paused_projects = [r[0] for r in ledger.db.execute(
         "SELECT DISTINCT project_id FROM artifacts WHERE kind='semantic_control' "
         "AND project_id IS NOT NULL ORDER BY project_id") if paused(ledger.db, r[0])]

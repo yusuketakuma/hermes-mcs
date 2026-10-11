@@ -315,6 +315,16 @@ class DeliveryWorker:
 
     # -- startup reconcile --------------------------------------------
 
+    async def reload_reconcile(self) -> dict:
+        """Reload the registry, settle orphaned attempts in one batch, and
+        log non-zero stats — the startup step shared by Slack and Discord."""
+        self._reg.reload()
+        with self._reg.batch():
+            stats = await self.reconcile()
+        if any(stats.values()):
+            self._log("reconciled", **stats)
+        return stats
+
     async def reconcile(self) -> dict:
         """Settle orphaned attempts before any new claim runs.
 
@@ -790,12 +800,11 @@ class DeliveryWorker:
     async def _send_allowed(self, spec: dict | None = None) -> bool:
         flags = await asyncio.to_thread(paths.read_flags, self._root)
         return (not self._stopping and not self._journal_incomplete
-                and flags.get("interactive") is True
-                and flags.get("transport", "discord") == self.transport
-                and not flags.get("restore_pending")
-                and (spec is None or (
-                    type(flags.get("route_epoch")) is int
-                    and flags["route_epoch"] == spec["delivery"]["route_epoch"])))
+                and paths.route_open(
+                    flags, self.transport,
+                    None if spec is None else spec["delivery"]["route_epoch"],
+                    check_epoch=spec is not None, int_epoch=True,
+                    default_transport="discord"))
 
     async def _step_claim(self, claim: dict, *, allow_parts: bool = True) -> None:
         spec = claim["spec"]

@@ -124,8 +124,8 @@ def response_observation(
         db, mid, metadata, *, as_of
 ) -> dict[str, dict[str, str | float | list[str] | None] | str | None]:
     """保存済み返信と本人のUI操作を別々に示し、業務完了や未対応を推定しない。"""
-    import mcs_signals
-    self_id = mcs_signals.self_sender_id(db)
+    import self_identity
+    self_id = self_identity.self_sender_id(db)
     row = db.execute(
         "SELECT project_id,parent_id,posted_at_ts FROM messages WHERE message_id=?",
         (mid,)).fetchone()
@@ -141,7 +141,7 @@ def response_observation(
             "AND parent_id=? "
             "AND COALESCE(body_state,'')!='deleted' ORDER BY posted_at_ts,message_id",
             (row[0], root)):
-            actor = mcs_signals.normalize_sender_id(reply[0])
+            actor = self_identity.normalize_sender_id(reply[0])
             at = _timestamp(reply[1])
             if actor is None:
                 if at is None or at > row[2]:
@@ -344,8 +344,8 @@ def flag_lines(db, metadata) -> list:
     def state(value, status, yes="あり", no="なし"):
         return (yes if value else no) if status == "observed" else (
             "取得不正" if status == "invalid" else "未取得")
-    import mcs_signals
-    hit = mentions_self(metadata, mcs_signals.self_sender_id(db))
+    import self_identity
+    hit = mentions_self(metadata, self_identity.self_sender_id(db))
     mention = (state(hit, "observed", "本人宛あり", "本人宛なし") if hit is not None
                else "本人判定不可（本人ID不明）"
                if metadata["mentions_status"] == "observed"
@@ -357,5 +357,5 @@ def flag_lines(db, metadata) -> list:
 
 def is_self_sender(db, sender_id) -> bool:
     """氏名の一致ではなく本人の送信者IDとの一致で判定する。"""
-    import mcs_signals
-    return mcs_signals.is_self_message(db, sender_id)
+    import self_identity
+    return self_identity.is_self_message(db, sender_id)

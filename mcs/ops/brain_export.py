@@ -28,6 +28,7 @@ from drug_map import candidate_note
 from rollup import current_cached_refs
 import mcs_util
 from mcs_util import loads_dict
+from safe_io import create_exclusive
 
 HOME = Path(mcs_util.HOME)
 SNAPSHOT = HOME / "data" / "snapshots" / "ledger-snapshot.db"
@@ -84,8 +85,7 @@ def _write(root: Path, rel: str, text: str) -> None:
         _check_directory(dest.parent)
     with _directory_fd(root, str(dest.parent.relative_to(root)), create=True) as directory:
         tmp = f".{dest.name}-{secrets.token_hex(12)}.tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                     0o600, dir_fd=directory)
+        fd = create_exclusive(tmp, 0o600, dir_fd=directory)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
                 stream.write(text)

@@ -20,12 +20,14 @@ import time
 
 from mcs_requests import (RELEASE_TAG_RE, _text, canonical, payload_hash, positive,
                           release_tag, valid_hash)
+# paused() is a core read (mcs_queries); re-exported for callers
+from mcs_queries import SEMANTIC_CONTROL_KIND as _CONTROL_ARTIFACT, paused
+from safe_io import fsync_dir
 
 
 _FEATURE = "semantic"
 _SEMANTIC_JOB = "semantic"
 _HISTORY_JOB = "history"
-_CONTROL_ARTIFACT = "semantic_control"
 _ADOPTION_ARTIFACT = "semantic_adoption"
 _MAX_ADDITIONAL_ATTEMPTS = 3
 
@@ -692,11 +694,7 @@ def _refstat_promotion(pending: str, approved: str, expected_hash: str):
         os.replace(staged, approved)
         staged = None
         promoted = True
-        dirfd = os.open(os.path.dirname(approved), os.O_RDONLY)
-        try:
-            os.fsync(dirfd)
-        finally:
-            os.close(dirfd)
+        fsync_dir(os.path.dirname(approved), require_dir=False)
         yield
     except BaseException:
         recovering = True
@@ -902,19 +900,6 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     if req["cmd"] in ("ops.update_apply", "ops.update_rollback"):
         return _apply_update_op_tx(db, req, current)
     return "unknown_ops_cmd", {}
-
-
-def paused(db, project_id: int) -> bool:
-    """Return the latest semantic control state, failing closed on corruption."""
-    connection = getattr(db, "db", db)
-    row = connection.execute(
-        "SELECT content FROM artifacts WHERE kind=? AND project_id=? "
-        "ORDER BY artifact_id DESC LIMIT 1",
-        (_CONTROL_ARTIFACT, project_id),
-    ).fetchone()
-    if row is None:
-        return False
-    return row["content"] != "running"
 
 
 __all__ = ["apply_tx", "paused", "retry_error", "validate_ops"]

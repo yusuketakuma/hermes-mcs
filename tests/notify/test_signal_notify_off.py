@@ -1,26 +1,19 @@
 """Disabled review notifications never reach the interactive card transport."""
 
-import pytest
 
-import ledger
 import notify_flush
 from notify_testkit import (
     CFG, NOW, _begin, _dispatch, _intent, _latest_render, _msg, _patient,
     _signal_row,
 )
+from common_testkit import ledger_fixture
 
 
 ON = {**CFG, "signals": {"notify": True}}
 OFF = {**CFG, "signals": {"notify": False}}
 
 
-@pytest.fixture
-def led(tmp_path):
-    path = tmp_path / "data"
-    path.mkdir()
-    db = ledger.Ledger(str(path / "ledger.db"))
-    yield db
-    db.close()
+led = ledger_fixture(data_dir=True)
 
 
 def _signal(led):

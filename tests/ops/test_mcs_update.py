@@ -319,7 +319,7 @@ def test_impact_summary(updater, tmp_path):
 
 
 @pytest.mark.parametrize("path,gateway,lineworks", [
-    ("hermes_plugin/mcs_delivery/__init__.py", True, False),
+    ("hermes_plugin/card_workers.py", True, False),
     ("adapters/common/worker.py", True, True),
     ("adapters/slack/actions.py", True, False),
     ("adapters/discord/delivery.py", True, False),
@@ -668,7 +668,7 @@ def _apply_env(updater, monkeypatch, *, precheck_errors=(),
 
 
 @pytest.mark.parametrize("path,needs_restart", [
-    ("hermes_plugin/mcs_delivery/__init__.py", True),
+    ("hermes_plugin/card_workers.py", True),
     ("adapters/common/worker.py", True),
     ("adapters/slack/actions.py", True),
     ("adapters/discord/delivery.py", True),
@@ -2408,3 +2408,213 @@ def test_check_skips_notice_and_auto_when_head_contains_tag(
     assert ["merge-base", "--is-ancestor", "a" * 40, "HEAD"] in calls
     assert bool(notices) is expect_notice
     assert bool(applied) is expect_notice
+
+
+# A failed post-merge schema-bump rollback in apply()'s bail must stay
+# recoverable: recovery retries the DB restore (or escalates) instead of
+# 'finishing' as interrupted_pre_merge with old code on the newer DB.
+def test_failed_bail_rollback_is_not_finished_as_pre_merge(
+        updater, tmp_path, monkeypatch):  # noqa: F811
+    import maintenance
+    notices = []
+    repo, _ = _make_repo(tmp_path)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    monkeypatch.setattr(mcs_update, "REPO", str(repo))
+    before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    sha = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
+    live = str(tmp_path / "data" / "ledger.db")
+    monkeypatch.setattr(mcs_update, "LEDGER", live)
+    back = tmp_path / "data" / "backups" / "pre.db"
+    back.parent.mkdir(parents=True, exist_ok=True)
+    _mk_schema(back, 7, messages=2)
+    _mk_schema(live, 8, messages=5)
+    monkeypatch.setattr(mcs_update, "load_config",
+                        lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(mcs_update, "precheck_local", lambda c: [])
+    monkeypatch.setattr(mcs_update, "remote_tag_sha", lambda t: sha)
+    monkeypatch.setattr(mcs_update, "precheck_tag",
+                        lambda t: ["schema_bump:7->8"])
+    monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: str(back))
+    monkeypatch.setattr(mcs_update, "_baseline_check", lambda c: [])
+    monkeypatch.setattr(mcs_update, "quiesce",
+                        lambda: (mcs_update._write_marker(), [])[1])
+    monkeypatch.setattr(mcs_update, "restart_agents",
+                        lambda **k: (mcs_update._remove_marker(), [])[1])
+    monkeypatch.setattr(mcs_update, "_services_reconcile", lambda: None)
+    monkeypatch.setattr(mcs_update, "_reconcile_membership", lambda m: [])
+    monkeypatch.setattr(mcs_update, "_postcheck", lambda s, e: [])
+    monkeypatch.setattr(mcs_update, "_enqueue_notice",
+                        lambda *a, **k: notices.append(a[0]) or True)
+    monkeypatch.setattr(mcs_update, "restart_gateway", lambda c: None)
+
+    def post_merge(_sha):
+        back.write_bytes(b"garbage")          # restore will fail
+        raise mcs_update.UpdateError("post_merge_failed: synthetic")
+    monkeypatch.setattr(mcs_update, "_run_post_merge", post_merge)
+
+    assert mcs_update.apply("v1.1.0", sha, "cid") == 1
+    # frozen DB (restore incomplete): report only, no outbox write
+    assert notices == []
+    report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
+    assert report["result"] == "escalate" and report["writers_stopped"]
+    assert Path(mcs_update.MARKER_PATH).exists()
+    st = mcs_update.load_state()
+    assert st["applying"]["restore_incomplete"] is True
+    assert st["executed"]["cid"]["result"] == "failed"
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
+    # journal is rollback-shaped: target is prev, restore still owed
+    assert st["applying"]["rollback"] is True
+    assert st["applying"]["sha"] == before
+
+    mcs_update.recover_interrupted()
+    assert notices == []
+    st = mcs_update.load_state()
+    report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
+    assert report["result"] != "interrupted_pre_merge"
+    assert report["result"] == "escalate"
+    assert "rollback db restore" in report["detail"]
+    assert st["applying"] is not None          # still visible to humans
+    assert (st.get("executed") or {}).get("cid", {}).get("result") \
+        != "interrupted_recovered"
+    assert mcs_update._db_version(live) == 8
+
+
+# Synthetic regressions for update rollback, delayed notices and restart scope.
+@pytest.mark.parametrize("stop_fails", [False, True])
+def test_post_merge_bail_stops_restarted_writers_before_rollback(updater, monkeypatch, stop_fails):
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    previous = updater._head_sha()
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(updater, "remote_tag_sha", lambda tag: target)
+    monkeypatch.setattr(updater, "_reconcile_membership", lambda snapshot: [])
+    events = []
+
+    def quiesce():
+        events.append("quiesce")
+        updater._write_marker()
+        if stop_fails and events.count("quiesce") == 2:
+            raise updater.UpdateError("drainer_stop_failed: synthetic")
+        return []
+
+    def restarted_child(expected):
+        events.append("child_restart")
+        updater._remove_marker()
+        raise updater.UpdateError("post_merge_failed: synthetic")
+
+    rollback = updater._rollback_tree
+
+    def restore(entry, on_hold):
+        events.append("rollback")
+        assert Path(updater.MARKER_PATH).exists()
+        rollback(entry, on_hold)
+
+    monkeypatch.setattr(updater, "quiesce", quiesce)
+    monkeypatch.setattr(updater, "_run_post_merge", restarted_child)
+    monkeypatch.setattr(updater, "_rollback_tree", restore)
+    monkeypatch.setattr(updater, "restart_agents", lambda: events.append("restart") or [])
+    assert updater.apply("v1.1.0", target, "synthetic-command") == 1
+    assert events[:3] == ["quiesce", "child_restart", "quiesce"]
+    state = updater.load_state()
+    if stop_fails:
+        assert "rollback" not in events and "restart" not in events
+        assert updater._head_sha() == target
+        assert state["applying"] and state["stages"]
+        assert Path(updater.MARKER_PATH).exists()
+    else:
+        assert events[3:] == ["rollback", "restart"]
+        assert updater._head_sha() == previous
+        assert not state["applying"] and not state["stages"]
+        assert not Path(updater.MARKER_PATH).exists()
+
+
+def test_deferred_update_notice_refetches_release_context(updater, monkeypatch):
+    monkeypatch.setattr(updater, "load_config", lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(updater, "detect_latest", lambda pre: ("v1.1.0", "a" * 40))
+    monkeypatch.setattr(updater, "current_version", lambda: ("v1.0.0", "b" * 40))
+    monkeypatch.setattr(updater, "scan_pending_approvals", lambda state: ([], []))
+    monkeypatch.setattr(updater, "_git", lambda args, **kw:
+                        subprocess.CompletedProcess(args, int(args[0] == "merge-base"), "", ""))
+    fetched, notices = [], []
+    monkeypatch.setattr(updater, "fetch_notes", lambda tag: fetched.append(tag) or "synthetic release notes")
+    monkeypatch.setattr(updater, "impact_summary", lambda current, tag: ["synthetic restart required"])
+    monkeypatch.setattr(updater, "_enqueue_notice", lambda text, **kw:
+                        notices.append(text) or len(notices) > 1)
+    assert updater.cmd_check() == 0
+    assert updater.load_state()["latest_tag"] == "v1.1.0"
+    assert updater.load_state().get("notified_at") != "v1.1.0"
+    assert updater.cmd_check() == 0
+    assert fetched == ["v1.1.0", "v1.1.0"]
+    assert "synthetic release notes" in notices[1]
+    assert "synthetic restart required" in notices[1]
+    assert updater.load_state()["notified_at"] == "v1.1.0"
+    assert updater.cmd_check() == 0
+    assert len(fetched) == 2 and len(notices) == 2
+
+
+def test_core_change_requires_gateway_restart_and_notice(updater, monkeypatch):
+    def diff(args):
+        if "--name-status" in args:
+            return "M\tmcs/notify/notify_cards.py\n"
+        return "mcs/notify/notify_cards.py\0" if "mcs" in args else ""
+
+    monkeypatch.setattr(updater, "_git_out", diff)
+    monkeypatch.setattr(updater, "load_config",
+                        lambda: {"notify": {"interactive": "lineworks"}})
+    assert updater._plugin_changed("v1.1.0", {})
+    impact = updater.impact_summary("synthetic-before", "v1.1.0")
+    assert any("gateway restart" in line for line in impact)
+    assert any("LINE WORKS" in line and "再起動" in line for line in impact)
+
+
+def test_lineworks_impact_only_when_the_adapter_is_in_use(updater, monkeypatch):
+    monkeypatch.setattr(updater, "_git_out", lambda args: "M\tmcs/notify/notify_cards.py\n")
+    for cfg in ({}, {"notify": {"interactive": "slack"}}, {"notify": "lineworks"}):
+        monkeypatch.setattr(updater, "load_config", lambda cfg=cfg: cfg)
+        impact = updater.impact_summary("synthetic-before", "v1.1.0")
+        assert any("gateway restart" in line for line in impact)
+        assert not any("LINE WORKS" in line for line in impact)
+
+
+def test_checkout_ahead_of_latest_tag_does_not_refetch_daily(updater, monkeypatch):
+    monkeypatch.setattr(updater, "load_config", lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(updater, "detect_latest", lambda pre: ("v1.1.0", "a" * 40))
+    monkeypatch.setattr(updater, "current_version", lambda: ("v1.1.0-3-gsynthetic", "b" * 40))
+    monkeypatch.setattr(updater, "scan_pending_approvals", lambda state: ([], []))
+    calls = []
+    monkeypatch.setattr(updater, "_git", lambda args, **kw: calls.append(args[0])
+                        or subprocess.CompletedProcess(args, 0, "", ""))   # ancestor of HEAD
+    fetched = []
+    monkeypatch.setattr(updater, "fetch_notes", lambda tag: fetched.append(tag) or "notes")
+    monkeypatch.setattr(updater, "impact_summary", lambda current, tag: [])
+    monkeypatch.setattr(updater, "_enqueue_notice", lambda text, **kw: pytest.fail("no notice"))
+    assert updater.cmd_check() == 0         # first sighting of the tag fetches once
+    assert fetched == ["v1.1.0"] and calls.count("fetch") == 1
+    for _ in range(2):
+        assert updater.cmd_check() == 0
+    assert fetched == ["v1.1.0"] and calls.count("fetch") == 1
+    assert updater.load_state().get("notified_at") is None
+
+
+def test_invalid_runtime_mode_is_reported_not_raised(updater, tmp_path, monkeypatch):
+    from ops_testkit import _make_repo
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(updater, "load_config", lambda: {"runtime_mode": "synthetic-invalid"})
+    monkeypatch.setattr(updater, "precheck_local", lambda cfg: [])
+    result = updater.plan("v1.1.0")
+    assert result["route"] == "blocked"
+    assert any(b.startswith("plan_failed: runtime_mode_invalid") for b in result["blockers"])
+    monkeypatch.setattr(updater, "_git_out", lambda args: "M\tmcs/notify/notify_cards.py\n")
+    with pytest.raises(ValueError):
+        updater.impact_summary("synthetic-before", "v1.1.0")
+    monkeypatch.setattr(updater, "load_config", lambda: {
+        "runtime_mode": "synthetic-invalid", "update": {"mode": "notify"}})
+    monkeypatch.setattr(updater, "detect_latest", lambda pre: ("v1.1.0", "a" * 40))
+    monkeypatch.setattr(updater, "current_version", lambda: ("v1.0.0", "b" * 40))
+    monkeypatch.setattr(updater, "scan_pending_approvals", lambda state: ([], []))
+    monkeypatch.setattr(updater, "_git", lambda args, **kw: subprocess.CompletedProcess(args, 1, "", ""))
+    monkeypatch.setattr(updater, "fetch_notes", lambda tag: "notes")
+    notices = []
+    monkeypatch.setattr(updater, "_enqueue_notice", lambda text, **kw: notices.append(text) or True)
+    assert updater.cmd_check() == 0 and notices

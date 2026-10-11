@@ -8,7 +8,7 @@ import hashlib
 import json
 import types
 
-from hermes_plugin.mcs_delivery import envelopes, journal
+from adapters.common import envelopes, journal
 
 class FakeHTTP(Exception):
     def __init__(self, status):

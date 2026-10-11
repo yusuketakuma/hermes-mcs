@@ -206,426 +206,479 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
     success.  outcome "incomplete"|"retryable"|"hard_fail" asks the
     caller to break the member loop with the matching failure flag set.
     """
-    import semantic
-
     # facts: reuse a stored set for this fingerprint, else extract.
     fact_source = scfg.get("fact_source", "legacy")
     v2_doc = None
     if fact_source != "legacy":
-        from semantic_extraction import extract_facts_v2, v2_generation
+        early, v2_doc, doc_build = _fact_v2_document(
+            ledger, member, pid, mid, fp, policy, fact_source,
+            jev_client, llm_fn, deadline)
+        if early is not None:
+            return early
+    if fact_source == "canonical":
+        early, v2_doc, doc_hash = _fact_canonical_audit(
+            ledger, scfg, member, pid, mid, fp, policy, fact_source,
+            v2_doc, doc_build, jev_client, llm_fn, deadline)
+        if early is not None:
+            return early
         from semantic_projection import project_v2_facts
-        prev_v2 = _current(ledger, KIND_FACTS_V2, mid, fp)
-        if prev_v2 is not None:
-            cached = prev_v2["content"]
-            from hashlib import sha256
-            from semantic_facts import ContractError, validate_facts_doc
-            try:
-                cached = {**cached, **validate_facts_doc(cached)}
-            except ContractError:
-                # Preserve malformed history and rebuild through extraction.
+        facts = project_v2_facts(v2_doc)
+        _fact_canonical_projection(ledger, member, pid, mid, fp, policy,
+                                   v2_doc, doc_hash)
+    else:
+        early, facts = _fact_legacy(ledger, member, pid, mid, fp, policy,
+                                    llm_fn, deadline)
+        if early is not None:
+            return early
+    return {"outcome": None, "facts": facts, "v2_doc": v2_doc}
+
+
+def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
+                      jev_client, llm_fn, deadline):
+    """Reuse or extract the v2 fact document for a non-legacy fact source.
+
+    Returns (early, v2_doc, doc_build): early is the _fact_stage result to
+    return as-is, else None with the document (None when not stored) and
+    the hint-merge build it carries."""
+    import semantic
+    from semantic_extraction import extract_facts_v2, v2_generation
+    import semantic_projection  # noqa: F401  loaded before any stage write
+    v2_doc = None
+    prev_v2 = _current(ledger, KIND_FACTS_V2, mid, fp)
+    if prev_v2 is not None:
+        cached = prev_v2["content"]
+        from hashlib import sha256
+        from semantic_facts import ContractError, validate_facts_doc
+        try:
+            cached = {**cached, **validate_facts_doc(cached)}
+        except ContractError:
+            # Preserve malformed history and rebuild through extraction.
+            prev_v2 = None
+        else:
+            source = cached["source"]
+            body = member["body_original"]
+            if (source["message_id"] != str(mid)
+                    or source["revision"] != str(member.get("revision", ""))
+                    or source["content_hash"] != sha256(body.encode("utf-8")).hexdigest()
+                    or source["body_codepoints"] != len(body)
+                    or source["source_fingerprint"] != fp
+                    or source["content_quality"] != (
+                        "full" if member.get("body_state") == "full" else "partial")
+                    or source["attachments_complete"] != bool(
+                        member.get("attachments_complete", True))):
+                # Artifact metadata alone cannot bind facts to this source.
                 prev_v2 = None
             else:
-                source = cached["source"]
-                body = member["body_original"]
-                if (source["message_id"] != str(mid)
-                        or source["revision"] != str(member.get("revision", ""))
-                        or source["content_hash"] != sha256(body.encode("utf-8")).hexdigest()
-                        or source["body_codepoints"] != len(body)
-                        or source["source_fingerprint"] != fp
-                        or source["content_quality"] != (
-                            "full" if member.get("body_state") == "full" else "partial")
-                        or source["attachments_complete"] != bool(
-                            member.get("attachments_complete", True))):
-                    # Artifact metadata alone cannot bind facts to this source.
-                    prev_v2 = None
-                else:
-                    # The contract normalizes supported IDs/text before use.
-                    # Keep the original stored row and any document extensions.
-                    prev_v2["content"] = cached
-        # A stored document the hint rebuild did not confirm (skipped, or a
-        # past generation) is never reused, but the retry it already spent
-        # still binds this run.
-        spent = False
-        if prev_v2 is not None and prev_v2["meta"].get("hint_rebuild") \
-                not in (None, "same"):
-            spent, prev_v2 = bool(prev_v2["meta"].get("coverage_retry")), None
-        # C03: an adjudicated-but-incomplete stored doc must not be
-        # reused forever — one bounded re-extraction resumes from the
-        # missing chunks; if it still cannot complete, the generation
-        # parks as needs_review instead of silently deferring forever.
-        coverage_retry = (
-            fact_source == "canonical" and prev_v2 is not None
-            and prev_v2["meta"].get("coverage_status") not in
-                (None, "complete")
-            and not prev_v2["meta"].get("coverage_retry"))
-        if fact_source == "canonical":
-            # S0: deterministic prep (extract_v1 hints + atom/chunk
-            # boundaries inside extract_facts_v2) — no model call
-            v4.record_stage(ledger, pid, mid, fp, policy,
-                            "s0_prep", "done")
-        # the hint-merge build of the document this run continues from
-        doc_build = None
-        if prev_v2 is not None and not coverage_retry:
-            v2_doc = prev_v2["content"]
-            doc_build = prev_v2["meta"].get("build")
-            if fact_source == "canonical":
-                v4.record_stage(ledger, pid, mid, fp, policy,
-                                "s1_extract", "reused")
-        elif fact_source == "shadow" and _shadow_v2_tried(
-                ledger, mid, fp, policy):
-            # this source + policy already ran its shadow comparison and it
-            # stayed incomplete (receipt below) — a retry does not re-run it
-            pass
-        else:
-            if time.monotonic() > deadline - 5:
-                return {"outcome": "incomplete", "v2_doc": None}
-            if fact_source == "canonical":
-                v4.record_stage(ledger, pid, mid, fp, policy,
-                                "s1_extract", "start")
-            started = time.monotonic()
-            shadow = _SHADOW_V2["pass"] if fact_source == "shadow" else None
-            complete = False
-            try:
-                v2_result = extract_facts_v2(
-                    llm_fn, member, deadline - 5, ledger=ledger,
-                    source_fingerprint=fp, project_id=pid,
-                    jev_client=jev_client, retry_coverage=coverage_retry or spent)
-                complete = v2_result["extraction_complete"]
-            finally:
-                if shadow is not None:      # a raised call ended incomplete too
-                    shadow["calls"] += 1
-                    shadow["incomplete"] += 0 if complete else 1
-                    shadow["s"] += time.monotonic() - started
-            if not v2_result["extraction_complete"]:
-                if fact_source == "canonical":
-                    return {"outcome": "retryable"
-                            if v2_result["failure_reason"] == "model"
-                            else "incomplete", "v2_doc": None}
-                v2_doc = None      # shadow: incomplete doc not stored
-                if v2_result["failure_reason"] != "deadline":
-                    # Without a durable mark every retry re-extracted each
-                    # finished target until a multi-target job could no
-                    # longer reach the next one (2026-10-10). The receipt
-                    # says "incomplete", never complete; a time-out instead
-                    # resumes from the persisted chunks next pass.
-                    ledger.artifact_add(
-                        KIND_SHADOW_V2,
-                        json.dumps({"status": "incomplete",
-                                    "failure_reason":
-                                        v2_result["failure_reason"],
-                                    # codes/counts only: which "model" stop
-                                    # it was (LLM failure code, or facts
-                                    # dropped by the chunk's validation)
-                                    "llm_failure": semantic.last_llm_failure(),
-                                    "dropped_in_failed_chunk":
-                                        v2_result.get("dropped_in_failed_chunk"),
-                                    "dropped_reasons":
-                                        v2_result.get("dropped_reasons"),
-                                    "null_contexts_omitted":
-                                        v2_result.get("null_contexts_omitted"),
-                                    "chunks_completed":
-                                        v2_result["chunks_completed"],
-                                    "chunks_total":
-                                        v2_result["chunks_total"]}),
-                        project_id=pid, message_id=mid,
-                        model=semantic.llm_model(),
-                        meta={"fingerprint": fp,
-                              "policy_fingerprint": policy,
-                              "generation": v2_generation()})
-            else:
-                v2_doc = v2_result["doc"]
-                from semantic_extraction import FACTS_V2_BUILD
-                doc_build = FACTS_V2_BUILD
-                meta = {"fingerprint": fp,
-                        "policy_fingerprint": policy,
-                        "schema": SCHEMA_VERSION,
-                        "fact_source": fact_source,
-                        "coverage_status":
-                            v2_doc["coverage"]["status"],
-                        "facts": len(v2_doc["facts"]),
-                        "open_obligations": len(
-                            v2_doc["coverage"]
-                            ["open_obligation_ids"]),
-                        "build": FACTS_V2_BUILD,
-                        # newly normalised this run (reused chunks excluded)
-                        "null_contexts_omitted":
-                            v2_result.get("null_contexts_omitted", 0)}
-                if coverage_retry or spent:
-                    # the bounded retry already ran — a still-incomplete
-                    # doc is flagged for human review and never
-                    # re-extracted again (C03)
-                    meta["coverage_retry"] = True
-                    if v2_doc["coverage"]["status"] != "complete":
-                        meta["needs_review"] = True
-                if fact_source == "canonical":
-                    v4.record_stage(ledger, pid, mid, fp, policy,
-                                    "s1_extract", "done",
-                                    facts=len(v2_doc["facts"]))
-                ledger.artifact_add(
-                    KIND_FACTS_V2,
-                    json.dumps(v2_doc, ensure_ascii=False,
-                               allow_nan=False),
-                    project_id=pid, message_id=mid,
-                    model=semantic.llm_model(),
-                    meta=meta)
-        if fact_source == "canonical" and v2_doc is not None \
-                and v2_doc["coverage"]["status"] != "complete":
-            if coverage_retry or spent \
-                    or (prev_v2 and prev_v2["meta"].get("coverage_retry")):
-                return _park_needs_review(
-                    ledger, pid, mid, fp, policy, v2_doc)
-            return {"outcome": "incomplete", "v2_doc": v2_doc}
+                # The contract normalizes supported IDs/text before use.
+                # Keep the original stored row and any document extensions.
+                prev_v2["content"] = cached
+    # A stored document the hint rebuild did not confirm (skipped, or a
+    # past generation) is never reused, but the retry it already spent
+    # still binds this run.
+    spent = False
+    if prev_v2 is not None and prev_v2["meta"].get("hint_rebuild") \
+            not in (None, "same"):
+        spent, prev_v2 = bool(prev_v2["meta"].get("coverage_retry")), None
+    # C03: an adjudicated-but-incomplete stored doc must not be
+    # reused forever — one bounded re-extraction resumes from the
+    # missing chunks; if it still cannot complete, the generation
+    # parks as needs_review instead of silently deferring forever.
+    coverage_retry = (
+        fact_source == "canonical" and prev_v2 is not None
+        and prev_v2["meta"].get("coverage_status") not in
+            (None, "complete")
+        and not prev_v2["meta"].get("coverage_retry"))
     if fact_source == "canonical":
-        fail_kind = "incomplete"
-        # POST_JEV: bidirectional audit must pass before the
-        # canonical fact set feeds any consumer.  The audit artifact
-        # is keyed by doc_hash, so a repaired document is always
-        # re-audited; the repair receipt bounds dispatch to one
-        # attempt per generation.  Findings hold the generation —
-        # never promoted or silently dropped.
-        audited = False
-        for _attempt in range(2):
-            doc_hash = v4._doc_hash(v2_doc)
-            prev_fa = _current(ledger, KIND_FACT_AUDIT, mid, fp, policy)
-            # C04: only a COMPLETED evaluation is a reusable audit — a
-            # stored evaluated:false row (mid-audit outage) must be
-            # re-run, otherwise a transient failure pins the generation
-            # on a failed verdict forever and manual retry cannot clear it
-            from semantic_audit import _published_quantity_findings
-            previous_verdict = v4.fact_audit_verdict(prev_fa, doc_hash)
-            if (previous_verdict is not None and (previous_verdict != "PASS"
-                    or not _published_quantity_findings(v2_doc))):
-                fact_audit = prev_fa["content"]
-            else:
-                if time.monotonic() > deadline - 5:
-                    break
-                from semantic_audit import audit_facts_v2
-                fact_audit = audit_facts_v2(
-                    jev_client, v2_doc, member["body_original"],
-                    deadline - 5,
-                    match_threshold=scfg["match_threshold"])
-                stored = {"status": fact_audit["status"],
-                          "evaluated": fact_audit["evaluated"],
-                          "findings": fact_audit["findings"],
-                          "fact_verdicts": fact_audit["fact_verdicts"]}
-                # an unevaluated re-run identical to the stored row (a
-                # durable resource wait) adds no information — record
-                # an outcome once, not once per drain (FIX-SD1)
-                if not (prev_fa is not None
-                        and prev_fa["meta"].get("doc_hash") == doc_hash
-                        and prev_fa["content"] == stored):
-                    ledger.artifact_add(
-                        KIND_FACT_AUDIT,
-                        json.dumps(stored, ensure_ascii=False,
-                                   allow_nan=False),
-                        project_id=pid, message_id=mid,
-                        model=jev.JEV_MODEL,
-                        meta={"fingerprint": fp,
-                              "policy_fingerprint": policy,
-                              "schema": SCHEMA_VERSION,
-                              "doc_hash": doc_hash,
-                              "audit_status": fact_audit["status"]})
-            v4.record_stage(
-                ledger, pid, mid, fp, policy,
-                "s4_reaudit" if _attempt else "s2_fact_audit",
-                fact_audit["status"] if fact_audit["evaluated"]
-                else "unevaluated",
-                doc_hash=doc_hash)
-            if not fact_audit["evaluated"]:
-                error = getattr(jev_client, "last_error", None)
-                if error is not None \
-                        and _jev_failure_class(error) == "failed":
-                    fail_kind = "hard_fail"
-                elif error is None \
-                        or _jev_failure_class(error) != "resource":
-                    fail_kind = "retryable"
-                break
-            if fact_audit["status"] == "PASS":
-                if v2_doc["coverage"]["status"] != "complete":
-                    # defense in depth: never mint PASS over open
-                    # obligations, whatever the audit said
-                    return _park_needs_review(
-                        ledger, pid, mid, fp, policy, v2_doc)
-                audited = True
-                break
-            # NEEDS_REVIEW: one targeted repair dispatch per
-            # generation (receipt-persisted), then re-audit.
-            rejected = {f["fact"]: f["code"]
-                        for f in fact_audit["findings"]
-                        if f.get("fact")}
-            if _attempt == 0 and rejected \
-                    and _current(ledger, KIND_FACT_REPAIR,
-                                 mid, fp) is None:
-                if time.monotonic() > deadline - 5:
-                    break      # repair still possible next pass
-                # S3 (T18): reserve the single repair dispatch BEFORE
-                # the model call — a crash leaves the 'started'
-                # receipt, which permanently consumes this generation's
-                # one dispatch (no second repair run)
-                started = ledger.artifact_add(
-                    KIND_FACT_REPAIR,
-                    json.dumps({"status": "started",
-                                "rejected": rejected},
-                               ensure_ascii=False),
+        # S0: deterministic prep (extract_v1 hints + atom/chunk
+        # boundaries inside extract_facts_v2) — no model call
+        v4.record_stage(ledger, pid, mid, fp, policy,
+                        "s0_prep", "done")
+    # the hint-merge build of the document this run continues from
+    doc_build = None
+    if prev_v2 is not None and not coverage_retry:
+        v2_doc = prev_v2["content"]
+        doc_build = prev_v2["meta"].get("build")
+        if fact_source == "canonical":
+            v4.record_stage(ledger, pid, mid, fp, policy,
+                            "s1_extract", "reused")
+    elif fact_source == "shadow" and _shadow_v2_tried(
+            ledger, mid, fp, policy):
+        # this source + policy already ran its shadow comparison and it
+        # stayed incomplete (receipt below) — a retry does not re-run it
+        pass
+    else:
+        if time.monotonic() > deadline - 5:
+            return {"outcome": "incomplete", "v2_doc": None}, None, None
+        if fact_source == "canonical":
+            v4.record_stage(ledger, pid, mid, fp, policy,
+                            "s1_extract", "start")
+        started = time.monotonic()
+        shadow = _SHADOW_V2["pass"] if fact_source == "shadow" else None
+        complete = False
+        try:
+            v2_result = extract_facts_v2(
+                llm_fn, member, deadline - 5, ledger=ledger,
+                source_fingerprint=fp, project_id=pid,
+                jev_client=jev_client, retry_coverage=coverage_retry or spent)
+            complete = v2_result["extraction_complete"]
+        finally:
+            if shadow is not None:      # a raised call ended incomplete too
+                shadow["calls"] += 1
+                shadow["incomplete"] += 0 if complete else 1
+                shadow["s"] += time.monotonic() - started
+        if not v2_result["extraction_complete"]:
+            if fact_source == "canonical":
+                return {"outcome": "retryable"
+                        if v2_result["failure_reason"] == "model"
+                        else "incomplete", "v2_doc": None}, None, None
+            v2_doc = None      # shadow: incomplete doc not stored
+            if v2_result["failure_reason"] != "deadline":
+                # Without a durable mark every retry re-extracted each
+                # finished target until a multi-target job could no
+                # longer reach the next one (2026-10-10). The receipt
+                # says "incomplete", never complete; a time-out instead
+                # resumes from the persisted chunks next pass.
+                ledger.artifact_add(
+                    KIND_SHADOW_V2,
+                    json.dumps({"status": "incomplete",
+                                "failure_reason":
+                                    v2_result["failure_reason"],
+                                # codes/counts only: which "model" stop
+                                # it was (LLM failure code, or facts
+                                # dropped by the chunk's validation)
+                                "llm_failure": semantic.last_llm_failure(),
+                                "dropped_in_failed_chunk":
+                                    v2_result.get("dropped_in_failed_chunk"),
+                                "dropped_reasons":
+                                    v2_result.get("dropped_reasons"),
+                                "null_contexts_omitted":
+                                    v2_result.get("null_contexts_omitted"),
+                                "chunks_completed":
+                                    v2_result["chunks_completed"],
+                                "chunks_total":
+                                    v2_result["chunks_total"]}),
                     project_id=pid, message_id=mid,
                     model=semantic.llm_model(),
                     meta={"fingerprint": fp,
                           "policy_fingerprint": policy,
-                          "schema": SCHEMA_VERSION,
-                          "doc_hash": doc_hash})
+                          "generation": v2_generation()})
+        else:
+            v2_doc = v2_result["doc"]
+            from semantic_extraction import FACTS_V2_BUILD
+            doc_build = FACTS_V2_BUILD
+            meta = {"fingerprint": fp,
+                    "policy_fingerprint": policy,
+                    "schema": SCHEMA_VERSION,
+                    "fact_source": fact_source,
+                    "coverage_status":
+                        v2_doc["coverage"]["status"],
+                    "facts": len(v2_doc["facts"]),
+                    "open_obligations": len(
+                        v2_doc["coverage"]
+                        ["open_obligation_ids"]),
+                    "build": FACTS_V2_BUILD,
+                    # newly normalised this run (reused chunks excluded)
+                    "null_contexts_omitted":
+                        v2_result.get("null_contexts_omitted", 0)}
+            if coverage_retry or spent:
+                # the bounded retry already ran — a still-incomplete
+                # doc is flagged for human review and never
+                # re-extracted again (C03)
+                meta["coverage_retry"] = True
+                if v2_doc["coverage"]["status"] != "complete":
+                    meta["needs_review"] = True
+            if fact_source == "canonical":
                 v4.record_stage(ledger, pid, mid, fp, policy,
-                                "s3_repair", "reserved",
-                                doc_hash=doc_hash)
-                from semantic_extraction import repair_facts_v2
-                sent = []
+                                "s1_extract", "done",
+                                facts=len(v2_doc["facts"]))
+            ledger.artifact_add(
+                KIND_FACTS_V2,
+                json.dumps(v2_doc, ensure_ascii=False,
+                           allow_nan=False),
+                project_id=pid, message_id=mid,
+                model=semantic.llm_model(),
+                meta=meta)
+    if fact_source == "canonical" and v2_doc is not None \
+            and v2_doc["coverage"]["status"] != "complete":
+        if coverage_retry or spent \
+                or (prev_v2 and prev_v2["meta"].get("coverage_retry")):
+            return _park_needs_review(
+                ledger, pid, mid, fp, policy, v2_doc), None, None
+        return {"outcome": "incomplete", "v2_doc": v2_doc}, None, None
+    return None, v2_doc, doc_build
 
-                def repair_llm(prompt):
-                    try:
-                        value = llm_fn(prompt)
-                    except runtime.RuntimeGuardError as e:
-                        if not (isinstance(e, runtime.LLMNotSent)
-                                or e.stage in _PRE_DISPATCH_STAGES):
-                            sent.append(True)
-                        raise
-                    except Exception:
-                        sent.append(True)
-                        raise
-                    sent.append(True)
-                    return value
-                try:
-                    repair = repair_facts_v2(
-                        repair_llm, member, v2_doc, rejected, deadline - 5)
-                except runtime.RuntimeGuardError:
-                    if not sent:
-                        # stopped before any dispatch — the one repair
-                        # was never spent, so release its reservation
-                        with ledger.db:
-                            ledger.db.execute(
-                                "DELETE FROM artifacts WHERE artifact_id=?",
-                                (started,))
-                    raise
-                v4.record_stage(ledger, pid, mid, fp, policy,
-                                "s3_repair", "completed",
-                                repaired=repair["repaired"])
+
+def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
+                          fact_source, v2_doc, doc_build, jev_client,
+                          llm_fn, deadline):
+    """POST_JEV bidirectional fact audit with its one bounded repair.
+
+    Returns (early, v2_doc, doc_hash): early is the _fact_stage result to
+    return as-is, else None with the audited document and its hash."""
+    import semantic
+    fail_kind = "incomplete"
+    # POST_JEV: bidirectional audit must pass before the
+    # canonical fact set feeds any consumer.  The audit artifact
+    # is keyed by doc_hash, so a repaired document is always
+    # re-audited; the repair receipt bounds dispatch to one
+    # attempt per generation.  Findings hold the generation —
+    # never promoted or silently dropped.
+    audited = False
+    for _attempt in range(2):
+        doc_hash = v4._doc_hash(v2_doc)
+        prev_fa = _current(ledger, KIND_FACT_AUDIT, mid, fp, policy)
+        # C04: only a COMPLETED evaluation is a reusable audit — a
+        # stored evaluated:false row (mid-audit outage) must be
+        # re-run, otherwise a transient failure pins the generation
+        # on a failed verdict forever and manual retry cannot clear it
+        from semantic_audit import _published_quantity_findings
+        previous_verdict = v4.fact_audit_verdict(prev_fa, doc_hash)
+        if (previous_verdict is not None and (previous_verdict != "PASS"
+                or not _published_quantity_findings(v2_doc))):
+            fact_audit = prev_fa["content"]
+        else:
+            if time.monotonic() > deadline - 5:
+                break
+            from semantic_audit import audit_facts_v2
+            fact_audit = audit_facts_v2(
+                jev_client, v2_doc, member["body_original"],
+                deadline - 5,
+                match_threshold=scfg["match_threshold"])
+            stored = {"status": fact_audit["status"],
+                      "evaluated": fact_audit["evaluated"],
+                      "findings": fact_audit["findings"],
+                      "fact_verdicts": fact_audit["fact_verdicts"]}
+            # an unevaluated re-run identical to the stored row (a
+            # durable resource wait) adds no information — record
+            # an outcome once, not once per drain (FIX-SD1)
+            if not (prev_fa is not None
+                    and prev_fa["meta"].get("doc_hash") == doc_hash
+                    and prev_fa["content"] == stored):
                 ledger.artifact_add(
-                    KIND_FACT_REPAIR,
-                    json.dumps({"rejected": rejected,
-                                "repaired": repair["repaired"],
-                                "repaired_fact_ids":
-                                    repair["repaired_fact_ids"],
-                                "owner_chunk_ids":
-                                    repair["owner_chunk_ids"],
-                                # pair scan cut by the deadline: the
-                                # repaired doc was not kept and the
-                                # spent repair parks for review below
-                                **({"relation_pairs_skipped":
-                                    repair["relation_pairs_skipped"]}
-                                   if repair.get("relation_pairs_skipped")
-                                   else {})},
-                               ensure_ascii=False, allow_nan=False),
+                    KIND_FACT_AUDIT,
+                    json.dumps(stored, ensure_ascii=False,
+                               allow_nan=False),
                     project_id=pid, message_id=mid,
-                    model=semantic.llm_model(),
+                    model=jev.JEV_MODEL,
                     meta={"fingerprint": fp,
                           "policy_fingerprint": policy,
                           "schema": SCHEMA_VERSION,
                           "doc_hash": doc_hash,
-                          "repaired": repair["repaired"]})
-                if repair["repaired"]:
-                    v2_doc = repair["doc"]
-                    ledger.artifact_add(
-                        KIND_FACTS_V2,
-                        json.dumps(v2_doc, ensure_ascii=False,
-                                   allow_nan=False),
-                        project_id=pid, message_id=mid,
-                        model=semantic.llm_model(),
-                        meta={"fingerprint": fp,
-                              "policy_fingerprint": policy,
-                              "schema": SCHEMA_VERSION,
-                              "fact_source": fact_source,
-                              "repaired": True,
-                              "coverage_status":
-                                  v2_doc["coverage"]["status"],
-                              "facts": len(v2_doc["facts"]),
-                              **({"build": doc_build} if doc_build else {})})
-                    # the repair drops every rejected fact and reopens
-                    # the obligations they covered — a repaired doc with
-                    # open obligations must never reach PASS (rollout
-                    # "Nothing degrades to PASS"); the one repair is
-                    # spent, so the generation parks for review
-                    if v2_doc["coverage"]["status"] != "complete":
-                        return _park_needs_review(
-                            ledger, pid, mid, fp, policy, v2_doc)
-                    continue
-            # an evaluated NEEDS_REVIEW with no repair left (no per-fact
-            # finding to repair, repair already spent, or still failing
-            # after it) is a clinical verdict, not a technical wait —
-            # park it for review instead of deferring forever
-            return _park_needs_review(
-                ledger, pid, mid, fp, policy, v2_doc,
-                fact_audit["findings"])
-        if not audited:
-            return {"outcome": fail_kind, "v2_doc": v2_doc}
-        facts = project_v2_facts(v2_doc)
-        # T12: audited canonical docs also publish a legacy-shaped
-        # projection so the read side (stats/queries/rollup/signals)
-        # keeps working during migration — the artifact carries the
-        # message hash so "current" predicates bind it like an
-        # extract_llm row.
-        # audited is only set by a break right after doc_hash was taken
-        # for this v2_doc, so doc_hash is the audited document's hash
-        from semantic_projection import (PROJECTION_VERSION,
-                                         project_v2_doc_legacy,
-                                         projection_current)
-        prev_proj = _current(ledger, KIND_FACT_PROJ, mid, fp, policy)
-        # a row minted by an older projection version (or from another
-        # audited document) is stale — supersede it with a fresh row
-        if prev_proj is None \
-                or not projection_current(prev_proj["meta"], doc_hash):
+                          "audit_status": fact_audit["status"]})
+        v4.record_stage(
+            ledger, pid, mid, fp, policy,
+            "s4_reaudit" if _attempt else "s2_fact_audit",
+            fact_audit["status"] if fact_audit["evaluated"]
+            else "unevaluated",
+            doc_hash=doc_hash)
+        if not fact_audit["evaluated"]:
+            error = getattr(jev_client, "last_error", None)
+            if error is not None \
+                    and _jev_failure_class(error) == "failed":
+                fail_kind = "hard_fail"
+            elif error is None \
+                    or _jev_failure_class(error) != "resource":
+                fail_kind = "retryable"
+            break
+        if fact_audit["status"] == "PASS":
+            if v2_doc["coverage"]["status"] != "complete":
+                # defense in depth: never mint PASS over open
+                # obligations, whatever the audit said
+                return _park_needs_review(
+                    ledger, pid, mid, fp, policy, v2_doc), None, None
+            audited = True
+            break
+        # NEEDS_REVIEW: one targeted repair dispatch per
+        # generation (receipt-persisted), then re-audit.
+        rejected = {f["fact"]: f["code"]
+                    for f in fact_audit["findings"]
+                    if f.get("fact")}
+        if _attempt == 0 and rejected \
+                and _current(ledger, KIND_FACT_REPAIR,
+                             mid, fp) is None:
+            if time.monotonic() > deadline - 5:
+                break      # repair still possible next pass
+            # S3 (T18): reserve the single repair dispatch BEFORE
+            # the model call — a crash leaves the 'started'
+            # receipt, which permanently consumes this generation's
+            # one dispatch (no second repair run)
+            started = ledger.artifact_add(
+                KIND_FACT_REPAIR,
+                json.dumps({"status": "started",
+                            "rejected": rejected},
+                           ensure_ascii=False),
+                project_id=pid, message_id=mid,
+                model=semantic.llm_model(),
+                meta={"fingerprint": fp,
+                      "policy_fingerprint": policy,
+                      "schema": SCHEMA_VERSION,
+                      "doc_hash": doc_hash})
             v4.record_stage(ledger, pid, mid, fp, policy,
-                            "s5_projection", "done",
+                            "s3_repair", "reserved",
                             doc_hash=doc_hash)
+            from semantic_extraction import repair_facts_v2
+            sent = []
+
+            def repair_llm(prompt):
+                try:
+                    value = llm_fn(prompt)
+                except runtime.RuntimeGuardError as e:
+                    if not (isinstance(e, runtime.LLMNotSent)
+                            or e.stage in _PRE_DISPATCH_STAGES):
+                        sent.append(True)
+                    raise
+                except Exception:
+                    sent.append(True)
+                    raise
+                sent.append(True)
+                return value
+            try:
+                repair = repair_facts_v2(
+                    repair_llm, member, v2_doc, rejected, deadline - 5)
+            except runtime.RuntimeGuardError:
+                if not sent:
+                    # stopped before any dispatch — the one repair
+                    # was never spent, so release its reservation
+                    with ledger.db:
+                        ledger.db.execute(
+                            "DELETE FROM artifacts WHERE artifact_id=?",
+                            (started,))
+                raise
+            v4.record_stage(ledger, pid, mid, fp, policy,
+                            "s3_repair", "completed",
+                            repaired=repair["repaired"])
             ledger.artifact_add(
-                KIND_FACT_PROJ,
-                json.dumps(project_v2_doc_legacy(v2_doc),
+                KIND_FACT_REPAIR,
+                json.dumps({"rejected": rejected,
+                            "repaired": repair["repaired"],
+                            "repaired_fact_ids":
+                                repair["repaired_fact_ids"],
+                            "owner_chunk_ids":
+                                repair["owner_chunk_ids"],
+                            # pair scan cut by the deadline: the
+                            # repaired doc was not kept and the
+                            # spent repair parks for review below
+                            **({"relation_pairs_skipped":
+                                repair["relation_pairs_skipped"]}
+                               if repair.get("relation_pairs_skipped")
+                               else {})},
                            ensure_ascii=False, allow_nan=False),
                 project_id=pid, message_id=mid,
                 model=semantic.llm_model(),
                 meta={"fingerprint": fp,
                       "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION,
-                      "hash": member["revision"],
                       "doc_hash": doc_hash,
-                      "projection_version": PROJECTION_VERSION})
-        else:
-            v4.record_stage(ledger, pid, mid, fp, policy,
-                            "s5_projection", "reused",
-                            doc_hash=doc_hash)
+                      "repaired": repair["repaired"]})
+            if repair["repaired"]:
+                v2_doc = repair["doc"]
+                ledger.artifact_add(
+                    KIND_FACTS_V2,
+                    json.dumps(v2_doc, ensure_ascii=False,
+                               allow_nan=False),
+                    project_id=pid, message_id=mid,
+                    model=semantic.llm_model(),
+                    meta={"fingerprint": fp,
+                          "policy_fingerprint": policy,
+                          "schema": SCHEMA_VERSION,
+                          "fact_source": fact_source,
+                          "repaired": True,
+                          "coverage_status":
+                              v2_doc["coverage"]["status"],
+                          "facts": len(v2_doc["facts"]),
+                          **({"build": doc_build} if doc_build else {})})
+                # the repair drops every rejected fact and reopens
+                # the obligations they covered — a repaired doc with
+                # open obligations must never reach PASS (rollout
+                # "Nothing degrades to PASS"); the one repair is
+                # spent, so the generation parks for review
+                if v2_doc["coverage"]["status"] != "complete":
+                    return _park_needs_review(
+                        ledger, pid, mid, fp, policy, v2_doc), None, None
+                continue
+        # an evaluated NEEDS_REVIEW with no repair left (no per-fact
+        # finding to repair, repair already spent, or still failing
+        # after it) is a clinical verdict, not a technical wait —
+        # park it for review instead of deferring forever
+        return _park_needs_review(
+            ledger, pid, mid, fp, policy, v2_doc,
+            fact_audit["findings"]), None, None
+    if not audited:
+        return {"outcome": fail_kind, "v2_doc": v2_doc}, None, None
+    return None, v2_doc, doc_hash
+
+
+def _fact_canonical_projection(ledger, member, pid, mid, fp, policy,
+                               v2_doc, doc_hash) -> None:
+    """Publish (or reuse) the legacy-shaped projection of an audited doc."""
+    import semantic
+    # T12: audited canonical docs also publish a legacy-shaped
+    # projection so the read side (stats/queries/rollup/signals)
+    # keeps working during migration — the artifact carries the
+    # message hash so "current" predicates bind it like an
+    # extract_llm row.
+    # audited is only set by a break right after doc_hash was taken
+    # for this v2_doc, so doc_hash is the audited document's hash
+    from semantic_projection import (PROJECTION_VERSION,
+                                     project_v2_doc_legacy,
+                                     projection_current)
+    prev_proj = _current(ledger, KIND_FACT_PROJ, mid, fp, policy)
+    # a row minted by an older projection version (or from another
+    # audited document) is stale — supersede it with a fresh row
+    if prev_proj is None \
+            or not projection_current(prev_proj["meta"], doc_hash):
+        v4.record_stage(ledger, pid, mid, fp, policy,
+                        "s5_projection", "done",
+                        doc_hash=doc_hash)
+        ledger.artifact_add(
+            KIND_FACT_PROJ,
+            json.dumps(project_v2_doc_legacy(v2_doc),
+                       ensure_ascii=False, allow_nan=False),
+            project_id=pid, message_id=mid,
+            model=semantic.llm_model(),
+            meta={"fingerprint": fp,
+                  "policy_fingerprint": policy,
+                  "schema": SCHEMA_VERSION,
+                  "hash": member["revision"],
+                  "doc_hash": doc_hash,
+                  "projection_version": PROJECTION_VERSION})
     else:
-        prev_f = _current(ledger, KIND_FACTS, mid, fp)
-        if prev_f is not None:
-            facts = prev_f["content"].get("facts", [])
-        else:
-            if time.monotonic() > deadline - 5:
-                return {"outcome": "incomplete", "v2_doc": None}
-            facts, f_complete, f_dropped, f_reason = extract_facts(
-                llm_fn, member, deadline - 5, return_reason=True,
-                ledger=ledger, source_fingerprint=fp, project_id=pid)
-            if not f_complete:
-                return {"outcome": "retryable" if f_reason == "model"
-                        else "incomplete", "v2_doc": None}
-            ledger.artifact_add(
-                KIND_FACTS,
-                json.dumps({"facts": facts,
-                            "evidence": {f["_evidence"]["evidence_id"]:
-                                         f["_evidence"] for f in facts
-                                         if f.get("_evidence")}},
-                           ensure_ascii=False),
-                project_id=pid, message_id=mid, model=semantic.llm_model(),
-                meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
-                      "chunks_total": len(_chunks(
-                          member["body_original"])),
-                      "dropped_by_cap": f_dropped})
-    return {"outcome": None, "facts": facts, "v2_doc": v2_doc}
+        v4.record_stage(ledger, pid, mid, fp, policy,
+                        "s5_projection", "reused",
+                        doc_hash=doc_hash)
+
+
+def _fact_legacy(ledger, member, pid, mid, fp, policy, llm_fn, deadline):
+    """Reuse or extract the legacy fact set.
+
+    Returns (early, facts): early is the _fact_stage result to return
+    as-is, else None with the facts."""
+    import semantic
+    prev_f = _current(ledger, KIND_FACTS, mid, fp)
+    if prev_f is not None:
+        facts = prev_f["content"].get("facts", [])
+    else:
+        if time.monotonic() > deadline - 5:
+            return {"outcome": "incomplete", "v2_doc": None}, None
+        facts, f_complete, f_dropped, f_reason = extract_facts(
+            llm_fn, member, deadline - 5, return_reason=True,
+            ledger=ledger, source_fingerprint=fp, project_id=pid)
+        if not f_complete:
+            return {"outcome": "retryable" if f_reason == "model"
+                    else "incomplete", "v2_doc": None}, None
+        ledger.artifact_add(
+            KIND_FACTS,
+            json.dumps({"facts": facts,
+                        "evidence": {f["_evidence"]["evidence_id"]:
+                                     f["_evidence"] for f in facts
+                                     if f.get("_evidence")}},
+                       ensure_ascii=False),
+            project_id=pid, message_id=mid, model=semantic.llm_model(),
+            meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+                  "chunks_total": len(_chunks(
+                      member["body_original"])),
+                  "dropped_by_cap": f_dropped})
+    return None, facts
 
 
 def _publish_v4(ledger, pid: int, mid: int, fp: str, policy: str,
@@ -657,6 +710,270 @@ def _publish_v4(ledger, pid: int, mid: int, fp: str, policy: str,
                       findings, doc_hash=doc_hash, tx=True)
         v4.record_stage(ledger, pid, mid, fp, policy, "s8_publish",
                         final_status, tx=True, doc_hash=doc_hash)
+
+
+def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
+                   prev, deadline):
+    """Primary Jev proposition assessment of one target, durably recorded.
+
+    Returns (verdicts, flag): verdicts is None when no answer arrived (the
+    wait/error row is recorded once per status change); flag is the
+    _jev_fail_flag of a raised JevError, else None."""
+    flag = None
+    state = jev_state(bundle, mid)
+    meta_base = {"fingerprint": fp, "policy_fingerprint": policy, "model": jev.JEV_MODEL,
+                 "registry": jev.REGISTRY_VERSION,
+                 "schema": SCHEMA_VERSION}
+    answers = None
+    req0 = jev_client.requests_made if jev_client else 0
+    if jev_client is not None and state is not None:
+        qs = {k: jev.noul_question(p["instructions"], p["true"],
+                                   p["false"])
+              for k, p in jev.PROPOSITIONS.items()}
+        try:
+            out = _eval_chunked(
+                jev_client, state, qs, deadline,
+                scfg["max_questions_per_request"])
+            answers = out["answers"]
+        except jev.JevError as e:
+            meta_base["technical_status"] = (
+                "retry_wait" if e.retryable else "error")
+            meta_base["error_kind"] = e.kind
+            flag = _jev_fail_flag(e)
+            _why(f"assess_jev_{flag}")
+    meta_base["jev_requests"] = (
+        jev_client.requests_made - req0) if jev_client else 0
+    if answers is None:
+        meta_base.setdefault("technical_status", "pending")
+        meta_base.setdefault("error_kind", "jev_unavailable")
+        # an identical wait/error record adds no information —
+        # only a status CHANGE earns a new row, so a durable
+        # resource wait (Jev down, no key, budget hold) does not
+        # append one artifact per drain forever
+        if prev is None or (
+                prev["meta"].get("technical_status"),
+                prev["meta"].get("error_kind")) != (
+                meta_base["technical_status"],
+                meta_base.get("error_kind")):
+            ledger.artifact_add(
+                KIND_ASSESS,
+                json.dumps({"target_message_id": mid,
+                            "verdicts": {}},
+                           ensure_ascii=False),
+                project_id=pid, message_id=mid,
+                model=jev.JEV_MODEL, meta=meta_base)
+        return None, flag
+    target_verdicts = {k: {"noul": a["noul"],
+                           "verdict": jev.verdict_for(
+                               a["noul"], scfg["match_threshold"],
+                               scfg["nomatch_threshold"])}
+                       for k, a in answers.items()}
+    ledger.artifact_add(
+        KIND_ASSESS,
+        # "detail" stays in the stored shape (medication detail
+        # lives in semantic_assessment rows)
+        json.dumps({"target_message_id": mid,
+                    "verdicts": target_verdicts,
+                    "detail": {}}, ensure_ascii=False),
+        project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+        meta={**meta_base, "technical_status": "complete"})
+    return target_verdicts, flag
+
+
+def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
+                    facts, verdicts, existing, deadline):
+    """Stored, candidate, or freshly generated summary for one target, with
+    the one reserved format repair.
+
+    Returns (summary, summary_reason, summary_error, sent_error): sent_error
+    is the LLMNotSent/RuntimeBudget stop that left no summary, else None;
+    any other runtime guard error propagates."""
+    import semantic
+    sent_error = None
+    summary_reason = None
+    summary_error = {}
+    if existing is not None:
+        summary = existing["content"]
+        if existing["meta"].get("input_oversize"):
+            summary["_input_oversize"] = True
+    else:
+        candidate = _current(ledger, KIND_CANDIDATE, mid, fp, policy)
+        if candidate and candidate["meta"].get("publication_mode") == scfg["summary_mode"]:
+            summary = candidate["content"]
+        else:
+            format_repair_id = None
+            try:
+                summary, summary_reason = summarize(
+                    llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
+                    deadline=deadline, return_reason=True,
+                    error_out=summary_error)
+                if summary is None and summary_reason == "model" \
+                        and summary_error.get("code") \
+                        and semantic.last_llm_failure() != "length_stop" \
+                        and _current(ledger, KIND_SUMMARY_FORMAT_REPAIR,
+                                     mid, fp, policy) is None:
+                    if _PASS_REASON.get("summary_validation_error") is None:
+                        _PASS_REASON["summary_validation_error"] = summary_error["code"]
+                    guard("summary_format_repair_reservation")
+                    format_repair_id = ledger.artifact_add(
+                        KIND_SUMMARY_FORMAT_REPAIR,
+                        json.dumps({"target_message_id": mid}),
+                        project_id=pid, message_id=mid,
+                        model=semantic.llm_model(),
+                        meta={"fingerprint": fp, "policy_fingerprint": policy,
+                              "repair_count": 1})
+                    summary, summary_reason = summarize(
+                        llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
+                        format_repair=True,
+                        deadline=deadline, return_reason=True,
+                        error_out=summary_error)
+            except runtime.RuntimeGuardError as e:
+                if format_repair_id is not None and (
+                        isinstance(e, runtime.LLMNotSent)
+                        or e.stage in _PRE_DISPATCH_STAGES):
+                    with ledger.db:
+                        ledger.db.execute(
+                            "DELETE FROM artifacts WHERE artifact_id=?",
+                            (format_repair_id,))
+                if not isinstance(e, (runtime.LLMNotSent, runtime.RuntimeBudget)):
+                    raise
+                # the local model never got (or ran out of budget
+                # for) this target's request: stop here like any
+                # incomplete pass, so targets already audited are
+                # still committed below; re-raised for _process_job
+                sent_error = e
+                summary, summary_reason = None, "not_sent"
+    return summary, summary_reason, summary_error, sent_error
+
+
+def _apply_mandatory_render(summary: dict, findings: list, status: str,
+                            v2_doc: dict) -> str:
+    """Merge the adjudicated mandatory render layer into ``summary`` and
+    ``findings`` in place; returns the (possibly downgraded) status."""
+    from semantic_render import mandatory_render
+    mandatory = mandatory_render(v2_doc)
+    if mandatory["facts"]:
+        summary["mandatory_facts"] = mandatory["facts"]
+        summary["mandatory_fact_ids"] = mandatory["fact_ids"]
+        summary["mandatory_pages"] = mandatory["pages"]
+        summary["mandatory_overview"] = mandatory["overview"]
+    if mandatory["limitations"]:
+        existing_lims = summary.get("limitations") or []
+        summary["limitations"] = existing_lims + [
+            x for x in mandatory["limitations"]
+            if x not in existing_lims]
+    # A verified fact that cannot reach any page (oversized
+    # single line, or a packing gap) is publication-incomplete —
+    # flag it instead of letting a partial list pass as done.
+    if not mandatory["complete"]:
+        findings.append({"code": "mandatory_render_incomplete"})
+        status = "NEEDS_REVIEW"
+    return status
+
+
+def _promote_loops(ledger, scfg, pl, pid, bundle, facts_by_target,
+                   jev_client, deadline):
+    """Loop candidates/relation events for the live generation.
+
+    Returns (loops_done, loops_short, resource, retryable, hard): the last
+    three are failure flags the caller ORs into its own."""
+    loops_short = False
+    resource = retryable = hard = False
+    rejections = []
+    scope = pl.get("retry_command_id")
+    try:
+        _, loops_done = update_loops(
+            ledger, pid, bundle, facts_by_target, jev_client,
+            scfg, deadline,
+            retry_scope=scope if isinstance(scope, str) else "",
+            rejections=rejections)
+    except runtime.RuntimeBudgetShort:
+        # the Jev cutoff stopped the relation pass: the results below
+        # still commit and the job resumes the remaining pairs next
+        # tick (last_error is not this stop's cause — no flag)
+        loops_done = False
+        loops_short = True
+    else:
+        flag = _jev_fail_flag(getattr(jev_client, "last_error", None)) \
+            if not loops_done and jev_client is not None else None
+        if rejections:
+            if _PASS_REASON.get("loops_rejected") is None:
+                _PASS_REASON["loops_rejected"] = rejections[0]["code"]
+            if flag is None:
+                # Only cached rejections, or a later pair's success
+                # reset last_error: the known rejection is the cause —
+                # a bounded retry, never a free defer that would loop
+                # forever. A later hard/resource failure keeps its own
+                # handling below.
+                _why("loops_jev_rejected")
+                retryable = True
+        if not loops_done and jev_client is not None:
+            _why(f"loops_jev_{flag}")
+            resource |= flag == "resource"
+            retryable |= flag == "retryable"
+            hard |= flag == "hard"
+    return loops_done, loops_short, resource, retryable, hard
+
+
+def _record_notice_plan_tx(ledger, scfg, pl, pid, root, mid, fp, policy,
+                           r: dict, final_status: str, bundle: dict,
+                           members: dict, all_targets: list) -> None:
+    """Notice outbox intent and plan row for one target — called INSIDE the
+    caller's ``with ledger.db`` with the analysis result."""
+    # notification plan + outbox intent commit in the SAME
+    # transaction as the analysis result — a crash can never
+    # leave a saved summary without its notification intent
+    # (§18.3). Reused results re-enter here so an intent lost
+    # by an older crash is recreated on the next run. The two
+    # dedupes are independent: the plan row keys on
+    # (fingerprint, audit_status), the outbox row on its
+    # delivery_key — a plan written by an earlier PENDING/shadow
+    # run must not block a now-PASS enforce enqueue.
+    summary_clean = {k: v for k, v in r["summary"].items()
+                     if not k.startswith("_")}
+    text = render_notice(ledger, pid, root, summary_clean,
+                         final_status, targets=all_targets,
+                         quality=bundle["content_quality"],
+                         focus_mid=mid)
+    enqueued = False
+    if (scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce"
+            and final_status == "PASS" and not pl.get("notification_free")):
+        # per-target delivery key — one generation emits one
+        # notice PER audited target; a shared (root, fp) key
+        # would dedup every later target's claims out of the
+        # notice while the header still claims them
+        dkey = payload_hash({"kind": "semantic_notice",
+                             "root": root, "fp": fp,
+                             "mid": mid, "policy": policy})
+        # per-target eligibility: THIS message must be covered
+        # by a stored new_messages intent — a target that only
+        # ever arrived via import/replay produces artifacts but
+        # no notice, even when a sibling target was notified
+        # (INV-20, AT-055)
+        src_mid = _notify_src_event(ledger, pid, [mid])
+        if src_mid is not None \
+                and not _outbox_has_delivery(ledger, dkey):
+            ledger.outbox_add_tx("semantic_notice", pid, {
+                "delivery_key": dkey, "root_id": root,
+                "target_message_id": mid,
+                "target_revision": members[mid]["revision"],
+                "src_event_id": src_mid, "text": text,
+                "fingerprint": fp,
+                "policy_version": POLICY_VERSION,
+                "policy_fingerprint": policy})
+            enqueued = True
+    if not _plan_exists(ledger, mid, fp, final_status, policy):
+        plan_meta = {"fingerprint": fp, "policy_fingerprint": policy,
+                     "audit_status": final_status, "publication_mode": scfg["summary_mode"],
+                     "mode": scfg["mode"],
+                     "origin": pl.get("origin")}
+        if enqueued:
+            plan_meta["enqueued"] = True
+        ledger.artifact_add_tx(KIND_PLAN, json.dumps(
+            {"root_id": root, "target_message_id": mid,
+             "text": text}, ensure_ascii=False),
+            project_id=pid, message_id=mid,
+            meta=plan_meta)
 
 
 def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
@@ -780,67 +1097,16 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             if time.monotonic() > deadline - 5:
                 incomplete = True
                 break
-            state = jev_state(bundle, mid)
-            meta_base = {"fingerprint": fp, "policy_fingerprint": policy, "model": jev.JEV_MODEL,
-                         "registry": jev.REGISTRY_VERSION,
-                         "schema": SCHEMA_VERSION}
-            answers = None
-            req0 = jev_client.requests_made if jev_client else 0
-            if jev_client is not None and state is not None:
-                qs = {k: jev.noul_question(p["instructions"], p["true"],
-                                           p["false"])
-                      for k, p in jev.PROPOSITIONS.items()}
-                try:
-                    out = _eval_chunked(
-                        jev_client, state, qs, deadline,
-                        scfg["max_questions_per_request"])
-                    answers = out["answers"]
-                except jev.JevError as e:
-                    meta_base["technical_status"] = (
-                        "retry_wait" if e.retryable else "error")
-                    meta_base["error_kind"] = e.kind
-                    flag = _jev_fail_flag(e)
-                    _why(f"assess_jev_{flag}")
-                    resource_wait |= flag == "resource"
-                    retryable_failure |= flag == "retryable"
-                    hard_fail |= flag == "hard"
-            meta_base["jev_requests"] = (
-                jev_client.requests_made - req0) if jev_client else 0
-            if answers is None:
-                meta_base.setdefault("technical_status", "pending")
-                meta_base.setdefault("error_kind", "jev_unavailable")
-                # an identical wait/error record adds no information —
-                # only a status CHANGE earns a new row, so a durable
-                # resource wait (Jev down, no key, budget hold) does not
-                # append one artifact per drain forever
-                if prev is None or (
-                        prev["meta"].get("technical_status"),
-                        prev["meta"].get("error_kind")) != (
-                        meta_base["technical_status"],
-                        meta_base.get("error_kind")):
-                    ledger.artifact_add(
-                        KIND_ASSESS,
-                        json.dumps({"target_message_id": mid,
-                                    "verdicts": {}},
-                                   ensure_ascii=False),
-                        project_id=pid, message_id=mid,
-                        model=jev.JEV_MODEL, meta=meta_base)
+            target_verdicts, flag = _assess_target(
+                ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
+                prev, deadline)
+            resource_wait |= flag == "resource"
+            retryable_failure |= flag == "retryable"
+            hard_fail |= flag == "hard"
+            if target_verdicts is None:
                 incomplete = True
                 continue
-            verdicts[mid] = {k: {"noul": a["noul"],
-                                 "verdict": jev.verdict_for(
-                                     a["noul"], scfg["match_threshold"],
-                                     scfg["nomatch_threshold"])}
-                             for k, a in answers.items()}
-            ledger.artifact_add(
-                KIND_ASSESS,
-                # "detail" stays in the stored shape (medication detail
-                # lives in semantic_assessment rows)
-                json.dumps({"target_message_id": mid,
-                            "verdicts": verdicts[mid],
-                            "detail": {}}, ensure_ascii=False),
-                project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-                meta={**meta_base, "technical_status": "complete"})
+            verdicts[mid] = target_verdicts
         if scfg["summary_mode"] == "off" and scfg["loop_mode"] == "off":
             continue
         stage = _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
@@ -950,59 +1216,11 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         if time.monotonic() > deadline - 5:
             incomplete = True
             break
-        summary_reason = None
-        summary_error = {}
-        if existing is not None:
-            summary = existing["content"]
-            if existing["meta"].get("input_oversize"):
-                summary["_input_oversize"] = True
-        else:
-            candidate = _current(ledger, KIND_CANDIDATE, mid, fp, policy)
-            if candidate and candidate["meta"].get("publication_mode") == scfg["summary_mode"]:
-                summary = candidate["content"]
-            else:
-                format_repair_id = None
-                try:
-                    summary, summary_reason = summarize(
-                        llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
-                        deadline=deadline, return_reason=True,
-                        error_out=summary_error)
-                    if summary is None and summary_reason == "model" \
-                            and summary_error.get("code") \
-                            and semantic.last_llm_failure() != "length_stop" \
-                            and _current(ledger, KIND_SUMMARY_FORMAT_REPAIR,
-                                         mid, fp, policy) is None:
-                        if _PASS_REASON.get("summary_validation_error") is None:
-                            _PASS_REASON["summary_validation_error"] = summary_error["code"]
-                        guard("summary_format_repair_reservation")
-                        format_repair_id = ledger.artifact_add(
-                            KIND_SUMMARY_FORMAT_REPAIR,
-                            json.dumps({"target_message_id": mid}),
-                            project_id=pid, message_id=mid,
-                            model=semantic.llm_model(),
-                            meta={"fingerprint": fp, "policy_fingerprint": policy,
-                                  "repair_count": 1})
-                        summary, summary_reason = summarize(
-                            llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
-                            format_repair=True,
-                            deadline=deadline, return_reason=True,
-                            error_out=summary_error)
-                except runtime.RuntimeGuardError as e:
-                    if format_repair_id is not None and (
-                            isinstance(e, runtime.LLMNotSent)
-                            or e.stage in _PRE_DISPATCH_STAGES):
-                        with ledger.db:
-                            ledger.db.execute(
-                                "DELETE FROM artifacts WHERE artifact_id=?",
-                                (format_repair_id,))
-                    if not isinstance(e, (runtime.LLMNotSent, runtime.RuntimeBudget)):
-                        raise
-                    # the local model never got (or ran out of budget
-                    # for) this target's request: stop here like any
-                    # incomplete pass, so targets already audited are
-                    # still committed below; re-raised for _process_job
-                    not_sent = e
-                    summary, summary_reason = None, "not_sent"
+        summary, summary_reason, summary_error, sent_error = _obtain_summary(
+            ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
+            facts, verdicts, existing, deadline)
+        if sent_error is not None:
+            not_sent = sent_error
         if summary is None:
             _why(f"summary_{summary_reason}")
             if _PASS_REASON.get("summary_validation_error") is None:
@@ -1132,24 +1350,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             # model summary dropped them. Per-target doc: the LAST
             # member's doc must never leak into another target's
             # summary (C02).
-            from semantic_render import mandatory_render
-            mandatory = mandatory_render(v2_doc)
-            if mandatory["facts"]:
-                summary["mandatory_facts"] = mandatory["facts"]
-                summary["mandatory_fact_ids"] = mandatory["fact_ids"]
-                summary["mandatory_pages"] = mandatory["pages"]
-                summary["mandatory_overview"] = mandatory["overview"]
-            if mandatory["limitations"]:
-                existing_lims = summary.get("limitations") or []
-                summary["limitations"] = existing_lims + [
-                    x for x in mandatory["limitations"]
-                    if x not in existing_lims]
-            # A verified fact that cannot reach any page (oversized
-            # single line, or a packing gap) is publication-incomplete —
-            # flag it instead of letting a partial list pass as done.
-            if not mandatory["complete"]:
-                findings.append({"code": "mandatory_render_incomplete"})
-                status = "NEEDS_REVIEW"
+            status = _apply_mandatory_render(summary, findings, status,
+                                             v2_doc)
         summary["audit_status"] = status
         if fact_source == "canonical":
             v4.record_stage(ledger, pid, mid, fp, policy,
@@ -1209,39 +1411,12 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         # kept OUT of the commit tx because matching makes Jev calls
         # (no network inside a DB transaction, §6.2); replay-safe via
         # candidate_fp and pair dedup.
-        rejections = []
-        scope = pl.get("retry_command_id")
-        try:
-            _, loops_done = update_loops(
-                ledger, pid, bundle, facts_by_target, jev_client,
-                scfg, deadline,
-                retry_scope=scope if isinstance(scope, str) else "",
-                rejections=rejections)
-        except runtime.RuntimeBudgetShort:
-            # the Jev cutoff stopped the relation pass: the results below
-            # still commit and the job resumes the remaining pairs next
-            # tick (last_error is not this stop's cause — no flag)
-            loops_done = False
-            loops_short = True
-        else:
-            flag = _jev_fail_flag(getattr(jev_client, "last_error", None)) \
-                if not loops_done and jev_client is not None else None
-            if rejections:
-                if _PASS_REASON.get("loops_rejected") is None:
-                    _PASS_REASON["loops_rejected"] = rejections[0]["code"]
-                if flag is None:
-                    # Only cached rejections, or a later pair's success
-                    # reset last_error: the known rejection is the cause —
-                    # a bounded retry, never a free defer that would loop
-                    # forever. A later hard/resource failure keeps its own
-                    # handling below.
-                    _why("loops_jev_rejected")
-                    retryable_failure = True
-            if not loops_done and jev_client is not None:
-                _why(f"loops_jev_{flag}")
-                resource_wait |= flag == "resource"
-                retryable_failure |= flag == "retryable"
-                hard_fail |= flag == "hard"
+        loops_done, loops_short, resource, retryable, hard = _promote_loops(
+            ledger, scfg, pl, pid, bundle, facts_by_target, jev_client,
+            deadline)
+        resource_wait |= resource
+        retryable_failure |= retryable
+        hard_fail |= hard
     # notification eligibility is derived from the stored origin event,
     # not from this job's seed provenance (INV-20, §20.3) — evaluated
     # per target below: a covering new_messages intent must exist for
@@ -1262,60 +1437,9 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                         r.get("findings") or [], fact_source)
             if stale:
                 continue
-            # notification plan + outbox intent commit in the SAME
-            # transaction as the analysis result — a crash can never
-            # leave a saved summary without its notification intent
-            # (§18.3). Reused results re-enter here so an intent lost
-            # by an older crash is recreated on the next run. The two
-            # dedupes are independent: the plan row keys on
-            # (fingerprint, audit_status), the outbox row on its
-            # delivery_key — a plan written by an earlier PENDING/shadow
-            # run must not block a now-PASS enforce enqueue.
-            summary_clean = {k: v for k, v in r["summary"].items()
-                             if not k.startswith("_")}
-            text = render_notice(ledger, pid, root, summary_clean,
-                                 final_status, targets=all_targets,
-                                 quality=bundle["content_quality"],
-                                 focus_mid=mid)
-            enqueued = False
-            if (scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce"
-                    and final_status == "PASS" and not pl.get("notification_free")):
-                # per-target delivery key — one generation emits one
-                # notice PER audited target; a shared (root, fp) key
-                # would dedup every later target's claims out of the
-                # notice while the header still claims them
-                dkey = payload_hash({"kind": "semantic_notice",
-                                     "root": root, "fp": fp,
-                                     "mid": mid, "policy": policy})
-                # per-target eligibility: THIS message must be covered
-                # by a stored new_messages intent — a target that only
-                # ever arrived via import/replay produces artifacts but
-                # no notice, even when a sibling target was notified
-                # (INV-20, AT-055)
-                src_mid = _notify_src_event(ledger, pid, [mid])
-                if src_mid is not None \
-                        and not _outbox_has_delivery(ledger, dkey):
-                    ledger.outbox_add_tx("semantic_notice", pid, {
-                        "delivery_key": dkey, "root_id": root,
-                        "target_message_id": mid,
-                        "target_revision": members[mid]["revision"],
-                        "src_event_id": src_mid, "text": text,
-                        "fingerprint": fp,
-                        "policy_version": POLICY_VERSION,
-                        "policy_fingerprint": policy})
-                    enqueued = True
-            if not _plan_exists(ledger, mid, fp, final_status, policy):
-                plan_meta = {"fingerprint": fp, "policy_fingerprint": policy,
-                             "audit_status": final_status, "publication_mode": scfg["summary_mode"],
-                             "mode": scfg["mode"],
-                             "origin": pl.get("origin")}
-                if enqueued:
-                    plan_meta["enqueued"] = True
-                ledger.artifact_add_tx(KIND_PLAN, json.dumps(
-                    {"root_id": root, "target_message_id": mid,
-                     "text": text}, ensure_ascii=False),
-                    project_id=pid, message_id=mid,
-                    meta=plan_meta)
+            _record_notice_plan_tx(ledger, scfg, pl, pid, root, mid, fp,
+                                   policy, r, final_status, bundle,
+                                   members, all_targets)
         if (not stale and not pending and loops_done
                 and not runtime.transition_tx(ledger, token, "done")):
             raise runtime.RuntimeStale("promote")
@@ -1679,6 +1803,214 @@ def _job_lock(ledger, job_id):
     # Keep the inode: unlinking a flock file can create two lock owners.
 
 
+def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
+                max_jobs: int, long_defers: dict | None = None) -> tuple:
+    """Due-job selection for one drain pass.
+
+    Returns (due, qc_jobs, arrivals, backfill, sched_mut): the ordered
+    candidate list, its per-cohort split, and the fairness turn to persist.
+    ``long_defers`` ({str(job_id): {"g", "n"}}) keeps jobs known to need
+    the long-output budget out of the realtime lane.
+    """
+    if lane is None:
+        qc_rows = []
+        if qc_active and max_jobs > 1:
+            qc_rows = ledger.db.execute(
+                "SELECT * FROM fetch_jobs WHERE state='pending' "
+                "AND kind=? AND next_try<=? ORDER BY job_id LIMIT ?",
+                (QC_JOB_KIND, time.time(), max_jobs)).fetchall()
+        qc_share = min(len(qc_rows), max(1, max_jobs // 4), max_jobs - 1)
+        qc_jobs = list(qc_rows[:qc_share])
+        arrivals, backfill, sched_mut = _due_lanes(
+            ledger, (JOB_KIND,) if qc_jobs else kinds,
+            max_jobs - len(qc_jobs))
+        # unused lane capacity flows back to QC — same rule the backfill
+        # cohort uses against an idle arrival lane
+        spare = max_jobs - len(qc_jobs) - len(arrivals) - len(backfill)
+        if spare > 0:
+            qc_jobs += list(qc_rows[qc_share:qc_share + spare])
+    else:
+        # explicit lane: the fairness/QC selection is never computed
+        # (it would be discarded), saving its queries per tick
+        eligible = ("json_valid(payload) AND "
+                    "COALESCE(json_extract(payload,'$.eligible'),0)=1")
+        # Fresh arrivals use realtime. Background workers may also finish
+        # older arrival-seeded jobs; a per-job flock excludes double work.
+        if lane == "realtime":
+            # Newest SEED first (M6): a seed/re-seed/revival writes
+            # next_try=updated_at, while every defer/retry pushes
+            # next_try past updated_at — so a job that already took a
+            # free defer ranks by its creation time instead of jumping
+            # back to the head on each defer. Jobs known to need the
+            # long-output budget never fit this lane and are left to
+            # the backlog workers.
+            # (same input generation only: a re-seed gets a new try)
+            rows = ledger.db.execute(
+                f"SELECT * FROM fetch_jobs WHERE state='pending' AND next_try<=? "
+                f"AND kind=? AND {eligible} "
+                "AND NOT EXISTS (SELECT 1 FROM json_each(?) s"
+                " WHERE s.key=CAST(fetch_jobs.job_id AS TEXT)"
+                " AND json_extract(s.value,'$.g')=CASE WHEN json_valid("
+                "fetch_jobs.payload) THEN json_extract(fetch_jobs.payload,"
+                "'$.generation') END) "
+                f"ORDER BY {_REALTIME_ORDER} LIMIT ?",
+                (time.time(), JOB_KIND, json.dumps(long_defers or {}),
+                 max_jobs + 8)).fetchall()
+        else:
+            # Re-extraction re-pends QC rows under their old (low) job_id;
+            # one job_id order let them win every pass and no semantic job
+            # ran for hours (2026-10-10). Each kind keeps oldest-first, and
+            # the kind this worker served last goes second.
+            # QC re-seeding refreshes next_try: its new generation must
+            # queue behind QC that was already waiting, despite an old id.
+            rows = [row for kind in sorted(
+                        kinds, key=lambda k: k == _BACKLOG_TURN["kind"])
+                    for row in ledger.db.execute(
+                        "SELECT * FROM fetch_jobs WHERE state='pending' "
+                        "AND next_try<=? AND kind=? ORDER BY "
+                        f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
+                        (time.time(), kind, max_jobs + 8)).fetchall()]
+        # Include extra candidates so another worker's current job cannot
+        # hide the next runnable item. Work remains bounded by max_jobs.
+        qc_jobs = [j for j in rows if j['kind'] == QC_JOB_KIND]
+        arrivals = [j for j in rows if j['kind'] == JOB_KIND
+                    and runtime.parse_payload(j).get('eligible')]
+        backfill = [j for j in rows if j['kind'] == JOB_KIND
+                    and not runtime.parse_payload(j).get('eligible')]
+        sched_mut = {"turn": None}
+    due = (list(rows) if lane is not None else
+           qc_jobs + list(arrivals) + list(backfill))
+    return due, qc_jobs, arrivals, backfill, sched_mut
+
+
+def _job_metric(job, token, cohort: str, status, job_age: float,
+                job_elapsed: float, llm_s: float, jev_s: float, used: int,
+                usage: dict, jev_client) -> dict:
+    """The bounded per-job metrics row of one drain pass."""
+    import semantic
+    return {
+        "job_id": job["job_id"], "project_id": job["project_id"],
+        "kind": job["kind"],
+        "cohort": cohort,
+        "generation": token.generation,
+        "status": status if status is not None else "error",
+        # phase split — queue wait vs model call vs Jev evaluation
+        # vs the residual validate/render phase (T14)
+        "queue_wait_s": job_age,
+        "llm_s": llm_s,
+        "jev_s": jev_s,
+        "post_s": max(0.0, job_elapsed - llm_s - jev_s),
+        "elapsed_s": job_elapsed, "job_age_s": job_age,
+        "jev_requests": used, "usage": usage,
+        # last Jev error class/kind of this pass — a job that ends
+        # "failed" after a few Jev calls was previously
+        # undiagnosable from the run record (2026-09-30)
+        "jev_error": _jev_error_brief(
+            getattr(jev_client, "last_error", None))
+        if status not in (None, "done") else None,
+        # last local-model failure code of this pass (never
+        # text) — a long call ending "retry" was undiagnosable
+        # from the run record (2026-10-09). Module-level and
+        # latest-wins: only a pass that actually called the
+        # model may report it, or a cached/QC pass would wear
+        # the previous job's code.
+        "llm_error": semantic.last_llm_failure()
+        if status not in (None, "done") and llm_s > 0 else None,
+        "retry_reason": _PASS_REASON["code"]
+        if status != "done" else None,
+        "summary_validation_error": _PASS_REASON["summary_validation_error"],
+        "loops_rejected": _PASS_REASON["loops_rejected"],
+    }
+
+
+def _apply_job_status(ledger, token, limit: int, status: str,
+                      budget_short: bool, out: dict) -> bool:
+    """Map one finished job's status onto its queue transition and the
+    pass counters; True when the pass must stop (no further call fits)."""
+    if status == "done":
+        out["done"] += 1
+    elif status in ("deferred", "deferred_short"):
+        out["deferred"] += 1
+        runtime.transition(ledger, token, "defer", retry_in=60)
+        if status == "deferred_short":
+            # less than one call reserve is left: the next job's
+            # first call is exempt from the reserve gate and would
+            # be dispatched only to time out at the deadline
+            return True
+    elif status == "deferred_backoff":
+        out["deferred"] += 1
+        runtime.transition(ledger, token, "defer",
+                           retry_in=NOT_SENT_BACKOFF_S)
+    elif status == "retry":
+        runtime.transition(ledger, token, "retry", retry_in=300,
+                           max_attempts=limit)
+        out["deferred"] += 1
+        if budget_short:
+            return True  # same reason as deferred_short: no call fits
+    elif status == "failed":
+        runtime.transition(ledger, token, "retry", max_attempts=1)
+        out["failed"] += 1
+    elif status == "stale":
+        # The worker that observed this row no longer owns it.  Do not
+        # defer/retry/done the replacement generation by ID alone.
+        out["deferred"] += 1
+    else:
+        out["failed"] += 1
+    return False
+
+
+def _persist_drain_accounting(ledger, scfg, out: dict, result: dict,
+                              selected: dict, qc_active: bool,
+                              sched_mut: dict, long_seen: dict | None = None,
+                              long_defers: dict | None = None) -> None:
+    """Persist the fairness counters and the bounded drain-run metrics
+    artifact; either failure is recorded in ``result`` and never breaks
+    the drain. This pass's long-output defers (``long_seen``) are folded
+    into the persisted map alongside the fairness counters."""
+    # persisted fairness accounting — survives restarts, feeds
+    # semantic_observe's scheduler section (T14)
+    try:
+        sched = _sched_state(ledger)
+        for cohort in ("arrival", "backfill"):
+            sched[cohort + "_selected"] = \
+                sched.get(cohort + "_selected", 0) + selected[cohort]
+        if qc_active:
+            sched["qc_selected"] = \
+                sched.get("qc_selected", 0) + selected["qc"]
+        if selected["backfill"]:
+            sched["backfill_last_served_at"] = time.time()
+        if selected["qc"]:
+            sched["qc_last_served_at"] = time.time()
+        if sched_mut.get("turn"):
+            sched["turn"] = sched_mut["turn"]
+        if long_seen or long_defers:
+            _merge_long_defers(ledger, sched, long_seen or {})
+        _sched_write(ledger, sched)
+    except Exception:
+        # accounting must never break the drain itself
+        result["errors"].append("semantic: sched_persist_failed")
+    # Bounded per-run metrics artifact — observe() aggregates the
+    # recent ones; a drain that attempted work leaves durable
+    # evidence instead of an in-memory-only result (T14).
+    try:
+        ledger.artifact_add(
+            KIND_DRAIN_RUN,
+            json.dumps({
+                "v": 1, "mode": scfg["mode"],
+                "done": out["done"], "deferred": out["deferred"],
+                "failed": out["failed"],
+                "budget_exhausted": out["budget_exhausted"],
+                "left": out["left"], "elapsed_s": out["elapsed_s"],
+                "oldest_pending_age_s":
+                    out["oldest_pending_job_age_s"],
+                "lanes": out["lanes"],
+                "job_metrics": out["job_metrics"][:64]},
+                ensure_ascii=False),
+            model="semantic_drain")
+    except Exception:
+        result["errors"].append("semantic: metrics_persist_failed")
+
+
 def run_due(ledger, cfg: dict, result: dict, deadline: float,
             jev_client=None, llm_fn=None, max_jobs: int = 4,
             cfg_path: str | None = None, run_lock_fd=None,
@@ -1875,74 +2207,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         # the semantic lanes leave unused. A 1-job window cannot be split —
         # QC falls back to the persisted cohort alternation inside the
         # non-eligible lane.
-        if lane is None:
-            qc_rows = []
-            if qc_active and max_jobs > 1:
-                qc_rows = ledger.db.execute(
-                    "SELECT * FROM fetch_jobs WHERE state='pending' "
-                    "AND kind=? AND next_try<=? ORDER BY job_id LIMIT ?",
-                    (QC_JOB_KIND, time.time(), max_jobs)).fetchall()
-            qc_share = min(len(qc_rows), max(1, max_jobs // 4), max_jobs - 1)
-            qc_jobs = list(qc_rows[:qc_share])
-            arrivals, backfill, sched_mut = _due_lanes(
-                ledger, (JOB_KIND,) if qc_jobs else kinds,
-                max_jobs - len(qc_jobs))
-            # unused lane capacity flows back to QC — same rule the backfill
-            # cohort uses against an idle arrival lane
-            spare = max_jobs - len(qc_jobs) - len(arrivals) - len(backfill)
-            if spare > 0:
-                qc_jobs += list(qc_rows[qc_share:qc_share + spare])
-        else:
-            # explicit lane: the fairness/QC selection is never computed
-            # (it would be discarded), saving its queries per tick
-            eligible = ("json_valid(payload) AND "
-                        "COALESCE(json_extract(payload,'$.eligible'),0)=1")
-            # Fresh arrivals use realtime. Background workers may also finish
-            # older arrival-seeded jobs; a per-job flock excludes double work.
-            if lane == "realtime":
-                # Newest SEED first (M6): a seed/re-seed/revival writes
-                # next_try=updated_at, while every defer/retry pushes
-                # next_try past updated_at — so a job that already took a
-                # free defer ranks by its creation time instead of jumping
-                # back to the head on each defer. Jobs known to need the
-                # long-output budget never fit this lane and are left to
-                # the backlog workers.
-                # (same input generation only: a re-seed gets a new try)
-                rows = ledger.db.execute(
-                    f"SELECT * FROM fetch_jobs WHERE state='pending' AND next_try<=? "
-                    f"AND kind=? AND {eligible} "
-                    "AND NOT EXISTS (SELECT 1 FROM json_each(?) s"
-                    " WHERE s.key=CAST(fetch_jobs.job_id AS TEXT)"
-                    " AND json_extract(s.value,'$.g')=CASE WHEN json_valid("
-                    "fetch_jobs.payload) THEN json_extract(fetch_jobs.payload,"
-                    "'$.generation') END) "
-                    f"ORDER BY {_REALTIME_ORDER} LIMIT ?",
-                    (time.time(), JOB_KIND, json.dumps(long_defers),
-                     max_jobs + 8)).fetchall()
-            else:
-                # Re-extraction re-pends QC rows under their old (low) job_id;
-                # one job_id order let them win every pass and no semantic job
-                # ran for hours (2026-10-10). Each kind keeps oldest-first, and
-                # the kind this worker served last goes second.
-                # QC re-seeding refreshes next_try: its new generation must
-                # queue behind QC that was already waiting, despite an old id.
-                rows = [row for kind in sorted(
-                            kinds, key=lambda k: k == _BACKLOG_TURN["kind"])
-                        for row in ledger.db.execute(
-                            "SELECT * FROM fetch_jobs WHERE state='pending' "
-                            "AND next_try<=? AND kind=? ORDER BY "
-                            f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
-                            (time.time(), kind, max_jobs + 8)).fetchall()]
-            # Include extra candidates so another worker's current job cannot
-            # hide the next runnable item. Work remains bounded by max_jobs.
-            qc_jobs = [j for j in rows if j['kind'] == QC_JOB_KIND]
-            arrivals = [j for j in rows if j['kind'] == JOB_KIND
-                        and runtime.parse_payload(j).get('eligible')]
-            backfill = [j for j in rows if j['kind'] == JOB_KIND
-                        and not runtime.parse_payload(j).get('eligible')]
-            sched_mut = {"turn": None}
-        due = (list(rows) if lane is not None else
-               qc_jobs + list(arrivals) + list(backfill))
+        due, qc_jobs, arrivals, backfill, sched_mut = _select_due(
+            ledger, lane, kinds, qc_active, max_jobs, long_defers)
         cohort_of = {id(job): "qc" for job in qc_jobs}
         cohort_of.update({id(job): "arrival" for job in arrivals})
         cohort_of.update({id(job): "backfill" for job in backfill})
@@ -1969,7 +2235,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 if runtime.circuit_open(ledger):
                     out["circuit_open"] = True
                     break
-                from mcs_operations import paused
+                from mcs_queries import paused
                 if paused(ledger.db, job["project_id"]):
                     runtime.transition(ledger, token, "defer", retry_in=300)
                     out["deferred"] += 1
@@ -2141,39 +2407,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 usage["unreported_requests"] = used - usage["reported_requests"]
                 llm_s = llm_acc["s"]
                 jev_s = timed_jev.elapsed_s if timed_jev is not None else 0.0
-                out["job_metrics"].append({
-                    "job_id": job["job_id"], "project_id": job["project_id"],
-                    "kind": job["kind"],
-                    "cohort": cohort_of.get(id(job), "backfill"),
-                    "generation": token.generation,
-                    "status": status if status is not None else "error",
-                    # phase split — queue wait vs model call vs Jev evaluation
-                    # vs the residual validate/render phase (T14)
-                    "queue_wait_s": job_age,
-                    "llm_s": llm_s,
-                    "jev_s": jev_s,
-                    "post_s": max(0.0, job_elapsed - llm_s - jev_s),
-                    "elapsed_s": job_elapsed, "job_age_s": job_age,
-                    "jev_requests": used, "usage": usage,
-                    # last Jev error class/kind of this pass — a job that ends
-                    # "failed" after a few Jev calls was previously
-                    # undiagnosable from the run record (2026-09-30)
-                    "jev_error": _jev_error_brief(
-                        getattr(jev_client, "last_error", None))
-                    if status not in (None, "done") else None,
-                    # last local-model failure code of this pass (never
-                    # text) — a long call ending "retry" was undiagnosable
-                    # from the run record (2026-10-09). Module-level and
-                    # latest-wins: only a pass that actually called the
-                    # model may report it, or a cached/QC pass would wear
-                    # the previous job's code.
-                    "llm_error": semantic.last_llm_failure()
-                    if status not in (None, "done") and llm_s > 0 else None,
-                    "retry_reason": _PASS_REASON["code"]
-                    if status != "done" else None,
-                    "summary_validation_error": _PASS_REASON["summary_validation_error"],
-                    "loops_rejected": _PASS_REASON["loops_rejected"],
-                })
+                out["job_metrics"].append(_job_metric(
+                    job, token, cohort_of.get(id(job), "backfill"), status,
+                    job_age, job_elapsed, llm_s, jev_s, used, usage,
+                    jev_client))
                 if status == "done":
                     out["done_by_kind"][job["kind"]] = \
                         out["done_by_kind"].get(job["kind"], 0) + 1
@@ -2191,35 +2428,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                         meta={"jev_requests": used})
                 if status is None:
                     continue
-                if status == "done":
-                    out["done"] += 1
-                elif status in ("deferred", "deferred_short"):
-                    out["deferred"] += 1
-                    runtime.transition(ledger, token, "defer", retry_in=60)
-                    if status == "deferred_short":
-                        # less than one call reserve is left: the next job's
-                        # first call is exempt from the reserve gate and would
-                        # be dispatched only to time out at the deadline
-                        break
-                elif status == "deferred_backoff":
-                    out["deferred"] += 1
-                    runtime.transition(ledger, token, "defer",
-                                       retry_in=NOT_SENT_BACKOFF_S)
-                elif status == "retry":
-                    runtime.transition(ledger, token, "retry", retry_in=300,
-                                       max_attempts=limit)
-                    out["deferred"] += 1
-                    if budget_short:
-                        break      # same reason as deferred_short: no call fits
-                elif status == "failed":
-                    runtime.transition(ledger, token, "retry", max_attempts=1)
-                    out["failed"] += 1
-                elif status == "stale":
-                    # The worker that observed this row no longer owns it.  Do not
-                    # defer/retry/done the replacement generation by ID alone.
-                    out["deferred"] += 1
-                else:
-                    out["failed"] += 1
+                if _apply_job_status(ledger, token, limit, status,
+                                     budget_short, out):
+                    break
                 if getattr(getattr(jev_client, "last_error", None),
                            "kind", "") == "payment_required":
                     # the service refuses every call until the account is
@@ -2250,48 +2461,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             "AND state='pending' AND next_try<=?", (*kinds, time.time())).fetchone()[0]
         out["elapsed_s"] = time.perf_counter() - drain_started
         if due:
-            # persisted fairness accounting — survives restarts, feeds
-            # semantic_observe's scheduler section (T14)
-            try:
-                sched = _sched_state(ledger)
-                for cohort in ("arrival", "backfill"):
-                    sched[cohort + "_selected"] = \
-                        sched.get(cohort + "_selected", 0) + selected[cohort]
-                if qc_active:
-                    sched["qc_selected"] = \
-                        sched.get("qc_selected", 0) + selected["qc"]
-                if selected["backfill"]:
-                    sched["backfill_last_served_at"] = time.time()
-                if selected["qc"]:
-                    sched["qc_last_served_at"] = time.time()
-                if sched_mut.get("turn"):
-                    sched["turn"] = sched_mut["turn"]
-                if long_seen or long_defers:
-                    _merge_long_defers(ledger, sched, long_seen)
-                _sched_write(ledger, sched)
-            except Exception:
-                # accounting must never break the drain itself
-                result["errors"].append("semantic: sched_persist_failed")
-            # Bounded per-run metrics artifact — observe() aggregates the
-            # recent ones; a drain that attempted work leaves durable
-            # evidence instead of an in-memory-only result (T14).
-            try:
-                ledger.artifact_add(
-                    KIND_DRAIN_RUN,
-                    json.dumps({
-                        "v": 1, "mode": scfg["mode"],
-                        "done": out["done"], "deferred": out["deferred"],
-                        "failed": out["failed"],
-                        "budget_exhausted": out["budget_exhausted"],
-                        "left": out["left"], "elapsed_s": out["elapsed_s"],
-                        "oldest_pending_age_s":
-                            out["oldest_pending_job_age_s"],
-                        "lanes": out["lanes"],
-                        "job_metrics": out["job_metrics"][:64]},
-                        ensure_ascii=False),
-                    model="semantic_drain")
-            except Exception:
-                result["errors"].append("semantic: metrics_persist_failed")
+            _persist_drain_accounting(ledger, scfg, out, result, selected,
+                                      qc_active, sched_mut, long_seen,
+                                      long_defers)
         return out
     finally:
         _SHADOW_V2["pass"] = None
