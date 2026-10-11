@@ -97,7 +97,10 @@ def failure(exc):
                  "private_key_permissions", "signature_failed", "upload_url_invalid",
                  "rate_state_invalid", "scope_mismatch"}
         rejected = isinstance(exc.status, int) and 400 <= exc.status < 500
-        return {"result": "not_sent" if rejected or exc.error_code in local else "unknown",
+        # pre_send: the access-token request failed before any post was made.
+        pre_send = getattr(exc, "pre_send", False) is True
+        return {"result": "not_sent" if rejected or pre_send or exc.error_code in local
+                else "unknown",
                 "error_code": exc.error_code}
     return {"result": "unknown", "error_code": type(exc).__name__.lower()}
 
