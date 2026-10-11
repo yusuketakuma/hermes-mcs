@@ -271,3 +271,47 @@ def test_repair_discards_answer_returned_after_deadline(monkeypatch):
         {doc["facts"][0]["fact_id"]: "synthetic"}, deadline=11.0)
     assert not result["repaired"]
     assert result["doc"] is doc
+
+
+def test_repair_merges_a_repeated_fact_with_extraction_rules():
+    """A repaired chunk that re-reports a kept fact merges it exactly as
+    extraction merges duplicates: an undetermined request detail is
+    filled in, a conflicting one becomes unknown."""
+    request = "架空担当Aから薬剤師へ架空資料Xを確認してください。"
+    body = "合成薬Aを中止します。" + request
+
+    def reply(details, med_status):
+        return json.dumps({"facts": [
+            {"statement": "合成薬A中止", "kind": "medication_event",
+             "action": "stop", "subject_role": "patient",
+             "polarity": "affirmed", "workflow_status": med_status,
+             "importance": "T1", "evidence_quote": "合成薬Aを中止"},
+            {"statement": request, "kind": "request_pending",
+             "evidence_quote": request, "polarity": "affirmed",
+             "workflow_status": "pending", **details}],
+            "category_presence": dict(NO_FACTS, medication="one",
+                                      request_pending="one")},
+            ensure_ascii=False)
+
+    stored = extraction.extract_facts_v2(
+        lambda _p: reply({"request_to": "unknown", "request_from": "架空担当A"},
+                         "performed"), _member(body))["doc"]
+    kept = next(f for f in stored["facts"] if f["kind"] == "request_pending")
+    assert (kept["request_to"], kept["request_from"]) == ("unknown", "架空担当A")
+    rejected = next(f for f in stored["facts"]
+                    if f["kind"] == "medication_event")
+
+    out = extraction.repair_facts_v2(
+        lambda _p: reply({"request_to": "薬剤師", "request_from": "薬剤師"},
+                         "ordered"),
+        _member(body), stored, {rejected["fact_id"]: "audit: synthetic"})
+
+    assert out["repaired"]
+    sf.validate_facts_doc(out["doc"])
+    merged = [f for f in out["doc"]["facts"] if f["fact_id"] == kept["fact_id"]]
+    assert len(merged) == 1
+    assert merged[0]["request_to"] == "薬剤師"
+    assert merged[0]["request_from"] == "unknown"
+    assert kept["fact_id"] not in out["repaired_fact_ids"]
+    assert [f["kind"] for f in out["doc"]["facts"]
+            if f["fact_id"] in out["repaired_fact_ids"]] == ["medication_event"]

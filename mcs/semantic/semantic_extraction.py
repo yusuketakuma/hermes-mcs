@@ -1711,14 +1711,15 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
         return {"doc": doc, "repaired": False,
                  "repaired_fact_ids": [], "owner_chunk_ids": [], **generation_detail}
 
-    # Normalise repaired items per owning chunk, then merge by fact_id.
+    # Normalise repaired items per owning chunk, then merge by fact_id
+    # once, with the same rules as extraction's duplicate merge.
     facts = [f for f in doc["facts"]
              if f.get("fact_id") not in rejected_ids]
-    by_fact_id = {f["fact_id"]: f for f in facts}
+    kept_ids = {f["fact_id"] for f in facts}
     for ob in obligations.values():
         ob["fact_ids"] = [fid for fid in ob.get("fact_ids", [])
-                          if fid in by_fact_id]
-    repaired_fact_ids = []
+                          if fid in kept_ids]
+    collected = []
     for spec in specs:
         cid = spec["chunk_id"]
         items = repaired_items.get(cid)
@@ -1738,20 +1739,12 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
             for oid, mark in link_marks.items():
                 del obligations[oid]["fact_ids"][mark:]
             continue
-        for fact in new_facts:
-            existing = by_fact_id.get(fact["fact_id"])
-            if existing is None:
-                by_fact_id[fact["fact_id"]] = fact
-                facts.append(fact)
-                repaired_fact_ids.append(fact["fact_id"])
-                continue
-            for oid in fact["obligation_ids"]:
-                if oid not in existing["obligation_ids"]:
-                    existing["obligation_ids"].append(oid)
-            if fact["validation_status"] == "verified":
-                existing["validation_status"] = "verified"
-            if fact.get("_evidence") and not existing.get("_evidence"):
-                existing["_evidence"] = fact["_evidence"]
+        collected.extend(new_facts)
+    # One merge over every chunk: a detail that conflicted in one chunk
+    # cannot be revived by a later one.
+    facts = _merge_dupe_facts(facts + collected)
+    repaired_fact_ids = list(dict.fromkeys(
+        f["fact_id"] for f in collected if f["fact_id"] not in kept_ids))
 
     # A covered jev_pre obligation snapshots its deterministic
     # counterpart's links at extraction; re-sync so repaired facts
