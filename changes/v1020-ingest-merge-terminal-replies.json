@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "スレッド取得の失敗時に、本文取得済みの返信を再取得ジョブに戻さないよう修正",
+  "summary": "スレッドの全件取得に失敗したとき、本文をすでに取得済みの返信まで返信取得ジョブとして登録し直し、完了済みのジョブを一時的に未完了へ戻していました。実行記録の reply_jobs 件数も実際より多く表示されていました。本文がまだない返信だけを登録するようにしました。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "mcs/ingest/job_ops.py の merge_full_replies は、スレッド取得の失敗経路で body_state が full・deleted の返信を reply ジョブにしない。成功経路と同じ条件にそろえた。",
+    "取得済みの返信は同じ実行内の保存で完了扱いに戻っていたため、MCS への取得回数は変わらない。スレッドを未検証として扱い履歴の完了判定を進めない動作（checkpoint_safe=False）と、thread_incomplete 時のスレッド再取得ジョブは従来どおり。"
+  ],
+  "refs": [
+    "mcs/ingest/job_ops.py",
+    "tests/ingest/test_merge_failure_terminal_replies.py"
+  ]
+}
