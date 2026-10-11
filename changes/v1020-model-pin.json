@@ -5,8 +5,7 @@
   "upgrade": "追加操作は不要です。モデルを導入済みの環境では再取得も照合も行いません。MCS_MODEL_SHA256 を設定している場合は従来どおりその値で照合します。",
   "details": [
     "MODEL_URL を resolve/3885219b6810b007914f3a7950a8d1b469d598a5 に固定し、既定の MODEL_SHA256 を 03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8 とした。値は 2026-10-11 に Hugging Face API（siblings の lfs.sha256）と resolve 応答ヘッダー（x-repo-commit / x-linked-etag）の両方で一致を確認した。",
-    "sha256 はファイルを標準入力から読んで計算する。パスにバックスラッシュを含むと shasum が出力の先頭に \\ を付け、照合が失敗していた。",
-    "docs/specs/lifecycle-spec.md の LLM 行（任意の MCS_MODEL_SHA256 照合）は統合時に既定照合へ更新が必要。"
+    "sha256 はファイルを標準入力から読んで計算する。パスにバックスラッシュを含むと shasum が出力の先頭に \\ を付け、照合が失敗していた。"
   ],
   "refs": [
     "install.sh",
