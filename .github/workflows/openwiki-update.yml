@@ -21,17 +21,42 @@ jobs:
           # update runs against an empty change summary.
           fetch-depth: 0
 
+      - name: Check OpenWiki credentials
+        id: preflight
+        # Secrets cannot be read in `if:`, so expose only whether the key is set.
+        # Without the key `openwiki` exits before doing any work; skip the run
+        # instead of failing every scheduled day, but fail a manual run so the
+        # missing secret is visible to whoever started it.
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ -n "$OPENAI_API_KEY" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          msg="Repository secret OPENAI_API_KEY is not set; OpenWiki update skipped. Add it under Settings > Secrets and variables > Actions."
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "::error title=OpenWiki credentials missing::$msg"
+            exit 1
+          fi
+          echo "::warning title=OpenWiki credentials missing::$msg"
+
       - name: Set up Node.js
+        if: ${{ steps.preflight.outputs.ready == 'true' }}
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
 
       - name: Install OpenWiki
+        if: ${{ steps.preflight.outputs.ready == 'true' }}
         # mermaid + jsdom are optional; they add high-fidelity validation of Mermaid diagrams. Remove if your wiki has none.
         run: npm install --global openwiki@0.7.2 mermaid@11.17.2 jsdom@30.1.2
 
       - name: Run OpenWiki
         id: openwiki
+        if: ${{ steps.preflight.outputs.ready == 'true' }}
         continue-on-error: true
         run: openwiki code --update --print
         env:
@@ -45,15 +70,16 @@ jobs:
           # Optional: also trace this workflow's own OpenWiki run to LangSmith.
           LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
           LANGCHAIN_PROJECT: openwiki
-          LANGCHAIN_TRACING_V2: "true"
+          # Trace only when the key exists; tracing without it only adds errors.
+          LANGCHAIN_TRACING_V2: ${{ secrets.LANGSMITH_API_KEY != '' && 'true' || 'false' }}
 
       - name: Remove transient OpenWiki run state
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.preflight.outputs.ready == 'true' }}
         run: rm -f -- openwiki/.run.json
 
       - name: List OpenWiki update paths
         id: paths
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.preflight.outputs.ready == 'true' }}
         # CLAUDE.md is listed only when present: git add fails on a missing path
         # and then stages nothing.
         run: |
@@ -63,7 +89,7 @@ jobs:
 
       - name: Create OpenWiki update pull request
         id: create-pr
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.preflight.outputs.ready == 'true' }}
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           add-paths: ${{ steps.paths.outputs.list }}
