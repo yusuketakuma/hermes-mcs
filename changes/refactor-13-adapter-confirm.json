@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "人の確認後の送信処理と結果通知の巡回を共通化",
+  "summary": "Slack・Discord・LINE WORKSで個別に書いていた「確定する」後のコマンド送信・送信失敗時の扱いと、Slack・LINE WORKSの結果通知の巡回範囲の決め方を共通処理にまとめました。確認の条件・表示文言・通知の動作は変わりません。",
+  "upgrade": "設定変更・DB移行は不要です。Hermesモードではgateway再起動、独立実行（standalone）とLINE WORKSは各プロセスの再起動で反映されます。",
+  "details": [
+    "adapters/common/confirm.publish_confirmedに送信・受付確認・確認の解放/消費の順序を集約し、通知先ごとの文言は引数で渡す。LINE WORKSだけは受付済みの可能性がある送信失敗を通知後に再送出する従来動作を引数で保持する。",
+    "adapters/common/confirm.followup_windowで1回最大32件の巡回範囲を共通化する（Slack・LINE WORKS）。Discordは従来どおり全件を巡回する。",
+    "Slack・LINE WORKSの確認待ち記録の作成と確定/取消ボタンの並びを共通化する。Discordの確認待ち記録（tokenを持たない）は変更しない。"
+  ],
+  "refs": ["adapters/common/confirm.py", "adapters/slack/actions.py", "adapters/discord/actions.py", "adapters/lineworks/actions.py"]
+}

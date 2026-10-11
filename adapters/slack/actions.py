@@ -9,7 +9,7 @@ import re
 import time
 
 from hermes_plugin import projects
-from adapters.common import envelopes, paths, registry
+from adapters.common import confirm, envelopes, paths, registry
 from adapters.common.text import (MODAL_ACTIONS, MODAL_TITLES, SEARCH_EMPTY,
                                  VIEW_FORMS, digest_inputs,
                                  ja, modal_fields, preview_text,
@@ -561,10 +561,9 @@ class Actions:
             await self._say(origin["channel_id"], pending["user"],
                             "入力または対象が無効です。")
             return
-        confirm_id = registry.new_confirm_id()
-        self._reg.put_confirm(confirm_id, {
-            "token": pending["token"], "actor": pending["actor"],
-            "origin": origin, "payload": payload})
+        confirm_id = confirm.open_confirm(
+            self._reg, token=pending["token"], actor=pending["actor"],
+            origin=origin, payload=payload)
         text = preview_text(pending["action"], payload, markdown=False)
         blocks = [{"type": "section", "text":
                    {"type": "plain_text", "text": text[:3000]}},
@@ -572,7 +571,7 @@ class Actions:
                       {"type": "button", "text": {"type": "plain_text",
                                                 "text": label},
                        "action_id": f"mcs:c:{confirm_id}{suffix}"}
-                      for label, suffix in (("確定する", ""), ("取消", ":cancel"))]}]
+                      for label, suffix in confirm.CHOICES]}]
         await self._say(origin["channel_id"], pending["user"],
                         "確認", blocks=blocks)
 
@@ -643,20 +642,18 @@ class Actions:
             "token": pending["token"], "user": user,
             "route_epoch": self._settings.get("route_epoch"),
             "project_id": payload["project_id"]})
-        try:
-            await self._publish(payload)
-        except (OSError, ValueError):
-            if await asyncio.to_thread(envelopes.command_queued,
-                                       self._dirs["cmd_int"],
-                                       payload["command_id"]):
-                # possibly applied: keep the confirm in flight and the followup
-                await self._say(origin["channel_id"], user,
-                                "受付結果を確認できませんでした。結果の通知をお待ちください。")
-                return
-            self._reg.end_confirm(confirm_id)
-            await self._say(origin["channel_id"], user, "送信に失敗しました。")
+        if not await confirm.publish_confirmed(
+                self._reg, confirm_id,
+                lambda: self._publish(payload),
+                lambda: asyncio.to_thread(envelopes.command_queued,
+                                          self._dirs["cmd_int"],
+                                          payload["command_id"]),
+                on_queued=lambda: self._say(
+                    origin["channel_id"], user,
+                    "受付結果を確認できませんでした。結果の通知をお待ちください。"),
+                on_failed=lambda: self._say(origin["channel_id"], user,
+                                            "送信に失敗しました。")):
             return
-        self._reg.consume_confirm(confirm_id)
         await self._say(origin["channel_id"], user, "受け付けました。")
         await self.sweep_followups()
 
@@ -664,16 +661,10 @@ class Actions:
         """Deliver at most 32 ready results to the original user."""
         if not self._active:
             return
-        followups = list(self._reg.followups().items())
-        if not followups:
-            self._followup_cursor = 0
-            return
-        start = self._followup_cursor % len(followups)
-        count = min(32, len(followups))
-        self._followup_cursor = (start + count) % len(followups)
+        self._followup_cursor, window = confirm.followup_window(
+            self._reg, self._followup_cursor)
         interactive = None  # flags read at most once per sweep
-        for offset in range(count):
-            cid, rec = followups[(start + offset) % len(followups)]
+        for cid, rec in window:
             if self._reg.followup(cid) is None:
                 continue
             origin = rec["origin"]
