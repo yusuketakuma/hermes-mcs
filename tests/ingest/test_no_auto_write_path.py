@@ -14,7 +14,9 @@ no network, no real MCS."""
 
 import ast
 import base64
+import functools
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -39,13 +41,21 @@ NETWORK_MODULES = {"mcs_adapter", "mcs_worker", "run_check", "init_data",
                    "cross_lists", "project_metadata"}
 
 
+# Scheduled launchers (LaunchAgents, cron-style shell wrappers) and the
+# installer run without a human; they must not reach MCS on their own.
+LAUNCHER_ROOTS = ("deployment", "scripts")
+LAUNCHER_FILES = ("install.sh",)
+
+
+@functools.cache
 def _production_files():
-    for top in PRODUCTION_ROOTS:
-        for path in sorted((ROOT / top).rglob("*.py")):
-            if "__pycache__" not in path.parts:
-                yield path.relative_to(ROOT)
+    return tuple(path.relative_to(ROOT)
+                 for top in PRODUCTION_ROOTS
+                 for path in sorted((ROOT / top).rglob("*.py"))
+                 if "__pycache__" not in path.parts)
 
 
+@functools.cache
 def _parse(rel):
     return ast.parse((ROOT / rel).read_text(encoding="utf-8"), filename=str(rel))
 
@@ -100,10 +110,23 @@ def test_every_mcs_request_call_is_a_literal_get():
     assert not bad, f"non-GET (or non-literal) MCS request: {bad}"
 
 
+def _operation_of(call):
+    """The _io operation as a literal, or None when it is not one."""
+    for kw in call.keywords:
+        if kw.arg == "operation":
+            return kw.value.value if isinstance(kw.value, ast.Constant) else None
+    if call.args and isinstance(call.args[0], ast.Constant):
+        return call.args[0].value
+    return None
+
+
 def test_every_api_worker_call_is_a_literal_get():
-    calls = [(rel, node) for rel, node in _calls_to("_io")
-             if node.args and isinstance(node.args[0], ast.Constant)
-             and node.args[0].value == "api"]
+    io_calls = list(_calls_to("_io"))
+    dynamic = [f"{rel}:{node.lineno}" for rel, node in io_calls
+               if _operation_of(node) is None]
+    assert not dynamic, f"_io operation must be a literal: {dynamic}"
+    calls = [(rel, node) for rel, node in io_calls
+             if _operation_of(node) == "api"]
     assert len(calls) >= 2, "api worker callers vanished — re-point this test"
     adapter_tree = _parse(ADAPTER)
     bad = []
@@ -120,8 +143,7 @@ def test_every_api_worker_call_is_a_literal_get():
         bad.append(f"{rel}:{node.lineno}")
     assert not bad, f"non-GET (or non-literal) api worker call: {bad}"
     # Every other _io operation is local (CDP on loopback) or a download.
-    ops = {node.args[0].value for _rel, node in _calls_to("_io")
-           if node.args and isinstance(node.args[0], ast.Constant)}
+    ops = {_operation_of(node) for _rel, node in io_calls}
     assert ops <= {"api", "cdp_eval", "cdp_json", "download"}, ops
 
 
@@ -178,29 +200,91 @@ def _enclosing_function(tree, target):
     return best
 
 
+DOM_ACTION = re.compile(r"\.click\(|\.submit\(|\.requestSubmit\(|dispatchEvent\(")
+
+
 def test_dom_clicks_exist_only_in_the_login_form():
-    """The one scripted click is the login submit inside auto_login;
-    no other injected script presses, submits or dispatches anything."""
-    owners = []
+    """The one scripted click is the login submit inside auto_login, and
+    the only dispatched events are the two credential input events; no
+    other injected script presses, submits or dispatches anything — not
+    even another action added inside auto_login itself."""
+    actions = []
     for rel in _production_files():
         tree = _parse(rel)
         for node, text in _string_constants(tree):
-            if any(tok in text for tok in (".click(", ".submit(", "dispatchEvent(")):
-                fn = _enclosing_function(tree, node)
-                owners.append((rel, fn.name if fn else None))
-    assert owners, "auto_login script vanished — re-point this test"
-    assert set(owners) == {(ADAPTER, "auto_login")}, owners
+            for line in text.splitlines():
+                for _match in DOM_ACTION.finditer(line):
+                    fn = _enclosing_function(tree, node)
+                    actions.append((rel, fn.name if fn else None,
+                                    " ".join(line.split())))
+    assert sorted(actions) == sorted([
+        (ADAPTER, "auto_login",
+         "idEl.dispatchEvent(new Event('input', {bubbles:true}));"),
+        (ADAPTER, "auto_login",
+         "pwEl.dispatchEvent(new Event('input', {bubbles:true}));"),
+        (ADAPTER, "auto_login", "btn.click();"),
+    ]), actions
+    # The click target is the login form's submit button on the MCS origin.
+    click_script = next(text for _n, text in _string_constants(_parse(ADAPTER))
+                        if "btn.click()" in text)
+    assert "location.origin !== 'https://www.medical-care.net'" in click_script
+    assert "button[type=submit]" in click_script
+
+
+def _cdp_new_target(arg):
+    """'/unreads' for f"/json/new?{BASE}/unreads"; None for any other
+    shape (plain string, other base, extra interpolation)."""
+    if not isinstance(arg, ast.JoinedStr) or len(arg.values) != 3:
+        return None
+    head, base, tail = arg.values
+    if not (isinstance(head, ast.Constant) and head.value == "/json/new?"
+            and isinstance(base, ast.FormattedValue)
+            and isinstance(base.value, ast.Name) and base.value.id == "BASE"
+            and base.format_spec is None and base.conversion == -1
+            and isinstance(tail, ast.Constant)):
+        return None
+    return tail.value
 
 
 def test_cdp_only_opens_the_unreads_and_login_pages():
-    tree = _parse(ADAPTER)
-    pages = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.JoinedStr):
-            parts = [v.value for v in node.values if isinstance(v, ast.Constant)]
-            if parts and parts[0].startswith("/json/new?"):
-                pages.add("".join(parts[1:]))
-    assert pages == {"/unreads", "/authentication/login"}, pages
+    opened, rejected = set(), []
+    for rel in _production_files():
+        for node in ast.walk(_parse(rel)):
+            if not isinstance(node, ast.Call):
+                continue
+            for arg in list(node.args) + [kw.value for kw in node.keywords]:
+                texts = [arg.value] if isinstance(arg, ast.Constant) else \
+                    [v.value for v in getattr(arg, "values", [])
+                     if isinstance(v, ast.Constant)]
+                if not any(isinstance(t, str) and "/json/new" in t for t in texts):
+                    continue
+                page = _cdp_new_target(arg) if rel == ADAPTER else None
+                if page is None:
+                    rejected.append(f"{rel}:{node.lineno}")
+                else:
+                    opened.add(page)
+    assert not rejected, f"unpinned CDP page open: {rejected}"
+    assert opened == {"/unreads", "/authentication/login"}, opened
+
+
+def test_launchers_never_address_mcs_directly():
+    """Shell/launchd entrypoints run on a schedule; any MCS traffic must go
+    through the Python adapter pinned above, never a curl in a wrapper."""
+    hits = []
+    paths = [ROOT / f for f in LAUNCHER_FILES]
+    for top in LAUNCHER_ROOTS:
+        paths += [p for p in (ROOT / top).rglob("*")
+                  if p.is_file() and p.suffix != ".py"
+                  and "__pycache__" not in p.parts]
+    assert paths
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if "medical-care.net" in text or "/api/v2t" in text:
+            hits.append(str(path.relative_to(ROOT)))
+    assert not hits, hits
 
 
 class _RecordingWorker:
