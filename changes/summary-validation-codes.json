@@ -5,7 +5,7 @@
   "upgrade": "更新後に抽出worker2本（Hermesでは ai.mcs.extract-drainer / -2、独立モードでは host）を再起動してください。gateway・設定の変更は不要です。要約の受入基準、モデル、取得範囲、予算、試行回数、人承認の条件は変更しません。",
   "details": [
     "既存の summary_model 分類と戻り値を保持し、job_metrics に summary_validation_error を追加する。",
-    "コードは5種類の検証箇所だけを表し、応答本文・動的なキー名・入力値は含めない。完了・別ジョブへ理由が混ざらない。",
+    "コードは JSON・claims・claim本文・limitations などの検証箇所だけを表し、応答本文・動的なキー名・入力値は含めない。別ジョブへ理由を持ち越さない。形式の再生成で回復して完了したジョブには、最初に拒否した理由が記録として残る。",
     "完全合成の回帰で各拒否条件、正常応答、既存の失敗契約、後続QCへの理由持越し防止を検証する。"
   ],
   "refs": ["mcs/semantic/semantic_llm.py", "mcs/semantic/semantic_drain.py", "tests/semantic/test_summary_validation_diagnostics.py"]
