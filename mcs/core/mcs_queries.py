@@ -404,15 +404,20 @@ def extract_feedback(db, project_id=None, limit=100):
         [*params, limit]).fetchall()
 
 
+# Incomplete thread root over alias m: the thread job's criterion (full or
+# tombstoned replies), shared by the view, backup inventory and repair plan;
+# not a claim about what the API's reply_count means.
+REPLY_GAP = """m.parent_id IS NULL AND m.reply_count >
+    (SELECT COUNT(*) FROM messages r WHERE r.project_id=m.project_id
+     AND r.parent_id=m.message_id AND r.body_state IN ('full','deleted'))"""
+
+
 def incomplete_reply_roots(db, project_id) -> int:
     """Thread roots whose reported reply_count exceeds the stored full or
     tombstoned replies — the thread job's criterion, not a completeness claim."""
-    return db.execute("""
-      SELECT count(*) FROM messages m WHERE m.project_id=? AND m.parent_id IS NULL
-        AND m.reply_count > (SELECT count(*) FROM messages r
-          WHERE r.project_id=m.project_id AND r.parent_id=m.message_id
-            AND r.body_state IN ('full','deleted'))
-    """, (project_id,)).fetchone()[0]
+    return db.execute(
+        f"SELECT COUNT(*) FROM messages m WHERE m.project_id=? AND {REPLY_GAP}",
+        (project_id,)).fetchone()[0]
 
 
 def thread_reply_pairs(db, *, since=None, until=None, as_of, project_id=None):

@@ -26,3 +26,9 @@ def test_backup_and_repair_agree_on_tombstoned_reply(tmp_path):
     backup_count = mcs_backup._inventory(path)["metrics"]["incomplete_reply_roots"]
     repair_count = mcs_repair.plan(path)["counts"]["incomplete_reply_roots"]
     assert backup_count == repair_count == 0
+
+
+def test_backup_and_repair_share_the_query_module_criterion():
+    import mcs_queries
+    assert mcs_backup.REPLY_GAP is mcs_queries.REPLY_GAP
+    assert mcs_repair.REPLY_GAP is mcs_queries.REPLY_GAP
