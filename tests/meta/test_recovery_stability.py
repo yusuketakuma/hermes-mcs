@@ -104,3 +104,29 @@ def test_failed_schema_rollback_hold_survives_independent_recovery(
     assert calls == [True] and not Path(rec.MARKER_PATH).exists()
     assert rec._db_version(str(live)) == 7
     assert json.loads(Path(rec.STATE_PATH).read_text())["applying"] is None
+
+
+def test_frozen_gateway_program_carries_the_atomic_json_writer(rec, tmp_path):
+    namespace = {"__name__": "synthetic_frozen"}
+    exec(compile(rec._GATEWAY_RESTART_PROGRAM.rsplit("sys.exit(", 1)[0],
+                 "<frozen>", "exec"), namespace)
+    out = tmp_path / "frozen-data"
+    namespace["_gateway_restart_report"](str(out), "requested", error="synthetic")
+    written = out / "gateway_restart.json"
+    assert json.loads(written.read_text())["status"] == "requested"
+    assert written.stat().st_mode & 0o777 == 0o600
+    assert [p.name for p in out.iterdir()] == ["gateway_restart.json"]
+
+
+def test_atomic_json_failure_keeps_target_and_leaves_no_temp(rec, monkeypatch):
+    Path(rec.REPORT_PATH).write_text('{"result": "synthetic-previous"}')
+
+    def fail(src, dst):
+        raise OSError("synthetic replace failure")
+
+    monkeypatch.setattr(rec.os, "replace", fail)
+    rec._report("escalate", "synthetic")         # best-effort: swallowed
+    with pytest.raises(OSError):
+        rec._save_state({"v": 1})                # state writes raise
+    assert json.loads(Path(rec.REPORT_PATH).read_text())["result"] == "synthetic-previous"
+    assert not [p for p in Path(rec.DATA).iterdir() if p.name.endswith(".tmp")]
