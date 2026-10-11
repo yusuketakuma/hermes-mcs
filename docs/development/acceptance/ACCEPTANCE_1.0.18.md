@@ -55,6 +55,15 @@ Python 3.14では深い入れ子のJSONを標準ライブラリが読めるた�
 
 ## 検証の区別
 
+最終候補`2f1783a`（統合用ブランチ`release/1.0.18-candidate`）での実績（いずれもPython 3.14.8、完全合成）:
+
+- 全テスト一式: 10,714 passed・2 skipped（SDK専用レーンの対象外）・0 failed（Claude実行、`2f1783a`）。
+- root独立の全体実行（Python移行の前の固定ツリー）: 10,666 passed・11 failed・2 skipped。11件は旧版の合成fixture（doctor/CLI/旧recoveryの期待値）で、修正後262 passed。統合後の候補でops・install・CIの2,589 passed、最終の中断復旧の235 passed＋復元承認100 passed。
+- SDKレーン: Hermes連携21 passed（6f35b1ed）・独立実行25 passed。静的検査: ruff 0.17.0全対象、安全ゲート10/10、incident網羅、`sh -n install.sh`、README・生成文書・リリースノートの検査、リリース関連テスト28件。
+- リモートの最終SHAでの必須CI、push・PR・tag・公開・本番配備は未実施で、別の承認段階とする。
+
+
+
 各変更の対象テスト・関連一式は各レビューで実行済み（snapshot 774件、lifecycle 321件、main-local 214件、drug 212件、更新元fixture、ruff・gates・README/notes check）。統合候補の最終source SHAでのtests/integration一式、CI必須チェック（lint-test、hygiene、incident-gates、standalone-sdk、hermes-integration、readme-sync、Release Notes Check）は公開前に別途確認し、この票の時点では完了扱いしない。
 
 本番は2026-10-11時点でmain `1188bb7`稼働。1.0.18の本番適用・push・tag・Release公開は別の明示承認で行う。実データ・患者名・秘密値を公開記録へ含めない。臨床精度・長期安定稼働を合成成功から推定しない。
