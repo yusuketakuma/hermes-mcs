@@ -45,6 +45,8 @@ Python 3.14では深い入れ子のJSONを標準ライブラリが読めるた�
 | 仕様・利用条件 | R08rec3・R08rec1・厚労省利用条件ページを再取得し、hashが前回確認と一致 |
 | 同梱検証 | `check_drug_master_bundle.py` ok、`conversion_held=terms_unconfirmed`（意図した保留） |
 
+公開作業の直前（2026-10-11T04:38Z）に同じ上限・no-proxy/no-redirectで再取得し、menuの令和8年度版医薬品マスター（19,272件・令和8年9月30日）、ZIP・CSV・R08rec3・R08rec1・利用条件ページのSHA256が上記と一致することを再確認した。候補`30b19fe`での無通信のbundle検証もok（19,272行、`conversion_held=terms_unconfirmed`）。
+
 更新はなく、20260930版を継続同梱する。今回追加した`install-bundled`は同梱原本の全行を実行時converterで変換できることを一時HOMEで確認した（12,210 entries、変更区分3の1,022行は変更年月日が実行日より後のため候補外）。運用者の`terms_checked_on`・`confirmed_by`・`approved_by`は入力必須または任意入力で、manifestや同梱物から作成しない。`mcs drug status`は版の識別（dict_idに含む原本SHA）の比較で、同梱物の完全な検証は`check_drug_master_bundle.py`が担う。本番の辞書作成・config有効化・既存投稿の再照合は運用者の操作であり、本リリースの範囲外。
 
 ## 新規導入と全過去版更新
