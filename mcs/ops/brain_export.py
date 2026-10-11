@@ -247,9 +247,9 @@ def _patient_md(pid: int, name: str, info: dict, roll: dict) -> str:
         rows = {k: v for k, v in vit.items() if k != "at"}
         lines.append(f"\n## latest vitals ({vit.get('at')})\n\n"
                      + "\n".join(f"- {k}: {v}" for k, v in rows.items()) + "\n")
-    if roll.get("current_med_period"):
-        lines.append("\n## current med period\n\n```json\n"
-                     + json.dumps(roll["current_med_period"],
+    if roll.get("med_period_candidate"):
+        lines.append("\n## med period candidate（規則抽出・未確認）\n\n```json\n"
+                     + json.dumps(roll["med_period_candidate"],
                                   ensure_ascii=False)[:1000] + "\n```\n")
     if roll.get("medications"):
         lines.append("\n## current medications\n\n| name | dose | last | 成分候補（未確認） |\n"
@@ -278,8 +278,9 @@ def _patient_md(pid: int, name: str, info: dict, roll: dict) -> str:
     if roll.get("top_senders"):
         lines.append("\n## top senders\n\n"
                      + ", ".join(f"{n}({c})" for n, c in roll["top_senders"]) + "\n")
-    if roll.get("possibly_deleted"):
-        lines.append(f"\n> possibly_deleted: {len(roll['possibly_deleted'])} message ids\n")
+    if roll.get("unrefreshed_message_ids"):
+        lines.append(f"\n> unrefreshed_message_ids: {len(roll['unrefreshed_message_ids'])} message ids"
+                     " (削除の証拠ではない。tombstone は coverage.collection.deleted)\n")
     return "".join(lines)
 
 

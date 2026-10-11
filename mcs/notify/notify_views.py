@@ -51,12 +51,12 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
         roll = {}
     else:
         roll = current_cached_refs(db, project_id, roll, row["meta"])
-        period = roll.get("current_med_period")
+        period = roll.get("med_period_candidate")
         meds = [m for m in roll.get("medications") or []
                 if isinstance(m, dict) and m.get("name")]
         lines.append("■ 薬")
         if isinstance(period, dict) and period.get("start"):
-            lines.append(f"処方期間: {period.get('start')}"
+            lines.append(f"処方期間の候補: {period.get('start')}"
                          f"〜{period.get('end') or '?'}")
         lines.extend("・" + " ".join(str(m[k]) for k in
                                      ("name", "dose", "freq", "route")

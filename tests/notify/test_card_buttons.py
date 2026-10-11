@@ -381,7 +381,7 @@ def test_summary_with_rollup_and_coverage(led):
     body = _click(led, spec, "summary")["body"]
     assert ("履歴取得: 完了記録あり · 直近の取得は未完了（通信エラー）"
             " · 返信未取得 1件") in body
-    assert "処方期間: 2026-09-01〜2026-09-28" in body
+    assert "処方期間の候補: 2026-09-01〜2026-09-28" in body
     assert "・アムロジピン 5mg 1日1回（最終言及 2026-09-20）" in body
     assert "バイタル: BP 128/70  BT 36.5（2026-09-22）" in body
     assert "■ 次回予定: 10/3 訪問" in body
