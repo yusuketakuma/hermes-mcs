@@ -1,7 +1,8 @@
-"""Semantic policy + config layer (spec §22.1): mode names, artifact
-kind constants, schema/policy versions, config validation, and the
-policy fingerprint. Leaf module — every other semantic_* module may
-import it; it imports none of them."""
+"""Semantic policy and config layer (spec §22.1).
+
+Mode names, artifact kind constants, schema/policy versions, config
+validation, and the policy fingerprint. Leaf module — every other
+semantic_* module may import it; it imports none of them."""
 from __future__ import annotations
 
 from mcs_requests import payload_hash
