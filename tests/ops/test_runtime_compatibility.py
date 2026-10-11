@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import plistlib
 import sys
+import stat
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +14,7 @@ import mcs_setup
 from test_mcs_update import updater as updater
 
 
-def _facts(python="3.11.15", sqlite="3.51.3"):
+def _facts(python="3.14.8", sqlite="3.51.3"):
     return {"python": python, "sqlite": sqlite,
             "packages": {"discord.py": "2.7.1", "slack-bolt": "1.30.0",
                          "slack-sdk": "3.45.0"}}
@@ -33,14 +34,16 @@ def test_supported_wal_versions(version, safe):
 
 @pytest.mark.parametrize(("python", "sqlite", "recovery", "supported"), [
     ("3.9.6", "3.51.3", False, False),
-    ("3.10.0", "3.51.3", False, True),
+    ("3.10.0", "3.51.3", False, False),
     ("3.13.2", "3.50.4", False, False),
-    ("3.13.2", "3.50.7", False, True),
-    ("3.9.6", "3.44.6", True, True),
+    ("3.13.2", "3.50.7", False, False),
+    ("3.14.8", "3.50.7", False, True),
+    ("3.9.6", "3.44.6", True, False),
+    ("3.14.8", "3.44.6", True, True),
     ("3.8.10", "3.51.3", True, False),
     ("3.9.6", "3.51.0", True, False),
 ])
-def test_runtime_compatibility_has_separate_recovery_python_contract(
+def test_runtime_compatibility_requires_python314_for_both_roles(
         python, sqlite, recovery, supported):
     assert (mcs_setup._runtime_problem(_facts(python, sqlite), recovery=recovery)
             is None) is supported
@@ -173,7 +176,7 @@ def test_invalid_recovery_plist_is_unverified(monkeypatch, tmp_path, content):
 def _tree(root):
     return {str(path.relative_to(root)): (
         path.lstat().st_mode, path.lstat().st_mtime_ns,
-        hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None)
+        hashlib.sha256(path.read_bytes()).hexdigest() if stat.S_ISREG(path.lstat().st_mode) else None)
         for path in [root, *sorted(root.rglob("*"))]}
 
 
@@ -235,7 +238,7 @@ def test_safe_service_runtimes_keep_python_roles_and_rendering(monkeypatch, tmp_
 
     def probe(exe):
         probes.append(exe)
-        return _facts("3.9.6", "3.44.6") if exe == recovery else _facts("3.10.0", "3.50.7")
+        return _facts("3.14.8", "3.44.6") if exe == recovery else _facts("3.14.8", "3.50.7")
 
     monkeypatch.setattr(mcs_setup, "_runtime_probe", probe)
     monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version_info", (3, 51, 0))
@@ -247,10 +250,10 @@ def test_safe_service_runtimes_keep_python_roles_and_rendering(monkeypatch, tmp_
 
 @pytest.mark.parametrize("mode", ["hermes", "standalone"])
 @pytest.mark.parametrize(("role", "facts", "blocked"), [
-    ("selected", _facts("3.10.0", "3.51.3"), False),
+    ("selected", _facts("3.14.8", "3.51.3"), False),
     ("selected", None, True), ("selected", _facts(sqlite="3.51.0"), True),
     ("recovery", None, True), ("recovery", _facts("3.9.6", "3.51.0"), True),
-    ("recovery", _facts("3.9.6", "3.50.7"), False),
+    ("recovery", _facts("3.14.8", "3.50.7"), False),
 ])
 def test_updater_precheck_probes_actual_runtimes_not_parent(
         updater, monkeypatch, tmp_path, mode, role, facts, blocked):
@@ -314,7 +317,7 @@ def test_installer_explicit_template_probe_never_uses_deployed_or_parent_python(
         "ProgramArguments": ["/synthetic/unused-python", "recovery.py"]}))
     probes = []
     monkeypatch.setattr(mcs_setup, "_runtime_probe",
-                        lambda exe: probes.append(exe) or _facts("3.9.6", "3.51.3"))
+                        lambda exe: probes.append(exe) or _facts("3.14.8", "3.51.3"))
     assert mcs_setup._runtime_problem(mcs_setup._recovery_runtime(template), recovery=True) is None
     assert probes == ["/synthetic/template-python"]
 
@@ -325,7 +328,7 @@ def test_explicit_recovery_init_persists_private_selection(monkeypatch, tmp_path
     selected = str(tmp_path / "independent-python")
     probes = []
     monkeypatch.setattr(mcs_setup, "_runtime_probe",
-                        lambda exe: probes.append(exe) or _facts("3.9.6"))
+                        lambda exe: probes.append(exe) or _facts("3.14.8"))
     monkeypatch.setattr(sys, "argv", ["mcs_setup", "init", "--yes",
                                     "--recovery-python", selected])
     assert mcs_setup.main() == 0
@@ -358,7 +361,8 @@ def test_recovery_rejects_relative_checkout_and_update_tree_paths(monkeypatch, t
     monkeypatch.setattr(mcs_setup, "REPO_ROOT", repo)
     for path in ("relative", str(repo / "python"), str(alias), str(update / "python")):
         assert mcs_setup._recovery_python_problem(path, update)
-    assert mcs_setup._recovery_python({}) == "/usr/bin/python3"
+    monkeypatch.setattr(mcs_setup.os, "access", lambda path, mode: path == "/usr/local/bin/python3.14")
+    assert mcs_setup._recovery_python({}) == "/usr/local/bin/python3.14"
     assert mcs_setup._recovery_python_problem(str(tmp_path / "independent-python"), update) is None
 
 

@@ -543,22 +543,18 @@ def test_init_heals_nondict_semantic(monkeypatch, tmp_path):
     block is reset with a notice instead of crashing on item
     assignment."""
     import json
-    monkeypatch.setattr(mcs_setup, "cmd_check", lambda args: 0)
-    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(tmp_path / "c.json"))
-    monkeypatch.setattr(mcs_setup, "ENV_PATH", str(tmp_path / ".env"))
-    monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
-    monkeypatch.delenv("MCS_SETUP_PASSWORD", raising=False)
-    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
-    monkeypatch.setattr(mcs_setup, "load_config", lambda: {
+    _init_env(monkeypatch, tmp_path, {
         "mcs_login_id": "u1", "notify_target": "slack",
+        "notify": {"interactive": "slack", "slack": {
+            "profile": "main", "application_id": "app1", "team_id": "team1", "channel_id": "c1"}},
         "semantic": "off", "signals": "yes"})
     monkeypatch.setattr(
         mcs_setup.sys, "argv",
         ["mcs_setup", "init", "--yes", "--semantic-mode", "shadow",
-         "--signals-notify"])
+         "--project-ids", "1", "--signals-notify"])
     assert mcs_setup.main() == 0
     cfg = json.loads((tmp_path / "c.json").read_text())
-    assert cfg["semantic"] == {"mode": "shadow"}
+    assert cfg["semantic"] == {"mode": "shadow", "project_ids": [1]}
     assert cfg["signals"] == {"notify": True}
 
 
@@ -749,7 +745,9 @@ def test_init_set_flag_covers_any_key(monkeypatch, tmp_path):
     """--set KEY=JSON writes arbitrary (dotted) keys under --yes."""
     import json
     _init_env(monkeypatch, tmp_path,
-              {"mcs_login_id": "u1", "notify_target": "slack"})
+              {"mcs_login_id": "u1", "notify_target": "slack",
+               "notify": {"discord": {"profile": "main", "application_id": "app1",
+                                      "guild_id": "g1", "channel_id": "c1"}}})
     monkeypatch.setattr(
         mcs_setup.sys, "argv",
         ["mcs_setup", "init", "--yes",
@@ -762,7 +760,9 @@ def test_init_set_flag_covers_any_key(monkeypatch, tmp_path):
     assert cfg["self_posts"] is True
     assert cfg["metadata_shadow"] is True
     assert cfg["notify"] == {"interactive": "discord",
-                             "card_thread": False}
+                             "card_thread": False,
+                             "discord": {"profile": "main", "application_id": "app1",
+                                         "guild_id": "g1", "channel_id": "c1"}}
 
 
 @pytest.mark.parametrize("source,settings", [
@@ -2036,7 +2036,7 @@ def test_doctor_is_local_and_does_not_run_check(monkeypatch, capsys):
                         lambda: {"mcs_login_id": "synthetic", "notify_target": "local"})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: {
-        "python": "3.11.15", "sqlite": "3.51.3",
+        "python": "3.14.8", "sqlite": "3.51.3",
         "packages": {"discord.py": None, "slack-bolt": None, "slack-sdk": None}})
     monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version_info", (3, 51, 3))
     monkeypatch.setattr(mcs_setup, "cmd_check", lambda args: pytest.fail("not local"))
@@ -2064,7 +2064,7 @@ def test_check_runtime_verifies_services_interpreter(monkeypatch, tmp_path):
     monkeypatch.setattr(mcs_setup, "HERMES_PY",
                         _stub_py(tmp_path / "old-py", 1))
     errors, _ = mcs_setup.check_runtime(cfg)
-    assert any("not a working Python >= 3.10" in e for e in errors)
+    assert any("not a working Python >= 3.14" in e for e in errors)
     monkeypatch.setattr(mcs_setup, "HERMES_PY",
                         _stub_py(tmp_path / "py", 0))
     assert mcs_setup.check_runtime(cfg) == ([], [])
@@ -2104,7 +2104,7 @@ def _runtime_darwin(monkeypatch, tmp_path, loaded=()):
     monkeypatch.setattr(mcs_setup, "_hermes_py_problem", lambda: None)
     monkeypatch.setattr(mcs_setup, "_hermes_ok", lambda exe: True)
     monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: {
-        "python": "3.9.6", "sqlite": "3.51.3",
+        "python": "3.14.8", "sqlite": "3.51.3",
         "packages": {"discord.py": None, "slack-bolt": None, "slack-sdk": None}})
     monkeypatch.setattr(mcs_setup, "_run",
                         lambda *a, **k: SimpleNamespace(returncode=0))

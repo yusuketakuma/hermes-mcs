@@ -109,7 +109,13 @@ for a in "$@"; do
     prev="$a"
 done
 case "$*" in
-  *v1/models*) [ -n "$STUB_LLM_SERVING" ] && exit 0; exit 7 ;;
+  *v1/models*)
+    if [ -n "$STUB_LLM_SERVING" ]; then
+        if [ -n "$STUB_MODEL_RESPONSE" ]; then printf '%s' "$STUB_MODEL_RESPONSE"
+        else printf '%s' '{"data":[{"id":"synthetic-model"}]}' ; fi
+        exit 0
+    fi
+    exit 7 ;;
 esac
 if [ -n "$STUB_CURL_FAIL" ]; then
     case "$*" in *"$STUB_CURL_FAIL"*) exit 6 ;; esac
@@ -158,15 +164,23 @@ case "$1" in
 esac
 exit 0
 """,
-    # ambient python3 answers every version probe as 3.11–3.13
+    # ambient python3 answers version probes as the supported 3.14 runtime
     "python3": """#!/bin/sh
 echo "python3 $*" >> "$STUB_LOG"
+case "$*" in
+  *mcs-model-list-probe*|*mcs-runtime-migration-lock*) exec "$STUB_PARSE_PYTHON" "$@" ;;
+esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
 fi
 if [ "$1" = "-" ] && [ "$2" = "$HOME/.mcs/config.json" ]; then
     exec "$STUB_PARSE_PYTHON" "$@"
 fi
+exit 0
+""",
+    "ps": """#!/bin/sh
+[ -z "$STUB_PS_FAIL" ] || exit 1
+[ -z "$STUB_VENV_PROCESS" ] || printf '%s\\n' "$STUB_VENV_PROCESS"
 exit 0
 """,
     "llama-server": """#!/bin/sh
@@ -195,6 +209,9 @@ echo "/dev/stub 100000000 1 ${STUB_DF_KB:-50000000} 1% /"
 # copied into the venv by the uv stub (not on PATH)
 VENV_PYTHON = """#!/bin/sh
 echo "venv-python $*" >> "$STUB_LOG"
+case "$*" in
+  *mcs-model-list-probe*|*mcs-runtime-migration-lock*) exec "$STUB_PARSE_PYTHON" "$@" ;;
+esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
 fi
@@ -237,9 +254,9 @@ def _world(tmp_path, *, brew=True, git_head=None, path_hermes=False):
         del stubs["brew"]
     if path_hermes:        # a hermes on PATH that is not our venv
         stubs["hermes"] = '#!/bin/sh\necho "path-hermes $*" >> "$STUB_LOG"\n'
-    # find_py prefers python3.13/3.12/3.11 before python3; shadow them so a
+    # find_py prefers python3.14 before python3; shadow them so a
     # host Python (e.g. /usr/bin/python3.12 on Linux CI) never replaces the stub.
-    for version in ("python3.13", "python3.12", "python3.11"):
+    for version in ("python3.14",):
         stubs.setdefault(version, "#!/bin/sh\nexit 1\n")
     for name, body in stubs.items():
         p = bin_dir / name
@@ -267,7 +284,7 @@ def metadata(argv, **kwargs):
     with open(os.environ['STUB_LOG'], 'a') as stream:
         stream.write('runtime-metadata ' + argv[0] + '\\n')
     case = os.environ.get('STUB_RECOVERY_RUNTIME', 'safe')
-    facts = {{'python': '3.9.6', 'sqlite': '3.51.3',
+    facts = {{'python': '3.14.8', 'sqlite': '3.51.3',
               'packages': {{'discord.py': None, 'slack-bolt': None, 'slack-sdk': None}}}}
     if case == 'unsafe':
         facts['sqlite'] = '3.51.0'
@@ -277,6 +294,7 @@ def metadata(argv, **kwargs):
         argv, 127 if case == 'failed' else 0,
         'not-json' if case == 'unknown' else json.dumps(facts), '')
 mcs_setup._run = metadata
+mcs_setup._recovery_python = lambda cfg: cfg.get("recovery_python", os.path.join(os.environ["STUB_ROOT"], "bin/python3.14"))
 if sys.argv[1] == '--persist':
     code = sys.stdin.read()
     sys.argv = sys.argv[2:]
@@ -301,16 +319,16 @@ exec(compile(code, '<installer-runtime-check>', 'exec'))
     return home, hermes_home, stub_root, env
 
 
-def _run(env, hermes_home, *flags, script=INSTALL, cwd=None):
+def _run(env, hermes_home, *flags, script=INSTALL, cwd=None, pass_fds=()):
     args = [*flags] + ([str(hermes_home)] if hermes_home is not None else [])
     return subprocess.run(
         ["sh", str(script), *args], cwd=cwd,
-        env=env, capture_output=True, text=True, timeout=60)
+        env=env, capture_output=True, text=True, timeout=60, pass_fds=pass_fds)
 
 
 def _calls(stub_root):
     log = stub_root / "calls.log"
-    return log.read_text().splitlines() if log.exists() else []
+    return [line for line in log.read_text().splitlines() if line.strip()] if log.exists() else []
 
 
 def _bootstraps(stub_root, label):
@@ -335,7 +353,7 @@ def test_recovery_runtime_gate_fails_before_watchdog_installation(
     assert _bootstraps(stub_root, "org.mcs.recovery") == []
     assert not any(c.startswith("launchctl bootout") and "org.mcs.recovery" in c
                    for c in _calls(stub_root))
-    assert "runtime-metadata /usr/bin/python3" in _calls(stub_root)
+    assert f"runtime-metadata {stub_root}/bin/python3.14" in _calls(stub_root)
     if mode != "install":
         assert list(home.iterdir()) == []
 
@@ -383,7 +401,7 @@ def test_recovery_template_executable_is_probed_without_substitution(tmp_path):
              script=repo / "install.sh")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "runtime-metadata " + str(executable) in _calls(stub_root)
-    assert "runtime-metadata /usr/bin/python3" not in _calls(stub_root)
+    assert f"runtime-metadata {stub_root}/bin/python3.14" not in _calls(stub_root)
     installed = plistlib.loads((home / "Library/LaunchAgents/org.mcs.recovery.plist").read_bytes())
     assert installed["Program"] == str(executable)
 
@@ -416,7 +434,7 @@ def test_explicit_recovery_flag_persists_and_renders_selected_target(tmp_path):
     assert second.returncode == 0, second.stdout + second.stderr
     assert plistlib.loads(path.read_bytes())["ProgramArguments"][0] == str(selected)
     assert "runtime-metadata " + str(selected) in _calls(stub_root)
-    assert "runtime-metadata /usr/bin/python3" not in _calls(stub_root)
+    assert f"runtime-metadata {stub_root}/bin/python3.14" not in _calls(stub_root)
 
 
 @pytest.mark.parametrize("runtime", ["unsafe", "unknown", "unsupported"])
