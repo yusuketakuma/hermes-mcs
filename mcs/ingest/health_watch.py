@@ -551,6 +551,12 @@ _REASON_JA = {
                                 "llama-server と extract-drainer の稼働を確認（launchctl list | grep mcs）"),
     "semantic_backlog_stalled": ("意味チェックが6時間以上止まっています",
                                  "extract-drainer の稼働と data/extract_drain.log の jev_error を確認"),
+    "local_llm_down": ("ローカルLLMに1時間以上つながらず、要約の抽出が止まっています",
+                       "llama-server の稼働を確認（再起動後は自動で再開します）"),
+    "llm_endpoint_down": ("ローカルLLMの失敗が続き、要約の抽出が6時間以上進んでいません",
+                          "llama-server の稼働と data/extract_drain.log を確認"),
+    "backup_deferred_deadline": ("収集の制限時間内に日次バックアップを取れず、1日以上更新されていません",
+                                 f"DBの大きさと収集の所要時間を確認。続く場合は {_CHECK}"),
     "stall_check_failed": ("停滞の判定処理が失敗しました",
                            f"data/run_check.log の stall_check_failed を確認。続く場合は {_CHECK}"),
     "semantic_jev_payment_required": ("TypeSafe Jev が支払い未了（HTTP 402）を返しています",
@@ -586,6 +592,7 @@ _STANDALONE_ACTION = {
     "extract_backlog_stalled": f"llama-server の稼働と {_STANDALONE_STATUS} の extract-0・extract-2 を確認",
 }
 _AREA_JA = (("semantic", "意味チェック（任意機能）"), ("extract_backlog", "要約の抽出"),
+            ("local_llm", "要約の抽出"), ("llm_endpoint", "要約の抽出"),
             ("notification", "通知"), ("card_delivery", "通知"),
             ("collection_incomplete", "一部患者の記録取得"), ("disk_low", "保存"),
             ("ledger", "保存データ"), ("backup", "バックアップ"))
