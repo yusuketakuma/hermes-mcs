@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "Slack の送信制限（429）の待機後に、停止済みの通知が送られる問題を修正",
+  "summary": "Slack から送信制限（429）を受けて待つ間に、通知の停止（interactive の無効化）、配送先設定の変更（route_epoch）、復元中の保留が起きても、待機後の1回の再送がそのまま行われていました。再送の直前に現在の送信許可を確かめ、許可がなければ再送せず「送信制限のため未送信」として記録します。操作への個別返信（ephemeral）も、待機中にアダプターが停止した場合は再送しません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "adapters/slack/delivery.py の _call は、429 の待機後に RETRY_ALLOWED（呼出し側の現在の送信可否）を確かめてから1回だけ再送する。許可がなければ最初の 429 を結果とし、従来どおり not_sent（ratelimited）になる。",
+    "配送 worker はカード本体と各部品（本文・添付・編集）の送信中、worker 共通の送信可否（interactive・transport・restore_pending・route_epoch）を RETRY_ALLOWED に設定する。個別返信は、アダプターが有効なままかを確かめる。",
+    "再送は最大1回、結果が不明な送信は再送しない、という既存の約束は変えていない。LINE WORKS は再送ごとに送信経路を確かめ直しており、Discord はアダプター側で待機・再送しないため、変更していない。"
+  ],
+  "refs": [
+    "adapters/slack/delivery.py",
+    "adapters/slack/actions.py",
+    "tests/adapters/slack/test_rate_retry_authority.py"
+  ]
+}

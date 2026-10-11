@@ -334,11 +334,16 @@ class Actions:
 
     async def _say(self, channel, user, text, *, blocks=None, thread_ts=None,
                    navigation=None):
-        from .delivery import _call   # one Retry-After resend, as for cards
+        from .delivery import RETRY_ALLOWED, _call   # one Retry-After resend, as for cards
         client = self._client()
         if client is None:
             self._log("followup_failed", error="retry_policy_unknown")
             return
+
+        async def still_active():
+            return self._active
+
+        token = RETRY_ALLOWED.set(still_active)
         try:
             for index, chunk in enumerate(_ephemeral_chunks(text)):
                 if not self._active:
@@ -355,6 +360,8 @@ class Actions:
                 await _call(client.chat_postEphemeral, **kwargs)
         except Exception as exc:
             self._log("followup_failed", error=type(exc).__name__)
+        finally:
+            RETRY_ALLOWED.reset(token)
 
     async def _clicker_name(self, user) -> str:
         """The clicker's Slack display/real name (users.info, cached by
