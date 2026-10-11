@@ -371,6 +371,16 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
                 "AND event_id>?", (ev["event_id"],)).fetchone():
             # a newer day exists — an old summary is never sent late
             raise _StaleSend("daily_digest_superseded")
+    if ev["kind"] == "task_reminder":
+        # the text is frozen at enqueue; the task, card or switch may
+        # have changed while it waited
+        import notify_cards
+        stale = notify_cards.task_reminder_stale(
+            ledger, _config(), ev["event_id"])
+        if stale == "outside_hours":
+            raise _DeferredSend(stale)
+        if stale:
+            raise _StaleSend(stale)
     if ev["kind"] in ("update_notice", "task_reminder", "daily_digest"):
         # Frozen text like semantic_notice — sanitized at enqueue time
         # (mentions defused), the sender just relays it.

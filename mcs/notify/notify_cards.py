@@ -3364,6 +3364,45 @@ def task_reminders(ledger, cfg, now=None, limit=REMINDER_LIMIT) -> int:
     return sent
 
 
+def task_reminder_stale(ledger, cfg, event_id, now=None) -> str | None:
+    """Send-time recheck of a queued task reminder: None while it is still
+    true, otherwise the stale reason, or 'outside_hours' to wait."""
+    if not interactive_enabled(cfg):
+        return "interactive_off"
+    from datetime import datetime
+    from mcs_queries import JST
+    local = datetime.fromtimestamp(time.time() if now is None else now, JST)
+    db = _db(ledger)
+    mark = db.execute(
+        "SELECT request_id,stage,due_date FROM notification_task_reminders "
+        "WHERE event_id=? AND stage IN ('due','overdue')",
+        (event_id,)).fetchone()
+    if mark is None:
+        return "reminder_record_missing"
+    today = local.date().isoformat()
+    # a due-day text says 本日 — the next day only the overdue one is true
+    if (mark["due_date"] != today) if mark["stage"] == "due" \
+            else not mark["due_date"] < today:
+        return "reminder_stage_passed"
+    live = db.execute(
+        """SELECT 1 FROM requests r
+           JOIN messages m ON m.message_id=r.source_message_id
+            AND m.project_id=r.project_id
+           WHERE r.request_id=? AND r.status IN ('open','in_progress')
+             AND r.due_date=?
+             AND EXISTS (SELECT 1 FROM notification_cards c
+                 WHERE c.kind='thread' AND c.project_id=r.project_id
+                   AND c.transport=? AND c.delivery_state!='revoked'
+                   AND c.root_message_id IN (m.message_id, m.parent_id))""",
+        (mark["request_id"], mark["due_date"],
+         active_transport(cfg))).fetchone()
+    if live is None:
+        return "task_not_pending"
+    if not REMINDER_HOURS[0] <= local.hour < REMINDER_HOURS[1]:
+        return "outside_hours"
+    return None
+
+
 def _plain(text) -> str:
     return plain_notice(text, 200)
 
