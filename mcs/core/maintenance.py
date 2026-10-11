@@ -266,11 +266,13 @@ def prune_attachments(db_path: str) -> int:
           WHERE kind='attachment_followup' AND state IN ('pending','failed')
             AND json_valid(payload)""")}
         # An accepted card can still have unsent or uncertain companion
-        # files. Their durable part journal owns those payloads until settled.
+        # files. Their durable part journal owns those payloads until settled;
+        # parts held by card revocation can never be sent and own nothing.
         keep_ids.update(r[0] for r in con.execute("""
           SELECT p.attachment_id FROM notification_render_parts p
           LEFT JOIN notification_renders r USING(delivery_id)
           WHERE p.kind='attachment_part' AND p.state IN ('pending','unknown','held')
+            AND p.error_code IS NOT 'card_revoked'
             AND r.state IS NOT 'cancelled' AND p.attachment_id IS NOT NULL
         """))
         rows = [a for a in con.execute("""
