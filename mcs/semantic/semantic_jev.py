@@ -226,6 +226,22 @@ def is_answer_defect(error) -> bool:
         and ":" in str(getattr(error, "detail", "") or "")
 
 
+def failure_class(error) -> str:
+    """Classify an evaluation failure for durable job scheduling.
+
+    ``resource`` means no external request should be counted as a failed
+    input (daily cap, missing key, or exhausted job budget).  All other
+    retryable failures use finite job retries, as does one malformed
+    answer (``is_answer_defect``) at every evaluation site; permanent
+    failures (``failed``) stop the generation until explicitly reseeded.
+    """
+    if getattr(error, "kind", "") in {"budget_exceeded", "no_api_key",
+                                      "payment_required"}:
+        return "resource"
+    return "retry" if getattr(error, "retryable", False) \
+        or is_answer_defect(error) else "failed"
+
+
 def evaluate_once_more(client, state: dict, questions: dict,
                        deadline: float) -> dict:
     """``client.evaluate()``, asking the same request once more after a

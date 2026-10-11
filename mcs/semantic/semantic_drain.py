@@ -71,20 +71,8 @@ def _shadow_v2_tried(ledger, mid: int, fp: str, policy: str) -> bool:
             and row["meta"].get("generation") == v2_generation())
 
 
-def _jev_failure_class(error) -> str:
-    """Classify an evaluation failure for durable job scheduling.
-
-    ``resource`` means no external request should be counted as a failed
-    input (daily cap, missing key, or exhausted job budget).  All other Jev
-    retryable failures use finite job retries, as does one malformed
-    answer (``jev.is_answer_defect``) at every evaluation site; permanent
-    failures stop the generation until explicitly reseeded.
-    """
-    if getattr(error, "kind", "") in {"budget_exceeded", "no_api_key",
-                                      "payment_required"}:
-        return "resource"
-    return "retry" if getattr(error, "retryable", False) \
-        or jev.is_answer_defect(error) else "failed"
+# kept under the drain's name for semantic.py, semantic_qc and tests
+_jev_failure_class = jev.failure_class
 
 
 def _jev_fail_flag(error) -> str | None:
@@ -914,7 +902,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 if error is not None and _jev_failure_class(error) == "failed":
                     hard_fail = True
                 elif (error is not None and _jev_failure_class(error) == "retry"
-                      or coverage.get("failure_reason") == "model"):
+                      or coverage.get("failure_reason") in ("model", "retry")):
                     retryable_failure = True
                 break
     if incomplete:
