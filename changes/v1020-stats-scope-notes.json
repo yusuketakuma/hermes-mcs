@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "統計の注記で、期間指定が効かない項目と件数の読み方を明記",
+  "summary": "統計 card_parts は --as-of・--since・--until・--project の指定に関係なくスナップショット時点の全件を数えますが、そのことが結果に書かれていませんでした。結果の注記に明記しました。また med_change_followup の change_mentions_7d_plus は件数を numerator に入れた項目で、value は常に 1.0 になります。対応の有無や未対応率を示す値ではないことを注記に追加しました。数値は変わりません。",
+  "upgrade": "追加操作は不要です。外部出力の形式も変わりません。",
+  "details": [
+    "mcs/views/mcs_stats.py の st_card_parts と st_med_change_followup の notes に1文ずつ追加した。",
+    "change_mentions_7d_plus は外部出力の契約（export_schema の比率形式）を保つため形を変えず、件数は numerator から読む。記録が見つからないことは対応がなかったことを意味しない。"
+  ],
+  "refs": [
+    "mcs/views/mcs_stats.py",
+    "tests/views/test_v1020_stats_notes.py"
+  ]
+}
