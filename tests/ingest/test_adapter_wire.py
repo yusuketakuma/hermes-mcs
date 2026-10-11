@@ -33,7 +33,7 @@ class _ProjectsAdapter(mcs_adapter.MCSAdapter):
     b'{"nested":' + b'[' * 10000 + b'0' + b']' * 10000 + b'}',
     b'{"integer":' + b'9' * 10000 + b'}',
 ], ids=["invalid_utf8", "deep_json", "oversized_integer"])
-def test_bad_api_json_is_a_local_failure_and_the_next_patient_can_be_fetched(body):
+def test_bad_api_json_is_a_local_failure_and_the_next_patient_can_be_fetched(body, recursion_limited_json):
     adapter = mcs_adapter.MCSAdapter()
     replies = iter([body, b'{"messages":[],"paginate":{"has_next":false}}'])
     adapter._request = lambda *args, **kwargs: (200, next(replies), {})

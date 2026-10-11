@@ -36,7 +36,7 @@ def test_job_due_filters_before_limit(tmp_path):
     '{"nested":' + '[' * 10000 + '0' + ']' * 10000 + '}',
     '{"integer":' + '9' * 10000 + '}',
 ], ids=["deep_json", "oversized_integer"])
-def test_job_payload_rejects_unparseable_stored_objects(tmp_path, payload):
+def test_job_payload_rejects_unparseable_stored_objects(tmp_path, payload, recursion_limited_json):
     db = _ledger(tmp_path)
     try:
         db.job_add("history_head", 1, payload={"since": 0, "page": 1})
@@ -1303,7 +1303,7 @@ def test_karte_summary_due_flag_is_durable_until_stored(tmp_path):
     ("capture", "recapture"), ("shadow", "shadow"),
     ("capture", "publish"), ("shadow", "failure"),
 ])
-def test_corrupt_optional_metadata_does_not_block_recapture(tmp_path, raw, source, entry):
+def test_corrupt_optional_metadata_does_not_block_recapture(tmp_path, raw, source, entry, recursion_limited_json):
     from message_metadata import get_message_metadata, get_metadata_shadow_status
 
     db = _ledger(tmp_path)
@@ -1348,7 +1348,7 @@ CORRUPT_SUMMARY_JSON = [
 
 @pytest.mark.parametrize("column", ["content", "meta"])
 @pytest.mark.parametrize("raw", CORRUPT_SUMMARY_JSON, ids=["integer_limit", "deep_json"])
-def test_corrupt_summary_json_is_unknown(tmp_path, column, raw):
+def test_corrupt_summary_json_is_unknown(tmp_path, column, raw, recursion_limited_json):
     db = _ledger(tmp_path)
     db.karte_summary_store(1, 10, _summary())
     with db.db:

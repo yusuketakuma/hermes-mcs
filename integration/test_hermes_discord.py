@@ -12,7 +12,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import yaml
 import discord
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'mcs'))
@@ -68,7 +67,7 @@ async def test_native_discord_confirmation_uses_snapshot_and_durable_inbox(tmp_p
                     'allowed_chat_ids': ['123', '124'], 'project_ids': [1]}
     config = {'plugins': {'enabled': ['mcs-discord-commands'], 'entries': {
         'mcs-discord-commands': {'settings': settings}}}}
-    (home / 'config.yaml').write_text(yaml.safe_dump(config))
+    (home / 'config.yaml').write_text(json.dumps(config))
     adapter = DiscordAdapter(PlatformConfig(enabled=True, token='synthetic-token'))
     interaction = SimpleNamespace(id=10, channel_id=123,
         channel=SimpleNamespace(id=123, name='synthetic', guild=None, topic=None),

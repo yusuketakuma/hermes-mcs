@@ -100,7 +100,7 @@ def test_explicit_command_promotes_existing_trickle_job(tmp_path):
 
 
 @pytest.mark.parametrize("kind", ["reply", "history", "reconcile"])
-def test_deep_job_payload_does_not_starve_the_next_patient(tmp_path, kind):
+def test_deep_job_payload_does_not_starve_the_next_patient(tmp_path, kind, recursion_limited_json):
     db = _ledger(tmp_path)
     try:
         for pid in (1, 2):

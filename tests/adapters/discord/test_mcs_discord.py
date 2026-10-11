@@ -1948,7 +1948,7 @@ def test_revoke_delete_404_is_delivered(world):
 
 @pytest.mark.parametrize("contents", ["{not json", "[" * 10000 + "]" * 10000],
                          ids=["syntax", "deep_nesting"])
-def test_corrupt_spec_quarantined(world, contents):
+def test_corrupt_spec_quarantined(world, contents, recursion_limited_json):
     """A readable spec file that fails to parse is permanent
     corruption (publication is atomic) — quarantine it like a corrupt
     cmd_int instead of re-reading it every tick."""

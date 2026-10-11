@@ -79,7 +79,7 @@ def test_observe_ignores_unreadable_metric_rows(ledger):
     assert observe._extract_recent(ledger.db)["artifacts"] == 0
 
 
-def test_deep_circuit_content_preserves_bounded_fail_closed_cooldown(ledger):
+def test_deep_circuit_content_preserves_bounded_fail_closed_cooldown(ledger, recursion_limited_json):
     raw = '[' * 20000 + '0' + ']' * 20000
     with pytest.raises(RecursionError):
         json.loads(raw)
@@ -90,7 +90,7 @@ def test_deep_circuit_content_preserves_bounded_fail_closed_cooldown(ledger):
 
 
 @pytest.mark.parametrize("path_attr,reader", [("_FMT_PATH", semantic._format_marks), ("_LONG_PATH", semantic._long_marks)])
-def test_deep_private_marker_cache_does_not_stop_model_preparation(tmp_path, monkeypatch, path_attr, reader):
+def test_deep_private_marker_cache_does_not_stop_model_preparation(tmp_path, monkeypatch, path_attr, reader, recursion_limited_json):
     path = tmp_path / "synthetic-markers.json"
     raw = '[' * 20000 + '0' + ']' * 20000
     with pytest.raises(RecursionError):

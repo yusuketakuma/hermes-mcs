@@ -217,7 +217,7 @@ def test_stale_summary_rejected_by_gate_render_state_and_block(
 
 @pytest.mark.parametrize("column", ["content", "meta"])
 def test_deep_summary_is_unpublishable_without_changing_saved_data(
-        tmp_path, monkeypatch, column):
+        tmp_path, monkeypatch, column, recursion_limited_json):
     db = _delivery_db(tmp_path, [_message()])
     try:
         cfg = _cfg("enforce")
@@ -243,7 +243,7 @@ def test_deep_summary_is_unpublishable_without_changing_saved_data(
 
 @pytest.mark.parametrize("in_progress", [False, True])
 def test_deep_source_payload_preserves_stale_or_freeze_verdict(
-        tmp_path, monkeypatch, in_progress):
+        tmp_path, monkeypatch, in_progress, recursion_limited_json):
     db = _delivery_db(tmp_path, [_message()])
     try:
         monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
@@ -265,7 +265,7 @@ def test_deep_source_payload_preserves_stale_or_freeze_verdict(
 
 @pytest.mark.parametrize("in_progress", [False, True])
 def test_deep_source_progress_preserves_degraded_send_hold(
-        tmp_path, monkeypatch, in_progress):
+        tmp_path, monkeypatch, in_progress, recursion_limited_json):
     db = _delivery_db(tmp_path, [_message()])
     try:
         monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))

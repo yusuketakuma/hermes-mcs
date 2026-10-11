@@ -20,7 +20,7 @@ def lane(request):
     value = request.config.getoption("--sdk-lane", default=None)
     if value is None:
         pytest.skip("explicit SDK lane: sh scripts/check_pinned_sdks.sh")
-    assert (3, 11) <= sys.version_info[:2] < (3, 14)
+    assert (3, 14) <= sys.version_info[:2] < (3, 15)
     return value
 
 
@@ -52,7 +52,8 @@ def test_actual_distribution_versions_match_lane(lane, request):
         assert project, "explicit immutable Hermes source archive is required"
         data = tomllib.loads(Path(project).read_text())
         requirements = data["project"]["optional-dependencies"]["messaging"]
-        requirements += [r for r in data["project"]["optional-dependencies"]["dev"]
+        # Hermes moved its dev tooling from an extra to a PEP 735 group.
+        requirements += [r for r in data["dependency-groups"]["dev"]
                          if r.startswith("pytest==")]
         assert metadata.version("hermes-agent") == data["project"]["version"]
     actual = {}

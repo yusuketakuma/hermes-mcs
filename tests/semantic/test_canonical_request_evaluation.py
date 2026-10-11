@@ -169,7 +169,7 @@ def test_real_offline_cli_reports_only_local_fixture_runtime(capsys):
     assert report["capacity"]["eligible"] is False
 
 
-def test_cli_rejects_deep_synthetic_json_without_traceback(tmp_path, capsys):
+def test_cli_rejects_deep_synthetic_json_without_traceback(tmp_path, capsys, recursion_limited_json):
     source = tmp_path / 'deep.json'
     source.write_text('[' * 20000 + '0' + ']' * 20000)
     assert support.main(['--input', str(source)]) == 1

@@ -56,7 +56,7 @@ def test_auth_unknown_field_rejected(tmp_path):
         ext.load_authorization(p, NOW)
 
 
-def test_deep_authorization_is_a_contract_refusal(tmp_path):
+def test_deep_authorization_is_a_contract_refusal(tmp_path, recursion_limited_json):
     path = tmp_path / "auth.json"
     path.write_text("[" * 10000 + "0" + "]" * 10000)
     with pytest.raises(ContractError, match="auth_unreadable:RecursionError"):
@@ -65,7 +65,7 @@ def test_deep_authorization_is_a_contract_refusal(tmp_path):
 
 @pytest.mark.parametrize("corrupt", ["ack", "payload", "journal", "deletion"])
 def test_deep_json_preserves_unknown_delivery_or_deletion(
-        tmp_path, corrupt):
+        tmp_path, corrupt, recursion_limited_json):
     auth_path = _auth(tmp_path)
     auth = ext.load_authorization(auth_path, NOW)
     envelope = ext.build_envelope(_records(), auth, NOW - 10, now=NOW)

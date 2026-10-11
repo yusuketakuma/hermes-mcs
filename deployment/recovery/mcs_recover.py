@@ -54,7 +54,7 @@ def _installed_repo():
 
 
 REPO = _installed_repo()
-# mcs_setup needs Python >= 3.10 while this watchdog runs under the
+# mcs_setup needs Python >= 3.14 while this watchdog runs under the
 # system /usr/bin/python3 — reconcile services with the install-time
 # interpreter (mcs_setup.HERMES_PY)
 HERMES_PY = os.path.expanduser("~/.hermes/hermes-agent/venv/bin/python")
@@ -319,15 +319,15 @@ def _try_lock(path):
 
 
 def _setup_python():
-    """Interpreter able to run mcs_setup (>= 3.10), or None."""
+    """Interpreter able to run mcs_setup (>= 3.14), or None."""
     if _runtime_mode() == "standalone":
         exe = str(Path(DATA).parent / "venv/bin/python3")
-        return exe if os.access(exe, os.X_OK) else (sys.executable if sys.version_info >= (3, 10) else None)
+        return exe if os.access(exe, os.X_OK) else (sys.executable if sys.version_info >= (3, 14) else None)
     if _runtime_mode() != "hermes":
         return None
     if os.access(HERMES_PY, os.X_OK):
         return HERMES_PY
-    if sys.version_info >= (3, 10):
+    if sys.version_info >= (3, 14):
         return sys.executable
     return None
 

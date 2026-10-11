@@ -11,8 +11,6 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-import yaml
-
 MCS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(MCS_ROOT))
 sys.path.insert(0, str(MCS_ROOT / "tests" / "adapters" / "slack"))
@@ -44,7 +42,7 @@ def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypa
     }
 
     def configure(settings):
-        (home / "config.yaml").write_text(yaml.safe_dump({
+        (home / "config.yaml").write_text(json.dumps({
             "plugins": {"enabled": [plugin_name], "entries": {
                 plugin_name: {"settings": {**base_settings, **settings}},
             }},
