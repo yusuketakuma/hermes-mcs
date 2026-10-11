@@ -158,6 +158,27 @@ def render(items, headline, summary):
     return "\n".join(out)
 
 
+def _released_fragment(root, base, paths):
+    """A release commit moves its records to changes/archive/<version>/.
+    Count those only for a version whose CHANGELOG section is new since
+    base, and only when every such record still validates."""
+    archived = [(m[1], p) for p in paths
+                if (m := re.fullmatch(r"changes/archive/([0-9]+\.[0-9]+\.[0-9]+)/[^/]+\.json", p))
+                and (root / p).is_file()]
+    if not archived:
+        return False
+    # fail closed: an unreadable base CHANGELOG must not make every version new
+    old = subprocess.run(["git", "show", f"{base}:CHANGELOG.md"], cwd=root,
+                         check=True, capture_output=True, text=True).stdout
+    heading = re.compile(r"^## \[([0-9]+\.[0-9]+\.[0-9]+)\]", re.M)
+    released = (set(heading.findall((root / "CHANGELOG.md").read_text(encoding="utf-8")))
+                - set(heading.findall(old)))
+    records = [p for version, p in archived if version in released]
+    for p in records:
+        validate(json.loads((root / p).read_text(encoding="utf-8")))
+    return bool(records)
+
+
 def require_fragment(root, base):
     # base is passed as argv, never interpolated into a shell command.
     result = subprocess.run(
@@ -169,6 +190,8 @@ def require_fragment(root, base):
                    and not p.endswith(".md")) or p == "install.sh" for p in paths)
     new_fragment = any(re.fullmatch(r"changes/[^/]+\.json", p)
                        and (root / p).is_file() for p in paths)
+    if runtime and not new_fragment:
+        new_fragment = _released_fragment(root, base, paths)
     if runtime and not new_fragment:
         raise ValueError("実行時の変更にはchanges/*.jsonの日本語変更記録が必要です")
 

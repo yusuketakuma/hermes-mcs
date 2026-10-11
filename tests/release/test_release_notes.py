@@ -143,5 +143,72 @@ class ReleaseNotesTest(unittest.TestCase):
                 notes.require_fragment(root, "base")
 
 
+    def test_release_commit_archives_count_only_for_a_new_version(self):
+        def scenario(path, payload, version="1.0.1"):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+
+                def git(*args):
+                    return subprocess.run(
+                        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                         *args], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+
+                git("init")
+                (root / "mcs").mkdir()
+                (root / "mcs/example.py").write_text("# synthetic\n", encoding="utf-8")
+                (root / "changes/archive/1.0.0").mkdir(parents=True)
+                (root / "changes/archive/1.0.0/old.json").write_text(
+                    json.dumps(self.item()), encoding="utf-8")
+                (root / "CHANGELOG.md").write_text(
+                    "## [Unreleased]\n\n## [1.0.0] — 2026-01-01\n", encoding="utf-8")
+                git("add", ".")
+                git("commit", "-m", "base")
+                base = git("rev-parse", "HEAD")
+                (root / "mcs/example.py").write_text("# synthetic change\n", encoding="utf-8")
+                (root / "CHANGELOG.md").write_text(
+                    f"## [Unreleased]\n\n## [{version}] — 2026-01-02\n\n## [1.0.0] — 2026-01-01\n",
+                    encoding="utf-8")
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_text(payload, encoding="utf-8")
+                git("add", ".")
+                git("commit", "-m", "release")
+                notes.require_fragment(root, base)
+
+        # the release build moved the new version's records into its archive
+        scenario("changes/archive/1.0.1/a.json", json.dumps(self.item()))
+        for path, payload, version in (
+                # a version already released at base is history, not a record
+                ("changes/archive/1.0.0/new.json", json.dumps(self.item()), "1.0.1"),
+                # a record for a version without a new CHANGELOG section
+                ("changes/archive/1.0.2/a.json", json.dumps(self.item()), "1.0.1"),
+                # unrelated json is never a change record
+                ("docs/a.json", json.dumps(self.item()), "1.0.1")):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                scenario(path, payload, version)
+        broken = dict(self.item(), category="unknown")
+        with self.assertRaises(ValueError):
+            scenario("changes/archive/1.0.1/a.json", json.dumps(broken))
+
+    def test_unreadable_base_changelog_never_accepts_archives(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "changes/archive/1.0.1").mkdir(parents=True)
+            (root / "changes/archive/1.0.1/a.json").write_text(json.dumps(self.item()), encoding="utf-8")
+            (root / "CHANGELOG.md").write_text("## [1.0.1] — 2026-01-02\n", encoding="utf-8")
+            calls = []
+
+            def run(argv, *args, **kwargs):
+                calls.append(argv)
+                if argv[1] == "show":
+                    raise subprocess.CalledProcessError(128, argv)
+                return subprocess.CompletedProcess(
+                    argv, 0, "mcs/example.py\nchanges/archive/1.0.1/a.json\n", "")
+
+            with patch.object(notes.subprocess, "run", side_effect=run), \
+                    self.assertRaises(subprocess.CalledProcessError):
+                notes.require_fragment(root, "base")
+            self.assertEqual(calls[-1][:2], ["git", "show"])
+
+
 if __name__ == "__main__":
     unittest.main()
