@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "更新失敗後の DB 復元が未完了なら復旧後も処理を止めたままにする",
+  "summary": "schema 変更を伴う更新が失敗し、旧版へ戻す途中で DB の復元に失敗した場合、その後の復旧処理（更新ツールの recover と独立 watchdog）でも抽出処理を再開せず、更新 marker を残します。旧版のコードが新しい schema の DB に対して動き出すことはありません。復元が完了した時点で通常どおり再開します。",
+  "upgrade": "更新ツール側は追加操作は不要です。独立 watchdog（checkout 外の復旧本体）へ反映するには、`./install.sh` に導入時と同じ opt-out と `--no-services` を付けて再実行し、同期してください。復元に必要な人の承認条件は変わりません。",
+  "details": [
+    "apply の巻戻し失敗時に、rollback 形の journal へ restore_incomplete を記録する。復元の同意記録は作らない。",
+    "recover_interrupted と独立 watchdog は、この記録がある間の escalate で drainer を再起動せず marker も消さない。復旧レポートは escalate と writers_stopped: true を示す。",
+    "DB 復元の成功（または schema が既にバックアップと一致）で記録を消し、以後の escalate は従来どおり処理を再開する。記録のない中断（壊れた live DB など）の扱いは変わらない。"
+  ],
+  "refs": ["mcs/ops/mcs_update.py", "deployment/recovery/mcs_recover.py", "docs/guides/UPGRADE_AGENT.md"]
+}

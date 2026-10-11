@@ -1850,6 +1850,11 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                     return 2
                 rollback_failed = True
                 reason += f" (rollback failed: {e} — escalate)"
+                if state["applying"].get("rollback"):
+                    # the tree may be on the old code while the DB keeps the
+                    # newer schema: recovery keeps writers stopped until the
+                    # restore completes (no consent report exists to hold on)
+                    state["applying"]["restore_incomplete"] = True
         if not rollback_failed:
             # keep remnants when the rollback itself failed — recovery
             # must still be able to see and escalate the wedged state
@@ -2857,7 +2862,9 @@ def recover_interrupted(if_stale: bool = False) -> int:
             loss report's content digest, voiding the consent it
             awaits. An invalid hold record (wrong journal shape) is
             held the same way: only a human can repair it. The journal
-            stays, so the next check / consent respawn retries."""
+            stays, so the next check / consent respawn retries. A schema
+            rollback apply could not finish (applying.restore_incomplete)
+            keeps drainers down and the marker too, until a pass restores."""
             if held():
                 _report("restore_consent_blocked",
                         detail[:240] + " — hold kept, retried next pass")
@@ -2869,8 +2876,20 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     "at": time.time()}
                 save_state(state)
             key = _alert_key(state, detail)
-            dkey = _drainers_key(state, head)
             notify, notified_at = _alert_due("escalate", key, time.time())
+            if (applying or {}).get("restore_incomplete"):
+                # apply's schema rollback failed before the DB restore
+                # finished: same freeze as a consent hold (drainers down,
+                # marker kept), but no consent report exists to point at
+                _report("escalate", detail, alert_key=key,
+                        notified_at=notified_at, writers_stopped=True)
+                if notify and not _enqueue_notice(
+                        f"[MCS] 更新の中断復旧ができません（要手動対応）: {detail}"
+                        " — DB の復元が未完了のため常駐処理は停止したままです"):
+                    _report("escalate", detail, alert_key=key,
+                            writers_stopped=True)   # retry next
+                return 1
+            dkey = _drainers_key(state, head)
             _report("escalate", detail, alert_key=key,
                     notified_at=notified_at, drainers_key=dkey)
             problems = drainers(dkey)
@@ -2949,7 +2968,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 # the DB is at the backup schema and the marker left
                 # awaiting_consent: the hold is over — later failures
                 # escalate normally (drainers up on a consistent DB)
-                if state.pop("restore_consent", None) is not None:
+                held_before = state.pop("restore_consent", None) is not None
+                if applying.pop("restore_incomplete", None) or held_before:
                     save_state(state)
             try:
                 if applying.get("rollback"):

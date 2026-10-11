@@ -1527,6 +1527,15 @@ def recover(if_stale=False):
                     "result": "escalated", "detail": detail[:200],
                     "at": time.time()}
                 _save_state(state)
+            if (applying or {}).get("restore_incomplete"):
+                # = mcs_update: apply's schema rollback failed before the
+                # DB restore finished — keep drainers down and the marker
+                _report_alert("escalate", state, detail,
+                              "[MCS] 更新の中断復旧ができません"
+                              f"（要手動対応）: {detail} — DB の復元が"
+                              "未完了のため常駐処理は停止したままです",
+                              writers_stopped=True)
+                return 1
             dkey = _drainers_key(state, head)
             _report_alert("escalate", state, detail,
                           "[MCS] 更新の中断復旧ができません"
@@ -1614,7 +1623,8 @@ def recover(if_stale=False):
                     return escalate("rollback db restore: " + err)
                 # DB at the backup schema, marker left awaiting_consent:
                 # the hold is over — later failures escalate normally
-                if state.pop("restore_consent", None) is not None:
+                held_before = state.pop("restore_consent", None) is not None
+                if applying.pop("restore_incomplete", None) or held_before:
                     _save_state(state)
             if not applying.get("rollback") and applying.get("reinstall") \
                     and not applying.get("reinstall_done"):
