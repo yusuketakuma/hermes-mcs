@@ -20,8 +20,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-_MODULES = {p.stem: p for base in ("mcs", "mcs_standalone")
-            for p in (ROOT / base).rglob("*.py") if "__pycache__" not in p.parts}
+_FILES = [p for base in ("mcs", "mcs_standalone")
+          for p in (ROOT / base).rglob("*.py") if "__pycache__" not in p.parts]
+_MODULES = {p.stem: p for p in _FILES}
 _QUOTE = re.compile(r"[A-Za-z]*('''|\"\"\"|'|\")")
 
 
@@ -89,6 +90,7 @@ def _violations(source: str) -> list[str]:
 
 
 def test_updater_path_covers_the_entry_points_and_their_imports():
+    assert len(_MODULES) == len(_FILES)  # flat import names stay unique
     paths = {p.relative_to(ROOT).as_posix() for p in _updater_path()}
     assert {"scripts/mcs_upgrade.py", "mcs/ops/mcs_update.py", "mcs/ops/mcs_setup.py",
             "mcs/core/mcs_util.py", "mcs/core/ledger.py"} <= paths
