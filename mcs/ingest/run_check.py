@@ -165,10 +165,10 @@ CONFIG_NOT_LOADED: dict = {}
 def _backup_health(cfg: dict, now: float) -> dict:
     """Read only configured backup evidence; missing proof is never success."""
     from mcs_backup import BackupError, load_policy, status
-    from mcs_setup import _backup_config
+    from backup_config import validate_backup_config
 
     setting = cfg.get("backup", {"enabled": False})
-    if _backup_config(setting):
+    if validate_backup_config(setting):
         return {"state": "invalid", "reasons": ["backup_config_invalid"]}
     if not setting["enabled"]:
         return {"state": "disabled", "reasons": []}

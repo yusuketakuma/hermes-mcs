@@ -18,6 +18,7 @@ import json
 import math
 import os
 import re
+import shutil
 import sqlite3
 import tempfile
 import time
@@ -93,6 +94,16 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
 # 4xx statuses that mean "try again later", not a permanent refusal
 # (408 timeout, 425 too early, 429 rate limit)
 RETRY_LATER_4XX = frozenset({408, 425, 429})
+
+
+def hermes_exe(cfg: dict, path: str | None = None) -> str:
+    """The `hermes` binary: config hermes_bin, else PATH (or `path`), else
+    the standard user-local install — the launchd PATH is minimal."""
+    exe = cfg.get("hermes_bin")
+    if isinstance(exe, str) and exe.strip():
+        return exe.strip()
+    return shutil.which("hermes", os.F_OK | os.X_OK, path) \
+        or os.path.expanduser("~/.local/bin/hermes")
 
 
 def fsync_dir(path) -> None:

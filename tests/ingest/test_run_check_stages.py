@@ -2059,8 +2059,8 @@ def test_overdue_tick_defers_later_stages_but_records_run_and_health(
 def test_backup_health_database_failure_remains_machine_readable(monkeypatch):
     import sqlite3
     import mcs_backup
-    import mcs_setup
-    monkeypatch.setattr(mcs_setup, "_backup_config", lambda setting: [])
+    import backup_config
+    monkeypatch.setattr(backup_config, "validate_backup_config", lambda setting: [])
     monkeypatch.setattr(mcs_backup, "load_policy", lambda path: (object(), True))
 
     def fail(*args):
