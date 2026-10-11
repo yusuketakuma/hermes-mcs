@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+import errno
 import fcntl
 import json
 import math
 import os
 from pathlib import Path
 import plistlib
+import re
 import signal
 import stat
 import subprocess
@@ -27,6 +29,120 @@ REPO = Path(__file__).resolve().parents[1]
 BACKGROUND = {"extract-0": "ai.mcs.extract-drainer", "extract-2": "ai.mcs.extract-drainer-2"}
 COMMANDS = {"cmd": "local.mcs-cmd", "cmd_int": "local.mcs-int"}
 
+# Crash restarts back off exponentially (30 s doubling) up to this cap, for
+# child jobs and for the Slack/Discord connector alike; a success resets it.
+RESTART_BACKOFF_S = 30
+BACKOFF_CAP_S = 1800
+# A connector that stayed up this long ended for a new reason: its failure
+# streak starts over instead of continuing to grow the backoff.
+CONNECTOR_STABLE_S = 600
+# The status file is rewritten when its content changes and otherwise as a
+# heartbeat well inside service.STATUS_TTL (15 s).
+HEARTBEAT_S = 5
+# A restart drain waits for running scheduled jobs at most this long, then
+# stops them (they are lock-safe and caught up after the restart). `update`
+# and the command intakes are never interrupted.
+DRAIN_CAP_S = 600
+STOP_GRACE_S = 10
+# A marker without its live writer is re-checked at most this often.
+MARKER_PROBE_S = 60
+SCHEDULE_FILE = "standalone-schedule.json"
+# Missed calendar slots are looked up this far back (daily jobs included).
+CATCHUP_WINDOW_MIN = 24 * 60
+_CODE = re.compile(r"[a-z][a-z0-9_:.-]{0,63}")
+
+
+def _backoff(failures):
+    return min(RESTART_BACKOFF_S * 2 ** max(failures - 1, 0), BACKOFF_CAP_S)
+
+
+def _error_code(exc):
+    """A fixed code for a connector end: codes as raised, else the type name."""
+    text = str(exc)
+    return text if _CODE.fullmatch(text) else type(exc).__name__
+
+
+def _try_lock(path):
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+    except OSError:
+        os.close(fd)
+        return None
+
+
+def _journal_empty(path):
+    """mcs_update's journal: True when it records no apply, False when it does,
+    None when unreadable (fail closed like the updater and recovery)."""
+    try:
+        with open(path, encoding="utf-8") as stream:
+            state = json.load(stream)
+    except FileNotFoundError:
+        return True
+    except (OSError, ValueError, RecursionError, UnicodeError):
+        return None
+    if not isinstance(state, dict) or state.get("v") != 1 \
+            or not isinstance(state.get("stages", []), list) \
+            or not isinstance(state.get("applying"), (dict, type(None))):
+        return None
+    return not state.get("applying") and not state.get("stages")
+
+
+def _process_args(pid):
+    """(parent pid, command line) of a live process, or None."""
+    try:
+        result = subprocess.run(["ps", "-ww", "-o", "ppid=", "-o", "args=", "-p", str(pid)],
+                                capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    parts = result.stdout.strip().split(None, 1) if result.returncode == 0 else []
+    if len(parts) != 2 or not parts[0].isdigit():
+        return None
+    return int(parts[0]), parts[1]
+
+
+def _is_orphan(pid, argv):
+    """A child of a killed host: same command line, no longer our child."""
+    found = _process_args(pid)
+    return found is not None and found[0] != os.getpid() and found[1] == " ".join(argv)
+
+
+class _Adopted:
+    """A child left by a host that was killed; it is watched, never re-parented."""
+
+    def __init__(self, pid, argv):
+        self.pid = pid
+        self.argv = argv
+        self.ended = False
+        self.checked = time.monotonic()
+
+    def poll(self):
+        if not self.ended:
+            try:
+                os.kill(self.pid, 0)
+            except OSError:
+                self.ended = True
+            else:
+                # A reaped orphan's pid can be reused: re-verify its identity.
+                if time.monotonic() - self.checked >= 30:
+                    self.checked = time.monotonic()
+                    self.ended = not _is_orphan(self.pid, self.argv)
+        return 0 if self.ended else None
+
+    def terminate(self):
+        if not self.ended:
+            with suppress(OSError):
+                os.kill(self.pid, signal.SIGTERM)
+
+    def kill(self):
+        if not self.ended:
+            with suppress(OSError):
+                os.kill(self.pid, signal.SIGKILL)
+
 
 class Runtime:
     def __init__(self, root, cfg):
@@ -34,15 +150,27 @@ class Runtime:
         self.data = self.root / "data"
         self.cfg = cfg
         self.generation = uuid.uuid4().hex
+        self.started_at = time.time()
         self.children = {}
         self.retry_at = {}
-        # job -> last exit code/time and consecutive failed exits (one row
-        # per configured job, so bounded): a crash loop is visible in status
+        # job -> last exit code/time, last success and consecutive failed exits
+        # (one row per configured job, so bounded): a crash loop is visible in status
         self.exits = {}
         # Command inbox names drained by the last successful run; None after a failure.
         self.drained = {}
         self.last_minute = None
         self.restarting = False
+        self.restart_since = None
+        self.marker = None
+        # job -> start of the newest calendar slot already fired (persisted)
+        self.fired = self._load_fired()
+        self.due = {}
+        self.skipped = {}
+        self.connector = {"state": "off", "failures": 0, "failing_since": None,
+                          "last_error": None, "retry_at": None, "started_at": None}
+        self.status_body = None
+        self.status_written = None
+        self.write_error = {}
         subs = {"PYTHON": python_executable(cfg, root=self.root), "REPO": str(REPO),
                 "DATA": str(self.data), "RUNTIME_HOME": str(self.root)}
         self.argv = {}
@@ -59,6 +187,65 @@ class Runtime:
             self.argv[job] = ["/usr/bin/perl", "-e", _TIMEOUT_PL, str(CRON_TIMEOUT_S),
                               "/bin/bash", str(self.root / "scripts" / script)]
             self.schedules.append((job, _calendar(schedule)))
+
+    # ---------------------------------------------------------------- files
+
+    def _write_failed(self, name, exc):
+        code = errno.errorcode.get(exc.errno, "unknown") if isinstance(exc, OSError) else "unknown"
+        if self.write_error.get(name) != code:
+            # Logged once per distinct failure: a full disk must not crash-loop
+            # the host or fill its own log.
+            self.write_error[name] = code
+            log("state_write_failed", file=name, code=code)
+
+    def _write_ok(self, name):
+        if self.write_error.pop(name, None) is not None:
+            log("state_write_recovered", file=name)
+
+    def _load_fired(self):
+        try:
+            raw = config._private_bytes(self.data / SCHEDULE_FILE, "missing", "invalid", 65536)
+            value = json.loads(raw)
+            fired = value["fired"]
+            return {job: stamp for job, stamp in fired.items()
+                    if isinstance(job, str) and type(stamp) in (int, float) and math.isfinite(stamp)}
+        except (config.ConfigError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
+            return {}
+
+    def _save_fired(self):
+        try:
+            atomic_write(str(self.data / SCHEDULE_FILE),
+                         lambda stream: json.dump({"v": 1, "fired": self.fired}, stream), mode=0o600)
+        except OSError as exc:
+            self._write_failed(SCHEDULE_FILE, exc)
+        else:
+            self._write_ok(SCHEDULE_FILE)
+
+    def _publish_status(self, now, updating):
+        body = {"pid": os.getpid(), "generation": self.generation, "started_at": self.started_at,
+                "update_in_progress": updating,
+                "update_marker": dict(self.marker) if self.marker else None,
+                "restarting": self.restarting,
+                "children": {job: {"pid": row["process"].pid, "kind": row["kind"]}
+                             for job, row in self.children.items()},
+                "exits": self.exits,
+                "connector": {key: value for key, value in self.connector.items()
+                              if key != "started_at"}}
+        text = json.dumps(body, sort_keys=True)
+        if text == self.status_body and self.status_written is not None \
+                and 0 <= now - self.status_written < HEARTBEAT_S:
+            return
+        snapshot = {**json.loads(text), "updated_at": now}
+        try:
+            atomic_write(str(self.data / service.STATUS_FILE),
+                         lambda stream: json.dump(snapshot, stream), mode=0o600)
+        except OSError as exc:
+            self._write_failed(service.STATUS_FILE, exc)
+            return
+        self._write_ok(service.STATUS_FILE)
+        self.status_body, self.status_written = text, now
+
+    # ------------------------------------------------------------- children
 
     def start(self, job, kind, now, pending=None):
         # A failed start earlier in this tick requested a restart: start nothing more.
@@ -80,45 +267,208 @@ class Runtime:
                               "pending": pending}
         log("child_started", job=job)
 
-    def _restart_requested(self, now):
-        path = self.data / service.RESTART_FILE
+    def adopt_orphans(self, now=None):
+        """Children of a host that was killed (SIGKILL, crash) outlive it under
+        launchd's AbandonProcessGroup. Verified leftovers are taken back: a
+        resident worker is stopped and started fresh, a core job is waited
+        for so it never runs twice."""
+        now = time.time() if now is None else now
         try:
-            raw = config._private_bytes(path, "request_missing", "request_invalid")
-            value = json.loads(raw)
-            stamp = value["requested_at"]
-            return (value["generation"] == self.generation
-                    and isinstance(value["request_id"], str)
-                    and len(value["request_id"]) == 32
-                    and type(stamp) in (int, float) and math.isfinite(stamp)
-                    and -2 <= now - stamp <= service.STATUS_TTL)
-        except (OSError, ValueError, KeyError, TypeError, RecursionError, OverflowError):
+            raw = config._private_bytes(self.data / service.STATUS_FILE, "missing", "invalid",
+                                        1024 * 1024)
+            previous = json.loads(raw)
+            rows = previous["children"]
+            if previous.get("pid") == os.getpid() or not isinstance(rows, dict):
+                return
+        except (config.ConfigError, ValueError, KeyError, TypeError, RecursionError):
+            return
+        for job, row in rows.items():
+            pid = row.get("pid") if isinstance(row, dict) else None
+            if job not in self.argv or job in self.children or type(pid) is not int or pid <= 1:
+                continue
+            if not _is_orphan(pid, self.argv[job]):
+                continue
+            process = _Adopted(pid, self.argv[job])
+            kind = "background" if job in BACKGROUND or job == "lineworks" else "core"
+            entry = {"process": process, "kind": kind, "stopping_at": None,
+                     "pending": None, "adopted": True}
+            if kind == "background":
+                process.terminate()
+                entry["stopping_at"] = now
+            self.children[job] = entry
+            log("orphan_adopted", job=job, action="stop" if kind == "background" else "wait")
+
+    def _ended(self, job, row, code, now, updating):
+        del self.children[job]
+        prev = self.exits.get(job) or {}
+        if row.get("adopted"):
+            # The exit status of a process we did not start is unknown.
+            self.exits[job] = {**prev, "last_exit": None, "ended_at": now}
+            self.retry_at[job] = now
+            log("child_ended", job=job, code=None, adopted=True)
+            return
+        failures = prev.get("failures", 0) + 1 if code else 0
+        if updating:
+            backoff = 0
+        elif code == 0:
+            # Card/approval intake is local and cheap: match launchd's 10 s throttle
+            # after success. `cmd` contacts MCS, so it keeps the 30 s backoff.
+            backoff = 10 if job == "cmd_int" else RESTART_BACKOFF_S
+        else:
+            backoff = _backoff(failures)
+        self.retry_at[job] = now + backoff
+        self.drained[job] = row.get("pending") if code == 0 else None
+        self.exits[job] = {"last_exit": code, "ended_at": now, "failures": failures,
+                           "last_ok_at": now if code == 0 else prev.get("last_ok_at")}
+        log("child_ended", job=job, code=code, failures=failures, retry_in=backoff)
+
+    def _should_stop(self, job, row, now, updating):
+        if row["stopping_at"] is not None:
+            return True
+        if row["kind"] == "background":
+            return updating or self.restarting
+        return (self.restarting and job in self.scheduled and job != "update"
+                and now - self.restart_since >= DRAIN_CAP_S)
+
+    @property
+    def scheduled(self):
+        return {job for job, _ in self.schedules}
+
+    # --------------------------------------------------------------- update
+
+    def _updating(self, now):
+        """The update marker pauses every job while its writer lives. A marker
+        left without one (no update.lock holder, empty journal) is an orphan:
+        it is cleared under the updater's own locks, exactly as recovery does.
+        A marker kept by an unfinished journal stays: recovery owns it."""
+        path = self.data / UPDATE_MARKER_NAME
+        try:
+            since = os.lstat(path).st_mtime
+        except FileNotFoundError:
+            self.marker = None
             return False
+        except OSError:
+            since = now
+        if self.marker is None:
+            self.marker = {"since": since, "state": "present", "probed_at": None}
+            log("update_marker_seen")
+        marker = self.marker
+        if "update" in self.children:
+            marker["state"] = "updating"
+            return True
+        probed = marker["probed_at"]
+        if now - marker["since"] < MARKER_PROBE_S or (
+                probed is not None and 0 <= now - probed < MARKER_PROBE_S):
+            return True
+        marker["probed_at"] = now
+        verdict = self._probe_marker(path)
+        if verdict == "orphan_cleared":
+            log("update_marker_orphan_cleared", age_s=int(now - marker["since"]))
+            self.marker = None
+            return False
+        if verdict != marker["state"]:
+            log("update_marker_held", state=verdict, age_s=int(now - marker["since"]))
+        marker["state"] = verdict
+        return True
+
+    def _probe_marker(self, path):
+        update_fd = _try_lock(self.data / "update.lock")
+        if update_fd is None:
+            return "updater_alive"
+        try:
+            run_fd = _try_lock(self.data / "run.lock")
+            if run_fd is None:
+                return "run_busy"
+            try:
+                empty = _journal_empty(self.data / "update_state.json")
+                if empty is None:
+                    return "journal_unreadable"
+                if not empty:
+                    return "journal_pending"
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    return "marker_unremovable"
+                return "orphan_cleared"
+            finally:
+                os.close(run_fd)
+        finally:
+            os.close(update_fd)
+
+    # ------------------------------------------------------------- schedule
+
+    def _due_slots(self, minute):
+        """job -> start of its newest calendar slot within the catch-up window."""
+        due, pending = {}, dict(self.schedules)
+        for back in range(CATCHUP_WINDOW_MIN + 1):
+            if not pending:
+                break
+            stamp = (minute - back) * 60
+            local = time.localtime(stamp)
+            for job, entries in list(pending.items()):
+                if any(entry.get("Hour", local.tm_hour) == local.tm_hour
+                       and entry.get("Minute", local.tm_min) == local.tm_min for entry in entries):
+                    due[job] = stamp
+                    del pending[job]
+        return due
+
+    def _schedule(self, now):
+        minute = int(now // 60)
+        if minute != self.last_minute:
+            self.last_minute = minute
+            self.due = self._due_slots(minute)
+        changed = False
+        for job, slot in self.due.items():
+            fired = self.fired.get(job)
+            current = slot == minute * 60
+            if fired is None and not current:
+                # First sight of this job: no history to replay.
+                self.fired[job] = slot
+                changed = True
+                continue
+            if fired is not None and slot <= fired:
+                continue
+            if job in self.children:
+                if self.skipped.get(job) != slot:
+                    self.skipped[job] = slot
+                    log("slot_skipped_running", job=job, slot=int(slot))
+                continue
+            if not current:
+                log("slot_catchup", job=job, slot=int(slot))
+            # The crash-loop backoff is for workers; a slot fires only once,
+            # so a run that ended just before it must not drop it (launchd parity).
+            self.retry_at.pop(job, None)
+            self.start(job, "core", now)
+            if self.restarting:
+                break   # a failed start: the slot is caught up after the restart
+            self.fired[job] = slot
+            changed = True
+        if changed:
+            self._save_fired()
+
+    # ----------------------------------------------------------------- tick
 
     def tick(self, now=None, *, draining=False):
         now = time.time() if now is None else now
         if not draining:
             self.restarting |= self._restart_requested(now)
-        updating = os.path.lexists(self.data / UPDATE_MARKER_NAME)
+        if self.restarting and self.restart_since is None:
+            self.restart_since = now
+        updating = self._updating(now)
         for job, row in list(self.children.items()):
             child = row["process"]
             code = child.poll()
             if code is not None:
-                del self.children[job]
-                # Card/approval intake is local and cheap: match launchd's 10 s throttle
-                # after success. `cmd` contacts MCS, so it keeps the 30 s backoff.
-                backoff = 10 if job == "cmd_int" and code == 0 else 30
-                self.retry_at[job] = now if updating else now + backoff
-                self.drained[job] = row.get("pending") if code == 0 else None
-                prev = self.exits.get(job) or {}
-                self.exits[job] = {"last_exit": code, "ended_at": now,
-                                   "failures": prev.get("failures", 0) + 1 if code else 0}
-                log("child_ended", job=job, code=code,
-                    failures=self.exits[job]["failures"])
-            elif (updating or self.restarting) and row["kind"] == "background":
+                self._ended(job, row, code, now, updating)
+            elif self._should_stop(job, row, now, updating):
                 if row["stopping_at"] is None:
                     child.terminate()
                     row["stopping_at"] = now
-                elif now - row["stopping_at"] >= 10:
+                    if row["kind"] == "core":
+                        log("drain_cap_reached", job=job)
+                elif now - row["stopping_at"] >= STOP_GRACE_S:
                     child.kill()
         if not updating and not self.restarting and not draining:
             for job in [*BACKGROUND, *(["lineworks"] if "lineworks" in self.argv else [])]:
@@ -136,25 +486,56 @@ class Runtime:
                 if job == "cmd_int" and drained is not None and names - drained:
                     self.retry_at.pop(job, None)
                 self.start(job, "core", now, names)
-            minute = int(now // 60)
-            if minute != self.last_minute:
-                self.last_minute = minute
-                local = time.localtime(now)
-                for job, entries in self.schedules:
-                    if any(entry.get("Hour", local.tm_hour) == local.tm_hour
-                           and entry.get("Minute", local.tm_min) == local.tm_min for entry in entries):
-                        # The crash-loop backoff is for workers; a slot fires only once,
-                        # so a run that ended just before it must not drop it (launchd parity).
-                        self.retry_at.pop(job, None)
-                        self.start(job, "core", now)
-        snapshot = {"pid": os.getpid(), "generation": self.generation, "updated_at": now,
-                    "update_in_progress": updating,
-                    "children": {job: {"pid": row["process"].pid, "kind": row["kind"]}
-                                 for job, row in self.children.items()},
-                    "exits": self.exits}
-        atomic_write(str(self.data / service.STATUS_FILE),
-                     lambda stream: json.dump(snapshot, stream), mode=0o600)
+            self._schedule(now)
+        self._publish_status(now, updating)
         return self.restarting and not self.children
+
+    def _restart_requested(self, now):
+        path = self.data / service.RESTART_FILE
+        try:
+            raw = config._private_bytes(path, "request_missing", "request_invalid")
+            value = json.loads(raw)
+            stamp = value["requested_at"]
+            return (value["generation"] == self.generation
+                    and isinstance(value["request_id"], str)
+                    and len(value["request_id"]) == 32
+                    and type(stamp) in (int, float) and math.isfinite(stamp)
+                    and -2 <= now - stamp <= service.STATUS_TTL)
+        except (OSError, ValueError, KeyError, TypeError, RecursionError, OverflowError):
+            return False
+
+    # ------------------------------------------------------------ connector
+
+    def connector_started(self, now):
+        self.connector.update(state="running", started_at=now, retry_at=None)
+        log("connector_started", failures=self.connector["failures"])
+
+    def connector_running(self, now):
+        """A connection that stayed up ends the failure streak."""
+        row = self.connector
+        if row["failures"] and now - row["started_at"] >= CONNECTOR_STABLE_S:
+            row.update(failures=0, failing_since=None)
+            log("connector_stable")
+
+    def connector_ended(self, task, now):
+        if task.cancelled():
+            code = "cancelled"
+        else:
+            exc = task.exception()
+            code = "returned" if exc is None else _error_code(exc)
+        row = self.connector
+        if now - (row["started_at"] or now) >= CONNECTOR_STABLE_S:
+            row.update(failures=0, failing_since=None)
+        if code.endswith("_restart_required"):
+            # Changed settings or credentials: reconnect with the new ones now.
+            delay = 0
+        else:
+            row["failures"] += 1
+            if row["failing_since"] is None:
+                row["failing_since"] = now
+            delay = _backoff(row["failures"])
+        row.update(state="waiting", last_error=code, retry_at=now + delay, started_at=None)
+        log("connector_ended", code=code, failures=row["failures"], retry_in=delay)
 
 
 async def serve(root, cfg, connector=None):
@@ -181,14 +562,30 @@ async def serve(root, cfg, connector=None):
             for sig in (signal.SIGTERM, signal.SIGINT):
                 loop.add_signal_handler(sig, setattr, runtime, "restarting", True)
                 registered.append(sig)
-            worker = asyncio.create_task(connector(root, stopping)) if connector else None
+            # Only after the single-host lock: the previous host is gone.
+            runtime.adopt_orphans()
+            if connector:
+                runtime.connector["retry_at"] = 0
             while True:
                 try:
                     runtime.restarting |= config.load(root) != cfg
                 except ValueError:
                     runtime.restarting = True
-                if worker and worker.done():
-                    runtime.restarting = True
+                if connector:
+                    # The connection is supervised on its own: its failure
+                    # (token revoked, Slack/Discord outage, network down at
+                    # start) backs off and reconnects without stopping the
+                    # scheduler or the workers.
+                    now = time.time()
+                    if worker is not None and worker.done():
+                        runtime.connector_ended(worker, now)
+                        worker = None
+                    elif worker is not None:
+                        runtime.connector_running(now)
+                    if worker is None and not runtime.restarting \
+                            and now >= runtime.connector["retry_at"]:
+                        worker = asyncio.create_task(connector(root, stopping))
+                        runtime.connector_started(now)
                 if runtime.tick():
                     break
                 await asyncio.sleep(1)
@@ -206,6 +603,9 @@ async def serve(root, cfg, connector=None):
                         await asyncio.wait_for(worker, timeout=30)
                     except asyncio.TimeoutError:
                         log("connector_stop_timeout")
+                    except Exception as exc:
+                        # Supervised like any other end: a code, never a crash.
+                        log("connector_ended", code=_error_code(exc), stopping=True)
             finally:
                 for sig in registered:
                     loop.remove_signal_handler(sig)

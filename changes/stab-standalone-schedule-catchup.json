@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "独立モードの定期ジョブが逃した時刻を後で1回実行するように修正",
+  "summary": "スリープ・hostの再起動・前回の実行中などで定期ジョブの時刻を逃した場合、直近に逃した時刻の分を1回だけ後から実行します。前回の実行中で飛ばした時刻はログに slot_skipped_running として記録します。",
+  "upgrade": "独立モードでは更新後に mcs_setup.py services を1回実行してください。初回起動時は過去の時刻をさかのぼって実行しません。Hermesモードでは操作は不要です。",
+  "details": [
+    "ジョブごとに最後に実行した時刻を data/standalone-schedule.json（0600）に保存する。",
+    "さかのぼる範囲は24時間で、逃した時刻が複数あっても実行は1回（slot_catchup をログに記録）。",
+    "保存に失敗してもhostは止まらず、ログに1回記録する。"
+  ],
+  "refs": [
+    "mcs_standalone/runtime.py",
+    "tests/adapters/standalone/test_stab_runtime_supervision.py"
+  ]
+}
