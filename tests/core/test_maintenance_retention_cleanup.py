@@ -130,6 +130,60 @@ def test_rotate_log_covers_update_recovery_cmd_int_and_llamacpp(monkeypatch, tmp
     assert str(tmp_path / ".hermes" / "logs" / "llamacpp.log") in checked
 
 
+def test_rotate_log_covers_standalone_llamacpp_log(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path / "user"))
+    monkeypatch.setattr(maintenance, "HOME", str(tmp_path / "mcs"))
+    checked = []
+
+    def getsize(path):
+        checked.append(path)
+        return 0
+
+    monkeypatch.setattr(maintenance.os.path, "getsize", getsize)
+    maintenance.rotate_log()
+    assert str(tmp_path / "mcs" / "logs" / "llamacpp.log") in checked
+    assert str(tmp_path / "user" / ".hermes" / "logs" / "llamacpp.log") in checked
+
+
+def test_rotate_log_keeps_rotated_copy_private_under_loose_umask(monkeypatch, tmp_path):
+    monkeypatch.setattr(maintenance, "LOG_MAX", 3)
+    fresh, stale = tmp_path / "fresh.log", tmp_path / "stale.log"
+    for log in (fresh, stale):
+        log.write_bytes(b"synthetic line\n")
+        log.chmod(0o600)
+    (tmp_path / "stale.log.1").write_bytes(b"old")
+    (tmp_path / "stale.log.1").chmod(0o644)
+    old = os.umask(0o022)
+    try:
+        maintenance.rotate_log([str(fresh), str(stale)])
+    finally:
+        os.umask(old)
+    for log in (fresh, stale):
+        rotated = tmp_path / (log.name + ".1")
+        assert rotated.read_bytes() == b"synthetic line\n"
+        assert rotated.stat().st_mode & 0o777 == 0o600
+        assert log.read_bytes() == b""
+
+
+def test_prune_leftovers_removes_stranded_backup_and_snapshot_copies(tmp_path, monkeypatch):
+    monkeypatch.setattr(maintenance, "HOME", str(tmp_path))
+    backups, snaps = tmp_path / "backups", tmp_path / "snapshots"
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(snaps))
+    backups.mkdir()
+    snaps.mkdir()
+    for f in (backups / "ledger-20260101.db.tmp", backups / "preupdate-x-1.db.tmp",
+              backups / "ledger-20260101.db", backups / "preupdate-x-2.db",
+              snaps / ".snapshot.abc.tmp", snaps / "ledger-snapshot.db"):
+        f.write_bytes(b"x")
+    assert maintenance.prune_leftovers() == 0               # in-flight copies stay
+    monkeypatch.setattr(maintenance, "LEFTOVER_KEEP_S", -60)
+    assert maintenance.prune_leftovers() == 3
+    assert sorted(p.name for p in backups.iterdir()) == [
+        "ledger-20260101.db", "preupdate-x-2.db"]
+    assert [p.name for p in snaps.iterdir()] == ["ledger-snapshot.db"]
+
+
 def test_alert_and_failed_job_lookups_use_indexes(tmp_path):
     db = ledger.Ledger(str(tmp_path / "ledger.db"))
     plan = " ".join(r[3] for r in db.db.execute(
