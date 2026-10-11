@@ -1257,6 +1257,126 @@ def _project_ids_yaml(text: str) -> str | None:
         return None
 
 
+def _apply_standalone_credentials(args, used: set, wanted: list) -> bool:
+    """Provision the wanted standalone tokens into the MCS .env."""
+    # Credentials already provisioned by the native initializer need no dotenv copy.
+    from mcs_standalone.config import credentials_path, load_credentials
+    if used & {"slack", "discord"} and all(
+            os.path.lexists(credentials_path(HOME, transport))
+            for transport in used & {"slack", "discord"}):
+        try:
+            for transport in used & {"slack", "discord"}:
+                load_credentials(HOME, transport)
+            return True
+        except ValueError:
+            return False
+    updates, missing = {}, []
+    for env_key, desc in wanted:
+        if env_value(env_key, paths=[ENV_PATH], check_env=False):
+            print(f"  {env_key}: 設定済み")
+            continue
+        tok = os.environ.get(env_key)
+        hermes_tok = None if tok or args.yes else env_value(
+            env_key, paths=[os.path.expanduser("~/.hermes/.env")], check_env=False)
+        # switching from Hermes: reuse its token only on explicit consent
+        if hermes_tok and input(f"  {env_key}: ~/.hermes/.env の値を使いますか？"
+                                "[y/N]: ").strip().lower() in ("y", "yes"):
+            tok = hermes_tok
+        if not tok and not args.yes:
+            tok = getpass.getpass(f"  {desc}（{ENV_PATH} へ保存。空欄=スキップ）: ") or None
+        if tok:
+            updates[env_key] = tok
+        else:
+            missing.append(env_key)
+    if updates:
+        try:
+            _env_write(ENV_PATH, updates)
+        except ValueError:
+            print("  .env: invalid token format; existing file retained")
+            return False
+        print(f"  {', '.join(sorted(updates))}: {ENV_PATH} へ保存 (0600)")
+    if missing:
+        print("  未設定: " + ", ".join(missing)
+              + f" — {ENV_PATH} に KEY=値 で追加するか init を再実行")
+    return not missing
+
+
+def _plugin_settings_plan(transport: str, nd: dict, args) -> tuple:
+    """Build the fixed plugin settings and the operator allowlists for a transport."""
+    data = os.path.join(HOME, "data")
+    fixed = {
+        "snapshot": os.path.join(data, "snapshots",
+                                 "ledger-snapshot.db"),
+        "inbox": os.path.join(data, "cmd"),
+        "data_root": data,
+        "interactive": "true",
+    }
+    if transport == "discord":
+        for k in ("profile", "application_id", "guild_id", "channel_id"):
+            if nd.get(k):
+                fixed[k] = nd[k]
+        # operator-specific allowlists: flag > existing value > prompt
+        lists = (
+            ("allowed_user_ids", getattr(args, "plugin_user_ids", None),
+             "カード操作を許可する Discord user ID", ""),
+            ("allowed_chat_ids", getattr(args, "plugin_chat_ids", None),
+             "コマンドを受け付ける Discord channel ID",
+             nd.get("channel_id", "")),
+            ("project_ids", getattr(args, "plugin_project_ids", None),
+             "対象とする MCS project ID", ""),
+        )
+    else:
+        fixed["slack_adapter_enabled"] = "true"
+        for k in ("profile", "application_id", "team_id", "channel_id"):
+            if nd.get(k):
+                fixed[f"slack_{k}"] = nd[k]
+        lists = (
+            ("slack_allowed_user_ids",
+             getattr(args, "plugin_user_ids", None),
+             "カード操作を許可する Slack user ID", ""),
+            ("project_ids", getattr(args, "plugin_project_ids", None),
+             "対象とする MCS project ID", ""),
+        )
+    return fixed, lists
+
+
+def _plugin_store_tokens(exe, profile: str, tokens, args) -> bool:
+    """Store the transport tokens in the serving profile; True when a write failed."""
+    # Pipe tokens to the public writer so process listings cannot expose
+    # them. Older Hermes versions must fail instead of falling back to
+    # argv. `config set` routes *_TOKEN keys to the profile .env. They
+    # must land in the SERVING profile's .env: under multiplex each
+    # profile's secret scope is authoritative and a miss never falls
+    # through to the default profile's .env (agent/secret_scope.py).
+    # Already-configured installs keep their existing tokens.
+    def _store(env_key, tok) -> bool:
+        ok = _hermes_config_set(exe, profile, env_key, tok)
+        print(f"  {env_key}: "
+              + (f"hermes {'-p ' + profile if profile else '既定'} "
+                 ".env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
+        return ok
+
+    failed = False
+    for env_key, desc in tokens:
+        tok = os.environ.get(env_key)
+        if tok:
+            failed |= not _store(env_key, tok)
+        elif _hermes_config_get(exe, profile, env_key):
+            print(f"  {env_key}: 設定済み")
+        else:
+            if not args.yes:
+                tok = getpass.getpass(
+                    f"  {desc}（hermes .env へ保存。"
+                    "空欄=スキップ）: ") or None
+                if tok:
+                    failed |= not _store(env_key, tok)
+            if not tok:
+                print(f"  {env_key}: 未設定 — `hermes "
+                      + (f"-p {profile} " if profile else "")
+                      + "setup` で後から設定")
+    return failed
+
+
 def _apply_plugin_integration(cfg: dict, args) -> bool:
     """Wire the mcs-discord-commands plugin into hermes through the
     public `hermes config` CLI — writes the serving profile's
@@ -1278,46 +1398,7 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
             wanted.append(("SLACK_BOT_TOKEN", "Slack bot token (xoxb-…)"))
         if interactive == "slack":
             wanted.append(("SLACK_APP_TOKEN", "Slack app-level token (xapp-…)"))
-        # Credentials already provisioned by the native initializer need no dotenv copy.
-        from mcs_standalone.config import credentials_path, load_credentials
-        if used & {"slack", "discord"} and all(
-                os.path.lexists(credentials_path(HOME, transport))
-                for transport in used & {"slack", "discord"}):
-            try:
-                for transport in used & {"slack", "discord"}:
-                    load_credentials(HOME, transport)
-                return True
-            except ValueError:
-                return False
-        updates, missing = {}, []
-        for env_key, desc in wanted:
-            if env_value(env_key, paths=[ENV_PATH], check_env=False):
-                print(f"  {env_key}: 設定済み")
-                continue
-            tok = os.environ.get(env_key)
-            hermes_tok = None if tok or args.yes else env_value(
-                env_key, paths=[os.path.expanduser("~/.hermes/.env")], check_env=False)
-            # switching from Hermes: reuse its token only on explicit consent
-            if hermes_tok and input(f"  {env_key}: ~/.hermes/.env の値を使いますか？"
-                                    "[y/N]: ").strip().lower() in ("y", "yes"):
-                tok = hermes_tok
-            if not tok and not args.yes:
-                tok = getpass.getpass(f"  {desc}（{ENV_PATH} へ保存。空欄=スキップ）: ") or None
-            if tok:
-                updates[env_key] = tok
-            else:
-                missing.append(env_key)
-        if updates:
-            try:
-                _env_write(ENV_PATH, updates)
-            except ValueError:
-                print("  .env: invalid token format; existing file retained")
-                return False
-            print(f"  {', '.join(sorted(updates))}: {ENV_PATH} へ保存 (0600)")
-        if missing:
-            print("  未設定: " + ", ".join(missing)
-                  + f" — {ENV_PATH} に KEY=値 で追加するか init を再実行")
-        return not missing
+        return _apply_standalone_credentials(args, used, wanted)
     if not isinstance(ntf, dict) \
             or ntf.get("interactive") not in ("discord", "slack"):
         return True
@@ -1343,41 +1424,10 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
           f"{'-p ' + profile if profile else '既定'}"
           " profile にプラグイン設定を書き込みます")
 
-    data = os.path.join(HOME, "data")
-    fixed = {
-        "snapshot": os.path.join(data, "snapshots",
-                                 "ledger-snapshot.db"),
-        "inbox": os.path.join(data, "cmd"),
-        "data_root": data,
-        "interactive": "true",
-    }
+    fixed, lists = _plugin_settings_plan(transport, nd, args)
     if transport == "discord":
-        for k in ("profile", "application_id", "guild_id", "channel_id"):
-            if nd.get(k):
-                fixed[k] = nd[k]
-        # operator-specific allowlists: flag > existing value > prompt
-        lists = (
-            ("allowed_user_ids", getattr(args, "plugin_user_ids", None),
-             "カード操作を許可する Discord user ID", ""),
-            ("allowed_chat_ids", getattr(args, "plugin_chat_ids", None),
-             "コマンドを受け付ける Discord channel ID",
-             nd.get("channel_id", "")),
-            ("project_ids", getattr(args, "plugin_project_ids", None),
-             "対象とする MCS project ID", ""),
-        )
         tokens = (("DISCORD_BOT_TOKEN", "Discord bot token"),)
     else:
-        fixed["slack_adapter_enabled"] = "true"
-        for k in ("profile", "application_id", "team_id", "channel_id"):
-            if nd.get(k):
-                fixed[f"slack_{k}"] = nd[k]
-        lists = (
-            ("slack_allowed_user_ids",
-             getattr(args, "plugin_user_ids", None),
-             "カード操作を許可する Slack user ID", ""),
-            ("project_ids", getattr(args, "plugin_project_ids", None),
-             "対象とする MCS project ID", ""),
-        )
         tokens = (("SLACK_BOT_TOKEN", "Slack bot token (xoxb-…)"),
                   ("SLACK_APP_TOKEN", "Slack app-level token (xapp-…)"))
     missing = []
@@ -1449,37 +1499,7 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
               " — 後で `hermes config set "
               f"{PLUGIN_SETTINGS}.<key> <値>` で設定してください")
 
-    # Pipe tokens to the public writer so process listings cannot expose
-    # them. Older Hermes versions must fail instead of falling back to
-    # argv. `config set` routes *_TOKEN keys to the profile .env. They
-    # must land in the SERVING profile's .env: under multiplex each
-    # profile's secret scope is authoritative and a miss never falls
-    # through to the default profile's .env (agent/secret_scope.py).
-    # Already-configured installs keep their existing tokens.
-    def _store(env_key, tok) -> bool:
-        ok = _hermes_config_set(exe, profile, env_key, tok)
-        print(f"  {env_key}: "
-              + (f"hermes {'-p ' + profile if profile else '既定'} "
-                 ".env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
-        return ok
-
-    for env_key, desc in tokens:
-        tok = os.environ.get(env_key)
-        if tok:
-            failed |= not _store(env_key, tok)
-        elif _hermes_config_get(exe, profile, env_key):
-            print(f"  {env_key}: 設定済み")
-        else:
-            if not args.yes:
-                tok = getpass.getpass(
-                    f"  {desc}（hermes .env へ保存。"
-                    "空欄=スキップ）: ") or None
-                if tok:
-                    failed |= not _store(env_key, tok)
-            if not tok:
-                print(f"  {env_key}: 未設定 — `hermes "
-                      + (f"-p {profile} " if profile else "")
-                      + "setup` で後から設定")
+    failed |= _plugin_store_tokens(exe, profile, tokens, args)
     return not failed
 
 
@@ -1556,38 +1576,13 @@ def _init_recovery_problem(cfg, update_repo=None) -> str | None:
         _runtime_probe(cfg["recovery_python"]), recovery=True)
 
 
-def cmd_init(args) -> int:
-    # --yes may archive a corrupt config: defer that write until the desired
-    # interpreter (including --set overrides) has been verified.
-    if not args.yes and not _guard_config(False):
-        return 1
-    cfg = load_config()
-    try:
-        mode_before = mcs_runtime.mode(cfg)
-    except ValueError:
-        mode_before = None  # an explicit --runtime-mode may repair it
-    if getattr(args, "runtime_mode", None):
-        cfg["runtime_mode"] = args.runtime_mode
-    if getattr(args, "recovery_python", None) is not None:
-        cfg["recovery_python"] = args.recovery_python
-    def pick(flag, key):
-        # flag wins, else the existing value is kept — the wizard's req
-        # items do the interactive prompting for these
-        return flag if flag is not None else cfg.get(key)
-
-    login_id = pick(args.login_id, "mcs_login_id")
-    target = pick(args.notify_target, "notify_target")
-    updates = {}
-    if login_id:
-        cfg["mcs_login_id"] = login_id
-    if target:
-        cfg["notify_target"] = str(target)
-
+def _init_apply_set_overrides(cfg: dict, set_args) -> int | None:
+    """Apply `--set KEY=JSON` overrides to cfg; return 1 when init must stop."""
     # --set KEY=JSON gives non-interactive coverage of every config
     # key (dotted paths nest); the trailing cmd_check validates them.
     fact_selection = (_get_key(cfg, "semantic.fact_source"),
                       _get_key(cfg, "semantic.fact_source_gate"))
-    for kv in args.set or []:
+    for kv in set_args or []:
         k, sep, v = kv.partition("=")
         if not sep or not k.strip():
             print(f"--set: expected KEY=VALUE, got {kv!r}")
@@ -1610,30 +1605,11 @@ def cmd_init(args) -> int:
               "only be set via `mcs_setup.py fact-source canonical "
               "--gate-evidence <report>` — config not written")
         return 1
+    return None
 
-    # before any secret reaches Keychain/.env
-    try:
-        mcs_runtime.mode(cfg)
-    except ValueError:
-        print("init: runtime_mode must be 'hermes' or 'standalone' — nothing written")
-        return 1
-    why = _init_recovery_problem(cfg)
-    if why:
-        print("init: recovery_python " + why + " — nothing written")
-        return 1
-    checked_recovery = cfg.get("recovery_python")
-    # standalone keeps the plugin grants in config.json: an id list it
-    # cannot honour whole is refused like the Hermes path, before any
-    # secret, .env or config write — never silently narrowed
-    standalone_projects = None
-    if mcs_runtime.standalone(cfg) and getattr(args, "plugin_project_ids", None):
-        literal = _project_ids_yaml(args.plugin_project_ids)
-        if literal is None:
-            print("init: --plugin-project-ids: 正の整数の project ID を"
-                  "カンマ区切りで指定してください — nothing written")
-            return 1
-        standalone_projects = json.loads(literal)
 
+def _init_apply_section_flags(cfg: dict, args) -> None:
+    """Apply the semantic/signals flags and the manual self-identity override."""
     if args.semantic_mode:
         sem = cfg.get("semantic")
         if not isinstance(sem, dict):
@@ -1679,55 +1655,45 @@ def cmd_init(args) -> int:
         if profs:
             sig["self_professions"] = profs
 
-    if mcs_runtime.standalone(cfg):
-        # the --plugin-* grants Hermes keeps in plugin settings live in
-        # notify.<transport> when MCS serves Slack/Discord itself
-        # notify.<transport>; the transports follow _validate_standalone_scope
-        # and the grants apply only when exactly one Slack/Discord scope is used
-        ntf = cfg.get("notify") if isinstance(cfg.get("notify"), dict) else {}
-        used = {ntf["interactive"]} if isinstance(ntf.get("interactive"), str) else set()
-        used |= {t.split(":", 1)[0] for t in (cfg.get("notify_target"),
-                                             cfg.get("notify_system_target"))
-                 if isinstance(t, str)}
-        used &= {"slack", "discord"}
-        transport = next(iter(used)) if len(used) == 1 else None
-        scope = ntf.get(transport) if transport else None
-        ignored = ["--plugin-profile"] \
-            if getattr(args, "plugin_profile", None) else []
-        for flag, key in (("plugin_user_ids", "allowed_user_ids"),
-                          ("plugin_chat_ids", "allowed_chat_ids"),
-                          ("plugin_role_ids", "allowed_role_ids"),
-                          ("plugin_project_ids", "project_ids")):
-            value = getattr(args, flag, None)
-            if not value:
-                continue
-            if not isinstance(scope, dict) or (
-                    transport != "discord"
-                    and key in ("allowed_chat_ids", "allowed_role_ids")):
-                ignored.append("--plugin-" + flag[7:].replace("_", "-"))
-            else:
-                scope[key] = standalone_projects if key == "project_ids" \
-                    else _csv_list([value])
-        if ignored:
-            print(f"init: {', '.join(ignored)} は standalone では適用されません"
-                  " — カード権限は config.json の notify.<transport> に設定してください")
 
-    if not args.yes:
-        _wizard(cfg)
+def _init_standalone_grants(cfg: dict, args, standalone_projects) -> None:
+    """Move the --plugin-* grants into notify.<transport> for standalone mode."""
+    # the --plugin-* grants Hermes keeps in plugin settings live in
+    # notify.<transport> when MCS serves Slack/Discord itself
+    # notify.<transport>; the transports follow _validate_standalone_scope
+    # and the grants apply only when exactly one Slack/Discord scope is used
+    ntf = cfg.get("notify") if isinstance(cfg.get("notify"), dict) else {}
+    used = {ntf["interactive"]} if isinstance(ntf.get("interactive"), str) else set()
+    used |= {t.split(":", 1)[0] for t in (cfg.get("notify_target"),
+                                         cfg.get("notify_system_target"))
+             if isinstance(t, str)}
+    used &= {"slack", "discord"}
+    transport = next(iter(used)) if len(used) == 1 else None
+    scope = ntf.get(transport) if transport else None
+    ignored = ["--plugin-profile"] \
+        if getattr(args, "plugin_profile", None) else []
+    for flag, key in (("plugin_user_ids", "allowed_user_ids"),
+                      ("plugin_chat_ids", "allowed_chat_ids"),
+                      ("plugin_role_ids", "allowed_role_ids"),
+                      ("plugin_project_ids", "project_ids")):
+        value = getattr(args, flag, None)
+        if not value:
+            continue
+        if not isinstance(scope, dict) or (
+                transport != "discord"
+                and key in ("allowed_chat_ids", "allowed_role_ids")):
+            ignored.append("--plugin-" + flag[7:].replace("_", "-"))
+        else:
+            scope[key] = standalone_projects if key == "project_ids" \
+                else _csv_list([value])
+    if ignored:
+        print(f"init: {', '.join(ignored)} は standalone では適用されません"
+              " — カード権限は config.json の notify.<transport> に設定してください")
 
-    # The wizard can change the selected recovery interpreter.
-    why = None if cfg.get("recovery_python") == checked_recovery else _init_recovery_problem(cfg)
-    if why:
-        print("init: recovery_python " + why + " — config.json not written")
-        return 1
-    errors, _ = validate_config(cfg)
-    if errors:
-        print("init: invalid configuration — nothing written")
-        for error in errors:
-            print("  " + error)
-        return 1
-    login_id = cfg.get("mcs_login_id")
 
+def _init_store_secrets(args, login_id) -> int | None:
+    """Store the MCS password in Keychain and the .env fallback; return 1 on failure."""
+    updates = {}
     # secrets come from the environment (or getpass) — never argv flags,
     # which persist in shell history and `ps` (FIX-SU1)
     pw = os.environ.get("MCS_SETUP_PASSWORD")
@@ -1760,6 +1726,100 @@ def cmd_init(args) -> int:
         print(f".env: wrote {sorted(updates)} to {ENV_PATH} (0600)")
     if keychain_failed:
         return 1
+    return None
+
+
+def _init_standalone_connectors(cfg: dict, args, integration_ok: bool) -> bool:
+    """Run the native standalone initializer for each enabled transport."""
+    for transport in ("slack", "discord"):
+        if _transport_on(cfg, transport):
+            argv = [sys.executable, "-m", "mcs_standalone", "init", "--root", HOME,
+                    "--transport", transport] + (["--yes"] if args.yes else [])
+            # Terminal-bound getpass owns credentials; no secret ever travels in argv.
+            try:
+                result = subprocess.run(argv, timeout=300 if not args.yes else 30,
+                                        cwd=REPO_ROOT)
+                integration_ok = integration_ok and result.returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                integration_ok = False
+    return integration_ok
+
+
+def cmd_init(args) -> int:
+    # --yes may archive a corrupt config: defer that write until the desired
+    # interpreter (including --set overrides) has been verified.
+    if not args.yes and not _guard_config(False):
+        return 1
+    cfg = load_config()
+    try:
+        mode_before = mcs_runtime.mode(cfg)
+    except ValueError:
+        mode_before = None  # an explicit --runtime-mode may repair it
+    if getattr(args, "runtime_mode", None):
+        cfg["runtime_mode"] = args.runtime_mode
+    if getattr(args, "recovery_python", None) is not None:
+        cfg["recovery_python"] = args.recovery_python
+    def pick(flag, key):
+        # flag wins, else the existing value is kept — the wizard's req
+        # items do the interactive prompting for these
+        return flag if flag is not None else cfg.get(key)
+
+    login_id = pick(args.login_id, "mcs_login_id")
+    target = pick(args.notify_target, "notify_target")
+    if login_id:
+        cfg["mcs_login_id"] = login_id
+    if target:
+        cfg["notify_target"] = str(target)
+
+    if _init_apply_set_overrides(cfg, args.set):
+        return 1
+
+    # before any secret reaches Keychain/.env
+    try:
+        mcs_runtime.mode(cfg)
+    except ValueError:
+        print("init: runtime_mode must be 'hermes' or 'standalone' — nothing written")
+        return 1
+    why = _init_recovery_problem(cfg)
+    if why:
+        print("init: recovery_python " + why + " — nothing written")
+        return 1
+    checked_recovery = cfg.get("recovery_python")
+    # standalone keeps the plugin grants in config.json: an id list it
+    # cannot honour whole is refused like the Hermes path, before any
+    # secret, .env or config write — never silently narrowed
+    standalone_projects = None
+    if mcs_runtime.standalone(cfg) and getattr(args, "plugin_project_ids", None):
+        literal = _project_ids_yaml(args.plugin_project_ids)
+        if literal is None:
+            print("init: --plugin-project-ids: 正の整数の project ID を"
+                  "カンマ区切りで指定してください — nothing written")
+            return 1
+        standalone_projects = json.loads(literal)
+
+    _init_apply_section_flags(cfg, args)
+
+    if mcs_runtime.standalone(cfg):
+        _init_standalone_grants(cfg, args, standalone_projects)
+
+    if not args.yes:
+        _wizard(cfg)
+
+    # The wizard can change the selected recovery interpreter.
+    why = None if cfg.get("recovery_python") == checked_recovery else _init_recovery_problem(cfg)
+    if why:
+        print("init: recovery_python " + why + " — config.json not written")
+        return 1
+    errors, _ = validate_config(cfg)
+    if errors:
+        print("init: invalid configuration — nothing written")
+        for error in errors:
+            print("  " + error)
+        return 1
+    login_id = cfg.get("mcs_login_id")
+
+    if _init_store_secrets(args, login_id):
+        return 1
 
     if args.yes and not _guard_config(True):
         return 1
@@ -1775,17 +1835,7 @@ def cmd_init(args) -> int:
     print(f"config: wrote {CONF_PATH}")
     integration_ok = _apply_plugin_integration(cfg, args)
     if cfg.get("runtime_mode") == "standalone":
-        for transport in ("slack", "discord"):
-            if _transport_on(cfg, transport):
-                argv = [sys.executable, "-m", "mcs_standalone", "init", "--root", HOME,
-                        "--transport", transport] + (["--yes"] if args.yes else [])
-                # Terminal-bound getpass owns credentials; no secret ever travels in argv.
-                try:
-                    result = subprocess.run(argv, timeout=300 if not args.yes else 30,
-                                            cwd=REPO_ROOT)
-                    integration_ok = integration_ok and result.returncode == 0
-                except (OSError, subprocess.TimeoutExpired):
-                    integration_ok = False
+        integration_ok = _init_standalone_connectors(cfg, args, integration_ok)
     # an interactive transport needs the supervised gateway — on a
     # first install `services` ran BEFORE init could configure
     # interactive, so sync just the gateway here rather than leaving
