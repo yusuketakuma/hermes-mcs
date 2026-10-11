@@ -2646,6 +2646,9 @@ def _replace_database(backup_path, expected_sha, before_replace):
                 raise OSError("live_journal_busy")
         finally:
             live.close()
+        # = deployment/recovery/mcs_recover._replace_database: same lexists
+        # sidecar rule, kept as an independent copy (recovery must run
+        # without the repo's modules)
         if any(os.path.lexists(LEDGER + suffix)
                for suffix in ("-wal", "-shm", "-journal")):
             raise OSError("live_sidecars_remaining")
