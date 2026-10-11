@@ -72,7 +72,7 @@ def render(root, platform=None):
                  "WorkingDirectory": repository, "RunAtLoad": True, "KeepAlive": True,
                  "ExitTimeOut": 3660, "AbandonProcessGroup": True,
                  "ThrottleInterval": 30, "StandardOutPath": logfile,
-                 "StandardErrorPath": logfile}
+                 "StandardErrorPath": logfile, "Umask": 0o077}
         return LABEL + ".plist", plistlib.dumps(value).decode("utf-8")
     if platform.startswith("linux"):
         def quote(value):
@@ -84,7 +84,7 @@ def render(root, platform=None):
         body = ("[Unit]\nDescription=Independent MCS runtime\nAfter=network-online.target\n\n"
                 "[Service]\nType=simple\nWorkingDirectory=" + repository.replace("%", "%%") + "/."
                 + "\nExecStart=" + " ".join(quote(v) for v in argv)
-                + "\nRestart=always\nRestartSec=30\nTimeoutStopSec=3660\n"
+                + "\nRestart=always\nRestartSec=30\nTimeoutStopSec=3660\nUMask=0077\n"
                   "KillMode=control-group\n\n[Install]\nWantedBy=default.target\n")
         return "mcs-standalone.service", body
     raise ValueError("standalone_service_platform_unsupported")
