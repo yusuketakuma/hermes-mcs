@@ -75,7 +75,17 @@ def test_long_reason_never_truncates_negation_or_subject_tail(led):
 @pytest.mark.parametrize("timestamp", [True, float("nan"), -1, 1e30, None])
 def test_unknown_observation_time_is_explicit(timestamp):
     text = alert_view.render_text({"project_id": 1, "message_id": 100, "observed_at": timestamp})
-    assert "判定 不明" in text
+    assert "判定 日時未取得" in text and "不明" not in text
+
+
+def test_missing_post_time_reads_as_unobtained(led):
+    _patient(led)
+    _msg(led, 100)
+    with led.db:
+        led.db.execute("UPDATE messages SET posted_at=NULL WHERE message_id=100")
+    text = notify_render.parts_text(alert_view.render_parts(
+        {"project_id": 1, "message_id": 100, "observed_at": 1790000000}, led.db))
+    assert "投稿 日時未取得 · 判定 " in text and "不明" not in text
 
 
 def test_source_preview_fields_come_from_same_patient_message_not_checked_overrides(led):

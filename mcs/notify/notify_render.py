@@ -307,6 +307,17 @@ def _when_posted(posted_at) -> str:
     return f"{_mmdd(posted_at)} {_hhmm(posted_at)}" if posted_at else "日時未取得"
 
 
+def thread_stamp_row(db, mid, sender_id) -> str:
+    """A post's stamp row for its thread message, or "" for an observed
+    zero (owner 2026-10-07): unfetched, failed and own stamps still show."""
+    meta = get_message_metadata(db, mid)
+    meta["own_post"] = is_self_sender(db, sender_id)
+    if stamp_counts(meta) == {} and not self_stamps(meta) \
+            and not meta["last_error"]:
+        return ""
+    return thread_stamp_line(meta, reaction_actor_summary(db, mid))
+
+
 def _sender_tag(m, db=None) -> str:
     """Message sender header — name plus profession・organization when
     the ledger stores them (same metadata the text notify path shows)."""
@@ -732,12 +743,8 @@ def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
         out.append(_summary_block(db, mid, cfg=cfg, label=layout < 2)["text"])
     stamp_line = ""
     if stamps:
-        meta = get_message_metadata(db, mid)
-        sid = m["sender_id"] if "sender_id" in m.keys() else None
-        meta["own_post"] = is_self_sender(db, sid)
-        line = thread_stamp_line(meta, reaction_actor_summary(db, mid))
-        if line != "スタンプ なし":       # an observed zero needs no row
-            stamp_line = line
+        stamp_line = thread_stamp_row(
+            db, mid, m["sender_id"] if "sender_id" in m.keys() else None)
     body = m["body_text"] or ""
     if layout >= 2:
         if include_summary:
