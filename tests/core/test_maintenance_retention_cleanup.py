@@ -184,6 +184,71 @@ def test_prune_leftovers_removes_stranded_backup_and_snapshot_copies(tmp_path, m
     assert [p.name for p in snaps.iterdir()] == ["ledger-snapshot.db"]
 
 
+def test_prune_leftovers_removes_stranded_staging_sidecars(tmp_path, monkeypatch):
+    monkeypatch.setattr(maintenance, "HOME", str(tmp_path))
+    backups, snaps = tmp_path / "backups", tmp_path / "snapshots"
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(snaps))
+    backups.mkdir()
+    snaps.mkdir()
+    stranded = [backups / "ledger-20260101-ab.db.tmp-journal",
+                backups / "preupdate-x-1.db.tmp-wal",
+                backups / "preupdate-x-1.db.tmp-shm",
+                snaps / ".snapshot.abc.tmp-journal",
+                snaps / ".snapshot.abc.tmp-wal",
+                snaps / ".snapshot.abc.tmp-shm"]
+    kept = [backups / "ledger-20260101.db", snaps / "ledger-snapshot.db"]
+    for f in stranded + kept:
+        f.write_bytes(b"x")
+    assert maintenance.prune_leftovers() == 0               # in-flight copies stay
+    monkeypatch.setattr(maintenance, "LEFTOVER_KEEP_S", -60)
+    assert maintenance.prune_leftovers() == len(stranded)
+    assert sorted(p for p in [*backups.iterdir(), *snaps.iterdir()]) == sorted(kept)
+
+
+def test_rotate_log_refuses_symlinked_copy_and_still_rotates_the_rest(monkeypatch, tmp_path):
+    monkeypatch.setattr(maintenance, "LOG_MAX", 3)
+    linked, plain = tmp_path / "linked.log", tmp_path / "plain.log"
+    for log in (linked, plain):
+        log.write_bytes(b"synthetic line\n")
+    target = tmp_path / "elsewhere.txt"
+    target.write_bytes(b"keep")
+    (tmp_path / "linked.log.1").symlink_to(target)
+    with pytest.raises(maintenance.MaintenanceError, match="log_rotate_symlink_refused"):
+        maintenance.rotate_log([str(linked), str(plain)])
+    assert target.read_bytes() == b"keep"                   # never written through
+    assert linked.read_bytes() == b"synthetic line\n"      # not truncated unrotated
+    assert (tmp_path / "plain.log.1").read_bytes() == b"synthetic line\n"
+    assert plain.read_bytes() == b""
+
+
+def test_daily_backup_staging_copy_is_private_from_creation(tmp_path, monkeypatch):
+    source = tmp_path / "source.db"
+    writer = ledger.Ledger(str(source))
+    writer.ensure_patient(1)
+    writer.close()
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(maintenance, "disk_floor_mb", lambda: 0)
+    real_valid = maintenance.valid_mcs_db
+    staged = []
+
+    def spy(path, **kwargs):
+        if path.endswith(".tmp"):
+            staged.append(os.stat(path).st_mode & 0o777)
+        return real_valid(path, **kwargs)
+
+    monkeypatch.setattr(maintenance, "valid_mcs_db", spy)
+    old = os.umask(0o022)
+    try:
+        maintenance.daily_backup(str(source))
+    finally:
+        os.umask(old)
+    assert staged == [0o600]
+    assert list(backups.glob("*.tmp")) == []
+    assert len(list(backups.glob("ledger-*.db"))) == 1
+
+
 def test_alert_and_failed_job_lookups_use_indexes(tmp_path):
     db = ledger.Ledger(str(tmp_path / "ledger.db"))
     plan = " ".join(r[3] for r in db.db.execute(
