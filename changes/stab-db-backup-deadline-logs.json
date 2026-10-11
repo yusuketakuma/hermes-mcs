@@ -1,0 +1,18 @@
+{
+  "category": "fixed",
+  "title": "日次バックアップが時間切れで毎回中断される問題と、子プロセスのログが肥大化する問題を修正",
+  "summary": "データベースが大きいと、日次バックアップが監視タイマーに毎回打ち切られ、いつまでも完了しない恐れがありました。残り時間がデータベースの大きさに見合わないときは開始せず、理由を記録して次の実行で行います。また standalone の各ジョブのログ（data/*.log）と LINE WORKS の常駐ログもローテーションの対象にしました。",
+  "upgrade": "追加操作は不要です。時間不足で見送られた状態が続き、最新のバックアップが1日より古くなると health.json に backup_deferred_deadline が出ます（ディスク不足の disk_low とは区別されます）。ログは従来どおり5MBを超えるとコピーしてから切り詰め（.1 に1世代）、シンボリックリンクはたどりません。",
+  "details": [
+    "監視タイマー（--watchdog-grace）が有効なときだけ期限を適用し、32MiB/秒＋5秒で所要時間を見積もる。",
+    "kill した子プロセスの回収（communicate）に5秒の上限を設け、パイプが閉じない場合も呼び出し元が止まらないようにした。"
+  ],
+  "refs": [
+    "mcs/core/maintenance.py",
+    "mcs/core/bounded_http.py",
+    "mcs/ingest/mcs_worker.py",
+    "mcs/ingest/run_check.py",
+    "tests/core/test_stab_db_maintenance.py",
+    "tests/ingest/test_stab_worker_reap.py"
+  ]
+}

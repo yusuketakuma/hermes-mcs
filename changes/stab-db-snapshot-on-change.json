@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "読取り用スナップショットを変更があったときだけ作り直すよう変更",
+  "summary": "10分ごとの定期実行のたびにデータベース全体を複製・検査していた処理を、内容が変わったとき・通知状態の更新があったとき・前回から1時間たったときだけ行うようにしました。ディスクへの書込み量が大きく減り、データベースが大きくなっても検査の時間切れで読取り用スナップショットが更新されなくなる状態を避けます。",
+  "upgrade": "追加操作は不要です。読取り側（閲覧・集計）が見るスナップショットは、新着の保存や通知状態の変化があれば従来どおり同じ実行で更新され、それ以外の変化（既存行の更新のみ）も最長1時間で反映されます。検査の上限時間は30秒を基準に、ファイルの大きさに応じて最大150秒まで延びます。",
+  "details": [
+    "変更の判定は各表の最大rowidとschema_versionの比較（全件走査なし）。実行記録(runs)だけの変化は対象外。",
+    "判定用の記録は data/snapshots/.publish-sig.json（0600）に保存する。",
+    "公開に失敗したときは従来どおり run を partial にし、snapshot_dirty は公開が成功したときだけ解除する。"
+  ],
+  "refs": [
+    "mcs/core/maintenance.py",
+    "mcs/core/ledger.py",
+    "mcs/ingest/run_check.py",
+    "tests/core/test_stab_db_maintenance.py",
+    "tests/ingest/test_stab_health_db.py"
+  ]
+}
