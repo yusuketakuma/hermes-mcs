@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "要約付き新着通知の保留理由が実際の原因と食い違う問題を修正",
+  "summary": "新着通知に監査済み要約を添える設定（enforce）で、要約の公開設定（summary_mode）が enforce でない場合・設定に誤りがある場合・対象の患者で意味解析が一時停止中の場合に、送信直前の再確認が理由を「要約の世代が変わった（semantic_generation_changed）」と記録していました。実際の理由（semantic_not_enforce / semantic_paused / project_out_of_scope）を記録するように直しました。",
+  "upgrade": "追加操作は不要です。通知の扱い（送信前なら60秒後に作り直し、送信途中なら残りを止める）は変わりません。記録される理由コードだけが変わります。",
+  "details": [
+    "semantic_render_gate は他の送信ゲートと同じく semantic_config で設定を検証し、送信可否の確認（mode・summary_mode・一時停止・対象範囲）を要約の再取得より先に行う。",
+    "mode・project_id の型・一時停止・対象範囲の確認を semantic_send_gate._enforce_block_reason にまとめ、semantic_gate・semantic_render_state・semantic_summary_block・semantic_render_gate・劣化通知の作成が同じ判定を使う。各呼出し元の結果（例外・空の値）と確認順序は変えない。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_send_gate.py",
+    "mcs/semantic/semantic_render.py",
+    "tests/semantic/test_semantic_render_gate_reason.py"
+  ]
+}
