@@ -55,3 +55,17 @@ def atomic_write(path: str, writer, mode: int | None = None,
         with suppress(OSError):
             os.unlink(tmp)
         raise
+
+
+def create_exclusive(path, mode: int = 0o600, *, dir_fd: int | None = None,
+                     nofollow: bool = True) -> int:
+    """Create ``path`` write-only and return its fd, failing if it exists.
+
+    ``O_WRONLY | O_CREAT | O_EXCL`` with ``mode``, plus ``O_NOFOLLOW``
+    unless ``nofollow=False``; ``dir_fd`` is passed only when given."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if nofollow:
+        flags |= os.O_NOFOLLOW
+    if dir_fd is None:
+        return os.open(path, flags, mode)
+    return os.open(path, flags, mode, dir_fd=dir_fd)

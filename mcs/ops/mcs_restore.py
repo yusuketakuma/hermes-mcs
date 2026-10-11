@@ -27,6 +27,7 @@ import mcs_backup  # noqa: E402
 from mcs_requests import (  # noqa: E402
     MAX_COMMAND_BYTES, _text, canonical, parse_command, payload_hash, valid_hash, valid_uuid,
 )
+from safe_io import create_exclusive  # noqa: E402
 
 PURPOSE = "ops.backup_restore_resume"
 APPROVAL = "backup_restore_approval.json"
@@ -205,8 +206,7 @@ def _publish(fd, name, value):
     # Fsynced bytes -> exclusive link -> directory fsync. Neither a partial
     # receipt nor an overwrite is visible; use the already pinned directory.
     temporary = ".backup-consent-" + uuid.uuid4().hex
-    opened = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL
-                     | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+    opened = create_exclusive(temporary, 0o600, dir_fd=fd)
     try:
         with os.fdopen(opened, "wb") as stream:
             stream.write(canonical(value))
