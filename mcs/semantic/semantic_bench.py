@@ -232,10 +232,7 @@ def cmd_calibrate(args) -> int:
     db.close()
     confs = []
     for (meta,) in rows:
-        try:
-            parsed = json.loads(meta or "{}")
-        except (TypeError, json.JSONDecodeError):
-            continue
+        parsed = mcs_util.loads_dict(meta or "{}")
         ca = parsed.get("claim_audit") if isinstance(parsed, dict) else None
         if not isinstance(ca, dict):
             continue

@@ -57,9 +57,15 @@ def settings(cfg) -> _Settings | None:
     for key in ("after_min", "repeat_min", "room_cooldown_min"):
         value = values[key]
         if (not isinstance(value, (int, float)) or isinstance(value, bool)
-                or not math.isfinite(value) or value <= 0):
+                or value <= 0):
             return None
-        numbers[key] = float(value)
+        try:
+            number = float(value)
+        except OverflowError:
+            return None
+        if not math.isfinite(number):
+            return None
+        numbers[key] = number
     for key in ("max_repeats", "max_per_day"):
         value = values[key]
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:

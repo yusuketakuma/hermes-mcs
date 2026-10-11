@@ -10,6 +10,7 @@ import mcs_stats
 import extract_llm
 from response_observation_view import get_response_observation_list
 from views_testkit import SCHEMA, SNAP_TS, _extract, _message, _msg
+from semantic_projection import PROJECTION_VERSION
 
 DEEP = "[" * 1500 + "0" + "]" * 1500
 BIGINT = '{"synthetic_unused":' + "9" * 5000 + "}"
@@ -28,6 +29,25 @@ def store(tmp_path):
 def _view(store, tmp_path):
     source = store.db.execute("PRAGMA database_list").fetchone()["file"]
     return View(publish_snapshot(source, str(tmp_path / "snapshots")))
+
+
+@pytest.mark.parametrize("stat,kind", [("meds", "extract_llm"),
+                                      ("canonical_facts", "canonical_projection")])
+def test_stats_integer_limit_is_unavailable_and_preserves_source(stat, kind):
+    db = sqlite3.connect(":memory:")
+    try:
+        db.executescript(SCHEMA)
+        _msg(db, 1)
+        raw = '{"unused":' + '9' * 5000 + ',"canonical_facts":[{"fact_id":"synthetic-f1"}],"meds":[]}'
+        meta = json.dumps({"hash": "h1", "projection_version": PROJECTION_VERSION})
+        db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta) VALUES(?,1,1,?,?)",
+                   (kind, raw, meta))
+        result = mcs_stats.run_stats(db, SNAP_TS, {"stat": stat})["stats"][stat]
+        assert result["status"] == "unavailable" and result["reason"] == "data_error:ValueError"
+        assert "total" not in result and "mentions" not in result
+        assert db.execute("SELECT content FROM artifacts").fetchone()[0] == raw
+    finally:
+        db.close()
 
 
 def test_status_deep_history_payload_is_unknown(store, tmp_path):
