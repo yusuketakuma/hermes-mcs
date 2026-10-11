@@ -1113,6 +1113,59 @@ def test_stage_fetch_probe_notifies_own_post_backfill_would_absorb(
     db.close()
 
 
+def test_self_post_burst_past_probe_pages_notifies_every_new_post(
+        tmp_path, monkeypatch):
+    """A self_posts burst larger than SELF_PROBE_PAGES: the probe stores
+    the newest pages and the same tick's backfill stores the rest — that
+    remainder must notify too, or the next tick sees the latest id stored
+    and never probes again. Rows at/below the pre-probe cutoff stay quiet."""
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(90))
+    db.save_messages([_msg_at(100, 90, _iso(1), unread=False)])
+    # lagging coverage: backfill walks below the watermark and newly
+    # stores an old gap row, which must not be announced
+    db.set_coverage(90, int(time.time()) - 3 * 86400)
+    # newest-first timeline: 21 new read/own posts, then the old gap row
+    items = [{"id": i, "comment": "synthetic own post",
+              "created_at": _iso(0), "is_unread": False}
+             for i in range(121, 100, -1)]
+    items.append({"id": 50, "comment": "synthetic old gap",
+                  "created_at": _iso(2), "is_unread": False})
+
+    class Adapter(mcs_adapter.MCSAdapter):
+        def __init__(self):
+            self.calls = []
+
+        def fetch_latest(self, pid):
+            return {"message_id": 121, "is_self_only": True}
+
+        def _get(self, path, params=None, **kwargs):
+            assert path == "/projects/90/messages"
+            self.calls.append(params["page"])
+            start = (params["page"] - 1) * params["per_page"]
+            return {"messages": items[start:start + params["per_page"]],
+                    "paginate": {"has_next":
+                                 start + params["per_page"] < len(items)}}
+
+    monkeypatch.setattr(run_check, "stage_unread", lambda *a, **k: None)
+    monkeypatch.setattr(run_check, "_outage_since", lambda: None)
+    args = SimpleNamespace(jobs_only=False, no_backfill=False)
+    adapter = Adapter()
+    for run_id in (1, 2):
+        result = {"errors": [], "new_messages": 0, "backfilled": 0}
+        run_check._stage_fetch(adapter, db, args, {"self_posts": True},
+                               result, time.monotonic() + 300, run_id,
+                               False, None)
+        assert result["errors"] == []
+    rows = db.db.execute(
+        "SELECT kind,payload FROM notify_outbox").fetchall()
+    notified = sorted({i for r in rows if r["kind"] == "new_messages"
+                       for i in json.loads(r["payload"])["message_ids"]})
+    assert db.has_message(50)
+    assert notified == list(range(101, 122))
+    db.close()
+
+
 def test_self_probe_skips_when_latest_already_stored(tmp_path):
     """The latest endpoint returns no timestamp — freshness is decided
     by whether the returned id is already in the ledger."""

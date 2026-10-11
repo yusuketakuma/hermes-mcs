@@ -1318,7 +1318,8 @@ class Ledger:
                       notify: dict | None = None,
                       semantic: bool = False,
                       notify_max_age_s: float | None = None,
-                      notify_all_new: bool = False) -> list:
+                      notify_all_new: bool = False,
+                      notify_new_after_ts: float | None = None) -> list:
         """Backfill path: upsert messages (+reply attachments) without
         touching patient fetch_state. Optional notify intent lands in the
         same transaction. Returns ids of newly-inserted messages.
@@ -1331,7 +1332,10 @@ class Ledger:
         With notify_max_age_s, newly stored read posts with a known
         recent timestamp also qualify through the shared save gate.
         notify_all_replies on the ledger exempts new replies from the age
-        and unread gates only when this call supplies a notify template."""
+        and unread gates only when this call supplies a notify template.
+        notify_new_after_ts widens eligibility like notify_all_new, but
+        only to new rows posted strictly after it (a page-limited
+        self-post probe's cutoff; older history stays quiet)."""
         new_ids = []
         now = time.time()
         before_semantic = (self._semantic_generation_snapshot(msgs)
@@ -1351,6 +1355,13 @@ class Ledger:
                 if notify_all_new:
                     fresh_unread = list(dict.fromkeys(
                         fresh_unread + new_ids))
+                elif notify_new_after_ts is not None and new_ids:
+                    fresh_unread = list(dict.fromkeys(fresh_unread + [
+                        r[0] for r in self.db.execute(
+                            "SELECT message_id FROM messages WHERE message_id IN ("
+                            + ",".join("?" * len(new_ids))
+                            + ") AND posted_at_ts > ?",
+                            [*new_ids, notify_new_after_ts])]))
                 notify_ids = self._unnotified(fresh_unread) if notify else []
                 self._queue_saved_messages_tx(
                     project_id, new_ids, changed_semantic.get(project_id, []),

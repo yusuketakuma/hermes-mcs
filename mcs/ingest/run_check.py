@@ -996,10 +996,13 @@ def stage_thread_read(adapter, ledger, result, deadline):
 def stage_backfill(adapter, ledger, result, deadline, run_id,
                    semantic: bool = False,
                    notify_max_age_s: float | None = None,
-                   notify_all_new: bool = False):
+                   notify_all_new: bool = False,
+                   notify_after: dict | None = None):
     """Catch posts the unread API misses (e.g. read by another human).
     notify_all_new (the first collecting run after an outage) announces
-    every newly stored row, not only unread ones.
+    every newly stored row, not only unread ones. notify_after maps a
+    pid to the cutoff of this run's page-limited self-post probe: new
+    rows posted after it notify like the probe's own.
     Walk each patient's history down to CONFIRMED coverage — never the
     newest stored message, so storing a new unread cannot skip older
     unfetched items (Oracle B06). Coverage only advances on a complete
@@ -1030,9 +1033,15 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
             hist, project_id=pid,
             notify={"run_id": run_id, "source": "history"},
             semantic=semantic, notify_max_age_s=notify_max_age_s,
-            notify_all_new=notify_all_new)
+            notify_all_new=notify_all_new,
+            notify_new_after_ts=(notify_after or {}).get(pid))
         if new_ids:
             result["backfilled"] += len(new_ids)
+        if pid in (notify_after or {}) and not batch.reached \
+                and not batch.error:
+            # rows past this walk stay unobtained — and would be stored
+            # silently by a later tick — so surface it
+            result["errors"].append(f"probe {pid}: history_incomplete")
         if merged.error:
             raise merged.error
         if batch.error:
@@ -1133,12 +1142,12 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
             continue                     # nothing newer than stored
         if ledger.probe_marker(pid) == mid:
             continue                     # unfetchable id — already tried
+        # overlap the watermark: fetch_history drops items with ts <=
+        # since, and a same-second post would be skipped then marked
+        since = max(1, wm - BACKFILL_OVERLAP_S)
         try:
-            # overlap the watermark: fetch_history drops items with ts <=
-            # since, and a same-second post would be skipped then marked
             batch = adapter.fetch_history(
-                pid, max(1, wm - BACKFILL_OVERLAP_S),
-                max_pages=SELF_PROBE_PAGES)
+                pid, since, max_pages=SELF_PROBE_PAGES)
         except SessionExpired:
             raise
         except MCSError as e:
@@ -1156,6 +1165,11 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
             result.setdefault("realtime_ids", []).extend(new_ids)
             ledger.karte_summary_mark_due(pid)
         result.setdefault("self_probe_fetched", []).append(pid)
+        if not batch.reached:
+            # page-limited: this run's backfill stores the rest and must
+            # keep the probe's notify policy, or the next tick sees the
+            # latest id stored and the remainder is never announced
+            result.setdefault("self_probe_after", {})[pid] = since
         # A page-limited walk has not established that the latest id is
         # unfetchable. Only a completed walk may suppress later probes.
         if not batch.error and batch.reached and merged.checkpoint_safe:
@@ -1681,12 +1695,14 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
                       stage_self_probe, adapter, ledger, result,
                       deadline, run_id, semantic=sem_on,
                       notify_max_age_s=notify_max_age_s)
+    probe_after = result.pop("self_probe_after", None)
     if not args.no_backfill:
         _with_relogin(adapter, ledger, result, "backfill",
                       stage_backfill, adapter, ledger, result, deadline,
                       run_id, semantic=sem_on,
                       notify_max_age_s=notify_max_age_s,
-                      notify_all_new=outage_since is not None)
+                      notify_all_new=outage_since is not None,
+                      notify_after=probe_after)
     if outage_since is not None:
         _seed_outage_catchup(ledger, result, outage_since)
 
