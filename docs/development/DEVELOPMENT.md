@@ -688,6 +688,8 @@ python mcs/extract/v4/extract_bench.py run --mock-ok   # オフライン: 期待
 アクセスしない。`integration/test_hermes_*` は hermes-agent checkout 上でのみ
 収集される（合成テストのみの `test_mcs_*` は既定の `testpaths` と `scripts/run_tests.sh`
 無引数実行で `tests/` と共に収集される）。
+領域をまたぐ共通テストヘルパー（一時 Ledger の `make_ledger`・`ledger_fixture`）は
+`tests/support/common_testkit.py` に置き、領域固有のものは各 `*_testkit.py` に置く。
 
 ## 未検証残件
 

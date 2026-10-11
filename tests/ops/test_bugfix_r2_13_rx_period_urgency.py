@@ -2,17 +2,12 @@
 high-urgency extraction on that post must escalate them to immediate."""
 import json
 
-import ledger as ledger_mod
 import mcs_signals
-import pytest
 from ops_testkit import NOW, _msg
+from common_testkit import ledger_fixture
 
 
-@pytest.fixture
-def led(tmp_path):
-    lg = ledger_mod.Ledger(str(tmp_path / "ledger.db"))
-    yield lg
-    lg.db.close()
+led = ledger_fixture()
 
 
 def test_rx_period_expiry_high_urgency_escalates(led):

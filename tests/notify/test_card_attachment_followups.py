@@ -10,15 +10,10 @@ from notify_testkit import (
     NOW, _dispatch, _intent, _latest_render, _msg, _seed_thread,
 )
 from slack_testkit import SLACK
+from common_testkit import ledger_fixture
 
 
-@pytest.fixture
-def led(tmp_path):
-    data = tmp_path / "data"
-    data.mkdir()
-    instance = ledger.Ledger(str(data / "ledger.db"))
-    yield instance
-    instance.close()
+led = ledger_fixture(data_dir=True)
 
 
 @pytest.mark.parametrize("download_after", [False, True])

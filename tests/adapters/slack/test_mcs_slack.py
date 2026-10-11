@@ -8,7 +8,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import hermes_plugin
-import ledger
 import pytest
 from hermes_plugin.mcs_slack.actions import Actions
 from hermes_plugin.mcs_slack.delivery import DeliveryWorker, SlackCardAdapter
@@ -25,6 +24,7 @@ from notify_testkit import (
 )
 from slack_card_testkit import _spec
 from slack_testkit import SCOPE, SLACK, FakeClient, _granted_card, _mkworld
+from common_testkit import ledger_fixture
 
 
 @pytest.fixture(autouse=True)
@@ -32,13 +32,7 @@ def _pin_wall_clock(monkeypatch):
     monkeypatch.setattr(runner_cards.time, "time", lambda: NOW)
 
 
-@pytest.fixture(name="led")
-def isolated_slack_ledger(tmp_path):
-    root = tmp_path / "data"
-    root.mkdir()
-    instance = ledger.Ledger(str(root / "ledger.db"))
-    yield instance
-    instance.close()
+isolated_slack_ledger = ledger_fixture(data_dir=True)
 
 
 def _adapter(client):

@@ -10,10 +10,10 @@ import json
 
 import pytest
 
-import ledger as _ledger
 import notify_cards
 import notify_cmds
 import notify_transport
+from common_testkit import ledger_fixture
 
 NOW = 1_790_000_000.0
 CFG = {"notify": {"interactive": "discord", "route_epoch": 1,
@@ -37,13 +37,7 @@ def _uuid(n: int) -> str:
     return f"{n:08x}-0000-4000-8000-{n:012x}"[:36]
 
 
-@pytest.fixture
-def led(tmp_path):
-    db_path = tmp_path / "data" / "ledger.db"
-    (tmp_path / "data").mkdir()
-    led = _ledger.Ledger(str(db_path))
-    yield led
-    led.close()
+led = ledger_fixture(data_dir=True)
 
 
 def _patient(led, pid=1, name="患者A", archived=0):

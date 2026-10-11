@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-import ledger as ledger_mod
 from mcs_signals import _thresholds
+from common_testkit import ledger_fixture
 
 NOW = 1_800_000_000.0
 DAY = 86400
@@ -37,11 +37,7 @@ OLD_SIGNAL_BRANCH = """
 """
 
 
-@pytest.fixture
-def led(tmp_path):
-    lg = ledger_mod.Ledger(str(tmp_path / "ledger.db"))
-    yield lg
-    lg.db.close()
+led = ledger_fixture()
 
 
 def _msg(db, mid, pid=1, ts=NOW):

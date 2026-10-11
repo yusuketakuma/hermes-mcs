@@ -15,10 +15,10 @@ import ledger
 import mcs_adapter
 import mcs_refstats
 import mcs_requests as requests
+from common_testkit import make_ledger
 
 
-def _db(tmp_path):
-    return ledger.Ledger(str(tmp_path / "ledger.db"))
+_db = make_ledger
 
 
 def _msg(mid=1, body="test body"):

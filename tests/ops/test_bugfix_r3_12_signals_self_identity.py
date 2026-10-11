@@ -3,17 +3,13 @@ with ", " by mcs_adapter) match per element, and adherence_concern
 honours the unverified fail-closed gate. Synthetic data only."""
 import pytest
 
-import ledger as ledger_mod
 import mcs_signals
 from ops_testkit import DAY, NOW, _msg
 from test_mcs_signals import _extract_doc, _ev
+from common_testkit import ledger_fixture
 
 
-@pytest.fixture
-def led(tmp_path):
-    lg = ledger_mod.Ledger(str(tmp_path / "ledger.db"))
-    yield lg
-    lg.db.close()
+led = ledger_fixture()
 
 
 def _open_types(db):

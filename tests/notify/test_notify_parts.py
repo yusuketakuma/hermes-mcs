@@ -13,22 +13,16 @@ import uuid as _uuid_mod
 
 import pytest
 
-import ledger as _ledger
 import notify_cards
 import notify_render
 import notify_transport
 from notify_testkit import (
     CFG, NOW, SCOPE, _begin, _card, _dispatch, _intent, _latest_render,
     _msg, _receipt, _seed_thread, _uuid)
+from common_testkit import ledger_fixture
 
 
-@pytest.fixture
-def led(tmp_path):
-    db_path = tmp_path / "data" / "ledger.db"
-    (tmp_path / "data").mkdir()
-    led = _ledger.Ledger(str(db_path))
-    yield led
-    led.close()
+led = ledger_fixture(data_dir=True)
 
 
 def _parts(led, delivery_id):
