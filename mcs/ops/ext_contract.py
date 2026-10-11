@@ -52,7 +52,7 @@ from c1_envelopes import (  # noqa: E402
     encode_withdrawal, intent_hash, parse_envelope, validate_envelope)
 from export_schema import (  # noqa: E402
     FORBIDDEN_KEYS, RECORD_TYPES, TYPE_FORBIDDEN, finite_number, validate_record)
-from mcs_util import atomic_write  # noqa: E402
+from mcs_util import atomic_write, fsync_dir  # noqa: E402
 
 AUTH_CONTRACT = "mcs-ext-auth/1"
 EXT_CONTRACT = "mcs-ext-export/1"
@@ -462,11 +462,7 @@ class LocalSink:
         path = self.root / "envelopes" / f"{envelope_id}.json"
         path.unlink(missing_ok=True)
         if path.parent.exists():
-            fd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
+            fsync_dir(path.parent)
         if not self.drop_delete_ack:
             _write_json(
                 self.root / "deletions" / f"{envelope_id}.json",
@@ -1099,11 +1095,7 @@ def _write_new_receipts(path: str, bundle: str) -> None:
             os.link(tmp, path)
         except FileExistsError:
             raise ContractError("receipts_out_exists") from None
-        dfd = os.open(parent, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        fsync_dir(parent)
     finally:
         with suppress(OSError):
             os.unlink(tmp)
