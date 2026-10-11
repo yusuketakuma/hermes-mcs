@@ -362,6 +362,14 @@ def list_messages(result: dict, allowed, markdown: bool = True, *,
     return _answer_chunks("\n".join(lines))
 
 
+def view_scope_ok(result: dict, allowed) -> bool:
+    """False when a view result was counted over a project this
+    deployment no longer serves (a click queued before its scope
+    narrowed): neither its text nor its card may be sent."""
+    scope = result.get("projects")
+    return not isinstance(scope, list) or all(allowed(p) for p in scope)
+
+
 def view_answer(result: dict | None, allowed,
                 markdown: bool = True, *, plain: bool = False) -> list | None:
     """An applied view click's ephemeral answer as ``[(text, tasks)]``
@@ -374,10 +382,7 @@ def view_answer(result: dict | None, allowed,
     if not result or result.get("outcome") != "applied" \
             or result.get("modal"):
         return None
-    scope = result.get("projects")
-    if isinstance(scope, list) and not all(allowed(p) for p in scope):
-        # counted over projects this deployment no longer serves (a click
-        # queued before its scope narrowed): never send those totals
+    if not view_scope_ok(result, allowed):
         return [(SCOPE_CHANGED_TEXT, None)]
     # markdown=False callers send plain text (Slack plain_text / LINE
     # WORKS): no "**" or "*" markup may reach them

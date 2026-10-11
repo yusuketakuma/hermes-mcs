@@ -5,12 +5,13 @@
   "upgrade": "追加操作は不要です。",
   "details": [
     "runner（mcs/notify/notify_cards.py の _act_view）は input.projects で数えたとき、その範囲を結果の projects に入れて返す。",
-    "adapters/common/text.py の view_answer は、結果の projects に現在の project_ids が許可しない project が1件でもあれば、一覧や件数の代わりに再操作の案内だけを返す。Slack・Discord・LINE WORKS の即時応答と遅延応答に共通で効く。",
+    "adapters/common/text.py の view_scope_ok は、結果の projects に現在の project_ids が許可しない project が1件でもあれば False を返し、view_answer は一覧や件数の代わりに再操作の案内だけを返す。Slack の遅延応答は 📊 まとめの Block Kit カードも同じ判定で作らない（案内文だけを送る）。Slack・Discord・LINE WORKS の即時応答と遅延応答に共通で効く。",
     "project_ids_auto の構成は input.projects を送らないため、これまでどおり。"
   ],
   "refs": [
     "mcs/notify/notify_cards.py",
     "adapters/common/text.py",
+    "adapters/slack/actions.py",
     "hermes_plugin/README.md",
     "tests/adapters/slack/test_queued_view_scope_narrowed.py"
   ]

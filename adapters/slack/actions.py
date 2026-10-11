@@ -13,7 +13,8 @@ from adapters.common import envelopes, paths, registry
 from adapters.common.text import (MODAL_ACTIONS, MODAL_TITLES, SEARCH_EMPTY,
                                  VIEW_FORMS, digest_inputs,
                                  ja, modal_fields, preview_text,
-                                 search_query, split_body, view_answer)
+                                 search_query, split_body, view_answer,
+                                 view_scope_ok)
 from .cards import LINK_ACTION, MENU_ACTION, _sections, render_parts
 
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
@@ -729,9 +730,9 @@ class Actions:
                     await self._say(origin["channel_id"], rec["user"],
                                     ja(result))
                 continue
-            answer = view_answer(
-                result, lambda pid: projects.project_allowed(
-                    self._settings, pid), markdown=False, plain=True)
+            def allowed(pid):
+                return projects.project_allowed(self._settings, pid)
+            answer = view_answer(result, allowed, markdown=False, plain=True)
             if answer is not None:
                 pin = self._pinned(rec["token"],
                                    {**origin, "actor": rec["actor"]}, rec["actor"])
@@ -777,7 +778,8 @@ class Actions:
                 if token_ctx:
                     await asyncio.to_thread(self._reg.put_tokens, token_ctx,
                                             durable=bool(thread_ts))
-                cards = _parts_blocks(result)
+                cards = (_parts_blocks(result)
+                         if view_scope_ok(result, allowed) else None)
                 if cards:
                     # 📊: one Block Kit card; the text is the fallback
                     answer = answer[:1]
