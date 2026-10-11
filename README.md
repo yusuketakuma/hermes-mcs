@@ -331,43 +331,19 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 <!-- BEGIN GENERATED:release -->
 
-**v1.0.18 · 2026-10-11** — **意味解析の滞留を解消し、収集停止の検知と更新・復旧を安定化。同梱医薬品マスターを辞書として利用可能に**
+**v1.0.19 · 2026-10-11** — **独自に管理するHermes checkoutのまま、Python 3.14へ更新できるように**
 
-長い出力や外部評価（Jev）の不正応答で意味解析が止まり続ける問題を直し、Hermesの定期実行が止まっても収集停止を警報する独立した監視と、公開用データ検証・サービス再設定の停止対策を加えた版です。同梱の公式医薬品マスターから運用者の確認入力で私有辞書を作れるようになりました（自動では有効化しません）。実行環境はPython 3.14以上が必要になり、推奨するHermes agentと依存ライブラリを現行の安定版へ更新しました。
-
-> 更新前の確認：1.0.18への更新は更新ツール（scripts/mcs_upgrade.py）で行ってください。Python 3.14未満の実行環境を3.14へ移行します。1.0.17以前の自動更新では移行できず、元の版に戻ります。
-
-| 変更 | 以前 | 今回 | 利用者のメリット |
-|---|---|---|---|
-| 意味解析の滞留 | 定期収集と重なると完了した解析を捨て、長い出力や一時的な不正応答で再試行を使い切る | 収集の終了を待って保存し、不正な回答だけを一度聞き直す | 解析結果が届かないまま滞る状態を減らす |
-| 収集停止の警報 | Hermesの定期実行が1本詰まると収集もヘルス監視も止まり、警報が出ない | Hermesとは独立したヘルス監視が5分ごとに確認 | 収集が止まったことに気づける |
-| 医薬品マスター | 同梱していても、私有辞書にするには設定を手で組み立てる必要がある | 確認日と確認者を入力する1コマンドで辞書を作成 | 公式マスターを照会・薬剤候補に使い始めやすい |
+1.0.18で必要になったPython 3.14への移行を、過去の固定commit以外のHermes checkoutを使う環境でも、運用者がcommitを指定して確認すれば、checkoutを書き換えずに更新ツールで行える版です。
 
 <details>
 <summary>主な変更と更新時の注意を開く</summary>
 
-- **新機能 · 同梱の公式医薬品マスターから薬剤辞書を作れる**
-  `mcs drug install-bundled` に、利用条件を確認した日と変更区分・日付の扱いを確認した人を入力すると、同梱の厚生労働省医薬品マスター（20260930版）の全行を検証して私有辞書を作ります。承認者も入力した辞書だけがカードの薬剤候補に使われ、省略した辞書は照会・参考検索専用です。設定・DB・通信は変更せず、有効化は表示された設定コマンドを運用者が実行したときだけです。`mcs drug status` で同梱版と設定中の辞書の対応を確認できます。
-
-- **改善 · 意味解析を少ない呼出しで進める**
-  要約の主張の検査をまとめて外部評価へ送り（既定12件ずつ）、同じ投稿の再取得だけでは患者集計を作り直さないようにしました。送信回数と実行ロックの保持が減ります。判定基準・公開条件・集計の表示内容は変わりません。
-
-- **不具合修正 · 意味解析の滞留を解消**
-  10分ごとの収集が台帳を使っている間に解析が終わると、結果を捨ててworkerを再起動していた問題を直し、収集の終了を待って保存します。外部評価の通信は期限より前に終え、保存の余裕を残します。品質確認（QC）ばかりが選ばれる・古いQCが追い越される・長い出力が600秒で打ち切られる・LLM再起動直後の読込中応答で試行回数を消費する問題も修正しました。
-
-- **動作・設定の変更 · Python 3.14以上が必要に、推奨Hermesと依存ライブラリを更新**
-  実行環境・復旧用PythonはPython 3.14以上（SQLiteのWAL修正済み）が必要です。推奨するHermes agentを公開版v0.21.6を含む版（6f35b1ed）へ更新し、独立実行用のSlack・Discord接続ライブラリと開発ツールも最新の安定版へ揃えました。既存の環境は更新ツールが3.14へ移行し、旧環境は退避して残します。
+- **新機能 · Python 3.14対応済みの独自Hermes checkoutのまま更新できるように**
+  更新ツールに --keep-hermes-checkout を追加しました。運用者が指定したcommitと一致し、変更がなく、Python 3.14対応を宣言している独自のHermes checkoutは、移動せずにそのままPython 3.14の実行環境を作り直します。
 
 **更新時の注意**
 
-- 更新は更新ツール（`scripts/mcs_upgrade.py`、[更新手順](docs/guides/UPGRADE_AGENT.md)）で行ってください。定期処理とworkerを止めたまま、3.14未満の実行環境を退避して3.14で作り直し、Hermesのcheckoutが過去の固定commitにあれば新しい固定commitへ進めます。失敗時は旧版・旧環境・checkoutへ戻します。install.shの途中で強制終了した場合は、`mcs_update.py recover` で旧版へ戻してから再度更新します。
-- 1.0.17以前の自動更新（mode=auto）では移行できないため、適用を取り消して元の版に戻り、更新ツールの利用を通知します。Hermesのcheckoutが固定commit以外・ブランチ上・変更ありの場合と、復旧用Pythonが3.14未満の場合は、更新前の確認で止まります（選び直しの手順は更新手順を参照）。
-- Hermesでは抽出worker2本（`ai.mcs.extract-drainer` / `-2`）とgateway、独立実行ではhostを更新後に再起動してください。新しいヘルス監視（`local.mcs-health`）はinstall.sh・更新が実行する `mcs_setup.py services` で配置されます。独立実行（`runtime_mode=standalone`）では配置せず、従来どおりhostが監視します。
-- 必須の設定変更はありません。長い出力と収集の待ちを同じジョブ内で収めたい場合は、運用者の判断で `semantic.job_budget_seconds` を引き上げられます（上限1260秒）。まとめて送る件数は既存の `semantic.max_questions_per_request`（既定12）に従います。
-- 更新後の最初の定期処理は、患者集計の署名の初回更新とルール20の再生成で一時的に長くなります。DB schemaは9のままで、投稿・履歴・正式な依頼・通知履歴は保持し、過去の通知を再投稿しません。
-- 試行回数の上限で失敗済みの意味解析ジョブと、途中終了と記録済みの比較抽出は自動では戻りません。必要なジョブは既存の人承認による再試行（ops.retry）を使います。モデル・Jevの予算・既読化・人承認の条件は変わりません。
-- 公開用データの検証に失敗した回は、その回の実行が部分終了として記録され、次の正常な公開まで前回の内容が表示されます。サービス再設定の失敗は固定の理由と終了コードで記録されるため、詳細は `mcs_setup.py services` を手動で実行して確認してください。
-- 公式医薬品マスターは2026-10-11に公式サイトで更新がないことを確認し、20260930版を継続同梱します。辞書は自動では作られず、有効化すると次の定期処理から既存の投稿の薬剤名を順に照合し直します。`mcs drug status` は版の識別の比較で、同梱物の完全な検証は `check_drug_master_bundle.py` で行います。辞書候補は名称の一致による参考情報で、処方・成分・同等性を確定しません。
+- 1.0.18からの更新は更新ツールで通常どおり行えます。1.0.17以前からの更新は、1.0.18と同じく更新ツール（scripts/mcs_upgrade.py）でPython 3.14へ移行します。このとき過去の固定commit以外のHermes checkoutを使っている環境は、plan と apply に --keep-hermes-checkout と、そのcheckoutの40桁のcommitを付けます。指定しない場合と、commitの不一致・ローカル変更あり・Python 3.14非対応の場合は、従来どおり更新前の確認で止まり何も変更しません。
 
 </details>
 
@@ -388,7 +364,7 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 | 使い方・画面・データの読み方 | [利用者ガイド](docs/guides/USER_GUIDE.md) |
 | 導入・接続・設定・トラブル対応 | [導入ガイド](docs/guides/INSTALLATION.md) · [LINE WORKS接続](docs/guides/LINEWORKS.md) · [スタンドアローン](docs/guides/STANDALONE.md) · [エージェント向け手順](docs/guides/SETUP_AGENT.md) |
 | データ取扱い・安全境界・AI・復旧の限界 | [SECURITY](SECURITY.md) |
-| 更新・バックアップ・復旧 | [更新ガイド](docs/guides/UPGRADE_AGENT.md) · [1.0.17受入票](docs/development/acceptance/ACCEPTANCE_1.0.17.md) · [ライフサイクル仕様](docs/specs/lifecycle-spec.md) · [鍵escrow・端末喪失ガイド](docs/guides/BACKUP.md) · [配備資産](deployment/README.md) |
+| 更新・バックアップ・復旧 | [更新ガイド](docs/guides/UPGRADE_AGENT.md) · [1.0.19受入票](docs/development/acceptance/ACCEPTANCE_1.0.19.md) · [ライフサイクル仕様](docs/specs/lifecycle-spec.md) · [鍵escrow・端末喪失ガイド](docs/guides/BACKUP.md) · [配備資産](deployment/README.md) |
 | 開発・コマンド・統計・アラート定義 | [開発リファレンス](docs/development/DEVELOPMENT.md) · [Hermesプラグイン](hermes_plugin/README.md) |
 | エクスポート・意味解析の評価 | [外部出力契約](docs/specs/external-export-contract.md) · [意味解析の評価](docs/specs/semantic-evaluation.md) · [rollout](docs/specs/semantic-facts-v2-rollout.md) |
 | 今後の計画 | [ロードマップ](docs/ROADMAP.md) |

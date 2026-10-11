@@ -100,3 +100,73 @@ def test_checkout_already_at_the_current_pin_rebuilds_the_venv_only(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert (checkout / ".git/HEAD").read_text().strip() == _pin()
     assert (checkout / "venv.pre-python314/bin/python").exists()
+
+
+def _own_checkout(tmp_path, spec, head="3" * 40):
+    home, hermes_home, checkout, venv, lock, env = _established(tmp_path, head)
+    (checkout / "pyproject.toml").write_text(f'[project]\nrequires-python = "{spec}"\n')
+    env["STUB_GIT_BRANCH"] = "local/org-build"
+    return head, home, hermes_home, checkout, venv, lock, env
+
+
+# ">=3.0" / "<3.0" hold for any test interpreter; the script itself is tested in tests/ops
+@pytest.mark.parametrize("case", ["confirmed", "mismatch", "old_python", "dirty", "no_lock",
+                                  "previous_pin_kept", "previous_pin_unready"])
+def test_confirmed_own_checkout_is_kept_and_venv_rebuilt(tmp_path, case):
+    spec = "<3.0" if case in ("old_python", "previous_pin_unready") else ">=3.0"
+    head = PREVIOUS if case.startswith("previous_pin") else "3" * 40
+    head, home, hermes_home, checkout, venv, lock, env = _own_checkout(tmp_path, spec, head)
+    env["MCS_UPDATE_KEEP_HERMES_CHECKOUT"] = "4" * 40 if case == "mismatch" else head
+    if case == "dirty":
+        env["STUB_GIT_DIRTY"] = "1"
+    fd = _held(lock)
+    try:
+        env.update(MCS_UPDATE_RUN_LOCK_FD=str(fd),
+                   MCS_UPDATE_RUNTIME_BACKUP=str(venv) + ".pre-python314")
+        result = _run(env, hermes_home, "--mode", "hermes", *FLAGS,
+                      pass_fds=() if case == "no_lock" else (fd,))
+    finally:
+        os.close(fd)
+    assert (checkout / ".git/HEAD").read_text().strip() == head      # never moved
+    if case in ("confirmed", "previous_pin_kept"):
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (checkout / "venv.pre-python314/bin/python").exists()
+        assert (venv / "bin/python3").exists()
+        return
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert (venv / "bin/python").read_text() == "#!/bin/sh\nexit 1\n"
+    assert {"mismatch": "not the confirmed", "old_python": "does not declare Python 3.14",
+            "previous_pin_unready": "does not declare Python 3.14",
+            "dirty": "has local changes", "no_lock": "lock or backup is invalid"}[case] \
+        in result.stderr
+
+
+def test_installer_judges_with_the_shared_script():
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[2] / "install.sh").read_text()
+    assert '"$REPO/mcs/ops/requires_python_admits.py" "$HERMES_DIR/pyproject.toml"' in text
+
+
+@pytest.mark.parametrize("case", ["kept", "mismatch", "unready", "dirty"])
+def test_an_explicit_keep_is_judged_before_the_current_pin_too(tmp_path, case):
+    spec = "<3.0" if case == "unready" else ">=3.0"
+    head, home, hermes_home, checkout, venv, lock, env = _own_checkout(tmp_path, spec, _pin())
+    env["MCS_UPDATE_KEEP_HERMES_CHECKOUT"] = "5" * 40 if case == "mismatch" else head
+    if case == "dirty":
+        env["STUB_GIT_DIRTY"] = "1"
+    fd = _held(lock)
+    try:
+        env.update(MCS_UPDATE_RUN_LOCK_FD=str(fd),
+                   MCS_UPDATE_RUNTIME_BACKUP=str(venv) + ".pre-python314")
+        result = _run(env, hermes_home, "--mode", "hermes", *FLAGS, pass_fds=(fd,))
+    finally:
+        os.close(fd)
+    assert (checkout / ".git/HEAD").read_text().strip() == head
+    if case == "kept":
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "keeping the confirmed hermes-agent checkout" in result.stdout
+        return
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert (venv / "bin/python").read_text() == "#!/bin/sh\nexit 1\n"
+    assert {"mismatch": "not the confirmed", "unready": "does not declare Python 3.14",
+            "dirty": "has local changes"}[case] in result.stderr

@@ -292,6 +292,14 @@ except (OSError, ValueError, OverflowError):
 ' "$VENV" "$MCS_DATA/run.lock"
 }
 
+# [project].requires-python of the Hermes checkout, judged by the Python 3.14
+# that builds the venv (the same script mcs_update's preflight runs).
+hermes_admits_314() {
+    _ha_py="${PYBIN:-$(find_py || true)}"
+    [ -n "$_ha_py" ] || return 1
+    "$_ha_py" -I "$REPO/mcs/ops/requires_python_admits.py" "$HERMES_DIR/pyproject.toml"
+}
+
 preserve_old_venv() {
     if [ ! -e "$VENV" ] && [ ! -L "$VENV" ]; then return; fi
     if [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] || [ -n "${MCS_UPDATE_RUNTIME_BACKUP:-}" ]; then
@@ -756,6 +764,20 @@ if [ -f "$CLONE_MARK" ]; then
     rm -f "$CLONE_MARK"
     ok "hermes-agent cloned (pinned $HERMES_PIN)"
     _ck="cloned at pin $HERMES_PIN"
+elif [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] && ! py_ok "$VENV_PY" 14 15 \
+        && [ -n "${MCS_UPDATE_KEEP_HERMES_CHECKOUT:-}" ]; then
+    # Operator-confirmed (mcs_upgrade --keep-hermes-checkout): keep this exact,
+    # clean checkout that already declares Python 3.14 support; never move it.
+    [ "$HEAD_SHA" = "$MCS_UPDATE_KEEP_HERMES_CHECKOUT" ] \
+        || die "runtime migration: $HERMES_DIR is at $HEAD_SHA, not the confirmed $MCS_UPDATE_KEEP_HERMES_CHECKOUT — existing checkout and venv retained"
+    [ -z "$(git -C "$HERMES_DIR" status --porcelain --untracked-files=no)" ] \
+        || die "runtime migration: $HERMES_DIR has local changes — existing checkout and venv retained"
+    hermes_admits_314 \
+        || die "runtime migration: $HERMES_DIR does not declare Python 3.14 support — existing checkout and venv retained"
+    migration_backup >/dev/null \
+        || die "runtime migration lock or backup is invalid — existing checkout and venv retained"
+    ok "keeping the confirmed hermes-agent checkout $HEAD_SHA for the Python 3.14 runtime"
+    _ck="kept confirmed checkout $HEAD_SHA"
 elif [ "$HEAD_SHA" = "$HERMES_PIN" ]; then
     skip "hermes-agent checkout already at pin $HERMES_PIN"
     _ck="kept existing checkout (pinned)"

@@ -151,6 +151,9 @@ RUNTIME_MIN = (3, 14)
 RUN_LOCK_FD_ENV = "MCS_UPDATE_RUN_LOCK_FD"
 RUNTIME_BACKUP_ENV = "MCS_UPDATE_RUNTIME_BACKUP"
 MIGRATION_INSTALL_ARGS = ("--no-llm", "--no-plugin")
+# scripts/mcs_upgrade.py --keep-hermes-checkout SHA: the operator's own
+# Python-3.14-ready Hermes checkout stays where it is during the migration
+KEEP_CHECKOUT_ENV = "MCS_UPDATE_KEEP_HERMES_CHECKOUT"
 # mirror install.sh: a migration accepts the current pin as is and moves only
 # the previous pins (HERMES_PIN / HERMES_PREVIOUS_PINS)
 HERMES_PIN = "6f35b1ed84536f7e7fd2f605f7779dd051cce05f"
@@ -529,11 +532,53 @@ def _migration_checkout_problem(cfg: dict) -> str | None:
         return "hermes_checkout_unreadable"
     if head.returncode != 0 or dirty.returncode != 0:
         return "hermes_checkout_unreadable"
-    if head.stdout.strip() not in HERMES_PREVIOUS_PINS | {HERMES_PIN}:
-        return "hermes_checkout_unknown_commit"
-    if branch.returncode == 0 or dirty.stdout.strip():
+    if dirty.stdout.strip():
         return "hermes_checkout_branch_or_dirty"
+    keep = os.environ.get(KEEP_CHECKOUT_ENV)
+    if keep:
+        # the operator confirmed this exact checkout: kept as is, never moved
+        # (decided before the pin rules, exactly as install.sh does)
+        if not HEX_RE.fullmatch(keep):
+            return "keep_hermes_checkout_invalid"
+        if head.stdout.strip() != keep:
+            return "keep_hermes_checkout_mismatch"
+        if not _checkout_admits_python314(checkout):
+            return "keep_hermes_checkout_python_unsupported"
+        return None
+    if head.stdout.strip() in HERMES_PREVIOUS_PINS | {HERMES_PIN}:
+        # a pin is moved/used detached; a branch there is someone's work
+        return "hermes_checkout_branch_or_dirty" if branch.returncode == 0 else None
+    return "hermes_checkout_unknown_commit"
+
+
+def _python314() -> str | None:
+    """The interpreter install.sh's find_py would pick (3.14 <= v < 3.15)."""
+    for name in ("python3.14", "python3"):
+        exe = shutil.which(name)
+        if not exe:
+            continue
+        try:
+            ok = subprocess.run([exe, "-I", "-c", "import sys; sys.exit(not (3, 14) <= "
+                                 "sys.version_info[:2] < (3, 15))"],
+                                capture_output=True, timeout=30).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if ok:
+            return exe
     return None
+
+
+def _checkout_admits_python314(checkout: str) -> bool:
+    """[project].requires-python checked by that interpreter, same script as install.sh."""
+    python = _python314()
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requires_python_admits.py")
+    if python is None:
+        return False
+    try:
+        return subprocess.run([python, "-I", script, os.path.join(checkout, "pyproject.toml")],
+                              capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 def _norm(path: str) -> str:
@@ -1492,6 +1537,8 @@ def _plan_runtime_migration(state: dict, held_fd: int | None = None) -> None:
         if head.returncode != 0 or not HEX_RE.fullmatch(head.stdout.strip()):
             raise UpdateError("runtime_migration_checkout_unreadable")
         migration.update(checkout=checkout, checkout_head=head.stdout.strip())
+        if os.environ.get(KEEP_CHECKOUT_ENV) == migration["checkout_head"]:
+            migration["kept_checkout"] = True
     applying["runtime_migration"] = migration
     args = list(applying.get("install_args") or [])
     applying["install_args"] = args + [a for a in MIGRATION_INSTALL_ARGS if a not in args]

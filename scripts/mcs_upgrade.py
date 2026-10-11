@@ -81,6 +81,9 @@ def main(argv=None) -> int:
     for name in ("plan", "apply"):
         p = sub.add_parser(name)
         p.add_argument("--to", help="target tag (default: newest release tag)")
+        p.add_argument("--keep-hermes-checkout", metavar="SHA",
+                       help="keep this exact, clean, Python-3.14-ready Hermes checkout "
+                            "during the runtime migration (40-hex commit)")
         if name == "apply":
             p.add_argument("--reinstall", action="store_true")
             p.add_argument("--install-arg", action="append", default=[])
@@ -91,6 +94,8 @@ def main(argv=None) -> int:
     repo = os.path.realpath(_git(args.repo, "rev-parse", "--show-toplevel").strip())
     if not args.no_fetch:
         _git(repo, "fetch", "--tags", "origin")
+    if args.keep_hermes_checkout and not re.fullmatch(r"[0-9a-f]{40}", args.keep_hermes_checkout):
+        raise SystemExit("--keep-hermes-checkout needs the full 40-hex commit")
     tag = args.to or latest_tag(repo)
     if not SEMVER_RE.fullmatch(tag):
         raise SystemExit(f"bad target tag: {tag}")
@@ -105,6 +110,9 @@ def main(argv=None) -> int:
             cmd += ["--reinstall"] if args.reinstall else []
             cmd += [f"--install-arg={a}" for a in args.install_arg]
         env = {**os.environ, "MCS_UPDATE_REPO": repo}
+        env.pop("MCS_UPDATE_KEEP_HERMES_CHECKOUT", None)
+        if args.keep_hermes_checkout:
+            env["MCS_UPDATE_KEEP_HERMES_CHECKOUT"] = args.keep_hermes_checkout
         try:
             return subprocess.run(cmd, env=env, cwd=repo).returncode
         except OSError as exc:

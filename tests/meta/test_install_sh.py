@@ -174,7 +174,7 @@ exit 0
     "python3": """#!/bin/sh
 echo "python3 $*" >> "$STUB_LOG"
 case "$*" in
-  *mcs-model-list-probe*|*mcs-runtime-migration-lock*) exec "$STUB_PARSE_PYTHON" "$@" ;;
+  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*requires_python_admits.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
 esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
@@ -216,7 +216,7 @@ echo "/dev/stub 100000000 1 ${STUB_DF_KB:-50000000} 1% /"
 VENV_PYTHON = """#!/bin/sh
 echo "venv-python $*" >> "$STUB_LOG"
 case "$*" in
-  *mcs-model-list-probe*|*mcs-runtime-migration-lock*) exec "$STUB_PARSE_PYTHON" "$@" ;;
+  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*requires_python_admits.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
 esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"

@@ -435,3 +435,79 @@ def test_symlinked_venv_is_restored_as_the_same_link(updater, tmp_path):
     assert venv.is_symlink() and os.readlink(venv) == str(real)
     assert (real / "bin/python3").read_text().endswith("echo 3 13\n")
     assert (tmp_path / "rt" / "venv.python314-aside").is_dir()
+
+
+@pytest.mark.parametrize("spec, admitted", [
+    (">=3.11,<3.15", True), (">=3.14", True), ("<3.15,>3.13", True), (">=3.14.1", True),
+    ("==3.14", False), ("<3.14.1", False), ("!=3.14.8", False),
+    (">=3.11,<3.14", False), ("~=3.11", False), (">=3.11,<3.15.*", False),
+    ("", False), (">=3.11,", False), (None, False)])
+def test_requires_python_is_judged_against_the_full_interpreter_version(spec, admitted):
+    import requires_python_admits
+    assert requires_python_admits.admits(spec, (3, 14, 8)) is admitted
+
+
+@pytest.mark.parametrize("toml, ok", [
+    ('[project]\nrequires-python = ">=3.0"\n', True),
+    ('[tool.example]\nrequires-python = ">=3.0"\n[project]\nrequires-python = "<3.0"\n', False),
+    ('requires-python = ">=3.0"\n', False),                 # not under [project]
+    ('[project]\nrequires-python = 3\n', False),
+    ('[project\n', False)])
+def test_only_project_requires_python_counts(tmp_path, toml, ok):
+    import requires_python_admits
+    path = tmp_path / "pyproject.toml"
+    path.write_text(toml)
+    assert (requires_python_admits.main(["x", str(path)]) == 0) is ok
+
+
+def _own_checkout(updater, tmp_path, monkeypatch, *, pin=None):
+    checkout = tmp_path / "hermes-agent"
+    head, _ = _checkout(checkout)
+    if pin == "previous":
+        monkeypatch.setattr(updater, "HERMES_PREVIOUS_PINS", frozenset({head}))
+    elif pin == "current":
+        monkeypatch.setattr(updater, "HERMES_PIN", head)
+    else:
+        subprocess.run(["git", "-C", str(checkout), "checkout", "-q", "-b", "local/org-build"],
+                       check=True)
+    venv = _venv(checkout, version_ok=False)
+    monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    return checkout, head
+
+
+@pytest.mark.parametrize("case, expected", [
+    ("confirmed", None), ("no_keep", "hermes_checkout_unknown_commit"),
+    ("mismatch", "keep_hermes_checkout_mismatch"), ("invalid", "keep_hermes_checkout_invalid"),
+    ("old_python", "keep_hermes_checkout_python_unsupported"),
+    ("dirty", "hermes_checkout_branch_or_dirty")])
+def test_confirmed_own_checkout_is_kept_only_when_exact_clean_and_ready(
+        updater, tmp_path, monkeypatch, case, expected):
+    checkout, head = _own_checkout(updater, tmp_path, monkeypatch)
+    monkeypatch.setattr(updater, "_checkout_admits_python314", lambda c: case != "old_python")
+    keep = {"confirmed": head, "old_python": head, "dirty": head,
+            "mismatch": "b" * 40, "invalid": "zz"}.get(case)
+    if keep:
+        monkeypatch.setenv(updater.KEEP_CHECKOUT_ENV, keep)
+    else:
+        monkeypatch.delenv(updater.KEEP_CHECKOUT_ENV, raising=False)
+    if case == "dirty":
+        (checkout / "f").write_text("local edit")
+    assert updater._migration_checkout_problem({}) == expected
+    if case == "confirmed":
+        monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
+        state = _state(updater)
+        updater._plan_runtime_migration(state)
+        migration = state["applying"]["runtime_migration"]
+        assert migration["kept_checkout"] is True and migration["checkout_head"] == head
+
+
+@pytest.mark.parametrize("pin", ["previous", "current"])
+@pytest.mark.parametrize("keep, ready, expected", [
+    ("head", True, None), ("head", False, "keep_hermes_checkout_python_unsupported"),
+    ("other", True, "keep_hermes_checkout_mismatch")])
+def test_an_explicit_keep_is_decided_before_the_pin_rules(
+        updater, tmp_path, monkeypatch, pin, keep, ready, expected):
+    checkout, head = _own_checkout(updater, tmp_path, monkeypatch, pin=pin)
+    monkeypatch.setattr(updater, "_checkout_admits_python314", lambda c: ready)
+    monkeypatch.setenv(updater.KEEP_CHECKOUT_ENV, head if keep == "head" else "c" * 40)
+    assert updater._migration_checkout_problem({}) == expected
