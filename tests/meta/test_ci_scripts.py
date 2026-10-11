@@ -386,3 +386,14 @@ def test_generated_module_table_publishes_docstring_subject(monkeypatch, tmp_pat
     monkeypatch.setattr(ur, "MCS_DIR", mcs)
     monkeypatch.setattr(ur, "TESTS_DIR", tmp_path / "tests")
     assert "| `mcs/synthetic_render.py` | Synthetic cards — display model. |" in ur.gen_modules()
+
+
+def test_generated_summary_is_cut_at_a_word_boundary():
+    ur = _load("update_readme_cut", "scripts/development/update_readme.py")
+    long = ("Synthetic drain engine (spec §1): the durable worker — claiming jobs, "
+            "staged extraction and summary, retries, receipts and the final decision table.")
+    cut = ur._first_sentence(long)
+    assert len(cut) <= 120 and cut.endswith("…")
+    assert cut.startswith("Synthetic drain engine (spec §1):")
+    assert long.startswith(cut[:-1]) and not long[len(cut) - 1].isalnum()
+    assert ur._first_sentence("Short synthetic summary.") == "Short synthetic summary."
