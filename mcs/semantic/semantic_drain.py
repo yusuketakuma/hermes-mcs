@@ -1752,6 +1752,194 @@ def _job_lock(ledger, job_id):
     # Keep the inode: unlinking a flock file can create two lock owners.
 
 
+def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
+                max_jobs: int) -> tuple:
+    """Due-job selection for one drain pass.
+
+    Returns (due, qc_jobs, arrivals, backfill, sched_mut): the ordered
+    candidate list, its per-cohort split, and the fairness turn to persist.
+    """
+    if lane is None:
+        qc_rows = []
+        if qc_active and max_jobs > 1:
+            qc_rows = ledger.db.execute(
+                "SELECT * FROM fetch_jobs WHERE state='pending' "
+                "AND kind=? AND next_try<=? ORDER BY job_id LIMIT ?",
+                (QC_JOB_KIND, time.time(), max_jobs)).fetchall()
+        qc_share = min(len(qc_rows), max(1, max_jobs // 4), max_jobs - 1)
+        qc_jobs = list(qc_rows[:qc_share])
+        arrivals, backfill, sched_mut = _due_lanes(
+            ledger, (JOB_KIND,) if qc_jobs else kinds,
+            max_jobs - len(qc_jobs))
+        # unused lane capacity flows back to QC — same rule the backfill
+        # cohort uses against an idle arrival lane
+        spare = max_jobs - len(qc_jobs) - len(arrivals) - len(backfill)
+        if spare > 0:
+            qc_jobs += list(qc_rows[qc_share:qc_share + spare])
+    else:
+        # explicit lane: the fairness/QC selection is never computed
+        # (it would be discarded), saving its queries per tick
+        eligible = ("json_valid(payload) AND "
+                    "COALESCE(json_extract(payload,'$.eligible'),0)=1")
+        # Fresh arrivals use realtime. Background workers may also finish
+        # older arrival-seeded jobs; a per-job flock excludes double work.
+        if lane == "realtime":
+            rows = ledger.db.execute(
+                f"SELECT * FROM fetch_jobs WHERE state='pending' AND next_try<=? "
+                f"AND kind=? AND {eligible} "
+                f"ORDER BY updated_at DESC, job_id DESC LIMIT ?",
+                (time.time(), JOB_KIND, max_jobs + 8)).fetchall()
+        else:
+            # Re-extraction re-pends QC rows under their old (low) job_id;
+            # one job_id order let them win every pass and no semantic job
+            # ran for hours (2026-10-10). Each kind keeps oldest-first, and
+            # the kind this worker served last goes second.
+            # QC re-seeding refreshes next_try: its new generation must
+            # queue behind QC that was already waiting, despite an old id.
+            rows = [row for kind in sorted(
+                        kinds, key=lambda k: k == _BACKLOG_TURN["kind"])
+                    for row in ledger.db.execute(
+                        "SELECT * FROM fetch_jobs WHERE state='pending' "
+                        "AND next_try<=? AND kind=? ORDER BY "
+                        f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
+                        (time.time(), kind, max_jobs + 8)).fetchall()]
+        # Include extra candidates so another worker's current job cannot
+        # hide the next runnable item. Work remains bounded by max_jobs.
+        qc_jobs = [j for j in rows if j['kind'] == QC_JOB_KIND]
+        arrivals = [j for j in rows if j['kind'] == JOB_KIND
+                    and runtime.parse_payload(j).get('eligible')]
+        backfill = [j for j in rows if j['kind'] == JOB_KIND
+                    and not runtime.parse_payload(j).get('eligible')]
+        sched_mut = {"turn": None}
+    due = (list(rows) if lane is not None else
+           qc_jobs + list(arrivals) + list(backfill))
+    return due, qc_jobs, arrivals, backfill, sched_mut
+
+
+def _job_metric(job, token, cohort: str, status, job_age: float,
+                job_elapsed: float, llm_s: float, jev_s: float, used: int,
+                usage: dict, jev_client) -> dict:
+    """The bounded per-job metrics row of one drain pass."""
+    import semantic
+    return {
+        "job_id": job["job_id"], "project_id": job["project_id"],
+        "kind": job["kind"],
+        "cohort": cohort,
+        "generation": token.generation,
+        "status": status if status is not None else "error",
+        # phase split — queue wait vs model call vs Jev evaluation
+        # vs the residual validate/render phase (T14)
+        "queue_wait_s": job_age,
+        "llm_s": llm_s,
+        "jev_s": jev_s,
+        "post_s": max(0.0, job_elapsed - llm_s - jev_s),
+        "elapsed_s": job_elapsed, "job_age_s": job_age,
+        "jev_requests": used, "usage": usage,
+        # last Jev error class/kind of this pass — a job that ends
+        # "failed" after a few Jev calls was previously
+        # undiagnosable from the run record (2026-09-30)
+        "jev_error": _jev_error_brief(
+            getattr(jev_client, "last_error", None))
+        if status not in (None, "done") else None,
+        # last local-model failure code of this pass (never
+        # text) — a long call ending "retry" was undiagnosable
+        # from the run record (2026-10-09). Module-level and
+        # latest-wins: only a pass that actually called the
+        # model may report it, or a cached/QC pass would wear
+        # the previous job's code.
+        "llm_error": semantic.last_llm_failure()
+        if status not in (None, "done") and llm_s > 0 else None,
+        "retry_reason": _PASS_REASON["code"]
+        if status != "done" else None,
+        "summary_validation_error": _PASS_REASON["summary_validation_error"],
+        "loops_rejected": _PASS_REASON["loops_rejected"],
+    }
+
+
+def _apply_job_status(ledger, token, limit: int, status: str,
+                      budget_short: bool, out: dict) -> bool:
+    """Map one finished job's status onto its queue transition and the
+    pass counters; True when the pass must stop (no further call fits)."""
+    if status == "done":
+        out["done"] += 1
+    elif status in ("deferred", "deferred_short"):
+        out["deferred"] += 1
+        runtime.transition(ledger, token, "defer", retry_in=60)
+        if status == "deferred_short":
+            # less than one call reserve is left: the next job's
+            # first call is exempt from the reserve gate and would
+            # be dispatched only to time out at the deadline
+            return True
+    elif status == "deferred_backoff":
+        out["deferred"] += 1
+        runtime.transition(ledger, token, "defer",
+                           retry_in=NOT_SENT_BACKOFF_S)
+    elif status == "retry":
+        runtime.transition(ledger, token, "retry", retry_in=300,
+                           max_attempts=limit)
+        out["deferred"] += 1
+        if budget_short:
+            return True  # same reason as deferred_short: no call fits
+    elif status == "failed":
+        runtime.transition(ledger, token, "retry", max_attempts=1)
+        out["failed"] += 1
+    elif status == "stale":
+        # The worker that observed this row no longer owns it.  Do not
+        # defer/retry/done the replacement generation by ID alone.
+        out["deferred"] += 1
+    else:
+        out["failed"] += 1
+    return False
+
+
+def _persist_drain_accounting(ledger, scfg, out: dict, result: dict,
+                              selected: dict, qc_active: bool,
+                              sched_mut: dict) -> None:
+    """Persist the fairness counters and the bounded drain-run metrics
+    artifact; either failure is recorded in ``result`` and never breaks
+    the drain."""
+    # persisted fairness accounting — survives restarts, feeds
+    # semantic_observe's scheduler section (T14)
+    try:
+        sched = _sched_state(ledger)
+        for cohort in ("arrival", "backfill"):
+            sched[cohort + "_selected"] = \
+                sched.get(cohort + "_selected", 0) + selected[cohort]
+        if qc_active:
+            sched["qc_selected"] = \
+                sched.get("qc_selected", 0) + selected["qc"]
+        if selected["backfill"]:
+            sched["backfill_last_served_at"] = time.time()
+        if selected["qc"]:
+            sched["qc_last_served_at"] = time.time()
+        if sched_mut.get("turn"):
+            sched["turn"] = sched_mut["turn"]
+        _sched_write(ledger, sched)
+    except Exception:
+        # accounting must never break the drain itself
+        result["errors"].append("semantic: sched_persist_failed")
+    # Bounded per-run metrics artifact — observe() aggregates the
+    # recent ones; a drain that attempted work leaves durable
+    # evidence instead of an in-memory-only result (T14).
+    try:
+        ledger.artifact_add(
+            KIND_DRAIN_RUN,
+            json.dumps({
+                "v": 1, "mode": scfg["mode"],
+                "done": out["done"], "deferred": out["deferred"],
+                "failed": out["failed"],
+                "budget_exhausted": out["budget_exhausted"],
+                "left": out["left"], "elapsed_s": out["elapsed_s"],
+                "oldest_pending_age_s":
+                    out["oldest_pending_job_age_s"],
+                "lanes": out["lanes"],
+                "job_metrics": out["job_metrics"][:64]},
+                ensure_ascii=False),
+            model="semantic_drain")
+    except Exception:
+        result["errors"].append("semantic: metrics_persist_failed")
+
+
 def run_due(ledger, cfg: dict, result: dict, deadline: float,
             jev_client=None, llm_fn=None, max_jobs: int = 4,
             cfg_path: str | None = None, run_lock_fd=None,
@@ -1927,60 +2115,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         # the semantic lanes leave unused. A 1-job window cannot be split —
         # QC falls back to the persisted cohort alternation inside the
         # non-eligible lane.
-        if lane is None:
-            qc_rows = []
-            if qc_active and max_jobs > 1:
-                qc_rows = ledger.db.execute(
-                    "SELECT * FROM fetch_jobs WHERE state='pending' "
-                    "AND kind=? AND next_try<=? ORDER BY job_id LIMIT ?",
-                    (QC_JOB_KIND, time.time(), max_jobs)).fetchall()
-            qc_share = min(len(qc_rows), max(1, max_jobs // 4), max_jobs - 1)
-            qc_jobs = list(qc_rows[:qc_share])
-            arrivals, backfill, sched_mut = _due_lanes(
-                ledger, (JOB_KIND,) if qc_jobs else kinds,
-                max_jobs - len(qc_jobs))
-            # unused lane capacity flows back to QC — same rule the backfill
-            # cohort uses against an idle arrival lane
-            spare = max_jobs - len(qc_jobs) - len(arrivals) - len(backfill)
-            if spare > 0:
-                qc_jobs += list(qc_rows[qc_share:qc_share + spare])
-        else:
-            # explicit lane: the fairness/QC selection is never computed
-            # (it would be discarded), saving its queries per tick
-            eligible = ("json_valid(payload) AND "
-                        "COALESCE(json_extract(payload,'$.eligible'),0)=1")
-            # Fresh arrivals use realtime. Background workers may also finish
-            # older arrival-seeded jobs; a per-job flock excludes double work.
-            if lane == "realtime":
-                rows = ledger.db.execute(
-                    f"SELECT * FROM fetch_jobs WHERE state='pending' AND next_try<=? "
-                    f"AND kind=? AND {eligible} "
-                    f"ORDER BY updated_at DESC, job_id DESC LIMIT ?",
-                    (time.time(), JOB_KIND, max_jobs + 8)).fetchall()
-            else:
-                # Re-extraction re-pends QC rows under their old (low) job_id;
-                # one job_id order let them win every pass and no semantic job
-                # ran for hours (2026-10-10). Each kind keeps oldest-first, and
-                # the kind this worker served last goes second.
-                # QC re-seeding refreshes next_try: its new generation must
-                # queue behind QC that was already waiting, despite an old id.
-                rows = [row for kind in sorted(
-                            kinds, key=lambda k: k == _BACKLOG_TURN["kind"])
-                        for row in ledger.db.execute(
-                            "SELECT * FROM fetch_jobs WHERE state='pending' "
-                            "AND next_try<=? AND kind=? ORDER BY "
-                            f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
-                            (time.time(), kind, max_jobs + 8)).fetchall()]
-            # Include extra candidates so another worker's current job cannot
-            # hide the next runnable item. Work remains bounded by max_jobs.
-            qc_jobs = [j for j in rows if j['kind'] == QC_JOB_KIND]
-            arrivals = [j for j in rows if j['kind'] == JOB_KIND
-                        and runtime.parse_payload(j).get('eligible')]
-            backfill = [j for j in rows if j['kind'] == JOB_KIND
-                        and not runtime.parse_payload(j).get('eligible')]
-            sched_mut = {"turn": None}
-        due = (list(rows) if lane is not None else
-               qc_jobs + list(arrivals) + list(backfill))
+        due, qc_jobs, arrivals, backfill, sched_mut = _select_due(
+            ledger, lane, kinds, qc_active, max_jobs)
         cohort_of = {id(job): "qc" for job in qc_jobs}
         cohort_of.update({id(job): "arrival" for job in arrivals})
         cohort_of.update({id(job): "backfill" for job in backfill})
@@ -2157,39 +2293,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 usage["unreported_requests"] = used - usage["reported_requests"]
                 llm_s = llm_acc["s"]
                 jev_s = timed_jev.elapsed_s if timed_jev is not None else 0.0
-                out["job_metrics"].append({
-                    "job_id": job["job_id"], "project_id": job["project_id"],
-                    "kind": job["kind"],
-                    "cohort": cohort_of.get(id(job), "backfill"),
-                    "generation": token.generation,
-                    "status": status if status is not None else "error",
-                    # phase split — queue wait vs model call vs Jev evaluation
-                    # vs the residual validate/render phase (T14)
-                    "queue_wait_s": job_age,
-                    "llm_s": llm_s,
-                    "jev_s": jev_s,
-                    "post_s": max(0.0, job_elapsed - llm_s - jev_s),
-                    "elapsed_s": job_elapsed, "job_age_s": job_age,
-                    "jev_requests": used, "usage": usage,
-                    # last Jev error class/kind of this pass — a job that ends
-                    # "failed" after a few Jev calls was previously
-                    # undiagnosable from the run record (2026-09-30)
-                    "jev_error": _jev_error_brief(
-                        getattr(jev_client, "last_error", None))
-                    if status not in (None, "done") else None,
-                    # last local-model failure code of this pass (never
-                    # text) — a long call ending "retry" was undiagnosable
-                    # from the run record (2026-10-09). Module-level and
-                    # latest-wins: only a pass that actually called the
-                    # model may report it, or a cached/QC pass would wear
-                    # the previous job's code.
-                    "llm_error": semantic.last_llm_failure()
-                    if status not in (None, "done") and llm_s > 0 else None,
-                    "retry_reason": _PASS_REASON["code"]
-                    if status != "done" else None,
-                    "summary_validation_error": _PASS_REASON["summary_validation_error"],
-                    "loops_rejected": _PASS_REASON["loops_rejected"],
-                })
+                out["job_metrics"].append(_job_metric(
+                    job, token, cohort_of.get(id(job), "backfill"), status,
+                    job_age, job_elapsed, llm_s, jev_s, used, usage,
+                    jev_client))
                 if status == "done":
                     out["done_by_kind"][job["kind"]] = \
                         out["done_by_kind"].get(job["kind"], 0) + 1
@@ -2207,35 +2314,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                         meta={"jev_requests": used})
                 if status is None:
                     continue
-                if status == "done":
-                    out["done"] += 1
-                elif status in ("deferred", "deferred_short"):
-                    out["deferred"] += 1
-                    runtime.transition(ledger, token, "defer", retry_in=60)
-                    if status == "deferred_short":
-                        # less than one call reserve is left: the next job's
-                        # first call is exempt from the reserve gate and would
-                        # be dispatched only to time out at the deadline
-                        break
-                elif status == "deferred_backoff":
-                    out["deferred"] += 1
-                    runtime.transition(ledger, token, "defer",
-                                       retry_in=NOT_SENT_BACKOFF_S)
-                elif status == "retry":
-                    runtime.transition(ledger, token, "retry", retry_in=300,
-                                       max_attempts=limit)
-                    out["deferred"] += 1
-                    if budget_short:
-                        break      # same reason as deferred_short: no call fits
-                elif status == "failed":
-                    runtime.transition(ledger, token, "retry", max_attempts=1)
-                    out["failed"] += 1
-                elif status == "stale":
-                    # The worker that observed this row no longer owns it.  Do not
-                    # defer/retry/done the replacement generation by ID alone.
-                    out["deferred"] += 1
-                else:
-                    out["failed"] += 1
+                if _apply_job_status(ledger, token, limit, status,
+                                     budget_short, out):
+                    break
                 if getattr(getattr(jev_client, "last_error", None),
                            "kind", "") == "payment_required":
                     # the service refuses every call until the account is
@@ -2256,46 +2337,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             "AND state='pending' AND next_try<=?", (*kinds, time.time())).fetchone()[0]
         out["elapsed_s"] = time.perf_counter() - drain_started
         if due:
-            # persisted fairness accounting — survives restarts, feeds
-            # semantic_observe's scheduler section (T14)
-            try:
-                sched = _sched_state(ledger)
-                for cohort in ("arrival", "backfill"):
-                    sched[cohort + "_selected"] = \
-                        sched.get(cohort + "_selected", 0) + selected[cohort]
-                if qc_active:
-                    sched["qc_selected"] = \
-                        sched.get("qc_selected", 0) + selected["qc"]
-                if selected["backfill"]:
-                    sched["backfill_last_served_at"] = time.time()
-                if selected["qc"]:
-                    sched["qc_last_served_at"] = time.time()
-                if sched_mut.get("turn"):
-                    sched["turn"] = sched_mut["turn"]
-                _sched_write(ledger, sched)
-            except Exception:
-                # accounting must never break the drain itself
-                result["errors"].append("semantic: sched_persist_failed")
-            # Bounded per-run metrics artifact — observe() aggregates the
-            # recent ones; a drain that attempted work leaves durable
-            # evidence instead of an in-memory-only result (T14).
-            try:
-                ledger.artifact_add(
-                    KIND_DRAIN_RUN,
-                    json.dumps({
-                        "v": 1, "mode": scfg["mode"],
-                        "done": out["done"], "deferred": out["deferred"],
-                        "failed": out["failed"],
-                        "budget_exhausted": out["budget_exhausted"],
-                        "left": out["left"], "elapsed_s": out["elapsed_s"],
-                        "oldest_pending_age_s":
-                            out["oldest_pending_job_age_s"],
-                        "lanes": out["lanes"],
-                        "job_metrics": out["job_metrics"][:64]},
-                        ensure_ascii=False),
-                    model="semantic_drain")
-            except Exception:
-                result["errors"].append("semantic: metrics_persist_failed")
+            _persist_drain_accounting(ledger, scfg, out, result, selected,
+                                      qc_active, sched_mut)
         return out
     finally:
         _SHADOW_V2["pass"] = None
