@@ -46,7 +46,7 @@ import local_llm
 import patient_context
 from patient_context import CATEGORIES, DETAIL_KEYS, context_items
 from ledger import Ledger, LedgerReader
-from mcs_queries import (EXTRACT_FEEDBACK_KIND, current_extract_pred,
+from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, current_extract_pred,
                          current_qc_pred,
                          current_v4_id, json_or_null, qc_source_id)
 from mcs_util import (CONF_PATH, HOME, acquire_run_lock, circuit_failure, circuit_open_s,
@@ -2422,8 +2422,7 @@ def _human_flagged_sql(val: str = "h.artifact_id") -> str:
 
 def pending_pred() -> str:
     """Shared body-current extraction and quality-retry eligibility."""
-    return f"""m.body_text IS NOT NULL AND m.body_text != ''
-        AND (m.body_state IS NULL OR m.body_state='full')
+    return f"""{ELIGIBLE_MESSAGE}
         AND {current_v4_id()} IS NULL
         AND ((NOT EXISTS (SELECT 1 FROM artifacts f
                         WHERE f.kind='{KIND}' AND f.message_id=m.message_id
@@ -3060,8 +3059,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                       =?
                   AND json_extract(e.meta,'$.hash')=m.content_hash
                  ELSE 0 END
-      WHERE m.body_text IS NOT NULL AND m.body_text != ''
-        AND (m.body_state IS NULL OR m.body_state='full'){adm_sql}
+      WHERE {ELIGIBLE_MESSAGE}{adm_sql}
         AND NOT EXISTS (SELECT 1 FROM fetch_jobs claim
                         WHERE claim.kind='extract_claim'
                           AND claim.project_id=m.project_id

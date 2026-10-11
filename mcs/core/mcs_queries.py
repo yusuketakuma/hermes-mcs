@@ -25,6 +25,12 @@ MED_ACTIONS = CHANGE_ACTIONS + ("none",)
 CHANGE_ACTIONS_SQL = ",".join(f"'{a}'" for a in CHANGE_ACTIONS)
 TRANSITION_EVENTS_SQL = "'discharge','transfer'"
 
+# a message (alias m) whose full body is stored and non-empty — the
+# extraction eligibility rule (extract_llm). run_check, read_model,
+# extract (v1) and semantic_observe still inline the same text.
+ELIGIBLE_MESSAGE = ("m.body_text IS NOT NULL AND m.body_text != '' "
+                    "AND (m.body_state IS NULL OR m.body_state='full')")
+
 
 def json_or_null(col: str) -> str:
     """JSON document argument that is NULL unless `col` is valid JSON.
@@ -172,20 +178,6 @@ def current_v4_id(msg: str = "m", *, require_version: bool = True) -> str:
             f" AND v.message_id={msg}.message_id"
             f" AND v.project_id={msg}.project_id"
             f" AND {pred})")
-
-
-def qc_v4_source_id(msg: str = "m") -> str:
-    """The v4 row a QC audit binds to. Deliberately separate from
-    qc_source_id: a bare ``version=4`` on the legacy extract_llm scan
-    can never select this kind — the consumer must opt in."""
-    return (f"(SELECT MAX(v.artifact_id) FROM artifacts v"
-            f" WHERE v.kind='{V4_PROJECTION_KIND}'"
-            f" AND v.message_id={msg}.message_id"
-            f" AND v.project_id={msg}.project_id"
-            f" AND {msg}.body_state IS NOT 'deleted'"
-            f" AND {current_v4_pred('v', f'{msg}.content_hash')}"
-            f" AND json_extract({json_or_null('v.meta')},"
-            "'$.extract_version')=4)")
 
 
 def current_fact_pred(art: str = "a", msg: str = "m", *,

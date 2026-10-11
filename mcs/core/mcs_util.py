@@ -70,6 +70,9 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
             for line in f:
                 if line.startswith(key + "="):
                     v = line.split("=", 1)[1].strip()
+                    # decodes mcs_setup._env_write's quoting; the standalone
+                    # credential loader (mcs_standalone.config._env_tokens)
+                    # keeps a stricter copy that fails closed on bad JSON
                     if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
                         if v[0] == '"':
                             try:
@@ -92,6 +95,15 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
 RETRY_LATER_4XX = frozenset({408, 425, 429})
 
 
+def fsync_dir(path) -> None:
+    """fsync a directory so a rename or link inside it survives a crash."""
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def publish_tmp(tmp: str, dest: str, mode: int | None = None) -> None:
     """[chmod] -> fsync tmp -> os.replace -> dir fsync for a finished tmp
     file: readers see the whole old ``dest`` or the whole new one."""
@@ -103,11 +115,7 @@ def publish_tmp(tmp: str, dest: str, mode: int | None = None) -> None:
     finally:
         os.close(fd)
     os.replace(tmp, dest)
-    dfd = os.open(os.path.dirname(dest) or ".", os.O_RDONLY)
-    try:
-        os.fsync(dfd)
-    finally:
-        os.close(dfd)
+    fsync_dir(os.path.dirname(dest) or ".")
 
 
 def atomic_write(path: str, writer, mode: int | None = None,
@@ -128,11 +136,7 @@ def atomic_write(path: str, writer, mode: int | None = None,
         if mode is not None:
             os.chmod(tmp, mode)
         os.replace(tmp, path)
-        dfd = os.open(parent, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        fsync_dir(parent)
     except BaseException:
         with suppress(OSError):
             os.unlink(tmp)
