@@ -13,6 +13,7 @@ import pytest
 import extract_llm
 import semantic
 import semantic_v4 as v4
+import semantic_v4_cohort as cohort
 from mcs_queries import current_fact_pred
 from semantic_policy import KIND_FACT_REPAIR
 from semantic_projection import PROJECTION_VERSION
@@ -246,7 +247,7 @@ def test_extract_admission_defaults_to_zero_under_v4(tmp_path, monkeypatch):
                                       admitted_ids=set())
         assert res["done"] == 0 and res["failed"] == 0
         # Conversion manifests belong to v4; they never reopen v3.
-        v4.declare_cohort(
+        cohort.declare_cohort(
             db, "c1", [{"message_id": 1,
                         "content_hash": db.db.execute(
                             "SELECT content_hash FROM messages "
@@ -268,7 +269,7 @@ def test_cohort_schedules_bounded_and_restart_safe(tmp_path):
         hashes = {r["message_id"]: r["content_hash"] for r in
                   db.db.execute("SELECT message_id,content_hash "
                                 "FROM messages")}
-        v4.declare_cohort(
+        cohort.declare_cohort(
             db, "c2",
             [{"message_id": i, "content_hash": hashes[i]}
              for i in (1, 2, 3)],
@@ -276,11 +277,11 @@ def test_cohort_schedules_bounded_and_restart_safe(tmp_path):
         assert tuple(db.db.execute(
             "SELECT project_id,message_id FROM artifacts WHERE kind=?",
             (v4.KIND_V4_COHORT,)).fetchone()) == (None, None)
-        res = v4.run_cohort(db, "c2", now=NOW)
+        res = cohort.run_cohort(db, "c2", now=NOW)
         assert res["scheduled"] == 2          # ceiling respected
         # item receipts bound the cursor — re-running doesn't re-seed
-        v4.mark_item_done(db, "c2", 1, "converted")
-        res2 = v4.run_cohort(db, "c2", now=NOW)
+        cohort.mark_item_done(db, "c2", 1, "converted")
+        res2 = cohort.run_cohort(db, "c2", now=NOW)
         assert res2["scheduled"] == 0
         jobs = db.db.execute(
             "SELECT COUNT(*) FROM fetch_jobs WHERE kind='semantic'"
@@ -289,10 +290,10 @@ def test_cohort_schedules_bounded_and_restart_safe(tmp_path):
         # A terminal job cannot be revived by rerunning the cohort.
         db.db.execute("UPDATE fetch_jobs SET state='failed'")
         db.db.commit()
-        assert v4.run_cohort(db, "c2", now=NOW)["scheduled"] == 0
+        assert cohort.run_cohort(db, "c2", now=NOW)["scheduled"] == 0
         assert {r[0] for r in db.db.execute(
             "SELECT state FROM fetch_jobs")} == {"failed"}
-        assert v4.run_cohort(db, "c2", now=NOW + 7200)["error"] == \
+        assert cohort.run_cohort(db, "c2", now=NOW + 7200)["error"] == \
             "cohort_expired"
     finally:
         db.close()
@@ -320,15 +321,15 @@ def test_retire_payloads_requires_separate_verified_cleanup(tmp_path):
     try:
         h = _seed_legacy_and_v4(db, 1)
         _seed_legacy_and_v4(db, 2)
-        v4.declare_cohort(
+        cohort.declare_cohort(
             db, "c3",
             [{"message_id": 1, "content_hash": h},
              {"message_id": 2, "content_hash": db.db.execute(
                  "SELECT content_hash FROM messages WHERE message_id=2"
              ).fetchone()[0]}],
             {"items": 2}, NOW + 3600, retire_after_at=NOW + 100)
-        v4.mark_item_done(db, "c3", 1, "converted")
-        v4.mark_item_done(db, "c3", 2, "converted")
+        cohort.mark_item_done(db, "c3", 1, "converted")
+        cohort.mark_item_done(db, "c3", 2, "converted")
         # QC reference pins message 2's extract_llm row
         src = db.db.execute(
             "SELECT artifact_id FROM artifacts WHERE kind='extract_llm'"
@@ -337,11 +338,11 @@ def test_retire_payloads_requires_separate_verified_cleanup(tmp_path):
                         project_id=1, message_id=2,
                         meta={"source_artifact_id": src})
         # too early → held
-        res = v4.retire_payloads(db, "c3", now=NOW + 50)
+        res = cohort.retire_payloads(db, "c3", now=NOW + 50)
         assert res["retired"] == 0
         before = [tuple(r) for r in db.db.execute(
             "SELECT * FROM artifacts ORDER BY artifact_id")]
-        res = v4.retire_payloads(db, "c3", now=NOW + 200)
+        res = cohort.retire_payloads(db, "c3", now=NOW + 200)
         assert res["retired"] == []
         assert res["held"] == "cleanup_manifest_and_recovery_required"
         assert before == [tuple(r) for r in db.db.execute(
@@ -468,7 +469,7 @@ def test_cohort_rejects_invalid_budgets_without_persistence(tmp_path,
     db = _ledger(tmp_path)
     try:
         with pytest.raises(ValueError):
-            v4.declare_cohort(db, "invalid", [], ceilings, expiry)
+            cohort.declare_cohort(db, "invalid", [], ceilings, expiry)
         assert db.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 0
     finally:
         db.close()
@@ -481,9 +482,9 @@ def test_cohort_never_dispatches_without_enforceable_token_budget(tmp_path):
     db.save_messages([_message(1, body="synthetic")], project_id=1)
     try:
         h = db.db.execute("SELECT content_hash FROM messages").fetchone()[0]
-        v4.declare_cohort(db, "bounded", [{"message_id": 1, "content_hash": h}],
+        cohort.declare_cohort(db, "bounded", [{"message_id": 1, "content_hash": h}],
                          {"calls": 4, "tokens": 1000}, NOW + 3600)
-        v4.run_cohort(db, "bounded", now=NOW)
+        cohort.run_cohort(db, "bounded", now=NOW)
         job = db.db.execute("SELECT * FROM fetch_jobs WHERE kind='semantic'").fetchone()
         cfg = semantic_config({"semantic": {"mode": "shadow",
                                              "project_ids": [1]}})[0]
@@ -512,7 +513,7 @@ def test_cohort_reservation_rolls_back_with_job_and_survives_reopen(tmp_path,
                      project_id=1)
     items = [dict(r) for r in db.db.execute(
         "SELECT message_id,content_hash FROM messages ORDER BY message_id")]
-    v4.declare_cohort(db, "atomic", items, {"items": 1}, NOW + 3600)
+    cohort.declare_cohort(db, "atomic", items, {"items": 1}, NOW + 3600)
     original = db.artifact_add_tx
 
     def fail_receipt(kind, *args, **kwargs):
@@ -524,15 +525,15 @@ def test_cohort_reservation_rolls_back_with_job_and_survives_reopen(tmp_path,
         with monkeypatch.context() as patch:
             patch.setattr(db, "artifact_add_tx", fail_receipt)
             with pytest.raises(OSError):
-                v4.run_cohort(db, "atomic", NOW)
+                cohort.run_cohort(db, "atomic", NOW)
         assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 0
         assert v4.cohort_items_done(db, "atomic") == {}
-        assert v4.run_cohort(db, "atomic", NOW)["scheduled"] == 1
+        assert cohort.run_cohort(db, "atomic", NOW)["scheduled"] == 1
     finally:
         db.close()
     db = _ledger(tmp_path)
     try:
-        assert v4.run_cohort(db, "atomic", NOW + 100)["scheduled"] == 0
+        assert cohort.run_cohort(db, "atomic", NOW + 100)["scheduled"] == 0
         assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 1
     finally:
         db.close()
@@ -545,16 +546,16 @@ def test_cohort_binds_dependency_closure_and_rejects_duplicate_targets(tmp_path)
     item = dict(db.db.execute("SELECT message_id,content_hash FROM messages").fetchone())
     try:
         with pytest.raises(ValueError):
-            v4.declare_cohort(db, "duplicate", [item, item], {}, NOW + 3600)
-        v4.declare_cohort(db, "context", [item], {}, NOW + 3600)
+            cohort.declare_cohort(db, "duplicate", [item, item], {}, NOW + 3600)
+        cohort.declare_cohort(db, "context", [item], {}, NOW + 3600)
         # The target body is unchanged, but its dependency closure moved.
         db.save_messages([_message(2, parent=1, body="synthetic reply")], project_id=1)
-        result = v4.run_cohort(db, "context", NOW)
+        result = cohort.run_cohort(db, "context", NOW)
         assert result["scheduled"] == 0 and result["remaining"] == 0
         assert v4.cohort_items_done(db, "context")[1]["reason"] == "source_changed"
         before = [tuple(row) for row in db.db.execute("SELECT * FROM artifacts")]
         with pytest.raises(ValueError):
-            v4.retire_payloads(db, "context", float("nan"))
+            cohort.retire_payloads(db, "context", float("nan"))
         assert before == [tuple(row) for row in db.db.execute("SELECT * FROM artifacts")]
     finally:
         db.close()
