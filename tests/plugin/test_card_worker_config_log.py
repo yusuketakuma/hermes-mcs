@@ -19,10 +19,12 @@ def test_incomplete_opt_in_logs_worker_disabled(caplog):
         _Ctx({"interactive": True}))(None, None) is None
     assert card_workers.make_slack_factory(
         _Ctx({"slack_adapter_enabled": True}))(None, None) is None
-    lines = [r.getMessage() for r in caplog.records]
+    lines = [(r.name, r.getMessage()) for r in caplog.records]
     assert lines == [
-        'mcs_discord worker_disabled {"reason": "config_incomplete"}',
-        'mcs_slack worker_disabled {"reason": "config_incomplete"}']
+        ("hermes.plugin.mcs_discord",
+         '{"event": "worker_disabled", "reason": "config_incomplete"}'),
+        ("hermes.plugin.mcs_slack",
+         '{"event": "worker_disabled", "reason": "config_incomplete"}')]
 
 
 def test_opted_out_stays_silent(caplog):

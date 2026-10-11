@@ -1,0 +1,20 @@
+{
+  "category": "changed",
+  "title": "通知アダプターの動作ログをJSON形式に統一",
+  "summary": "Slack・Discord・LINE WORKSの通知アダプターと独立実行ホストの動作ログを、1行1件のJSON形式（event と許可された項目のみ）に統一しました。DiscordのinteractionログからユーザーIDとチャンネルIDを記録しなくなりました。独立Discord接続では、これまで落としていたdelivery_idや件数などの診断項目も記録されます。通知・収集・既読化・承認の動作は変わりません。",
+  "upgrade": "設定変更・DB移行は不要です。Hermes接続ではgateway再起動、独立実行（standalone）とLINE WORKSアダプターではプロセスの再起動で反映されます。ログを文字列一致で集計している場合は新しいJSON形式に合わせてください。",
+  "details": [
+    "共通の adapters/common/eventlog.py が許可項目（error, reason, action, outcome, result, command_id, delivery_id, rows, receipt_republished, not_sent, unknown, job, code, failures）だけを残し、英数字と _.:- の80文字以内でない文字列は redacted に置き換える。値のないNone項目は出力しない。",
+    "Hermes の hermes.plugin.mcs_discord / mcs_slack ログは行頭の接続名を持たなくなり、logger名で区別する。",
+    "Discord の interaction_denied / interaction_result から actor と channel を削除する。"
+  ],
+  "refs": [
+    "adapters/common/eventlog.py",
+    "adapters/discord/actions.py",
+    "adapters/discord/standalone.py",
+    "adapters/slack/standalone.py",
+    "adapters/lineworks/__main__.py",
+    "mcs_standalone/host.py",
+    "hermes_plugin/card_workers.py"
+  ]
+}

@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 from urllib.parse import urlsplit
 
-from adapters.common import paths, text as display_text, worker
+from adapters.common import eventlog, paths, text as display_text, worker
 from hermes_plugin import _make_handler
 from . import cards
 from .actions import _authorizing_channel
@@ -275,11 +275,8 @@ class _Commands:
             pass
 
 
-def _event(event, **fields):
-    # Do not include source content, exception strings or local paths.
-    logging.getLogger("mcs.standalone.discord").info(
-        "%s %s", event, {key: fields[key] for key in fields
-                          if key in {"reason", "error", "result", "action", "outcome"}})
+# Do not include source content, exception strings or local paths.
+_event = eventlog.make_logger("mcs.standalone.discord")
 
 
 async def run(root, stopping=None):
