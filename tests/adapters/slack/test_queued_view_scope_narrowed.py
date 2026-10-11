@@ -98,3 +98,27 @@ def test_queued_aggregate_view_respects_the_current_scope(tmp_path, monkeypatch,
         assert "未完了 2件" in text and "SYNTHETIC B NEW" in text
     else:
         assert sent == []
+
+
+def test_queued_digest_card_over_a_narrowed_scope_sends_no_blocks(tmp_path):
+    from hermes_plugin.mcs_delivery.paths import safe_name
+    from test_mcs_slack_actions import click, command, fixture, result, submitted
+
+    async def scenario():
+        actions, app, _reg, dirs = fixture(tmp_path, kind="digest")
+        await actions._action(ack, *click())
+        modal = app.client.views[0]["view"]["private_metadata"]
+        Path(dirs["cmd_int"], safe_name(command(dirs)["command_id"]) + ".json").unlink()
+        await actions._modal(ack, *submitted(modal, query="mine"))
+        env = command(dirs)
+        # counted over [123, 456]; this deployment now serves only 123
+        parts = {"containers": [{"type": "heading", "text": "📊 MCS サマリー"},
+                                {"type": "text", "text": "■ 新着\n・SYNTHETIC OLD 2件"}],
+                 "footer": []}
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", action="digest", parts=parts,
+               projects=[123, 456], text="*📊 MCS サマリー*\n■ 新着")
+        await actions.sweep_followups()
+        assert [m["text"] for m in app.client.messages] == [SCOPE_CHANGED_TEXT]
+        assert all("blocks" not in m for m in app.client.messages)
+    asyncio.run(scenario())
