@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import json
 import math
-from contextlib import suppress
 from semantic_projection import PROJECTION_VERSION
 
 from patient_context import context_items, extract_context, merged_context
@@ -418,7 +417,7 @@ def _coverage(db, records, attachments, project_id=None) -> dict:
             continue
         for kind in EXTRACTION_KINDS:
             extraction[kind][rec["extraction"][kind]["state"]] += 1
-    with suppress(Exception):
+    if _table_exists(db, "patients"):
         if project_id is None:
             collection["patients"] = db.execute(
                 "SELECT COUNT(*) FROM patients").fetchone()[0]
