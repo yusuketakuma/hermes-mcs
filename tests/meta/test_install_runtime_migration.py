@@ -81,11 +81,16 @@ def test_updater_and_installer_agree_on_pins():
     from pathlib import Path
 
     import mcs_update
-    text = (Path(__file__).resolve().parents[2] / "install.sh").read_text()
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "install.sh").read_text()
     pins = re.search(r'^HERMES_PREVIOUS_PINS="([0-9a-f ]+)"$', text, re.M)
     assert pins and set(pins[1].split()) == mcs_update.HERMES_PREVIOUS_PINS
     current = re.search(r'^HERMES_PIN="([0-9a-f]{40})"$', text, re.M)
     assert current and current[1] == mcs_update.HERMES_PIN
+    # The CI hermes-integration lane must test the Hermes that users install.
+    workflow = (root / ".github/workflows/ci.yml").read_text()
+    ci = re.findall(r"repository: yusuketakuma/hermes-agent\s+ref: ([0-9a-f]{40})", workflow)
+    assert ci == [mcs_update.HERMES_PIN]
 
 
 def test_checkout_already_at_the_current_pin_rebuilds_the_venv_only(tmp_path):
