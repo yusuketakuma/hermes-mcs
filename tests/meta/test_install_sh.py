@@ -70,6 +70,12 @@ if [ "$1" = "-C" ]; then
             echo "error: pathspec '$last' did not match" >&2; exit 1
         fi
         echo "$last" > "$2/.git/HEAD"; exit 0 ;;
+      symbolic-ref)
+        [ -n "$STUB_GIT_BRANCH" ] || exit 1
+        echo "refs/heads/$STUB_GIT_BRANCH"; exit 0 ;;
+      status)
+        [ -z "$STUB_GIT_DIRTY" ] || echo " M synthetic"
+        exit 0 ;;
     esac
 fi
 exit 0

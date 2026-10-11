@@ -182,6 +182,9 @@ HERMES_REPO="https://github.com/yusuketakuma/hermes-agent.git"
 # Pinned: public MCS companion plus upstream v0.21.6-era release code.
 # Native context/attestation and async pre-dispatch contracts remain required.
 HERMES_PIN="6f35b1ed84536f7e7fd2f605f7779dd051cce05f"
+# Pins validated by earlier releases (all Python <3.14); only these move to
+# HERMES_PIN, and only during an updater-proven runtime migration.
+HERMES_PREVIOUS_PINS="fd50a275e2616118c48fe07e7e1c878782b15ccd 1e8fbfe6b41399a46e232f6cde5618cfdfa2729a 16390dc80d248b7b49554c0cde52caf22e1fc3d8"
 CLONE_MARK="$HERMES_HOME/.hermes-agent.install-in-progress"
 VENV="$HERMES_DIR/venv"
 if [ "$RUNTIME_MODE" = standalone ]; then VENV="$RUNTIME_HOME/venv"; fi
@@ -259,10 +262,12 @@ raise SystemExit(0 if valid else 1)
 ' 2>/dev/null
 }
 
-preserve_old_venv() {
-    if [ ! -e "$VENV" ] && [ ! -L "$VENV" ]; then return; fi
-    if [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] || [ -n "${MCS_UPDATE_RUNTIME_BACKUP:-}" ]; then
-        _prior_venv="$("$PYBIN" -I -c '
+# Updater-proven runtime migration: the inherited run.lock FD and the
+# journaled backup path must both verify; prints the backup path.
+migration_backup() {
+    _mb_py="${PYBIN:-$(find_py || true)}"
+    [ -n "$_mb_py" ] || return 1
+    "$_mb_py" -I -c '
 # mcs-runtime-migration-lock
 import fcntl, os, re, stat, sys
 try:
@@ -284,7 +289,13 @@ try:
     print(backup)
 except (OSError, ValueError, OverflowError):
     raise SystemExit(1) from None
-' "$VENV" "$MCS_DATA/run.lock")" \
+' "$VENV" "$MCS_DATA/run.lock"
+}
+
+preserve_old_venv() {
+    if [ ! -e "$VENV" ] && [ ! -L "$VENV" ]; then return; fi
+    if [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] || [ -n "${MCS_UPDATE_RUNTIME_BACKUP:-}" ]; then
+        _prior_venv="$(migration_backup)" \
             || die "runtime migration lock or backup is invalid — existing venv retained"
     else
         # A scheduled tick can start after a process check; established installs
@@ -748,6 +759,26 @@ if [ -f "$CLONE_MARK" ]; then
 elif [ "$HEAD_SHA" = "$HERMES_PIN" ]; then
     skip "hermes-agent checkout already at pin $HERMES_PIN"
     _ck="kept existing checkout (pinned)"
+elif [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] && ! py_ok "$VENV_PY" 14 15; then
+    # Runtime migration: the earlier pins require Python <3.14, so the
+    # rebuilt venv needs the current pin. Move only a clean, detached,
+    # previously validated checkout, and only once the lock verifies.
+    case " $HERMES_PREVIOUS_PINS " in *" $HEAD_SHA "*) ;; *)
+        die "runtime migration: $HERMES_DIR is at an unknown commit $HEAD_SHA — move it to $HERMES_PIN yourself, then re-run; existing venv retained" ;;
+    esac
+    if git -C "$HERMES_DIR" symbolic-ref -q HEAD >/dev/null 2>&1 \
+            || [ -n "$(git -C "$HERMES_DIR" status --porcelain --untracked-files=no)" ]; then
+        die "runtime migration: $HERMES_DIR is on a branch or has local changes — existing checkout and venv retained"
+    fi
+    migration_backup >/dev/null \
+        || die "runtime migration lock or backup is invalid — existing checkout and venv retained"
+    git -C "$HERMES_DIR" fetch -q "$HERMES_REPO" "$HERMES_PIN" \
+        && git -C "$HERMES_DIR" checkout -q --detach "$HERMES_PIN" \
+        || die "runtime migration: could not move $HERMES_DIR to $HERMES_PIN — existing venv retained"
+    [ "$(git -C "$HERMES_DIR" rev-parse HEAD)" = "$HERMES_PIN" ] \
+        || die "runtime migration: $HERMES_DIR is not at $HERMES_PIN after checkout"
+    ok "hermes-agent moved $HEAD_SHA -> $HERMES_PIN for the Python 3.14 runtime"
+    _ck="moved previous pin to $HERMES_PIN"
 else
     warn "$HERMES_DIR is at $HEAD_SHA, not pinned $HERMES_PIN"
     warn "  (keeping existing checkout; update deliberately)"
