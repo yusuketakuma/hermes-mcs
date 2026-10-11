@@ -1,0 +1,21 @@
+{
+  "category": "added",
+  "title": "独立モードのhostを外から監視し、停止・クラッシュの繰返しを警報",
+  "summary": "独立モードでもhostの外にhealth監視（macOS: local.mcs-health、Linux: mcs-health.timer）を置き、hostの停止、同じ子プロセスの3回連続の異常終了、Slack/Discord接続の10分を超える未回復、2時間を超える更新待ち、未読収集の成功の途絶を通知先へ警報します。子プロセスの異常終了後の再起動も、固定30秒から30秒の倍々（上限30分）に変わります。",
+  "upgrade": "独立モードでは更新後に mcs_setup.py services を1回実行してください。監視エージェント（Linuxはsystemd user timer）が配置され、以後 doctor が配置・稼働を確認します。実行するまで doctor は standalone health watch not installed を警告します。Hermesモードでは操作は不要です。",
+  "details": [
+    "health_watch は runtime_mode=standalone のとき data/standalone-status.json を読み、standalone_host_down（failed）、standalone_child_failing・standalone_connector_down・standalone_update_stuck・standalone_check_stalled（degraded）を理由コードに加える。警報本文はジョブ名・回数・時間・コードのみ。",
+    "health.json が古い・ない場合も、host側の現在の原因を理由として示す。",
+    "独立モードの対処案内を Hermes gateway や launchctl list ではなく mcs_standalone status と ai.mcs.standalone / mcs-standalone.service の再起動に直した。",
+    "失敗回数の監視対象は抽出worker・LINE WORKS・cmd/cmd_int・mcs_check・mcs_deep のみ（LLM再起動など非0終了があり得る補助ジョブは除外）。",
+    "mcs_setup.py doctor は監視の未配置・差分・未稼働とhost状態の問題を報告する。Hermesへ戻すとLinuxの監視timerも撤去する。"
+  ],
+  "refs": [
+    "mcs/ingest/health_watch.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs_standalone/service.py",
+    "mcs_standalone/runtime.py",
+    "tests/ingest/test_stab_health_standalone.py",
+    "tests/ops/test_stab_standalone_health_agent.py"
+  ]
+}

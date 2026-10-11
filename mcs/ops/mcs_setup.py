@@ -2699,6 +2699,10 @@ RECOVERY_LABEL = "org.mcs.recovery"
 LLAMA_LABELS = ("ai.hermes.llamacpp", "ai.mcs.llamaserver")
 STANDALONE_LABEL = "ai.mcs.standalone"
 STANDALONE_UNIT = "mcs-standalone.service"
+# = mcs_standalone.service.HEALTH_*: the standalone host's external watcher
+HEALTH_LABEL = "local.mcs-health"
+HEALTH_UNITS = ("mcs-health.service", "mcs-health.timer")
+HEALTH_TIMER = "mcs-health.timer"
 
 
 CRON_LABEL_PREFIX = "ai.mcs.cron."
@@ -2780,7 +2784,8 @@ def _agent_labels(cfg: dict) -> list[str]:
     """Every LaunchAgent `services` owns for the selected runtime."""
     if not mcs_runtime.standalone(cfg):
         return list(AGENT_LABELS)
-    return [STANDALONE_LABEL]
+    # The health watch stays outside the host so its death still alerts.
+    return [STANDALONE_LABEL, HEALTH_LABEL]
 
 
 def _owned_label(label: str) -> bool:
@@ -2835,6 +2840,10 @@ def check_runtime(cfg: dict) -> tuple[list[str], list[str]]:
                     errors.append("standalone service differs from current source — run `mcs_setup.py services`")
             except (OSError, ValueError):
                 errors.append("standalone service content unverifiable")
+        if os.path.exists(path):
+            e, w = _check_standalone_health()
+            errors += e
+            warnings += w
     if sys.platform != "darwin":
         return errors, warnings
     uid = os.getuid()
@@ -3155,10 +3164,10 @@ def _retire_agents(labels, note, dry) -> int:
     if sys.platform.startswith("linux") and STANDALONE_LABEL in labels:
         path = _standalone_service_path()
         if not os.path.exists(path):
-            return 0
+            return _retire_standalone_health(note, dry)
         note("standalone service: disable + stop")
         if dry:
-            return 0
+            return _retire_standalone_health(note, dry)
         if _run(["systemctl", "--user", "disable", "--now", STANDALONE_UNIT]).returncode:
             return 1
         state = _run(["systemctl", "--user", "is-active", "--quiet", STANDALONE_UNIT])
@@ -3169,7 +3178,8 @@ def _retire_agents(labels, note, dry) -> int:
             os.unlink(path)
         except OSError:
             return 1
-        return int(_run(["systemctl", "--user", "daemon-reload"]).returncode != 0)
+        return int(_run(["systemctl", "--user", "daemon-reload"]).returncode != 0) \
+            + _retire_standalone_health(note, dry)
     if sys.platform != "darwin" or not os.path.isdir(AGENTS_DIR):
         return 0
     problems = 0
@@ -3399,6 +3409,120 @@ def _standalone_service_path():
     return os.path.expanduser("~/.config/systemd/user/" + STANDALONE_UNIT)
 
 
+def _health_unit_path(name):
+    """Where the standalone health watch file `name` lives (plist or unit)."""
+    if sys.platform == "darwin":
+        return os.path.join(AGENTS_DIR, name)
+    return os.path.join(os.path.dirname(_standalone_service_path()), name)
+
+
+def _standalone_health_loaded():
+    if sys.platform == "darwin":
+        return _agent_loaded(HEALTH_LABEL)
+    if sys.platform.startswith("linux"):
+        return _run(["systemctl", "--user", "is-active", "--quiet", HEALTH_TIMER]).returncode == 0
+    return False
+
+
+def _retire_standalone_health(note, dry) -> int:
+    """Linux: disable and remove the standalone health timer (launchd's
+    plist is retired like any other owned agent)."""
+    paths = [path for path in map(_health_unit_path, HEALTH_UNITS) if os.path.exists(path)]
+    if not paths:
+        return 0
+    note("standalone health watch: disable + stop")
+    if dry:
+        return 0
+    if _run(["systemctl", "--user", "disable", "--now", HEALTH_TIMER]).returncode:
+        return 1
+    for path in paths:
+        try:
+            os.unlink(path)
+        except OSError:
+            return 1
+    return int(_run(["systemctl", "--user", "daemon-reload"]).returncode != 0)
+
+
+def _check_standalone_health() -> tuple[list[str], list[str]]:
+    """doctor: the external health watch is installed, current and loaded,
+    and the host's own status shows no crash loop or stalled work."""
+    errors, warnings = [], []
+    try:
+        from mcs_standalone.service import render_health
+        bodies = render_health(HOME, platform=sys.platform)
+    except ValueError:
+        return errors, warnings
+    installed = True
+    for name, body in bodies:
+        try:
+            current = Path(_health_unit_path(name)).read_text(encoding="utf-8")
+        except OSError:
+            current = None
+        if current is None:
+            installed = False
+        elif current != body:
+            errors.append("standalone health watch differs from current source — run `mcs_setup.py services`")
+            break
+    if not installed:
+        warnings.append("standalone health watch not installed — a stopped host raises no alert; run `mcs_setup.py services`")
+    elif not _standalone_health_loaded():
+        errors.append("standalone health watch installed but not loaded — run `mcs_setup.py services`")
+    try:
+        import health_watch
+        _, reasons, details = health_watch.standalone_host_reasons(HOME, time.time(), load_config())
+    except Exception as exc:   # diagnostics only: never fail doctor on the reader
+        warnings.append(f"standalone status unreadable ({type(exc).__name__})")
+        return errors, warnings
+    for code in reasons:
+        extra = details.get(code)
+        warnings.append(f"standalone host: {code}" + (f" ({extra})" if extra else "")
+                        + " — see `python -m mcs_standalone status` and data/standalone.log")
+    return errors, warnings
+
+
+def _sync_standalone_health(manifest, note, dry) -> int:
+    """Install the health watch next to the host, never inside it: a dead,
+    wedged or crash-looping host must still raise an alert."""
+    from mcs_standalone.service import render_health
+    changed = False
+    bodies = render_health(HOME, platform=sys.platform)
+    for name, body in bodies:
+        path = _health_unit_path(name)
+        try:
+            current = Path(path).read_text(encoding="utf-8")
+        except OSError:
+            current = None
+        if current != body:
+            changed = True
+            note(f"standalone health watch: write {path}")
+            if not dry:
+                _write_atomic(path, body, 0o600)
+    loaded = _standalone_health_loaded()
+    if not changed and loaded:
+        note("standalone health watch: loaded")
+    elif not dry:
+        if sys.platform == "darwin":
+            if not _agent_reconcile(HEALTH_LABEL, _health_unit_path(bodies[0][0]), note, False):
+                return 1
+        else:
+            if changed and _run(["systemctl", "--user", "daemon-reload"]).returncode:
+                return 1
+            # restart (not start) so a rewritten timer takes its new schedule
+            if _run(["systemctl", "--user", "enable", HEALTH_TIMER]).returncode \
+                    or _run(["systemctl", "--user", "restart", HEALTH_TIMER]).returncode:
+                note("standalone health watch: enable failed")
+                return 1
+        if not _standalone_health_loaded():
+            note("standalone health watch did not become active")
+            return 1
+    else:
+        note("standalone health watch: load")
+    for name, body in bodies:
+        manifest["agents"].append({"label": HEALTH_LABEL if sys.platform == "darwin" else name,
+                                   "sha256": _sha256(body), "loaded": not dry})
+    return 0
+
+
 def _standalone_loaded():
     if sys.platform == "darwin":
         return _agent_loaded(STANDALONE_LABEL)
@@ -3573,6 +3697,8 @@ def cmd_services(args) -> int:
     _sync_scripts(subs, manifest, note, dry)
     if selected_mode == "standalone":
         problems += _sync_standalone_service(manifest, note, dry)
+        if not problems:
+            problems += _sync_standalone_health(manifest, note, dry)
         _record_llm_slots(manifest, note)
         if not dry and not problems:
             try:
