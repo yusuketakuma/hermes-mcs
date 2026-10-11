@@ -211,10 +211,6 @@ def presenter(transport: str):
     return importlib.import_module("present_" + transport)
 
 
-def _discord_literal(text: str) -> str:
-    return presenter("discord").literal(text)
-
-
 def render_text(parts: dict, head: str = "【{}】", lit=str,
                 footer: str = "{}") -> str:
     """Shared mechanics of a display model as one chat's text; each
