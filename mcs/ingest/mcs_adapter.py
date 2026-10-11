@@ -362,6 +362,8 @@ class UnreadPatient:
     ack_fallback: bool = False
     # MCS karte id (patient record) — the 連携サマリー route is keyed by it
     karte_id: int | None = None
+    # epoch of the last message; only list_projects fills it (0 = unknown)
+    last_activity: int = 0
 
 
 @dataclass
@@ -473,6 +475,15 @@ def _attachments(files: list | None) -> list[Attachment]:
     return out
 
 
+_REACTION_KIND = re.compile(r"[a-zA-Z0-9_-]{1,64}")
+
+
+def _reaction_kind_ok(kind) -> bool:
+    """A concrete reaction kind: a short token, never the 'all' aggregate."""
+    return isinstance(kind, str) and bool(_REACTION_KIND.fullmatch(kind)) \
+        and kind != "all"
+
+
 def _message_metadata(m: dict, project_id: int) -> tuple[dict, list[str]]:
     """Normalize optional metadata independently of the required chat body."""
     out, errors = {}, []
@@ -490,9 +501,8 @@ def _message_metadata(m: dict, project_id: int) -> tuple[dict, list[str]]:
                 normalized, seen = [], set()
                 for r in value:
                     if (not isinstance(r, dict)
-                            or not isinstance(r.get("type"), str)
-                            or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", r["type"])
-                            or r["type"] == "all" or r["type"] in seen
+                            or not _reaction_kind_ok(r.get("type"))
+                            or r["type"] in seen
                             or type(r.get("count")) is not int
                             or not 0 <= r["count"] <= 2**63 - 1
                             or type(r.get("self_reacted")) is not bool
@@ -522,9 +532,6 @@ def _message_metadata(m: dict, project_id: int) -> tuple[dict, list[str]]:
     return out, errors
 
 
-_REACTION_KIND = re.compile(r"[a-zA-Z0-9_-]{1,64}")
-
-
 def walk_reaction_actors(get, project_id: int, message_id: int, *,
                          reaction_type: str | None = None,
                          max_pages: int = 10, per_page: int = 50) -> dict:
@@ -538,10 +545,8 @@ def walk_reaction_actors(get, project_id: int, message_id: int, *,
     if (not _valid_id(project_id) or not _valid_id(message_id)
             or type(max_pages) is not int or not 1 <= max_pages <= 10
             or type(per_page) is not int or not 1 <= per_page <= 50
-            or (reaction_type is not None and (
-                not isinstance(reaction_type, str)
-                or not _REACTION_KIND.fullmatch(reaction_type)
-                or reaction_type == "all"))):
+            or (reaction_type is not None
+                and not _reaction_kind_ok(reaction_type))):
         raise ValueError("invalid actor arguments")
     suffix, key = (("user_reactions", "reactions") if reaction_type is None
                    else ("reactions", "users"))
@@ -610,8 +615,7 @@ def walk_reaction_actors(get, project_id: int, message_id: int, *,
                 user = row.get("user") if reaction_type is None else row
                 kind = row.get("reaction_type") if reaction_type is None else reaction_type
                 if (not isinstance(user, dict) or not _valid_id(user.get("id"))
-                        or not isinstance(kind, str)
-                        or not _REACTION_KIND.fullmatch(kind) or kind == "all"):
+                        or not _reaction_kind_ok(kind)):
                     raise SchemaError("actors: identity invalid")
                 identity = (user["id"], kind)
                 if identity in actors:
@@ -722,6 +726,12 @@ def _norm_threads(items, project_id: int, parent_id: int) -> list[Message]:
     return [_norm_message(m, project_id, parent_id=parent_id) for m in items]
 
 
+def thread_page_budget(reply_count: int) -> dict:
+    """fetch_thread kwargs that cover a thread of reply_count replies (10 per page)."""
+    # fetch_thread's default 10 pages already covers 100 replies
+    return {"max_pages": (reply_count + 9) // 10} if reply_count > 100 else {}
+
+
 def _disk_kind(e: BaseException) -> str:
     """'disk_full' for a local out-of-space write, so the caller can
     defer instead of burning a download attempt; else download_failed."""
@@ -740,6 +750,8 @@ class MCSAdapter:
         self._dl_opener = no_proxy_opener(_SameHostRedirect)
         self._deadline: float | None = None
         self._worker = bounded_call if worker is None else worker
+        # per-attempt browser repair facts, journaled by run_check
+        self.healed_tabs, self.chrome_restarted = 0, False
 
     def set_deadline(self, monotonic_deadline: float | None):
         """Absolute run budget enforced by reaped I/O workers (F13)."""
@@ -1694,9 +1706,8 @@ class MCSAdapter:
         as complete (Oracle B05)."""
         if not any(t.is_unread for t in msg.replies):
             return ReplyBatch([], [])
-        kwargs = ({"max_pages": (msg.reply_count + 9) // 10}
-                  if msg.reply_count > 100 else {})
-        full = self.fetch_thread(msg.project_id, msg.message_id, **kwargs)
+        full = self.fetch_thread(msg.project_id, msg.message_id,
+                                 **thread_page_budget(msg.reply_count))
         got_ids = {m.message_id for m in full
                    if m.body_state in ("full", "deleted")}
         unread_ids = {t.message_id for t in msg.replies if t.is_unread}

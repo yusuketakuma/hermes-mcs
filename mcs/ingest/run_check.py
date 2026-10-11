@@ -653,6 +653,16 @@ def _outage_since(now: float | None = None) -> float | None:
     return unread_at
 
 
+def _seed_notifying_head(ledger, pid: int, since: float) -> None:
+    """Queue a bounded history_head walk that notifies every row it stores.
+
+    A pending head job keeps its own `since` and only gains the flag."""
+    ledger.job_add("history_head", pid, payload={
+        "since": max(0, int(since)), "page": 1,
+        "pages": BACKFILL_MAX_PAGES, "trickle": False, "notify": True})
+    ledger.job_set_flag("history_head", pid, 0, "notify")
+
+
 def _seed_outage_catchup(ledger, result, since: float) -> None:
     """Queue the bounded notifying history_head walk _post_ack_gap uses
     for every active patient — it finishes what this run's backfill did
@@ -662,12 +672,9 @@ def _seed_outage_catchup(ledger, result, since: float) -> None:
     seeded = 0
     for row in ledger.frontier_patients():
         pid = row["project_id"]
-        start = min(since, ledger.coverage_ts(pid) or ledger.high_watermark(pid)
-                    or since) - BACKFILL_OVERLAP_S
-        ledger.job_add("history_head", pid, payload={
-            "since": max(0, int(start)), "page": 1,
-            "pages": BACKFILL_MAX_PAGES, "trickle": False, "notify": True})
-        ledger.job_set_flag("history_head", pid, 0, "notify")
+        _seed_notifying_head(ledger, pid, min(
+            since, ledger.coverage_ts(pid) or ledger.high_watermark(pid)
+            or since) - BACKFILL_OVERLAP_S)
         seeded += 1
     result["outage_catchup"] = seeded
 
@@ -766,14 +773,11 @@ def _post_ack_gap(adapter, ledger, pid: int, result):
         gap = True
     if not gap:
         return
-    cutoff = (ledger.coverage_ts(pid) or ledger.high_watermark(pid)) \
-        - BACKFILL_OVERLAP_S
     # notify: the rows it finds arrive already read — the walk must
     # offer every new row, merged into an already-pending head job too
-    ledger.job_add("history_head", pid, payload={
-        "since": max(0, cutoff), "page": 1,
-        "pages": BACKFILL_MAX_PAGES, "trickle": False, "notify": True})
-    ledger.job_set_flag("history_head", pid, 0, "notify")
+    _seed_notifying_head(ledger, pid, (ledger.coverage_ts(pid)
+                                       or ledger.high_watermark(pid))
+                         - BACKFILL_OVERLAP_S)
     result["errors"].append(f"mark {pid}: post_ack_gap")
 
 
