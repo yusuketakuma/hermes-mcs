@@ -1117,8 +1117,10 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
                 stages["extract"] = "incomplete"
             try:
                 rels = semantic_relations.reconcile_facts(
-                    active_facts, doc["facts"])
+                    active_facts, doc["facts"], deadline=deadline)
                 doc["relations"] = rels["relations"]
+                if rels.get("pairs_skipped"):
+                    stages["relations"] = "incomplete"
             except Exception as error:
                 stages["relations"] = f"error:{type(error).__name__}"
             audit = semantic_audit.audit_facts_v2(
@@ -1142,8 +1144,11 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
                     if repair["repaired"]:
                         doc = repair["doc"]
                         try:
-                            doc["relations"] = semantic_relations.reconcile_facts(
-                                active_facts, doc["facts"])["relations"]
+                            rels = semantic_relations.reconcile_facts(
+                                active_facts, doc["facts"], deadline=deadline)
+                            doc["relations"] = rels["relations"]
+                            if rels.get("pairs_skipped"):
+                                stages["relations"] = "incomplete"
                         except Exception as error:
                             stages["relations"] = f"error:{type(error).__name__}"
                         audit = semantic_audit.audit_facts_v2(
