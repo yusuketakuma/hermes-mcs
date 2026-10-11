@@ -67,11 +67,11 @@ def test_legacy_chunk_malformed_latest_owner_still_invalidates_old_checkpoint(le
             "chunk_size": extract_llm._CHUNK_SIZE, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": 0}
     add(ledger, "extract_llm_chunk", {"summary": "SYNTH"}, meta)
-    assert extract_llm._saved_chunks(ledger, row) == {0: {"summary": "SYNTH"}}
+    assert extract_llm._saved_chunk_state(ledger, row)[1] == {0: {"summary": "SYNTH"}}
     add(ledger, "extract_llm_chunk", [], meta)
-    assert extract_llm._saved_chunks(ledger, row) == {}
+    assert extract_llm._saved_chunk_state(ledger, row)[1] == {}
     add(ledger, "extract_llm_chunk", {"summary": "SYNTH-old"}, {**meta, "hash": "old"})
-    assert extract_llm._saved_chunks(ledger, row) == {}
+    assert extract_llm._saved_chunk_state(ledger, row)[1] == {}
 
 
 def test_cache_readers_preserve_artifacts_only_ledger_protocol(ledger):
@@ -95,4 +95,4 @@ def test_cache_readers_preserve_artifacts_only_ledger_protocol(ledger):
             "chunk_size": extract_llm._CHUNK_SIZE, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": 0}
     add(ledger, "extract_llm_chunk", {"summary": "SYNTH"}, meta)
-    assert extract_llm._saved_chunks(legacy, row) == {0: {"summary": "SYNTH"}}
+    assert extract_llm._saved_chunk_state(legacy, row)[1] == {0: {"summary": "SYNTH"}}

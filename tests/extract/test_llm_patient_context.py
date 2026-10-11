@@ -108,9 +108,9 @@ def test_patient_context_prompt_change_invalidates_saved_chunk(db, monkeypatch):
     db.save_messages([_message(body="独居です。")])
     row = db.db.execute("SELECT * FROM messages").fetchone()
     extract_llm._persist_chunks(db, row, {0: {"patient_context": [item()]}})
-    assert extract_llm._saved_chunks(db, row)
+    assert extract_llm._saved_chunk_state(db, row)[1]
     monkeypatch.setattr(extract_llm, "_PROMPT_HEAD", extract_llm._PROMPT_HEAD + "契約変更")
-    assert not extract_llm._saved_chunks(db, row)
+    assert not extract_llm._saved_chunk_state(db, row)[1]
 
 
 @pytest.mark.parametrize("body", ["独居です。", "既往があります。", "認知機能は良好です。",

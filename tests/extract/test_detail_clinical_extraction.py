@@ -320,7 +320,7 @@ def test_late_nested_split_does_not_repeat_completed_original_chunk(db, monkeypa
     roots = extract_llm.text_chunks(body, 120)
     if cached_empty:
         extract_llm._persist_chunks(db, row, {0: {}})
-        assert extract_llm._saved_chunks(db, row)[0] == {}
+        assert extract_llm._saved_chunk_state(db, row)[1][0] == {}
     seen = []
     target = roots[1]
     def reply(piece):
@@ -430,7 +430,7 @@ def test_newest_broken_leaf_suppresses_older_completion(db):
     extract_llm._persist_chunks(db, row, {0: {}})
     old = db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0]
     db.artifact_add("extract_llm_chunk", '{broken', project_id=1, message_id=1, meta=json.loads(old))
-    assert extract_llm._saved_chunks(db, row) == {}
+    assert extract_llm._saved_chunk_state(db, row)[1] == {}
 
 
 @pytest.mark.parametrize("fault", [{"split_size": True}, {"split_size": 0}, {"split_size": 99999},
@@ -471,7 +471,7 @@ def test_processing_revision_invalidates_old_global_hints_checkpoint(db, revisio
                     meta={"hash": row["content_hash"], "ver": 6, "chunk": 0,
                           "chunk_size": 3000, "context": old_context})
     assert old_context != extract_llm._chunk_context(row, None, checkpoint=True)
-    assert extract_llm._saved_chunks(db, row) == {}
+    assert extract_llm._saved_chunk_state(db, row)[1] == {}
 
 
 
@@ -483,7 +483,7 @@ def test_root_split_requires_explicit_piece_hash_but_legacy_empty_root_remains_v
     meta = {"hash": row["content_hash"], "ver": extract_llm.EXTRACT_VERSION, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": 0, "chunk_size": 3000}
     db.artifact_add("extract_llm_chunk", '{}', project_id=1, message_id=1, meta=meta)
-    assert extract_llm._saved_chunks(db, row) == {0: {}}
+    assert extract_llm._saved_chunk_state(db, row)[1] == {0: {}}
     # A newer split with no hash supersedes the root, but cannot prove a child plan.
     db.artifact_add("extract_llm_chunk", '{}', project_id=1, message_id=1,
                     meta={**meta, "split_size": 50})
@@ -512,7 +512,7 @@ def test_verified_completed_results_survive_local_hint_checkpoint_revision(db, m
     db.artifact_add("extract_llm_chunk", final["content"], project_id=1, message_id=1,
                     model=final["model"], meta={"hash": row["content_hash"], "ver": 6,
                         "chunk": 0, "chunk_size": 3000, "context": old_binding})
-    assert extract_llm._saved_chunks(db, row, context) == {}
+    assert extract_llm._saved_chunk_state(db, row, context)[1] == {}
     assert extract_llm.progress_for_message(db.db, row, model=final["model"])["state"] == "complete"
     assert extract_llm.run_pending(db, limit=1, budget_s=200)["selected"] == 0
 
