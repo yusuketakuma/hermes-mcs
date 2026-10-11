@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from c1_contract import C1_FIELDS
+from c1_contract import C1_FIELDS, C1ContractError, validate_record as validate_c1_record
 import ext_contract as ext
 from test_c1_contract import _body, _message
 from test_ext_contract import NOW, _auth, _records
@@ -55,11 +55,11 @@ def test_c1_retains_consent_expiry_scope_and_profile_refusals(tmp_path, override
 @pytest.mark.parametrize("text", ["", "SYNTHETIC BODY"])
 def test_c1_body_exception_is_only_for_paired_root_body_text(text):
     body, message = _body(text), _message()
-    assert ext._check_record_keys(body, c1=True, message=message) is None
+    assert validate_c1_record(body, message=message) is None
     with pytest.raises(ext.ContractError, match="forbidden_field:body_text"):
         ext._check_record_keys(body)
-    with pytest.raises(ext.ContractError, match="forbidden_field:body_text"):
-        ext._check_record_keys({**message, "body_text": text}, c1=True)
+    with pytest.raises(C1ContractError, match="forbidden_field:body_text"):
+        validate_c1_record({**message, "body_text": text})
 
 
 @pytest.mark.parametrize("extra", [
@@ -69,12 +69,11 @@ def test_c1_body_exception_is_only_for_paired_root_body_text(text):
     {"future_metadata": {"body_text": "SYNTHETIC"}},
 ])
 def test_c1_body_exception_does_not_exempt_other_or_nested_private_keys(extra):
-    with pytest.raises(ext.ContractError, match="forbidden_field:"):
-        ext._check_record_keys({**_body(), **extra}, c1=True, message=_message())
+    with pytest.raises(C1ContractError, match="forbidden_field:"):
+        validate_c1_record({**_body(), **extra}, message=_message())
 
 
 @pytest.mark.parametrize("text", [None, {"sender": "SYNTHETIC"}])
 def test_c1_body_exception_still_requires_a_string(text):
-    with pytest.raises(ext.ContractError, match="record_field_not_exportable"):
-        ext._check_record_keys({**_body(), "body_text": text},
-                               c1=True, message=_message())
+    with pytest.raises(C1ContractError, match="body_format_invalid"):
+        validate_c1_record({**_body(), "body_text": text}, message=_message())
