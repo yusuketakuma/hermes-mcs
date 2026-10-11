@@ -14,6 +14,7 @@ import time
 from mcs_requests import payload_hash, positive
 from mcs_util import loads_dict
 import semantic_facts as sf
+from semantic_send_gate import _enforce_block_reason
 
 _SECTION_LABEL = {"medication": "薬剤・処方に関する情報",
                   "status": "現在の状況（対象投稿時点）",
@@ -263,14 +264,15 @@ def render_degraded(ledger, project_id: int) -> str:
 
 
 def _outbox_has_delivery(ledger, delivery_key: str) -> bool:
-    for r in ledger.db.execute(
-            "SELECT payload FROM notify_outbox WHERE kind=? AND state IN "
-            "('pending','failed','accepted','suppressed')",
-            ("semantic_notice",)):
-        payload = loads_dict(r["payload"])
-        if payload is not None and payload.get("delivery_key") == delivery_key:
-            return True
-    return False
+    """Whether a live or finished semantic_notice already carries this key.
+
+    The json_valid guard keeps an unreadable payload from hiding a valid
+    key further on; the match runs in SQL, not per-row in Python."""
+    return ledger.db.execute(
+        "SELECT 1 FROM notify_outbox WHERE kind='semantic_notice' AND state IN "
+        "('pending','failed','accepted','suppressed') AND CASE WHEN "
+        "json_valid(payload) THEN json_extract(payload,'$.delivery_key')=? "
+        "ELSE 0 END LIMIT 1", (delivery_key,)).fetchone() is not None
 
 
 def _arrival_ids(raw) -> list[int]:
@@ -361,11 +363,7 @@ def _emit_degraded(ledger, scfg: dict) -> int:
             continue
         ids = ids[:500]      # a malformed fat payload must not wedge the scan
         pid = ev["project_id"]
-        from mcs_operations import paused
-        if paused(ledger.db, pid):
-            continue
-        if scfg["project_ids"] is not None and pid not in \
-                scfg["project_ids"]:
+        if _enforce_block_reason(ledger, scfg, pid) is not None:
             continue
         marks = ",".join("?" * len(ids)) or "NULL"
         roots = {r["r"] for r in ledger.db.execute(
