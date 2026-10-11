@@ -265,15 +265,34 @@ def _long_marks() -> dict:
         with open(_LONG_PATH, encoding="utf-8") as f:
             marks = json.load(f)
     except (OSError, ValueError, RecursionError):
-        return {}
+        marks = {}
     if not isinstance(marks, dict):
-        return {}
+        marks = {}
     # hand-edited values (non-int) would raise at `level >= 2`
-    return {k: v for k, v in marks.items() if type(v) is int}
+    out = {k: v for k, v in marks.items() if type(v) is int}
+    # marks this process could not persist still apply here (T8)
+    for k, v in _LONG_UNSAVED.items():
+        out[k] = max(v, out.get(k, 0))
+    return out
+
+
+# Marks whose durable save failed (lock busy, disk/permission error):
+# kept in-process so this worker does not repeat the doomed base-ceiling
+# call, bounded like the file. Counted for the run record instead of
+# being dropped silently (T8).
+_LONG_UNSAVED: dict = {}
+_LONG_MARK_FAILURES = {"busy": 0, "error": 0}
+
+
+def long_mark_failures() -> dict:
+    """Cumulative unsaved long-output marks of this process by cause."""
+    return dict(_LONG_MARK_FAILURES)
 
 
 def _long_mark(key: str, level: int) -> None:
-    """Keep retry suppression monotonic without waiting for another worker."""
+    """Keep retry suppression monotonic without waiting for another worker.
+    A failed save stays non-fatal but is logged, counted and remembered
+    in-process."""
     import fcntl
     try:
         import maintenance
@@ -286,8 +305,18 @@ def _long_mark(key: str, level: int) -> None:
             while len(marks) > _LONG_MAX:
                 marks.pop(next(iter(marks)))
             maintenance.atomic_publish_text(_LONG_PATH, json.dumps(marks))
-    except Exception:
-        pass
+        _LONG_UNSAVED.clear()   # the merged write persisted them all
+    except Exception as e:
+        cause = "busy" if isinstance(e, BlockingIOError) else "error"
+        _LONG_MARK_FAILURES[cause] += 1
+        _LONG_UNSAVED[key] = max(level, _LONG_UNSAVED.pop(key, 0))
+        while len(_LONG_UNSAVED) > _LONG_MAX:
+            _LONG_UNSAVED.pop(next(iter(_LONG_UNSAVED)))
+        # code and exception class only — never the prompt or its key
+        print(json.dumps({"event": "semantic_long_mark_unsaved",
+                          "cause": cause, "error": type(e).__name__,
+                          "level": level}),
+              file=sys.stderr, flush=True)
 
 
 _LLM_FAILURE: str | None = None

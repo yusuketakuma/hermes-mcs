@@ -206,10 +206,14 @@ def test_request_never_sent_does_not_consume_attempts(tmp_path, monkeypatch,
         semantic.llm_chat("synthetic prompt")
     db = _seeded(tmp_path)
     try:
+        import mcs_util
         for _ in range(7):
             with db.db:
                 db.db.execute(
                     "UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+            # a refused connection now feeds the shared endpoint breaker;
+            # let each cooldown lapse so every pass reaches the model
+            mcs_util.circuit_state_path(db).unlink(missing_ok=True)
             out = semantic.run_due(
                 db, _cfg("shadow"), {"errors": []}, time.monotonic() + 300,
                 jev_client=_FakeJev(), llm_fn=semantic.llm_chat)

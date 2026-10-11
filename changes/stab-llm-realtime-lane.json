@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "長い出力が必要な意味評価ジョブが新着レーンを塞ぐ問題を修正",
+  "summary": "長い出力が必要なジョブは新着レーンの短い予算では実行できず、無料の延期を繰り返していました。延期のたびに更新時刻が新しくなるため新着レーンの先頭に戻り、新しい通知の評価を遅らせていました。新着レーンは登録・再登録の新しい順に選び、延期済みのジョブは作成時刻で並べます。長い出力が必要と分かったジョブは、入力が同じ間は新着レーンから外し、バックグラウンドの処理に任せます。予算不足による無料の延期が同じ入力で24回を超えると通常の試行として数えるため、延期を無限に繰り返すことはありません。",
+  "upgrade": "追加操作は不要です。予算不足の延期が上限を超えたジョブは試行回数を消費し、上限に達すると失敗として表示されます(夜間の自動再試行の対象です)。",
+  "details": [
+    "semantic_drain の realtime レーンの並び順を updated_at から CASE WHEN next_try<=updated_at THEN updated_at ELSE created_at END に変更した。登録・再登録・復活では next_try=updated_at、延期・再試行では next_try>updated_at になる。",
+    "long_output_needs_budget による延期を semantic_sched 行の long_defers にジョブ・入力世代ごとに記録し、同じ世代の間は realtime レーンで選ばない。世代が変わったか pending でなくなった記録は削除する(最大500件)。",
+    "同じ世代での無料延期が LONG_FREE_DEFER_CAP(24)を超えると retry として試行回数を消費する(retry_reason=long_output_defer_capped、out.long_output_capped)。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_drain.py",
+    "tests/semantic/test_stab_semantic_lanes.py"
+  ]
+}

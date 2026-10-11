@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "LLM受付制御で、応答不明の枠が常駐プロセスの間ずっと埋まったままになる問題を修正",
+  "summary": "MCS_LLM_ADMISSION を有効にしているとき、タイムアウトなどで完了を確認できなかった要求の枠は、要求したプロセスが終了するまで解放されませんでした。常駐の抽出処理ではこれが続き、枠が埋まって以後のバックグラウンド処理が受け付けられなくなりました。送信から30分以上経ち、かつサーバーの全スロットが続けて空いていることを複数回確認できた場合に限り、その枠を解放します。応答不明の枠の数と最も古い経過時間を状態として取得できます。",
+  "upgrade": "MCS_LLM_ADMISSION を有効にしている場合だけ影響します(既定は無効)。追加操作は不要です。",
+  "details": [
+    "llm_admission.Broker.reconcile_unknown(evidence) は、現在の epoch で unknown / cancel_pending のまま UNKNOWN_HOLD_S(1800秒)を過ぎた枠を、evidence が空でない証跡文字列を返したときだけ terminal(outcome=reconciled)にする。証跡の取得はストアの書込みロックの外で行う。",
+    "local_llm.admitted_chat は class_full / rt_pending で拒否されたとき、5分に1回まで /slots を1秒間隔で3回確認し(すべて is_processing=false のときだけ証跡)、解放できたら1回だけ受付をやり直す。",
+    "Broker.status() に unresolved・oldest_unresolved_age_s・slots を追加し、local_llm.admission_status() で取得できるようにした。"
+  ],
+  "refs": [
+    "mcs/core/llm_admission.py",
+    "mcs/core/local_llm.py",
+    "tests/core/test_stab_admission_reconcile.py"
+  ]
+}
