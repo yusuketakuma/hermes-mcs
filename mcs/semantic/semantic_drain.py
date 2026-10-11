@@ -516,7 +516,8 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                                 "owner_chunk_ids":
                                     repair["owner_chunk_ids"],
                                 # pair scan cut by the deadline: the
-                                # repaired doc was not kept
+                                # repaired doc was not kept and the
+                                # spent repair parks for review below
                                 **({"relation_pairs_skipped":
                                     repair["relation_pairs_skipped"]}
                                    if repair.get("relation_pairs_skipped")
