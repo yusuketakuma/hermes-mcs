@@ -2131,7 +2131,7 @@ def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0):
                                    (r["message_id"], r["content_hash"])).fetchone()
         if source is not None:
             r = {**dict(source), **dict(r)}
-    actual_model = r["_target"][1] if "_target" in r.keys() else MODEL
+    actual_model = _actual_model(r)
     can_bind = all(key in r.keys() for key in ("parent_id", "posted_at", "posted_at_ts"))
     context = (r["_context"] if "_context" in r.keys() else _thread_context(ledger, r)) if can_bind else None
     meta.update(actual_model=actual_model, plan_version=PLAN_VERSION,
@@ -2139,7 +2139,7 @@ def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0):
     if auto_retry:
         meta["auto_retry"] = auto_retry
     ledger.artifact_add_tx(
-        KIND, json.dumps({"_model": MODEL, "_error": True},
+        KIND, json.dumps({"_model": actual_model, "_error": True},
                          ensure_ascii=False),
         project_id=r["project_id"], message_id=r["message_id"],
         model=actual_model, meta=meta)
@@ -2314,7 +2314,7 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
         if source is None:
             return False                # fence before any missing-row context read
         r = {**dict(source), **dict(r)}
-    actual_model = r["_target"][1] if "_target" in r.keys() else MODEL
+    actual_model = _actual_model(r)
     bound_context = r["_context"] if "_context" in r.keys() else _thread_context(ledger, r)
     meta.update(actual_model=actual_model, plan_version=PLAN_VERSION,
                 context_binding=_chunk_context(r, bound_context))
@@ -2675,11 +2675,16 @@ def _release(ledger, r, lease: float | None):
     ledger.db.commit()
 
 
+def _actual_model(r) -> str:
+    """Return the model that served this row: its pinned target, else the default."""
+    return r["_target"][1] if "_target" in r.keys() else MODEL
+
+
 def _chunk_context(r, context: str | None, *, checkpoint: bool = False) -> str:
     """Bind completed results to their source and checkpoints to the local-hint contract."""
     return hashlib.sha256(json.dumps(
         [r["posted_at"], context,
-         r["_target"][1] if "_target" in r.keys() else MODEL,
+         _actual_model(r),
          _PROMPT_HEAD, _SCHEMA, "clinical-plan/v4" if checkpoint else "clinical-plan/v3", PLAN_VERSION],
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
@@ -2792,7 +2797,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
             meta = {"hash": r["content_hash"], "ver": EXTRACT_VERSION, "chunk": key,
                     "context": _chunk_context(r, context, checkpoint=True), "chunk_size": chunk_size,
                     "piece_sha256": hashlib.sha256(piece.encode()).hexdigest(),
-                    "actual_model": r["_target"][1] if "_target" in r.keys() else MODEL,
+                    "actual_model": _actual_model(r),
                     "plan_version": PLAN_VERSION}
             if split_size is not None:
                 meta["split_size"] = split_size
@@ -3285,7 +3290,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     prior = None
                 if not _improves(d, prior):
                     d = prior
-            d["_model"] = MODEL
+            d["_model"] = _actual_model(r)
             with lock(per_write_lock) as held:
                 if held:
                     _commit(r, d, ctx, integrity, qc)
