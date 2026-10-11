@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "評価・ベンチ用ツールを eval フォルダへ移動",
+  "summary": "オフライン評価・ベンチ用のツールを `mcs/semantic/eval/`・`mcs/extract/eval/` へ、意味解析の観測スナップショットを `mcs/ops/` へ移しました。収集・通知・解析の定期処理と動作は変わりません。評価用コマンドを直接パス指定で実行していた場合は新しいパスを使ってください。",
+  "upgrade": "定期処理・設定・DBの変更は不要です。評価用CLIを直接実行する場合のパスが変わります: `mcs/semantic/semantic_{bench,blind,lifecycle,evaluation}.py` → `mcs/semantic/eval/`、`mcs/extract/v4/extract_bench.py` → `mcs/extract/eval/extract_bench.py`、`mcs/semantic/semantic_observe.py` → `mcs/ops/semantic_observe.py`。",
+  "details": [
+    "flat importのモジュール名は変わらないため、importとテストの差し替えはそのまま動く。",
+    "1階層深くなったCLIはmcs/ルートを探すbootstrapと同梱コーパスの参照位置を合わせる。"
+  ],
+  "refs": ["mcs/semantic/eval/", "mcs/extract/eval/", "mcs/ops/semantic_observe.py"]
+}

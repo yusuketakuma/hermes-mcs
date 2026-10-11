@@ -32,10 +32,10 @@
 | `mcs/extract/clinical_chunking.py` | Plan source-preserving clinical units before inference using output-pressure heuristics. |
 | `mcs/extract/clinical_values.py` | Conservative surface normalization and quote-bound laboratory candidates. |
 | `mcs/extract/drug_map.py` | Pinned private dictionaries and source-bound medication candidate annotations. |
+| `mcs/extract/eval/extract_bench.py` | Field-level benchmark for extract_llm (message-level extraction). |
 | `mcs/extract/patient_context.py` | Extract and read source-bound patient context without inferring current clinical state. |
 | `mcs/extract/rollup.py` | MCS patient rollup — one consolidated artifact per patient. |
 | `mcs/extract/v1/extract.py` | MCS structured extraction — rule-based v1. |
-| `mcs/extract/v4/extract_bench.py` | Field-level benchmark for extract_llm (message-level extraction). |
 | `mcs/extract/v4/extract_llm.py` | MCS LLM extraction — the extract_llm layer via local llama.cpp (Qwen3.5-9B). |
 | `mcs/ingest/cross_lists.py` | Opt-in cross-project mentioned/bookmarked acquisition and storage-only capture. |
 | `mcs/ingest/health_watch.py` | MCS health watcher — independent supervised reader of health.json. |
@@ -80,21 +80,23 @@
 | `mcs/ops/mcs_update.py` | MCS self-update — detection, apply, rollback, interrupted recovery. |
 | `mcs/ops/request_loops.py` | Read-only validation for adopting a current Open Loop candidate. |
 | `mcs/ops/requires_python_admits.py` | Exit 0 when a pyproject's [project] requires-python admits the running interpreter. |
+| `mcs/ops/semantic_observe.py` | Shadow-mode observation snapshot — one command for the daily check. |
+| `mcs/semantic/eval/semantic_bench.py` | Auto-metrics benchmark for the semantic pipeline (Phase J tooling). |
+| `mcs/semantic/eval/semantic_blind.py` | Prepare local blinded worksheets from three fixed-bundle outputs. |
+| `mcs/semantic/eval/semantic_evaluation.py` | Offline evaluation for fixed semantic bundles and reviewed labels. |
+| `mcs/semantic/eval/semantic_lifecycle.py` | Derive observed verified/rendered/delivered fact-ID sets for evaluation records from a read-only ledger snapshot. |
+| `mcs/semantic/eval/semantic_v4_cohort.py` | Bounded v4 conversion cohorts: declare, schedule, record, hold cleanup. |
+| `mcs/semantic/eval/semantic_workflow.py` | Synthetic pharmacist workflow comparison harness (T6). |
 | `mcs/semantic/semantic.py` | MCS semantic layer — Jev-assisted meaning evaluation (Phase J). |
 | `mcs/semantic/semantic_assessment.py` | Durable medication-event detail assessment. |
 | `mcs/semantic/semantic_audit.py` | Semantic audit gates (spec §16): code-level checks, per-claim Jev support evaluation, and the audit-status decision… |
-| `mcs/semantic/semantic_bench.py` | Auto-metrics benchmark for the semantic pipeline (Phase J tooling). |
-| `mcs/semantic/semantic_blind.py` | Prepare local blinded worksheets from three fixed-bundle outputs. |
 | `mcs/semantic/semantic_drain.py` | Semantic drain engine (spec §14, §18): the durable-job worker — claiming jobs, staged extraction/summary/audit, Jev… |
-| `mcs/semantic/semantic_evaluation.py` | Offline evaluation for fixed semantic bundles and reviewed labels. |
 | `mcs/semantic/semantic_extraction.py` | Durable, whole-source fact extraction helpers. |
 | `mcs/semantic/semantic_facts.py` | Canonical ``semantic-facts/v2`` contract: enums, identity derivation, and validators. |
 | `mcs/semantic/semantic_jev.py` | TypeSafe Jev client — thin in-process adapter (Phase J, WP-03). |
-| `mcs/semantic/semantic_lifecycle.py` | Derive observed verified/rendered/delivered fact-ID sets for evaluation records from a read-only ledger snapshot. |
 | `mcs/semantic/semantic_llm.py` | Local-LLM extraction and summarization (spec §13.1, §15): prompts, response parsing, fact extraction wrapper, and the… |
 | `mcs/semantic/semantic_loops.py` | Revision-bound advisory candidates; formal requests remain human-owned. |
 | `mcs/semantic/semantic_metrics.py` | Semantic audit history and coverage for the current generation. |
-| `mcs/semantic/semantic_observe.py` | Shadow-mode observation snapshot — one command for the daily check. |
 | `mcs/semantic/semantic_policy.py` | Semantic policy + config layer (spec §22.1): mode names, artifact kind constants, schema/policy versions, config… |
 | `mcs/semantic/semantic_projection.py` | Canonical ``semantic-facts/v2`` -> legacy read-model projection. |
 | `mcs/semantic/semantic_qc.py` | extract_qc: Jev quality control over extract_llm artifacts. |
@@ -105,8 +107,6 @@
 | `mcs/semantic/semantic_send_gate.py` | Send-time semantic gate — last-moment policy re-verification. |
 | `mcs/semantic/semantic_store.py` | Semantic input bundle + artifact read helpers (spec §12.1): thread bundling, fingerprints, current-artifact lookup… |
 | `mcs/semantic/semantic_v4.py` | v4 publication, stage receipts, and fail-closed legacy migration. |
-| `mcs/semantic/semantic_v4_cohort.py` | Bounded v4 conversion cohorts: declare, schedule, record, hold cleanup. |
-| `mcs/semantic/semantic_workflow.py` | Synthetic pharmacist workflow comparison harness (T6). |
 | `mcs/views/cross_lists_view.py` | Gated read-only cross-list artifacts with independent completeness and freshness. |
 | `mcs/views/extraction_progress.py` | Read-only, bounded extraction progress counts for private patient summaries. |
 | `mcs/views/mcs_stats.py` | Cross-project statistics over the published ledger snapshot. |
@@ -688,9 +688,9 @@ make lint                            # CIと同じ範囲・ruff設定
 
 ```bash
 # 合成ケースのみ(実メッセージをケースファイルに入れない)
-python mcs/extract/v4/extract_bench.py run --tag v2 --out /tmp/bench_v2.json
-python mcs/extract/v4/extract_bench.py report /tmp/bench_v1.json /tmp/bench_v2.json
-python mcs/extract/v4/extract_bench.py run --mock-ok   # オフライン: 期待値の
+python mcs/extract/eval/extract_bench.py run --tag v2 --out /tmp/bench_v2.json
+python mcs/extract/eval/extract_bench.py report /tmp/bench_v1.json /tmp/bench_v2.json
+python mcs/extract/eval/extract_bench.py run --mock-ok   # オフライン: 期待値の
                                             # _validate 整合のみ確認
 ```
 

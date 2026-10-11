@@ -28,8 +28,8 @@ from pathlib import Path
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every subdir holding .py files (any depth) as an import root
-sys.path.insert(0, os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
 from ledger import LedgerReader
 import mcs_util
@@ -51,7 +51,7 @@ def _write_json_private(path: str, data) -> None:
 
 def _synthetic_cases() -> list[dict]:
     """Bind benchmark inputs to the repository's synthetic evaluation asset."""
-    asset = Path(__file__).resolve().parents[2] / "evaluation" / "extract_cases.json"
+    asset = Path(__file__).resolve().parents[3] / "evaluation" / "extract_cases.json"
     fixtures = json.loads(asset.read_text(encoding="utf-8"))["cases"]
     cases = []
     for pid, fixture in enumerate(fixtures, 1):
