@@ -27,10 +27,14 @@ from semantic_audit import audit_code, audit_status_for
 from semantic_llm import _chunks, extract_facts, summarize
 from semantic_loops import update_loops
 from semantic_policy import (JOB_KIND, KIND_ASSESS, KIND_AUDIT,
-                             KIND_BUNDLE, KIND_FACT_AUDIT, KIND_FACT_PROJ,
+                             KIND_BUNDLE, KIND_CANDIDATE, KIND_COVERAGE,
+                             KIND_DRAIN_RUN, KIND_FACT_AUDIT, KIND_FACT_PROJ,
                              KIND_FACT_REPAIR, KIND_FACTS, KIND_FACTS_V2,
-                             KIND_PLAN,
-                             KIND_SUMMARY, KIND_USAGE, POLICY_VERSION,
+                             KIND_LOOP, KIND_LOOP_EVENT,
+                             KIND_PLAN, KIND_POLICY, KIND_REPAIR,
+                             KIND_SHADOW_V2, KIND_SUMMARY,
+                             KIND_SUMMARY_FORMAT_REPAIR, KIND_USAGE,
+                             POLICY_VERSION,
                              QC_JOB_KIND, SCHEMA_VERSION,
                              policy_fingerprint, semantic_config)
 from semantic_render import (_emit_degraded, _notify_src_event,
@@ -55,11 +59,6 @@ def _eval_chunked(jev_client, state: dict, questions: dict,
         out = jev.evaluate_once_more(jev_client, state, part, deadline)
         merged["answers"].update(out["answers"])
     return merged
-
-
-# Receipt of a shadow v2 comparison that ran for a source + policy and
-# stayed incomplete (the incomplete document itself is never stored).
-KIND_SHADOW_V2 = "semantic_shadow_v2"
 
 
 def _shadow_v2_tried(ledger, mid: int, fp: str, policy: str) -> bool:
@@ -882,7 +881,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             guard("loop_candidates")
             update_loops(ledger, pid, bundle, {mid: facts}, None, scfg, deadline)
         if scfg["summary_mode"] != "off":
-            previous = _current(ledger, "semantic_coverage", mid, fp, policy)
+            previous = _current(ledger, KIND_COVERAGE, mid, fp, policy)
             coverage = previous["content"] if previous else None
             if not coverage or not coverage.get("evaluated"):
                 from semantic_audit import evaluate_source_fact_coverage
@@ -891,7 +890,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     target_id=f"m{mid}", match_threshold=scfg["match_threshold"])
                 guard("coverage_result")
                 ledger.artifact_add(
-                    "semantic_coverage", json.dumps(coverage, ensure_ascii=False),
+                    KIND_COVERAGE, json.dumps(coverage, ensure_ascii=False),
                     project_id=pid, message_id=mid, model=jev.JEV_MODEL,
                     meta={"fingerprint": fp, "policy_fingerprint": policy,
                           "technical_status": "complete" if coverage["evaluated"] else "pending"})
@@ -952,7 +951,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             if existing["meta"].get("input_oversize"):
                 summary["_input_oversize"] = True
         else:
-            candidate = _current(ledger, "semantic_candidate", mid, fp, policy)
+            candidate = _current(ledger, KIND_CANDIDATE, mid, fp, policy)
             if candidate and candidate["meta"].get("publication_mode") == scfg["summary_mode"]:
                 summary = candidate["content"]
             else:
@@ -965,13 +964,13 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     if summary is None and summary_reason == "model" \
                             and summary_error.get("code") \
                             and semantic.last_llm_failure() != "length_stop" \
-                            and _current(ledger, "semantic_summary_format_repair",
+                            and _current(ledger, KIND_SUMMARY_FORMAT_REPAIR,
                                          mid, fp, policy) is None:
                         if _PASS_REASON.get("summary_validation_error") is None:
                             _PASS_REASON["summary_validation_error"] = summary_error["code"]
                         guard("summary_format_repair_reservation")
                         format_repair_id = ledger.artifact_add(
-                            "semantic_summary_format_repair",
+                            KIND_SUMMARY_FORMAT_REPAIR,
                             json.dumps({"target_message_id": mid}),
                             project_id=pid, message_id=mid,
                             model=semantic.llm_model(),
@@ -1032,17 +1031,17 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                             else "done")
         # Preserve the pre-audit output for the fixed-bundle comparison (§24.1).
         # It is never eligible for publication or automatic adoption.
-        if existing is None and _current(ledger, "semantic_candidate", mid, fp, policy) is None:
+        if existing is None and _current(ledger, KIND_CANDIDATE, mid, fp, policy) is None:
             guard("candidate_snapshot")
             ledger.artifact_add(
-                "semantic_candidate", json.dumps(summary, ensure_ascii=False),
+                KIND_CANDIDATE, json.dumps(summary, ensure_ascii=False),
                 project_id=pid, message_id=mid, model=semantic.llm_model(),
                 meta={"fingerprint": fp, "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION, "stage": "pre_audit",
                       "publication_mode": scfg["summary_mode"],
                       "target_revision": members[mid]["revision"]})
         # Reserve before dispatch: a crash cannot refund the repair (INV-10).
-        repaired = bool(_current(ledger, "semantic_repair", mid, fp)
+        repaired = bool(_current(ledger, KIND_REPAIR, mid, fp)
                         or (prev_audit
                             and prev_audit["meta"].get("repair_count", 0) >= 1))
         summary["_facts"] = facts   # evidence context for the Jev audit
@@ -1085,7 +1084,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             if status == "REPAIR_REQUIRED" and not repaired:
                 guard("repair_reservation")
                 repair_id = ledger.artifact_add(
-                    "semantic_repair", json.dumps({"target_message_id": mid}),
+                    KIND_REPAIR, json.dumps({"target_message_id": mid}),
                     project_id=pid, message_id=mid, model=semantic.llm_model(),
                     meta={"fingerprint": fp, "policy_fingerprint": policy, "repair_count": 1})
                 repaired = True
@@ -1438,8 +1437,8 @@ def _jev_error_brief(error) -> dict | None:
 # guard stages raised before a local-model request leaves (runtime)
 _PRE_DISPATCH_STAGES = ("llm_attempt", "llm_next_call", "llm")
 
-_STAGE_KINDS = ("canonical_projection", "v4_stage", "loop_candidate",
-                "loop_event", "notify_plan")
+_STAGE_KINDS = (KIND_FACT_PROJ, v4.KIND_V4_STAGE, KIND_LOOP,
+                KIND_LOOP_EVENT, KIND_PLAN)
 
 
 def _last_stage_artifact(ledger, project_id) -> int:
@@ -1454,7 +1453,7 @@ def _last_stage_artifact(ledger, project_id) -> int:
         # artifacts scan for every job, twice per pass
         "WHERE project_id=? AND (kind GLOB 'semantic_*' "
         f"OR kind IN ({ph})) AND kind NOT IN (?,?,?)",
-        (project_id, *_STAGE_KINDS, KIND_USAGE, "semantic_drain_run",
+        (project_id, *_STAGE_KINDS, KIND_USAGE, KIND_DRAIN_RUN,
          SCHED_KIND)).fetchone()[0]
 
 
@@ -1706,10 +1705,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     out["done_by_kind"] = {}
     policy = policy_fingerprint(scfg)
     previous_policy = ledger.db.execute(
-        "SELECT content FROM artifacts WHERE kind='semantic_policy' "
-        "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+        "SELECT content FROM artifacts WHERE kind=? "
+        "ORDER BY artifact_id DESC LIMIT 1", (KIND_POLICY,)).fetchone()
     if previous_policy is None or previous_policy["content"] != policy:
-        ledger.artifact_add("semantic_policy", policy)
+        ledger.artifact_add(KIND_POLICY, policy)
     if llm_fn is None:
         llm_fn = semantic.llm_chat
     if jev_client is None and scfg["daily_request_budget"] > 0:
@@ -2152,7 +2151,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             # evidence instead of an in-memory-only result (T14).
             try:
                 ledger.artifact_add(
-                    "semantic_drain_run",
+                    KIND_DRAIN_RUN,
                     json.dumps({
                         "v": 1, "mode": scfg["mode"],
                         "done": out["done"], "deferred": out["deferred"],

@@ -29,6 +29,8 @@ import json
 import math
 import time
 from mcs_util import loads_dict
+from semantic_policy import (JOB_KIND, KIND_AUDIT, KIND_COVERAGE,
+                             KIND_FACT_AUDIT, KIND_LOOP, KIND_SUMMARY)
 
 ENGINE_VERSION = 4
 KIND_V4 = "semantic_facts_v4"
@@ -373,8 +375,8 @@ _FACT_OBJECT = "CASE WHEN f.type='object' THEN f.value ELSE '{}' END"
 _PROVENANCE = (f"CASE WHEN json_type({_FACT_OBJECT},'$.provenance')='text' "
                f"THEN json_extract({_FACT_OBJECT},'$.provenance') ELSE '' END")
 
-_HELD_KINDS = ("semantic_summary", "semantic_audit", "semantic_coverage",
-               "semantic_facts_audit", "loop_candidate")
+_HELD_KINDS = (KIND_SUMMARY, KIND_AUDIT, KIND_COVERAGE, KIND_FACT_AUDIT,
+               KIND_LOOP)
 
 
 def _count(out: dict, key: str) -> None:
@@ -466,7 +468,7 @@ def _seed_rebuild(ledger, scfg, pid: int, mid: int, meta: dict):
     row = ledger.db.execute(
         "SELECT COALESCE(parent_id,message_id) r FROM messages "
         "WHERE project_id=? AND message_id=?", (pid, mid)).fetchone()
-    state = ledger.job_state("semantic", pid, row["r"]) if row else None
+    state = ledger.job_state(JOB_KIND, pid, row["r"]) if row else None
     if state in ("failed", "pending"):
         return f"job_{state}"
     ledger._semantic_seed_tx(pid, [mid], {"source": "hint_rebuild",

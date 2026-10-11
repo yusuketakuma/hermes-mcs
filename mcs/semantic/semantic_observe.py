@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
-from semantic_policy import JOB_KIND, QC_JOB_KIND  # noqa: E402
+from semantic_policy import JOB_KIND, KIND_DRAIN_RUN, QC_JOB_KIND  # noqa: E402
 from semantic_drain import SCHED_KIND  # noqa: E402
 
 from mcs_util import HOME, loads_dict  # noqa: E402 — honours MCS_ROOT
@@ -160,9 +160,9 @@ def _recent_runs(c, days: int = 14) -> dict:
     `days` days (capacity gate: llm_s per window + per-job llm_s p90)."""
     from semantic_evaluation import _percentile
     rows = c.execute(
-        "SELECT content FROM artifacts WHERE kind='semantic_drain_run' "
+        "SELECT content FROM artifacts WHERE kind=? "
         "AND created_at >= ? ORDER BY artifact_id DESC",
-        (time.time() - days * 86400,)).fetchall()
+        (KIND_DRAIN_RUN, time.time() - days * 86400)).fetchall()
     recent = {"runs": 0, "done": 0, "deferred": 0, "failed": 0}
     phases = {key: [] for key in ("llm_s", "jev_s", "post_s", "queue_wait_s")}
     tokens = []
