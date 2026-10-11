@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "デスクトップ版のClaude・Codexからも、恒久的な置き場所へ導入できるようにしました",
+  "summary": "AIエージェントが一時的な作業フォルダへ取得したリポジトリから導入しても、常駐サービスが一時フォルダを参照しないよう、scripts/install_local.py が置き場所を決めてから install.sh を実行します。置き場所を指定しなければ、既存の導入先か ~/.mcs を自動で使い、~/.mcs に設定・データだけがある場合は ~/.local/share/hermes-mcs を使います。",
+  "upgrade": "既存の導入には影響しません。新しく導入する場合は python3 scripts/install_local.py を実行します（--dry-run で計画だけを確認できます）。macOS のログインセッションに届かない・ホームに書き込めない・git がない環境では何も書き込まずに止まり、利用者がターミナルで実行するコマンドを表示します。",
+  "details": [
+    "置き場所が存在しない・空なら取得元の commit 済みの内容を取得し、同じプロジェクトの checkout は書き換えずに使う。別のプロジェクト・空でないフォルダ・設定やデータだけのフォルダでは止め、既存のデータを移動しない。",
+    "MCSの設定・収集データの保存先は ~/.mcs のまま（Hermes・独立実行の実行環境は従来どおり install.sh が決める）。取得は一時フォルダから置き場所へ移すため、中断しても不完全な checkout を残さない。",
+    "macOS標準のPython 3.9以上で動き、Python 3.14 は install.sh が導入する。完全合成の git リポジトリで、置き場所の各状況・空白や引用符を含むパス・中断と再実行・ローカル実行でない環境を検証する。"
+  ],
+  "refs": ["scripts/install_local.py", "tests/meta/test_install_local.py", "docs/guides/LOCAL_AGENT_INSTALL.md"]
+}
