@@ -1,0 +1,14 @@
+{
+  "category": "security",
+  "title": "独立モードのホストが作るファイルを本人だけが読める権限に統一",
+  "summary": "独立モード（runtime_mode=standalone）のホスト（ai.mcs.standalone / mcs-standalone.service）に Umask 077 を設定しました。ホストと、ホストが起動する定期ジョブ・抽出worker・コマンド処理が新しく作るファイル（standalone.log、ローテーションしたログなど）は、他のユーザーが読めない権限で作られます。Hermesモードの各サービスとLINE WORKSサービスは以前から同じ設定です。",
+  "upgrade": "独立モードを使っている場合は、更新後に mcs_setup.py services を1回実行してください。サービス定義を書き換えてホストを1回再起動します（処理中のLLM抽出は中断され、次の周回で続きから処理します）。実行するまで check はサービス定義の差分を報告します。既存のファイルの権限は変わらないため、data/standalone.log は chmod 600 を手動で実行してください。Hermesモードでは操作は不要です。",
+  "details": [
+    "mcs_standalone/service.render が生成する launchd plist に Umask 0o077、systemd unit の [Service] に UMask=0077 を追加した。1.0.13 で LaunchAgent に Umask を設定した際に別項目として残していた対応。",
+    "導入・check が使うのは render() の出力で、deployment/launchagents/ai.mcs.standalone.plist の静的テンプレートは読まない（静的テンプレートは以前から Umask 77）。"
+  ],
+  "refs": [
+    "mcs_standalone/service.py",
+    "tests/ops/test_bugfix_r3_16_standalone_systemd_unit.py"
+  ]
+}
