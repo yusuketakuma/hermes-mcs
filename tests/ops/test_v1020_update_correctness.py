@@ -87,8 +87,62 @@ def test_core_change_requires_gateway_restart_and_notice(updater, monkeypatch):
         return "mcs/notify/notify_cards.py\0" if "mcs" in args else ""
 
     monkeypatch.setattr(updater, "_git_out", diff)
-    monkeypatch.setattr(updater, "load_config", lambda: {})
+    monkeypatch.setattr(updater, "load_config",
+                        lambda: {"notify": {"interactive": "lineworks"}})
     assert updater._plugin_changed("v1.1.0", {})
     impact = updater.impact_summary("synthetic-before", "v1.1.0")
     assert any("gateway restart" in line for line in impact)
     assert any("LINE WORKS" in line and "再起動" in line for line in impact)
+
+
+def test_lineworks_impact_only_when_the_adapter_is_in_use(updater, monkeypatch):
+    monkeypatch.setattr(updater, "_git_out", lambda args: "M\tmcs/notify/notify_cards.py\n")
+    for cfg in ({}, {"notify": {"interactive": "slack"}}, {"notify": "lineworks"}):
+        monkeypatch.setattr(updater, "load_config", lambda cfg=cfg: cfg)
+        impact = updater.impact_summary("synthetic-before", "v1.1.0")
+        assert any("gateway restart" in line for line in impact)
+        assert not any("LINE WORKS" in line for line in impact)
+
+
+def test_checkout_ahead_of_latest_tag_does_not_refetch_daily(updater, monkeypatch):
+    monkeypatch.setattr(updater, "load_config", lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(updater, "detect_latest", lambda pre: ("v1.1.0", "a" * 40))
+    monkeypatch.setattr(updater, "current_version", lambda: ("v1.1.0-3-gsynthetic", "b" * 40))
+    monkeypatch.setattr(updater, "scan_pending_approvals", lambda state: ([], []))
+    calls = []
+    monkeypatch.setattr(updater, "_git", lambda args, **kw: calls.append(args[0])
+                        or subprocess.CompletedProcess(args, 0, "", ""))   # ancestor of HEAD
+    fetched = []
+    monkeypatch.setattr(updater, "fetch_notes", lambda tag: fetched.append(tag) or "notes")
+    monkeypatch.setattr(updater, "impact_summary", lambda current, tag: [])
+    monkeypatch.setattr(updater, "_enqueue_notice", lambda text, **kw: pytest.fail("no notice"))
+    assert updater.cmd_check() == 0         # first sighting of the tag fetches once
+    assert fetched == ["v1.1.0"] and calls.count("fetch") == 1
+    for _ in range(2):
+        assert updater.cmd_check() == 0
+    assert fetched == ["v1.1.0"] and calls.count("fetch") == 1
+    assert updater.load_state().get("notified_at") is None
+
+
+def test_invalid_runtime_mode_is_reported_not_raised(updater, tmp_path, monkeypatch):
+    from ops_testkit import _make_repo
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(updater, "load_config", lambda: {"runtime_mode": "synthetic-invalid"})
+    monkeypatch.setattr(updater, "precheck_local", lambda cfg: [])
+    result = updater.plan("v1.1.0")
+    assert result["route"] == "blocked"
+    assert any(b.startswith("plan_failed: runtime_mode_invalid") for b in result["blockers"])
+    monkeypatch.setattr(updater, "_git_out", lambda args: "M\tmcs/notify/notify_cards.py\n")
+    with pytest.raises(ValueError):
+        updater.impact_summary("synthetic-before", "v1.1.0")
+    monkeypatch.setattr(updater, "load_config", lambda: {
+        "runtime_mode": "synthetic-invalid", "update": {"mode": "notify"}})
+    monkeypatch.setattr(updater, "detect_latest", lambda pre: ("v1.1.0", "a" * 40))
+    monkeypatch.setattr(updater, "current_version", lambda: ("v1.0.0", "b" * 40))
+    monkeypatch.setattr(updater, "scan_pending_approvals", lambda state: ([], []))
+    monkeypatch.setattr(updater, "_git", lambda args, **kw: subprocess.CompletedProcess(args, 1, "", ""))
+    monkeypatch.setattr(updater, "fetch_notes", lambda tag: "notes")
+    notices = []
+    monkeypatch.setattr(updater, "_enqueue_notice", lambda text, **kw: notices.append(text) or True)
+    assert updater.cmd_check() == 0 and notices

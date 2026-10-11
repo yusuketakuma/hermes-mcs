@@ -468,12 +468,17 @@ def impact_summary(cur_sha: str, tag: str) -> list[str]:
     if "install.sh" in names:
         notes.append("install.sh に差分 — 依存追加の可能性、"
                      "auto モードでは適用を中止します")
+    cfg = load_config()
     # mcs_standalone/ is loaded only by the standalone connector
-    connector = ("mcs_standalone/",) if mcs_runtime.standalone(load_config()) else ()
+    connector = ("mcs_standalone/",) if mcs_runtime.standalone(cfg) else ()
     if any(n.startswith(tuple(path + "/" for path in mcs_runtime.GATEWAY_SOURCE_DIRS)
                         + connector) for n in names):
         notes.append("plugin 変更 — 適用後に gateway restart（standalone では ai.mcs.standalone の再起動）が必要です")
-    if any(n.startswith(("mcs/", "adapters/common/", "adapters/lineworks/", "lineworks_adapter/")) for n in names):
+    # same condition as plan()'s lineworks_adapter restart
+    interactive = (cfg.get("notify") or {}).get("interactive") \
+        if isinstance(cfg.get("notify"), dict) else None
+    if interactive == "lineworks" and any(n.startswith((
+            "mcs/", "adapters/common/", "adapters/lineworks/", "lineworks_adapter/")) for n in names):
         notes.append("LINE WORKS 変更 — 適用後に独立アダプターの check と再起動が必要です")
     return notes
 
@@ -818,7 +823,8 @@ def plan(tag: str) -> dict:
                 "blockers": ["tag_not_fetched"]}
     try:
         return _plan(tag, cfg, state, current, target_sha)
-    except (UpdateError, subprocess.SubprocessError, OSError) as e:
+    except (UpdateError, subprocess.SubprocessError, OSError,
+            ValueError) as e:           # ValueError: invalid runtime_mode
         return {"route": "blocked", "current": current,
                 "target": {"tag": tag, "sha": target_sha},
                 "blockers": [f"plan_failed: {e}"[:200]]}
@@ -3186,6 +3192,19 @@ def _drainers_key(state: dict, head: str | None) -> str:
         sort_keys=True, default=str).encode()).hexdigest()[:32]
 # -------------------------------------------------------------------- CLI
 
+def _tag_is_newer(tag, sha, cur_sha) -> bool:
+    """Whether the latest tag is ahead of HEAD. HEAD already containing it
+    (a checkout ahead of the tag) is not newer; only an exit-0 ancestry
+    proof suppresses — missing objects (128) or a git failure keep the
+    notice/auto path."""
+    newer = bool(tag and sha and sha != cur_sha)
+    if newer and cur_sha:
+        with suppress(UpdateError):
+            newer = _git(["merge-base", "--is-ancestor", sha, "HEAD"]
+                         ).returncode != 0
+    return newer
+
+
 def cmd_check() -> int:
     """Daily driver: detect -> notify -> pending approvals -> auto.
 
@@ -3210,8 +3229,11 @@ def cmd_check() -> int:
             tag = sha = None            # receipts still get processed
     cur_tag, cur_sha = current_version()
     notes = impact = None
+    newer = _tag_is_newer(tag, sha, cur_sha)
+    # refetch for a deferred notice only while one is still owed — a
+    # checkout ahead of the latest tag never gets it and must not refetch
     if tag and (tag != state.get("latest_tag")
-                or (sha and sha != cur_sha and state.get("notified_at") != tag)):
+                or (newer and state.get("notified_at") != tag)):
         with suppress(UpdateError):
             # fetch objects BEFORE notes/impact — otherwise the summary
             # silently runs against missing objects (dead code, F15)
@@ -3219,16 +3241,9 @@ def cmd_check() -> int:
         notes = fetch_notes(tag)
         try:
             impact = impact_summary(cur_sha, tag) if cur_sha else []
-        except UpdateError:
+        except (UpdateError, ValueError):     # ValueError: invalid runtime_mode
             impact = []
-    # HEAD already containing the newest tag (a checkout ahead of it) is
-    # not "newer"; only an exit-0 ancestry proof suppresses — missing
-    # objects (128) or a git failure keep the notice/auto path
-    newer = bool(tag and sha and sha != cur_sha)
-    if newer and cur_sha:
-        with suppress(UpdateError):
-            newer = _git(["merge-base", "--is-ancestor", sha, "HEAD"]
-                         ).returncode != 0
+        newer = _tag_is_newer(tag, sha, cur_sha)   # objects present now
     # --- serialized state update + decision --------------------------
     picked = auto = None
     held = False
