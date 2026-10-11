@@ -219,7 +219,7 @@ def _signals_md(view, res: dict) -> str:
         pid = c.get("project_id", "?")
         at = c.get("detected_at")
         detected = _jst(at, "%Y-%m-%d") if at else "?"
-        note = str(c.get("note") or "")[:120].replace("|", "\\|")
+        note = _cell(str(c.get("note") or "")[:120])
         ev = json.dumps(c.get("evidence"), ensure_ascii=False)[:120] \
             if c.get("evidence") else ""
         lines.append(f"| {_cell(typ)} | {pid} | {detected} | {note} "

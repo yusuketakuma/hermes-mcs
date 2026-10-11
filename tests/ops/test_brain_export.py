@@ -784,3 +784,13 @@ def test_period_candidate_and_unrefreshed_ids_are_labelled(env, period_key, ids_
             " (削除の証拠ではない。tombstone は coverage.collection.deleted)") in text
     assert "current med period" not in text and "possibly_deleted" not in text
 
+
+def test_signal_note_is_escaped_as_one_table_cell(env):
+    snap, out = env
+    with sqlite3.connect(snap) as conn:
+        conn.execute("UPDATE artifacts SET content=json_set(content,'$.note',?) "
+                     "WHERE kind='signal_v1'", ("SYNTH 一行目\n| 二行目",))
+    assert brain_export.run(out, snap)["ok"]
+    signals = (out / "signals" / "latest.md").read_text()
+    row = next(line for line in signals.splitlines() if "SYNTH 一行目" in line)
+    assert "SYNTH 一行目 \\| 二行目" in row

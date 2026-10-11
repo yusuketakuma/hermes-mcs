@@ -77,7 +77,7 @@ def test_signals_view_counts_dismissal_reasons(tmp_path):
     try:
         for code in ("duplicate", "duplicate", None):
             db.artifact_add("signal_v1", json.dumps(
-                {"type": "med_followup", "state": "dismissed",
+                {"type": "med_change_no_followup", "state": "dismissed",
                  **({"dismiss_reason_code": code} if code else {})}),
                 project_id=1, meta={"key": "k"})
         view = _view(db, tmp_path)
@@ -86,7 +86,22 @@ def test_signals_view_counts_dismissal_reasons(tmp_path):
         finally:
             view.close()
         assert out["dismissals"] == {
-            "med_followup": {"duplicate": 2, "unclassified": 1}}
+            "med_change_no_followup": {"duplicate": 2, "unclassified": 1}}
+    finally:
+        db.close()
+
+
+def test_signals_view_counts_a_never_emitted_type_as_unknown(tmp_path):
+    import json
+    db = _seeded(tmp_path)
+    try:
+        db.artifact_add("signal_v1", json.dumps({"type": "med_followup", "state": "dismissed"}),
+                        project_id=1, meta={"key": "k"})
+        view = _view(db, tmp_path)
+        try:
+            assert view.signals({})["dismissals"] == {"unknown": {"unclassified": 1}}
+        finally:
+            view.close()
     finally:
         db.close()
 
@@ -97,12 +112,12 @@ def test_signals_view_holds_unknown_dismissal_reason_codes(tmp_path, reason):
     db = _seeded(tmp_path)
     try:
         db.artifact_add("signal_v1", json.dumps({
-            "type": "med_followup", "state": "dismissed",
+            "type": "med_change_no_followup", "state": "dismissed",
             "dismiss_reason_code": reason}), project_id=1, meta={"key": "k"})
         view = _view(db, tmp_path)
         try:
             assert view.signals({})["dismissals"] == {
-                "med_followup": {"unclassified": 1}}
+                "med_change_no_followup": {"unclassified": 1}}
         finally:
             view.close()
     finally:

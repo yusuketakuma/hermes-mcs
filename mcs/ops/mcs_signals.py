@@ -1716,7 +1716,7 @@ def dismiss_reason_counts(db, project_id=None, *, since=None, until=None,
     A dismissal is a label, not proof the signal was wrong."""
     from mcs_operations import DISMISS_REASON_CODES
     out: dict = {}
-    known_types = {name for name, _ in DETECTORS} | {"med_followup"}
+    known_types = {name for name, _ in DETECTORS}
     where, params = (" AND project_id=?", (ARTIFACT_KIND, project_id)) if project_id is not None else (
         "", (ARTIFACT_KIND,))
     for (content_s,) in db.execute(
