@@ -3322,13 +3322,40 @@ def cmd_status() -> int:
     return 0
 
 
-def main() -> int:
-    # services children reload the launchd job running this updater only
-    # after THIS process ends (mcs_setup._agent_reconcile waits on it)
-    os.environ.setdefault("MCS_JOB_PID", str(os.getpid()))
+def cmd_apply(args) -> int:
+    return apply(args.tag, args.sha, args.command_id,
+                 base_sha=args.base_sha, reinstall=args.reinstall,
+                 install_args=tuple(args.install_arg))
+
+
+def cmd_plan(args) -> int:
+    if not release_tag(args.tag):
+        print("plan: bad tag", args.tag)
+        return 2
+    print(json.dumps(plan(args.tag), ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_post_merge() -> int:
+    state = load_state()
+    applying = state.get("applying") or {}
+    # the post-merge stage is only reachable from the parent apply
+    # — the env token proves we were spawned by it, not invoked
+    # directly against whatever journal happens to exist (L17)
+    if state.get("_corrupt") or not applying \
+            or os.environ.get(_UPDATE_PM_ENV) != applying.get("sha"):
+        return 2
+    return _post_merge(state)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    # handlers are lambdas so a module attribute replaced after import
+    # (tests, callers) is the one dispatched
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--post-merge", action="store_true",
                     help=argparse.SUPPRESS)
+    # no subcommand = check (the cron/launchd default)
+    ap.set_defaults(fn=lambda args: cmd_check())
     sub = ap.add_subparsers(dest="cmd")
     ap_p = sub.add_parser("apply")
     ap_p.add_argument("--tag")
@@ -3339,47 +3366,29 @@ def main() -> int:
                       help="also re-run install.sh on the merged tree")
     ap_p.add_argument("--install-arg", action="append", default=[],
                       choices=sorted(INSTALL_ARGS))
+    ap_p.set_defaults(fn=lambda args: cmd_apply(args))
     pl_p = sub.add_parser("plan", help="read-only upgrade plan (JSON)")
     pl_p.add_argument("--tag", required=True)
-    sub.add_parser("check")
-    sub.add_parser("status")
-    sub.add_parser("rollback")
-    sub.add_parser("recover")
+    pl_p.set_defaults(fn=lambda args: cmd_plan(args))
+    sub.add_parser("check").set_defaults(fn=lambda args: cmd_check())
+    sub.add_parser("status").set_defaults(fn=lambda args: cmd_status())
+    sub.add_parser("rollback").set_defaults(fn=lambda args: rollback())
+    sub.add_parser("recover").set_defaults(
+        fn=lambda args: recover_interrupted())
     sub.add_parser("reinstall-done",
-                   help="after finishing an interrupted install.sh by hand")
-    args = ap.parse_args()
-    if args.post_merge:
-        state = load_state()
-        applying = state.get("applying") or {}
-        # the post-merge stage is only reachable from the parent apply
-        # — the env token proves we were spawned by it, not invoked
-        # directly against whatever journal happens to exist (L17)
-        if state.get("_corrupt") or not applying \
-                or os.environ.get(_UPDATE_PM_ENV) != applying.get("sha"):
-            return 2
-        return _post_merge(state)
-    if args.cmd == "status":
-        return cmd_status()
-    if args.cmd == "check" or args.cmd is None:
-        return cmd_check()
-    if args.cmd == "apply":
-        return apply(args.tag, args.sha, args.command_id,
-                     base_sha=args.base_sha, reinstall=args.reinstall,
-                     install_args=tuple(args.install_arg))
-    if args.cmd == "plan":
-        if not release_tag(args.tag):
-            print("plan: bad tag", args.tag)
-            return 2
-        print(json.dumps(plan(args.tag), ensure_ascii=False, indent=2))
-        return 0
-    if args.cmd == "rollback":
-        return rollback()
-    if args.cmd == "recover":
-        return recover_interrupted()
-    if args.cmd == "reinstall-done":
-        return reinstall_done()
-    return 2
+                   help="after finishing an interrupted install.sh by hand"
+                   ).set_defaults(fn=lambda args: reinstall_done())
+    return ap
 
+
+def main(argv: list[str] | None = None) -> int:
+    # services children reload the launchd job running this updater only
+    # after THIS process ends (mcs_setup._agent_reconcile waits on it)
+    os.environ.setdefault("MCS_JOB_PID", str(os.getpid()))
+    args = _build_parser().parse_args(argv)
+    if args.post_merge:
+        return cmd_post_merge()
+    return args.fn(args)
 
 if __name__ == "__main__":
     sys.exit(main())
