@@ -90,6 +90,15 @@ def test_relation_recount_is_skipped_while_fresh(tmp_path):
         assert not any("COUNT(*) FROM attachments" in s for s in statements)
 
 
+
+def test_relation_marker_moves_on_a_backfilled_lower_id_parent(tmp_path):
+    with closing(ledger.Ledger(str(tmp_path / "ledger.db"))) as db, db.db:
+        db.db.execute("INSERT INTO messages(message_id) VALUES(500)")
+        before = db._relation_marker()
+        # an older parent backfilled below MAX(message_id) can resolve an orphan
+        db.db.execute("INSERT INTO messages(message_id) VALUES(100)")
+        assert db._relation_marker() != before
+
 # ---------- H4: snapshot only when changed / stale ----------
 
 @pytest.fixture
@@ -150,6 +159,25 @@ def test_backup_skips_when_time_left_cannot_cover_the_ledger(tmp_path, monkeypat
     assert maintenance.daily_backup(path, deadline=time.monotonic() + 600) is None
     assert len(list(backups.glob("ledger-*.db"))) == 1
 
+
+
+def test_validated_backup_without_marker_rearms_the_fast_path(tmp_path, monkeypatch):
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    path = str(tmp_path / "ledger.db")
+    _ledger(tmp_path).close()
+    assert maintenance.daily_backup(path) is None
+    (made,) = backups.glob("ledger-*.db")
+    marker = made.with_name(made.name + ".ok")
+    marker.unlink()                 # a same-day backup from before the marker
+    checks = []
+    real = maintenance.valid_mcs_db
+    monkeypatch.setattr(maintenance, "valid_mcs_db",
+                        lambda *a, **k: checks.append(1) or real(*a, **k))
+    assert maintenance.daily_backup(path) is None
+    assert marker.exists() and len(checks) == 1
+    assert maintenance.daily_backup(path) is None
+    assert len(checks) == 1         # the next tick skips the full check
 
 # ---------- M1: child and LINE WORKS logs rotate ----------
 

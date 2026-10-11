@@ -445,13 +445,16 @@ class Ledger:
     def _relation_marker(self) -> str:
         """Cheap evidence of changes that can move a shadow count without
         clearing ledger_relation_audit: new shadow observations, and new
-        parent messages (which can resolve an orphan). Child deletions
+        parent messages at any id (which can resolve an orphan). Child deletions
         are covered only by the RELATION_RECOUNT_S bound."""
         shadow = self.db.execute(
             "SELECT COALESCE(SUM(shadow_count),0) FROM ledger_relation_guards"
         ).fetchone()[0]
-        newest = self.db.execute("SELECT MAX(message_id) FROM messages").fetchone()[0]
-        return f"{shadow}:{newest}"
+        # MCS ids are not insertion-ordered: a backfilled parent can land
+        # below MAX(message_id), so the row count moves the marker too
+        newest, total = self.db.execute(
+            "SELECT MAX(message_id), COUNT(*) FROM messages").fetchone()
+        return f"{shadow}:{newest}:{total}"
 
     def _relation_recount_fresh(self, marker: str) -> bool:
         """True when shadow evidence was confirmed within RELATION_RECOUNT_S

@@ -139,6 +139,13 @@ def backup_time_needed_s(db_path: str) -> float:
     return size / BACKUP_RATE_BPS + BACKUP_MARGIN_S
 
 
+def _write_ok_marker(dest: str) -> None:
+    sig = _stat_sig(dest)
+    if sig:
+        with suppress(OSError):   # marker is only a fast path
+            atomic_write(dest + ".ok", lambda f: f.write(sig), mode=0o600)
+
+
 def daily_backup(db_path: str, *, deadline: float | None = None):
     """One VERIFIED sqlite .backup per day — write to tmp, schema/quick_check,
     then atomic publish. A present-but-broken file must never block a
@@ -157,7 +164,12 @@ def daily_backup(db_path: str, *, deadline: float | None = None):
     # the .ok marker (size+mtime_ns at publish time) skips the full
     # quick_check while the verified file is untouched; any change or a
     # missing marker falls back to validation (B24)
-    if _verified_unchanged(dest) or _valid(dest, deadline):
+    if _verified_unchanged(dest):
+        return
+    if _valid(dest, deadline):
+        # re-arm the fast path, or every later tick today re-runs the
+        # full quick_check (a same-day backup made before the marker)
+        _write_ok_marker(dest)
         return
     if deadline is not None and (
             deadline - monotonic() < backup_time_needed_s(db_path)):
@@ -169,10 +181,7 @@ def daily_backup(db_path: str, *, deadline: float | None = None):
         prefix=f"ledger-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
     os.close(fd)
     _publish_backup(db_path, tmp, dest, deadline=deadline)
-    sig = _stat_sig(dest)
-    if sig:
-        with suppress(OSError):   # marker is only a fast path
-            atomic_write(dest + ".ok", lambda f: f.write(sig), mode=0o600)
+    _write_ok_marker(dest)
     files = sorted(glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db")))
     for old in files[:-BACKUP_KEEP]:
         for path in (old, old + ".ok"):

@@ -177,10 +177,27 @@ async def _identity(client, settings):
         raise
     except Exception as exc:
         # The SDK raises SlackApiError for an answered error (invalid_auth,
-        # account_inactive): that is a verdict, not an outage.
-        if type(exc).__name__ == "SlackApiError":
+        # account_inactive): that is a verdict, not an outage. A rate
+        # limit or a Slack-side 5xx is an answer too, but a transient one.
+        if type(exc).__name__ == "SlackApiError" and not _transient_api_error(exc):
             return "slack_identity_unverified"
         return "slack_identity_unreachable"
+
+
+_TRANSIENT_SLACK_ERRORS = frozenset({
+    "ratelimited", "rate_limited", "fatal_error", "internal_error",
+    "service_unavailable", "request_timeout"})
+
+
+def _transient_api_error(exc) -> bool:
+    """A SlackApiError that says "try later" (429, 5xx or a Slack-side
+    error code) rather than "this token is not that bot"."""
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if isinstance(status, int) and (status == 429 or status >= 500):
+        return True
+    data = getattr(response, "data", None)
+    return isinstance(data, dict) and data.get("error") in _TRANSIENT_SLACK_ERRORS
 
 
 async def _socket(client, credentials, inflight):

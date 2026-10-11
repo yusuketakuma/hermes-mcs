@@ -443,6 +443,11 @@ class Runtime:
             self.start(job, "core", now)
             if self.restarting:
                 break   # a failed start: the slot is caught up after the restart
+            if job in self.children:
+                # What to restore if the drain cap kills this run: the slot
+                # must stay pending so it is caught up after the restart.
+                # Never None: an unknown job past its slot reads as first sight.
+                self.children[job]["unfired"] = fired if fired is not None else slot - 1
             self.fired[job] = slot
             changed = True
         if changed:
@@ -468,6 +473,10 @@ class Runtime:
                     row["stopping_at"] = now
                     if row["kind"] == "core":
                         log("drain_cap_reached", job=job)
+                        if row.get("unfired") is not None:
+                            # killed before it finished: keep its slot pending
+                            self.fired[job] = row["unfired"]
+                            self._save_fired()
                 elif now - row["stopping_at"] >= STOP_GRACE_S:
                     child.kill()
         if not updating and not self.restarting and not draining:

@@ -9,7 +9,7 @@ import pytest
 
 import maintenance
 import run_check
-from ingest_testkit import _ledger
+from ingest_testkit import _ledger, _message
 
 ON = {"semantic": {"mode": "shadow", "project_ids": []}}
 H = 3600
@@ -68,21 +68,26 @@ def test_llm_endpoint_down_needs_failing_breaker_and_due_work(
     db = _ledger(tmp_path)
     now = time.time()
     circuit = tmp_path / "llm_circuit.json"
-    _sem_job(db, 1, next_try=now, updated_at=now, kind="extract_qc")
+    _sem_job(db, 1, next_try=now, updated_at=now)
     health_file(stall_marks={"llm_down_since": now - 7 * H})
     marks = {}
-    assert "llm_endpoint_down" not in run_check._backlog_stalls(db, {}, now, marks=marks)
+    assert "llm_endpoint_down" not in run_check._backlog_stalls(db, ON, now, marks=marks)
     assert marks["llm_down_since"] is None              # breaker healthy
     circuit.write_text(json.dumps({"failures": 1, "streak": 0}))
-    assert "llm_endpoint_down" in run_check._backlog_stalls(db, {}, now)
+    assert "llm_endpoint_down" in run_check._backlog_stalls(db, ON, now)
     health_file(stall_marks={"llm_down_since": now - H})
-    assert "llm_endpoint_down" not in run_check._backlog_stalls(db, {}, now)
+    assert "llm_endpoint_down" not in run_check._backlog_stalls(db, ON, now)
     db.close()
 
 
 @pytest.mark.parametrize(("down_for", "due", "alerted"), [
-    (3600, True, True), (3599, True, False), (None, True, False),
-    (7200, False, False),
+    (3600, "semantic", True), (3599, "semantic", False),
+    (None, "semantic", False), (7200, None, False),
+    # the default semantic-off install: pending legacy extraction is
+    # eligible messages, not fetch_jobs
+    (7200, "legacy", True),
+    # extract_qc runs on Jev, not the local model
+    (7200, "extract_qc", False),
 ])
 def test_local_llm_down_uses_the_llm_health_record(
         tmp_path, health_file, monkeypatch, down_for, due, alerted):
@@ -91,9 +96,15 @@ def test_local_llm_down_uses_the_llm_health_record(
     now = time.time()
     monkeypatch.setattr(mcs_util, "llm_down_for_s",
                         lambda _ledger, now=None: down_for, raising=False)
-    if due:
+    cfg = {}
+    if due == "semantic":
+        cfg = ON
+        _sem_job(db, 1, next_try=now, updated_at=now)
+    elif due == "extract_qc":
         _sem_job(db, 1, next_try=now, updated_at=now, kind="extract_qc")
-    reasons = run_check._backlog_stalls(db, {}, now)
+    elif due == "legacy":
+        db.save_messages([_message(1, body="synthetic note")], project_id=1)
+    reasons = run_check._backlog_stalls(db, cfg, now)
     assert ("local_llm_down" in reasons) is alerted
     assert "llm_endpoint_down" not in reasons   # fallback only without the record
     db.close()

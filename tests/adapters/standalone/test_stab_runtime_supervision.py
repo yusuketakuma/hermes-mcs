@@ -292,6 +292,33 @@ def test_restart_drain_is_capped_for_scheduled_jobs_only(tmp_path, monkeypatch):
     assert update.signals == [] and command.signals == []
 
 
+
+def test_a_slot_killed_by_the_drain_cap_is_caught_up_after_the_restart(tmp_path, monkeypatch):
+    events = []
+    started = []
+    host = _host(tmp_path, monkeypatch, events)
+    monkeypatch.setattr(runtime.subprocess, "Popen",
+                        lambda argv, **kw: started.append(argv) or Child())
+    monkeypatch.setattr(runtime, "BACKGROUND", {})
+    monkeypatch.setattr(runtime.time, "localtime", lambda stamp:
+                        SimpleNamespace(tm_hour=12, tm_min=int(stamp // 60) % 60))
+    host.schedules = [("mcs_check", [{"Minute": m} for m in range(0, 60, 10)])]
+    host.tick(600)
+    host.children["mcs_check"]["process"].code = 0
+    host.tick(660)
+    host.tick(1200)                   # minute 20 starts and is still running
+    assert len(started) == 2 and host.fired == {"mcs_check": 1200}
+    host.restarting = True
+    host.tick(1260)
+    host.tick(1260 + runtime.DRAIN_CAP_S)
+    assert ("drain_cap_reached", {"job": "mcs_check"}) in events
+    assert host.fired == {"mcs_check": 600}     # minute 20 never finished
+    later = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
+    later.schedules = host.schedules
+    later.tick(1260 + runtime.DRAIN_CAP_S + 60)
+    assert len(started) == 3
+    assert ("slot_catchup", {"job": "mcs_check", "slot": 1800}) in events
+
 # ------------------------------------------------------ orphans of a killed host
 
 def test_children_of_a_killed_host_are_stopped_or_awaited(tmp_path, monkeypatch):

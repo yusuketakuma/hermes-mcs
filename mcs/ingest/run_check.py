@@ -265,7 +265,8 @@ def _backlog_stalls(ledger, cfg, now: float, *, marks: dict | None = None) -> li
     draining backlog (or an idle system) never trips it.
     - card_delivery_stalled: a queued render on the active interactive
       transport not picked up for CARD_STALL_S (worker down/denied).
-    - llm_endpoint_down: semantic/QC work has been due while the local
+    - local_llm_down / llm_endpoint_down: local-model work (semantic jobs
+      or pending legacy extraction) has been due while the local
       LLM circuit breaker kept failing for BACKLOG_STALL_S (the server
       is down; deferred jobs never fail, so nothing else would say so).
     - semantic_backlog_stalled: semantic mode on, no semantic job done
@@ -294,12 +295,27 @@ def _backlog_stalls(ledger, cfg, now: float, *, marks: dict | None = None) -> li
             reasons.append("card_delivery_stalled")
     marks = {} if marks is None else marks
     window = now - BACKLOG_STALL_S
-    # due "now or within the slack": a deferring drainer keeps pushing
-    # next_try a minute ahead, which must still read as waiting work
-    llm_due = db.execute(
-        "SELECT 1 FROM fetch_jobs WHERE kind IN ('semantic','extract_qc') "
-        "AND state='pending' AND next_try<=? LIMIT 1",
-        (now + DUE_SLACK_S,)).fetchone() is not None
+    scfg, errors = semantic_policy.semantic_config(cfg)
+
+    def llm_due() -> bool:
+        """Work that needs the local model is waiting: due semantic jobs
+        (semantic mode on) or legacy extraction pending (fact_source not
+        canonical — the default semantic-off install has no fetch_jobs
+        for it). extract_qc is Jev-only and never counts. Evaluated
+        lazily: the legacy probe walks eligible messages."""
+        # due "now or within the slack": a deferring drainer keeps pushing
+        # next_try a minute ahead, which must still read as waiting work
+        if not errors and scfg["mode"] != "off" and db.execute(
+                "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "
+                "AND state='pending' AND next_try<=? LIMIT 1",
+                (now + DUE_SLACK_S,)).fetchone() is not None:
+            return True
+        if errors or scfg["fact_source"] == "canonical":
+            return False
+        return db.execute(
+            f"SELECT 1 FROM messages m WHERE {_ELIGIBLE} "
+            f"AND {current_v4_id()} IS NULL LIMIT 1").fetchone() is not None
+
     import mcs_util
     down_for = getattr(mcs_util, "llm_down_for_s", None)
     if callable(down_for):
@@ -310,17 +326,16 @@ def _backlog_stalls(ledger, cfg, now: float, *, marks: dict | None = None) -> li
         except Exception:
             seconds = None
         marks["llm_down_since"] = None
-        if (llm_due and _finite_number(seconds)
-                and seconds >= LOCAL_LLM_DOWN_S):
+        if (_finite_number(seconds) and seconds >= LOCAL_LLM_DOWN_S
+                and llm_due()):
             reasons.append("local_llm_down")
     else:
         # fallback without that record: breaker failing while work waits
         down = _carried_since("llm_down_since",
-                              llm_due and _llm_failing(ledger), now)
+                              _llm_failing(ledger) and llm_due(), now)
         marks["llm_down_since"] = down
         if down is not None and now - down > BACKLOG_STALL_S:
             reasons.append("llm_endpoint_down")
-    scfg, errors = semantic_policy.semantic_config(cfg)
     if errors:
         return reasons   # reported as stage errors; admission is closed
     blocked = _jev_block_reason(db) if scfg["mode"] != "off" else None

@@ -12,7 +12,7 @@ import mcs_adapter
 @pytest.fixture
 def adapter(monkeypatch, tmp_path):
     a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "token_cache.json"))
-    secret = {"pw": "synthetic-secret-1"}
+    secret = {"pw": "synthetic-secret-1", "rev": "mdat-1"}
     calls = {"click": 0, "fill": 0}
 
     def cdp_eval(ws, expr):
@@ -32,6 +32,7 @@ def adapter(monkeypatch, tmp_path):
     monkeypatch.setattr(a, "_cdp_peer_owned", lambda *a: True)
     monkeypatch.setattr(a, "_config", lambda: {"mcs_login_id": "synthetic-id"})
     monkeypatch.setattr(a, "_keychain_password", lambda *a, **k: secret["pw"])
+    monkeypatch.setattr(a, "_keychain_revision", lambda *a, **k: secret["rev"])
     monkeypatch.setattr(a, "_token_via_cdp", lambda: None)   # never validates
     a.secret, a.calls = secret, calls
     return a
@@ -46,16 +47,21 @@ def test_rejected_submit_backs_off_until_credential_changes(adapter, tmp_path):
     assert adapter.calls["click"] == 1
     state = _state(tmp_path)
     assert state["failures"] == 1
-    # the password itself is never persisted, only a short fingerprint
+    # nothing derived from the password is persisted: the record names
+    # the credential by its store's revision, not by its value
     raw = (tmp_path / mcs_adapter.LOGIN_STATE_NAME).read_text()
-    assert "synthetic-secret-1" not in raw and len(state["credential"]) == 8
+    assert "synthetic-secret-1" not in raw and "salt" not in state
+    assert state["credential"] == adapter._credential_fp("synthetic-id", "keychain")
+    adapter.secret["pw"] = "synthetic-other-guess"
+    assert adapter._credential_fp("synthetic-id", "keychain") == state["credential"]
+    adapter.secret["pw"] = "synthetic-secret-1"
     assert oct(os.stat(tmp_path / mcs_adapter.LOGIN_STATE_NAME).st_mode & 0o777) \
         == "0o600"
     # same credential: no fill, no submit — the run still reports manual
     assert adapter.auto_login(wait_s=0) == "manual_required:backoff"
     assert adapter.calls == {"click": 1, "fill": 1}
-    # a changed credential is tried at once
-    adapter.secret["pw"] = "synthetic-secret-2"
+    # a replaced Keychain item is tried at once
+    adapter.secret.update(pw="synthetic-secret-2", rev="mdat-2")
     assert adapter.auto_login(wait_s=0) == "manual_required"
     assert adapter.calls["click"] == 2 and _state(tmp_path)["failures"] == 1
 
@@ -105,3 +111,15 @@ def test_backoff_detail_still_raises_the_manual_login_alert(tmp_path, monkeypatc
     assert "auto_login=manual_required:backoff" in raised.value.detail
     assert run_check._alert_session_expired(db, 1, raised.value.detail) is True
     db.close()
+
+
+def test_env_credential_revision_follows_the_dotenv_file(adapter, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(mcs_adapter, "HOME", str(home))
+    monkeypatch.delenv("MCS_PASSWORD", raising=False)
+    before = adapter._credential_fp("synthetic-id", "env")
+    (home / ".env").write_text("MCS_PASSWORD=synthetic\n")
+    assert adapter._credential_fp("synthetic-id", "env") != before
+    assert adapter._credential_fp("synthetic-id", "browser") \
+        != adapter._credential_fp("synthetic-id", "env")

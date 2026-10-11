@@ -50,11 +50,20 @@ def _client(auth=None, bot=None, error=None):
 class SlackApiError(Exception):
     """Same type name as the SDK's answered-error exception."""
 
+    def __init__(self, error, status=200):
+        super().__init__(error)
+        self.response = SimpleNamespace(status_code=status, data={"ok": False, "error": error})
+
 
 @pytest.mark.parametrize("client,expected", [
     (_client(error=TimeoutError()), "slack_identity_unreachable"),
     (_client(error=OSError("synthetic network down")), "slack_identity_unreachable"),
     (_client(error=SlackApiError("invalid_auth")), "slack_identity_unverified"),
+    (_client(error=SlackApiError("account_inactive")), "slack_identity_unverified"),
+    # answered, but "try later": a rate limit or a Slack-side failure
+    (_client(error=SlackApiError("ratelimited", status=429)), "slack_identity_unreachable"),
+    (_client(error=SlackApiError("internal_error", status=500)), "slack_identity_unreachable"),
+    (_client(error=SlackApiError("service_unavailable")), "slack_identity_unreachable"),
     (_client(auth={"ok": True, "team_id": "T_FOREIGN", "bot_id": "B1"}), "slack_identity_unverified"),
     (_client(auth={"ok": True, "team_id": "T_SYNTHETIC", "bot_id": "B1"},
              bot={"ok": True, "bot": {"id": "B1", "app_id": "A_SYNTHETIC", "deleted": False}}), None),
