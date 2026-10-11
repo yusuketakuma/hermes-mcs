@@ -341,11 +341,8 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                     break
                 except jev.JevError as error:
                     detail = str(getattr(error, "detail", "") or "")
-                    # per-answer defect (same discriminator as
-                    # semantic_drain._malformed_answer); any other failure
-                    # stops the pass as before
-                    if getattr(error, "kind", "") != "protocol_error" \
-                            or ":" not in detail:
+                    # Envelope and transport failures stop the pass.
+                    if not jev.is_answer_defect(error):
                         return created, False
                     pairs += 1                   # every sent call counts
                     if asked == 0 and (pairs >= _PAIR_CAP

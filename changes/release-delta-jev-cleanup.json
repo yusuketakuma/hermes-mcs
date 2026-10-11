@@ -1,0 +1,13 @@
+{
+  "category": "changed",
+  "title": "回答エラーの判定処理を統一",
+  "summary": "意味解析の回答エラー判定を既存の共通処理にまとめました。再試行の条件・上限・期限と、処理結果の記録は変わりません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "ループ関係の判定から semantic_jev.is_answer_defect を利用し、semantic_drain の重複ラッパーを削除する。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_drain.py",
+    "mcs/semantic/semantic_loops.py"
+  ]
+}
