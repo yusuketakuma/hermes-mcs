@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401,E402  registers every subdir as import root
 import mcs_runtime  # noqa: E402
-from mcs_requests import parse_command  # noqa: E402
+from mcs_requests import RELEASE_TAG_RE, parse_command, release_tag  # noqa: E402
 
 from mcs_util import (HOME, REPO, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
                       atomic_write, launchd_bootstrap, load_config)
@@ -98,8 +98,6 @@ WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int", "local.mcs-health")
 # S5: only the labels listed above are touched; install.sh-owned
 # ai.mcs.llamaserver / org.mcs.recovery must never be.
 PROTECTED = ("data/", "config.json", ".env", "chrome-profile/", "venv/", "models/")
-SEMVER_RE = re.compile(
-    r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?$")
 HEX_RE = re.compile(r"^[0-9a-f]{40}$")
 _MENTION_RE = re.compile(r"<@[!&]?\d+>|<#\d+>|@everyone|@here")
 # drainer stray sweep: interpreter argv0 + script path — never matches
@@ -357,14 +355,10 @@ def remote_tag_sha(tag: str) -> str | None:
 def _ver_key(name: str) -> tuple | None:
     """Semver ordering key: (major, minor, patch, release-flag, pre).
     A prerelease sorts BELOW the same release; None when not semver."""
-    if not isinstance(name, str) or len(name) > 255:
+    if not release_tag(name):
         return None
-    m = SEMVER_RE.fullmatch(name)
-    if not m:
-        return None
+    m = RELEASE_TAG_RE.fullmatch(name)
     pre = m.group(4)
-    if pre and any(not part for part in pre.split(".")):
-        return None
     identifiers = tuple((0, int(part)) if part.isdigit() else (1, part)
                         for part in pre.split(".")) if pre else ()
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)),
@@ -1765,7 +1759,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
     the long pre-checks) — run.lock holders (drainer ticks) never
     block on update.lock, so no lock-order inversion exists."""
     global _HELD_RUN_LOCK_FD
-    if not tag or not SEMVER_RE.fullmatch(tag):
+    if not release_tag(tag):
         print("apply: bad tag", tag)
         return 2
     if sha is not None and not HEX_RE.fullmatch(sha):
@@ -3364,7 +3358,7 @@ def main() -> int:
                      base_sha=args.base_sha, reinstall=args.reinstall,
                      install_args=tuple(args.install_arg))
     if args.cmd == "plan":
-        if not SEMVER_RE.fullmatch(args.tag):
+        if not release_tag(args.tag):
             print("plan: bad tag", args.tag)
             return 2
         print(json.dumps(plan(args.tag), ensure_ascii=False, indent=2))

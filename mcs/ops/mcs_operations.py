@@ -18,7 +18,8 @@ import stat
 import tempfile
 import time
 
-from mcs_requests import _text, canonical, payload_hash, positive, valid_hash
+from mcs_requests import (RELEASE_TAG_RE, _text, canonical, payload_hash, positive,
+                          release_tag, valid_hash)
 
 
 _OPS_COMMON = {
@@ -229,15 +230,11 @@ def _v_update(req: dict, base: set) -> str | None:
         return "unknown_field"
     if not _text(req.get("reason"), 2000):
         return "bad_reason"
-    if req.get("cmd") == "ops.update_apply" and (
-            not isinstance(req.get("tag"), str)
-            or not re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+",
-                                req["tag"])):
+    if req.get("cmd") == "ops.update_apply" and "tag" not in req:
         return "bad_tag"
-    if "tag" in req and (
-            not isinstance(req["tag"], str)
-            or not re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+",
-                                req["tag"])):
+    # the updater's grammar, so a notified (opted-in prerelease) tag is
+    # approvable; the opt-in itself is enforced in _apply_update_op_tx
+    if "tag" in req and not release_tag(req["tag"]):
         return "bad_tag"
     for k in ("target_sha", "base_sha"):
         if k in req and (not isinstance(req[k], str)
@@ -846,6 +843,12 @@ def _apply_update_op_tx(db, req, current) -> tuple[str | None, dict]:
         # fail fast: accepting a receipt under mode=off would leave it
         # silently dormant while telling the user it was scheduled
         return "update_disabled", {}
+    if req["cmd"] == "ops.update_apply" \
+            and RELEASE_TAG_RE.fullmatch(req["tag"]).group(4) \
+            and not upd.get("include_prerelease"):
+        # same opt-in as cmd_check's detection: only a notified
+        # prerelease is approvable
+        return "prerelease_not_enabled", {}
     extra = {"cmd": req["cmd"], "scheduled": True}
     if "tag" in req:
         extra["tag"] = req["tag"]
