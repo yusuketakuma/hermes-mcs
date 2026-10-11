@@ -2,9 +2,9 @@
   "category": "fixed",
   "title": "Discord でロールを外された人に、待機中の結果が届く問題を修正",
   "summary": "Discord のロール（allowed_role_ids）で操作を許可している場合、ボタンを押した後に結果を待つ間（最大約14分）にロールを外された人へも、遅れて結果が届いていました。遅れて届ける直前にメンバーの現在のロールを確かめ直し、許可されたロールがなければ届けずに破棄します。ロールを確認できない場合も届けません。",
-  "upgrade": "追加操作は不要です。ロールで許可している利用者は、遅れた結果を届ける直前に1回だけ Discord 側でメンバー情報を確認します（キャッシュにあれば確認しません。結果を待っている間は確認しません）。",
+  "upgrade": "追加操作は不要です。ロールで許可している利用者は、遅れた結果を届ける直前に1回だけ Discord 側でメンバー情報を取得し直します（結果を待っている間は確認しません）。",
   "details": [
-    "adapters/discord/actions.py の sweep_followups は、allowed_user_ids に含まれない（ロールで許可された）操作者について、guild.get_member、なければ guild.fetch_member で現在のロールを取得し、現在の allowed_role_ids と照合する。取得できない、または一致しない場合は followup を破棄する。",
+    "adapters/discord/actions.py の sweep_followups は、allowed_user_ids に含まれない（ロールで許可された）操作者について、guild.fetch_member で現在のロールを取得し、現在の allowed_role_ids と照合する。メンバーキャッシュは members intent なしではロールの削除を反映しないため使わない。取得できない、または一致しない場合は followup を破棄し、followup_dropped（reason=role_check）をログに残す。",
     "allowed_user_ids に含まれる利用者と、クリック直後に結果を返す経路は変えていない。新しい操作はこれまでどおりクリック時のロールで判定する。"
   ],
   "refs": [
