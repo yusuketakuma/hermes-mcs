@@ -753,9 +753,7 @@ def db_maintenance(db_path: str, *, deadline: float | None = None,
             busy, log, done = con.execute(
                 "PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
             out["checkpoint"] = {"busy": busy, "log": log, "done": done}
-            if busy:
-                state["checkpoint_pending"] = True
-            else:
+            if not busy:
                 state.pop("checkpoint_pending", None)
         if fts and "messages_fts" not in _tables(con):
             state["fts_at"] = now

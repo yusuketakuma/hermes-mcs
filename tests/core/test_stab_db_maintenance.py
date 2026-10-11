@@ -153,6 +153,35 @@ def test_snapshot_stops_at_the_callers_hard_deadline(tmp_path, snapdir, monkeypa
     assert not (snapdir / "ledger-snapshot.db").exists()
 
 
+def test_snapshot_copy_completes_under_concurrent_writes(tmp_path, monkeypatch):
+    path = str(tmp_path / "busy.db")
+    with closing(sqlite3.connect(path)) as con:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("CREATE TABLE t(x BLOB)")
+        with con:   # several backup steps (4096 pages each)
+            con.executemany("INSERT INTO t VALUES(randomblob(4000))",
+                            [()] * 6000)
+        con.execute("CREATE TABLE snapshot_meta(singleton INTEGER PRIMARY "
+                    "KEY, generation_id TEXT, generated_at REAL)")
+    writer = sqlite3.connect(path, isolation_level=None)
+    real = ledger.monotonic
+
+    def clock():   # another connection commits between every backup step
+        writer.execute("INSERT INTO t VALUES(1)")
+        return real()
+    monkeypatch.setattr(ledger, "monotonic", clock)
+    monkeypatch.setattr(ledger, "_valid_snapshot_candidate",
+                        lambda _p, *, deadline: True)
+    try:
+        out = ledger.publish_snapshot(path, str(tmp_path / "snap"),
+                                      deadline=real() + 10)
+    finally:
+        writer.close()
+    assert out is not None
+    with closing(sqlite3.connect(out)) as snap:
+        assert snap.execute("SELECT COUNT(*) FROM t").fetchone()[0] >= 6000
+
+
 def test_snapshot_verify_budget_grows_with_size(tmp_path, monkeypatch):
     small = tmp_path / "small.db"
     small.write_bytes(b"x")
