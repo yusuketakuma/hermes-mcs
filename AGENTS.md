@@ -16,7 +16,7 @@ id は `patients.probe_mid` に記録して繰返し取得を抑える。
 |---|---|
 | 実行 | `mcs/` の `core/`・`ingest/`・`notify/`・`extract/`・`semantic/`・`views/`・`ops/`。モジュール表は `docs/development/DEVELOPMENT.md` |
 | import | flat import を維持。エントリポイントは `mcs/` を sys.path に追加し `_mcs_path` を import。`.py` のある配下を任意の深さで登録する。直下の import モジュールは `_mcs_path.py` のみ |
-| 抽出 | `extract/v1/` はルール、`v4/` は現行LLM。v2/v3 の旧実装は git 履歴。`extract/rollup.py` と `semantic/` は世代横断 |
+| 抽出 | `extract/v1/` はルール、`v4/` は現行LLM。v2/v3 の旧実装は git 履歴。`extract/rollup.py` と `semantic/` は世代横断。評価・ベンチ用は `extract/eval/`・`semantic/eval/`（定期処理からは読まない） |
 | 通知 | `adapters/{slack,discord,lineworks,common}/`。独立接続と旧APIの実装も接続先配下へ集約。`hermes_plugin/` は Hermes 接続・互換入口、`lineworks_adapter/` は独立CLI入口 |
 | 独立実行 | `runtime_mode=standalone` の `mcs_standalone/` が単一host・6定期ジョブ・cmd取込・抽出worker2本を所有。Hermes未指定は従来経路。`docs/guides/STANDALONE.md` |
 | 検証 | `tests/` は実行領域に対応、`integration/` は統合、`evaluation/` は完全合成の評価資産。conftest がヘルパー import と socket 遮断を担う |
