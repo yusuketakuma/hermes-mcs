@@ -317,20 +317,8 @@ class Actions:
         # task_status tokens ride an ephemeral task list — the ctx pins
         # only the card/project scope; origin() already bound the click
         # to this app/team/channel and an allowed user.
-        allowed = self._settings.get("project_ids")
-        if not allowed and not self._settings.get("project_ids_auto"):
+        if not projects.context_allowed(self._settings, ctx):
             return None
-        project = ctx.get("project_id")
-        if project is not None:
-            if not projects.project_allowed(self._settings, project):
-                return None
-        else:
-            signals = (ctx.get("context") or {}).get("signals") or {}
-            if not signals or any(
-                    not projects.project_allowed(
-                        self._settings, s.get("project_id"))
-                    for s in signals.values()):
-                return None
         return ctx
 
     async def _say(self, channel, user, text, *, blocks=None, thread_ts=None,

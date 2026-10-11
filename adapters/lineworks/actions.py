@@ -46,14 +46,8 @@ class Actions:
             return None
         if context.get("actor") is not None and context["actor"] != actor:
             return None
-        if context.get("project_id") is not None:
-            if not projects.project_allowed(self.settings, context["project_id"]):
-                return None
-        else:
-            signals = (context.get("context") or {}).get("signals") or {}
-            if not signals or any(not projects.project_allowed(self.settings, s.get("project_id"))
-                                  for s in signals.values()):
-                return None
+        if not projects.context_allowed(self.settings, context):
+            return None
         return context
 
     async def _say(self, user, value, actions=None):

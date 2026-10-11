@@ -131,23 +131,6 @@ def _same_origin(pinned: dict, current: dict,
     return all((pinned.get(k) or None) == (current.get(k) or None) for k in keys)
 
 
-def _context_projects(context: dict) -> list[int]:
-    """Every project in a digest must be authorized before acting on it."""
-    if context.get("project_id") is not None:
-        values = [context["project_id"]]
-    else:
-        nested = context.get("context")
-        signals = nested.get("signals") if isinstance(nested, dict) else None
-        if not isinstance(signals, dict) or not signals:
-            return []
-        if not all(isinstance(item, dict) for item in signals.values()):
-            return []
-        values = [item.get("project_id") for item in signals.values()]
-    if not all(type(pid) is int and pid > 0 for pid in values):
-        return []
-    return sorted(set(values))
-
-
 class Actions:
     def __init__(self, *, bot: Any, settings: dict, root: str,
                  reg: registry.Registry, log) -> None:
@@ -314,7 +297,7 @@ class Actions:
             return
         action = ctx.get("action")
 
-        pids = _context_projects(ctx)
+        pids = projects.context_projects(ctx)
         denial = self._authorized(interaction, pids)
         if denial:
             self._deny_reason(interaction, denial)
@@ -461,7 +444,7 @@ class Actions:
             return
         denial = self._authorized(
             interaction,
-            _context_projects({"project_id": pending.get("context", {}).get("project_id"),
+            projects.context_projects({"project_id": pending.get("context", {}).get("project_id"),
                                "context": pending.get("context")}))
         if denial:
             self._deny_reason(interaction, denial)
@@ -546,7 +529,7 @@ class Actions:
             ctx = pending.get("context") or {}
             await self._park_followup(
                 interaction, env["request_id"], pending["actor"],
-                pending["origin"], _context_projects(
+                pending["origin"], projects.context_projects(
                     {"project_id": ctx.get("project_id"), "context": ctx}))
             return
         self._result_log(interaction, pending["action"], result)

@@ -1146,3 +1146,25 @@ def test_confirm_publish_error_after_the_file_landed_keeps_the_confirm(
         assert reg.confirm(confirm_id).get("in_flight")
         assert reg.followup(human["command_id"]) is not None
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("project_id,signals", [
+    (None, {"synthetic-key": "not-a-dict"}),     # crashed the click
+    (True, None),                                # bool passed as project 1
+])
+def test_malformed_token_scope_is_denied(tmp_path, project_id, signals):
+    """A token context naming no valid positive int project is refused,
+    as on Discord, instead of raising or passing a bool as project 1."""
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, project_ids=frozenset({1}))
+        context = {"source_message_id": 456, "source_hash": "a" * 64}
+        if signals is not None:
+            context["signals"] = signals
+        reg.put_tokens({TOKEN: {
+            "action": "body", "team_id": SCOPE["team_id"],
+            "channel_id": SCOPE["channel_id"], "message_id": TS,
+            "project_id": project_id, "context": context}})
+        body, action = click()
+        await actions._action(ack, body, action)
+        assert list(Path(dirs["cmd_int"]).glob("*.json")) == []
+    asyncio.run(scenario())
