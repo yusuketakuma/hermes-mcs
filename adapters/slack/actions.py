@@ -650,18 +650,27 @@ class Actions:
         if taken == "cancelled":
             await self._say(origin["channel_id"], user, "取り消しました。")
             return
-        try:
-            await self._publish(payload)
-        except (OSError, ValueError):
-            self._reg.end_confirm(confirm_id)
-            await self._say(origin["channel_id"], user, "送信に失敗しました。")
-            return
-        self._reg.consume_confirm(confirm_id)
+        # before the publish: a publish error after the file landed still
+        # owes the receipt (same order as LINE WORKS)
         self._reg.put_followup(payload["command_id"], {
             "kind": "human", "origin": origin, "actor": actor,
             "token": pending["token"], "user": user,
             "route_epoch": self._settings.get("route_epoch"),
             "project_id": payload["project_id"]})
+        try:
+            await self._publish(payload)
+        except (OSError, ValueError):
+            if await asyncio.to_thread(envelopes.command_queued,
+                                       self._dirs["cmd_int"],
+                                       payload["command_id"]):
+                # possibly applied: keep the confirm in flight and the followup
+                await self._say(origin["channel_id"], user,
+                                "受付結果を確認できませんでした。結果の通知をお待ちください。")
+                return
+            self._reg.end_confirm(confirm_id)
+            await self._say(origin["channel_id"], user, "送信に失敗しました。")
+            return
+        self._reg.consume_confirm(confirm_id)
         await self._say(origin["channel_id"], user, "受け付けました。")
         await self.sweep_followups()
 

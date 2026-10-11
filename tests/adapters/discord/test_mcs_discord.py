@@ -1696,6 +1696,44 @@ def test_confirm_publish_failure_releases_in_flight(world, monkeypatch,
     assert "取り消し" in cancel.response.message["content"]
 
 
+def test_confirm_publish_error_after_the_file_landed_keeps_the_confirm(
+        world, monkeypatch):
+    """An OSError after os.replace (the directory fsync) is not a send
+    failure: the command is queued, so the confirm stays in flight (a
+    cancel reads as busy) and the followup still reports the receipt."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "request")
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+    cid = _drive_to_confirm(world, act, tok, msg)
+
+    real = paths.fsync_dir
+
+    def fail(d):
+        if os.path.samefile(d, world.data / "cmd_int"):
+            raise OSError("synthetic fsync failure")
+        real(d)
+    monkeypatch.setattr(paths, "fsync_dir", fail)
+    ok = FakeInteraction(cid, message_id=msg.id)
+    asyncio.run(act.on_interaction(ok))
+    monkeypatch.setattr(paths, "fsync_dir", real)
+    assert not any("送信に失敗" in m["content"] for m in ok.followup.sent)
+    assert "受付結果を確認できませんでした" in ok.followup.sent[-1]["content"]
+    assert reg.confirm(cid[len("mcs:c:"):]).get("in_flight")
+    human = [json.loads(p.read_text())
+             for p in (world.data / "cmd_int").glob("*.json")
+             if json.loads(p.read_text()).get("human_confirmed")]
+    assert len(human) == 1
+    assert reg.followup(human[0]["command_id"]) is not None
+    cancel = FakeInteraction(cid + ":cancel", message_id=msg.id)
+    asyncio.run(act.on_interaction(cancel))
+    assert "処理中" in cancel.response.message["content"]
+
+
 def test_confirm_expiring_before_take_never_publishes(world):
     """The TTL may lapse between the confirm lookup and taking it — the
     take must answer expiry, not queue the command from the stale
