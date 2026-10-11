@@ -373,21 +373,32 @@ def test_invalid_cursor_is_rejected_without_writes(store, tmp_path, cursor):
         view.close()
 
 
-def test_same_clock_body_revision_does_not_rebind_retained_mentions_to_new_hash(store, tmp_path):
+@pytest.mark.parametrize("retained,reason", [
+    # The ledger drops pre-edit fields an edit capture did not re-observe:
+    # nothing is observed for the new body, so the field itself is unknown.
+    (False, "mentions_unknown"),
+    # A row kept from before that ledger rule still holds the old value at the
+    # revision's clock; the view must not bind it to the new hash.
+    (True, "source_binding_unknown"),
+])
+def test_same_clock_body_revision_does_not_rebind_retained_mentions_to_new_hash(
+        store, tmp_path, retained, reason):
     ledger, _ = store
     _post(ledger)
     _meta(ledger)
     changed = _norm_message({"id": 1, "comment": "NEW-SYNTHETIC-BODY",
                              "user": {"id": 22}}, 1)
-    # Exact same clock; old metadata is retained, while the body hash changes.
+    # Exact same clock as the old metadata, while the body hash changes.
     ledger.save_messages([changed], project_id=1, notify=False)
     assert ledger.db.execute("SELECT max(seq) FROM message_revisions "
                              "WHERE message_id=1").fetchone()[0] == 2
+    if retained:
+        _meta(ledger)
     view = _view(store, tmp_path)
     try:
         result = _read(view)
         assert result["state"] == "unknown" and result["counts"]["self_target"] == 0
-        assert result["unknown_reasons"]["source_binding_unknown"] == 1
+        assert result["unknown_reasons"] == {reason: 1}
     finally:
         view.close()
 
