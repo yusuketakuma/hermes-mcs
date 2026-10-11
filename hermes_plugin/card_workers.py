@@ -5,7 +5,7 @@ import json
 import os
 from typing import Any
 
-from . import _config_ids, _id_text, _settings
+from .access import _config_ids, _id_text, _settings
 
 
 def _interactive_settings(ctx, native=None) -> dict[str, Any] | None:
