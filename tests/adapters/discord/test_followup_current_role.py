@@ -11,10 +11,12 @@ from test_mcs_discord import CFG, FakeInteraction, _deliver, actions_mod, world 
 class Guild:
     def __init__(self, roles, cached):
         self.member = SimpleNamespace(id=3003, roles=[SimpleNamespace(id=r) for r in roles])
-        self.cached, self.fetches = cached, 0
+        # without the members intent the cache never sees a role removal
+        self.cached = cached and SimpleNamespace(id=3003, roles=[SimpleNamespace(id=555)])
+        self.fetches = 0
 
     def get_member(self, uid):
-        return self.member if self.cached and uid == 3003 else None
+        return self.cached if uid == 3003 else None
 
     async def fetch_member(self, uid):
         self.fetches += 1
@@ -24,9 +26,9 @@ class Guild:
 
 
 @pytest.mark.parametrize(("current", "cached", "guild_known", "delivered"), [
-    (["555"], True, True, True),        # still holds the role (cache)
-    (["555"], False, True, True),       # still holds it (one member fetch)
-    ([], True, True, False),            # role removed while waiting
+    (["555"], True, True, True),        # still holds the role
+    (["555"], False, True, True),       # still holds it, uncached member
+    ([], True, True, False),            # removed while waiting; stale cache ignored
     ([], False, True, False),           # removed, uncached member
     (["555"], True, False, False),      # guild unknown: fail closed
 ])
@@ -39,6 +41,8 @@ def test_delayed_followup_checks_current_role(world, monkeypatch, current, cache
     _, spec = world.spec()
     act = world.mkactions(reg, bot)
     act._settings = {**SETTINGS, "allowed_role_ids": {"555"}}
+    logs = []
+    act._log = lambda event, **kw: logs.append((event, kw))
     ix = FakeInteraction(f"mcs:a:{world.token(spec, 'body')}", user_id=3003,
                          message_id=bot.channels[42].sent[0].id)
     ix.user = SimpleNamespace(id=3003, roles=[SimpleNamespace(id=555)])
@@ -57,4 +61,6 @@ def test_delayed_followup_checks_current_role(world, monkeypatch, current, cache
     if delivered:
         assert webhook.sent[0]["ephemeral"] and "本文" in webhook.sent[0]["content"]
     assert not reg.followups()          # delivered or dropped, never retried
-    assert guild.fetches == (0 if cached or not guild_known else 1)
+    assert guild.fetches == (1 if guild_known else 0)
+    if not delivered:
+        assert ("followup_dropped", {"reason": "role_check"}) in logs

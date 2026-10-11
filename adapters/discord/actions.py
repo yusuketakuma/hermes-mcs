@@ -716,9 +716,9 @@ class Actions:
 
     async def _actor_still_allowed(self, record: dict) -> bool:
         """A role-authorized actor must hold an allowed role NOW, not
-        only at click time: the member is looked up again (cache, then
-        one fetch through the host client). An unknown member or role
-        set fails closed, as for an interaction (_role_ids)."""
+        only at click time: the member is fetched again through the host
+        client. An unknown member or role set fails closed, as for an
+        interaction (_role_ids)."""
         users = {f"discord:{u}" for u in self._settings.get("allowed_user_ids") or []}
         if record.get("actor") in users:
             return True
@@ -726,7 +726,9 @@ class Actions:
             gid = int(record["origin"]["guild_id"])
             uid = int(str(record["actor"]).removeprefix("discord:"))
             guild = self._bot.get_guild(gid)
-            member = guild.get_member(uid) or await guild.fetch_member(uid)
+            # never the member cache: without the privileged members
+            # intent it does not see a role removal
+            member = await guild.fetch_member(uid)
             roles = {str(r.id) for r in member.roles} - {str(gid)}
         except asyncio.CancelledError:
             raise
@@ -753,6 +755,7 @@ class Actions:
             # not on every sweep tick while the result is pending
             if not await self._actor_still_allowed(rec):
                 self._reg.drop_followup(cid)
+                self._log("followup_dropped", reason="role_check")
                 continue
             if not self._reg.drop_followup(cid):
                 continue                 # the inline wait delivered it
