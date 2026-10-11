@@ -43,7 +43,7 @@ from contextlib import suppress
 from types import SimpleNamespace
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every subdir holding .py files, at any depth, as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
@@ -495,6 +495,7 @@ def _health(ledger, result: dict, status: str,
         "extract_qc_jobs": {"pending": qc["c"],
                             "oldest_age_s": (round(now - qc["o"], 1)
                                              if qc["o"] else 0)},
+        # key kept for health.json consumers; the value is the current version
         "extract_v2_coverage": {
             "extract_version": extract_llm.EXTRACT_VERSION,
             "current": current, "eligible": total,
@@ -1404,7 +1405,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
     Two lanes, one lineage: the rule pass is pure-pattern and instant —
     it keeps real-time analysis at ingest speed so notifications and
     signals never wait on the LLM queue. The extract_llm pass
-    (mcs/extract/v4, EXTRACT_VERSION=4) then folds the same rule output
+    (mcs/extract/v4, extract_llm.EXTRACT_VERSION) then folds the same rule output
     in as prompt hints and mints the extract_v1 artifact itself when
     the rule pass has not."""
     try:
@@ -2128,9 +2129,8 @@ def _main() -> int:
                    notify_max_age_s)
 
         # -- derived data ----------------------------------------------
-        # jobs-only runs skip fetch entirely, so the LLM extract slice
-        # can be wider than the 10-min tick's — still capped well under
-        # RUN_DEADLINE_S so history/trickle stages keep their share.
+        # jobs-only runs give the realtime LLM slice no budget: the
+        # resident backlog workers own background extraction.
         if not _code_changed(result):
             _run_stage(result, "derive", deadline, stage_derive,
                        ledger, result, deadline, cfg,
