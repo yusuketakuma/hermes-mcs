@@ -772,9 +772,10 @@ elif [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] && ! py_ok "$VENV_PY" 14 15; then
     fi
     migration_backup >/dev/null \
         || die "runtime migration lock or backup is invalid — existing checkout and venv retained"
-    git -C "$HERMES_DIR" fetch -q "$HERMES_REPO" "$HERMES_PIN" \
-        && git -C "$HERMES_DIR" checkout -q --detach "$HERMES_PIN" \
-        || die "runtime migration: could not move $HERMES_DIR to $HERMES_PIN — existing venv retained"
+    if ! git -C "$HERMES_DIR" fetch -q "$HERMES_REPO" "$HERMES_PIN" \
+        || ! git -C "$HERMES_DIR" checkout -q --detach "$HERMES_PIN"; then
+        die "runtime migration: could not move $HERMES_DIR to $HERMES_PIN — existing venv retained"
+    fi
     [ "$(git -C "$HERMES_DIR" rev-parse HEAD)" = "$HERMES_PIN" ] \
         || die "runtime migration: $HERMES_DIR is not at $HERMES_PIN after checkout"
     ok "hermes-agent moved $HEAD_SHA -> $HERMES_PIN for the Python 3.14 runtime"
