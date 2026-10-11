@@ -7,7 +7,9 @@ M2MZSSUK (observation services at 23700..25300, value formatter at 180200),
 4WFEVJDT / IGJY24TN (group consultation lists). These are client contracts,
 not proof of server-side read/session preservation.
 
-No scheduler, publication, extraction, patient-group association or new schema.
+No publication, extraction, patient-group association or new schema. The only
+scheduled caller is run_check's jobs-only run, which calls sync_clinical_metadata
+when config clinical_metadata is true.
 sync_metadata requires enabled=True and resolves project/karte from the ledger.
 Names require separate owner opt-in; photos/contact fields are never retained.
 CLI: project_metadata.py sync|view --database PATH --project-id ID --dataset NAME

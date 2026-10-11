@@ -11,7 +11,8 @@ Verified contract (live session, 2026-09):
             &include_meta=1&exclude_terminated_ex_application=1&include_paginate_totals=1
   threads : GET /api/v2t/projects/{pid}/messages/{mid}/messages  (full reply bodies)
   latest  : GET /api/v2t/projects/{id}/messages/latest -> {is_self_only,message{id}}
-  files   : GET {files[].url}  (anonymous 200 — no auth/cookie needed)
+  files   : GET {files[].url} with Bearer; /files/* 302s to a signed URL on
+            files.medical-care.net, followed WITHOUT Authorization
   mark    : GET /api/v2t/projects/{id}/messages?unread=1&timestamp={ts}
             without keep_read_status, followed by project-detail confirmation.
             The adapter requires the collection snapshot timestamp.
@@ -1424,7 +1425,11 @@ class MCSAdapter:
 
     def fetch_project_members(self, project_id: int, *, max_pages: int = 5,
                               per_page: int = 50, retain_names: bool = False) -> MetadataFetch:
-        """Bounded current membership GET; no photos, contacts or departed members."""
+        """Bounded current membership GET; no photos, contacts or departed members.
+
+        Kept since 1.0.13 as a compatibility entry point for callers outside
+        the scheduler; production paths call project_metadata.fetch_metadata.
+        """
         from project_metadata import fetch_metadata
         return fetch_metadata(self._get, "care_team", project_id,
                               max_pages=max_pages, per_page=per_page,
@@ -1432,7 +1437,11 @@ class MCSAdapter:
 
     def fetch_observation_values(self, karte_id: int, lab_test_item_id: int, *,
                                  max_pages: int = 5, per_page: int = 50) -> MetadataFetch:
-        """Read one evidenced lab-test item's values without fetching full karte data."""
+        """Read one evidenced lab-test item's values without fetching full karte data.
+
+        Kept since 1.0.13 as a compatibility entry point for callers outside
+        the scheduler; production paths call project_metadata.fetch_metadata.
+        """
         from project_metadata import fetch_metadata
         return fetch_metadata(self._get, "observation_values", karte_id,
                               item_id=lab_test_item_id,
@@ -1440,7 +1449,11 @@ class MCSAdapter:
 
     def fetch_group_consultations(self, project_id: int, *, project_type: str,
                                   max_pages: int = 5, per_page: int = 20) -> MetadataFetch:
-        """Read group consultation metadata only; never infer patient associations."""
+        """Read group consultation metadata only; never infer patient associations.
+
+        Kept since 1.0.13 as a compatibility entry point for callers outside
+        the scheduler; production paths call project_metadata.fetch_metadata.
+        """
         from project_metadata import fetch_metadata
         if project_type != "group":
             raise ValueError("group project evidence required")
