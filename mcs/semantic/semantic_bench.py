@@ -131,16 +131,30 @@ def _run_case(case: dict, llm_fn, jev_client=None,
                        (summary["claims"] if summary else [])]}
 
 
+def _deferred_reason(r: dict) -> str:
+    """Stage + reason of a deferred case (llm_not_sent, extract_* or summary_*)."""
+    if r.get("error"):
+        return r["error"]
+    if r.get("facts_complete") is False:
+        return f"extract_{r.get('extract_reason')}"
+    return f"summary_{r.get('summary_reason')}"
+
+
 def _aggregate(results: list[dict]) -> dict:
     codes = {}
     claims = findings = 0
     deferred = sum(1 for r in results if r.get("deferred"))
+    by_reason = {}
     for r in results:
+        if r.get("deferred"):
+            reason = _deferred_reason(r)
+            by_reason[reason] = by_reason.get(reason, 0) + 1
         for c in r.get("findings", []):
             codes[c] = codes.get(c, 0) + 1
         claims += r.get("n_claims", 0)
         findings += len(r.get("findings", []))
     return {"cases": len(results), "deferred": deferred,
+            "deferred_by_reason": by_reason,
             "claims": claims,
             "findings_total": findings,
             "findings_per_claim": round(findings / max(1, claims), 3),
@@ -197,6 +211,7 @@ def cmd_run(args) -> int:
     print(f"aggregate[{args.tag}]: {a['findings_total']} findings on "
           f"{a['claims']} claims / {a['cases']} cases -> {args.out}")
     print(f"  codes: {a['finding_codes']}")
+    print(f"  deferred: {a['deferred_by_reason']}")
     return 0
 
 
