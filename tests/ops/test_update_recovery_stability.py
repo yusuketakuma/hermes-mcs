@@ -160,8 +160,12 @@ def test_failed_schema_rollback_stays_frozen_until_restored(
     assert updater._head_sha() == before and restarts == ["child"]
 
     restarts.clear()
+    notices = []
+    monkeypatch.setattr(updater, "_enqueue_notice",
+                        lambda text, *a, **k: notices.append(text) or True)
     assert updater.recover_interrupted() == 1
     assert restarts == [] and Path(updater.MARKER_PATH).exists()
+    assert notices == []                 # frozen: report only, no ledger write
     report = json.loads(Path(updater.REPORT_PATH).read_text())
     assert report["result"] == "escalate" and report["writers_stopped"] is True
     assert "drainers_key" not in report
