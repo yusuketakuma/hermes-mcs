@@ -22,7 +22,7 @@ import time
 from typing import Any
 
 from hermes_plugin import projects
-from adapters.common import envelopes, paths, registry, text
+from adapters.common import confirm, envelopes, paths, registry, text
 from .cards import ACTION_PREFIX, MENU_ID, no_pings, thread_drug_view
 
 MODAL_PREFIX = "mcs:m:"
@@ -650,25 +650,21 @@ class Actions:
             "origin": pending["origin"],
             "project_ids": [payload.get("project_id")],
             "roles": sorted(self._allowed_roles(_role_ids(interaction)))})
-        try:
-            await asyncio.to_thread(envelopes.publish_command,
-                                    self._dirs["cmd_int"], payload)
-        except (OSError, ValueError):
-            if await asyncio.to_thread(envelopes.command_queued,
-                                       self._dirs["cmd_int"], cid):
-                # possibly applied: keep the confirm in flight and the followup
-                await self._followup(
+        # consumed only after the command file is durably queued; a
+        # failure that queued nothing keeps the confirm live for a retry
+        if not await confirm.publish_confirmed(
+                self._reg, confirm_id,
+                lambda: asyncio.to_thread(envelopes.publish_command,
+                                          self._dirs["cmd_int"], payload),
+                lambda: asyncio.to_thread(envelopes.command_queued,
+                                          self._dirs["cmd_int"], cid),
+                on_queued=lambda: self._followup(
                     interaction,
-                    "受付結果を確認できませんでした。結果の通知をお待ちください。")
-                return
-            # keep the confirm live — the user may retry
-            self._reg.end_confirm(confirm_id)
-            await self._followup(
-                interaction,
-                "送信に失敗しました。もう一度確定してください。")
+                    "受付結果を確認できませんでした。結果の通知をお待ちください。"),
+                on_failed=lambda: self._followup(
+                    interaction,
+                    "送信に失敗しました。もう一度確定してください。")):
             return
-        # consumed only after the command file is durably queued
-        self._reg.consume_confirm(confirm_id)
         self._result_log(interaction, payload.get("cmd"),
                          {"outcome": "confirmed"},
                          command_id=cid)

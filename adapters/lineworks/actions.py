@@ -6,7 +6,7 @@ import functools
 import re
 
 from hermes_plugin import projects
-from adapters.common import envelopes, paths, registry, text
+from adapters.common import confirm, envelopes, paths, text
 
 from .cards import buttons
 from .client import ClientError
@@ -229,12 +229,11 @@ class Actions:
         if isinstance(payload, str) or not projects.project_allowed(self.settings, payload["project_id"]):
             await self._say(user, payload if isinstance(payload, str) else "対象が無効です。")
             return
-        cid = registry.new_confirm_id()
-        self.reg.put_confirm(cid, {"token": session["token"], "actor": actor,
-                                   "origin": session["origin"], "payload": payload})
+        cid = confirm.open_confirm(self.reg, token=session["token"], actor=actor,
+                                   origin=session["origin"], payload=payload)
         await self._say(user, text.preview_text(session["action"], payload, markdown=False), [
             {"type": "message", "label": label, "postback": f"mcs:c:{cid}{suffix}"}
-            for label, suffix in (("確定する", ""), ("取消", ":cancel"))])
+            for label, suffix in confirm.CHOICES])
 
     async def _confirm(self, cid, cancel, user, actor):
         pending = self.reg.confirm(cid)
@@ -253,36 +252,32 @@ class Actions:
             "token": pending["token"], "user": user,
             "route_epoch": self.settings["route_epoch"],
             "project_id": pending["payload"]["project_id"]})
-        try:
-            await self._publish(pending["payload"])
-        except (OSError, ValueError):
-            if not await asyncio.to_thread(envelopes.command_queued, self.dirs["cmd_int"],
-                                           pending["payload"]["command_id"]):
-                # Nothing reached cmd_int (atomic_write unlinks its tmp): release in_flight so
-                # 確定 can be retried. The followup stays — a retry overwrites it, and a
-                # command the runner consumed in between still reports its receipt.
-                self.reg.end_confirm(cid)
-                await self._say(user, "送信に失敗しました。もう一度「確定する」を押してください。")
-                return
+        async def queued_notice():
             # 公開済みの可能性があるため確認とフォローアップは残し、結果待ちだけ伝える。
             try:
                 await self._say(user, "受付結果を確認できませんでした。結果の通知をお待ちください。")
             except ClientError:
                 pass  # the publish failure, not the notice failure, is what callers must see
-            raise
-        self.reg.consume_confirm(cid)
+
+        # Nothing reached cmd_int (atomic_write unlinks its tmp): on_failed runs after
+        # in_flight is released so 確定 can be retried. The followup stays — a retry
+        # overwrites it, and a command the runner consumed in between still reports its
+        # receipt. A possibly queued command re-raises the publish error (unlike Slack/
+        # Discord, which stop silently) once the notice is attempted.
+        if not await confirm.publish_confirmed(
+                self.reg, cid, lambda: self._publish(pending["payload"]),
+                lambda: asyncio.to_thread(envelopes.command_queued, self.dirs["cmd_int"],
+                                          pending["payload"]["command_id"]),
+                on_queued=queued_notice,
+                on_failed=lambda: self._say(
+                    user, "送信に失敗しました。もう一度「確定する」を押してください。"),
+                reraise_queued=True):
+            return
         await self._say(user, "受け付けました。")
 
     async def sweep_followups(self):
-        followups = list(self.reg.followups().items())
-        if not followups:
-            self._followup_cursor = 0
-            return
-        start = self._followup_cursor % len(followups)
-        count = min(32, len(followups))
-        self._followup_cursor = (start + count) % len(followups)
-        for offset in range(count):
-            cid, rec = followups[(start + offset) % len(followups)]
+        self._followup_cursor, window = confirm.followup_window(self.reg, self._followup_cursor)
+        for cid, rec in window:
             if self.reg.followup(cid) is None:
                 continue
             user = rec["user"]
