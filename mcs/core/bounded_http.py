@@ -48,6 +48,7 @@ def _loopback_endpoint_allowed(endpoint: str) -> bool:
     """Allow only an unauthenticated HTTP endpoint on loopback."""
     try:
         parts = urlsplit(endpoint)
+        parts.port  # noqa: B018 -- raises on a non-numeric/out-of-range port
     except ValueError:
         return False
     return (parts.scheme == "http" and parts.hostname in

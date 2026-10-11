@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "ローカルLLMのポート誤りと .env の文字コード誤りを早い段階で扱うよう修正",
+  "summary": "ローカルLLMの接続先URLに数字でないポートや範囲外のポート（例: 99999）を書いた場合、これまでは設定確認を通過し、実行時に原因の分かりにくい通信失敗になっていました。今後は設定の誤りとして早い段階で拒否します。また、.env に UTF-8 以外の文字（Shift_JIS のコメントなど）が含まれていると認証情報の読み取りが例外で停止していた問題を修正し、そのファイルは未設定として扱って次の .env を参照します。",
+  "upgrade": "追加操作は不要です。ローカルLLMのURLのポートに誤りがある場合は設定確認で拒否されるため、正しいポートに直してください。.env は UTF-8 で保存してください。",
+  "details": [
+    "mcs/core/bounded_http.py の _loopback_endpoint_allowed が parts.port を検証し、数字でないポートや範囲外のポートを拒否する（mcs/ingest/mcs_worker.py の loopback 検証と同じ扱い）。local_llm と mcs_setup の設定検証もこの関数を使うため、同じ判定になる。",
+    "mcs/core/mcs_util.py の env_value は、UTF-8 として読めない .env を読めないファイルと同様に扱い、次の候補ファイルへ進む。文字を置換して読む方式は秘密値を壊すおそれがあるため採用していない。ファイルの内容はログに出さない。"
+  ],
+  "refs": [
+    "mcs/core/bounded_http.py",
+    "mcs/core/mcs_util.py",
+    "tests/core/test_http_numeric_bounds.py",
+    "tests/core/test_core_misc.py"
+  ]
+}
