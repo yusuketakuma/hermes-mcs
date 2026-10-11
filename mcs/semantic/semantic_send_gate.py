@@ -90,7 +90,7 @@ def _summary_current(ledger, project_id: int, message_id: int,
     return None
 
 
-def _enforce_block_reason(ledger, scfg: dict, project_id) -> str | None:
+def enforce_block_reason(ledger, scfg: dict, project_id) -> str | None:
     """The reason semantic content must not ride this send, or None.
 
     Order is mode, project_id type, pause, scope: a malformed id never
@@ -127,7 +127,7 @@ def semantic_gate(ledger, ev, payload: dict, cfg: dict,
         raise ValueError("payload_invalid")
     scfg, _ = _sem.semantic_config(cfg)
     project_id = ev["project_id"]
-    reason = _enforce_block_reason(ledger, scfg, project_id)
+    reason = enforce_block_reason(ledger, scfg, project_id)
     if reason == "payload_invalid":
         raise ValueError(reason)
     if reason is not None:
@@ -205,7 +205,7 @@ def semantic_render_state(ledger, ev, cfg: dict) -> tuple:
     import semantic as _sem
     scfg, _ = _sem.semantic_config(cfg)
     project_id = ev["project_id"]
-    if _enforce_block_reason(ledger, scfg, project_id) is not None:
+    if enforce_block_reason(ledger, scfg, project_id) is not None:
         return ()
     try:
         payload = json.loads(ev["payload"])
@@ -243,7 +243,7 @@ def semantic_render_gate(ledger, ev, initial: tuple, cfg: dict,
     import semantic as _sem
     scfg, _ = _sem.semantic_config(cfg)
     # the cheap policy check runs before the thread_bundle-heavy snapshot
-    reason = _enforce_block_reason(ledger, scfg, ev["project_id"])
+    reason = enforce_block_reason(ledger, scfg, ev["project_id"])
     if reason is not None:
         raise FreezeSend(reason) if in_progress else DeferredSend(reason)
     if semantic_render_state(ledger, ev, cfg) != initial:
@@ -342,7 +342,7 @@ def semantic_summary_block(ledger, r, cfg: dict) -> str:
     try:
         import semantic as _sem
         scfg, _ = _sem.semantic_config(cfg)
-        if _enforce_block_reason(ledger, scfg, r["project_id"]) is not None:
+        if enforce_block_reason(ledger, scfg, r["project_id"]) is not None:
             return ""
         root = r["parent_id"] or r["message_id"]
         # The audited summary must describe the current whole-thread
