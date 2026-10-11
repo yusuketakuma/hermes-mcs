@@ -184,6 +184,21 @@ def test_addressed_section_without_self_id_lists_no_mentions(led):
     assert _section(_digest(led, cfg, allowed=[2]), "自分宛で返信の記録なし") is None
 
 
+def test_addressed_section_keeps_unfetched_and_undetermined(led):
+    _patient(led)
+    _post(led, 110, OTHER, ts=NOW - 5000)          # mentions never fetched
+    # (b) 本人ID不明・シグナル通知なしでも、判定していない投稿があれば明示する
+    sec = _section(_digest(led), "自分宛で返信の記録なし")
+    assert sec is not None and "本人の送信者IDが不明のためメンションは判定していません" in sec
+    # (a) 本人ID既知でも、宛先未取得だけなら0件で消さずに件数を出す
+    _self_known(led)
+    sec = _section(_digest(led), "自分宛で返信の記録なし")
+    assert sec is not None and "0件" in sec and "宛先不明: 1投稿" in sec
+    # 観測済みの0件（本人宛なし）は従来どおり省略する
+    _meta(led, 110, mentions=[{"type": "user", "id": OTHER}], reactions=[])
+    assert _section(_digest(led), "自分宛で返信の記録なし") is None
+
+
 def test_self_mentioned_and_evidence_flags(led, tmp_path):
     def self_mentioned(db, mid):
         return mentions_self(get_message_metadata(db, mid), mcs_signals.self_sender_id(db))
