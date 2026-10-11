@@ -633,7 +633,44 @@ def _hold_event(ledger, ev, cfg, proven_undelivered=False,
 
 
 class _SendFailed(OSError):
-    """Delivery did not begin; the outbox may safely retry."""
+    """Delivery did not begin; the outbox may safely retry.
+
+    ``code`` is the direct sender's final stderr token (empty when the
+    failure was local); it only selects the hold policy, never whether
+    delivery may have begun."""
+
+    code = ""
+
+
+# Direct-sender codes (exit 75) that prove nothing was accepted AND name a
+# condition that heals on its own: connectivity/DNS/timeout before any post,
+# a busy local sender lock, or a platform rate limit. The standalone
+# Slack/Discord sender reports every not_sent outcome (including its
+# identity check failing on a network error) as delivery_not_accepted.
+_TRANSIENT_SEND_CODES = frozenset({
+    "transport_unknown", "rate_limited", "sender_busy",
+    "delivery_not_accepted"})
+# Transient pre-send failures quarantine on elapsed time, not on a retry
+# count: a ~45 min network outage must not park every text notification
+# for manual release. Auth/config/attachment failures keep the 5-attempt cap.
+TRANSIENT_HOLD_AFTER_S = 86400
+PRE_SEND_MAX_ATTEMPTS = 4
+
+
+def _retry_backoff(attempts: int) -> int:
+    return min(3600, 60 * (2 ** min(int(attempts), 6)))
+
+
+def _transient_failing_for(attempts: int) -> int:
+    """Lower bound of seconds spent failing after ``attempts`` failed
+    tries — each retry waits at least its backoff, so the schedule sum
+    never overstates the real elapsed time."""
+    return sum(_retry_backoff(i) for i in range(max(0, int(attempts))))
+
+
+def _transient_pre_send(exc) -> bool:
+    return (isinstance(exc, _SendFailed) and not isinstance(exc, _SendBudget)
+            and exc.code in _TRANSIENT_SEND_CODES)
 
 
 class _SendBudget(_SendFailed):
@@ -755,7 +792,12 @@ def _send(argv: list[str], content: str,
             ("/mcs_standalone/__main__.py", "/lineworks_adapter/__main__.py")):
         # EX_TEMPFAIL from a direct sender: the platform provably
         # accepted nothing (failed before the post, or a definitive reject).
-        raise _SendFailed(detail or "send not accepted")
+        exc = _SendFailed(detail or "send not accepted")
+        # The sender prints its fixed code last; earlier lines may be logs.
+        lines = (r.stderr or "").strip().splitlines()
+        words = lines[-1].split() if lines else []
+        exc.code = words[-1] if words and len(words[-1]) <= 64 else ""
+        raise exc
     if r.returncode != 0:
         # A failed child can have delivered text or some attachments
         # before losing its response. Its exit status is not a negative ACK.
@@ -1048,16 +1090,21 @@ def _fail_event(ledger, ev, cfg, res, exc):
         _hold_event(ledger, ev, cfg, reason="payload_or_progress_invalid")
         res["failed"] += 1
     elif isinstance(exc, OSError | TimeoutError | KeyError):
-        # Same 5-attempt ceiling as the generic path: a permanent
-        # pre-send failure (revoked token, deleted channel, missing
-        # attach) quarantines — with the never-began receipt its digest
-        # members still salvage — while a transient fault self-heals on
-        # the backoff retries instead of either looping forever.
-        if ev["attempts"] >= 4:
+        # A permanent pre-send failure (revoked token, deleted channel,
+        # missing attach) quarantines after the generic 5-attempt ceiling
+        # — with the never-began receipt its digest members still salvage.
+        # A provably transient refusal (network, busy sender, rate limit)
+        # keeps retrying on backoff and holds only after
+        # TRANSIENT_HOLD_AFTER_S of failure, so neither loops forever.
+        if _transient_pre_send(exc):
+            exhausted = _transient_failing_for(ev["attempts"]) >= TRANSIENT_HOLD_AFTER_S
+        else:
+            exhausted = ev["attempts"] >= PRE_SEND_MAX_ATTEMPTS
+        if exhausted:
             _hold_event(ledger, ev, cfg, reason="pre_send_failure")
         else:
-            backoff = min(3600, 60 * (2 ** ev["attempts"]))
-            ledger.outbox_mark(ev["event_id"], "failed", retry_in=backoff)
+            ledger.outbox_mark(ev["event_id"], "failed",
+                               retry_in=_retry_backoff(ev["attempts"]))
         res["failed"] += 1
     else:
         # Per-event containment: an unexpected failure inside
