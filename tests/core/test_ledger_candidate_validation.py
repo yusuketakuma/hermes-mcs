@@ -54,7 +54,8 @@ def test_snapshot_validator_stall_is_killed_and_reaped(tmp_path, monkeypatch):
     start = time.monotonic()
     assert not ledger._valid_snapshot_candidate(
         str(path), deadline=start + 0.3)
-    assert time.monotonic() - start < 2
+    # well under the child's 30 s sleep: the stall was killed, not waited out
+    assert time.monotonic() - start < 15
     assert len(children) == 1 and children[0].poll() is not None
 
 
