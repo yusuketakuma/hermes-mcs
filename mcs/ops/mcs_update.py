@@ -2062,6 +2062,9 @@ def _reconcile_membership(desired: dict) -> list[str]:
     if cfg.get("runtime_mode") == "standalone":
         # One host owns jobs; its restored code reconciles membership on restart.
         return []
+    if cfg.get("runtime_mode", "hermes") != "hermes":
+        # same token as mcs_recover; reported before any cron/agent removal
+        return ["runtime_mode_unverifiable"]
     desired = {} if desired is None else desired
     if not isinstance(desired, dict):
         return ["service_snapshot_invalid"]
@@ -2091,8 +2094,6 @@ def _reconcile_membership(desired: dict) -> list[str]:
         evidence += current["cron"]
     desired_paths = {os.path.normpath(os.path.join(SCRIPTS_DIR, script))
                      for script in desired_cron if script}
-    # standalone returned above; an invalid mode is treated as hermes like
-    # the check above — this runs during recovery and must not raise
     if mcs_setup._hermes_ok(hermes):
         try:
             # one parser with mcs_setup: ANSI-tolerant, None = unparsable

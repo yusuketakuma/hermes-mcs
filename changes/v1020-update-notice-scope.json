@@ -7,7 +7,7 @@
     "未通知の新版を再取得する条件に、HEAD が最新タグを含まないこと（祖先判定）を加えた。取得後の祖先判定を通知・自動適用の判断に使う。",
     "LINE WORKS の影響行は notify.interactive が lineworks のときだけ出す。plan の再起動対象と同じ条件。",
     "plan と check の影響計算で、不正な runtime_mode による ValueError を捕捉する。",
-    "巻戻し・復旧中のサービス整理（_reconcile_membership）は、不正な runtime_mode でも例外を出さず Hermes として扱う（同じ関数の先頭判定と同じ扱い）。"
+    "巻戻し・復旧中のサービス整理（_reconcile_membership）は、不正な runtime_mode を cron と agent の削除より前に runtime_mode_unverifiable として返す（独立 watchdog と同じ扱い）。巻戻しは失敗、復旧は escalate として扱い、例外で中断しない。"
   ],
   "refs": [
     "mcs/ops/mcs_update.py"
