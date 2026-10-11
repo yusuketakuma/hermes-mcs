@@ -682,6 +682,9 @@ def _with_relogin(adapter, ledger, result, where: str, fn, *args,
     auto_login (detail 'auto_login=…'), a run over the relogin budget,
     or a session that dies again right after recovery is not retried —
     it escalates to the run boundary."""
+    n_err = len(result.get("errors", ()))
+    n_inc = len(result.get("incomplete", ()))
+    msgs = result.get("messages")
     try:
         return fn(*args, **kwargs)
     except SessionExpired as e:
@@ -695,6 +698,15 @@ def _with_relogin(adapter, ledger, result, where: str, fn, *args,
             raise
         if state != "ok":
             raise SessionExpired(f"auto_login={state}") from e
+        # these stages re-walk everything, so the replay re-records them;
+        # drop the aborted attempt's incomplete/errors/messages. Job drains
+        # are excluded: a job failed or deferred by the aborted attempt is
+        # not due on replay, so its recorded error must stay.
+        if where in ("unread", "self_probe", "backfill"):
+            del result.get("errors", [])[n_err:]
+            del result.get("incomplete", [])[n_inc:]
+            if msgs is not None:
+                result["messages"] = msgs
         try:
             return fn(*args, **kwargs)
         except SessionExpired as e2:
@@ -1908,7 +1920,7 @@ def _housekeeping(result):
 
 
 def _overdue_housekeeping(result) -> None:
-    """An MCS failure ends the tick before housekeeping; a long outage or
+    """An MCS failure or crash ends the tick before housekeeping; a long outage or
     manual re-login wait must not also stop the local daily backup. Once
     it is overdue (no backup yet is not overdue), run the local-only
     housekeeping — no MCS request, no send — and keep its errors."""
@@ -2193,6 +2205,7 @@ def _main() -> int:
             _fail_run(ledger, args, result, run_id, "failed",
                       f"crash: {type(e).__name__}", deadline,
                       alert="run_failed")
+        _overdue_housekeeping(result)
         _write_health(ledger, result, "failed", run_id=run_id, cfg=cfg)
         print(json.dumps(result, ensure_ascii=False))
         return 1

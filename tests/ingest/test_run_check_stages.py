@@ -1478,6 +1478,67 @@ def _health_unread_at(tmp_path, monkeypatch, unread_at):
     monkeypatch.setattr(run_check, "HEALTH_FILE", str(path))
 
 
+def test_relogin_replay_drops_the_aborted_attempts_records(tmp_path):
+    """Recovered mid-stage expiry: the replay re-records the stage, so the
+    aborted attempt's incomplete/errors/messages must not linger (F10)."""
+    db = _ledger(tmp_path)
+    expired = []
+
+    def replies(m):
+        if m.project_id == 2 and not expired:
+            expired.append(1)
+            raise mcs_adapter.SessionExpired(status=403)
+        return mcs_adapter.ReplyBatch([], [])
+    adapter = SimpleNamespace(
+        auto_login=lambda **kw: "ok",
+        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+            timestamp=123, patients=[_unread_patient(1), _unread_patient(2)]),
+        fetch_unread_messages=lambda pid, ts: mcs_adapter.MessageBatch(
+            messages=[_message(mid=pid, project_id=pid, unread=True)], reached=True),
+        fetch_unread_replies=replies,
+        mark_patient_read=lambda *a, **k: None)
+    result = {"errors": [], "incomplete": [], "messages": 0,
+              "new_messages": 0, "marked_read": [], "run_id": 7}
+    run_check._with_relogin(
+        adapter, db, result, "unread", run_check.stage_unread, adapter, db,
+        SimpleNamespace(mark_read=False), result, time.monotonic() + 30,
+        db.begin_run(None))
+    assert expired == [1]
+    assert result["incomplete"] == [] and result["errors"] == []
+    assert result["messages"] == 2                 # not double-counted
+    assert result["new_messages"] == 2
+    assert [a["state"] for a in result["relogin_attempts"]] == ["ok"]
+    assert run_check._collection(result)["collection"] == "ok"
+    db.close()
+
+
+def test_relogin_replay_keeps_job_drain_failures(tmp_path):
+    """A reply job deferred by job_retry in the aborted attempt is not due
+    on replay, so its recorded failure must survive the relogin."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(80)
+    db.job_add("reply", 80, message_id=11, parent_id=10)
+    db.job_add("reply", 80, message_id=21, parent_id=20)
+    expired = []
+
+    def fetch_thread(pid, parent):
+        if parent == 10:
+            raise mcs_adapter.MCSError("network_error", retryable=True)
+        if not expired:
+            expired.append(1)
+            raise mcs_adapter.SessionExpired(status=403)
+        return []
+    adapter = SimpleNamespace(auto_login=lambda **kw: "ok",
+                              fetch_thread=fetch_thread)
+    result = {"errors": [], "run_id": 7}
+    run_check._with_relogin(
+        adapter, db, result, "reply_jobs", job_ops.run_reply_jobs,
+        adapter, db, result, time.monotonic() + 60)
+    assert expired == [1]
+    assert result["errors"] == ["reply 11: network_error"]
+    db.close()
+
+
 def test_relogin_journals_heal_facts_without_seeding(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     _health_unread_at(tmp_path, monkeypatch, time.time() - 3 * 3600)
