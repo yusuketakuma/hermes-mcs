@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "自分の投稿などがまとめて増えたとき、一部が通知されないことがある問題を修正",
+  "summary": "self_posts を有効にしている環境で、未読にならない新着投稿（自分の投稿や他の人が既読にした投稿）が1回の確認で取得上限（2ページ）を超えて届くと、上限を超えた分が通知されずに保存され、その後も通知されないことがありました。同じ回の取りこぼし補完で保存される投稿のうち、確認前の最新投稿より新しいものは通知するよう修正しました。それより古い履歴は従来どおり通知しません。",
+  "upgrade": "追加操作は不要です。self_posts を有効にしている場合だけ動作が変わります。更新前に通知されずに保存された投稿は、さかのぼって通知されません。",
+  "details": [
+    "mcs/ingest/run_check.py: stage_self_probe がページ上限で打ち切られた患者の取得起点を記録し、同じ回の stage_backfill へ渡す。補完でも上限に届かない場合は probe {pid}: history_incomplete をエラーとして表示する。",
+    "mcs/core/ledger.py: save_messages に notify_new_after_ts を追加し、指定時刻より後に投稿された新規保存行だけを通知候補に加える。notify_max_age_s による古さの制限はそのまま適用される。"
+  ],
+  "refs": [
+    "mcs/ingest/run_check.py",
+    "mcs/core/ledger.py",
+    "tests/ingest/test_run_check_stages.py"
+  ]
+}
