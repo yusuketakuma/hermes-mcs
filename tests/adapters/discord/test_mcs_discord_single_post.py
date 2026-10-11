@@ -19,6 +19,7 @@ from hermes_plugin.mcs_discord import cards
 from hermes_plugin.mcs_discord.delivery import DeliveryWorker
 from discord_delivery_testkit import (BOT_USER, SETTINGS, FakeHTTP,
                                       FakeHTTPClient, _chunks, _claim,
+                                      _publish_on_drive,
                                       _sent_parts, _spec, _state)
 
 _discord = types.ModuleType("discord")          # send_attachment's File
@@ -169,7 +170,7 @@ def _mk(tmp_path, bot):
     w = DeliveryWorker(bot=bot, settings=SETTINGS, root=str(tmp_path),
                        reg=Registry(str(_state(tmp_path))), worker_id="w1",
                        log=lambda ev, **kw: logs.append((ev, kw)))
-    return w, logs
+    return _publish_on_drive(w), logs
 
 
 def _attachment_spec(tmp_path):

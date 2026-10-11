@@ -15,7 +15,7 @@ from hermes_plugin.mcs_delivery.registry import Registry, scope_key
 from hermes_plugin.mcs_discord.delivery import DeliveryWorker
 from discord_delivery_testkit import (
     BOT_USER, DELIVERY_ID, SETTINGS, FakeHTTP, FakeHTTPClient, _chunks,
-    _claim, _receipts, _sent_parts, _spec, _state,
+    _claim, _publish_on_drive, _receipts, _sent_parts, _spec, _state,
 )
 
 # cards.send_attachment lazy-imports the SDK inside the function —
@@ -174,7 +174,7 @@ def _mkworker(tmp_path, bot=None, wid="w1"):
     w = DeliveryWorker(bot=bot, settings=SETTINGS, root=str(tmp_path),
                        reg=reg, worker_id=wid,
                        log=lambda *_a, **_k: None)
-    return w, reg, bot
+    return _publish_on_drive(w), reg, bot
 
 
 def _journal_card_delivered(state_dir, message_id="9001"):

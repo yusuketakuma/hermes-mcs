@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import types
 
 from hermes_plugin.mcs_delivery import envelopes, journal
@@ -92,6 +93,22 @@ def _spec(chunks, manifest=None, op="create", thread_id=None, prior=None):
                       "thread_name": "テスト スレッド",
                       "thread_body_parts": chunks,
                       "manifest": manifest}}
+
+
+def _publish_on_drive(w):
+    """Part tests drive a spec directly; the worker sends parts only while
+    its spec file is still published (revocation withdraws it), so stand
+    in for the runner's publication unless a test already did it."""
+    async def published(claim, *a, **kw):
+        path = os.path.join(w._dirs["render"],
+                            claim["spec"]["delivery_id"] + ".json")
+        if not os.path.exists(path):
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(claim["spec"], fh)
+        # resolved per call so a class-level monkeypatch still applies
+        return await type(w)._drive_parts(w, claim, *a, **kw)
+    w._drive_parts = published
+    return w
 
 
 def _state(tmp_path):
