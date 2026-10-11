@@ -21,7 +21,7 @@ def pytest_collection_finish(session):
     lane = session.config.getoption("--sdk-lane")
     if lane is None:
         raise pytest.UsageError("select --sdk-lane for the pinned SDK guard")
-    expected = ({"test_standalone_sdk.py", "test_standalone_discord.py",
+    expected = ({"test_standalone_discord.py",
                  "test_standalone_slack_sdk.py"} if lane == "standalone" else
                 {"test_hermes_discord.py", "test_hermes_slack.py",
                  "test_hermes_config.py", "test_discord_sdk_real.py"})

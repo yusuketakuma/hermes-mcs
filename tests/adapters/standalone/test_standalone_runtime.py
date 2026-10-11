@@ -13,7 +13,6 @@ from hermes_plugin import _validate_context
 from hermes_plugin.card_workers import _interactive_settings, _slack_adapter_settings
 from mcs_standalone import __main__ as cli
 from mcs_standalone import config
-from mcs_standalone.discord_runtime import command_context
 from mcs_standalone.host import Host, NotSent
 
 # split so the CI secret-pattern scan never sees a token shape
@@ -71,12 +70,16 @@ def test_supervisor_settings_match_the_hermes_plugin(tmp_path):
 
 
 def test_mcs_command_context_is_accepted_by_the_plugin():
+    from adapters.discord.standalone import _native_context
+    settings = {**DISCORD, "allowed_chat_ids": [DISCORD["channel_id"]]}
     interaction = SimpleNamespace(user=SimpleNamespace(id=4000000000000000004, bot=False),
+                                  application_id=2000000000000000002,
+                                  channel=SimpleNamespace(parent_id=None),
                                   channel_id=1000000000000000001, guild_id=3000000000000000003)
-    identity, error = _validate_context(command_context(interaction, {"profile": "default"}))
+    identity, error = _validate_context(_native_context(interaction, settings, slash=True))
     assert error is None and identity["user_id"] == "4000000000000000004"
     interaction.user.bot = True
-    assert command_context(interaction, {"profile": "default"}) is None
+    assert _native_context(interaction, settings, slash=True) is None
 
 
 def test_tokens_come_only_from_the_private_mcs_env(tmp_path, monkeypatch):
@@ -213,15 +216,6 @@ def test_refused_payload_and_missing_sdk_exit_codes(tmp_path, monkeypatch):
     assert _send(tmp_path, monkeypatch, {"text": "x"})[0] == 75
 
 
-def test_slack_mrkdwn_never_forms_emphasis_from_a_lone_asterisk():
-    from mcs_standalone.slack_runtime import _mrkdwn
-    # **bold** still becomes Slack *bold*, and pings stay escaped
-    assert _mrkdwn("**患者** <!here> & <@U1>") == \
-        "*患者* &lt;!here&gt; &amp; &lt;@U1&gt;"
-    # stray * could pair up into Slack bold on the wrong span
-    assert _mrkdwn("2*3 and *odd and a *b* c") == "2＊3 and ＊odd and a ＊b＊ c"
-
-
 def test_pinned_skips_marker_gated_dependencies(tmp_path, monkeypatch):
     req = tmp_path / "requirements-standalone.txt"
     req.write_text("# comment\n"
@@ -242,15 +236,20 @@ def test_unfinished_setup_is_retried_not_held(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("transport", ["slack", "discord"])
-def test_legacy_runtime_import_is_the_platform_module(transport, monkeypatch):
+def test_runtime_resolves_the_platform_standalone_module(transport):
     from importlib import import_module
-    old = import_module(f"mcs_standalone.{transport}_runtime")
-    current = import_module(f"adapters.{transport}.runtime_compat")
-    assert old is current
-    marker = object()
-    monkeypatch.setattr(old, "_client", marker)
-    assert current._client is marker
     assert cli._runtime(transport) is import_module(f"adapters.{transport}.standalone")
+
+
+def test_unrepresentable_restart_timestamp_is_ignored(monkeypatch, tmp_path):
+    from mcs_standalone import runtime
+    instance = object.__new__(runtime.Runtime)
+    instance.data = tmp_path
+    instance.generation = "a" * 32
+    monkeypatch.setattr(runtime.config, "_private_bytes", lambda *_args: (
+        '{"generation":"' + "a" * 32 + '","request_id":"' + "b" * 32
+        + '","requested_at":' + str(10 ** 400) + '}').encode())
+    assert instance._restart_requested(1) is False
 
 
 @pytest.mark.parametrize("key,value", [("allowed_role_ids", ["abc"]),

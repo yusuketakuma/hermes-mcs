@@ -249,26 +249,24 @@ def test_adapter_async_gate_keeps_process_and_network_blocked(monkeypatch, tmp_p
 
 
 @pytest.mark.parametrize(("relative", "source", "allowed"), [
-    ("discord/runtime_compat.py", "def make():\n from discord.ext import commands\n return commands.Bot()\n", True),
-    ("discord/runtime_compat.py", "def make():\n from discord import app_commands\n"
-     " return app_commands.command(name='synthetic')\n", True),
+    ("discord/standalone.py", "def make():\n from discord.ext import commands\n return commands.Bot()\n", True),
     ("discord/standalone.py", "def make():\n from discord import Client\n return Client()\n", False),
     ("discord/standalone.py", "def make():\n from discord.ext import commands\n return commands.Cog()\n", False),
     ("discord/standalone.py", "def make():\n from discord import app_commands as a\n return a.Group()\n", False),
-    # Each independent file gets only the surface it uses, not the union.
+    # The independent file gets only the surface it uses.
     ("discord/standalone.py", "def make():\n from discord import app_commands\n"
      " return app_commands.command(name='synthetic')\n", False),
-    ("discord/runtime_compat.py", "def make():\n import discord\n return getattr(discord, 'Client')\n", False),
+    ("discord/standalone.py", "def make():\n import discord\n return getattr(discord, 'Client')\n", False),
     ("discord/standalone.py", "def make():\n import discord\n return discord\n", True),
     ("discord/standalone.py", "def make():\n import discord\n from discord.ext import commands\n"
      " return discord, commands\n", True),
     # A bare from-imported name gets no wider access than the module form.
-    ("discord/runtime_compat.py", "def make():\n from discord.ext import commands\n"
+    ("discord/standalone.py", "def make():\n from discord.ext import commands\n"
      " return getattr(commands, 'Cog')\n", False),
-    ("discord/runtime_compat.py", "def make():\n from discord import Intents\n"
+    ("discord/standalone.py", "def make():\n from discord import Intents\n"
      " return Intents(guilds=True)\n", False),
-    ("discord/runtime_compat.py", "def make():\n from discord import app_commands\n return app_commands\n", False),
-    ("discord/runtime_compat.py", "def make():\n from discord import Intents\n return Intents.none()\n", True),
+    ("discord/standalone.py", "def make():\n from discord import app_commands\n return app_commands\n", False),
+    ("discord/standalone.py", "def make():\n from discord import Intents\n return Intents.none()\n", True),
     ("slack/standalone.py", "from asyncio import sleep\n", True),
     ("slack/standalone.py", "from asyncio import create_subprocess_exec\n", False),
     ("lineworks/actions.py", "from asyncio import open_connection as connect\n", False),
@@ -311,7 +309,7 @@ def test_notify_gate_scans_independent_entry_points(monkeypatch):
     assert {gates.STANDALONE, gates.ROOT / "lineworks_adapter"} <= set(seen)
 
 
-@pytest.mark.parametrize("filename", ["standalone.py", "runtime_compat.py"])
+@pytest.mark.parametrize("filename", ["standalone.py"])
 def test_independent_sdk_exception_keeps_core_and_ambient_secrets_blocked(monkeypatch, tmp_path, filename):
     gates = _load("ci_standalone_sdk", "ci/gates.py")
     adapters = tmp_path / "adapters"

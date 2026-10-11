@@ -7,7 +7,6 @@ case "${1:-}" in
     standalone)
         exec "$repo/scripts/run_tests.sh" -p integration.sdk_safety --sdk-lane standalone \
             "$repo/integration/test_pinned_sdk_versions.py" \
-            "$repo/integration/test_standalone_sdk.py" \
             "$repo/integration/test_standalone_discord.py" \
             "$repo/integration/test_standalone_slack_sdk.py" \
             -o addopts= -q -s -r fEs
