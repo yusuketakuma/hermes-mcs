@@ -186,33 +186,139 @@ def circuit_open_s(ledger) -> float:
     return max(0.0, until - _time.time()) if math.isfinite(until) else 0.0
 
 
+@contextmanager
+def _circuit_lock(path):
+    """Serialize the breaker/health read-modify-write across the extract
+    workers, the semantic lanes and the tick. Blocking but brief (one
+    small JSON rewrite); an unopenable lock file fails open so the guard
+    never stops the lane it protects."""
+    fd = None
+    try:
+        fd = os.open(f"{path}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError:
+        pass
+    try:
+        yield
+    finally:
+        if fd is not None:
+            with suppress(OSError):
+                os.close(fd)   # closing releases the flock; keep the inode
+
+
+# Health marker beside the breaker file: when the endpoint last answered
+# and since when it has been observed down. The breaker file is deleted
+# on success (absence = closed), so the marker lives apart. Stall checks
+# read it: an outage keeps the job queues' updated_at fresh (every free
+# defer rewrites it), so queue age alone never fires.
+_HEALTH_SUCCESS_REFRESH_S = 60.0
+
+
+def llm_health_path(ledger):
+    return circuit_state_path(ledger).with_name("llm_health.json")
+
+
+def _finite_ts(value) -> float | None:
+    if type(value) not in (int, float):
+        return None
+    try:
+        value = float(value)
+    except OverflowError:
+        return None
+    return value if math.isfinite(value) and value >= 0 else None
+
+
+def llm_health(ledger) -> dict:
+    """{"last_success": ts|None, "down_since": ts|None} in wall-clock
+    seconds. Missing/corrupt state reads as unknown, never as an outage."""
+    state = load_config(llm_health_path(ledger))
+    return {"last_success": _finite_ts(state.get("last_success")),
+            "down_since": _finite_ts(state.get("down_since"))}
+
+
+def llm_last_success(ledger) -> float | None:
+    """Wall-clock time the local LLM last answered a lane call, or None."""
+    return llm_health(ledger)["last_success"]
+
+
+def llm_down_since(ledger) -> float | None:
+    """Start of the current endpoint-down/timeout streak, or None."""
+    return llm_health(ledger)["down_since"]
+
+
+def llm_down_for_s(ledger, now: float | None = None) -> float | None:
+    """Seconds the endpoint has been observed down with no answered call
+    since; None when it is not currently observed down."""
+    since = llm_down_since(ledger)
+    if since is None:
+        return None
+    return max(0.0, (time.time() if now is None else now) - since)
+
+
+def _health_write(path, state: dict) -> None:
+    payload = json.dumps(state)
+    with suppress(OSError):
+        atomic_write(str(path), lambda f: f.write(payload))
+
+
+def _mark_llm_success(ledger) -> None:
+    now = time.time()
+    current = llm_health(ledger)
+    if current["down_since"] is None and current["last_success"] is not None \
+            and 0 <= now - current["last_success"] < _HEALTH_SUCCESS_REFRESH_S:
+        return   # one rewrite per minute on a busy healthy lane
+    _health_write(llm_health_path(ledger), {"last_success": now})
+
+
+def _mark_llm_down(ledger) -> None:
+    current = llm_health(ledger)
+    if current["down_since"] is not None:
+        return
+    state = {"down_since": time.time()}
+    if current["last_success"] is not None:
+        state["last_success"] = current["last_success"]
+    _health_write(llm_health_path(ledger), state)
+
+
 def circuit_success(ledger) -> None:
     """Any answered call proves the endpoint is alive — reset state."""
-    with suppress(OSError):
-        circuit_state_path(ledger).unlink(missing_ok=True)
+    path = circuit_state_path(ledger)
+    with _circuit_lock(path):
+        with suppress(OSError):
+            path.unlink(missing_ok=True)
+        _mark_llm_success(ledger)
+
+
+def circuit_streak(ledger) -> int:
+    """Trips of the current outage (0 = not tripped since the last
+    answered call). Corrupt state reads as 0."""
+    streak = _circuit_state(ledger).get("streak")
+    return streak if type(streak) is int and streak >= 0 else 0
 
 
 def circuit_failure(ledger) -> None:
     """Endpoint-down observation: count consecutive probes and open the
-    breaker on a doubling cooldown once the streak trips."""
-    import time as _time
+    breaker on a doubling cooldown once the streak trips. The read-
+    modify-write holds a flock so concurrent lanes never lose a count."""
     path = circuit_state_path(ledger)
-    state = _circuit_state(ledger)
-    fails, streak = state.get("failures"), state.get("streak")
-    fails = min(fails, _CIRCUIT_TRIP - 1) \
-        if type(fails) is int and fails >= 0 else 0
-    streak = min(streak, _CIRCUIT_MAX_STREAK) \
-        if type(streak) is int and streak >= 0 else 0
-    fails += 1
-    out = {"failures": fails, "streak": streak}
-    if fails >= _CIRCUIT_TRIP:
-        out["streak"] = min(streak + 1, _CIRCUIT_MAX_STREAK)
-        out["open_until"] = _time.time() + min(
-            _CIRCUIT_MAX_S, _CIRCUIT_BASE_S * 2 ** out["streak"])
-        out["failures"] = 0
-    payload = json.dumps(out)
-    with suppress(OSError):
-        atomic_write(str(path), lambda f: f.write(payload))
+    with _circuit_lock(path):
+        state = _circuit_state(ledger)
+        fails, streak = state.get("failures"), state.get("streak")
+        fails = min(fails, _CIRCUIT_TRIP - 1) \
+            if type(fails) is int and fails >= 0 else 0
+        streak = min(streak, _CIRCUIT_MAX_STREAK) \
+            if type(streak) is int and streak >= 0 else 0
+        fails += 1
+        out = {"failures": fails, "streak": streak}
+        if fails >= _CIRCUIT_TRIP:
+            out["streak"] = min(streak + 1, _CIRCUIT_MAX_STREAK)
+            out["open_until"] = time.time() + min(
+                _CIRCUIT_MAX_S, _CIRCUIT_BASE_S * 2 ** out["streak"])
+            out["failures"] = 0
+        payload = json.dumps(out)
+        with suppress(OSError):
+            atomic_write(str(path), lambda f: f.write(payload))
+        _mark_llm_down(ledger)
 
 
 def disk_free_mb(ledger) -> float | None:
