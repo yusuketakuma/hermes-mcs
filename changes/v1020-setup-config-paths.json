@@ -7,7 +7,8 @@
     "init --plugin-user-ids / --plugin-project-ids は、interactive と通知先から決まる Slack/Discord の scope が1つのときだけ、その scope へ適用する。--plugin-chat-ids / --plugin-role-ids は Discord だけに適用し、それ以外は従来どおり「適用されません」と表示する。",
     "fact-source は validate_config の「semantic: validator failed」も拒否理由として扱い、config.json を書き換えない。",
     "doctor の disk.dirty は git status --porcelain --untracked-files=no の結果で判定する。",
-    "notify.{slack,discord,lineworks}.project_ids が 1000 件（通知ランナーの SCOPE_MAX）を超え、project_ids_auto が true でない場合に警告する。"
+    "notify.{slack,discord,lineworks}.project_ids が 1000 件（通知ランナーの SCOPE_MAX）を超え、project_ids_auto が true でない場合に警告する。",
+    "check は notify_bot_profile の形式エラーを1回だけ表示する（以前は同じエラーを2回表示し、blocker を2件と数えていた）。"
   ],
   "refs": [
     "mcs/ops/mcs_setup.py",

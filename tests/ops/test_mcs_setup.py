@@ -229,10 +229,13 @@ def test_check_environment_resolves_hermes_binary(monkeypatch,
     assert not any("hermes CLI" in e for e in errors)
     assert calls[-1] == "/opt/h/hermes"
 
-    # invalid profile pattern still an error
+    # the profile pattern is validate_config's alone — `check` joins both
+    # lists, so a second copy here printed and counted the blocker twice
     errors, _ = mcs_setup.check_environment(
         {"notify_bot_profile": "Bad Name!"})
-    assert any("notify_bot_profile" in e for e in errors)
+    assert not any("notify_bot_profile" in e for e in errors)
+    assert any("notify_bot_profile" in e for e in
+               mcs_setup.validate_config({"notify_bot_profile": "Bad Name!"})[0])
 
 
 def test_check_environment_detects_locked_keychain(monkeypatch):

@@ -60,7 +60,7 @@ if sys.version_info < (3, 10):
         "(/usr/bin/python3 is too old)")
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every subdirectory holding .py files (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 sys.path.insert(0, os.path.dirname(os.path.dirname(
@@ -246,7 +246,6 @@ def _validate_llm(ll: dict) -> list[str]:
     url = ll.get("url")
     if isinstance(url, str) and url.strip():
         try:
-            import bounded_http
             allowed = bounded_http._loopback_endpoint_allowed(url)
         except Exception:
             allowed = False
@@ -714,10 +713,6 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
     llm_errors, llm_warnings = _check_llm(cfg)
     errors.extend(llm_errors)
     warnings.extend(llm_warnings)
-    profile = cfg.get("notify_bot_profile")
-    if isinstance(profile, str) and profile \
-            and not re.fullmatch(r"[a-z0-9_-]+", profile):
-        errors.append("notify_bot_profile: must match [a-z0-9_-]+")
     # Delivery is `hermes send` — the binary must resolve the same way
     # notify_flush._hermes_exe does: config hermes_bin, else PATH, else the
     # standard user-local install (launchd PATH is minimal).
@@ -733,8 +728,7 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
         if r.returncode:
             errors.append("standalone check failed — see "
                           "docs/guides/STANDALONE.md")
-        if sys.platform == "darwin" and STANDALONE_LABEL in _agent_labels(cfg) \
-                and _agent_loaded("ai.hermes.gateway"):
+        if sys.platform == "darwin" and _agent_loaded("ai.hermes.gateway"):
             warnings.append("ai.hermes.gateway is loaded while MCS serves "
                             "Slack/Discord itself — remove that platform from "
                             "Hermes or stop the gateway (docs/guides/STANDALONE.md)")
@@ -2090,7 +2084,6 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
     if not os.path.exists(db_path):
         return out
     try:
-        import sqlite3
         with closing(sqlite3.connect(
                 Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as db:
             now = time.time()
@@ -2726,8 +2719,10 @@ def _cron_label(script: str) -> str:
 
 
 def _calendar(schedule: str) -> list[dict]:
-    """launchd StartCalendarInterval entries for a CRON_JOBS schedule —
-    launchd has no `*/n`, so minute/hour lists are expanded."""
+    """Expand a CRON_JOBS schedule into calendar entries for the standalone scheduler.
+
+    Each entry is a {"Hour", "Minute"} dict (the launchd StartCalendarInterval
+    shape); `*/n` and comma lists are expanded, other fields must be `*`."""
     minute, hour, *rest = schedule.split()
     if rest != ["*", "*", "*"]:
         raise ValueError(f"unsupported schedule {schedule!r}")
@@ -3090,7 +3085,7 @@ def _desired_agents(subs, cfg) -> dict[str, str]:
     return out
 
 
-def _sync_agents(subs, prev, manifest, note, dry, cfg=None, keep=frozenset()) -> int:
+def _sync_agents(subs, manifest, note, dry, cfg=None, keep=frozenset()) -> int:
     """Stage 2: launchd agents (macOS only) — converge content AND
     loaded state; retire owned-but-undesired agents from our naming
     space only, never install.sh-owned labels (S5)."""
@@ -3565,7 +3560,7 @@ def cmd_services(args) -> int:
     hermes = _hermes_exe(cfg)
     cron_labels = frozenset(
         _cron_label(script) for _, _, script in configured_cron_jobs(cfg))
-    problems += _sync_agents(subs, prev, manifest, note, dry, cfg,
+    problems += _sync_agents(subs, manifest, note, dry, cfg,
                              cron_labels | {STANDALONE_LABEL})
     # the Hermes plugin decides from these flags whether to stand down;
     # a failed publish fails the run but never blocks the manifest below
