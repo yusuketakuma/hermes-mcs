@@ -404,7 +404,7 @@ def test_v1012_plist_with_unsafe_python_blocks_before_merge_and_owner_repair_app
     # The unchanged default watchdog is a pre-merge blocker naming the step.
     result = updater.plan(objects.target)
     assert result["route"] == "blocked"
-    assert "recovery_runtime: runtime SQLite WAL-reset fix missing" in result["blockers"]
+    assert "recovery_runtime: runtime Python version unsupported" in result["blockers"]
     assert any("recovery_python" in note for note in result["notes"])
     assert updater.apply(objects.target, objects.after, None, reinstall=install) == 1
     assert not merged() and objects.head == objects.before

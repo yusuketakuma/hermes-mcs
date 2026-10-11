@@ -14,7 +14,7 @@ def local_config(monkeypatch):
         "mcs_login_id": "synthetic-private-id", "notify_target": "local"})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(mcs_setup, "_runtime_probe", lambda exe: {
-        "python": "3.11.15", "sqlite": "3.51.3",
+        "python": "3.14.8", "sqlite": "3.51.3",
         "packages": {"discord.py": None, "slack-bolt": None, "slack-sdk": None}})
     monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version_info", (3, 51, 3))
     monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version", "3.51.3")
