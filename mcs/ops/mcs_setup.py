@@ -1294,6 +1294,126 @@ def _project_ids_yaml(text: str) -> str | None:
         return None
 
 
+def _apply_standalone_credentials(args, used: set, wanted: list) -> bool:
+    """Provision the wanted standalone tokens into the MCS .env."""
+    # Credentials already provisioned by the native initializer need no dotenv copy.
+    from mcs_standalone.config import credentials_path, load_credentials
+    if used & {"slack", "discord"} and all(
+            os.path.lexists(credentials_path(HOME, transport))
+            for transport in used & {"slack", "discord"}):
+        try:
+            for transport in used & {"slack", "discord"}:
+                load_credentials(HOME, transport)
+            return True
+        except ValueError:
+            return False
+    updates, missing = {}, []
+    for env_key, desc in wanted:
+        if env_value(env_key, paths=[ENV_PATH], check_env=False):
+            print(f"  {env_key}: 設定済み")
+            continue
+        tok = os.environ.get(env_key)
+        hermes_tok = None if tok or args.yes else env_value(
+            env_key, paths=[os.path.expanduser("~/.hermes/.env")], check_env=False)
+        # switching from Hermes: reuse its token only on explicit consent
+        if hermes_tok and input(f"  {env_key}: ~/.hermes/.env の値を使いますか？"
+                                "[y/N]: ").strip().lower() in ("y", "yes"):
+            tok = hermes_tok
+        if not tok and not args.yes:
+            tok = getpass.getpass(f"  {desc}（{ENV_PATH} へ保存。空欄=スキップ）: ") or None
+        if tok:
+            updates[env_key] = tok
+        else:
+            missing.append(env_key)
+    if updates:
+        try:
+            _env_write(ENV_PATH, updates)
+        except ValueError:
+            print("  .env: invalid token format; existing file retained")
+            return False
+        print(f"  {', '.join(sorted(updates))}: {ENV_PATH} へ保存 (0600)")
+    if missing:
+        print("  未設定: " + ", ".join(missing)
+              + f" — {ENV_PATH} に KEY=値 で追加するか init を再実行")
+    return not missing
+
+
+def _plugin_settings_plan(transport: str, nd: dict, args) -> tuple:
+    """Build the fixed plugin settings and the operator allowlists for a transport."""
+    data = os.path.join(HOME, "data")
+    fixed = {
+        "snapshot": os.path.join(data, "snapshots",
+                                 "ledger-snapshot.db"),
+        "inbox": os.path.join(data, "cmd"),
+        "data_root": data,
+        "interactive": "true",
+    }
+    if transport == "discord":
+        for k in ("profile", "application_id", "guild_id", "channel_id"):
+            if nd.get(k):
+                fixed[k] = nd[k]
+        # operator-specific allowlists: flag > existing value > prompt
+        lists = (
+            ("allowed_user_ids", getattr(args, "plugin_user_ids", None),
+             "カード操作を許可する Discord user ID", ""),
+            ("allowed_chat_ids", getattr(args, "plugin_chat_ids", None),
+             "コマンドを受け付ける Discord channel ID",
+             nd.get("channel_id", "")),
+            ("project_ids", getattr(args, "plugin_project_ids", None),
+             "対象とする MCS project ID", ""),
+        )
+    else:
+        fixed["slack_adapter_enabled"] = "true"
+        for k in ("profile", "application_id", "team_id", "channel_id"):
+            if nd.get(k):
+                fixed[f"slack_{k}"] = nd[k]
+        lists = (
+            ("slack_allowed_user_ids",
+             getattr(args, "plugin_user_ids", None),
+             "カード操作を許可する Slack user ID", ""),
+            ("project_ids", getattr(args, "plugin_project_ids", None),
+             "対象とする MCS project ID", ""),
+        )
+    return fixed, lists
+
+
+def _plugin_store_tokens(exe, profile: str, tokens, args) -> bool:
+    """Store the transport tokens in the serving profile; True when a write failed."""
+    # Pipe tokens to the public writer so process listings cannot expose
+    # them. Older Hermes versions must fail instead of falling back to
+    # argv. `config set` routes *_TOKEN keys to the profile .env. They
+    # must land in the SERVING profile's .env: under multiplex each
+    # profile's secret scope is authoritative and a miss never falls
+    # through to the default profile's .env (agent/secret_scope.py).
+    # Already-configured installs keep their existing tokens.
+    def _store(env_key, tok) -> bool:
+        ok = _hermes_config_set(exe, profile, env_key, tok)
+        print(f"  {env_key}: "
+              + (f"hermes {'-p ' + profile if profile else '既定'} "
+                 ".env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
+        return ok
+
+    failed = False
+    for env_key, desc in tokens:
+        tok = os.environ.get(env_key)
+        if tok:
+            failed |= not _store(env_key, tok)
+        elif _hermes_config_get(exe, profile, env_key):
+            print(f"  {env_key}: 設定済み")
+        else:
+            if not args.yes:
+                tok = getpass.getpass(
+                    f"  {desc}（hermes .env へ保存。"
+                    "空欄=スキップ）: ") or None
+                if tok:
+                    failed |= not _store(env_key, tok)
+            if not tok:
+                print(f"  {env_key}: 未設定 — `hermes "
+                      + (f"-p {profile} " if profile else "")
+                      + "setup` で後から設定")
+    return failed
+
+
 def _apply_plugin_integration(cfg: dict, args) -> bool:
     """Wire the mcs-discord-commands plugin into hermes through the
     public `hermes config` CLI — writes the serving profile's
@@ -1315,46 +1435,7 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
             wanted.append(("SLACK_BOT_TOKEN", "Slack bot token (xoxb-…)"))
         if interactive == "slack":
             wanted.append(("SLACK_APP_TOKEN", "Slack app-level token (xapp-…)"))
-        # Credentials already provisioned by the native initializer need no dotenv copy.
-        from mcs_standalone.config import credentials_path, load_credentials
-        if used & {"slack", "discord"} and all(
-                os.path.lexists(credentials_path(HOME, transport))
-                for transport in used & {"slack", "discord"}):
-            try:
-                for transport in used & {"slack", "discord"}:
-                    load_credentials(HOME, transport)
-                return True
-            except ValueError:
-                return False
-        updates, missing = {}, []
-        for env_key, desc in wanted:
-            if env_value(env_key, paths=[ENV_PATH], check_env=False):
-                print(f"  {env_key}: 設定済み")
-                continue
-            tok = os.environ.get(env_key)
-            hermes_tok = None if tok or args.yes else env_value(
-                env_key, paths=[os.path.expanduser("~/.hermes/.env")], check_env=False)
-            # switching from Hermes: reuse its token only on explicit consent
-            if hermes_tok and input(f"  {env_key}: ~/.hermes/.env の値を使いますか？"
-                                    "[y/N]: ").strip().lower() in ("y", "yes"):
-                tok = hermes_tok
-            if not tok and not args.yes:
-                tok = getpass.getpass(f"  {desc}（{ENV_PATH} へ保存。空欄=スキップ）: ") or None
-            if tok:
-                updates[env_key] = tok
-            else:
-                missing.append(env_key)
-        if updates:
-            try:
-                _env_write(ENV_PATH, updates)
-            except ValueError:
-                print("  .env: invalid token format; existing file retained")
-                return False
-            print(f"  {', '.join(sorted(updates))}: {ENV_PATH} へ保存 (0600)")
-        if missing:
-            print("  未設定: " + ", ".join(missing)
-                  + f" — {ENV_PATH} に KEY=値 で追加するか init を再実行")
-        return not missing
+        return _apply_standalone_credentials(args, used, wanted)
     if not isinstance(ntf, dict) \
             or ntf.get("interactive") not in ("discord", "slack"):
         return True
@@ -1380,41 +1461,10 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
           f"{'-p ' + profile if profile else '既定'}"
           " profile にプラグイン設定を書き込みます")
 
-    data = os.path.join(HOME, "data")
-    fixed = {
-        "snapshot": os.path.join(data, "snapshots",
-                                 "ledger-snapshot.db"),
-        "inbox": os.path.join(data, "cmd"),
-        "data_root": data,
-        "interactive": "true",
-    }
+    fixed, lists = _plugin_settings_plan(transport, nd, args)
     if transport == "discord":
-        for k in ("profile", "application_id", "guild_id", "channel_id"):
-            if nd.get(k):
-                fixed[k] = nd[k]
-        # operator-specific allowlists: flag > existing value > prompt
-        lists = (
-            ("allowed_user_ids", getattr(args, "plugin_user_ids", None),
-             "カード操作を許可する Discord user ID", ""),
-            ("allowed_chat_ids", getattr(args, "plugin_chat_ids", None),
-             "コマンドを受け付ける Discord channel ID",
-             nd.get("channel_id", "")),
-            ("project_ids", getattr(args, "plugin_project_ids", None),
-             "対象とする MCS project ID", ""),
-        )
         tokens = (("DISCORD_BOT_TOKEN", "Discord bot token"),)
     else:
-        fixed["slack_adapter_enabled"] = "true"
-        for k in ("profile", "application_id", "team_id", "channel_id"):
-            if nd.get(k):
-                fixed[f"slack_{k}"] = nd[k]
-        lists = (
-            ("slack_allowed_user_ids",
-             getattr(args, "plugin_user_ids", None),
-             "カード操作を許可する Slack user ID", ""),
-            ("project_ids", getattr(args, "plugin_project_ids", None),
-             "対象とする MCS project ID", ""),
-        )
         tokens = (("SLACK_BOT_TOKEN", "Slack bot token (xoxb-…)"),
                   ("SLACK_APP_TOKEN", "Slack app-level token (xapp-…)"))
     missing = []
@@ -1486,37 +1536,7 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
               " — 後で `hermes config set "
               f"{PLUGIN_SETTINGS}.<key> <値>` で設定してください")
 
-    # Pipe tokens to the public writer so process listings cannot expose
-    # them. Older Hermes versions must fail instead of falling back to
-    # argv. `config set` routes *_TOKEN keys to the profile .env. They
-    # must land in the SERVING profile's .env: under multiplex each
-    # profile's secret scope is authoritative and a miss never falls
-    # through to the default profile's .env (agent/secret_scope.py).
-    # Already-configured installs keep their existing tokens.
-    def _store(env_key, tok) -> bool:
-        ok = _hermes_config_set(exe, profile, env_key, tok)
-        print(f"  {env_key}: "
-              + (f"hermes {'-p ' + profile if profile else '既定'} "
-                 ".env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
-        return ok
-
-    for env_key, desc in tokens:
-        tok = os.environ.get(env_key)
-        if tok:
-            failed |= not _store(env_key, tok)
-        elif _hermes_config_get(exe, profile, env_key):
-            print(f"  {env_key}: 設定済み")
-        else:
-            if not args.yes:
-                tok = getpass.getpass(
-                    f"  {desc}（hermes .env へ保存。"
-                    "空欄=スキップ）: ") or None
-                if tok:
-                    failed |= not _store(env_key, tok)
-            if not tok:
-                print(f"  {env_key}: 未設定 — `hermes "
-                      + (f"-p {profile} " if profile else "")
-                      + "setup` で後から設定")
+    failed |= _plugin_store_tokens(exe, profile, tokens, args)
     return not failed
 
 
