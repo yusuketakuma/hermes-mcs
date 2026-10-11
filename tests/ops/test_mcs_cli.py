@@ -191,7 +191,7 @@ def test_doctor_runs_through_real_cli_without_touching_synthetic_files(tmp_path)
                                   "notify_target": "local"}))
     python = home / ".hermes/hermes-agent/venv/bin/python"
     python.parent.mkdir(parents=True)
-    runtime = json.dumps({"python": "3.10.0", "sqlite": "3.51.3",
+    runtime = json.dumps({"python": "3.14.8", "sqlite": "3.51.3",
                           "packages": {"discord.py": None, "slack-bolt": None,
                                        "slack-sdk": None}})
     python.write_text(f"#!/bin/sh\nprintf '%s\\n' '{runtime}'\n")
