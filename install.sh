@@ -225,9 +225,10 @@ PLUGIN_LINK="$HERMES_HOME/plugins/mcs-discord-commands"
 LLM_MODELS_URL="http://127.0.0.1:8080/v1/models"
 MODEL_DIR="$RUNTIME_HOME/models"
 MODEL_FILE="$MODEL_DIR/Qwen3.5-9B-Q4_K_M.gguf"
-MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf"
-# optional integrity check — set when the published sha256 is known
-MODEL_SHA256="${MCS_MODEL_SHA256:-}"
+# Pinned revision and its LFS sha256 (Hugging Face API + resolve headers,
+# 2026-10-11); a floating main could swap the bytes that read PHI bodies.
+MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf"
+MODEL_SHA256="${MCS_MODEL_SHA256:-03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8}"
 AGENTS_DIR="$HOME/Library/LaunchAgents"
 LLAMA_PLIST="$AGENTS_DIR/ai.mcs.llamaserver.plist"
 HERMES_LLAMA_PLIST="$AGENTS_DIR/ai.hermes.llamacpp.plist"
@@ -1055,12 +1056,10 @@ else
                         -o "$MODEL_FILE.part" "$MODEL_URL" \
                     || die "model download failed — re-run install.sh to resume (partial file: $MODEL_FILE.part)"
             fi
-            if [ -n "$MODEL_SHA256" ]; then
-                _got="$(shasum -a 256 "$MODEL_FILE.part" | awk '{print $1}')"
-                if [ "$_got" != "$MODEL_SHA256" ]; then
-                    rm -f "$MODEL_FILE.part"
-                    die "model checksum mismatch (got $_got) — the partial file was removed; re-run install.sh"
-                fi
+            _got="$(shasum -a 256 < "$MODEL_FILE.part" | awk '{print $1}')"
+            if [ "$_got" != "$MODEL_SHA256" ]; then
+                rm -f "$MODEL_FILE.part"
+                die "model checksum mismatch (got $_got) — the partial file was removed; re-run install.sh"
             fi
             mv -f "$MODEL_FILE.part" "$MODEL_FILE"
             ok "model downloaded"

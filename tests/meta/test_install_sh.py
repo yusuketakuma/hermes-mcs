@@ -12,6 +12,7 @@ internals; here the venv `python` is a recording stub so the SHELL
 contract — stage ordering, idempotent rerun, partial-failure recovery —
 is what is tested.
 """
+import hashlib
 import os
 import json
 import plistlib
@@ -247,6 +248,9 @@ exit 0
 """
 
 
+STUB_MODEL_SHA256 = hashlib.sha256(b"stub-model-bytes\n").hexdigest()
+
+
 def _world(tmp_path, *, brew=True, git_head=None, path_hermes=False):
     home = tmp_path / "home"
     hermes_home = home / ".hermes"
@@ -321,6 +325,8 @@ exec(compile(code, '<installer-runtime-check>', 'exec'))
         "STUB_GIT_HEAD": git_head or _pin(),
         "STUB_CLONE_HEAD": CLONE_HEAD,
         "STUB_PARSE_PYTHON": sys.executable,
+        # sha256 of the stub curl's model bytes ("stub-model-bytes\n")
+        "MCS_MODEL_SHA256": STUB_MODEL_SHA256,
     })
     return home, hermes_home, stub_root, env
 
@@ -968,7 +974,8 @@ def test_complete_part_is_not_requested_again(tmp_path):
     models.mkdir(parents=True)
     part = models / "Qwen3.5-9B-Q4_K_M.gguf.part"
     part.write_text("complete-model")
-    r = _run({**env, "STUB_MODEL_SIZE": str(part.stat().st_size)},
+    r = _run({**env, "STUB_MODEL_SIZE": str(part.stat().st_size),
+              "MCS_MODEL_SHA256": hashlib.sha256(b"complete-model").hexdigest()},
              hermes_home)
     assert r.returncode == 0, r.stderr
     assert (models / "Qwen3.5-9B-Q4_K_M.gguf").read_text() == "complete-model"
@@ -992,6 +999,20 @@ def test_dry_run_plans_no_second_llm_when_hermes_manages_it(tmp_path):
 def test_model_checksum_mismatch_is_fatal(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     r = _run({**env, "MCS_MODEL_SHA256": "0" * 64}, hermes_home)
+    assert r.returncode == 1 and "checksum mismatch" in r.stderr
+    assert not (hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf").exists()
+
+
+def test_model_download_is_pinned_and_verified_by_default(tmp_path):
+    """The GGUF comes from a fixed revision and is checked against its
+    published sha256 even when MCS_MODEL_SHA256 is not set."""
+    text = INSTALL.read_text()
+    assert re.search(r'^MODEL_URL="https://huggingface\.co/[^"]+/resolve/[0-9a-f]{40}/[^"]+\.gguf"$',
+                     text, re.M)
+    assert re.search(r'^MODEL_SHA256="\$\{MCS_MODEL_SHA256:-[0-9a-f]{64}\}"$', text, re.M)
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    del env["MCS_MODEL_SHA256"]
+    r = _run(env, hermes_home)
     assert r.returncode == 1 and "checksum mismatch" in r.stderr
     assert not (hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf").exists()
 
