@@ -21,6 +21,7 @@ import argparse
 from datetime import datetime
 import fcntl
 import json
+import math
 import os
 import re
 import sys
@@ -30,7 +31,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
-from export_schema import finite_number as _finite_number
 import maintenance
 from mcs_queries import JST
 from mcs_util import HOME, load_config
@@ -48,6 +48,17 @@ UNKNOWN_HISTORY = 50        # retained uncertain-delivery records
 
 OVERALL_STATUS = {"ok": "ok", "degraded": "degraded",
                   "failed": "failed"}
+
+
+def _finite_number(value) -> bool:
+    # mirrors mcs_backup's finite check; the tick_no_ext gate keeps the
+    # watchdog off the manual-only C1 modules that hold the shared copy
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _tick_settings(cfg: dict) -> tuple[dict, float, float]:
