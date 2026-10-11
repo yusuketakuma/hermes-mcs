@@ -25,12 +25,17 @@ mints that single self-correcting pipeline as engine v4:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import time
 from mcs_util import loads_dict
+from mcs_queries import (current_projection_id, current_v4_id, current_v4_pred,
+                         json_object_or_null)
 from semantic_policy import (JOB_KIND, KIND_AUDIT, KIND_COVERAGE,
-                             KIND_FACT_AUDIT, KIND_LOOP, KIND_SUMMARY)
+                             KIND_FACTS_V2, KIND_FACT_AUDIT, KIND_FACT_PROJ,
+                             KIND_FACT_REPAIR, KIND_LOOP, KIND_SUMMARY,
+                             policy_fingerprint)
 
 ENGINE_VERSION = 4
 KIND_V4 = "semantic_facts_v4"
@@ -57,7 +62,6 @@ def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
     same generation and stage adds no information and is skipped — a
     job waiting on a durable resource outage re-walks S0–S2 every drain
     without consuming attempts, and must not append rows forever."""
-    from mcs_queries import json_object_or_null
     receipt = {"stage": stage, "status": status, **detail}
     # json_extract on a malformed meta row raises; the guarded document
     # is NULL for such rows, so they are skipped (fail-open).
@@ -106,7 +110,6 @@ def current_v4(ledger, mid: int, content_hash: str):
     """Newest valid published v4 row bound to the CURRENT source hash
     — mirrors ``current_projection_pred`` (error-free, hash-current,
     not invalidated) for the v4 kind."""
-    from mcs_queries import current_v4_pred
     row = ledger.db.execute(
         "SELECT a.artifact_id,a.content,a.meta FROM artifacts a "
         "JOIN messages m ON m.message_id=a.message_id "
@@ -124,7 +127,6 @@ def current_v4(ledger, mid: int, content_hash: str):
 
 def stage_request_following(ledger, bundle, doc, *, policy):
     """Persist a current-source candidate; never publish, change Loop IDs or mint grants."""
-    import hashlib
     import semantic
     import semantic_facts as sf
     from semantic_projection import project_v2_doc_legacy, project_v2_facts
@@ -240,7 +242,6 @@ def reproject_doc(ledger, mid: int, meta: dict):
     fingerprint) and accepted only when it is still the document the row
     binds (``doc_hash``), its coverage is complete, and the stored fact
     audit of that generation PASSed it (``fact_audit_verdict``)."""
-    from semantic_policy import KIND_FACT_AUDIT, KIND_FACTS_V2
     from semantic_store import _current
     fp, policy = meta.get("fingerprint"), meta.get("policy_fingerprint")
     doc_hash = meta.get("doc_hash")
@@ -288,8 +289,6 @@ def reproject_stale(ledger, scfg: dict,
     safely is marked ``reproject_skipped`` (so it cannot starve the
     bound); an old-version row stays outside the current read model. Run it
     after ``invalidate_projections`` in the same tick."""
-    from mcs_queries import current_projection_id, current_v4_id
-    from semantic_policy import KIND_FACT_PROJ
     from semantic_projection import PROJECTION_VERSION, project_v2_doc_legacy
     out = {"reprojected": 0, "skipped": 0, "skip_reasons": {}}
     # run_due first invalidates rows while fact_source is noncanonical,
@@ -395,7 +394,6 @@ def _member_bundle(ledger, pid: int, mid: int, fp):
 def _reinterpret_loops(ledger, scfg, pid, mid, doc, meta, out) -> None:
     """Loop candidates follow the current projection of the same audited
     document: items it no longer yields stop being current (no model)."""
-    from semantic_policy import policy_fingerprint
     from semantic_projection import project_v2_facts
     if scfg.get("loop_mode", "off") == "off" \
             or meta.get("policy_fingerprint") != policy_fingerprint(scfg):
@@ -418,7 +416,6 @@ def _hold_derivatives(ledger, pid: int, mid: int, fp: str,
     generation, and the generation's summary/audit/coverage/fact audit and Loop
     candidates. Rows stay as history; a summary is also marked stale so
     the send gate holds any queued notice. Caller holds the transaction."""
-    from semantic_policy import KIND_FACT_PROJ
     # Every publication of this message's generation, not only the one bound
     # to the held document: readers pick the newest non-invalidated row, so
     # an older document's row of the same generation would otherwise become
@@ -484,7 +481,6 @@ def _rebuild_hint_docs(ledger, scfg: dict, limit: int, out: dict) -> int:
     ``fact_source=canonical``, where the document feeds every consumer."""
     from semantic_extraction import FACTS_V2_BUILD, rebuild_facts_v2_cached
     from semantic_facts import ContractError, validate_facts_doc
-    from semantic_policy import KIND_FACTS_V2
     stats = {"same": 0, "replaced": 0, "skipped": 0, "history": 0, "seeded": 0}
     # shadow/legacy summaries and Loops come from legacy facts, not from
     # this document: holding them by fingerprint would touch unrelated rows
@@ -603,7 +599,6 @@ def _upgraded_obligations(ledger, row, meta, doc) -> tuple[str, list]:
     Anything missing, invalid or ambiguous is never asserted — a broken
     candidate is never skipped in favour of another one."""
     from semantic_facts import ContractError, validate_facts_doc
-    from semantic_policy import KIND_FACT_REPAIR, KIND_FACTS_V2
     fp, mid, rid = meta.get("fingerprint"), row["message_id"], row["artifact_id"]
 
     def bound(candidate):
@@ -671,7 +666,6 @@ def _hold_upgraded_repairs(ledger, scfg: dict, limit: int, out: dict) -> None:
     contradictory, is left as it is."""
     if limit < 1 or scfg.get("fact_source") != "canonical":
         return
-    from semantic_policy import KIND_FACTS_V2
     rows = ledger.db.execute(
         "SELECT a.artifact_id,a.project_id,a.message_id,a.content,a.meta "
         "FROM artifacts a JOIN messages m "
@@ -918,7 +912,6 @@ def run_cohort(ledger, cohort: str, now: float | None = None) -> dict:
                     "scheduled": 0, "remaining": 0}
         done = cohort_items_done(ledger, cohort)
         scheduled = pending = 0
-        from semantic_policy import JOB_KIND
         for item in doc["items"]:
             mid = item["message_id"]
             if mid in done or len(done) >= doc["ceilings"]["items"]:
