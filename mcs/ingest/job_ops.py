@@ -291,6 +291,8 @@ def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
                     ledger.job_add("thread", m.project_id, m.message_id,
                                    parent_id=m.message_id, payload={"page": 1})
                 for t in m.replies:
+                    if t.body_state in TERMINAL_BODY_STATES:
+                        continue      # body already held; job_add would revive a done row
                     ledger.job_add("reply", m.project_id, t.message_id,
                                    parent_id=m.message_id)
                     stats["reply_jobs"] += 1
