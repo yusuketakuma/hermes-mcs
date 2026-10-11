@@ -244,16 +244,6 @@ def stamp_line(metadata) -> str:
             + ("・再取得失敗" if metadata["last_error"] else ""))
 
 
-def self_reaction_text(metadata) -> str:
-    """既存呼出元にも絵文字と観測日時を持つスタンプ行を返す。"""
-    return stamp_line(metadata)
-
-
-def own_post_reaction_text(metadata) -> str:
-    """自投稿の互換入口で本人分を除いたスタンプ行を返す。"""
-    return stamp_line(dict(metadata, own_post=True))
-
-
 ACTOR_NAMES_MAX = 12
 
 

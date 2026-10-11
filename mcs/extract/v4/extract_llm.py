@@ -15,6 +15,12 @@ with a time budget each tick so the backlog drains gradually. A row whose
 current artifact Jev QC flagged re-enters pending once for a feedback
 re-extract (meta.qc_fix settles the flag); vitals are anchored to the
 nearest measurement label in the body at validation time.
+
+Naming: comments here call this engine "the v3 pass" (the generation
+it was built as; see the clinical-plan/v3 prompt key). It lives in
+extract/v4/ as the current generation (docs/specs/semantic-evaluation.md),
+EXTRACT_VERSION is an independent schema counter, and semantic_v4 is a
+separate generation-crossing engine.
 """
 import argparse
 import contextlib

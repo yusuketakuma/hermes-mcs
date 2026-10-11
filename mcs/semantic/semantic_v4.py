@@ -42,7 +42,6 @@ KIND_V4_ITEM = "v4_retire_item"
 STAGES = ("s0_prep", "s1_extract", "s2_fact_audit", "s3_repair",
           "s4_reaudit", "s5_projection", "s6_summary",
           "s7_summary_audit", "s8_publish")
-FINAL_STATUSES = ("PASS", "PENDING", "NEEDS_REVIEW", "STALE")
 
 
 def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
