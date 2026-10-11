@@ -197,6 +197,18 @@ explicitly for the fake consumer. Successful settlement exits 0; refusal
 or rejection exits 1; unresolved reconciliation, withdrawal or health
 exits 2. Creating handoff staging exits 0 while still reporting `held`;
 exit 0 does not mean that an external receiver accepted it.
+A batch (`reconcile --all`, `reconcile --receipts`, `withdraw --generation`)
+exits by the worst status in its results: any `refused`, `rejected` or
+`no_journal` result exits 1 even when other entries are still `held` or
+`delete_held`, because the journal is never pruned and a historical
+refusal stays in it. The held entries remain listed with their
+`envelope_id` in the JSON `results`; read those statuses, or reconcile one
+entry with `--envelope-id` (exit 2 while it is unresolved). An entry bound
+to a different sink stops the batch with `sink_binding_mismatch` (exit 1,
+fail closed) and the output reports only that refusal. `withdraw
+--generation` checks every binding first, so nothing is withdrawn; a
+reconcile batch keeps the journal state of entries it settled before the
+mismatched one, so check them with `--envelope-id`.
 The old four-flag invocation without a subcommand remains supported,
 including its exit 1 for a held LocalSink delivery.
 
