@@ -1562,10 +1562,11 @@ def _guard_config(yes: bool) -> bool:
     return True
 
 
-def _init_recovery_problem(cfg) -> str | None:
+def _init_recovery_problem(cfg, update_repo=None) -> str | None:
+    """Why the configured recovery interpreter is unusable, or None (install.sh shares it)."""
     if "recovery_python" not in cfg:
         return None
-    return _recovery_python_problem(cfg["recovery_python"]) or _runtime_problem(
+    return _recovery_python_problem(cfg["recovery_python"], update_repo) or _runtime_problem(
         _runtime_probe(cfg["recovery_python"]), recovery=True)
 
 
