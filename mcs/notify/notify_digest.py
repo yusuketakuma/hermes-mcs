@@ -231,7 +231,7 @@ def _response_state(db, r, self_id, as_of) -> tuple:
 
 def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
     """自分宛で応答未観測: 既存シグナルと、本人userメンション後の返信・本人反応なし。"""
-    rows = []
+    rows, signal_mids = [], set()
     if signals_on:
         for c in mcs_signals._latest_signal_states(db).values():
             mids = ((c.get("evidence") or {}).get("message_ids") or []) if c else []
@@ -241,8 +241,14 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
             msg = db.execute("SELECT message_id,project_id,parent_id,posted_at_ts "
                              "FROM messages WHERE message_id=? AND project_id=?",
                              (mids[0], c["project_id"])).fetchone()
+            # the detector looks back 30 days; this section is 直近N日, so a
+            # source post outside (or missing) is not listed here
+            if not (msg and type(msg["posted_at_ts"]) in (int, float)
+                    and until - OWN_POST_DAYS * DAY_S <= msg["posted_at_ts"] < until):
+                continue
+            signal_mids.add(msg["message_id"])
             state = (_response_state(db, msg, self_id, until)[2]
-                     if msg and self_id else "本人ID不明")
+                     if self_id else "本人ID不明")
             rows.append(f"・{room(c['project_id'])} "
                         f"薬剤師宛の依頼に返信の記録なし・{state}")
     unknown, station = 0, 0
@@ -256,8 +262,8 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
                 unknown += 1
                 continue
             station += any(m["type"] == "station" for m in meta["mentions"])
-            if not hit:
-                continue
+            if not hit or r["message_id"] in signal_mids:
+                continue          # a signal row already lists this post
             replied, mine, state = _response_state(db, r, self_id, until)
             if not replied and not mine:
                 rows.append(f"・{room(r['project_id'])} "
@@ -272,7 +278,9 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
     if not rows and not station and not unknown and not (
             self_id is None and _recent_posts(db, until, ok, "")):
         return []
-    return [f"{len(rows)}件（直近{OWN_POST_DAYS}日）",
+    # 本人ID不明の件数はシグナル行だけ — 見出しで判定外を明示する
+    undetermined = "・メンション未判定" if self_id is None else ""
+    return [f"{len(rows)}件（直近{OWN_POST_DAYS}日{undetermined}）",
             *notes, *_listed(rows)]
 
 
