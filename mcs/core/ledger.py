@@ -1791,7 +1791,7 @@ class Ledger:
         payload=None is the unregistered form and is stored as
         empty=true/comment=null so 空 (fetched, nothing registered) stays
         distinct from 未取得 (never fetched). An unchanged summary (same
-        sha256) writes no new artifact — only the newest row's
+        sha256 and karte_id) writes no new artifact — only the newest row's
         fetched_at moves. Either way the project's due flag is cleared."""
         p = payload or {}
         user = p.get("user") or {}
@@ -1810,7 +1810,9 @@ class Ledger:
         if row:
             with suppress(ValueError, TypeError, RecursionError):
                 meta = json.loads(row["meta"] or "{}")
-                if isinstance(meta, dict) and meta.get("sha256") == sha:
+                # karte_id too: readers bind the newest row to patients.karte_id
+                if (isinstance(meta, dict) and meta.get("sha256") == sha
+                        and meta.get("karte_id") == karte_id):
                     meta["fetched_at"] = now
                     self.db.execute(
                         "UPDATE artifacts SET meta=? WHERE artifact_id=?",
@@ -1980,7 +1982,11 @@ class Ledger:
                                payload, next_try,
                                revive_failed=revive_failed)
         self.db.commit()
-        return cur.lastrowid
+        if cur.rowcount < 1:  # kept an in-flight row; lastrowid is stale here
+            return None
+        return self.db.execute(
+            "SELECT job_id FROM fetch_jobs WHERE kind=? AND project_id=?"
+            " AND message_id=?", (kind, project_id, message_id)).fetchone()[0]
 
     def job_set_flag(self, kind: str, project_id: int, message_id: int,
                      key: str) -> None:
