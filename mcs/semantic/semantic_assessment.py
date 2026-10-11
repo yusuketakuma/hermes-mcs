@@ -13,10 +13,10 @@ import json
 import time
 
 from mcs_util import loads_dict
+from semantic_policy import KIND_ASSESS
 
-
-KIND_ASSESS = "semantic_assess"
-SCHEMA_VERSION = "semantic-assessment/v2"
+# per-fact detail rows; distinct from semantic_policy.SCHEMA_VERSION
+ASSESSMENT_SCHEMA_VERSION = "semantic-assessment/v2"
 
 
 def _result(details: dict, findings: list, complete: bool,
@@ -53,7 +53,7 @@ def _cached_detail(ledger, project_id, target_id, source_fp, policy_fp,
         if meta is None:
             continue
         row_source = meta.get("source_fingerprint", meta.get("fingerprint"))
-        if (meta.get("schema") != SCHEMA_VERSION
+        if (meta.get("schema") != ASSESSMENT_SCHEMA_VERSION
                 or row_source != source_fp
                 or meta.get("policy_fingerprint") != policy_fp
                 or meta.get("fact_id") != fact_id
@@ -77,7 +77,7 @@ def _persist_detail(ledger, project_id, target_id, source_fp, policy_fp,
     if ledger is None:
         return
     content = {
-        "schema": SCHEMA_VERSION,
+        "schema": ASSESSMENT_SCHEMA_VERSION,
         "target_message_id": target_id,
         "fact_id": fact_id,
         "dimension": dimension,
@@ -85,7 +85,7 @@ def _persist_detail(ledger, project_id, target_id, source_fp, policy_fp,
         "confidence": confidence,
     }
     meta = {
-        "schema": SCHEMA_VERSION,
+        "schema": ASSESSMENT_SCHEMA_VERSION,
         "technical_status": "complete",
         "fingerprint": source_fp,
         "source_fingerprint": source_fp,

@@ -27,6 +27,15 @@ KIND_LOOP = "loop_candidate"
 KIND_LOOP_EVENT = "loop_event"
 KIND_PLAN = "notify_plan"
 KIND_USAGE = "semantic_usage"
+KIND_COVERAGE = "semantic_coverage"
+KIND_CANDIDATE = "semantic_candidate"
+KIND_REPAIR = "semantic_repair"
+KIND_SUMMARY_FORMAT_REPAIR = "semantic_summary_format_repair"
+KIND_POLICY = "semantic_policy"
+KIND_DRAIN_RUN = "semantic_drain_run"
+# Receipt of a shadow v2 comparison that ran for a source + policy and
+# stayed incomplete (the incomplete document itself is never stored).
+KIND_SHADOW_V2 = "semantic_shadow_v2"
 
 MODES = ("off", "shadow", "assist", "enforce")
 # Which extraction path produces the fact set consumed downstream.
