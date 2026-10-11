@@ -276,6 +276,22 @@ def test_from_import_cannot_bypass_sdk_and_asyncio_surface(monkeypatch, tmp_path
     assert bool(gates.gate_stdlib_only() + gates.gate_plugin_sandbox()) is not allowed
 
 
+@pytest.mark.parametrize(("source", "hardcoded"), [
+    ('target = cfg.get("notify_target") or "slack:C0123ABCDEF"\n', True),
+    ('THREAD = "slack:G0123ABCDEF:1700000000.000100"\n', True),
+    ('target = cfg.get("notify_target") or "discord:123456789012"\n', True),
+    ('HELP = "hermes send target (e.g. slack:C0CHANNELID, discord:1234)"\n', False),
+    ('def same(target, cid):\n return target == "slack:" + cid\n', False),
+    ('def build(cid):\n return f"slack:{cid}"\n', False),
+])
+def test_notify_gate_catches_baked_in_slack_destination(monkeypatch, tmp_path, source, hardcoded):
+    gates = _load("ci_notify_literal", "ci/gates.py")
+    path = tmp_path / "synthetic_notify.py"
+    path.write_text(source)
+    monkeypatch.setattr(gates, "_py_files", lambda *args: [path])
+    assert bool(gates.gate_notify_fail_closed()) is hardcoded
+
+
 @pytest.mark.parametrize("filename", ["standalone.py", "runtime_compat.py"])
 def test_independent_sdk_exception_keeps_core_and_ambient_secrets_blocked(monkeypatch, tmp_path, filename):
     gates = _load("ci_standalone_sdk", "ci/gates.py")
