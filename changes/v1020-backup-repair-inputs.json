@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "バックアップ鍵生成の理由を記録し、修復計画の読込上限をそろえた",
+  "summary": "バックアップ鍵の生成（keygen）で必須の --reason が、鍵生成の記録（key_escrow.json）に保存されるようになりました。理由は2000文字までで、超える場合は鍵を作らずに拒否します。修復（mcs_repair.py）の record・finalize が、16KiB を超える計画ファイルや監査ログを一律に拒否していた問題も修正しました。本来の上限である 1MiB まで読み込めます。",
+  "upgrade": "追加操作は不要です。既存の key_escrow.json には理由が記録されていないため、そのまま残ります。",
+  "details": [
+    "mcs/ops/mcs_backup.py の keygen は、--reason を witness（pending と stored の両方）の reason に保存する。鍵の値・生成・Keychain 保存の扱いは変えていない。2000文字を超える理由は backup_human_escrow_required として拒否する。上限がないと記録が読込上限（64KiB）を超え、以後の plan や再試行が止まるおそれがあるため。",
+    "mcs/ops/mcs_repair.py は、計画ファイルと監査ログの読込に、mcs_requests.parse_command（コマンドキュー用で上限16KiB）ではなく専用の厳格な JSON loader を使う。上限は MAX_BYTES（1MiB）で、重複キー・NaN・深すぎる入れ子は従来どおり拒否する。parse_command 自体の上限は変えていない。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_backup.py",
+    "mcs/ops/mcs_repair.py",
+    "tests/ops/test_mcs_backup.py",
+    "tests/ops/test_mcs_repair.py"
+  ]
+}
