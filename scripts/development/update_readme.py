@@ -23,7 +23,6 @@ Keep module/function docstrings' first line a one-line summary — it is
 published.
 """
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -66,14 +65,9 @@ def _mod_docline(path: Path) -> str:
     return _first_sentence(doc or "")
 
 
-def _clean(desc: str, strip_prefix: bool = False) -> str:
-    # module docstrings often start "Name — summary"; function docstrings
-    # are plain sentences — only strip the Name prefix for modules. The
-    # separator must be a spaced dash: a hyphenated word ("Durable
-    # medication-event …", "Auto-metrics …") is part of the summary.
-    if strip_prefix:
-        desc = re.sub(r"^[A-Z][A-Za-z0-9 _.-]*?\s+[—–-]\s+", "",
-                      desc or "")
+def _clean(desc: str) -> str:
+    # Publish the whole first sentence: a "Subject — summary" docstring
+    # loses its meaning without the subject.
     return desc.replace("|", "\\|")
 
 
@@ -82,7 +76,7 @@ def gen_modules() -> str:
     files = sorted(p for p in MCS_DIR.rglob("*.py")
                    if "__pycache__" not in p.parts)
     for f in files:
-        desc = _clean(_mod_docline(f), strip_prefix=True) or "(docstring なし)"
+        desc = _clean(_mod_docline(f)) or "(docstring なし)"
         rows.append(f"| `{f.relative_to(ROOT)}` | {desc} |")
     n_tests = len(list(TESTS_DIR.rglob("test_*.py")))
     return "\n".join(
