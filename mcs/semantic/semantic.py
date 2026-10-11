@@ -41,6 +41,7 @@ import json
 import os
 import sys
 import time
+from functools import partial
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every first-level subdir as an import root
@@ -218,11 +219,18 @@ def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
             and time.monotonic() - _FMT_TS < _PROBE_RETRY_S:
         return _FMT_MODE
     try:
-        _FMT_MODE = local_llm.probe_format(
-            endpoint, model, None, timeout=min(10, timeout),
-            request_fn=local_llm.bounded_request,
-            slot=local_llm.request_slot(),
-            verify=lambda text: _json_block(text) is not None) or "plain"
+        kw = dict(timeout=min(10, timeout),
+                  request_fn=local_llm.bounded_request,
+                  slot=local_llm.request_slot(),
+                  verify=lambda text: _json_block(text) is not None)
+        if local_llm.admission_enabled():
+            # T20: the probe sends real inference POSTs — it takes a
+            # class permit (a held verdict yields "plain")
+            _FMT_MODE = local_llm.admitted_probe_format(
+                "mcs.semantic", endpoint, model, None, **kw) or "plain"
+        else:
+            _FMT_MODE = local_llm.probe_format(
+                endpoint, model, None, **kw) or "plain"
     except Exception:
         _FMT_MODE = "plain"
     _FMT_TS = time.monotonic()
@@ -311,77 +319,73 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
     endpoint, model = llm_conf()
     err_out: dict = {}
     _failed(None)
-    if local_llm.admission_enabled():
-        # T20: route through the RT/BACKLOG admission boundary — the
-        # registered route binds the class; the response shape carries
-        # an `admission` verdict on denial/deferral (never model text)
-        response = local_llm.admitted_chat(
-            "mcs.semantic", prompt,
-            endpoint=endpoint, model=model, timeout=timeout,
-            max_tokens=max_tokens,
-            request_fn=local_llm.bounded_request, error_out=err_out)
-        if response is not None and response.get("admission"):
-            raise runtime.LLMNotSent(f"llm_admission:{response['admission']}")
-    else:
-        global _FMT_MODE, _FMT_TS
-        # the probe spends the caller's budget, never adds to it: the
-        # runtime sized ``timeout`` to the job deadline (absolute)
-        call_deadline = time.monotonic() + timeout
-        rf = {"type": "json_object"} \
-            if _probe_format(endpoint, model, timeout) == "object" else None
-        key = _long_key(model, prompt)
-        level = _long_marks().get(key, 0)
-        if level >= 2:
-            return _failed("long_ceiling")   # even the long ceiling stopped on length
+    global _FMT_MODE, _FMT_TS
+    # T20: under admission each send (retries included) takes its own
+    # class permit; the loop below is otherwise identical
+    send = partial(local_llm.admitted_chat, "mcs.semantic") \
+        if local_llm.admission_enabled() else local_llm.chat
+    # the probe spends the caller's budget, never adds to it: the
+    # runtime sized ``timeout`` to the job deadline (absolute)
+    call_deadline = time.monotonic() + timeout
+    rf = {"type": "json_object"} \
+        if _probe_format(endpoint, model, timeout) == "object" else None
+    key = _long_key(model, prompt)
+    level = _long_marks().get(key, 0)
+    if level >= 2:
+        return _failed("long_ceiling")   # even the long ceiling stopped on length
+    timeout = call_deadline - time.monotonic()
+    if timeout <= 0:
+        return _failed("deadline")
+    if level and timeout < _LONG_MIN_CALL_S:
+        _failed("long_output_needs_budget")
+        raise runtime.LLMNotSent("long_output_needs_budget")
+    while True:
         timeout = call_deadline - time.monotonic()
         if timeout <= 0:
             return _failed("deadline")
-        if level and timeout < _LONG_MIN_CALL_S:
-            _failed("long_output_needs_budget")
-            raise runtime.LLMNotSent("long_output_needs_budget")
-        while True:
+        response = send(
+            prompt, endpoint=endpoint, model=model,
+            timeout=timeout, deadline=call_deadline,
+            max_tokens=max(max_tokens, LLM_LONG_MAX_TOKENS)
+            if level else max_tokens,
+            response_format=rf,
+            extra_payload={"id_slot": local_llm.request_slot()},
+            request_fn=local_llm.bounded_request, error_out=err_out)
+        if response is not None and response.get("admission"):
+            # a denial/deferral never left — the verdict, never model text
+            raise runtime.LLMNotSent(
+                f"llm_admission:{response['admission']}")
+        timeout = call_deadline - time.monotonic()
+        if rf is not None and response is not None \
+                and response.get("status") in _FMT_REJECT_STATUSES:
+            # the server rejected the constraint (restart / model
+            # swap): degrade to plain for this and later calls —
+            # the retry shares what is left of the caller's budget
+            _FMT_MODE, _FMT_TS = "plain", time.monotonic()
+            _remember_plain(endpoint, model)
             timeout = call_deadline - time.monotonic()
+            rf = None
             if timeout <= 0:
-                return _failed("deadline")
-            response = local_llm.chat(
-                prompt, endpoint=endpoint, model=model,
-                timeout=timeout, deadline=call_deadline,
-                max_tokens=max(max_tokens, LLM_LONG_MAX_TOKENS)
-                if level else max_tokens,
-                response_format=rf,
-                extra_payload={"id_slot": local_llm.request_slot()},
-                request_fn=local_llm.bounded_request, error_out=err_out)
+                # A format refusal is not a plain-prompt rejection.
+                # Exhausted work stays retryable without another send.
+                return _failed("format_rejected")
+            if level and timeout < _LONG_MIN_CALL_S:
+                # The rejected request already left: do not report a
+                # free not-sent defer, or send a long call that cannot
+                # fit. A format refusal says nothing about the prompt,
+                # so this is a retryable model failure, never the plain
+                # HTTP 400 terminal rejection; plain is remembered and
+                # the mark kept for a later adequately sized try.
+                return _failed("format_rejected")
+            continue
+        if response is not None \
+                and response.get("finish_reason") == "length":
+            level += 1
+            _long_mark(key, level)
             timeout = call_deadline - time.monotonic()
-            if rf is not None and response is not None \
-                    and response.get("status") in _FMT_REJECT_STATUSES:
-                # the server rejected the constraint (restart / model
-                # swap): degrade to plain for this and later calls —
-                # the retry shares what is left of the caller's budget
-                _FMT_MODE, _FMT_TS = "plain", time.monotonic()
-                _remember_plain(endpoint, model)
-                timeout = call_deadline - time.monotonic()
-                rf = None
-                if timeout <= 0:
-                    # A format refusal is not a plain-prompt rejection.
-                    # Exhausted work stays retryable without another send.
-                    return _failed("format_rejected")
-                if level and timeout < _LONG_MIN_CALL_S:
-                    # The rejected request already left: do not report a
-                    # free not-sent defer, or send a long call that cannot
-                    # fit. A format refusal says nothing about the prompt,
-                    # so this is a retryable model failure, never the plain
-                    # HTTP 400 terminal rejection; plain is remembered and
-                    # the mark kept for a later adequately sized try.
-                    return _failed("format_rejected")
-                continue
-            if response is not None \
-                    and response.get("finish_reason") == "length":
-                level += 1
-                _long_mark(key, level)
-                timeout = call_deadline - time.monotonic()
-                if level == 1 and timeout >= _LONG_MIN_CALL_S:
-                    continue  # one long-ceiling retry in what is left
-            break
+            if level == 1 and timeout >= _LONG_MIN_CALL_S:
+                continue  # one long-ceiling retry in what is left
+        break
     if response is None and err_out.get("kind") == "unreachable":
         _failed("unreachable")
         raise runtime.LLMNotSent("llm_unreachable")
