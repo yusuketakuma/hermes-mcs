@@ -481,3 +481,45 @@ def test_flags_publish_failure_fails_services_and_defers_the_switch_restart(monk
     split = len(calls)
     assert mcs_setup.cmd_services(args) == 0
     assert _restarts(calls[split:]) == 1
+
+
+def _slack_target_config():
+    cfg = config(interactive="off")
+    cfg["notify_target"] = "slack:C0SYNTHETIC"
+    cfg["notify"] = {"interactive": "off", "slack": {
+        "profile": "default", "application_id": "A0SYNTHETIC", "team_id": "T0SYNTHETIC",
+        "channel_id": "C0SYNTHETIC", "allowed_user_ids": ["U0OLD"], "project_ids": [1]}}
+    return cfg
+
+
+def test_init_applies_plugin_flags_to_the_single_delivery_transport(monkeypatch, tmp_path, capsys):
+    """interactive=off with a Slack target: the grants belong to the Slack
+    scope the validator requires; Discord-only grants stay unapplied."""
+    from test_mcs_setup import _init_env
+    _init_env(monkeypatch, tmp_path, _slack_target_config())
+    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(mcs_setup.sys, "argv",
+                        ["mcs_setup", "init", "--yes", "--plugin-user-ids", "U1,U2",
+                         "--plugin-project-ids", "5", "--plugin-chat-ids", "9"])
+    assert mcs_setup.main() == 0
+    out = capsys.readouterr().out
+    assert "--plugin-chat-ids" in out and "--plugin-user-ids" not in out
+    slack = json.loads((tmp_path / "c.json").read_text())["notify"]["slack"]
+    assert slack["allowed_user_ids"] == ["U1", "U2"] and slack["project_ids"] == [5]
+    assert "allowed_chat_ids" not in slack
+
+
+def test_init_leaves_plugin_flags_unapplied_when_two_transports_need_scopes(monkeypatch, tmp_path, capsys):
+    from test_mcs_setup import _init_env
+    cfg = _slack_target_config()
+    cfg["notify"]["interactive"] = "discord"
+    cfg["notify"]["discord"] = config()["notify"]["discord"]
+    _init_env(monkeypatch, tmp_path, cfg)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(mcs_setup.sys, "argv",
+                        ["mcs_setup", "init", "--yes", "--plugin-user-ids", "U1"])
+    assert mcs_setup.main() == 0
+    assert "--plugin-user-ids" in capsys.readouterr().out
+    saved = json.loads((tmp_path / "c.json").read_text())["notify"]
+    assert saved["slack"]["allowed_user_ids"] == ["U0OLD"]
+    assert saved["discord"]["allowed_user_ids"] == ["4000000000000000004"]

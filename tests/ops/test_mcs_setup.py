@@ -2290,3 +2290,34 @@ def test_alerts_need_an_interactive_transport():
         {**base, "notify": {"interactive": "slack", "slack": scope}})[0] == []
     assert mcs_setup.validate_config(
         {**base, "signals": {"notify": False}})[0] == []
+
+
+def test_fact_source_refuses_when_the_semantic_validator_crashes(monkeypatch, tmp_path):
+    import semantic_policy
+    conf = tmp_path / "c.json"
+    conf.write_text(json.dumps({"mcs_login_id": "synthetic", "semantic": {"mode": "off"}}))
+    before = conf.read_bytes()
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(conf))
+    monkeypatch.setattr(mcs_setup, "load_config",
+                        lambda path=None: mcs_util.load_config(path or str(conf)))
+
+    def crash(cfg):
+        raise TypeError("synthetic validator crash")
+    monkeypatch.setattr(semantic_policy, "semantic_config", crash)
+    assert mcs_setup.cmd_fact_source(SimpleNamespace(fact_source="shadow", gate_evidence=None)) == 1
+    assert conf.read_bytes() == before
+
+
+@pytest.mark.parametrize("transport", ["slack", "discord", "lineworks"])
+def test_check_warns_on_a_static_project_scope_over_the_runner_cap(transport):
+    import notify_cmds
+    assert mcs_setup.PROJECT_SCOPE_MAX == notify_cmds.SCOPE_MAX
+    ids = list(range(1, mcs_setup.PROJECT_SCOPE_MAX + 2))
+    cfg = {"notify": {transport: {"project_ids": ids}}}
+    warnings = [w for w in mcs_setup.validate_config(cfg)[1] if "project_ids" in w]
+    assert len(warnings) == 1 and f"notify.{transport}.project_ids" in warnings[0]
+    assert all("project_ids" not in e or "positive" in e for e in mcs_setup.validate_config(cfg)[0])
+    cfg["notify"][transport]["project_ids_auto"] = True
+    assert not [w for w in mcs_setup.validate_config(cfg)[1] if "project_ids" in w]
+    cfg["notify"][transport] = {"project_ids": ids[:-1]}
+    assert not [w for w in mcs_setup.validate_config(cfg)[1] if "project_ids" in w]
