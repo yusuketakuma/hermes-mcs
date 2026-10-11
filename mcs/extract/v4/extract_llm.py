@@ -3539,6 +3539,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             "selected": len(rows), "deferred": deferred,
             "skipped": skipped, "lock_lost": lock_lost,
             "circuit_open_s": round(circuit_s) or None,
+            "disk_low": disk_low,
             "disk_free_mb": round(free_mb) if free_mb is not None
                             else None,
             "pids": sorted(done_pids),
@@ -3884,6 +3885,12 @@ def _main() -> int:
                     # poll interval still beats the 5-min tick for picking up newly fetched messages.
                     pause(120)
                     continue
+                if r["done"] == 0 and (r.get("circuit_open_s")
+                                       or r.get("disk_low")):
+                    # the LLM lane is gated: re-scanning every few seconds
+                    # cannot claim anything until the breaker/disk clears
+                    pause(min(120, r.get("circuit_open_s") or 120))
+                    continue
                 if r["done"] == 0 and r["failed"] == 0:
                     # rows were selected but nothing committed — either
                     # every write was skipped (lock/_current race → short
@@ -3896,7 +3903,10 @@ def _main() -> int:
                     # wait for the earliest retry instead of quitting.
                     nt = _next_retry(led)
                     if nt is None:
-                        break
+                        # no retriable error row (e.g. endpoint-down
+                        # failures write none): stay resident and poll
+                        pause(120)
+                        continue
                     pause(min(300.0, max(5.0, nt - time.time())))
                 else:
                     pause(1)  # yield the write window between batches

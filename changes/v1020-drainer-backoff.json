@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "LLM抽出の常駐処理が障害中に短い間隔で再走査する問題と、失敗だけの回で終了する問題を修正",
+  "summary": "ローカルLLMの接続遮断（サーキットブレーカー）中やディスク残量不足のあいだ、常駐の抽出処理が5秒ごとに未抽出の検索を繰り返し、データベースの負荷を上げていた問題を修正しました。遮断の残り時間（最大2分）だけ待ってから再確認します。また、1回の処理が失敗だけで再試行予定の記録もない場合に常駐処理が終了していた問題を修正し、2分後に再確認して常駐を続けるようにしました。",
+  "upgrade": "追加操作は不要です。更新後に抽出の常駐処理が再起動されると反映されます。",
+  "details": [
+    "mcs/extract/v4/extract_llm.py の run_pending は返り値に disk_low を含める。--all の常駐ループは、抽出が0件で circuit_open_s または disk_low が立っているとき min(120, circuit_open_s) 秒（disk_low のみは120秒）待機する。",
+    "失敗だけの回で _next_retry が None（接続不可の失敗はエラー記録を残さない）のとき、ループを抜けずに120秒待って継続する。--stop-after による終了は従来どおり。"
+  ],
+  "refs": [
+    "mcs/extract/v4/extract_llm.py",
+    "tests/extract/test_extract_truncation_and_resident_errors.py",
+    "tests/extract/test_extract_prefilter.py"
+  ]
+}
