@@ -1064,9 +1064,26 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         for _attempt in range(2):      # initial + at most one repair
             code_f = (audit_code(bundle, facts, summary) + coverage_by_target.get(mid, [])
                       + detail_findings.get(mid, []))
-            jev_f, evaluated = semantic.audit_claims(
-                jev_client, bundle, summary, deadline, scfg["match_threshold"],
-                scfg["max_questions_per_request"])
+            try:
+                jev_f, evaluated = semantic.audit_claims(
+                    jev_client, bundle, summary, deadline,
+                    scfg["match_threshold"], scfg["max_questions_per_request"])
+            except (runtime.LLMNotSent, runtime.RuntimeBudget) as error:
+                # Jev cutoff/budget: earlier targets commit below. A repair
+                # already applied this pass is kept as a PENDING result, so
+                # the next pass re-audits the repaired text (INV-10: the
+                # one repair is spent, never refunded).
+                not_sent = error
+                incomplete = True
+                if _attempt:
+                    summary["audit_status"] = "PENDING"
+                    results[mid] = {
+                        "summary": summary, "status": "PENDING",
+                        "findings": code_f + [{"code": "support_unevaluated"}],
+                        "repaired": True, "fresh": True,
+                        "jev_requests": (jev_client.requests_made - req0)
+                        if jev_client else 0}
+                break
             if not evaluated and jev_client is not None:
                 flag = _jev_fail_flag(getattr(jev_client, "last_error",
                                               None))
@@ -1100,7 +1117,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                 "DELETE FROM artifacts WHERE artifact_id=?",
                                 (repair_id,))
                     if isinstance(error, (runtime.LLMNotSent,
-                                          runtime.RuntimeBudgetShort)):
+                                          runtime.RuntimeBudget)):
                         not_sent = error
                         incomplete = True
                         break
@@ -1193,6 +1210,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     pending = not stale and any(r["status"] == "PENDING"
                                 for r in results.values())
     loops_done = True
+    loops_short = False
     if not stale and scfg["loop_mode"] != "off":
         # loop candidates/relation events for the LIVE generation —
         # kept OUT of the commit tx because matching makes Jev calls
@@ -1200,28 +1218,37 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         # candidate_fp and pair dedup.
         rejections = []
         scope = pl.get("retry_command_id")
-        _, loops_done = update_loops(ledger, pid, bundle,
-                                     facts_by_target, jev_client,
-                                     scfg, deadline,
-                                     retry_scope=scope if isinstance(scope, str) else "",
-                                     rejections=rejections)
-        flag = _jev_fail_flag(getattr(jev_client, "last_error", None)) \
-            if not loops_done and jev_client is not None else None
-        if rejections:
-            if _PASS_REASON.get("loops_rejected") is None:
-                _PASS_REASON["loops_rejected"] = rejections[0]["code"]
-            if flag is None:
-                # Only cached rejections, or a later pair's success reset
-                # last_error: the known rejection is the cause — a bounded
-                # retry, never a free defer that would loop forever. A
-                # later hard/resource failure keeps its own handling below.
-                _why("loops_jev_rejected")
-                retryable_failure = True
-        if not loops_done and jev_client is not None:
-            _why(f"loops_jev_{flag}")
-            resource_wait |= flag == "resource"
-            retryable_failure |= flag == "retryable"
-            hard_fail |= flag == "hard"
+        try:
+            _, loops_done = update_loops(
+                ledger, pid, bundle, facts_by_target, jev_client,
+                scfg, deadline,
+                retry_scope=scope if isinstance(scope, str) else "",
+                rejections=rejections)
+        except runtime.RuntimeBudgetShort:
+            # the Jev cutoff stopped the relation pass: the results below
+            # still commit and the job resumes the remaining pairs next
+            # tick (last_error is not this stop's cause — no flag)
+            loops_done = False
+            loops_short = True
+        else:
+            flag = _jev_fail_flag(getattr(jev_client, "last_error", None)) \
+                if not loops_done and jev_client is not None else None
+            if rejections:
+                if _PASS_REASON.get("loops_rejected") is None:
+                    _PASS_REASON["loops_rejected"] = rejections[0]["code"]
+                if flag is None:
+                    # Only cached rejections, or a later pair's success
+                    # reset last_error: the known rejection is the cause —
+                    # a bounded retry, never a free defer that would loop
+                    # forever. A later hard/resource failure keeps its own
+                    # handling below.
+                    _why("loops_jev_rejected")
+                    retryable_failure = True
+            if not loops_done and jev_client is not None:
+                _why(f"loops_jev_{flag}")
+                resource_wait |= flag == "resource"
+                retryable_failure |= flag == "retryable"
+                hard_fail |= flag == "hard"
     # notification eligibility is derived from the stored origin event,
     # not from this job's seed provenance (INV-20, §20.3) — evaluated
     # per target below: a covering new_messages intent must exist for
@@ -1303,6 +1330,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         return "stale"
     if hard_fail:
         return "failed"
+    if loops_short:
+        # same mapping as a cutoff raised anywhere else in the pass
+        _why("budget_short")
+        return "deferred_short"
     if pending:
         # evaluation incomplete (e.g. Jev outage mid-audit) — the job
         # must not sit 'done' on an unfinished audit; consume a bounded
