@@ -9,6 +9,7 @@ network client is created here.
 from __future__ import annotations
 
 import bisect
+import copy
 import json
 import re
 import time
@@ -1306,12 +1307,27 @@ def extract_facts_v2(llm_fn, member: dict,
     evidence = {}
     clean_facts = _collect_facts(facts, evidence)
 
+    # Intra-document relation reconciliation (T6): every pair of kept
+    # facts is classified — ordered transitions supersede, unordered
+    # conflicts contradict, never silent latest-wins.  A pair scan cut
+    # by the deadline leaves the document incomplete, and the cached
+    # chunks let the next pass finish it.
+    from semantic_relations import reconcile_facts
+    reconciled = reconcile_facts([], clean_facts, deadline=deadline)
+    relations = reconciled["relations"]
+    pairs_skipped = reconciled["pairs_skipped"]
+    if pairs_skipped and failure_reason is None:
+        failure_reason = "deadline"
+
     limitations = []
     if failed:
         limitations.append("chunks_incomplete")
+    if pairs_skipped:
+        limitations.append("relations_incomplete")
     if any(f["validation_status"] == "unverified" for f in clean_facts):
         limitations.append("unverified_facts")
-    complete = len(completed) == len(specs) and not failed
+    complete = len(completed) == len(specs) and not failed \
+        and not pairs_skipped
     status = "complete" \
         if complete and not open_ids and not limitations else "incomplete"
     coverage = {
@@ -1320,12 +1336,6 @@ def extract_facts_v2(llm_fn, member: dict,
         "limitations": limitations,
         "status": status,
     }
-
-    # Intra-document relation reconciliation (T6): every pair of kept
-    # facts is classified — ordered transitions supersede, unordered
-    # conflicts contradict, never silent latest-wins.
-    from semantic_relations import reconcile_facts
-    relations = reconcile_facts([], clean_facts)["relations"]
 
     member_quality = "full" if member.get("body_state") == "full" \
         else "partial"
@@ -1367,6 +1377,7 @@ def extract_facts_v2(llm_fn, member: dict,
         **_chunk_progress(specs, completed, reused, failed,
                           failure_reason, failed_dropped, source_fp),
         "dropped_reasons": drop_reasons,     # the failed chunk's, by code
+        "relation_pairs_skipped": pairs_skipped,
         "null_contexts_omitted": omitted.get("context_null", 0),
         **({"generation": generation} if request_following else {}),
     }
@@ -1712,9 +1723,11 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
                  "repaired_fact_ids": [], "owner_chunk_ids": [], **generation_detail}
 
     # Normalise repaired items per owning chunk, then merge by fact_id
-    # once, with the same rules as extraction's duplicate merge.
-    facts = [f for f in doc["facts"]
-             if f.get("fact_id") not in rejected_ids]
+    # once, with the same rules as extraction's duplicate merge.  The
+    # merge edits facts in place, so it works on copies: an unrepaired
+    # return must hand back the stored doc untouched.
+    facts = copy.deepcopy([f for f in doc["facts"]
+                           if f.get("fact_id") not in rejected_ids])
     kept_ids = {f["fact_id"] for f in facts}
     for ob in obligations.values():
         ob["fact_ids"] = [fid for fid in ob.get("fact_ids", [])
@@ -1809,9 +1822,16 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     new_doc["facts"] = clean_facts
     new_doc["coverage"] = coverage
     # Relations referencing removed facts dangle — recompute over the
-    # surviving set so every endpoint resolves.
+    # surviving set so every endpoint resolves.  A scan cut by the
+    # deadline must not publish a partial set: keep the prior doc.
     from semantic_relations import reconcile_facts
-    new_doc["relations"] = reconcile_facts([], clean_facts)["relations"]
+    reconciled = reconcile_facts([], clean_facts, deadline=deadline)
+    if reconciled["pairs_skipped"]:
+        return {"doc": doc, "repaired": False, "repaired_fact_ids": [],
+                "owner_chunk_ids": dispatched,
+                "relation_pairs_skipped": reconciled["pairs_skipped"],
+                **generation_detail}
+    new_doc["relations"] = reconciled["relations"]
     sf.validate_facts_doc(new_doc)
     return {"doc": new_doc, "repaired": True,
             "repaired_fact_ids": repaired_fact_ids,

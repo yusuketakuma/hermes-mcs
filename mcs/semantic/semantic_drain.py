@@ -514,7 +514,13 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                                 "repaired_fact_ids":
                                     repair["repaired_fact_ids"],
                                 "owner_chunk_ids":
-                                    repair["owner_chunk_ids"]},
+                                    repair["owner_chunk_ids"],
+                                # pair scan cut by the deadline: the
+                                # repaired doc was not kept
+                                **({"relation_pairs_skipped":
+                                    repair["relation_pairs_skipped"]}
+                                   if repair.get("relation_pairs_skipped")
+                                   else {})},
                                ensure_ascii=False, allow_nan=False),
                     project_id=pid, message_id=mid,
                     model=semantic.llm_model(),

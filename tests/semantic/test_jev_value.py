@@ -203,10 +203,10 @@ def test_shadow_e2e_later_message_cannot_hide_failed_stage(monkeypatch, failure)
 
     if failure == "relations":
         reconcile = semantic_relations.reconcile_facts
-        def broken(active, new):
+        def broken(active, new, **kwargs):
             if active:
                 raise ValueError("synthetic reconciliation failure")
-            return reconcile(active, new)
+            return reconcile(active, new, **kwargs)
         monkeypatch.setattr(semantic_relations, "reconcile_facts", broken)
     monkeypatch.setattr(semantic_audit, "audit_facts_v2", audit)
     cases = [{"id": "thread", "messages": [
@@ -293,7 +293,7 @@ def test_shadow_relations_use_repaired_facts_for_following_message(monkeypatch):
 
     histories = []
 
-    def relations(active, new):
+    def relations(active, new, **_kwargs):
         histories.append([f["statement"] for f in active])
         return {"relations": []}
 
