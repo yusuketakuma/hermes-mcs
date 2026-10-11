@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "緊急度の根拠に患者以外の人の記述が表示される問題を修正",
+  "summary": "投稿に家族など患者以外の人の急変と患者本人の症状が両方書かれていると、カードや一覧の「🚨 緊急度高 — 根拠:」に患者以外の人の記述が表示されることがありました。根拠には、患者本人についての緊急の記述だけを表示するようにしました。緊急度の判定そのものは変わりません。",
+  "upgrade": "追加操作は不要です。更新後の表示から反映されます。",
+  "details": [
+    "mcs/views/structured_view.py の structured_lines は、根拠の引用に LLM の urgency_evidence の先頭をそのまま使っていた。判定側（message_urgency_details）が患者のスコープで絞り込んだ reasons の先頭を使うように変更した。",
+    "家族の急変と患者本人の症状を含む完全合成の投稿で、表示される根拠が患者本人の記述になることを回帰テストで確認する。"
+  ],
+  "refs": [
+    "mcs/views/structured_view.py",
+    "tests/extract/test_alert_subject_guard.py"
+  ]
+}

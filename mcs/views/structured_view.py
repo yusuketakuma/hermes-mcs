@@ -702,10 +702,9 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
         if urgency or llm else {}
     suffix = ""
     if urgency == "llm":
-        ev = (llm.get("urgency_evidence") or ext.get("urgency_evidence")
-              or [])
-        if ev:
-            suffix = f" — 根拠:「{str(ev[0])[:40]}」"
+        # quote only the patient-scoped reason; raw evidence[0] may be a family member's
+        if details["reasons"]:
+            suffix = f" — 根拠:「{str(details['reasons'][0])[:40]}」"
         suffix += urgency_qc_suffix(db, mid)
     lines: list[str] = _head_lines(selected, v1, urgency, suffix, plain)
     if details["held"]:
