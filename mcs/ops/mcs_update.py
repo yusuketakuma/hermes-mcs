@@ -1503,7 +1503,7 @@ def _use_migrated_runtime(migration: dict) -> None:
     """Drive services with the rebuilt venv; the old path was moved aside."""
     global _SERVICES_PYTHON
     python = _runtime_python(migration["venv"])
-    if python is None or not os.path.isdir(migration["backup_path"]):
+    if python is None or not os.path.lexists(migration["backup_path"]):
         raise UpdateError("runtime_migration_unverified")
     _SERVICES_PYTHON = python
 
@@ -1512,7 +1512,9 @@ def _restore_runtime(entry: dict) -> None:
     """Undo a runtime migration: keep the new venv aside, restore the old."""
     migration = entry.get("runtime_migration") or {}
     venv, backup = migration.get("venv"), migration.get("backup_path")
-    if venv and backup and os.path.isdir(backup) and not os.path.islink(backup):
+    # a moved symlink venv is renamed back as the link itself; its external
+    # target is never touched
+    if venv and backup and os.path.lexists(backup):
         if os.path.lexists(venv):
             os.rename(venv, _free_sibling(venv, ".python314-aside"))
         os.rename(backup, venv)
@@ -2098,10 +2100,12 @@ def _rollback_tree(entry: dict, on_hold=None) -> None:
     prev = entry["prev_sha"]
     if load_config().get("runtime_mode") == "standalone" and not _standalone_target_supported(prev):
         raise UpdateError("standalone_runtime_missing_in_target")
+    # runtime first: once the tree is back on prev, an older updater that
+    # knows nothing of runtime_migration may run the next recovery
+    _restore_runtime(entry)
     _git_out(["reset", "--hard", prev])
     if _head_sha() != prev or not _tree_clean():
         raise UpdateError("rollback_verify_failed")
-    _restore_runtime(entry)
     if entry.get("schema_bump") and entry.get("backup_path"):
         _restore_db(entry["backup_path"], on_hold=on_hold)
     _cancel_unsent_notices()
@@ -2900,12 +2904,16 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     save_state(state)
             try:
                 if applying.get("rollback"):
+                    if applying.get("runtime_migration"):
+                        quiesce()       # drainers may have been restarted since
                     _restore_runtime(applying)
                     problems = _reconcile_membership(applying.get("manifest_snapshot"))
                     if problems:
                         return escalate("membership: " + ",".join(problems))
                 elif applying.get("reinstall") \
                         and not applying.get("reinstall_done"):
+                    if applying.get("runtime_migration"):
+                        return _undo_interrupted_migration(state, applying, drainers, escalate)
                     # an interrupted install.sh is never re-run unattended
                     # (operator-only) — a human finishes the upgrade
                     return escalate("reinstall_incomplete")
@@ -2954,6 +2962,9 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 # drifted — escalate, never 'finish' into a wedge
                 return escalate("restore_consent hold lost its "
                                 "rollback target — refusing to classify")
+            if applying.get("rollback") and applying.get("runtime_migration"):
+                # journaled the migration undo, then died before the reset
+                return _undo_interrupted_migration(state, applying, drainers, escalate)
             if not clean:
                 # crash mid-merge checkout without MERGE_HEAD — the
                 # mixed-tree case stage-gating could never reach (F1)
@@ -2974,6 +2985,45 @@ def recover_interrupted(if_stale: bool = False) -> int:
         for fd in (run_fd, upd_fd):
             if fd is not None:
                 os.close(fd)
+
+
+def _undo_interrupted_migration(state, applying, drainers, escalate) -> int:
+    """An interrupted runtime migration is undone, never re-run unattended.
+    Same order as rollback(): journal a rollback-shaped record, quiesce,
+    then restore tree, venv and Hermes checkout; a pending restore consent
+    holds with drainers stopped."""
+    if applying.get("rollback"):
+        record, entry = applying, {**applying, "prev_sha": applying["sha"]}
+    else:
+        record, entry = _rollback_applying(applying, applying["sha"],
+                                           applying.get("command_id")), applying
+        state["applying"] = record
+        journal(state, "rollback")      # crash-visible before quiesce
+    quiesce()
+    try:
+        _rollback_tree(entry, lambda report: _consent_hold(
+            state, RestoreConsentPending(report), entry.get("backup_path")))
+    except RestoreConsentPending as e:
+        _consent_hold(load_state(), e, entry.get("backup_path"))
+        return 0
+    problems = drainers(_drainers_key(state, _head_sha()))
+    if problems:
+        return escalate("runtime migration rollback: " + ",".join(problems))
+    state = load_state()
+    state.setdefault("attempts", {})[applying.get("tag") or "?"] = {
+        "result": "rolled_back", "at": time.time()}
+    cid = record.get("command_id")
+    if cid:
+        state.setdefault("executed", {})[cid] = {"result": "rolled_back", "at": time.time()}
+    state["applying"] = None
+    state["stages"] = []
+    state.pop("restore_consent", None)
+    save_state(state)
+    _remove_marker()
+    _report("rolled_back", "interrupted runtime migration undone")
+    _enqueue_notice("[MCS] 中断されたPython 3.14への移行を元に戻しました。"
+                    "scripts/mcs_upgrade.py で再度更新してください")
+    return 0
 
 
 def _finish_recovery(state: dict, result: str, removed: list) -> int:
