@@ -1003,24 +1003,22 @@ class MCSAdapter:
                 return
         raise BootstrapError("chrome launch timed out")
 
-    def _stop_profile_chrome(self, profile_dir: str, chrome_bin: str) -> bool:
-        """Stop Chrome main processes of exactly this dedicated profile
-        (helpers exit with them): SIGTERM, bounded wait, then SIGKILL.
-        Nothing else is touched; an unparseable listing stops nothing."""
-        import signal
+    @staticmethod
+    def _profile_chrome_pids(profile_dir: str, chrome_bin: str) -> list[int]:
+        """Pids of Chrome main processes of exactly this dedicated profile; [] when unknown."""
         import subprocess
         if (not profile_dir or not os.path.isabs(profile_dir)
                 or not chrome_bin or not os.path.isabs(chrome_bin)):
-            return False
+            return []
         flag = re.compile(r"(?:^|\s)--user-data-dir=" + re.escape(profile_dir)
                           + r"(?:\s|$)")
         try:
             result = subprocess.run(["ps", "-axww", "-o", "pid=,command="],
                                     capture_output=True, text=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
-            return False
+            return []
         if result.returncode != 0:
-            return False
+            return []
         pids = []
         for line in result.stdout.splitlines():
             pid, _, command = line.strip().partition(" ")
@@ -1031,6 +1029,55 @@ class MCSAdapter:
                     and flag.search(command)
                     and " --type=" not in f" {command}"):
                 pids.append(int(pid))
+        return pids
+
+    def _cdp_peer_owned(self, ws_url: str, profile_dir: str,
+                        chrome_bin: str) -> bool:
+        """True only when ws_url is the CDP endpoint and its listener is this profile's Chrome run by this OS user.
+
+        A loopback address does not identify the peer: another local
+        account could hold the CDP port while the profile's Chrome is
+        down and answer every probe itself. Fails closed when the socket
+        listing is unavailable (no lsof, timeout, unparseable output)."""
+        import subprocess
+        try:
+            cdp = urllib.parse.urlparse(self.cdp_url)
+            ws = urllib.parse.urlparse(ws_url)
+            if (cdp.port is None or ws.scheme != "ws"
+                    or (ws.hostname, ws.port) != (cdp.hostname, cdp.port)):
+                return False
+        except ValueError:
+            return False
+        pids = self._profile_chrome_pids(profile_dir, chrome_bin)
+        lsof = next((p for p in ("/usr/sbin/lsof", "/usr/bin/lsof")
+                     if os.access(p, os.X_OK)), None)
+        if not pids or lsof is None:
+            return False
+        host = f"[{cdp.hostname}]" if ":" in cdp.hostname else cdp.hostname
+        try:
+            listing = subprocess.run(
+                [lsof, "-nP", "-a", f"-iTCP@{host}:{cdp.port}",
+                 "-sTCP:LISTEN", "-Fpu"], capture_output=True, text=True,
+                timeout=self._remaining_timeout(10))
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if listing.returncode != 0:
+            return False
+        listeners, pid = set(), None
+        for line in listing.stdout.splitlines():
+            if line[:1] == "p" and line[1:].isdigit():
+                pid = int(line[1:])
+            elif line[:1] == "u" and line[1:].isdigit() and pid is not None:
+                listeners.add((pid, int(line[1:])))
+        return bool(listeners) and all(
+            pid in pids and uid == os.getuid() for pid, uid in listeners)
+
+    def _stop_profile_chrome(self, profile_dir: str, chrome_bin: str) -> bool:
+        """Stop Chrome main processes of exactly this dedicated profile
+        (helpers exit with them): SIGTERM, bounded wait, then SIGKILL.
+        Nothing else is touched; an unparseable listing stops nothing."""
+        import signal
+        pids = self._profile_chrome_pids(profile_dir, chrome_bin)
         if not pids:
             return False
 
@@ -1198,7 +1245,9 @@ class MCSAdapter:
         Returns 'ok' | 'manual_required' | 'keychain_locked' | 'failed'.
         'manual_required:no_form' distinguishes a missing login form
         (page never rendered / app redirected) from a submitted login
-        that never validated."""
+        that never validated. Credentials are filled only into a CDP
+        listener verified as this profile's Chrome (_cdp_peer_owned);
+        any other peer ends the attempt as 'failed'."""
         # per-attempt journal facts (run_check records them)
         self.healed_tabs, self.chrome_restarted = 0, False
         try:
@@ -1236,6 +1285,11 @@ class MCSAdapter:
                 if not pw:
                     return "keychain_locked" if locked else \
                         "manual_required"
+                # shortcut: the listener is checked, then the fill opens its
+                # own socket; a profile Chrome dying in that gap re-opens
+                # the race — a pinned connection would close it
+                if not self._cdp_peer_owned(ws, profile_dir, chrome_bin):
+                    return "failed"
                 login_id = self._config().get("mcs_login_id", "")
                 fill = self._cdp_eval(ws, f"""(() => {{
                   if (location.origin !== 'https://www.medical-care.net')
