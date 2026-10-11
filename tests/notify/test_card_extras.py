@@ -24,6 +24,13 @@ def _texts(view):
     return [i["text"] for i in view["items"]]
 
 
+def test_card_limits_mirror_the_worker_spec():
+    """The runner budgets cards with copies of the worker's ceilings."""
+    from adapters.common import spec as worker_spec
+    assert notify_cards.MAX_COMPONENTS == worker_spec.MAX_COMPONENTS
+    assert notify_cards.MAX_POST_ACTIONS == worker_spec.MAX_POST_ACTIONS
+
+
 def test_extra_row_is_budgeted(led):
     spec = _delivered_card(led)
     assert [b["id"] for b in spec["parts"]["action_rows"][-1]] == [

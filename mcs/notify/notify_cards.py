@@ -298,13 +298,14 @@ _LIVE_VIEWS = frozenset({"body", "summary", "request", "dismiss", "report",
                          "mytasks", "unacked", "search", "digest", "tasks",
                          "meds", "drugsearch"})
 
+# mirrored from adapters/common/spec (core never imports adapters);
+# tests/notify/test_card_extras.py pins them equal
 MAX_COMPONENTS = 40           # the worker's per-card component ceiling
-MAX_POST_ACTIONS = 5          # adapters/common/spec.MAX_POST_ACTIONS
+MAX_POST_ACTIONS = 5          # spec.MAX_POST_ACTIONS
 # Card face layout stamped at creation: existing cards keep layout 1 (no
 # fingerprint change, no mass re-render / LINE WORKS re-post); cards
 # created from now on use the current one (owner decision 2026-10-08)
 CARD_LAYOUT = 2
-                              # (hermes_plugin spec.MAX_COMPONENTS)
 TASK_HINT_MAX = 300           # 📝 prefill — the modal field holds 1000
 STAFF_CHOICES = 25            # Discord/Slack select option ceiling
 TASK_VIEW_LIMIT = 12          # ephemeral list rows — 12 tasks x <=2
