@@ -14,6 +14,8 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from mcs_util import loads_dict
+
 JST = ZoneInfo("Asia/Tokyo")
 DAY_S = 86400
 
@@ -341,6 +343,29 @@ def transition_cooccurrences(db, *, win_s: int, extra_where: str = "",
     for pid, dmid, mid in rows:
         grouped.setdefault(dmid, (pid, set()))[1].add(mid)
     return grouped
+
+
+def latest_artifact(db, kind):
+    """(artifact_id, content dict) of the newest artifact of kind; (None, None) when absent, content None when unreadable."""
+    row = db.execute("SELECT artifact_id, content FROM artifacts WHERE kind=? "
+                     "ORDER BY artifact_id DESC LIMIT 1", (kind,)).fetchone()
+    return (row["artifact_id"], loads_dict(row["content"])) if row else (None, None)
+
+
+SEMANTIC_CONTROL_KIND = "semantic_control"
+
+
+def paused(db, project_id: int) -> bool:
+    """Return the latest semantic control state, failing closed on corruption."""
+    connection = getattr(db, "db", db)
+    row = connection.execute(
+        "SELECT content FROM artifacts WHERE kind=? AND project_id=? "
+        "ORDER BY artifact_id DESC LIMIT 1",
+        (SEMANTIC_CONTROL_KIND, project_id),
+    ).fetchone()
+    if row is None:
+        return False
+    return row["content"] != "running"
 
 
 def staff_directory(db, project_id=None):

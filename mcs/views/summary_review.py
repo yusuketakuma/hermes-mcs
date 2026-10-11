@@ -346,7 +346,7 @@ def comparison(db, project_id: int, message_id: int,
             })
 
     if candidate is not None and candidate["current"]:
-        from mcs_operations import paused
+        from mcs_queries import paused
         if paused(db, project_id):
             reasons.append("paused")
 

@@ -38,7 +38,7 @@ from mcs_queries import (JST, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
 from mcs_util import HOME, acquire_run_lock, loads_dict
 from semantic_projection import PROJECTION_VERSION
-from mcs_signals import normalize_sender_id
+from self_identity import normalize_sender_id
 from drug_map import (KIND as REF_KIND, PROGRESS_KIND, candidate_note, current_refs,
                       generation_signature)
 

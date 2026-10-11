@@ -29,6 +29,7 @@
 | `mcs/core/mcs_queries.py` | Shared extraction-scan contract for the read side. |
 | `mcs/core/mcs_runtime.py` | Resolve the explicitly selected Hermes or standalone runtime paths. |
 | `mcs/core/mcs_util.py` | Shared micro-utilities for the MCS adapter — no network, no DB access. |
+| `mcs/core/self_identity.py` | Who "we" are in MCS: the logged-in user and own-station roster. |
 | `mcs/extract/clinical_chunking.py` | Plan source-preserving clinical units before inference using output-pressure heuristics. |
 | `mcs/extract/clinical_values.py` | Conservative surface normalization and quote-bound laboratory candidates. |
 | `mcs/extract/drug_map.py` | Pinned private dictionaries and source-bound medication candidate annotations. |

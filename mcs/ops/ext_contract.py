@@ -1351,7 +1351,7 @@ def main(argv=None) -> int:
                             policy = None
                             if args.classify_senders:
                                 from mcs_setup import load_config
-                                from mcs_signals import self_sender_id
+                                from self_identity import self_sender_id
                                 orgs = (load_config().get("signals") or {}).get(
                                     "self_organizations")
                                 policy = {"self_sender_id": self_sender_id(view.db),

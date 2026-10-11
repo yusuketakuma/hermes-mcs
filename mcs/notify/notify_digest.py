@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401,E402  CLI entry: registers every subdir
 
 import mcs_signals  # noqa: E402
+import self_identity
 import structured_view  # noqa: E402
 from mcs_queries import JST, coverage_gaps  # noqa: E402
 from message_metadata import (get_message_metadata, mentions_self,  # noqa: E402
@@ -196,7 +197,7 @@ def _own_unreacted(db, until, ok, room, self_id) -> list:
         return ["本人の送信者IDが不明のため判定していません。"]
     rows, unfetched, invalid = [], 0, 0
     for r in _recent_posts(db, until, ok, "AND m.parent_id IS NULL"):
-        if mcs_signals.normalize_sender_id(r["sender_id"]) != self_id:
+        if self_identity.normalize_sender_id(r["sender_id"]) != self_id:
             continue
         meta = get_message_metadata(db, r["message_id"])
         others = others_reaction_count(meta)
@@ -254,7 +255,7 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on) -> list:
     unknown, station = 0, 0
     if self_id is not None:
         for r in _recent_posts(db, until, ok, ""):
-            if mcs_signals.normalize_sender_id(r["sender_id"]) == self_id:
+            if self_identity.normalize_sender_id(r["sender_id"]) == self_id:
                 continue
             meta = get_message_metadata(db, r["message_id"])
             hit = mentions_self(meta, self_id)
@@ -400,7 +401,7 @@ def build(db, cfg, since: float, until: float, flt=None, *,
             containers.append({"type": "text", "fold": fold,
                                "text": "\n".join([f"■ {head}", *lines])})
 
-    self_id = mcs_signals.self_sender_id(db)
+    self_id = self_identity.self_sender_id(db)
     todo = []
     for label, pids in (("期限切れタスク", late), ("本日期限タスク", due)):
         if pids:

@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "自分・自局の判定処理を独立した共通処理へ分離",
+  "summary": "自分の投稿か・自局の職員かを判定する処理をシグナル検知から切り離し、台帳・通知・表示が直接使う共通処理にしました。判定結果と動作は変わりません。",
+  "upgrade": "設定変更・DB移行・追加操作は不要です。",
+  "details": [
+    "self_profile・station_staffの読み書きと送信者ID判定をcore/self_identity.pyへ移し、mcs_signalsから同じ名前で再exportする。",
+    "最新artifactの読込みと意味解析の一時停止判定をcore/mcs_queriesへ移し、mcs_operationsから再exportする。"
+  ],
+  "refs": ["mcs/core/self_identity.py", "mcs/core/mcs_queries.py", "mcs/ops/mcs_signals.py", "mcs/ops/mcs_operations.py"]
+}
