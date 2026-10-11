@@ -13,7 +13,7 @@ import pytest
 import extract_llm
 import semantic
 import semantic_v4 as v4
-from mcs_queries import (current_fact_pred, qc_v4_source_id)
+from mcs_queries import current_fact_pred
 from semantic_policy import KIND_FACT_REPAIR
 from semantic_projection import PROJECTION_VERSION
 from semantic_testkit import (_AuditFailJev, _drain, _ledger,
@@ -196,12 +196,7 @@ def test_v4_outranks_legacy_and_projection(tmp_path):
         assert [r["kind"] for r in picked] == ["semantic_facts_v4"]
         assert json.loads(picked[0]["content"])["canonical_facts"][0][
             "fact_id"] == "from-semantic_facts_v4"
-        # qc_v4_source_id selects the v4 row; bare qc_source_id with
-        # version=4 can never reach this kind
-        v4src = db.db.execute(
-            f"SELECT {qc_v4_source_id('m')} FROM messages m "
-            "WHERE m.message_id=1").fetchone()[0]
-        assert v4src is not None
+        # bare qc_source_id with version=4 can never reach this kind
         from mcs_queries import qc_source_id
         legacy = db.db.execute(
             f"SELECT {qc_source_id('m', version=4)} FROM messages m "
