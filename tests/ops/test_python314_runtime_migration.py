@@ -12,6 +12,12 @@ from test_mcs_update import updater as updater  # noqa: F401  (fixture)
 OLD = (3, 13, 9)
 
 
+@pytest.fixture(autouse=True)
+def _no_leaked_services_python(monkeypatch):
+    """_use_migrated_runtime sets module state; keep it per test."""
+    monkeypatch.setattr(mcs_update, "_SERVICES_PYTHON", None)
+
+
 def _state(updater, **applying):
     state = updater._default_state()
     state["applying"] = {"tag": "v1.0.18", "sha": "b" * 40, "prev_sha": "a" * 40,
@@ -320,3 +326,112 @@ def test_checkout_already_at_the_current_pin_with_an_old_venv_is_accepted(update
     assert updater._migration_checkout_problem({}) is None
     (checkout / "f").write_text("local edit")      # dirty stays refused at the pin too
     assert updater._migration_checkout_problem({}) == "hermes_checkout_branch_or_dirty"
+
+
+def _interrupted(updater, tmp_path, monkeypatch, *, reset=False, rollback_shaped=False):
+    import time
+    from ops_testkit import _git, _make_repo
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(updater, "REPO", str(repo))
+    prev = _git(repo, "rev-list", "-n1", "v1.0.0").stdout.strip()
+    target = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
+    assert prev != target
+    # merged (HEAD=target) then crashed; or already reset back to prev
+    _git(repo, "reset", "-q", "--hard", prev if reset else target)
+    runtime = tmp_path / "rt"
+    old = _venv(runtime, version_ok=False)
+    os.rename(old, str(old) + ".pre-python314")             # install.sh moved it ...
+    _venv(runtime)                                          # ... and half-built the new one
+    order, notices = [], []
+    monkeypatch.setattr(updater, "_enqueue_notice", lambda text, **k: notices.append(text) or True)
+    monkeypatch.setattr(updater, "_services_reconcile", lambda: order.append("services"))
+    monkeypatch.setattr(updater, "_reconcile_membership", lambda snapshot: [])
+    monkeypatch.setattr(updater, "_postcheck", lambda state, sha: [])
+    monkeypatch.setattr(updater, "quiesce", lambda: order.append("quiesce") or [])
+    monkeypatch.setattr(updater, "restart_agents", lambda bounce=True: order.append("restart") or [])
+    restore = updater._restore_runtime
+    monkeypatch.setattr(updater, "_restore_runtime",
+                        lambda entry: order.append("runtime") or restore(entry))
+    git_out = updater._git_out
+    monkeypatch.setattr(updater, "_git_out", lambda args, *a, **k: (
+        order.append("reset") if args[:1] == ["reset"] else None) or git_out(args, *a, **k))
+    applying = {"tag": "v1.1.0", "sha": target, "prev_sha": prev, "reinstall": True,
+                "reinstall_done": False, "command_id": "cid-mig",
+                "runtime_migration": {"venv": str(old), "backup_path": str(old) + ".pre-python314"},
+                "at": time.time() - 4000}
+    state = updater._default_state()
+    state["applying"] = (updater._rollback_applying(applying, target, "cid-mig")
+                         if rollback_shaped else applying)
+    state["stages"] = [{"stage": "rollback" if rollback_shaped else "post_merge",
+                        "at": time.time() - 3000}]
+    updater.save_state(state)
+    return repo, prev, old, runtime, order, notices
+
+
+def _assert_undone(updater, repo, prev, old, runtime, order, notices):
+    from ops_testkit import _git
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == prev
+    assert (old / "bin/python3").read_text().endswith("echo 3 13\n")
+    assert (runtime / "venv.python314-aside").is_dir()
+    after = updater.load_state()
+    assert after["applying"] is None and after["executed"]["cid-mig"]["result"] == "rolled_back"
+    assert "restart" in order
+
+
+def test_interrupted_migration_is_quiesced_then_undone_not_rerun(updater, tmp_path, monkeypatch):
+    repo, prev, old, runtime, order, notices = _interrupted(updater, tmp_path, monkeypatch)
+    assert updater.recover_interrupted() == 0
+    _assert_undone(updater, repo, prev, old, runtime, order, notices)
+    # the old tree must never come back before the runtime it needs
+    assert order.index("quiesce") < order.index("runtime") < order.index("reset") \
+        < order.index("restart")
+    assert any("mcs_upgrade.py" in text for text in notices)
+
+
+def test_undo_resumes_when_interrupted_after_the_reset(updater, tmp_path, monkeypatch):
+    # the rollback-shaped journal was written and the tree reset, then a crash
+    repo, prev, old, runtime, order, notices = _interrupted(
+        updater, tmp_path, monkeypatch, reset=True, rollback_shaped=True)
+    assert updater.recover_interrupted() == 0
+    _assert_undone(updater, repo, prev, old, runtime, order, notices)
+    assert order.index("quiesce") < order.index("runtime")
+
+
+def test_undo_resumes_when_interrupted_before_the_reset(updater, tmp_path, monkeypatch):
+    repo, prev, old, runtime, order, notices = _interrupted(
+        updater, tmp_path, monkeypatch, rollback_shaped=True)
+    assert updater.recover_interrupted() == 0
+    _assert_undone(updater, repo, prev, old, runtime, order, notices)
+    assert order.index("quiesce") < order.index("runtime")
+
+
+def test_undo_waiting_for_restore_consent_holds_with_drainers_stopped(updater, tmp_path, monkeypatch):
+    repo, prev, old, runtime, order, notices = _interrupted(updater, tmp_path, monkeypatch)
+    held = []
+
+    def needs_consent(entry, on_hold=None):
+        raise updater.RestoreConsentPending({"report_id": "synthetic-report"})
+
+    monkeypatch.setattr(updater, "_rollback_tree", needs_consent)
+    monkeypatch.setattr(updater, "_consent_hold", lambda state, e, path: held.append(e) or "rid")
+    assert updater.recover_interrupted() == 0
+    assert held and "restart" not in order and not notices
+    after = updater.load_state()
+    assert after["applying"]["rollback"] is True
+    assert after["applying"]["runtime_migration"]["venv"] == str(old)
+
+
+def test_symlinked_venv_is_restored_as_the_same_link(updater, tmp_path):
+    real = _venv(tmp_path / "external", version_ok=False)
+    venv = tmp_path / "rt" / "venv"
+    venv.parent.mkdir()
+    venv.symlink_to(real)
+    backup = tmp_path / "rt" / "venv.pre-python314"
+    os.rename(venv, backup)                     # what install.sh's mv does
+    _venv(tmp_path / "rt")                      # rebuilt as a real directory
+    migration = {"venv": str(venv), "backup_path": str(backup)}
+    updater._use_migrated_runtime(migration)    # the link counts as the backup
+    updater._restore_runtime({"runtime_migration": migration})
+    assert venv.is_symlink() and os.readlink(venv) == str(real)
+    assert (real / "bin/python3").read_text().endswith("echo 3 13\n")
+    assert (tmp_path / "rt" / "venv.python314-aside").is_dir()
