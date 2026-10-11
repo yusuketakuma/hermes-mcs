@@ -35,6 +35,7 @@ import errno
 import json
 import math
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -682,6 +683,51 @@ def _seed_outage_catchup(ledger, result, since: float) -> None:
 
 _REPLAYED_LISTS = ("errors", "incomplete", "coverage_gaps",
                    "coverage_stalled", "self_probe_fetched")
+_ENTRY_PID = re.compile(r"(?:project|mark|backfill|probe) (\d+): ")
+
+
+def _entry_pid(entry) -> int | None:
+    """The patient a walk record names — a pid, a {'pid': …} entry or a
+    '<stage> <pid>: …' error — or None for a run-wide record."""
+    if isinstance(entry, dict):
+        return entry.get("pid")
+    if isinstance(entry, int):
+        return entry
+    m = _ENTRY_PID.match(entry) if isinstance(entry, str) else None
+    return int(m.group(1)) if m else None
+
+
+def _restore_unobserved(where: str, result, aborted: dict, counted: dict,
+                        replay) -> None:
+    """Re-add the aborted attempt's records that the replay cannot
+    observe again. unread: a patient the replay no longer lists (the
+    aborted attempt acknowledged it, or its mark landed before the
+    response failed) keeps its errors, incomplete entry and message
+    count. backfill: the aborted attempt's job_add revived the stalled
+    history_head, so its coverage_stalled record stays unless the
+    replay recorded that patient's stall itself."""
+    if where == "unread":
+        seen = {p.project_id for p in getattr(replay, "patients", ())}
+        unseen = sum(n for pid, n in counted.items() if pid not in seen)
+        if unseen:
+            result["messages"] += unseen
+
+        def keep(key, entry):
+            pid = _entry_pid(entry)
+            return pid is not None and pid not in seen
+    elif where == "backfill":
+        stalled = {g["pid"] for g in result.get("coverage_stalled", ())}
+
+        def keep(key, entry):
+            return (key == "coverage_stalled"
+                    or ": coverage_stalled_" in str(entry)) \
+                and _entry_pid(entry) not in stalled
+    else:
+        return
+    for key, entries in aborted.items():
+        for entry in entries:
+            if keep(key, entry) and entry not in result.get(key, ()):
+                result.setdefault(key, []).append(entry)
 
 
 def _with_relogin(adapter, ledger, result, where: str, fn, *args,
@@ -714,22 +760,30 @@ def _with_relogin(adapter, ledger, result, where: str, fn, *args,
         if state != "ok":
             raise SessionExpired(f"auto_login={state}") from e
         # these stages re-walk everything, so the replay re-records them;
-        # drop the aborted attempt's walk records and messages. Job drains
-        # are excluded: a job failed or deferred by the aborted attempt is
+        # drop the aborted attempt's walk records and messages, then put
+        # back what the replay cannot observe again. Job drains are
+        # excluded: a job failed or deferred by the aborted attempt is
         # not due on replay, so its recorded error must stay.
+        aborted, counted = {}, result.pop("_unread_counted", {})
         if where in ("unread", "self_probe", "backfill"):
             for key in _REPLAYED_LISTS:
                 if key in sizes:
+                    aborted[key] = result[key][sizes[key]:]
                     del result[key][sizes[key]:]
                 else:
-                    result.pop(key, None)
+                    aborted[key] = result.pop(key, [])
             if msgs is not None:
                 result["messages"] = msgs
         try:
-            return fn(*args, **kwargs)
+            replay = fn(*args, **kwargs)
         except SessionExpired as e2:
             raise SessionExpired(
                 "auto_login=ok_then_expired") from e2
+        _restore_unobserved(where, result, aborted, counted, replay)
+        return replay
+    finally:
+        # stage_unread's per-patient tally is replay bookkeeping only
+        result.pop("_unread_counted", None)
 
 
 # ---------- stage: unread pipeline ----------
@@ -911,6 +965,9 @@ def stage_unread(adapter, ledger, args, result, deadline, run_id,
                 f"project {p.project_id}: db_write_failed")
             continue
         result["messages"] += len(p.messages)
+        # per patient, for a relogin replay that no longer lists it
+        result.setdefault("_unread_counted", {})[p.project_id] = \
+            len(p.messages)
         result["new_messages"] += len(new_ids)
         result.setdefault("realtime_ids", []).extend(new_ids)
         if new_ids:
