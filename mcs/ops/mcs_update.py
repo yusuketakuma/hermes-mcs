@@ -2829,6 +2829,76 @@ def reinstall_done() -> int:
     return recover_interrupted() if applying else 0
 
 
+def _journal_is_fresh(state: dict, applying: dict | None) -> bool:
+    """True when the newest journal timestamp is younger than STALE_S."""
+    last = max(
+        [s.get("at", 0) for s in state.get("stages", [])]
+        + [(applying or {}).get("at", 0)])
+    return bool(last and time.time() - last < STALE_S)
+
+
+def _journal_consent_from_marker(state: dict, applying: dict) -> None:
+    """Journal a restore-consent hold known only from its marker."""
+    marker = _awaiting_consent_marker()
+    if marker is not None:
+        # A hold without its journal record: entered before
+        # holds were journaled (older watchdog) or a crash
+        # between the awaiting_consent marker and
+        # _consent_hold. Record it so this and every later pass
+        # (either tool) keeps the freeze; the head==target pass
+        # rewrites it from a fresh loss report.
+        state["restore_consent"] = {
+            "report_id": marker.get("report_id"),
+            "backup_path": applying["backup_path"],
+            "from_marker": True, "at": time.time()}
+        save_state(state)
+
+
+def _complete_done_bookkeeping(state: dict) -> int:
+    """Finish the parent's bookkeeping after the child journaled 'done'."""
+    applied = state.get("applied") or []
+    cid = (applied[-1] or {}).get("command_id") if applied else None
+    if cid:
+        state.setdefault("executed", {})[cid] = {
+            "result": "applied", "at": time.time()}
+    state["stages"] = []
+    save_state(state)
+    _remove_marker()
+    _report("resumed_done", "completed bookkeeping after crash")
+    _enqueue_notice("[MCS] 中断された更新の後処理を完了しました")
+    _gateway_restart_if_needed(state)
+    return 0
+
+
+def _finish_resumed(state: dict, applying: dict) -> int:
+    """Record a resumed apply or rollback as complete and restart services."""
+    if applying.get("rollback"):
+        applied = state.get("applied") or []
+        if applied and applied[-1].get("sha") == applying.get("prev_sha"):
+            reverted = applied[-1]
+            state["applied"] = applied[:-1]
+            state.setdefault("attempts", {})[reverted.get("tag") or "?"] = {
+                "result": "rolled_back", "at": time.time()}
+        result = "rolled_back"
+    else:
+        state.setdefault("applied", []).append(applying)
+        result = "applied"
+    state["applying"] = None
+    state["stages"] = []
+    state.pop("restore_consent", None)
+    cid = applying.get("command_id")
+    if cid:
+        state.setdefault("executed", {})[cid] = {
+            "result": result, "at": time.time()}
+    save_state(state)
+    _remove_marker()
+    _report("resumed", "post-merge completed after crash")
+    _enqueue_notice(
+        "[MCS] 更新の中断を検出し、post-merge を完了しました")
+    restart_services(load_config(), applying.get("plugin_changed"))
+    return 0
+
+
 def recover_interrupted(if_stale: bool = False) -> int:
     """Journal-driven recovery (⑤). Safe to call any time.
 
@@ -2859,31 +2929,15 @@ def recover_interrupted(if_stale: bool = False) -> int:
         if not applying and not stages:
             _remove_marker()           # orphan marker — writer is dead
             return 0
-        if if_stale:
-            last = max(
-                [s.get("at", 0) for s in state.get("stages", [])]
-                + [(applying or {}).get("at", 0)])
-            if last and time.time() - last < STALE_S:
-                return 0               # fresh journal — leave it alone
+        if if_stale and _journal_is_fresh(state, applying):
+            return 0                   # fresh journal — leave it alone
         removed = _clean_stale_git_locks()
         prev = (applying or {}).get("prev_sha")
         target = (applying or {}).get("sha")
         rollback_shaped = bool(applying and applying.get("rollback")
                                and applying.get("backup_path"))
         if not state.get("restore_consent") and rollback_shaped:
-            marker = _awaiting_consent_marker()
-            if marker is not None:
-                # A hold without its journal record: entered before
-                # holds were journaled (older watchdog) or a crash
-                # between the awaiting_consent marker and
-                # _consent_hold. Record it so this and every later pass
-                # (either tool) keeps the freeze; the head==target pass
-                # rewrites it from a fresh loss report.
-                state["restore_consent"] = {
-                    "report_id": marker.get("report_id"),
-                    "backup_path": applying["backup_path"],
-                    "from_marker": True, "at": time.time()}
-                save_state(state)
+            _journal_consent_from_marker(state, applying)
         prior_drainers = _last_report().get("drainers_key")
         head = None                    # measured below (restart identity)
         tree_reset = False
@@ -2980,18 +3034,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
         if "done" in stages and not applying:
             # child wrote 'done' then died before the parent finished
             # bookkeeping — complete it
-            applied = state.get("applied") or []
-            cid = (applied[-1] or {}).get("command_id") if applied else None
-            if cid:
-                state.setdefault("executed", {})[cid] = {
-                    "result": "applied", "at": time.time()}
-            state["stages"] = []
-            save_state(state)
-            _remove_marker()
-            _report("resumed_done", "completed bookkeeping after crash")
-            _enqueue_notice("[MCS] 中断された更新の後処理を完了しました")
-            _gateway_restart_if_needed(state)
-            return 0
+            return _complete_done_bookkeeping(state)
         if not applying:
             # pre-'applying' remnant: nothing was ever mutated — safe
             # to clean (previously wedged all updates, F10)
@@ -3051,31 +3094,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 if problems or errors:
                     return escalate("resume postcheck: "
                                     + ",".join(problems + errors))
-                if applying.get("rollback"):
-                    applied = state.get("applied") or []
-                    if applied and applied[-1].get("sha") == applying.get("prev_sha"):
-                        reverted = applied[-1]
-                        state["applied"] = applied[:-1]
-                        state.setdefault("attempts", {})[reverted.get("tag") or "?"] = {
-                            "result": "rolled_back", "at": time.time()}
-                    result = "rolled_back"
-                else:
-                    state.setdefault("applied", []).append(applying)
-                    result = "applied"
-                state["applying"] = None
-                state["stages"] = []
-                state.pop("restore_consent", None)
-                cid = applying.get("command_id")
-                if cid:
-                    state.setdefault("executed", {})[cid] = {
-                        "result": result, "at": time.time()}
-                save_state(state)
-                _remove_marker()
-                _report("resumed", "post-merge completed after crash")
-                _enqueue_notice(
-                    "[MCS] 更新の中断を検出し、post-merge を完了しました")
-                restart_services(load_config(), applying.get("plugin_changed"))
-                return 0
+                return _finish_resumed(state, applying)
             except UpdateError as e:
                 return escalate("resume failed: " + str(e))
         if prev and head == prev:
