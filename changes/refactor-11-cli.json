@@ -1,10 +1,14 @@
 {
   "category": "changed",
-  "title": "更新コマンドの引数処理を整理",
-  "summary": "自己更新コマンドの内部構造を他の運用コマンドと揃えました。サブコマンド名・オプション・既定値・ヘルプ・出力・終了コードは変わらず、更新・ロールバック・復旧の動作も変わりません。",
+  "title": "更新・外部出力コマンドの引数処理を整理",
+  "summary": "自己更新コマンドと外部出力契約コマンドの内部構造を他の運用コマンドと揃えました。サブコマンド名・オプション・既定値・ヘルプ・出力・終了コードは変わらず、更新・ロールバック・復旧・外部出力・人承認の動作も変わりません。",
   "upgrade": "設定変更・DB移行・定期実行の変更・追加操作は不要です。",
   "details": [
-    "mcs_update.mainが引数リストを明示的に受け取り、各サブコマンドをargparseのset_defaultsで処理関数へ振り分ける。サブコマンド省略時は従来どおりcheckを実行する。"
+    "mcs_update.mainが引数リストを明示的に受け取り、各サブコマンドをargparseのset_defaultsで処理関数へ振り分ける。サブコマンド省略時は従来どおりcheckを実行する。",
+    "ext_contract.mainをサブコマンドごとの処理関数（deliver・handoff・reconcile・withdraw・health・receive・link-hints）へ分割する。旧形式（サブコマンド省略でdeliver）の扱いと保留時の終了コードは同一。"
   ],
-  "refs": ["mcs/ops/mcs_update.py"]
+  "refs": [
+    "mcs/ops/mcs_update.py",
+    "mcs/ops/ext_contract.py"
+  ]
 }
