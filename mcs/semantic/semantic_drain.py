@@ -723,7 +723,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     # through the same identity check.  A real Jev client additionally gets
     # a hook before each internal retry attempt and a durable reservation
     # immediately before the POST.
-    jev_client, _ = runtime.bind_jev(
+    jev_client = runtime.bind_jev(
         jev_client, guard, reserve_fn,
         cutoff=transport_deadline if lane == "backlog" else None)
     llm_fn = runtime.guarded_llm(
