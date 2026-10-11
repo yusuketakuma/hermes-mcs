@@ -950,7 +950,7 @@ class _FeedbackLatest(TypedDict):
 
 def _feedback_ratio(num, den, unit):
     """Small samples expose counts, not a rate or confidence interval."""
-    from semantic_evaluation import wilson_interval
+    from stats_math import wilson_interval
     ratio = _ratio(num, den, unit)
     ratio["wilson95"] = {"low": None, "high": None}
     if den < SIGNAL_FEEDBACK_MIN_N:

@@ -24,6 +24,7 @@ import _mcs_path  # noqa: F401
 from semantic_facts import RELATION_TYPES
 from mcs_util import atomic_write
 from mcs_util import payload_hash
+from stats_math import wilson_interval  # noqa: F401  re-exported for callers
 
 
 SCHEMA_VERSION = "semantic-evaluation/v3"
@@ -79,20 +80,6 @@ def _finite_number(value, field: str, integer: bool = False) -> float | int:
     if not math.isfinite(number) or value < 0:
         raise EvaluationError(f"{field}_invalid")
     return value if integer else number
-
-
-def wilson_interval(successes: int, denominator: int,
-                    z: float = 1.96) -> dict[str, float | None]:
-    """Return a bounded 95% Wilson interval without a statistics package."""
-    if denominator <= 0:
-        return {"low": None, "high": None}
-    p = successes / denominator
-    z2 = z * z
-    center = (p + z2 / (2 * denominator)) / (1 + z2 / denominator)
-    half = z / (1 + z2 / denominator) * math.sqrt(
-        p * (1 - p) / denominator + z2 / (4 * denominator ** 2))
-    return {"low": max(0.0, center - half),
-            "high": min(1.0, center + half)}
 
 
 def _success_metric(correct: int, denominator: int) -> dict:

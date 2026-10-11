@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "統計表示の信頼区間計算を共通処理へ移動",
+  "summary": "統計表示が使う信頼区間の計算を評価用モジュールから基盤の共通処理へ移しました。表示される値と動作は変わりません。",
+  "upgrade": "設定変更・DB移行・追加操作は不要です。",
+  "details": [
+    "wilson_intervalをcore/stats_math.pyへ移し、semantic_evaluationからは同じ名前で再exportする。",
+    "統計表示（mcs_stats）は評価用モジュールを読み込まなくなる。"
+  ],
+  "refs": ["mcs/core/stats_math.py", "mcs/semantic/semantic_evaluation.py", "mcs/views/mcs_stats.py"]
+}
