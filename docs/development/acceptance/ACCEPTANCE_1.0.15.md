@@ -6,9 +6,10 @@
 
 ## 全体監査と再利用範囲
 
-基準は [round3全体監査](../audits/1.0.15/round3/stability-audit-round3-1.0.15.json)、
-[round2監査](../audits/1.0.15/round2/stability-audit-round2-1.0.15.json)、
-[1.0.14全体inventory](../audits/1.0.14/full-maintenance-20261005/inventory.json)。
+基準は round3全体監査（`docs/development/audits/1.0.15/round3/stability-audit-round3-1.0.15.json`）、
+round2監査（`docs/development/audits/1.0.15/round2/stability-audit-round2-1.0.15.json`）、
+1.0.14全体inventory（`docs/development/audits/1.0.14/full-maintenance-20261005/inventory.json`）。
+これらはgit履歴に移した（[監査記録](../AUDITS.md)）。
 `git archive baa4f6d` の追跡1226ファイルをメモリ内で照合し、round3の全1143対象について
 SHA256一致1020・変更123・欠落0を確認した。相対symlinkはrepo内の対象内容で照合した。
 他の既存監査JSONにも現SHA一致を探し、再利用できる現物は同じ1020件だった。

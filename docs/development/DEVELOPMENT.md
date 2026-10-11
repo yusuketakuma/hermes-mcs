@@ -6,7 +6,7 @@
 実機・実API・人手・相手側の受入条件は同計画の§6で確認する。導入する版の手順はCHANGELOGと導入ガイドを参照する。
 
 開発者・運用担当者向けの詳細リファレンス。
-1.0.15の確認内容・検証結果・制約は[監査記録](audits/1.0.15/README.md)にまとめています。
+1.0.14〜1.0.15の監査記録はgit履歴に移しました。取り出し方は[監査記録](AUDITS.md)を参照。
 利用者向けの概要は [README.md](../../README.md)、画面イメージ・データ解説は [USER_GUIDE.md](../guides/USER_GUIDE.md)、導入は [INSTALLATION.md](../guides/INSTALLATION.md) を参照。
 
 ## 構成
