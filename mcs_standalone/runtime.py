@@ -163,7 +163,7 @@ class Runtime:
         self.restart_since = None
         self.marker = None
         # job -> start of the newest calendar slot already fired (persisted)
-        self.fired = self._load_fired()
+        self.fired, self.inflight = self._load_fired()
         self.due = {}
         self.skipped = {}
         self.connector = {"state": "off", "failures": 0, "failing_since": None,
@@ -203,19 +203,28 @@ class Runtime:
             log("state_write_recovered", file=name)
 
     def _load_fired(self):
+        """(fired, inflight): the newest slot fired per job, and for a slot
+        whose run has not been seen to end, the mark to restore if it never
+        does (the host was killed with it)."""
+        def stamps(rows):
+            return {job: stamp for job, stamp in rows.items()
+                    if isinstance(job, str) and type(stamp) in (int, float) and math.isfinite(stamp)}
         try:
             raw = config._private_bytes(self.data / SCHEDULE_FILE, "missing", "invalid", 65536)
             value = json.loads(raw)
-            fired = value["fired"]
-            return {job: stamp for job, stamp in fired.items()
-                    if isinstance(job, str) and type(stamp) in (int, float) and math.isfinite(stamp)}
+            fired = stamps(value["fired"])
         except (config.ConfigError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
-            return {}
+            return {}, {}
+        try:
+            return fired, stamps(value.get("inflight") or {})
+        except (TypeError, AttributeError):
+            return fired, {}
 
     def _save_fired(self):
+        body = {"v": 1, "fired": self.fired, "inflight": self.inflight}
         try:
             atomic_write(str(self.data / SCHEDULE_FILE),
-                         lambda stream: json.dump({"v": 1, "fired": self.fired}, stream), mode=0o600)
+                         lambda stream: json.dump(body, stream), mode=0o600)
         except OSError as exc:
             self._write_failed(SCHEDULE_FILE, exc)
         else:
@@ -295,11 +304,26 @@ class Runtime:
             if kind == "background":
                 process.terminate()
                 entry["stopping_at"] = now
+            if job in self.inflight:
+                entry["unfired"] = self.inflight[job]
             self.children[job] = entry
             log("orphan_adopted", job=job, action="stop" if kind == "background" else "wait")
 
+    def recover_inflight(self):
+        """A slot whose run outlived neither the host nor as an adopted
+        orphan was cut short by an abrupt shutdown: keep it pending so it
+        is caught up (after adopt_orphans)."""
+        lost = [job for job in self.inflight if job not in self.children]
+        for job in lost:
+            self.fired[job] = self.inflight.pop(job)
+            log("slot_interrupted", job=job)
+        if lost:
+            self._save_fired()
+
     def _ended(self, job, row, code, now, updating):
         del self.children[job]
+        if self.inflight.pop(job, None) is not None:
+            self._save_fired()
         prev = self.exits.get(job) or {}
         if row.get("adopted"):
             # The exit status of a process we did not start is unknown.
@@ -448,6 +472,7 @@ class Runtime:
                 # must stay pending so it is caught up after the restart.
                 # Never None: an unknown job past its slot reads as first sight.
                 self.children[job]["unfired"] = fired if fired is not None else slot - 1
+                self.inflight[job] = self.children[job]["unfired"]
             self.fired[job] = slot
             changed = True
         if changed:
@@ -573,6 +598,7 @@ async def serve(root, cfg, connector=None):
                 registered.append(sig)
             # Only after the single-host lock: the previous host is gone.
             runtime.adopt_orphans()
+            runtime.recover_inflight()
             if connector:
                 runtime.connector["retry_at"] = 0
             while True:

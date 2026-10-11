@@ -295,6 +295,30 @@ def test_db_maintenance_runs_daily_and_weekly_once(tmp_path, monkeypatch):
     assert oct((tmp_path / "maint.json").stat().st_mode & 0o777) == "0o600"
 
 
+def test_a_checkpoint_held_off_by_a_reader_is_retried_next_tick(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(1)])
+    db.close()
+    monkeypatch.setattr(maintenance, "DB_MAINT_STATE", str(tmp_path / "maint.json"))
+    path = str(tmp_path / "ledger.db")
+    reader = sqlite3.connect(path)
+    reader.execute("BEGIN")
+    reader.execute("SELECT COUNT(*) FROM messages").fetchone()
+    writer = sqlite3.connect(path)
+    with writer:
+        writer.execute("UPDATE messages SET sender_name='synthetic' WHERE message_id=1")
+    writer.close()
+    out = maintenance.db_maintenance(path)
+    assert out["checkpoint"]["busy"] != 0
+    assert json.loads((tmp_path / "maint.json").read_text())["checkpoint_pending"] is True
+    reader.rollback()
+    reader.close()
+    out = maintenance.db_maintenance(path)              # same day: checkpoint only
+    assert out == {"checkpoint": {"busy": 0, "log": 0, "done": 0}}
+    assert "checkpoint_pending" not in json.loads((tmp_path / "maint.json").read_text())
+    assert maintenance.db_maintenance(path) is None
+
+
 def test_db_maintenance_waits_for_time(tmp_path, monkeypatch):
     _ledger(tmp_path).close()
     monkeypatch.setattr(maintenance, "DB_MAINT_STATE", str(tmp_path / "maint.json"))

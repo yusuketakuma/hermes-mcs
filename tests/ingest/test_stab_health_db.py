@@ -80,6 +80,19 @@ def test_llm_endpoint_down_needs_failing_breaker_and_due_work(
     db.close()
 
 
+def _legacy_extract(db, mid, *, exhausted):
+    import extract_llm
+    digest = db.db.execute("SELECT content_hash FROM messages WHERE message_id=?",
+                           (mid,)).fetchone()[0]
+    meta = {"hash": digest, "extract_version": extract_llm.EXTRACT_VERSION}
+    content = {"summary": "s", "symptoms": [{"text": "a"}, {"text": "b"}]}
+    if exhausted:
+        meta.update(error=True, attempts=5, next_try=0)
+        content = {"_error": True}
+    db.artifact_add(extract_llm.KIND, json.dumps(content), project_id=1,
+                    message_id=mid, meta=meta)
+
+
 @pytest.mark.parametrize(("down_for", "due", "alerted"), [
     (3600, "semantic", True), (3599, "semantic", False),
     (None, "semantic", False), (7200, None, False),
@@ -88,6 +101,8 @@ def test_llm_endpoint_down_needs_failing_breaker_and_due_work(
     (7200, "legacy", True),
     # extract_qc runs on Jev, not the local model
     (7200, "extract_qc", False),
+    # legacy extraction already settled, or out of attempts: nothing runnable
+    (7200, "legacy_done", False), (7200, "legacy_exhausted", False),
 ])
 def test_local_llm_down_uses_the_llm_health_record(
         tmp_path, health_file, monkeypatch, down_for, due, alerted):
@@ -102,8 +117,10 @@ def test_local_llm_down_uses_the_llm_health_record(
         _sem_job(db, 1, next_try=now, updated_at=now)
     elif due == "extract_qc":
         _sem_job(db, 1, next_try=now, updated_at=now, kind="extract_qc")
-    elif due == "legacy":
+    elif due and due.startswith("legacy"):
         db.save_messages([_message(1, body="synthetic note")], project_id=1)
+        if due != "legacy":
+            _legacy_extract(db, 1, exhausted=due == "legacy_exhausted")
     reasons = run_check._backlog_stalls(db, cfg, now)
     assert ("local_llm_down" in reasons) is alerted
     assert "llm_endpoint_down" not in reasons   # fallback only without the record

@@ -312,9 +312,14 @@ def _backlog_stalls(ledger, cfg, now: float, *, marks: dict | None = None) -> li
             return True
         if errors or scfg["fact_source"] == "canonical":
             return False
+        # extract_llm's own pending predicate, minus exhausted rows
+        import extract_llm
         return db.execute(
-            f"SELECT 1 FROM messages m WHERE {_ELIGIBLE} "
-            f"AND {current_v4_id()} IS NULL LIMIT 1").fetchone() is not None
+            f"SELECT 1 FROM messages m WHERE {extract_llm.pending_pred()} "
+            "AND COALESCE((SELECT MAX(COALESCE(json_extract(e.meta,"
+            f"'$.attempts'),0)) {extract_llm._ERROR_ROWS_SQL}), 0) < 5 "
+            "LIMIT 1", (extract_llm.KIND, extract_llm.EXTRACT_VERSION)
+        ).fetchone() is not None
 
     import mcs_util
     down_for = getattr(mcs_util, "llm_down_for_s", None)

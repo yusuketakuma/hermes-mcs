@@ -173,6 +173,31 @@ def test_long_defer_entry_dropped_on_new_generation(jobs_db, monkeypatch):
     assert str(long_id) not in semantic_drain._long_defers(jobs_db)
 
 
+def test_legacy_payload_long_job_leaves_realtime(jobs_db, monkeypatch):
+    now = time.time()
+    long_id = _job(jobs_db, 50, created=now - 50, updated=now - 50,
+                   next_try=now - 50)
+    _job(jobs_db, 51, created=now - 900, updated=now - 900,
+         next_try=now - 900)
+    with jobs_db.db:                     # a payload from before "generation"
+        jobs_db.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
+                           (json.dumps({"targets": [50], "eligible": True}),
+                            long_id))
+
+    def outcome(job):
+        if job["message_id"] == 50:
+            return "deferred", "long_output_needs_budget"
+        return "done", None
+    served = _serve(monkeypatch, outcome)
+    _run(jobs_db, None, lane="realtime", max_jobs=1)
+    assert served == [50]
+    assert str(long_id) in semantic_drain._long_defers(jobs_db)
+    with jobs_db.db:
+        jobs_db.db.execute("UPDATE fetch_jobs SET next_try=0")
+    _run(jobs_db, None, lane="realtime", max_jobs=1)
+    assert served == [50, 51]            # the legacy long job stays out
+
+
 # ---------- T8: unsaved long-output mark ----------
 
 def test_unsaved_long_mark_is_logged_counted_and_kept(monkeypatch, capsys,

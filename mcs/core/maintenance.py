@@ -721,7 +721,9 @@ def db_maintenance(db_path: str, *, deadline: float | None = None,
     state = _load_json(DB_MAINT_STATE)
     daily = not _recent(state.get("daily_at"), now, DB_MAINT_INTERVAL_S)
     fts = not _recent(state.get("fts_at"), now, FTS_OPTIMIZE_INTERVAL_S)
-    if not (daily or fts):
+    # a TRUNCATE a reader held off is retried every tick, not next day
+    retry_ckpt = not daily and state.get("checkpoint_pending") is True
+    if not (daily or fts or retry_ckpt):
         return None
 
     def left() -> float:
@@ -741,10 +743,16 @@ def db_maintenance(db_path: str, *, deadline: float | None = None,
             out["pruned"] = prune_history(con, now)
             con.execute("PRAGMA analysis_limit=1000")
             con.execute("PRAGMA optimize=0x10002")
+            state["daily_at"] = now
+        if daily or retry_ckpt:
+            # busy: a reader kept the WAL from being truncated (no error)
             busy, log, done = con.execute(
                 "PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
             out["checkpoint"] = {"busy": busy, "log": log, "done": done}
-            state["daily_at"] = now
+            if busy:
+                state["checkpoint_pending"] = True
+            else:
+                state.pop("checkpoint_pending", None)
         if fts and "messages_fts" not in _tables(con):
             state["fts_at"] = now
         elif fts and left() < FTS_OPTIMIZE_MIN_S:

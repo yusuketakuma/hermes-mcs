@@ -1304,8 +1304,18 @@ class MCSAdapter:
 
     @staticmethod
     def _env_revision() -> str:
-        """Where MCS_PASSWORD comes from and when those files last changed."""
-        stamps = ["environ" if os.environ.get("MCS_PASSWORD") else "-"]
+        """Where MCS_PASSWORD comes from and when those files last changed.
+
+        A value only the process environment holds has no file to stamp;
+        it can change only when the supervisor that passes it restarts,
+        so the parent process identifies that revision."""
+        env = os.environ.get("MCS_PASSWORD")
+        if not env:
+            stamps = ["-"]
+        elif env == env_value("MCS_PASSWORD", check_env=False):
+            stamps = ["environ"]           # mirrored from a stamped file
+        else:
+            stamps = [f"environ:{os.getppid()}"]
         for path in (os.path.join(HOME, ".env"),
                      os.path.expanduser("~/.hermes/.env")):
             try:

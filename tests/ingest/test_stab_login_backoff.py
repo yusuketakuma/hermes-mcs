@@ -123,3 +123,21 @@ def test_env_credential_revision_follows_the_dotenv_file(adapter, tmp_path, monk
     assert adapter._credential_fp("synthetic-id", "env") != before
     assert adapter._credential_fp("synthetic-id", "browser") \
         != adapter._credential_fp("synthetic-id", "env")
+
+
+def test_env_only_password_revision_follows_the_supervisor(adapter, tmp_path, monkeypatch):
+    monkeypatch.setattr(mcs_adapter, "HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("MCS_PASSWORD", "synthetic-env-only")
+    files = {"value": None}
+    monkeypatch.setattr(mcs_adapter, "env_value",
+                        lambda key, check_env=True: files["value"])
+    ppid = [4100]
+    monkeypatch.setattr(mcs_adapter.os, "getppid", lambda: ppid[0])
+    before = adapter._credential_fp("synthetic-id", "env")
+    ppid[0] = 4200   # restarted with a new environment
+    assert adapter._credential_fp("synthetic-id", "env") != before
+    # A value mirrored from a dotenv file is tracked by the file's stamp instead.
+    files["value"] = "synthetic-env-only"
+    mirrored = adapter._credential_fp("synthetic-id", "env")
+    ppid[0] = 4300
+    assert adapter._credential_fp("synthetic-id", "env") == mirrored

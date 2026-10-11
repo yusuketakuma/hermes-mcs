@@ -319,6 +319,52 @@ def test_a_slot_killed_by_the_drain_cap_is_caught_up_after_the_restart(tmp_path,
     assert len(started) == 3
     assert ("slot_catchup", {"job": "mcs_check", "slot": 1800}) in events
 
+
+
+def _killed_mid_slot(tmp_path, monkeypatch, events, started):
+    host = _host(tmp_path, monkeypatch, events)
+    monkeypatch.setattr(runtime.subprocess, "Popen",
+                        lambda argv, **kw: started.append(argv) or Child())
+    monkeypatch.setattr(runtime, "BACKGROUND", {})
+    monkeypatch.setattr(runtime.time, "localtime", lambda stamp:
+                        SimpleNamespace(tm_hour=12, tm_min=int(stamp // 60) % 60))
+    host.schedules = [("mcs_check", [{"Minute": m} for m in range(0, 60, 10)])]
+    host.tick(600)
+    host.children["mcs_check"]["process"].code = 0
+    host.tick(660)
+    host.tick(1200)                   # minute 20 starts; then the host is SIGKILLed
+    saved = json.loads((tmp_path / "data" / runtime.SCHEDULE_FILE).read_text())
+    assert saved["inflight"] == {"mcs_check": 600}
+    return host
+
+
+def test_a_slot_cut_short_by_an_abrupt_shutdown_is_caught_up(tmp_path, monkeypatch):
+    events, started = [], []
+    host = _killed_mid_slot(tmp_path, monkeypatch, events, started)
+    later = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
+    later.schedules = host.schedules
+    later.adopt_orphans(QUIET)        # no surviving child to adopt
+    later.recover_inflight()
+    assert later.fired == {"mcs_check": 600} and later.inflight == {}
+    assert ("slot_interrupted", {"job": "mcs_check"}) in events
+    later.tick(1260)
+    assert len(started) == 3
+    assert ("slot_catchup", {"job": "mcs_check", "slot": 1200}) in events
+
+
+def test_a_finished_or_adopted_slot_is_not_rerun(tmp_path, monkeypatch):
+    events, started = [], []
+    host = _killed_mid_slot(tmp_path, monkeypatch, events, started)
+    host.children["mcs_check"]["process"].code = 0
+    host.tick(1260)                   # the run was seen to end
+    later = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
+    assert later.inflight == {} and later.fired == {"mcs_check": 1200}
+    later.children["mcs_check"] = {"process": Child(), "kind": "core",
+                                   "stopping_at": None, "adopted": True}
+    later.inflight = {"mcs_check": 600}
+    later.recover_inflight()          # a surviving orphan is awaited instead
+    assert later.fired == {"mcs_check": 1200} and later.inflight == {"mcs_check": 600}
+
 # ------------------------------------------------------ orphans of a killed host
 
 def test_children_of_a_killed_host_are_stopped_or_awaited(tmp_path, monkeypatch):

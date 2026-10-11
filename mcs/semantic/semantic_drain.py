@@ -1855,7 +1855,13 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
                 "'$.generation') END) "
                 f"ORDER BY {_REALTIME_ORDER} LIMIT ?",
                 (time.time(), JOB_KIND, json.dumps(long_defers or {}),
-                 max_jobs + 8)).fetchall()
+                 max_jobs + 8 + len(long_defers or {}))).fetchall()
+            # a payload from before the generation field: its generation
+            # is the payload digest, which SQL cannot compute
+            rows = [r for r in rows
+                    if (long_defers or {}).get(str(r["job_id"]), {}).get("g")
+                    != runtime.payload_generation(runtime.parse_payload(r))
+                    ][:max_jobs + 8]
         else:
             # Re-extraction re-pends QC rows under their old (low) job_id;
             # one job_id order let them win every pass and no semantic job

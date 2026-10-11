@@ -6,7 +6,8 @@
   "details": [
     "semantic_drain の realtime レーンの並び順を updated_at から 延期中のジョブは作成時刻・それ以外は更新時刻を基準にする順 に変更した。延期・再試行中かどうかは next_try と updated_at の比較で判定する。",
     "long_output_needs_budget による延期を semantic_sched 行の long_defers にジョブ・入力世代ごとに記録し、同じ世代の間は realtime レーンで選ばない。世代が変わったか pending でなくなった記録は削除する(最大500件)。",
-    "同じ世代での無料延期が LONG_FREE_DEFER_CAP(24)を超えると retry として試行回数を消費する(retry_reason=long_output_defer_capped、out.long_output_capped)。"
+    "同じ世代での無料延期が LONG_FREE_DEFER_CAP(24)を超えると retry として試行回数を消費する(retry_reason=long_output_defer_capped、out.long_output_capped)。",
+    "generation を持たない旧形式のジョブも、長い出力が必要と判明したものは新着レーンから外す。"
   ],
   "refs": [
     "mcs/semantic/semantic_drain.py",
