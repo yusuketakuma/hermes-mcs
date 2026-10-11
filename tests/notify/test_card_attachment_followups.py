@@ -108,3 +108,31 @@ def test_retention_waits_for_unsettled_attachment_parts(led, tmp_path, monkeypat
         led.db.execute("UPDATE notification_render_parts SET state='delivered' WHERE kind='attachment_part'")
     assert maintenance.prune_attachments(db_path) == 1
     assert not blob.exists()
+
+
+def test_retention_releases_attachment_parts_held_by_card_revocation(led, tmp_path, monkeypatch):
+    import maintenance
+    _seed_thread(led, mids=(100,))
+    attachments = tmp_path / "data" / "attachments"
+    attachments.mkdir()
+    blob = attachments / "1"
+    blob.write_bytes(b"synthetic")
+    led.db.execute(
+        "INSERT INTO attachments(message_id,file_id,name,local_path,bytes,sha256,state,downloaded_at) "
+        "VALUES(100,'synthetic','synthetic.bin',?,9,?,'downloaded',?)",
+        (str(blob), hashlib.sha256(blob.read_bytes()).hexdigest(),
+         NOW - maintenance.ATTACHMENT_KEEP_S - 1))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}), SLACK)
+    with led.db:
+        led.db.execute("UPDATE notify_outbox SET state='accepted'")
+        led.db.execute("UPDATE notification_renders SET state='delivered'")
+        card_id = led.db.execute("SELECT card_id FROM notification_renders").fetchone()[0]
+        notify_cards.revoke_card(led.db, card_id, NOW)
+    assert tuple(led.db.execute(
+        "SELECT state,error_code FROM notification_render_parts WHERE kind='attachment_part'"
+    ).fetchone()) == ("held", "card_revoked")
+    monkeypatch.setattr(maintenance.time, "time", lambda: NOW)
+    db_path = led.db.execute("PRAGMA database_list").fetchone()[2]
+    # a revoked card's parts can never be sent: they must not pin the payload
+    assert maintenance.prune_attachments(db_path) == 1
+    assert not blob.exists()
