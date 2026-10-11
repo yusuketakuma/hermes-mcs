@@ -56,6 +56,9 @@ def test_failing_for_is_a_lower_bound_of_the_backoff_schedule():
 
 @pytest.mark.parametrize(("argv", "stderr"), [
     (STANDALONE, "not_sent delivery_not_accepted\n"),
+    (STANDALONE, "not_sent slack_identity_unreachable\n"),
+    (STANDALONE, "not_sent discord_unreachable\n"),
+    (STANDALONE, "not_sent http_429\n"),
     (LINEWORKS, "transport_unknown\n"),
     (LINEWORKS, "rate_limited\n"),
     (LINEWORKS, "sender_busy\n"),
@@ -75,7 +78,9 @@ def test_transient_failure_holds_after_a_day(tmp_path, monkeypatch):
     assert hold == "pre_send_failure" and row["next_try"] is None
 
 
-@pytest.mark.parametrize("stderr", ["credentials_invalid\n", "http_error\n", ""])
+@pytest.mark.parametrize("stderr", ["credentials_invalid\n", "http_error\n", "",
+                                    "not_sent slack_identity_unverified\n",
+                                    "not_sent loginfailure\n"])
 def test_auth_or_config_refusal_keeps_the_attempt_cap(tmp_path, monkeypatch, stderr):
     row, hold = _flush_once(tmp_path, monkeypatch, LINEWORKS, stderr, attempts=4)
     assert hold == "pre_send_failure" and row["next_try"] is None

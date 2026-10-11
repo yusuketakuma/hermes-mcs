@@ -649,7 +649,8 @@ class _SendFailed(OSError):
 # identity check failing on a network error) as delivery_not_accepted.
 _TRANSIENT_SEND_CODES = frozenset({
     "transport_unknown", "rate_limited", "sender_busy",
-    "delivery_not_accepted"})
+    "delivery_not_accepted", "http_429", "slack_identity_unreachable",
+    "discord_unreachable", "slack_configuration_changed_restart_required"})
 # Transient pre-send failures quarantine on elapsed time, not on a retry
 # count: a ~45 min network outage must not park every text notification
 # for manual release. Auth/config/attachment failures keep the 5-attempt cap.
