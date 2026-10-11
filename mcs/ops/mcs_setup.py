@@ -258,6 +258,11 @@ def _validate_llm(ll: dict) -> list[str]:
     return errors
 
 
+# = notify_cmds.SCOPE_MAX: the runner rejects, and the plugin truncates to,
+# a static project scope longer than this
+PROJECT_SCOPE_MAX = 1000
+
+
 def _validate_notify(ntf: dict) -> list[str]:
     """Subkey checks for the notify block — mirrors notify_cards'
     contracts: interactive is a closed enum, discord delivery scope is
@@ -457,6 +462,15 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
                 warnings.append(
                     f"notify.{other}: scope configured but interactive "
                     f"is {act!r} — ignored until you switch back")
+        for transport in ("discord", "slack", "lineworks"):
+            scope = cfg["notify"].get(transport)
+            projects = scope.get("project_ids") if isinstance(scope, dict) else None
+            if isinstance(projects, list) and len(projects) > PROJECT_SCOPE_MAX \
+                    and scope.get("project_ids_auto") is not True:
+                warnings.append(
+                    f"notify.{transport}.project_ids: {len(projects)} ids exceed "
+                    f"the {PROJECT_SCOPE_MAX}-project card/summary scope — only "
+                    "the lowest ids are counted; use project_ids_auto=true")
     if isinstance(cfg.get("local_llm"), dict):
         errors.extend(_validate_llm(cfg["local_llm"]))
     if isinstance(cfg.get("semantic"), dict):
@@ -1687,24 +1701,32 @@ def cmd_init(args) -> int:
     if mcs_runtime.standalone(cfg):
         # the --plugin-* grants Hermes keeps in plugin settings live in
         # notify.<transport> when MCS serves Slack/Discord itself
-        ntf = cfg.get("notify")
-        scope = ntf.get(ntf.get("interactive")) if isinstance(ntf, dict) else None
+        # notify.<transport>; the transports follow _validate_standalone_scope
+        # and the grants apply only when exactly one Slack/Discord scope is used
+        ntf = cfg.get("notify") if isinstance(cfg.get("notify"), dict) else {}
+        used = {ntf["interactive"]} if isinstance(ntf.get("interactive"), str) else set()
+        used |= {t.split(":", 1)[0] for t in (cfg.get("notify_target"),
+                                             cfg.get("notify_system_target"))
+                 if isinstance(t, str)}
+        used &= {"slack", "discord"}
+        transport = next(iter(used)) if len(used) == 1 else None
+        scope = ntf.get(transport) if transport else None
         ignored = ["--plugin-profile"] \
             if getattr(args, "plugin_profile", None) else []
-        if isinstance(scope, dict):
-            for flag, key in (("plugin_user_ids", "allowed_user_ids"),
-                              ("plugin_chat_ids", "allowed_chat_ids"),
-                              ("plugin_role_ids", "allowed_role_ids"),
-                              ("plugin_project_ids", "project_ids")):
-                value = getattr(args, flag, None)
-                if value:
-                    scope[key] = standalone_projects if key == "project_ids" \
-                        else _csv_list([value])
-        else:
-            ignored += ["--plugin-" + f[7:].replace("_", "-") for f in
-                        ("plugin_user_ids", "plugin_chat_ids",
-                         "plugin_role_ids", "plugin_project_ids")
-                        if getattr(args, f, None)]
+        for flag, key in (("plugin_user_ids", "allowed_user_ids"),
+                          ("plugin_chat_ids", "allowed_chat_ids"),
+                          ("plugin_role_ids", "allowed_role_ids"),
+                          ("plugin_project_ids", "project_ids")):
+            value = getattr(args, flag, None)
+            if not value:
+                continue
+            if not isinstance(scope, dict) or (
+                    transport != "discord"
+                    and key in ("allowed_chat_ids", "allowed_role_ids")):
+                ignored.append("--plugin-" + flag[7:].replace("_", "-"))
+            else:
+                scope[key] = standalone_projects if key == "project_ids" \
+                    else _csv_list([value])
         if ignored:
             print(f"init: {', '.join(ignored)} は standalone では適用されません"
                   " — カード権限は config.json の notify.<transport> に設定してください")
@@ -1906,7 +1928,8 @@ def cmd_fact_source(args) -> int:
     sem["fact_source"] = source
     # Fail closed: never write a config the production validator rejects.
     errors, _ = validate_config(cfg)
-    sem_errors = [e for e in errors if e.startswith("config: semantic")]
+    sem_errors = [e for e in errors
+                  if e.startswith(("config: semantic", "semantic:"))]
     if sem_errors:
         print("fact_source: refusing to write invalid semantic config — "
               + "; ".join(sem_errors))
@@ -2449,9 +2472,12 @@ def _doctor_source(cfg: dict, *, probe: bool) -> dict:
         value = (r.stdout or "").strip()
         if r.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", value):
             revision = value
-            r = subprocess.run(["git", "-C", REPO_ROOT, "diff-index", "--quiet", "HEAD"],
-                               capture_output=True, timeout=5)
-            dirty = bool(r.returncode) if r.returncode in (0, 1) else None
+            # status refreshes stale index stat data (touch/rsync); the
+            # plumbing diff-index would report those files as modified
+            r = subprocess.run(["git", "-C", REPO_ROOT, "status", "--porcelain",
+                                "--untracked-files=no"],
+                               capture_output=True, text=True, timeout=5)
+            dirty = bool((r.stdout or "").strip()) if r.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
         pass
     running = {"status": "not_checked", "pid": None, "started_at": None,

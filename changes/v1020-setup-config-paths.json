@@ -1,0 +1,18 @@
+{
+  "category": "fixed",
+  "title": "セットアップの設定経路での見落としと誤判定を修正",
+  "summary": "standalone の init で --plugin-* の権限指定が通知先の Slack/Discord に反映されない問題、semantic の検証処理自体が失敗しても fact-source が設定を書き込む問題、doctor が更新日時だけ変わったファイルを「変更あり」と表示する問題を修正しました。また、check は project_ids が 1000 件を超える既存の設定に警告を表示するようになりました（失敗にはしません）。",
+  "upgrade": "追加操作は不要です。check で project_ids の件数超過の警告が出た場合は、表示・集計が先頭 1000 件に限られるため、project_ids_auto=true への切替を検討してください。",
+  "details": [
+    "init --plugin-user-ids / --plugin-project-ids は、interactive と通知先から決まる Slack/Discord の scope が1つのときだけ、その scope へ適用する。--plugin-chat-ids / --plugin-role-ids は Discord だけに適用し、それ以外は従来どおり「適用されません」と表示する。",
+    "fact-source は validate_config の「semantic: validator failed」も拒否理由として扱い、config.json を書き換えない。",
+    "doctor の disk.dirty は git status --porcelain --untracked-files=no の結果で判定する。",
+    "notify.{slack,discord,lineworks}.project_ids が 1000 件（通知ランナーの SCOPE_MAX）を超え、project_ids_auto が true でない場合に警告する。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "tests/ops/test_mcs_setup.py",
+    "tests/ops/test_mcs_setup_doctor.py",
+    "tests/ops/test_mcs_setup_standalone.py"
+  ]
+}
