@@ -99,9 +99,13 @@ def failure(exc):
         rejected = isinstance(exc.status, int) and 400 <= exc.status < 500
         # pre_send: the access-token request failed before any post was made.
         pre_send = getattr(exc, "pre_send", False) is True
+        code = exc.error_code
+        # A token endpoint 5xx is an outage, not a verdict: keep it transient.
+        if pre_send and isinstance(exc.status, int) and exc.status >= 500:
+            code = "lineworks_token_unavailable"
         return {"result": "not_sent" if rejected or pre_send or exc.error_code in local
                 else "unknown",
-                "error_code": exc.error_code}
+                "error_code": code}
     return {"result": "unknown", "error_code": type(exc).__name__.lower()}
 
 

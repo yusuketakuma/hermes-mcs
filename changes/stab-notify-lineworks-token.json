@@ -5,12 +5,14 @@
   "upgrade": "追加操作は不要です。LINE WORKSアダプターを常駐させている場合は、反映のためにアダプターを再起動してください。",
   "details": [
     "adapters/lineworks/client.py はトークン取得要求の失敗に pre_send を付け、delivery.failure はこれを not_sent と判定する。テキストCLIは終了コード75で終了する。",
+    "トークン取得先が5xxを返した場合は lineworks_token_unavailable を返し、通知処理はこれを一時的な障害として24時間の保留方針で扱う（4xxは従来どおり http_error）。",
     "トークンの期限は monotonic 時計と実時刻の両方で判定し、どちらかが期限を過ぎれば取り直す。",
     "メッセージ送信要求そのものの通信失敗は従来どおり結果不明として扱う。"
   ],
   "refs": [
     "adapters/lineworks/client.py",
     "adapters/lineworks/delivery.py",
-    "tests/adapters/lineworks/test_stab_token_expiry.py"
+    "tests/adapters/lineworks/test_stab_token_expiry.py",
+    "mcs/notify/notify_flush.py"
   ]
 }

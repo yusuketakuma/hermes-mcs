@@ -83,3 +83,20 @@ def test_cli_send_exits_tempfail_when_token_endpoint_unreachable(monkeypatch, tm
     code = cli.main(["send", "--root", str(tmp_path), "--to", "lineworks:" + SCOPE["channel_id"]])
     assert code == 75
     assert capsys.readouterr().err.strip().splitlines()[-1] == "transport_unknown"
+
+
+def test_token_endpoint_5xx_reports_a_transient_code():
+    from notify_flush import _TRANSIENT_SEND_CODES
+    api = client(Wire([(503, {"error": "synthetic"})]))
+    with pytest.raises(ClientError) as caught:
+        api.send_message({"type": "text", "text": "x"}, channel_id="room")
+    out = failure(caught.value)
+    assert out == {"result": "not_sent", "error_code": "lineworks_token_unavailable"}
+    assert out["error_code"] in _TRANSIENT_SEND_CODES
+
+
+def test_token_endpoint_4xx_keeps_its_permanent_code():
+    api = client(Wire([(401, {"error": "synthetic"})]))
+    with pytest.raises(ClientError) as caught:
+        api.send_message({"type": "text", "text": "x"}, channel_id="room")
+    assert failure(caught.value)["error_code"] == "http_error"

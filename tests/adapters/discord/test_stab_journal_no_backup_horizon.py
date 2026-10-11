@@ -4,7 +4,7 @@ import os
 import time
 
 from adapters.common import worker as common_worker
-from hermes_plugin.mcs_delivery import journal
+from adapters.common import journal
 from test_mcs_discord_delivery import _mkworker, _settled, _state
 
 DONE = "00000000-0000-4000-8000-0000000000d1"
