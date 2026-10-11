@@ -14,8 +14,9 @@ from notify_testkit import (
     CFG, NOW, _add_request, _click, _deliver, _dispatch, _extract, _intent,
     _msg, _patient, _signal_row, _spec, led,
 )
+from test_artifact_json_guards import MALFORMED, PLANNERS, _skew
 
-__all__ = ["led"]
+__all__ = ["led", "world"]
 
 
 @pytest.fixture
@@ -776,3 +777,38 @@ def test_qc_agreement_does_not_veto_escalation(world):
     aid = _fact(store)
     _qc_urgency(store, 100, aid, "high")
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
+
+
+# One malformed fact row must not abort urgency follow-ups under any join order.
+@pytest.mark.parametrize("planner", PLANNERS)
+@pytest.mark.parametrize("raw", MALFORMED)
+def test_malformed_extract_content_does_not_block_e1(world, raw, planner):
+    store, cfg, _, _ = world
+    _base(store)
+    _fact(store)
+    _msg(store, 200, ts=int(NOW - 7200))
+    with store.db:
+        store.db.execute(
+            "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
+            "VALUES ('extract_llm',1,200,?,?)", (raw, json.dumps({"hash": "h200"})))
+    if planner == "skewed":
+        _skew(store.db)
+    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
+    assert json.loads(_events(store)[0]["payload"])["stage"] == "E1"
+
+
+# Urgency escalation resolves 'our' organizations from signals.self_organizations.
+def test_documented_self_organizations_count_as_own_post(world):
+    store, cfg, _, _ = world
+    cfg = {**cfg, "signals": {**cfg["signals"], "self_organizations": ["SYNTH薬局"]}}
+    _base(store)
+    _fact(store)
+    with store.db:
+        store.db.execute("DELETE FROM artifacts WHERE kind='station_staff_v1'")
+        _msg(store, 101, ts=int(store.db.execute(
+            "SELECT posted_at_ts FROM messages WHERE message_id=100").fetchone()[0]) + 60,
+            org="SYNTH薬局")
+        store.db.execute("UPDATE messages SET sender_id=99 WHERE message_id=101")
+    result = notify_urgent.maybe_enqueue(store, cfg)
+    assert result["queued"] == 0
+    assert result["deferred"].get("own_post_observed") == 1, result

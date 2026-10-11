@@ -389,3 +389,19 @@ def test_malformed_page_fact_ids_leave_rendered_unobserved(tmp_path, fact_ids):
         assert result["observations"]["delivered"] == "rendered_unobserved"
     finally:
         db.close()
+
+
+# An unsent semantic_notice (no accepted chunk) is observed as delivered=[].
+@pytest.mark.parametrize("cfg", [None, {"notify_target": TARGET}])
+@pytest.mark.parametrize("progress", ["null", "zero"])
+def test_unsent_notice_yields_empty_delivered(tmp_path, cfg, progress):
+    db, final_id, event_id, _, _ = _chain(
+        tmp_path, [v2_fact("f1", statement="薬剤A継続")])
+    try:
+        if progress == "zero":
+            _receipt(db, event_id, "pending", 0, None)
+        got = _read(tmp_path, final_id, cfg)
+        assert got["fact_ids"]["delivered"] == []
+        assert got["observations"]["delivered"] == "notice_receipt"
+    finally:
+        db.close()

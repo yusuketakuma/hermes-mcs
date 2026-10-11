@@ -2324,3 +2324,62 @@ def test_check_warns_on_a_static_project_scope_over_the_runner_cap(transport):
     assert not [w for w in mcs_setup.validate_config(cfg)[1] if "project_ids" in w]
     cfg["notify"][transport] = {"project_ids": ids[:-1]}
     assert not [w for w in mcs_setup.validate_config(cfg)[1] if "project_ids" in w]
+
+
+def test_changed_standalone_plist_is_reloaded_into_launchd(monkeypatch, tmp_path):
+    from mcs_standalone import service
+
+    monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
+    calls, args = _services_env(monkeypatch, tmp_path, loaded={mcs_setup.STANDALONE_LABEL})
+    monkeypatch.setattr(mcs_setup, "load_config", lambda path=None: mcs_util.load_config(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(mcs_setup, "_standalone_py_problem", lambda cfg: None)
+    requests = []
+    monkeypatch.setattr(service, "request_restart", lambda root: requests.append(root))
+    stale = mcs_setup._standalone_service_path()
+    (tmp_path / "agents").mkdir(exist_ok=True)
+    with open(stale, "w") as f:
+        f.write("<plist>old checkout</plist>")
+    assert mcs_setup.cmd_services(args) == 0
+    assert ["launchctl", "bootout", "gui/501/ai.mcs.standalone"] in calls
+    assert any(c[:2] == ["launchctl", "bootstrap"] for c in calls)
+    assert requests == []
+
+
+def test_init_repairs_invalid_stored_runtime_mode(monkeypatch, tmp_path):
+    _init_env(monkeypatch, tmp_path, {"mcs_login_id": "u1", "notify_target": "slack",
+                                      "runtime_mode": "Standalone"})
+    monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init", "--yes", "--runtime-mode", "hermes"])
+    assert mcs_setup.main() == 0
+    assert json.loads((tmp_path / "c.json").read_text())["runtime_mode"] == "hermes"
+
+
+def test_init_invalid_runtime_mode_set_writes_no_secret(monkeypatch, tmp_path, capsys):
+    _init_env(monkeypatch, tmp_path, {"mcs_login_id": "u1", "notify_target": "slack"})
+    monkeypatch.setenv("TYPESAFE_API_KEY", "synthetic")
+    monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init", "--yes", "--set", 'runtime_mode="standalon"'])
+    assert mcs_setup.main() == 1
+    assert "nothing written" in capsys.readouterr().out
+    assert not (tmp_path / ".env").exists() and not (tmp_path / "c.json").exists()
+
+
+def test_wizard_keeps_explicit_null_project_ids(monkeypatch):
+    # semantic_config accepts project_ids: null as "all projects"; Enter
+    # must keep it instead of looping on the required-item prompt.
+    answers = iter([""] * 3)
+    monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
+    cur = mcs_setup._get_key(
+        {"semantic": {"project_ids": None}}, "semantic.project_ids")
+    assert mcs_setup._ask("semantic.project_ids", "reqintlist", None, "d",
+                          cur, True) is None
+    cfg = {"semantic": {"mode": "shadow", "project_ids": None}}
+    assert mcs_setup._has_key(cfg, "semantic.project_ids")
+    assert not mcs_setup._has_key(cfg, "semantic.extract_qc")
+    mcs_setup._set_key(cfg, "semantic.project_ids", None)
+    assert "project_ids" in cfg["semantic"]
+
+
+def test_wizard_missing_project_ids_still_required(monkeypatch):
+    answers = iter(["", "3"])
+    monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
+    assert mcs_setup._ask("semantic.project_ids", "reqintlist", None, "d",
+                          None, False) == [3]

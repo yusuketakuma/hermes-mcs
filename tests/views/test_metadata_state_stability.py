@@ -6,6 +6,7 @@ import pytest
 
 from project_metadata import ARTIFACT_KIND
 from project_metadata_view import get_project_metadata
+import message_metadata as mm
 
 
 @pytest.fixture
@@ -52,3 +53,36 @@ def test_invalid_old_complete_cannot_be_used_as_historical_fallback(db, corrupti
     result = get_project_metadata(db, 1, "care_team", now=120, max_age_s=1000)
     assert result["state"] == "unknown" and result["reason"] == "artifact_invalid"
     assert not result["historical"] and result["last_complete_at"] is None
+
+
+# 反応以外の項目の不正（mentions_invalid 等）を再取得失敗と表示しない。
+def _db(error):
+    db = sqlite3.connect(":memory:")
+    db.execute("CREATE TABLE message_metadata(message_id INTEGER, source TEXT, "
+               "content TEXT, checked_at REAL, last_error TEXT)")
+    content = {"reactions": {"value": [{"type": "viewed", "count": 2,
+                                        "self_reacted": False}],
+                             "observed_at": 1.7e9}}
+    for source in ("capture", "shadow"):
+        db.execute("INSERT INTO message_metadata VALUES(5,?,?,?,?)",
+                   (source, json.dumps(content), 1.7e9, error))
+    return db
+
+
+def test_mentions_invalid_keeps_reactions_observed():
+    db = _db("mentions_invalid")
+    meta = mm.get_message_metadata(db, 5)
+    assert meta["reactions_status"] == "observed"
+    assert meta["mentions_status"] == "invalid"
+    assert meta["last_error"] is None
+    assert "再取得失敗" not in mm.stamp_line(meta)
+    assert mm.get_metadata_shadow_status(db, 5)["state"] != "failed"
+
+
+def test_reaction_and_fetch_errors_still_reported():
+    assert mm.get_message_metadata(_db("reactions_invalid"), 5)["last_error"] \
+        == "reactions_invalid"
+    assert mm.get_message_metadata(_db("network_error"), 5)["last_error"] \
+        == "network_error"
+    assert mm.get_message_metadata(
+        _db("mentions_invalid,network_error"), 5)["last_error"] == "metadata_error"

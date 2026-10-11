@@ -16,6 +16,7 @@ import notify_cmds
 import pytest
 from notify_testkit import (CFG, CLICKER, ORIGIN, _delivered_card, _token_for, led,
                             pinned_clock)
+from notify_testkit import _uuid
 
 __all__ = ["led", "pinned_clock"]  # shared isolated fixtures
 
@@ -103,3 +104,27 @@ def test_an_applied_click_still_refreshes_cards_when_its_file_stays(
     assert led.db.execute(applied).fetchone()[0] == before + 1   # really applied
     assert sweeps == [1]
     assert (root / "cmd_int" / "0.json").exists()      # kept for the next drain
+
+
+# Runner-side text caps use the shared bounded-text rule (synthetic envelopes).
+def _refresh(actor, **origin):
+    return {"version": 1, "op": "refresh", "command_id": _uuid(7),
+            "actor": actor, "origin": {**ORIGIN, **origin}}
+
+
+def test_plain_identity_and_actor_still_validate():
+    assert notify_cmds.validate_int(_refresh("nurse-1")) is None
+
+
+@pytest.mark.parametrize("actor", [
+    " " * 200 + "nurse-1",      # the 120 cap counts the padding
+    "nurse\x00-1",              # NUL never reaches the ledger
+    "   ",
+])
+def test_actor_cap_holds_against_padding_and_nul(actor):
+    assert notify_cmds.validate_int(_refresh(actor)) == "bad_actor"
+
+
+def test_origin_ids_cap_counts_padding():
+    req = _refresh("nurse-1", message_id="m" + " " * 80)
+    assert notify_cmds.validate_int(req) == "bad_origin"

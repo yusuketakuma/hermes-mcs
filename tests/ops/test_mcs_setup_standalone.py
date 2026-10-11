@@ -3,6 +3,9 @@ without Hermes; Hermes mode keeps its existing surface."""
 import json
 import plistlib
 from types import SimpleNamespace
+import shlex
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -10,7 +13,7 @@ import mcs_runtime
 import mcs_setup
 import mcs_util
 from test_mcs_setup import _services_env
-from mcs_standalone import runtime
+from mcs_standalone import runtime, service
 
 
 def config(interactive="discord"):
@@ -523,3 +526,69 @@ def test_init_leaves_plugin_flags_unapplied_when_two_transports_need_scopes(monk
     saved = json.loads((tmp_path / "c.json").read_text())["notify"]
     assert saved["slack"]["allowed_user_ids"] == ["U0OLD"]
     assert saved["discord"]["allowed_user_ids"] == ["4000000000000000004"]
+
+
+# Regression: keychain update under a different account; standalone
+# target scope warned as ignored.
+def test_keychain_store_updates_existing_item_under_its_account(monkeypatch):
+    items = [("mcs", "oldpw")]   # first interactive init: login id unknown
+
+    def run(argv, *, timeout=60, input_text=None, cwd=None):
+        def ok(out=""):
+            return subprocess.CompletedProcess(argv, 0, out, "")
+
+        if argv[:2] == ["security", "-i"]:
+            toks = shlex.split(input_text)
+            a, w = toks[toks.index("-a") + 1], toks[toks.index("-w") + 1]
+            for i, (acc, _) in enumerate(items):
+                if acc == a:
+                    items[i] = (a, w)
+                    break
+            else:
+                items.append((a, w))
+            return ok()
+        if argv[1] == "find-generic-password":
+            m = [x for x in items
+                 if "-a" not in argv or x[0] == argv[argv.index("-a") + 1]]
+            if not m:
+                return subprocess.CompletedProcess(argv, 44, "", "")
+            acc, w = m[0]
+            return ok(w + "\n" if "-w" in argv
+                      else f'attributes:\n    "acct"<blob>="{acc}"\n')
+        if argv[1] == "delete-generic-password":
+            a = argv[argv.index("-a") + 1]
+            items[:] = [x for x in items if x[0] != a]
+            return ok()
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(mcs_setup, "_run", run)
+    assert mcs_setup._keychain_store("user1", "newpw") is True
+    assert items == [("mcs", "newpw")]
+
+
+def test_standalone_target_scope_is_not_warned_as_ignored():
+    cfg = config("slack")
+    warn = "notify.discord: scope configured but interactive"
+    assert not any(w.startswith(warn) for w in mcs_setup.validate_config(cfg)[1])
+    del cfg["runtime_mode"]
+    assert any(w.startswith(warn) for w in mcs_setup.validate_config(cfg)[1])
+
+
+# Linux standalone unit: WorkingDirectory unquoted, '$' escaped in ExecStart.
+def test_linux_unit_working_directory_unquoted_and_dollar_escaped(tmp_path):
+    root = tmp_path / "a$b"
+    root.mkdir()
+    _, body = service.render(root, platform="linux")
+    repo = str(Path(service.__file__).resolve().parents[1])
+    assert "WorkingDirectory=" + repo.replace("%", "%%") + "/.\n" in body
+    exec_line = next(line for line in body.splitlines() if line.startswith("ExecStart="))
+    assert "a$$b" in exec_line and "a$b" not in exec_line.replace("$$", "")
+
+
+def test_host_service_creates_owner_only_files(tmp_path):
+    """Jobs inherit the host umask: both service forms must set 077."""
+    import plistlib
+    _, plist = service.render(tmp_path, platform="darwin")
+    assert plistlib.loads(plist.encode())["Umask"] == 0o077
+    _, unit = service.render(tmp_path, platform="linux")
+    assert "\nUMask=0077\n" in unit.split("[Service]", 1)[1].split("[Install]", 1)[0]

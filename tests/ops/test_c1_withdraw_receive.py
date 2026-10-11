@@ -12,8 +12,9 @@ from c1_receiver import ReferenceReceiver
 import ext_contract as ext
 import mcs_setup
 from test_c1_cli import world  # noqa: F401  (pytest fixture)
-from test_c1_envelopes import _records
-from test_ext_contract import _auth
+from test_c1_envelopes import _records, _build
+from test_ext_contract import _auth, NOW
+from test_c1_delivery import authorization  # noqa: F401  (pytest fixture)
 
 EID = "0123456789abcdef01234567"
 
@@ -311,3 +312,76 @@ def test_generation_withdraw_and_reconcile_all_ignore_health_entry_cap(
     code, out = _cli(capsys, ["reconcile", "--state", str(state), "--sink", str(sink),
                               "--all"])
     assert len(out["results"]) == 3
+
+
+# Regression: a state dir under a symlinked parent still supports bulk journal scans.
+def test_generation_withdraw_and_health_under_symlinked_parent(staged, capsys):  # noqa: F811
+    state, sink, eids = staged
+    link = state.parent / "linked"
+    link.symlink_to(state.parent, target_is_directory=True)
+    via_link = link / state.name
+    _, out = _cli(capsys, ["withdraw", "--state", str(via_link), "--sink", str(sink),
+                           "--generation", "gen-envelope-synth"])
+    assert {r["status"] for r in out["results"]} == {"delete_held"}
+    _, out = _cli(capsys, ["reconcile", "--state", str(via_link), "--sink", str(sink),
+                           "--all"])
+    assert len(out["results"]) == 3
+    assert "journal_directory_invalid" not in ext.health(via_link)["reasons"]
+
+
+def test_symlinked_journal_directory_still_refused(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "journal").symlink_to(real, target_is_directory=True)
+    with pytest.raises(ext.ContractError) as e:
+        list(ext._journal_paths(state))
+    assert str(e.value) == "journal_directory_invalid"
+
+
+# Regressions: refused journal entries, legacy outbox receipts, malformed records.
+def test_reconcile_all_skips_refused_entry(tmp_path, authorization, capsys):  # noqa: F811
+    a, = _build(_records((10,)), now=1030.0)
+    b, = _build(_records((20,)), now=1030.0)
+    sink = ext.HandoffSink(tmp_path / "sink")
+    ex = ext.GovernedExporter(tmp_path / "state")
+    assert ex.deliver(a, sink, auth_path=authorization)["status"] == "held"
+    raw = json.loads(authorization.read_text())
+    raw["revoked"] = True
+    authorization.write_text(json.dumps(raw))
+    assert ex.deliver(b, sink, auth_path=authorization)["status"] == "refused"
+    assert ex.reconcile(b["envelope_id"], sink)["status"] == "refused"
+    capsys.readouterr()
+    ext.main(["reconcile", "--state", str(tmp_path / "state"), "--sink", str(sink.root),
+              "--sink-kind", "handoff", "--all"])
+    out = capsys.readouterr().out
+    assert "sink_binding_mismatch" not in out
+    assert a["envelope_id"] in out
+
+
+def test_receive_skips_legacy_receipt_in_outbox(staged, tmp_path, capsys):  # noqa: F811
+    state, sink, eids = staged
+    _, out = _cli(capsys, ["withdraw", "--state", str(state), "--sink", str(sink),
+                           "--envelope-id", eids[0]])
+    assert out["status"] == "delete_held"
+    legacy = tmp_path / "legacy.json"
+    legacy.write_text(json.dumps({"envelope_id": eids[0], "deleted_at": 1031}))
+    _, out = _cli(capsys, ["reconcile", "--state", str(state), "--sink", str(sink),
+                           "--receipts", str(legacy)])
+    _, out = _cli(capsys, ["receive", "--receiver-root", str(tmp_path / "r"),
+                           "--source-label", "s", "--input", str(sink),
+                           "--receipts-out", str(tmp_path / "x.ndjson")])
+    assert "rejected" not in out["transport"]
+    assert not [r for r in _bundle(tmp_path / "x.ndjson")
+                if r["envelope_id"] == eids[0] and r.get("status") == "rejected"]
+
+
+@pytest.mark.parametrize("line", ['{"type":"meta","snapshot":null}', '[]'])
+def test_malformed_records_refused(tmp_path, monkeypatch, capsys, line):
+    monkeypatch.setattr(ext.time, "time", lambda: NOW)
+    f = tmp_path / "f.jsonl"
+    f.write_text(line + "\n")
+    code = ext.main(["deliver", "--auth", str(_auth(tmp_path)), "--state", str(tmp_path / "s"),
+                     "--sink", str(tmp_path / "k"), "--records", str(f)])
+    assert code == 1 and json.loads(capsys.readouterr().out)["status"] == "refused"
