@@ -714,6 +714,26 @@ class Actions:
         return (origin.get("channel_id") in chats
                 and all(projects.project_allowed(s, pid) for pid in pids))
 
+    async def _actor_still_allowed(self, record: dict) -> bool:
+        """A role-authorized actor must hold an allowed role NOW, not
+        only at click time: the member is looked up again (cache, then
+        one fetch through the host client). An unknown member or role
+        set fails closed, as for an interaction (_role_ids)."""
+        users = {f"discord:{u}" for u in self._settings.get("allowed_user_ids") or []}
+        if record.get("actor") in users:
+            return True
+        try:
+            gid = int(record["origin"]["guild_id"])
+            uid = int(str(record["actor"]).removeprefix("discord:"))
+            guild = self._bot.get_guild(gid)
+            member = guild.get_member(uid) or await guild.fetch_member(uid)
+            roles = {str(r.id) for r in member.roles} - {str(gid)}
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return False
+        return bool(self._allowed_roles(roles))
+
     async def sweep_followups(self) -> None:
         """Report results that outlived the first wait window — while
         the interaction token still lives (~14 min)."""
@@ -728,6 +748,11 @@ class Actions:
                 paths.read_result, self._dirs["cmd_results"], cid)
             if result is None or (rec.get("request_id") is not None
                                   and result.get("request_id") != rec["request_id"]):
+                continue
+            # membership is looked up once the answer is ready to send,
+            # not on every sweep tick while the result is pending
+            if not await self._actor_still_allowed(rec):
+                self._reg.drop_followup(cid)
                 continue
             if not self._reg.drop_followup(cid):
                 continue                 # the inline wait delivered it
