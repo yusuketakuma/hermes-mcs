@@ -5,9 +5,10 @@ Aggregates extract_v1 + extract_llm artifacts + raw message metadata into
 kind='patient_rollup' (one current row per patient — old rollups are
 replaced, not stacked):
 
-  last_activity, msg counts, latest vitals (with date), current med period,
-  meds seen recently, recent symptoms, open requests (unanswered-looking),
-  next planned visit, top senders, possibly_deleted message ids.
+  last_activity, msg counts, latest vitals (with date), a rule-extracted
+  med period candidate, meds seen recently, recent symptoms, open requests
+  (unanswered-looking), next planned visit, top senders, and message ids the
+  server has not refreshed lately (not evidence of deletion).
 
 Deterministic — no LLM needed for the aggregation itself. A 'summary' line
 is taken from the newest extract_llm artifact when present.
@@ -44,10 +45,15 @@ from drug_map import (KIND as REF_KIND, PROGRESS_KIND, candidate_note, current_r
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "patient_rollup"
 STALE_DAYS = 21          # message unseen this long while siblings refresh
-# Bump when persisted rollup content changes shape: dirty_projects()
-# rebuilds every row stamped with another version (8: whole-number vital boundaries).
+# Bump when persisted rollup content changes shape, or when a scope/guard
+# change alters what build_rollup keeps: current-version caches are trusted
+# without per-read rebuilds, and dirty_projects() rebuilds every row stamped
+# with another version (9: med_period_candidate / unrefreshed_message_ids).
 # Rebuilds rewrite artifacts; automatic card rendering does not read patient_rollup.
-PERIOD_CHECK_VERSION = 8
+PERIOD_CHECK_VERSION = 9
+# Pre-9 rollup keys; readers map them to the current names until rebuilt.
+_LEGACY_KEYS = {"current_med_period": "med_period_candidate",
+                "possibly_deleted": "unrefreshed_message_ids"}
 # #20-C thread-level reply_state: strongest reply kind seen in the thread
 # after the request, from another sender. View-only, never a transition.
 _REPLY_STAGE = {k: i for i, k in enumerate(
@@ -314,7 +320,7 @@ def build_rollup(ledger, project_id: int) -> dict:
     if latest_labs:
         out["recent_labs"] = list(latest_labs.values())[:15]
     if med_period:
-        out["current_med_period"] = med_period
+        out["med_period_candidate"] = med_period
     if next_period_check is not None:
         out["_next_med_period_check"] = next_period_check
     for bucket, key, cap in (("current", "medications", 20),
@@ -356,13 +362,19 @@ def build_rollup(ledger, project_id: int) -> dict:
         out["summary"] = summary
     out["top_senders"] = sorted(senders.items(), key=lambda x: -x[1])[:8]
 
-    # staleness heuristic: message unseen while siblings refreshed ->
-    # possibly deleted/edited-out on the server (archive keeps it anyway)
-    cutoff = (newest["updated_seen"] or time.time()) - STALE_DAYS * 86400
-    out["possibly_deleted"] = [
-        m["message_id"] for m in msgs
-        if (m["updated_seen"] or 0) < cutoff][:20]
+    out["unrefreshed_message_ids"] = _unrefreshed_ids(
+        [(m["message_id"], m["updated_seen"]) for m in msgs], time.time())
     return out
+
+
+def _unrefreshed_ids(rows, now) -> list:
+    """Newest-first (message_id, updated_seen) rows the server stopped refreshing while siblings were seen.
+
+    A staleness heuristic only: it is not evidence of deletion (tombstones are
+    body_state='deleted') and includes legacy rows whose updated_seen is NULL.
+    """
+    cutoff = ((rows[0][1] or now) if rows else now) - STALE_DAYS * 86400
+    return [mid for mid, seen in rows if (seen or 0) < cutoff][:20]
 
 
 def _period_candidates(m, v1: dict, as_of, *, patient_name=None):
@@ -512,6 +524,10 @@ def current_cached_refs(db, project_id: int, roll: dict, meta) -> dict:
     # or damaged active-generation marker. New stamped rows still fence drift.
     mismatch = stamped is not None and stamped != signature
     out = dict(roll)
+    for old, new in _LEGACY_KEYS.items():
+        if old in out:
+            value = out.pop(old)
+            out.setdefault(new, value)
     sources = {}
     for key in ("medications", "unverified_medications", "planned_medications"):
         if not isinstance(roll.get(key), list):
@@ -588,7 +604,7 @@ def current_cached_refs(db, project_id: int, roll: dict, meta) -> dict:
             current = build_rollup(reader, project_id)
         except sqlite3.OperationalError:
             current = {}  # a legacy snapshot cannot prove scoped current fields
-        clinical_keys = (("latest_vitals", "recent_labs", "current_med_period", "medications",
+        clinical_keys = (("latest_vitals", "recent_labs", "med_period_candidate", "medications",
                           "unverified_medications", "planned_medications", "recent_symptoms")
                          if scoped or projection_stale else ("latest_vitals",))
         for key in clinical_keys:
@@ -623,11 +639,10 @@ def _message_source_signature(db, project_id, now):
         sender_id, sender_name, sender_type, parent_id, body_state, updated_seen
       FROM messages WHERE project_id=? ORDER BY posted_at_ts DESC, message_id DESC
     """, (project_id,)).fetchall()
-    cutoff = ((rows[0][-1] or now) if rows else now) - STALE_DAYS * 86400
-    possibly_deleted = [r[0] for r in rows if (r[-1] or 0) < cutoff][:20]
     payload = (tuple(patient) if patient else None, [tuple(a) for a in context],
                _registered_data(db, "aggregate", project_id, None),
-               [tuple(r[:-1]) for r in rows], possibly_deleted)
+               [tuple(r[:-1]) for r in rows],
+               _unrefreshed_ids([(r[0], r[-1]) for r in rows], now))
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
 
 
