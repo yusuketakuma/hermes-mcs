@@ -138,24 +138,26 @@ link_target() {
 }
 
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
-if [ "$RUNTIME_EXPLICIT" = 0 ] && [ -e "$HOME/.mcs/config.json" ]; then
+if [ -e "$HOME/.mcs/config.json" ] || [ -L "$HOME/.mcs/config.json" ]; then
     MODE_PY="$HOME/.mcs/venv/bin/python3"
     if [ ! -x "$MODE_PY" ]; then MODE_PY="$(command -v python3 || true)"; fi
     [ -n "$MODE_PY" ] || die "existing config requires Python to select its runtime mode; pass --mode explicitly"
-    RUNTIME_MODE="$("$MODE_PY" - "$HOME/.mcs/config.json" <<'PYMODE'
+    RUNTIME_MODE="$("$MODE_PY" - "$HOME/.mcs/config.json" "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" <<'PYMODE'
 import json
 import sys
 try:
     with open(sys.argv[1], encoding="utf-8") as stream:
         cfg = json.load(stream)
-    mode = cfg.get("runtime_mode", "hermes")
+    if not isinstance(cfg, dict):
+        raise ValueError
+    mode = sys.argv[3] if sys.argv[2] == "1" else cfg.get("runtime_mode", "hermes")
     if mode not in ("hermes", "standalone"):
         raise ValueError
     print(mode)
-except (OSError, ValueError, AttributeError, TypeError):
+except (OSError, ValueError, AttributeError, TypeError, RecursionError):
     raise SystemExit(1) from None
 PYMODE
-)" || die "cannot select runtime from existing config; repair config or pass --mode explicitly"
+)" || die "cannot select runtime from existing config; repair unreadable config (use --mode only to override a readable object's runtime)"
     case "$RUNTIME_MODE" in hermes|standalone) ;; *) die "runtime mode could not be read; pass --mode explicitly" ;; esac
 fi
 DEFAULT_HERMES_HOME="$(abspath "$HOME")/.hermes"
@@ -177,10 +179,9 @@ fi
 
 HERMES_DIR="$HERMES_HOME/hermes-agent"
 HERMES_REPO="https://github.com/yusuketakuma/hermes-agent.git"
-# Pinned: fork main — org build merged with upstream main (v2026.9.24),
-# including config set --stdin, native command attestation, and the
-# async pre-dispatch hook await fixes.
-HERMES_PIN="fd50a275e2616118c48fe07e7e1c878782b15ccd"
+# Pinned: public MCS companion plus upstream v0.21.6-era release code.
+# Native context/attestation and async pre-dispatch contracts remain required.
+HERMES_PIN="6f35b1ed84536f7e7fd2f605f7779dd051cce05f"
 CLONE_MARK="$HERMES_HOME/.hermes-agent.install-in-progress"
 VENV="$HERMES_DIR/venv"
 if [ "$RUNTIME_MODE" = standalone ]; then VENV="$RUNTIME_HOME/venv"; fi
@@ -230,14 +231,86 @@ py_ok() {
     "$1" -c "import sys; sys.exit(0 if (3, $2) <= sys.version_info[:2] < (3, $3) else 1)" \
         >/dev/null 2>&1
 }
-# hermes-agent requires >=3.11,<3.14 — prefer an explicitly versioned
+# hermes-agent requires >=3.14,<3.15 — prefer an explicitly versioned
 # interpreter over a possibly-too-new python3
 find_py() {
-    for _c in python3.13 python3.12 python3.11 python3; do
-        if py_ok "$_c" 11 14; then command -v "$_c"; return 0; fi
+    for _c in python3.14 python3; do
+        if py_ok "$_c" 14 15; then command -v "$_c"; return 0; fi
     done
     return 1
 }
+
+llm_serving() {
+    _probe_py="${MCS_PY:-}"
+    if [ -z "$_probe_py" ]; then _probe_py="$(command -v python3 || true)"; fi
+    [ -n "$_probe_py" ] || return 1
+    curl -sf --noproxy "*" --max-filesize 1048576 -m 3 "$LLM_MODELS_URL" 2>/dev/null | "$_probe_py" -c '
+# mcs-model-list-probe
+import json, sys
+try:
+    value = json.load(sys.stdin)
+    rows = value.get("data") if isinstance(value, dict) else None
+    valid = isinstance(rows, list) and any(
+        isinstance(row, dict) and isinstance(row.get("id"), str) and row["id"].strip()
+        for row in rows)
+except (ValueError, RecursionError):
+    valid = False
+raise SystemExit(0 if valid else 1)
+' 2>/dev/null
+}
+
+preserve_old_venv() {
+    if [ ! -e "$VENV" ] && [ ! -L "$VENV" ]; then return; fi
+    if [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] || [ -n "${MCS_UPDATE_RUNTIME_BACKUP:-}" ]; then
+        _prior_venv="$("$PYBIN" -I -c '
+# mcs-runtime-migration-lock
+import fcntl, os, re, stat, sys
+try:
+    number = os.environ.get("MCS_UPDATE_RUN_LOCK_FD", "")
+    if not number.isdecimal() or int(number) < 3:
+        raise ValueError
+    fd = int(number)
+    lock = os.lstat(sys.argv[2])
+    held = os.fstat(fd)
+    if (not stat.S_ISREG(lock.st_mode) or not stat.S_ISREG(held.st_mode)
+            or lock.st_uid != os.getuid() or held.st_uid != os.getuid()
+            or (lock.st_dev, lock.st_ino) != (held.st_dev, held.st_ino)):
+        raise ValueError
+    backup = os.environ.get("MCS_UPDATE_RUNTIME_BACKUP", "")
+    if (not os.path.isabs(backup) or os.path.lexists(backup)
+            or not re.fullmatch(re.escape(sys.argv[1]) + r"\.pre-python314(?:\.[1-9][0-9]*)?", backup)):
+        raise ValueError
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    print(backup)
+except (OSError, ValueError, OverflowError):
+    raise SystemExit(1) from None
+' "$VENV" "$MCS_DATA/run.lock")" \
+            || die "runtime migration lock or backup is invalid — existing venv retained"
+    else
+        # A scheduled tick can start after a process check; established installs
+        # require the updater's inherited run.lock for runtime migration.
+        if [ -e "$MCS_DATA/ledger.db" ] || [ -e "$MCS_DATA/service_manifest.json" ]; then
+            die "existing MCS installation requires a coordinated Python runtime migration — existing venv retained; follow the release upgrade procedure"
+        fi
+        _runtime_processes="$(ps -axo command=)" \
+            || die "cannot verify runtime is stopped — existing venv retained"
+        if printf '%s\n' "$_runtime_processes" | MCS_VENV_PREFIX="$VENV/" awk '
+            index($0, ENVIRON["MCS_VENV_PREFIX"]) == 1 { busy=1 }
+            END { exit !busy }'; then
+            die "existing runtime is still in use — stop its gateway/standalone service with its normal stop command, then re-run; existing venv retained"
+        fi
+        unset _runtime_processes
+        _prior_venv="$VENV.pre-python314"
+        _prior_n=0
+        while [ -e "$_prior_venv" ] || [ -L "$_prior_venv" ]; do
+            _prior_n=$((_prior_n + 1))
+            _prior_venv="$VENV.pre-python314.$_prior_n"
+        done
+    fi
+    mv "$VENV" "$_prior_venv" || die "old runtime could not be preserved — nothing rebuilt"
+    ok "previous runtime preserved: $_prior_venv"
+}
+
 recovery_runtime_ok() {  # <probe host Python>; never substitutes the template's executable
     "$1" -I -B -c '
 import json, os, plistlib, stat, sys
@@ -391,15 +464,15 @@ preflight() {
     fi
     _brew_fills=0
     if [ "$SKIP_BREW" -eq 0 ] && command -v brew >/dev/null 2>&1; then _brew_fills=1; fi
-    if _py="$(find_py)"; then pf_ok "Python 3.11–3.13: $_py"
-    elif [ "$_brew_fills" -eq 1 ]; then pf_info "no Python 3.11–3.13 yet — stage 1 installs python@3.13"
-    else pf_ng "no Python 3.11–3.13 on PATH" "brew install python@3.13"; fi
+    if _py="$(find_py)"; then pf_ok "Python 3.14: $_py"
+    elif [ "$_brew_fills" -eq 1 ]; then pf_info "no Python 3.14 yet — stage 1 installs python@3.14"
+    else pf_ng "no Python 3.14 on PATH" "brew install python@3.14"; fi
     if [ -n "$RECOVERY_OPTION" ] || { [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0 ]; }; then
         if [ -n "$_py" ] && RECOVERY_PYTHON="$(recovery_runtime_ok "$_py")"; then
-            pf_ok "recovery template interpreter: Python >=3.9 and safe SQLite"
+            pf_ok "recovery template interpreter: Python >=3.14 and safe SQLite"
         elif [ -z "$_py" ] && [ -z "$RECOVERY_OPTION" ] && [ "$_brew_fills" -eq 1 ]; then
             # same as the install path: stage 6 re-verifies after stage 1 adds Python
-            pf_warn "recovery interpreter is checked in stage 6 after python@3.13 is installed" ""
+            pf_warn "recovery interpreter is checked in stage 6 after python@3.14 is installed" ""
         else
             pf_ng "recovery template interpreter unsafe or unverified" \
                 "select an existing safe independent executable with --recovery-python; no fallback or binary installation is performed"
@@ -444,8 +517,8 @@ preflight() {
     elif [ -e "$HERMES_DIR" ]; then
         pf_ng "$HERMES_DIR exists but is not a git checkout" "mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")"
     else pf_info "no hermes-agent checkout yet — stage 2 clones $HERMES_PIN"; fi
-    if py_ok "$VENV_PY" 11 14; then pf_ok "hermes venv python: $VENV_PY"
-    elif [ -e "$VENV" ]; then pf_info "hermes venv has no usable Python 3.11–3.13 — stage 2 recreates it"
+    if py_ok "$VENV_PY" 14 15; then pf_ok "hermes venv python: $VENV_PY"
+    elif [ -e "$VENV" ]; then pf_info "hermes venv has no usable Python 3.14 — stage 2 recreates it"
     else pf_info "no hermes venv yet — stage 2 creates it"; fi
     fi
 
@@ -473,7 +546,7 @@ preflight() {
         elif [ "$_brew_fills" -eq 1 ]; then pf_info "Google Chrome missing — stage 1 installs it"
         else pf_warn "Google Chrome missing (MCS login needs it)" "brew install --cask google-chrome"; fi
     fi
-    if curl -sf -m 3 "$LLM_MODELS_URL" >/dev/null 2>&1; then
+    if llm_serving; then
         pf_ok "port 8080: an OpenAI-compatible server answers"
     elif command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:8080 -sTCP:LISTEN >/dev/null 2>&1; then
         if [ "$SKIP_LLM" -eq 1 ]; then
@@ -494,7 +567,7 @@ dry_run_plan() {
     say "plan (--dry-run: nothing below is executed)"
     plan_line "launcher" "$HOME/.local/bin/mcs -> selected runtime + $REPO/mcs/ops/mcs_cli.py"
     if [ "$SKIP_BREW" -eq 1 ]; then plan_line "1/6 brew" "skipped (--no-brew)"
-    else plan_line "1/6 brew" "brew install any of: git python@3.13 uv llama.cpp, cask google-chrome (installed ones are skipped)"; fi
+    else plan_line "1/6 brew" "brew install any of: git python@3.14 uv llama.cpp, cask google-chrome (installed ones are skipped)"; fi
     if [ "$RUNTIME_MODE" = standalone ]; then
         plan_line "2/6 standalone" "venv $VENV + official SDKs from deployment/requirements-standalone.txt; runtime_mode=standalone"
     else
@@ -511,7 +584,7 @@ dry_run_plan() {
         # server on :8080 is kept — no second llama-server is planned
         if [ -f "$HERMES_LLAMA_PLIST" ]; then
             plan_line "4/6 llm" "hermes-managed $HERMES_LLAMA_PLIST [exists] is kept (load state checked; no model download, no second server)"
-        elif curl -sf -m 3 "$LLM_MODELS_URL" >/dev/null 2>&1 \
+        elif llm_serving \
                 && [ ! -f "$LLAMA_PLIST" ] && ! loaded ai.mcs.llamaserver; then
             plan_line "4/6 llm" "a server already answers on :8080 — kept (nothing installed)"
         else
@@ -566,10 +639,10 @@ if [ -n "$RECOVERY_OPTION" ] || { [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0
         RECOVERY_PYTHON="$(recovery_runtime_ok "$_probe_host")" \
             || die "desired recovery interpreter unsafe/unknown or deployed selection drift — nothing written"
     elif [ -n "$RECOVERY_OPTION" ]; then
-        die "--recovery-python is verified before anything is written, which needs Python 3.11-3.13 (e.g. brew install python@3.13); install one and re-run — nothing written"
+        die "--recovery-python is verified before anything is written, which needs Python 3.14 (e.g. brew install python@3.14); install one and re-run — nothing written"
     else
         # A fresh Mac gets Python from stage 1; stage 6 checks the recovery runtime then.
-        warn "no Python 3.11-3.13 yet — the recovery interpreter is checked in stage 6"
+        warn "no Python 3.14 yet — the recovery interpreter is checked in stage 6"
     fi
 fi
 
@@ -589,7 +662,7 @@ elif ! command -v brew >/dev/null 2>&1; then
 then re-run install.sh (or pass --no-brew if you manage these tools yourself)"
 else
     _new=""
-    for pkg in git python@3.13 uv llama.cpp; do
+    for pkg in git python@3.14 uv llama.cpp; do
         if brew list --versions "$pkg" >/dev/null 2>&1; then
             skip "$pkg already installed"
         else
@@ -616,9 +689,9 @@ fi
 if [ "$RUNTIME_MODE" = standalone ]; then
     say "2/6 standalone runtime"
     mkdir -p "$RUNTIME_HOME"
-    if ! py_ok "$VENV_PY" 11 14; then
-        PYBIN="$(find_py)" || die "Python 3.11–3.13 required — brew install python@3.13"
-        if [ -e "$VENV" ]; then rm -rf "$VENV"; fi
+    if ! py_ok "$VENV_PY" 14 15; then
+        PYBIN="$(find_py)" || die "Python 3.14 required — brew install python@3.14"
+        preserve_old_venv
         if command -v uv >/dev/null 2>&1; then
             uv venv --python "$PYBIN" "$VENV"
         else
@@ -639,7 +712,7 @@ if [ "$RUNTIME_MODE" = standalone ]; then
         mv -f "$VENV/.mcs-connector-requirements.tmp" "$VENV/.mcs-connector-requirements"
         rm -f "$PIP_MARK"
     fi
-    py_ok "$VENV_PY" 11 14 || die "standalone interpreter unavailable after install"
+    py_ok "$VENV_PY" 14 15 || die "standalone interpreter unavailable after install"
     MCS_PY="$VENV_PY"
     sum "2/6 runtime:  standalone venv and official connector SDKs"
 else
@@ -683,13 +756,13 @@ fi
 
 # venv: converge on re-run — a venv without a usable python is rebuilt,
 # and PIP_MARK brackets the package install so a failed one is retried
-if ! py_ok "$VENV_PY" 11 14; then
+if ! py_ok "$VENV_PY" 14 15; then
     PYBIN="$(find_py)" \
-        || die "Python >=3.11,<3.14 is required for hermes-agent — brew install python@3.13, then re-run install.sh"
+        || die "Python >=3.14,<3.15 is required for hermes-agent — brew install python@3.14, then re-run install.sh"
     if [ -e "$VENV" ]; then
-        warn "$VENV has no usable Python 3.11–3.13 — recreating it"
-        rm -rf "$VENV"
+        warn "$VENV has no usable Python 3.14 — recreating it"
     fi
+    preserve_old_venv
     if command -v uv >/dev/null 2>&1; then
         uv venv --python "$PYBIN" "$VENV" || die "uv venv failed — re-run install.sh"
     else
@@ -714,8 +787,8 @@ if [ -f "$PIP_MARK" ] || [ ! -x "$VENV_HERMES" ]; then
     _venv="$_venv, hermes-agent installed"
 fi
 # this interpreter is what stage 5 bakes into every plist/wrapper
-py_ok "$VENV_PY" 11 14 \
-    || die "$VENV_PY is missing or not Python 3.11–3.13 — remove $VENV and re-run install.sh"
+py_ok "$VENV_PY" 14 15 \
+    || die "$VENV_PY is missing or not Python 3.14 — remove $VENV and re-run install.sh"
 [ -x "$VENV_HERMES" ] \
     || die "$VENV_HERMES is missing after the install — remove $VENV and re-run install.sh"
 ok "hermes venv: $VENV_PY"
@@ -855,7 +928,7 @@ elif [ "$OS" != Darwin ]; then
     sum "4/6 llm:      skipped (not macOS)"
 else
     SERVING=0
-    if curl -sf -m 3 "$LLM_MODELS_URL" >/dev/null 2>&1; then SERVING=1; fi
+    if llm_serving; then SERVING=1; fi
     if [ -f "$HERMES_LLAMA_PLIST" ]; then
         # hermes manages its own llama.cpp agent — never start a second one
         if loaded ai.hermes.llamacpp; then

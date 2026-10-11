@@ -52,11 +52,10 @@ from contextlib import closing, suppress
 from pathlib import Path
 from typing import Literal, TypedDict
 
-# mcs/ requires >=3.10 (runtime PEP-604 unions) — fail loudly before the
-# first project import instead of a cryptic TypeError inside mcs_util.
+# The old updater imports these helpers before migrating its Python runtime.
 if sys.version_info < (3, 10):
     raise SystemExit(
-        "mcs_setup requires Python >= 3.10 — use the install-time "
+        "mcs_setup imports require Python >= 3.10 — use the install-time "
         "interpreter ~/.hermes/hermes-agent/venv/bin/python "
         "(/usr/bin/python3 is too old)")
 
@@ -958,6 +957,8 @@ WIZARD = [
         ("notify_target", "req", None,
          "通知の送り先（例: slack:<チャンネルID>、"
          "discord:<チャンネルID>、lineworks:<トークルームID>）", None),
+        ("notify_system_target", "opt", None,
+         "障害・システム通知の送り先（空欄=notify_target と同じ）", None),
     ]),
     ("カード通知（Slack / Discord / LINE WORKS）", [
         ("notify.interactive", "choice:off,slack,discord,lineworks", "off",
@@ -1016,8 +1017,6 @@ WIZARD = [
          "配送先を変えたとき+1する番号（通常はそのまま）", _cards_on),
         ("notify_bot_profile", "opt", None,
          "通知投稿に使う hermes プロファイル（空欄=既定）", lambda cfg: cfg.get("runtime_mode") != "standalone"),
-        ("notify_system_target", "opt", None,
-         "障害・システム通知の送り先（空欄=notify_target と同じ）", None),
         ("notify_max_age_h", "num", None,
          "この時間より古い投稿は通知しない。期間内の新規取込みは既読でも通知（時間・空欄=制限なし）", None),
         ("notify_all_replies", "bool", False,
@@ -1191,7 +1190,7 @@ def _ask(key: str, kind: str, default, desc: str, cur, present=False):
     eff = cur if cur is not None else default
     # explicit null on a required item is a valid stored value (e.g.
     # semantic.project_ids: null = all projects) — Enter keeps it
-    keep_null = present and cur is None and kind.startswith("req")
+    keep_null = present and cur is None and key == "semantic.project_ids"
     marks = []
     if keep_null:
         marks.append("現在: null（全対象）")
@@ -1235,6 +1234,17 @@ def _wizard(cfg: dict):
         for key, kind, default, desc, when in items:
             if when is not None and not when(cfg):
                 continue
+            if key in ("notify.slack.channel_id", "notify.discord.channel_id") \
+                    and _get_key(cfg, key) is None:
+                transport = key.split(".")[1]
+                for target in (cfg.get("notify_target"), cfg.get("notify_system_target")):
+                    if isinstance(target, str) and target.startswith(transport + ":"):
+                        channel = target.partition(":")[2]
+                        if ((transport == "slack" and re.fullmatch(r"[CGD][A-Z0-9]+", channel))
+                                or (transport == "discord" and channel.isdecimal()
+                                    and any(c != "0" for c in channel))):
+                            default = channel
+                            break
             _set_key(cfg, key,
                      _ask(key, kind, default, desc, _get_key(cfg, key),
                           _has_key(cfg, key)))
@@ -1578,6 +1588,9 @@ def cmd_init(args) -> int:
             return 1
         try:
             val = json.loads(v)
+        except RecursionError:
+            print("--set: JSON nesting is too deep — nothing written")
+            return 1
         except ValueError:
             val = v
         _set_key(cfg, k.strip(), val)
@@ -1614,39 +1627,6 @@ def cmd_init(args) -> int:
                   "カンマ区切りで指定してください — nothing written")
             return 1
         standalone_projects = json.loads(literal)
-
-    # secrets come from the environment (or getpass) — never argv flags,
-    # which persist in shell history and `ps` (FIX-SU1)
-    pw = os.environ.get("MCS_SETUP_PASSWORD")
-    if pw is None and not args.yes:
-        pw = getpass.getpass(
-            "MCS password (stored in Keychain 'mcs-adapter' + .env "
-            "reboot fallback, leave empty to skip): ")
-    keychain_failed = False
-    if pw:
-        # .env carries the same secret as the reboot fallback — after a
-        # restart the login keychain is locked until first unlock, and
-        # auto_login reads MCS_PASSWORD when the keychain can't answer.
-        updates["MCS_PASSWORD"] = pw
-        if not _keychain_store(login_id or "mcs", pw):
-            print("keychain update not verified — check the existing entry; "
-                  "the .env fallback is handled below")
-            keychain_failed = True
-        else:
-            print(f"keychain: '{KEYCHAIN_SERVICE}' registered")
-
-    ts_key = os.environ.get("TYPESAFE_API_KEY")
-    if ts_key:
-        updates["TYPESAFE_API_KEY"] = ts_key
-    if updates:
-        try:
-            _env_write(ENV_PATH, updates)
-        except ValueError:
-            print(".env: invalid credential format; existing file retained")
-            return 1
-        print(f".env: wrote {sorted(updates)} to {ENV_PATH} (0600)")
-    if keychain_failed:
-        return 1
 
     if args.semantic_mode:
         sem = cfg.get("semantic")
@@ -1721,11 +1701,52 @@ def cmd_init(args) -> int:
     if not args.yes:
         _wizard(cfg)
 
-    # re-checked: the wizard edits cfg after the secrets above were stored
+    # The wizard can change the selected recovery interpreter.
     why = None if cfg.get("recovery_python") == checked_recovery else _init_recovery_problem(cfg)
     if why:
         print("init: recovery_python " + why + " — config.json not written")
         return 1
+    errors, _ = validate_config(cfg)
+    if errors:
+        print("init: invalid configuration — nothing written")
+        for error in errors:
+            print("  " + error)
+        return 1
+    login_id = cfg.get("mcs_login_id")
+
+    # secrets come from the environment (or getpass) — never argv flags,
+    # which persist in shell history and `ps` (FIX-SU1)
+    pw = os.environ.get("MCS_SETUP_PASSWORD")
+    if pw is None and not args.yes:
+        pw = getpass.getpass(
+            "MCS password (stored in Keychain 'mcs-adapter' + .env "
+            "reboot fallback, leave empty to skip): ")
+    keychain_failed = False
+    if pw:
+        # .env carries the same secret as the reboot fallback — after a
+        # restart the login keychain is locked until first unlock, and
+        # auto_login reads MCS_PASSWORD when the keychain can't answer.
+        updates["MCS_PASSWORD"] = pw
+        if not _keychain_store(login_id or "mcs", pw):
+            print("keychain update not verified — check the existing entry; "
+                  "the .env fallback is handled below")
+            keychain_failed = True
+        else:
+            print(f"keychain: '{KEYCHAIN_SERVICE}' registered")
+
+    ts_key = os.environ.get("TYPESAFE_API_KEY")
+    if ts_key:
+        updates["TYPESAFE_API_KEY"] = ts_key
+    if updates:
+        try:
+            _env_write(ENV_PATH, updates)
+        except ValueError:
+            print(".env: invalid credential format; existing file retained")
+            return 1
+        print(f".env: wrote {sorted(updates)} to {ENV_PATH} (0600)")
+    if keychain_failed:
+        return 1
+
     if args.yes and not _guard_config(True):
         return 1
 
@@ -2175,10 +2196,11 @@ print(json.dumps({'python': '.'.join(map(str, sys.version_info[:3])),
             "packages": packages}
 
 
-def _runtime_problem(facts: RuntimeFacts | None, *, recovery: bool = False) -> str | None:
+def _runtime_problem(facts: RuntimeFacts | None, *, recovery: bool = False,
+                     allow_runtime_migration: bool = False) -> str | None:
     if facts is None:
         return "runtime metadata unavailable"
-    minimum = (3, 9) if recovery else (3, 10)
+    minimum = (3, 10) if allow_runtime_migration and not recovery else (3, 14)
     if tuple(map(int, facts["python"].split("."))) < minimum:
         return "runtime Python version unsupported"
     if not sqlite_wal_safe(tuple(map(int, facts["sqlite"].split(".")))):
@@ -2187,7 +2209,14 @@ def _runtime_problem(facts: RuntimeFacts | None, *, recovery: bool = False) -> s
 
 
 def _recovery_python(cfg) -> str:
-    return cfg.get("recovery_python", "/usr/bin/python3")
+    if "recovery_python" in cfg:
+        return cfg["recovery_python"]
+    # Native supervision has a minimal PATH; keep Homebrew's stable path.
+    for path in ("/opt/homebrew/bin/python3.14", "/usr/local/bin/python3.14",
+                 "/usr/bin/python3.14"):
+        if os.access(path, os.X_OK):
+            return path
+    return shutil.which("python3.14") or "/usr/bin/python3.14"
 
 
 def _recovery_executable(plist) -> str | None:
@@ -2248,7 +2277,8 @@ def _recovery_owned() -> bool:
         return False
 
 
-def runtime_gate_errors(cfg, *, repair_recovery=False, update_repo=None) -> list[str]:
+def runtime_gate_errors(cfg, *, repair_recovery=False, update_repo=None,
+                        allow_runtime_migration=False) -> list[str]:
     """Refuse mutations on unsafe selected or explicitly deployed runtimes."""
     errors = []
     try:
@@ -2256,7 +2286,8 @@ def runtime_gate_errors(cfg, *, repair_recovery=False, update_repo=None) -> list
     except ValueError as e:     # backup / watchdog_grace_s invalid
         errors.append(f"config: {e}")
     else:
-        why = _runtime_problem(_runtime_probe(python))
+        why = _runtime_problem(_runtime_probe(python),
+                               allow_runtime_migration=allow_runtime_migration)
         if why:
             errors.append("selected_runtime: " + why)
     # Absence is the existing optional-watchdog warning, not an invented
@@ -2633,19 +2664,19 @@ def _services_py(cfg: dict) -> str:
 
 
 def _hermes_py_problem() -> str | None:
-    """None when HERMES_PY is an executable Python >= 3.10."""
+    """None when HERMES_PY is an executable Python >= 3.14."""
     return _py_problem(HERMES_PY)
 
 
 def _py_problem(exe: str) -> str | None:
-    """None when `exe` is an executable Python >= 3.10."""
+    """None when `exe` is an executable Python >= 3.14."""
     if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
         return f"interpreter {exe} is missing or not executable"
     r = _run([exe, "-c",
-              "import sys; sys.exit(sys.version_info < (3, 10))"],
+              "import sys; sys.exit(sys.version_info < (3, 14))"],
              timeout=20)
     if r.returncode != 0:
-        return (f"interpreter {exe} is not a working Python >= 3.10 "
+        return (f"interpreter {exe} is not a working Python >= 3.14 "
                 f"(rc={r.returncode})")
     # Inspect the actual service interpreter's linked SQLite, not the
     # version of a sqlite3 executable or a different Python on PATH.
@@ -3548,6 +3579,9 @@ def cmd_services(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if sys.version_info < (3, 14):
+        print("mcs_setup requires Python >= 3.14 — use the upgraded runtime", file=sys.stderr)
+        return 1
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser(
