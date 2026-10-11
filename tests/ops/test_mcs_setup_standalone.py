@@ -192,17 +192,20 @@ def test_init_warns_when_plugin_flags_have_no_standalone_scope(
     cfg = config()
     cfg["notify"] = {}                       # no interactive scope at all
     _init_env(monkeypatch, tmp_path, cfg)
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps(cfg))
+    before = path.read_bytes()
     monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
     monkeypatch.setattr(mcs_setup.sys, "argv",
                         ["mcs_setup", "init", "--yes",
                          "--plugin-user-ids", "1,2",
                          "--plugin-profile", "work"])
-    assert mcs_setup.main() == 0
+    assert mcs_setup.main() == 1
     out = capsys.readouterr().out
     assert "--plugin-user-ids" in out and "--plugin-profile" in out \
         and "適用されません" in out
-    saved = json.loads((tmp_path / "c.json").read_text())
-    assert saved["notify"] == {}             # nothing silently invented
+    assert path.read_bytes() == before       # invalid scope never rewritten
+    assert not (tmp_path / ".env").exists()
 
 
 def test_init_applies_plugin_flags_into_the_standalone_scope(

@@ -513,7 +513,7 @@ def test_reconcile_reports_failed_service_command(rec, tmp_path, monkeypatch):
     setup = tmp_path / "repo" / "mcs" / "ops" / "mcs_setup.py"
     setup.parent.mkdir(parents=True)
     setup.write_text("# synthetic")
-    monkeypatch.setattr(rec.subprocess, "run", lambda *a, **k:
+    monkeypatch.setattr(rec, "_run_owned", lambda *a, **k:
                         subprocess.CompletedProcess(a, 1, "", "failed"))
     assert "services_reconcile_failed" in rec._reconcile_membership(None)
 
@@ -945,11 +945,11 @@ def test_backup_manifest_never_adds_external_scheduler_to_standalone_host(
     setup.write_text("# synthetic services entry: never executed")
     monkeypatch.setattr(rec, "_setup_python", lambda: "/synthetic/python")
     calls = []
-    def run(argv, **kw):
+    def run(argv, *args, **kw):
         assert argv == ["/synthetic/python", str(setup), "services"]
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 0, "", "")
-    monkeypatch.setattr(rec.subprocess, "run", run)
+    monkeypatch.setattr(rec, "_run_owned", run)
     assert rec._reconcile_membership({"cron": [], "agents": []}) == []
     assert calls == [["/synthetic/python", str(setup), "services"]]
 
@@ -975,7 +975,7 @@ def test_standalone_recovery_uses_own_python_and_one_scheduler(rec, tmp_path, mo
     setup.parent.mkdir(parents=True)
     setup.write_text("# fixture")
     calls = []
-    monkeypatch.setattr(rec.subprocess, "run", lambda argv, **kw: calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
+    monkeypatch.setattr(rec, "_run_owned", lambda argv, *args, **kw: calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
     assert rec._setup_python() == str(exe)
     assert rec._reconcile_membership({"agents": [], "cron": []}) == []
     assert calls == [[str(exe), str(setup), "services"]]
@@ -1002,8 +1002,7 @@ def test_standalone_recovery_does_not_restart_an_unverified_host(rec):
 
 def test_reconcile_uses_install_interpreter_not_watchdog_python(
         rec, tmp_path, monkeypatch):
-    """The watchdog runs under /usr/bin/python3 (3.9) but mcs_setup
-    needs >= 3.10 — services must run with the install-time venv."""
+    """Services use the install-time venv, independent of watchdog Python."""
     setup = tmp_path / "repo" / "mcs" / "ops" / "mcs_setup.py"
     setup.parent.mkdir(parents=True)
     setup.write_text("# synthetic")
@@ -1013,11 +1012,11 @@ def test_reconcile_uses_install_interpreter_not_watchdog_python(
     monkeypatch.setattr(rec, "HERMES_PY", str(venv_py))
     calls = []
 
-    def run(args, **kwargs):
+    def run(args, *extra, **kwargs):
         calls.append(args)
         return subprocess.CompletedProcess(args, 0, "", "")
 
-    monkeypatch.setattr(rec.subprocess, "run", run)
+    monkeypatch.setattr(rec, "_run_owned", run)
     assert rec._reconcile_membership(None) == ["cron_list_unverifiable"]
     assert [str(venv_py), str(setup), "services"] in calls
 
