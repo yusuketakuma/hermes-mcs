@@ -240,7 +240,7 @@ CREATE TABLE IF NOT EXISTS message_revisions(
 
 (3) 命名: `current_med_period` → `med_period_candidate`、`possibly_deleted` → `unrefreshed_message_ids`（提案名）。brain_export の見出しと注記に「規則抽出・未確認」「削除の証拠ではない（tombstone は `coverage.collection.deleted`）」を入れる。USER_GUIDE と DEVELOPMENT を直す。`PERIOD_CHECK_VERSION` を 2 → 3 にする（`rollup.py:47`）。旧キーを持つ rollup は一度 tick で再構築される（`run_check.py:709-710`。全患者を 1 tick で再構築するコストは【未検証】）。brain_export は移行期に新旧キーの両方を読む。`possibly_deleted` の挙動テストを新設する（現状なし）。
 
-1.0.20 で (3) を実施した。`PERIOD_CHECK_VERSION` は 8 → 9（2 → 3 の記載は当時の値）。旧キーは `current_cached_refs` が新キーへ読み替え、判定は `_unrefreshed_ids` に一本化した。挙動テストは `tests/extract/test_bugfix_r2_5_rollup_dirty.py`。チャットの表示は「処方期間の候補」。DEVELOPMENT の rollup 説明の更新は残る。
+1.0.20 で (3) を実施した。`PERIOD_CHECK_VERSION` は 8 → 9（2 → 3 の記載は当時の値）。旧キーは `current_cached_refs` が新キーへ読み替え、判定は `_unrefreshed_ids` に一本化した。挙動テストは `tests/extract/test_rollup_dirty.py`。チャットの表示は「処方期間の候補」。DEVELOPMENT の rollup 説明の更新は残る。
 
 (4) wire の enum（#8-D2）: A = 現行enum名維持を2026-09-29に決定済み。契約文書に意味と制約を明記する。旧案Bの改名は今回行わない。
 
