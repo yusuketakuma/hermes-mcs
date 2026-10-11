@@ -1,0 +1,18 @@
+{
+  "category": "fixed",
+  "title": "Slack・Discord の確定で、受付済みの操作を送信失敗と表示する問題を修正",
+  "summary": "Slack と Discord で「確定」を押したとき、操作の書き込み自体は済んだ後の保存確認で失敗すると「送信に失敗しました」と表示し、確認を取り消せる状態に戻していました。実際には操作は受け付けられて反映されるため、取消を押しても取り消されず、結果も届きませんでした。書き込みが済んでいる場合は「受付結果を確認できませんでした。結果の通知をお待ちください。」と表示し、結果は後から届けます。書き込めなかった場合はこれまでどおり失敗を伝え、もう一度確定できます。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "adapters/slack/actions.py と adapters/discord/actions.py の確定処理は、LINE WORKS と同じく、コマンドの公開前に followup を登録する。公開で OSError/ValueError が起きたときは adapters/common/envelopes.command_queued で cmd_int にファイルがあるかを確かめ、ある場合は確認を処理中のまま残し、ない場合だけ end_confirm して失敗を伝える。",
+    "LINE WORKS の同じ判定も envelopes.command_queued を使うようにした（挙動は同じ）。"
+  ],
+  "refs": [
+    "adapters/slack/actions.py",
+    "adapters/discord/actions.py",
+    "adapters/lineworks/actions.py",
+    "adapters/common/envelopes.py",
+    "tests/adapters/slack/test_mcs_slack_actions.py",
+    "tests/adapters/discord/test_mcs_discord.py"
+  ]
+}

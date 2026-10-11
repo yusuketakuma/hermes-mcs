@@ -659,10 +659,27 @@ class Actions:
             self._reg.end_confirm(confirm_id)    # nothing was queued
             raise
         payload = pending["payload"]
+        cid = payload["command_id"]
+        # before the publish: a publish error after the file landed still
+        # owes the receipt (same order as LINE WORKS)
+        self._reg.put_followup(cid, {
+            "application_id": str(interaction.application_id),
+            "token": interaction.token, "kind": "human",
+            "project_id": payload.get("project_id"), "actor": actor,
+            "origin": pending["origin"],
+            "project_ids": [payload.get("project_id")],
+            "roles": sorted(self._allowed_roles(_role_ids(interaction)))})
         try:
             await asyncio.to_thread(envelopes.publish_command,
                                     self._dirs["cmd_int"], payload)
         except (OSError, ValueError):
+            if await asyncio.to_thread(envelopes.command_queued,
+                                       self._dirs["cmd_int"], cid):
+                # possibly applied: keep the confirm in flight and the followup
+                await self._followup(
+                    interaction,
+                    "受付結果を確認できませんでした。結果の通知をお待ちください。")
+                return
             # keep the confirm live — the user may retry
             self._reg.end_confirm(confirm_id)
             await self._followup(
@@ -673,18 +690,10 @@ class Actions:
         self._reg.consume_confirm(confirm_id)
         self._result_log(interaction, payload.get("cmd"),
                          {"outcome": "confirmed"},
-                         command_id=payload.get("command_id"))
-        cid = payload["command_id"]
+                         command_id=cid)
         await self._followup(
             interaction,
             f"受け付けました（`{cid[:8]}…`）。結果は反映後に表示されます。")
-        self._reg.put_followup(cid, {
-            "application_id": str(interaction.application_id),
-            "token": interaction.token, "kind": "human",
-            "project_id": payload.get("project_id"), "actor": actor,
-            "origin": pending["origin"],
-            "project_ids": [payload.get("project_id")],
-            "roles": sorted(self._allowed_roles(_role_ids(interaction)))})
         result = await self._wait_result(cid, HUMAN_WAIT_S)
         if result is None:
             return                        # supervisor sweeps followups

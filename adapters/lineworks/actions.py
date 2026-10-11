@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import os
 import re
 
 from hermes_plugin import projects
@@ -269,8 +268,8 @@ class Actions:
         try:
             await self._publish(pending["payload"])
         except (OSError, ValueError):
-            name = paths.safe_name(pending["payload"]["command_id"]) + ".json"
-            if not await asyncio.to_thread(os.path.exists, os.path.join(self.dirs["cmd_int"], name)):
+            if not await asyncio.to_thread(envelopes.command_queued, self.dirs["cmd_int"],
+                                           pending["payload"]["command_id"]):
                 # Nothing reached cmd_int (atomic_write unlinks its tmp): release in_flight so
                 # 確定 can be retried. The followup stays — a retry overwrites it, and a
                 # command the runner consumed in between still reports its receipt.

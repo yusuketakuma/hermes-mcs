@@ -47,6 +47,12 @@ def publish_command(cmd_int_dir: str, envelope: dict) -> str:
                         tmp_prefix=".int-")
 
 
+def command_queued(cmd_int_dir: str, command_id: str) -> bool:
+    """Whether publish_command's file for this command is in cmd_int."""
+    # a publish error after os.replace (the directory fsync) still queued it
+    return os.path.exists(os.path.join(cmd_int_dir, safe_name(command_id) + ".json"))
+
+
 # ---------- transport envelopes ------------------------------------
 
 def transport_begin(claim: dict) -> dict:
