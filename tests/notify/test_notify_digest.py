@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+import sqlite3
 
 import pytest
 
@@ -348,3 +349,35 @@ def test_text_route_never_sends_a_superseded_day(led, monkeypatch):
                         (old,)).fetchone()
     with pytest.raises(StaleSend, match="superseded"):
         notify_flush._format_event(led, ev)
+
+
+# 本人スタンプ集計がbody_state NULLの旧行を未削除として数えることの回帰テスト。
+def test_self_reaction_count_includes_null_body_state():
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.executescript(
+        "CREATE TABLE patients(project_id, is_archived);"
+        "CREATE TABLE messages(message_id, project_id, body_state);"
+        "CREATE TABLE message_metadata(message_id, source, content, checked_at, last_error);"
+        "INSERT INTO patients VALUES(1,0);"
+        "INSERT INTO messages VALUES(10,1,NULL),(11,1,'full'),(12,1,'deleted');")
+    content = json.dumps({"reactions": {"value": [
+        {"type": "like", "count": 1, "self_reacted": True}], "observed_at": 150}})
+    for mid in (10, 11, 12):
+        db.execute("INSERT INTO message_metadata VALUES(?,?,?,?,?)",
+                   (mid, "capture", content, 150, None))
+    posts, counts = notify_digest._self_reaction_count(db, 100, 200)
+    assert posts == 2
+    assert sum(counts.values()) == 2
+
+
+# Digest keeps posts whose time is unknown (NULL posted_at_ts), matching
+# the notification age filter. Synthetic temp ledger only.
+def test_null_posted_at_counted_with_max_age(led):
+    _patient(led, 1)
+    _seen(led, 100, T - 3600)
+    _seen(led, 101, T - 1800)
+    led.db.execute("UPDATE messages SET posted_at_ts=NULL WHERE message_id=101")
+    led.db.commit()
+    notify_digest.maybe_enqueue(led, {**ON, "notify_max_age_h": 48}, now=T)
+    assert "新着 2件" in _text(led)
