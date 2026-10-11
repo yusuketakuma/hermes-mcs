@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "Slack・LINE WORKS のコマンドで内部エラーを入力誤りと表示する問題を修正",
+  "summary": "Slack と LINE WORKS から送る mcs コマンドで、処理中に内部のエラーが起きたとき、入力の誤り（bad_command）と表示されていました。入力を読み取れない場合だけ bad_command とし、読み取った後の処理で起きたエラーは operation_failed と表示します。Hermes の /mcs と同じ区別です。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "adapters/common/commands.py の answer は、_parse の ValueError/UnicodeError/TypeError だけを bad_command にし、_dispatch の例外はすべて operation_failed にする。"
+  ],
+  "refs": [
+    "adapters/common/commands.py",
+    "tests/plugin/test_bugfix_r2_18_slack_card_settings.py"
+  ]
+}
