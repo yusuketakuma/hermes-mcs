@@ -111,6 +111,8 @@ def main() -> int:
         if time.monotonic() > deadline:
             stats["errors"].append("deadline_exceeded")
             break
+        if stats["deadline"]:
+            break  # expired session (re-login failed) ends the run
         ledger.ensure_patient(p.project_id)
         floor = ledger.history_floor(p.project_id)
         if floor and floor <= since:

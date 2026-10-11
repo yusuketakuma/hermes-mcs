@@ -423,7 +423,9 @@ def run_reply_jobs(adapter, ledger, result, deadline,
                 pl["page"] = next_page
                 ledger.job_defer(job["job_id"], 300, payload=pl,
                                  reason_code=_job_failure_reason(window_error))
-                if not isinstance(window_error, SessionExpired):
+                if not isinstance(window_error, SessionExpired) and not (
+                        window_error.kind == "deadline_exceeded"
+                        and next_page > page):
                     ledger.job_retry(job["job_id"],
                                      reason_code=_job_failure_reason(window_error))
             result["errors"].append(f"thread {job['parent_id']}: {window_error.kind}")
@@ -575,8 +577,19 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
             # error (gone project, lost permission), never surfacing
             # 'failed' (AUDIT-J03). P-2 revival via re-seed still applies.
             # SessionExpired stays attempt-free (auth aborts the run below,
-            # matching the raised path).
-            if isinstance(batch.error, SessionExpired):
+            # matching the raised path). A run-deadline cut is unfinished
+            # work: it is bounded by consecutive no-progress cuts (stalls,
+            # reset on progress) instead of attempts, which never reset.
+            if batch.error.kind == "deadline_exceeded":
+                if not (batch.pages and merged.checkpoint_safe):
+                    pl["stalls"] = pl.get("stalls", 0) + 1
+                if pl["stalls"] >= HISTORY_STALL_LIMIT:
+                    ledger.job_fail(job["job_id"],
+                                    reason_code="deadline_exceeded")
+                else:
+                    ledger.job_defer(job["job_id"], 300, payload=pl,
+                                     reason_code="deadline_exceeded")
+            elif isinstance(batch.error, SessionExpired):
                 ledger.job_defer(job["job_id"], 300, payload=pl,
                                  reason_code=_job_failure_reason(batch.error))
             else:
