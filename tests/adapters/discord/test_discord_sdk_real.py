@@ -16,8 +16,8 @@ import pytest
 discord = pytest.importorskip("discord")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from hermes_plugin.mcs_delivery import spec as spec_mod  # noqa: E402
-from hermes_plugin.mcs_discord import cards  # noqa: E402
+from adapters.common import spec as spec_mod  # noqa: E402
+from adapters.discord import cards  # noqa: E402
 
 
 def _spec():

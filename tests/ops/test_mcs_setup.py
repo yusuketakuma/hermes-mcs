@@ -405,7 +405,7 @@ def test_queue_warning_uses_the_exact_database_read_only(monkeypatch, tmp_path, 
 
 
 @pytest.mark.parametrize("source,needs_restart", [
-    ("hermes_plugin/mcs_delivery/__init__.py", True),
+    ("hermes_plugin/card_workers.py", True),
     ("adapters/common/worker.py", True),
     ("adapters/slack/actions.py", True),
     ("adapters/discord/delivery.py", True),

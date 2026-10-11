@@ -23,7 +23,7 @@ import notify_cards
 import notify_reconcile
 import notify_transport
 
-from hermes_plugin.mcs_delivery import envelopes, journal, registry
+from adapters.common import envelopes, journal, registry
 
 NOW = 1_790_000_000.0
 CFG = {"notify": {"interactive": "discord", "route_epoch": 1,

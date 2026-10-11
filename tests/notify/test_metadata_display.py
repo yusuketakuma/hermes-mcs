@@ -196,7 +196,7 @@ def test_large_observation_time_is_not_rendered(led):
     (60, 383, 8), (4000, 3200, 10)])
 def test_stamps_and_busy_footer_fit_card_budget(
         led, monkeypatch, name_length, structured_length, count):
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     _patient(led, name="合" * name_length)
     mids = list(range(100, 100 + count))
     for mid in mids:

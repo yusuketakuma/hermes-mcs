@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from adapters.common import worker
 from hermes_plugin.card_workers import make_slack_factory
-from hermes_plugin.mcs_slack.tasks import Supervisor
+from adapters.slack.tasks import Supervisor
 from slack_testkit import FakeClient
 
 

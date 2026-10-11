@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from hermes_plugin.mcs_delivery import paths as shared_paths
-from hermes_plugin.mcs_delivery import registry
-from hermes_plugin.mcs_slack import actions as slack_actions
-from hermes_plugin.mcs_slack.actions import Actions
-from hermes_plugin.mcs_slack.delivery import SlackCardAdapter
-from hermes_plugin.mcs_slack.paths import notify_dirs
+from adapters.common import paths as shared_paths
+from adapters.common import registry
+from adapters.slack import actions as slack_actions
+from adapters.slack.actions import Actions
+from adapters.slack.delivery import SlackCardAdapter
+from adapters.slack.paths import notify_dirs
 from notify_cmds import validate_int
 from mcs_requests import validate as validate_human
 
@@ -1086,7 +1086,7 @@ def test_ephemeral_chunks_split_by_characters_at_line_boundaries():
 
 
 def test_plain_answers_carry_no_markup():
-    from hermes_plugin.mcs_delivery import text
+    from adapters.common import text
     body = text.view_answer({"outcome": "applied", "action": "body",
                              "title": "合成", "body": "本文"},
                             lambda _p: True, markdown=False)

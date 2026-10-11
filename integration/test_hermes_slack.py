@@ -17,7 +17,7 @@ sys.path.insert(0, str(MCS_ROOT / "tests" / "adapters" / "slack"))
 
 from hermes_cli.plugins import PluginManager  # noqa: E402
 from gateway.platforms.base import BasePlatformAdapter  # noqa: E402
-from hermes_plugin.mcs_delivery.spec import token_map  # noqa: E402
+from adapters.common.spec import token_map  # noqa: E402
 from slack_card_testkit import _spec  # noqa: E402
 
 
@@ -195,7 +195,7 @@ def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypa
     assert len(fresh_client.calls) == 2
     # The native app exposes all four protocol actions, exactly once.
     # Keeping the earlier disabled-app assertions protects opt-in semantics.
-    from hermes_plugin.mcs_slack.cards import LINK_ACTION, MENU_ACTION
+    from adapters.slack.cards import LINK_ACTION, MENU_ACTION
 
     assert len(fresh_handlers) == 4
     for action_id, expected_callback in (
@@ -216,7 +216,7 @@ def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypa
 
 def test_connected_secondary_sdk_client_posts_card_without_retrying(tmp_path, monkeypatch):
     """Hermes's workspace lookup selects the secondary SDK client without retrying."""
-    from hermes_plugin.mcs_slack.delivery import SlackCardAdapter
+    from adapters.slack.delivery import SlackCardAdapter
     from plugins.platforms.slack.adapter import SlackAdapter
     from slack_sdk.web import async_base_client
     from slack_sdk.web.async_client import AsyncWebClient
@@ -271,9 +271,9 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
     three-step external upload into the same thread."""
     import hashlib
 
-    from hermes_plugin.mcs_delivery import envelopes, journal, registry
-    from hermes_plugin.mcs_slack import paths as slack_paths
-    from hermes_plugin.mcs_slack.delivery import (
+    from adapters.common import envelopes, journal, registry
+    from adapters.slack import paths as slack_paths
+    from adapters.slack.delivery import (
         DeliveryWorker, SlackCardAdapter)
     from plugins.platforms.slack.adapter import SlackAdapter
     from slack_sdk.web import async_base_client
@@ -430,9 +430,9 @@ def test_real_sdk_broadcasts_a_new_post_on_an_existing_card(tmp_path, monkeypatc
     chunk of a post new to the card goes to the card's original thread
     once, with reply_broadcast=true in the wire JSON; a replay re-binds
     that reply from conversations.replies instead of posting again."""
-    from hermes_plugin.mcs_delivery import registry
-    from hermes_plugin.mcs_slack import paths as slack_paths
-    from hermes_plugin.mcs_slack.delivery import (
+    from adapters.common import registry
+    from adapters.slack import paths as slack_paths
+    from adapters.slack.delivery import (
         DeliveryWorker, SlackCardAdapter)
     from plugins.platforms.slack.adapter import SlackAdapter
     from slack_sdk.web import async_base_client

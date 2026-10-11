@@ -17,10 +17,9 @@ LINE WORKS の導入・権限・callback 設定は [導入手順](../docs/guides
 配送 grant、journal、receipt、registry、render-spec の共通処理は
 `adapters/common/` にあり、通知先ごとの実装を重複させません。
 
-既存の `hermes_plugin.mcs_slack.*`、`hermes_plugin.mcs_discord.*`、
-`hermes_plugin.mcs_delivery.*` の import は
-互換入口からこのフォルダの実装を読み込むため引き続き利用できます。
-新しい import は `adapters.slack.*` / `adapters.discord.*` / `adapters.common.*` を利用できます。
+import は `adapters.slack.*` / `adapters.discord.*` / `adapters.common.*` を使います。
+Hermes plugin のカード worker もリポジトリのルートを `sys.path` に加えてから
+これらを直接読み込みます（`hermes_plugin/` 配下の別名パッケージはありません）。
 共通コードの変更は、対象 Hermes gateway と LINE WORKS独立アダプターの再起動で反映します。
 
 JSONコマンドは既存のsnapshot閲覧・依頼管理・運用承認を共有します。Slackの応答は
