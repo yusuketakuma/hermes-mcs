@@ -635,6 +635,11 @@ class DeliveryWorker:
                 continue              # held — dependents need a thread
             if not await self._send_allowed(spec):
                 return                # retain unfinished parts for resume
+            # revocation withdraws the spec file (the worker never reads
+            # the DB); the manifest in memory must not outrun it
+            if not await asyncio.to_thread(os.path.isfile, os.path.join(
+                    self._dirs["render"], spec["delivery_id"] + ".json")):
+                return
             await self._attempt_part(claim, part, ctx)
         self._reg.put_parts_done(spec["delivery_id"])
 

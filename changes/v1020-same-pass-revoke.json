@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "カード取り消し直後に、同じ送信処理で残りの本文が送られる問題を修正",
+  "summary": "スレッドの作成と本文の送信が続いている途中で患者をアーカイブしてカードが取り消されると、その回の処理で残っていた本文がそのまま送られることがありました。本文・添付を1つ送る直前に毎回、カードが取り消されていないかを確認し、取り消し後は残りを送りません。取り消しのない通常の送信は、これまでどおり続けて送られます。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "adapters/common/worker.py の _drive_parts は、各部品の送信前に spec ファイル（取り消し時に sweep が取り下げる）がまだ公開されているかを確認する。メモリ上の manifest だけでは送らない。",
+    "すでに通信を開始した部品はこれまでどおり journal の started/result に従って扱い、結果不明を送信済みや未送信に書き換えない。"
+  ],
+  "refs": [
+    "adapters/common/worker.py",
+    "tests/adapters/lineworks/test_same_pass_revoke.py",
+    "tests/adapters/discord/discord_delivery_testkit.py"
+  ]
+}
