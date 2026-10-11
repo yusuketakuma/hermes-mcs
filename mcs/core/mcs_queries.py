@@ -86,7 +86,9 @@ def current_extract_pred(art: str = "a", msg: str = "m", *,
 CANONICAL_PROJECTION_KIND = "canonical_projection"
 # T18: the PASS-only v4 read model — a distinct kind the legacy
 # extract_llm `_replace_current` DELETE can never reach. When a
-# current v4 row exists it outranks both older kinds.
+# current v4 row exists it outranks both older kinds. "v4" here is the
+# semantic engine version, unrelated to mcs/extract/v4 (extract_llm);
+# always filter by kind, never by a bare version number.
 V4_PROJECTION_KIND = "semantic_facts_v4"
 # human ⚠ report on one extraction (card button -> ops.extract_feedback)
 EXTRACT_FEEDBACK_KIND = "extract_feedback_v1"
