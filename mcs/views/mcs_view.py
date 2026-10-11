@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 
 from ledger import LedgerReader, reaction_actor_summary
+from project_metadata import CLINICAL_DATASETS
 from project_metadata_view import physician_viewed_status
 from mcs_adapter import project_url
 from mcs_queries import incomplete_reply_roots
@@ -81,10 +82,8 @@ class View:
 
     def _current_policy(self):
         """Content of the newest semantic_policy artifact, or None."""
-        row = self.db.execute(
-            "SELECT content FROM artifacts WHERE kind='semantic_policy' "
-            "ORDER BY artifact_id DESC LIMIT 1").fetchone()
-        return row["content"] if row else None
+        from request_loops import latest_policy
+        return latest_policy(self.db)
 
     def close(self):
         self.reader.close()
@@ -909,8 +908,8 @@ class View:
                 or (kind not in projectless and project is None):
             raise ValueError("project_required")
         if (type(include_chat) is not bool
-                or include_chat and (kind != "project_metadata" or dataset not in (
-                    "medication_periods", "observation_items", "observation_values"))):
+                or include_chat and (kind != "project_metadata"
+                                     or dataset not in CLINICAL_DATASETS)):
             raise ValueError("bad_comparison_scope")
         if kind == "response_observations":
             if type(publication) is not bool:
