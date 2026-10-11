@@ -187,7 +187,7 @@ def test_addressed_section_without_self_id_lists_no_mentions(led):
 def test_addressed_section_keeps_unfetched_and_undetermined(led):
     _patient(led)
     _post(led, 110, OTHER, ts=NOW - 5000)          # mentions never fetched
-    # (b) 本人ID不明・シグナル通知なしでも、判定していない投稿があれば明示する
+    # (b) 本人ID不明・シグナル行なしでも、判定していない投稿があれば明示する
     sec = _section(_digest(led), "自分宛で返信の記録なし")
     assert sec is not None and "本人の送信者IDが不明のためメンションは判定していません" in sec
     # (a) 本人ID既知でも、宛先未取得だけなら0件で消さずに件数を出す
@@ -197,6 +197,32 @@ def test_addressed_section_keeps_unfetched_and_undetermined(led):
     # 観測済みの0件（本人宛なし）は従来どおり省略する
     _meta(led, 110, mentions=[{"type": "user", "id": OTHER}], reactions=[])
     assert _section(_digest(led), "自分宛で返信の記録なし") is None
+
+
+def test_addressed_signal_rows_stay_in_window_and_count_a_post_once(led):
+    """直近7日の見出しに10日前の依頼を出さず、同じ投稿をシグナル行と
+    メンション行で二重に数えない（DIGEST-MIXED-WINDOW-DUPLICATE）。"""
+    _patient(led)
+    _self_known(led)
+    cfg = {**PUB, "signals": {"notify": True}}
+    _post(led, 100, OTHER, ts=NOW - 10 * DAY)
+    _meta(led, 100, mentions=[{"type": "user", "id": OTHER}], reactions=[])
+    _signal_row(led, "pru:1:100", stype="pharmacist_request_unanswered", mids=[100])
+    assert _section(_digest(led, cfg), "自分宛で返信の記録なし") is None
+    _post(led, 110, OTHER, ts=NOW - 4 * DAY)
+    _meta(led, 110, mentions=[{"type": "user", "id": SELF}], reactions=[])
+    _signal_row(led, "pru:1:110", stype="pharmacist_request_unanswered", mids=[110])
+    sec = _section(_digest(led, cfg), "自分宛で返信の記録なし")
+    assert "1件（直近7日）" in sec and "2件" not in sec
+    assert sec.count("・project 1 ") == 1
+    assert "薬剤師宛の依頼に返信の記録なし" in sec
+
+
+def test_addressed_header_marks_mentions_undetermined_without_self_id(led):
+    _patient(led)
+    _post(led, 110, OTHER, ts=NOW - 5000)
+    sec = _section(_digest(led), "自分宛で返信の記録なし")
+    assert "0件（直近7日・メンション未判定）" in sec
 
 
 def test_self_mentioned_and_evidence_flags(led, tmp_path):
