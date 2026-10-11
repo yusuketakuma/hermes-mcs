@@ -62,6 +62,8 @@ def test_rate_limit_retry_needs_current_authority(tmp_path, monkeypatch, target,
 
         w.client.chat_postMessage = flaky
         monkeypatch.setattr(delivery.asyncio, "sleep", sleep)
+        logs = []
+        w.worker._log = lambda event, **kw: logs.append(event)
 
         async def scenario():
             assert await w.sender.bind()
@@ -85,6 +87,7 @@ def test_rate_limit_retry_needs_current_authority(tmp_path, monkeypatch, target,
             # a lost authority or a second 429 never sends again; the 429 stands
             assert len(attempts) == (2 if mode == "repeat429" else 1)
             assert (results[-1]["result"], results[-1]["error_code"]) == ("not_sent", "ratelimited")
+        assert ("retry_skipped" in logs) == (mode in ("off", "epoch", "restore"))
         if target == "body":
             assert len(w.client.thread_posts) == (1 if mode == "none" else 0)
     finally:
