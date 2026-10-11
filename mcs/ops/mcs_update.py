@@ -164,7 +164,7 @@ _SERVICES_PYTHON: str | None = None   # rebuilt runtime after a migration
 _HELD_RUN_LOCK_FD: int | None = None  # apply's run.lock, inherited by post-merge
 # bail reasons that mean "we never attempted" — do NOT consume the
 # receipt or poison attempts[]; the next check may legitimately retry
-_TRANSIENT_BAIL = frozenset({"run_lock_timeout", "update_lock_busy"})
+_TRANSIENT_BAIL = frozenset({"run_lock_timeout"})
 
 
 class UpdateError(Exception):
@@ -490,8 +490,8 @@ def precheck_local(cfg: dict) -> list[str]:
     errors = []
     if not _tree_clean():
         errors.append("tree_dirty")
+    import mcs_setup
     try:
-        import mcs_setup
         errs, _ = mcs_setup.validate_config(cfg)
         errors.extend("config: " + e for e in errs)
     except Exception as e:
@@ -500,7 +500,6 @@ def precheck_local(cfg: dict) -> list[str]:
         need = os.path.getsize(LEDGER) * 2 + 64 * 1024 * 1024
         if shutil.disk_usage(DATA).free < need:
             errors.append("insufficient_disk")
-    import mcs_setup
     # an owned idle watchdog whose explicit selection drifted is repaired by
     # the post-merge `services`; anything else still blocks before merge
     errors.extend(mcs_setup.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO,
@@ -624,7 +623,8 @@ def _ls_tree_paths(tag: str, subdir: str | None = None
 def precheck_tag(tag: str) -> list[str]:
     """Candidate-tree content gates — all work on fetched objects."""
     errors: list[str] = []
-    if load_config().get("runtime_mode") == "standalone" and not _standalone_target_supported(tag):
+    standalone = mcs_runtime.standalone(load_config())
+    if standalone and not _standalone_target_supported(tag):
         errors.append("standalone_runtime_missing_in_target")
     paths = []
     for mode, otype, _sha, path in _ls_tree_paths(tag):
@@ -747,7 +747,7 @@ def precheck_tag(tag: str) -> list[str]:
             ).returncode != 0:
         errors.append("install_sh_changed")
     # standalone SDK pins live in ~/.mcs/venv, which only install.sh updates
-    if mcs_runtime.standalone(load_config()) and _git(
+    if standalone and _git(
             ["diff", "--quiet", "HEAD", tag, "--",
              "deployment/requirements-standalone.txt"]).returncode != 0:
         errors.append("standalone_requirements_changed")
@@ -1294,7 +1294,7 @@ def scan_pending_approvals(state: dict
     # superseded and must not fire later
     ordered = sorted(
         by_tag.values(),
-        key=lambda p: _ver_key(p.get("tag")) or (-1, -1, -1, -1, ""),
+        key=lambda p: _ver_key(p["tag"]),   # _scan_receipt kept valid tags only
         reverse=True)
     consumed.extend((p["command_id"], "superseded")
                     for p in ordered[1:])
@@ -1589,25 +1589,22 @@ def _post_merge(state: dict) -> int:
     """Post-merge stages, run as a NEW-code subprocess while the parent
     (old code) holds both locks (--locks-held)."""
     applying = state["applying"]
-    try:
-        _plan_runtime_migration(state)
-        if applying.get("reinstall") and not applying.get("reinstall_done"):
-            _reinstall(applying)
-            journal(state, "reinstall")      # persists reinstall_done
-        if applying.get("runtime_migration"):
-            _use_migrated_runtime(applying["runtime_migration"])
-        _services_reconcile()
-        journal(state, "services")
-        problems = restart_agents()
-        if problems:
-            raise UpdateError("restart_failed: " + ",".join(problems))
-        journal(state, "restart")
-        errors = _postcheck(state, applying["sha"])
-        if errors:
-            raise UpdateError("postcheck_failed: " + ",".join(errors))
-        journal(state, "postcheck")
-    except UpdateError:
-        raise
+    _plan_runtime_migration(state)
+    if applying.get("reinstall") and not applying.get("reinstall_done"):
+        _reinstall(applying)
+        journal(state, "reinstall")      # persists reinstall_done
+    if applying.get("runtime_migration"):
+        _use_migrated_runtime(applying["runtime_migration"])
+    _services_reconcile()
+    journal(state, "services")
+    problems = restart_agents()
+    if problems:
+        raise UpdateError("restart_failed: " + ",".join(problems))
+    journal(state, "restart")
+    errors = _postcheck(state, applying["sha"])
+    if errors:
+        raise UpdateError("postcheck_failed: " + ",".join(errors))
+    journal(state, "postcheck")
     state.setdefault("applied", []).append({
         "tag": applying["tag"], "sha": applying["sha"],
         "prev_sha": applying["prev_sha"],
@@ -2077,7 +2074,7 @@ def _reconcile_membership(desired: dict) -> list[str]:
             return ["service_snapshot_invalid"]
     hermes = mcs_setup._hermes_exe(cfg)
     desired_cron = {(d.get("script") or ""): d for d in
-                    (desired or {}).get("cron", [])}
+                    desired.get("cron", [])}
     known_scripts = {s for _, _, s in mcs_setup.CRON_JOBS} | {"mcs_offsite.sh"}
     current = {}
     try:
@@ -2094,9 +2091,9 @@ def _reconcile_membership(desired: dict) -> list[str]:
         evidence += current["cron"]
     desired_paths = {os.path.normpath(os.path.join(SCRIPTS_DIR, script))
                      for script in desired_cron if script}
-    if mcs_runtime.standalone(cfg):
-        pass        # launchd agents (below) carry the schedule; no hermes cron
-    elif mcs_setup._hermes_ok(hermes):
+    # standalone returned above; an invalid mode is treated as hermes like
+    # the check above — this runs during recovery and must not raise
+    if mcs_setup._hermes_ok(hermes):
         try:
             # one parser with mcs_setup: ANSI-tolerant, None = unparsable
             entries = mcs_setup._cron_list(hermes)
@@ -2124,7 +2121,7 @@ def _reconcile_membership(desired: dict) -> list[str]:
     else:
         problems.append("cron_list_unverifiable")
     desired_agents = {a.get("label") for a in
-                      (desired or {}).get("agents", [])}
+                      desired.get("agents", [])}
     current = set(mcs_setup._agent_labels(cfg))
     for path in glob.glob(os.path.join(AGENTS_DIR, "*.plist")):
         label = os.path.basename(path)[:-6]
@@ -2252,7 +2249,7 @@ def rollback(command_id: str | None = None) -> int:
             upd_fd = None
             return recover_interrupted()
         applied = state.get("applied") or []
-        entry = applied[-1] if applied else state.get("applying")
+        entry = applied[-1] if applied else None
         if not entry or not entry.get("prev_sha"):
             if command_id:
                 state.setdefault("executed", {})[command_id] = {
