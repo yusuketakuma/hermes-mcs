@@ -447,6 +447,10 @@ def gate_writer_lock() -> list[str]:
 
 
 _CHANNEL_LITERAL = re.compile(r"discord:\d{10,}|\b\d{17,20}\b")
+# A whole string constant naming a Slack conversation (optionally a thread).
+# Anchoring to the entire constant leaves help-text placeholders such as
+# "e.g. slack:C0CHANNELID" and the built '"slack:" + channel_id' alone.
+_SLACK_TARGET = re.compile(r"slack:[CDGU][A-Z0-9]{8,}(?:[:/].*)?")
 
 
 def gate_notify_fail_closed() -> list[str]:
@@ -454,10 +458,16 @@ def gate_notify_fail_closed() -> list[str]:
     skip, never fall back to a baked-in channel (patient-content risk)."""
     bad = []
     for path in _py_files(MCS, PLUGIN, ADAPTERS):
-        for i, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), 1):
-            if _CHANNEL_LITERAL.search(line) and "test" not in path.name:
+        if "test" in path.name:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _CHANNEL_LITERAL.search(line):
                 bad.append(f"{path.name}:{i} hardcoded channel/chat id")
+        bad += [f"{path.name}:{node.lineno} hardcoded Slack destination"
+                for node in ast.walk(ast.parse(text))
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and _SLACK_TARGET.fullmatch(node.value)]
     return bad
 
 
