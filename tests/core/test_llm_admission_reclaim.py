@@ -126,6 +126,7 @@ def test_concurrent_init_migrates_a_legacy_store_once(tmp_path, monkeypatch):
     old = os.open(path + ".owner.lock", os.O_CREAT | os.O_RDWR, 0o600)
     fcntl.flock(old, fcntl.LOCK_SH)          # a still-running broker
     paused, release = threading.Event(), threading.Event()
+    joining = threading.Event()
     real = adm._connect
 
     class Paused:
@@ -142,9 +143,16 @@ def test_concurrent_init_migrates_a_legacy_store_once(tmp_path, monkeypatch):
                 release.wait(10)
             return cur
 
+    class Joiner(Paused):
+        def execute(self, sql, *args):
+            if sql.startswith("BEGIN IMMEDIATE"):
+                joining.set()           # about to wait on the first's write tx
+            return self._conn.execute(sql, *args)
+
     calls = []
     monkeypatch.setattr(adm, "_connect", lambda p: (
-        calls.append(p), Paused(real(p)) if len(calls) == 1 else real(p))[1])
+        calls.append(p), Paused(real(p)) if len(calls) == 1 else
+        Joiner(real(p)) if len(calls) == 2 else real(p))[1])
     errors, brokers = [], []
 
     def init():
@@ -157,7 +165,9 @@ def test_concurrent_init_migrates_a_legacy_store_once(tmp_path, monkeypatch):
     assert paused.wait(10)
     second = threading.Thread(target=init)
     second.start()
-    time.sleep(0.5)                 # the joiner reaches the store first
+    # the joiner reaches the store's write lock while the first still
+    # holds it (the first only commits after its ALTERs, past release)
+    assert joining.wait(10)
     release.set()
     first.join(20)
     second.join(20)

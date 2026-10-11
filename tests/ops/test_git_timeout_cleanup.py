@@ -134,8 +134,9 @@ def test_interruption_stops_the_owned_session_and_reraises(tmp_path, monkeypatch
     repo = _repo(tmp_path)
     module = mcs_update if which == "update" else _load()
     monkeypatch.setattr(module, "REPO", str(repo))
-    children = []
+    children, locked = [], []
     real_popen = module.subprocess.Popen
+    lock = repo / ".git" / "index.lock"
 
     def interrupted_once(*args, **kwargs):
         child = real_popen(*args, **kwargs)
@@ -146,7 +147,12 @@ def test_interruption_stops_the_owned_session_and_reraises(tmp_path, monkeypatch
         def communicate(*a, **k):
             calls.append(1)
             if len(calls) == 1:
-                time.sleep(0.3)                       # let git take its lock
+                # interrupt only once git holds its lock, so the final
+                # assertion proves the cleanup removed it
+                deadline = time.monotonic() + 10
+                while not lock.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                locked.append(lock.exists())
                 raise KeyboardInterrupt
             return original(*a, **k)
         child.communicate = communicate
@@ -155,9 +161,10 @@ def test_interruption_stops_the_owned_session_and_reraises(tmp_path, monkeypatch
     with pytest.raises(KeyboardInterrupt):
         module._git(["hold"], timeout=30)
     monkeypatch.setattr(module.subprocess, "Popen", real_popen)   # before ps checks
+    assert locked == [True]
     assert children[0].returncode is not None
     assert _group_gone(children[0].pid)
-    assert not (repo / ".git" / "index.lock").exists()
+    assert not lock.exists()
 
 
 def test_reaped_leader_group_is_never_signalled(monkeypatch):

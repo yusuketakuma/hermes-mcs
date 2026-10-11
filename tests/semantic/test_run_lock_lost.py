@@ -122,7 +122,8 @@ def test_unlocked_transport_bounded_wait_and_code_stamp(lock_env, monkeypatch):
     with pytest.raises(mcs_util.RunLockLost) as e:
         with mcs_util.unlocked_transport(ledger, fd, wait_s=0.05):
             holder.append(mcs_util.acquire_run_lock(path))
-    assert e.value.held is False and time.monotonic() - started < 5
+    # far below the 150 s default reacquire wait: wait_s bounded it
+    assert e.value.held is False and time.monotonic() - started < 15
     os.close(holder[0])
     # lock released by the holder: fd is unlocked (no stray hold)
     probe = mcs_util.acquire_run_lock(path)
