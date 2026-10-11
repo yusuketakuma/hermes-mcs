@@ -2900,9 +2900,13 @@ def _norm_sched(s: str) -> str | None:
     return " ".join(m.group(1).split()) if m else None
 
 
-def _agent_loaded(label: str) -> bool:
+def _agent_loaded(label: str) -> bool | None:
+    """Whether launchd has `label` loaded; None when the probe timed out or
+    could not start (124/127) — unknown is falsy but never proof of a stop."""
     uid = os.getuid()
     r = _run(["launchctl", "print", f"gui/{uid}/{label}"])
+    if r.returncode in (124, 127):
+        return None
     return r.returncode == 0
 
 
@@ -3128,8 +3132,8 @@ def _retire_agents(labels, note, dry) -> int:
         note(f"agent {label}: undesired — bootout + remove")
         if not dry:
             _run(["launchctl", "bootout", f"gui/{uid}/{label}"])
-            if _agent_loaded(label):
-                note(f"  agent {label}: still loaded; keeping plist")
+            if _agent_loaded(label) is not False:
+                note(f"  agent {label}: still loaded or unverifiable; keeping plist")
                 problems += 1
                 continue
             try:
@@ -3369,7 +3373,7 @@ def _retire_previous_runtime(prev, desired_mode, note, dry):
         return 0
     for label in sorted(labels):
         _run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"])
-        if _agent_loaded(label):
+        if _agent_loaded(label) is not False:
             note(f"previous agent {label}: stop unverifiable — no new service started")
             return 1
         # bootout does not persist: launchd reloads a left plist at next login
