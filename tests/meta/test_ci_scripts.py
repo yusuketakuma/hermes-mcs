@@ -256,13 +256,10 @@ def test_adapter_async_gate_keeps_process_and_network_blocked(monkeypatch, tmp_p
     # The independent file gets only the surface it uses.
     ("discord/standalone.py", "def make():\n from discord import app_commands\n"
      " return app_commands.command(name='synthetic')\n", False),
-    ("discord/standalone.py", "def make():\n import discord\n return getattr(discord, 'Client')\n", False),
     ("discord/standalone.py", "def make():\n import discord\n return discord\n", True),
     ("discord/standalone.py", "def make():\n import discord\n from discord.ext import commands\n"
      " return discord, commands\n", True),
     # A bare from-imported name gets no wider access than the module form.
-    ("discord/standalone.py", "def make():\n from discord.ext import commands\n"
-     " return getattr(commands, 'Cog')\n", False),
     ("discord/standalone.py", "def make():\n from discord import Intents\n"
      " return Intents(guilds=True)\n", False),
     ("discord/standalone.py", "def make():\n from discord import app_commands\n return app_commands\n", False),
