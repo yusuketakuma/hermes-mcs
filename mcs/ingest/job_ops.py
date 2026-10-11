@@ -777,14 +777,14 @@ def run_discovery(adapter, ledger, result, deadline,
         result["errors"].append(f"discovery: {e.kind}")
         return 0
     new_n = 0
-    write_failed = False
+    write_failed = ""          # type name of the first per-patient failure
     active_ids = {p.project_id for p in projects}
     for p in projects:
         try:
             created, _ = ledger.upsert_patient_info(p, is_archived=False)
             new_n += created
-        except Exception:
-            write_failed = True
+        except Exception as e:
+            write_failed = write_failed or type(e).__name__
     # the archived sweep is a SEPARATE failure domain: its error must not
     # discard already-fetched active registrations or unarchive-on-
     # reappearance work (Oracle R7)
@@ -837,12 +837,12 @@ def run_discovery(adapter, ledger, result, deadline,
                         ledger.job_add("history_head", p.project_id,
                                        payload={"since": since, "page": 1,
                                                 "trickle": True})
-                except Exception:
-                    write_failed = True
+                except Exception as e:
+                    write_failed = write_failed or type(e).__name__
     if write_failed or archived_err:
         ledger.job_defer(job["job_id"], DISCOVERY_RETRY_S)
         cause = " ".join(
-            x for x in ("patient_write_failed" if write_failed else "",
+            x for x in (f"patient_write_failed:{write_failed}" if write_failed else "",
                         f"archived:{archived_err}" if archived_err else "")
             if x)
         result["errors"].append(f"discovery: {cause}")
