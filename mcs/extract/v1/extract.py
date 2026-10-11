@@ -3,14 +3,14 @@
 
 Parses each stored message body into a structured JSON artifact
 (kind='extract_v1') designed for reuse: timelines, search, rollups,
-and later LLM passes (which can overwrite/extend with kind='extract_v2').
+and later LLM passes (kind='extract_llm', stored alongside, never overwriting).
 
 Fields are grounded in the NCGG home-visit pharmacy guide + observed MCS
 conventions (visit-date headers, med periods "8/17-9/6", SOAP sections,
 vital strings, speaker labels). All work is LOCAL — no data leaves the box.
 
 Usage:
-  python3 extract.py --all              # every message lacking extract_v1
+  python3 extract.py [--all]            # every message lacking extract_v1
   python3 extract.py --project <id>     # one patient
   python3 extract.py --stats            # aggregate stats only
 """
@@ -25,7 +25,7 @@ import time
 from datetime import datetime
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every module dir (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
@@ -504,11 +504,7 @@ def extract_message(body: str, posted_at: str) -> dict:
     year = None
     posted = None
     try:
-        # Python 3.10 needs an explicit UTC offset. A date-only "...Z"
-        # must stay invalid rather than acquiring a fabricated time.
-        if (isinstance(posted_at, str) and posted_at.endswith("Z")
-                and re.search(r"[T ]\d", posted_at)):
-            posted_at = posted_at[:-1] + "+00:00"
+        # The 3.14 runtime reads a timed "...Z"; a date-only one stays invalid.
         posted = datetime.fromisoformat(posted_at)
         year = posted.year
     except (ValueError, TypeError):
@@ -771,7 +767,8 @@ def _extract_rows(ledger, rows, *, deadline: float | None = None) -> tuple[int, 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--all", action="store_true")
+    ap.add_argument("--all", action="store_true",
+                    help="compatibility only; without --project every message lacking a current extract_v1 is processed")
     ap.add_argument("--project", type=int, default=0)
     ap.add_argument("--stats", action="store_true")
     ap.add_argument("--limit", type=int, default=0)
