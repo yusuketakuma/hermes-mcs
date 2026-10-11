@@ -361,3 +361,52 @@ def test_retire_previous_hermes_removes_plists_so_login_does_not_reload(monkeypa
             "agents": [{"label": "ai.mcs.extract-drainer"}, {"label": "local.mcs-cmd"}]}
     assert mcs_setup._retire_previous_runtime(prev, "standalone", lambda m: None, False) == 0
     assert list(agents.iterdir()) == []
+
+
+@pytest.mark.parametrize("print_code", [124, 127])
+def test_unverifiable_launchd_stop_keeps_the_old_agent_and_starts_nothing(
+        monkeypatch, tmp_path, print_code):
+    """A timed-out or unstartable `launchctl print` is unknown, not stopped:
+    the old plist stays and the new runtime is not bootstrapped."""
+    label = "ai.mcs.extract-drainer"
+    real_loaded = mcs_setup._agent_loaded
+    calls, args = _standalone_services(monkeypatch, tmp_path, config(), loaded={label})
+    fixture_loaded = mcs_setup._agent_loaded
+    monkeypatch.setattr(mcs_setup, "_agent_loaded",
+                        lambda name: real_loaded(name) if name == label else fixture_loaded(name))
+    fixture_run = mcs_setup.subprocess.run
+
+    def run(argv, **kw):
+        if argv[:2] in (["launchctl", "bootout"], ["launchctl", "print"]) \
+                and argv[2].endswith("/" + label):
+            calls.append(list(argv))
+            return SimpleNamespace(returncode=124 if argv[1] == "bootout" else print_code,
+                                   stdout="", stderr="synthetic unavailable")
+        return fixture_run(argv, **kw)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", run)
+    (tmp_path / "agents").mkdir()
+    (tmp_path / "data").mkdir()
+    old = tmp_path / "agents" / (label + ".plist")
+    old.write_text("synthetic old service")
+    manifest = tmp_path / "data" / "service_manifest.json"
+    manifest.write_text(json.dumps({"runtime_mode": "hermes", "agents": [{"label": label}], "cron": []}))
+    assert mcs_setup.cmd_services(args) == 1
+    assert old.exists()
+    assert not any(a[:2] == ["launchctl", "bootstrap"] and a[-1].endswith(mcs_setup.STANDALONE_LABEL + ".plist")
+                   for a in calls)
+    assert json.loads(manifest.read_text())["runtime_mode"] == "hermes"
+
+
+@pytest.mark.parametrize("print_code", [124, 127])
+def test_retiring_an_agent_with_unknown_state_keeps_its_plist(monkeypatch, tmp_path, print_code):
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    plist = agents / "ai.mcs.cron.mcs-check.plist"
+    plist.write_text("synthetic")
+    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
+    monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
+    monkeypatch.setattr(mcs_setup, "_run", lambda argv, **kw: SimpleNamespace(
+        returncode=print_code if argv[1] == "print" else 0, stdout="", stderr=""))
+    assert mcs_setup._agent_loaded("ai.mcs.cron.mcs-check") is None
+    assert mcs_setup._retire_agents({"ai.mcs.cron.mcs-check"}, lambda m: None, False) == 1
+    assert plist.exists()
