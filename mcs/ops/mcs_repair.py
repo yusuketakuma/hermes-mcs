@@ -23,6 +23,7 @@ import _mcs_path  # noqa: F401
 from ledger import JOB_REASON_CODES, LedgerReader
 from ledger_audit import AuditReport, audit_db
 from mcs_requests import canonical, valid_hash, valid_uuid
+from mcs_util import has_sqlite_sidecars
 
 FORMAT = "mcs-repair/1"
 STAGES = ("backup", "audit", "coverage", "reconcile", "supplement", "artifacts", "rollup")
@@ -78,7 +79,7 @@ REPLY_GAP = """m.parent_id IS NULL AND m.reply_count >
 def _hash_file(path: str | Path) -> str:
     """Hash an explicit regular file, refusing symlinks and live sidecars."""
     path = Path(path)
-    if any(Path(str(path) + suffix).exists() for suffix in ("-wal", "-journal")):
+    if has_sqlite_sidecars(path):
         raise ValueError("static_snapshot_required")
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as stream:

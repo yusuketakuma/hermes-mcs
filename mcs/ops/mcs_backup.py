@@ -57,7 +57,8 @@ import _mcs_path  # noqa: E402,F401
 from ledger import static_contract_ok, valid_mcs_db  # noqa: E402
 from maintenance import MaintenanceError  # noqa: E402
 from mcs_repair import REPLY_GAP  # noqa: E402
-from mcs_util import atomic_write, file_sha256, publish_tmp  # noqa: E402
+from mcs_util import (  # noqa: E402
+    atomic_write, file_sha256, has_sqlite_sidecars, publish_tmp)
 import notify_cards  # noqa: E402
 
 MAGIC = b"MCSBKP1\n"
@@ -664,8 +665,7 @@ def offsite(snapshot: str, policy: BackupPolicy,
     if (not source.is_absolute() or source.is_symlink()
             or not stat.S_ISREG(source.stat().st_mode)
             or source.stat().st_size > policy.max_snapshot_bytes
-            or any(os.path.lexists(str(source) + suffix)
-                   for suffix in ("-wal", "-shm", "-journal"))):
+            or has_sqlite_sidecars(source)):
         raise BackupError("backup_static_snapshot_required")
     if len(list(dest.glob("snapshot-*.mcsb"))) >= policy.max_snapshots:
         raise BackupError("backup_retention_capacity")
@@ -916,8 +916,7 @@ def _latest_snapshot(directory: str, policy: BackupPolicy) -> str:
     for path in sorted(root.iterdir(), reverse=True):
         if (re.fullmatch(r"ledger-[0-9]{8}\.db", path.name)
                 and not path.is_symlink()
-                and not any(os.path.lexists(str(path) + suffix)
-                            for suffix in ("-wal", "-shm", "-journal"))
+                and not has_sqlite_sidecars(path)
                 and valid_mcs_db(str(path))):
             return str(path)
     raise BackupError("backup_no_valid_daily_snapshot")
@@ -974,8 +973,7 @@ def _snapshot_info(snapshot: str, policy: BackupPolicy, *,
     if (source.resolve() != source or not source.is_absolute()
             or not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
             or stat.S_IMODE(st.st_mode) != 0o600
-            or any(os.path.lexists(str(source) + suffix)
-                   for suffix in ("-wal", "-shm", "-journal"))):
+            or has_sqlite_sidecars(source)):
         raise BackupError("backup_static_snapshot_required")
     before_hash, before = _inspection_hash(source, policy.max_snapshot_bytes)
     inventory = _inventory(
@@ -983,8 +981,7 @@ def _snapshot_info(snapshot: str, policy: BackupPolicy, *,
     after_hash, after = _inspection_hash(source, policy.max_snapshot_bytes)
     if (before_hash != after_hash
             or _inspection_signature(before) != _inspection_signature(after)
-            or any(os.path.lexists(str(source) + suffix)
-                   for suffix in ("-wal", "-shm", "-journal"))):
+            or has_sqlite_sidecars(source)):
         raise BackupError("backup_source_changed")
     _fresh(inventory["last_successful_run"], policy)
     return after.st_size, inventory

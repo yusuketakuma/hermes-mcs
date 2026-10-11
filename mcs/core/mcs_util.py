@@ -225,6 +225,13 @@ def disk_floor_mb() -> float:
         return 512.0
 
 
+def has_sqlite_sidecars(path) -> bool:
+    """True when a -wal, -shm or -journal entry (even a dangling symlink)
+    sits next to ``path`` — the file is then not a static snapshot."""
+    return any(os.path.lexists(f"{path}{suffix}")
+               for suffix in ("-wal", "-shm", "-journal"))
+
+
 def file_sha256(path) -> str:
     """Streaming sha256 of a file — shared by operations/refstats so the
     digest contract (chunks of 64 KiB, hex digest) is defined once."""
