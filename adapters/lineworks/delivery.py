@@ -124,6 +124,10 @@ def chunk_text(spec, name, chunk):
     return f"{first}（{k}/{n}）{sep}{rest}"
 
 
+# the configured route identity every card, token and followup must match
+SCOPE_KEYS = ("transport", "profile", "application_id", "team_id", "channel_id")
+
+
 class Sender:
     def __init__(self, client, settings, root):
         self.client, self.settings, self.root = client, settings, root
@@ -145,8 +149,7 @@ class Sender:
                 and flags.get("route_epoch") == spec["delivery"]["route_epoch"])
 
     async def perform(self, spec):
-        if any(spec["delivery"].get(key) != self.settings[key] for key in
-               ("transport", "profile", "application_id", "team_id", "channel_id")) \
+        if any(spec["delivery"].get(key) != self.settings[key] for key in SCOPE_KEYS) \
                 or not self.route_current(spec):
             return {"result": "not_sent", "error_code": "scope_mismatch"}
         try:

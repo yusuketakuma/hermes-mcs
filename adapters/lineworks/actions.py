@@ -10,7 +10,7 @@ from adapters.common import envelopes, paths, registry, text
 
 from .cards import buttons
 from .client import ClientError
-from .delivery import locked
+from .delivery import SCOPE_KEYS, locked
 
 ACTION = re.compile(r"mcs:a:([0-9a-f]{32})\Z")
 CONFIRM = re.compile(r"mcs:c:([0-9a-f]{16})(:cancel)?\Z")
@@ -27,11 +27,7 @@ class Actions:
         self._sent = 0
 
     def _allowed(self):
-        flags = paths.read_flags(self.settings["data_root"])
-        return (flags.get("interactive") is True
-                and flags.get("transport") == "lineworks"
-                and flags.get("route_epoch") == self.settings["route_epoch"]
-                and not flags.get("restore_pending"))
+        return self.sender.route_current({"delivery": {"route_epoch": self.settings["route_epoch"]}})
 
     def _pinned(self, token, actor):
         context = self.reg.token(token)
@@ -39,8 +35,7 @@ class Actions:
             return None
         if context.get("route_epoch") != self.settings["route_epoch"]:
             return None
-        if any(context.get(key) != self.settings[key] for key in
-               ("transport", "profile", "application_id", "team_id", "channel_id")):
+        if any(context.get(key) != self.settings[key] for key in SCOPE_KEYS):
             return None
         if not actor.startswith("lineworks:" + self.settings["team_id"] + ":"):
             return None
@@ -97,8 +92,7 @@ class Actions:
                           context.get("via_more") or (context.get("action") == "meds"
                                                      and context.get("ephemeral") is True)))):
                 return
-            origin = {key: self.settings[key] for key in
-                      ("transport", "profile", "application_id", "team_id", "channel_id")}
+            origin = {key: self.settings[key] for key in SCOPE_KEYS}
             origin["message_id"] = context["message_id"]
             kind = context["action"]
             if kind == "mytasks":
@@ -298,7 +292,7 @@ class Actions:
                 allowed = (self._allowed()
                            and rec.get("route_epoch") == self.settings["route_epoch"]
                            and all((rec.get("origin") or {}).get(key) == self.settings[key]
-                                   for key in ("transport", "profile", "application_id", "team_id", "channel_id"))
+                                   for key in SCOPE_KEYS)
                            and projects.project_allowed(self.settings, rec.get("project_id")))
             else:
                 allowed = bool(self._pinned(rec["token"], rec["actor"]))
