@@ -40,7 +40,9 @@ _STANDALONE_SDK = {
     "mcs_slack/runtime_compat.py": {"slack_sdk", "slack_bolt"},
 }
 _STANDALONE_DISCORD_MEMBERS = {"", "__version__", "Intents.none", "Intents.default",
-                                "app_commands.Command", "AllowedMentions.none", "File", "ForumChannel"}
+                                "app_commands.Command", "AllowedMentions.none", "File", "ForumChannel",
+                                "app_commands.command", "app_commands.describe",
+                                "ext.commands.Bot"}
 _STANDALONE_ASYNC = {"Event", "FIRST_COMPLETED", "create_task", "current_task", "gather",
                      "get_running_loop", "wait", "wait_for", "TimeoutError"}
 
@@ -117,6 +119,32 @@ def _module_surface(tree, module: str, permitted: set[str]) -> list[str]:
             member.append(current.attr)
         if ".".join(member) not in permitted:
             bad.append(f"{node.lineno} forbidden {module} surface")
+    # ``from module[.sub] import name`` binds a member path, not the module;
+    # check it within the import's own function so unrelated locals reusing
+    # the name elsewhere in the file are not mistaken for the SDK.
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.ImportFrom) and not node.level and node.module
+                and (node.module == module or node.module.startswith(module + "."))):
+            continue
+        scope = parents.get(node)
+        while scope is not None and not isinstance(scope, ast.FunctionDef | ast.AsyncFunctionDef):
+            scope = parents.get(scope)
+        for alias in node.names:
+            prefix = node.module.split(".")[1:] + [alias.name]
+            path = ".".join(prefix)
+            if path not in permitted and not any(p.startswith(path + ".") for p in permitted):
+                bad.append(f"{node.lineno} forbidden {module} surface")
+                continue
+            for use in ast.walk(scope or tree):
+                if not isinstance(use, ast.Name) or use.id != (alias.asname or alias.name):
+                    continue
+                member, current = list(prefix), use
+                while isinstance(parents.get(current), ast.Attribute) \
+                        and parents[current].value is current:
+                    current = parents[current]
+                    member.append(current.attr)
+                if len(member) > len(prefix) and ".".join(member) not in permitted:
+                    bad.append(f"{use.lineno} forbidden {module} surface")
     return bad
 
 

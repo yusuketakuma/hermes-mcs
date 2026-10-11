@@ -20,42 +20,42 @@
 | モジュール | 概要 |
 |---|---|
 | `mcs/_mcs_path.py` | Flat-import bootstrap for the mcs/ package root. |
-| `mcs/core/bounded_http.py` | one short-lived worker per request. |
+| `mcs/core/bounded_http.py` | Bounded HTTP transport — one short-lived worker per request. |
 | `mcs/core/ledger.py` | SQLite ledger for MCS unread capture + history archive. |
 | `mcs/core/ledger_audit.py` | Bounded count-only integrity audit of an explicit static SQLite ledger. |
 | `mcs/core/llm_admission.py` | Cross-client RT/BACKLOG admission boundary for the shared local inference backend (T20). |
 | `mcs/core/local_llm.py` | Loopback local-LLM transport and response metadata. |
-| `mcs/core/maintenance.py` | backup, log rotation, read-only snapshot publish. |
+| `mcs/core/maintenance.py` | MCS housekeeping — backup, log rotation, read-only snapshot publish. |
 | `mcs/core/mcs_queries.py` | Shared extraction-scan contract for the read side. |
 | `mcs/core/mcs_runtime.py` | Resolve the explicitly selected Hermes or standalone runtime paths. |
-| `mcs/core/mcs_util.py` | no network, no DB access. |
+| `mcs/core/mcs_util.py` | Shared micro-utilities for the MCS adapter — no network, no DB access. |
 | `mcs/extract/clinical_chunking.py` | Plan source-preserving clinical units before inference using output-pressure heuristics. |
 | `mcs/extract/clinical_values.py` | Conservative surface normalization and quote-bound laboratory candidates. |
 | `mcs/extract/drug_map.py` | Pinned private dictionaries and source-bound medication candidate annotations. |
 | `mcs/extract/patient_context.py` | Extract and read source-bound patient context without inferring current clinical state. |
-| `mcs/extract/rollup.py` | one consolidated artifact per patient. |
-| `mcs/extract/v1/extract.py` | rule-based v1. |
+| `mcs/extract/rollup.py` | MCS patient rollup — one consolidated artifact per patient. |
+| `mcs/extract/v1/extract.py` | MCS structured extraction — rule-based v1. |
 | `mcs/extract/v4/extract_bench.py` | Field-level benchmark for extract_llm (message-level extraction). |
-| `mcs/extract/v4/extract_llm.py` | extract_v2 layer via local llama.cpp (Qwen3.5-9B). |
+| `mcs/extract/v4/extract_llm.py` | MCS LLM extraction — extract_v2 layer via local llama.cpp (Qwen3.5-9B). |
 | `mcs/ingest/cross_lists.py` | Opt-in cross-project mentioned/bookmarked acquisition and storage-only capture. |
-| `mcs/ingest/health_watch.py` | independent supervised reader of health.json. |
-| `mcs/ingest/init_data.py` | bulk-fetch recent history for all active patients. |
-| `mcs/ingest/job_ops.py` | separated from run_check orchestration. |
+| `mcs/ingest/health_watch.py` | MCS health watcher — independent supervised reader of health.json. |
+| `mcs/ingest/init_data.py` | MCS initial data import — bulk-fetch recent history for all active patients. |
+| `mcs/ingest/job_ops.py` | MCS durable job operations — separated from run_check orchestration. |
 | `mcs/ingest/mcs_adapter.py` | MCS (MedicalCare Station) adapter — API-first, CDP token bootstrap. |
 | `mcs/ingest/mcs_worker.py` | Workers with absolute deadlines for MCS API, attachments, and local Chrome I/O. |
 | `mcs/ingest/project_metadata.py` | Opt-in bounded project/group metadata acquisition and local artifact sync. |
-| `mcs/ingest/run_check.py` | cron/launchd entry point (orchestrator only). |
+| `mcs/ingest/run_check.py` | MCS unread check — cron/launchd entry point (orchestrator only). |
 | `mcs/notify/alert_view.py` | 再確認候補の対象・根拠・時点を短い通知に表示する。 |
 | `mcs/notify/extraction_refresh.py` | Queue source-safe card updates after committed extraction progress, without sending to chat. |
-| `mcs/notify/notify_cards.py` | delivery ledger and neutral render specs. |
+| `mcs/notify/notify_cards.py` | Interactive notification cards — delivery ledger and neutral render specs. |
 | `mcs/notify/notify_cmds.py` | cmd_int command drain — plugin-facing validated command intake. |
 | `mcs/notify/notify_digest.py` | MCS summary (#31) — the daily digest card and its on-demand view. |
-| `mcs/notify/notify_flush.py` | drains notify_outbox through the configured delivery CLI. |
-| `mcs/notify/notify_reconcile.py` | journal vs restored DB. |
-| `mcs/notify/notify_render.py` | display model. |
+| `mcs/notify/notify_flush.py` | Outbox notifier — drains notify_outbox through the configured delivery CLI. |
+| `mcs/notify/notify_reconcile.py` | Post-restore delivery reconciliation — journal vs restored DB. |
+| `mcs/notify/notify_render.py` | Interactive notification cards — display model. |
 | `mcs/notify/notify_transport.py` | Interactive notification delivery grants, receipts, and operator recovery. |
 | `mcs/notify/notify_urgent.py` | 現在のLLM緊急度と通知・確認記録から独立した再確認候補を永続化する。 |
-| `mcs/notify/notify_views.py` | clicker-scoped ephemeral views. |
+| `mcs/notify/notify_views.py` | Interactive notification cards — clicker-scoped ephemeral views. |
 | `mcs/notify/present_discord.py` | Discord presentation choices for MCS cards and clicker-only answers. |
 | `mcs/notify/present_lineworks.py` | LINE WORKS presentation choices for MCS cards and clicker-only answers. |
 | `mcs/notify/present_slack.py` | Slack presentation choices for MCS cards and clicker-only answers. |
@@ -65,7 +65,7 @@
 | `mcs/ops/c1_receiver.py` | Persist a bounded synthetic /2 reference lifecycle in private local files. |
 | `mcs/ops/c1_records.py` | Assemble proposed C1 records and paired selections from one read transaction. |
 | `mcs/ops/export_schema.py` | Project and validate aggregate export records with a shared field allowlist. |
-| `mcs/ops/ext_contract.py` | disabled by default (T16). |
+| `mcs/ops/ext_contract.py` | Governed external export contract — disabled by default (T16). |
 | `mcs/ops/import_drug_master.py` | Convert an explicitly pinned official medicine master offline into a private dictionary. |
 | `mcs/ops/mcs_backup.py` | Authenticated encrypted SQLite snapshots and isolated, held restore drills. |
 | `mcs/ops/mcs_cli.py` | Unified install, update, setup and local doctor entrypoint. |
@@ -76,11 +76,11 @@
 | `mcs/ops/mcs_requests.py` | Human-confirmed local requests; no network or automatic task creation. |
 | `mcs/ops/mcs_restore.py` | Human consent for adopting a new-terminal backup, with all delivery held. |
 | `mcs/ops/mcs_setup.py` | MCS environment setup + required-condition validation. |
-| `mcs/ops/mcs_signals.py` | MCS-STAT-PROSPECTIVE T2. |
-| `mcs/ops/mcs_update.py` | detection, apply, rollback, interrupted recovery. |
+| `mcs/ops/mcs_signals.py` | Prospective review-candidate signals — MCS-STAT-PROSPECTIVE T2. |
+| `mcs/ops/mcs_update.py` | MCS self-update — detection, apply, rollback, interrupted recovery. |
 | `mcs/ops/request_loops.py` | Read-only validation for adopting a current Open Loop candidate. |
 | `mcs/ops/requires_python_admits.py` | Exit 0 when a pyproject's [project] requires-python admits the running interpreter. |
-| `mcs/semantic/semantic.py` | Jev-assisted meaning evaluation (Phase J). |
+| `mcs/semantic/semantic.py` | MCS semantic layer — Jev-assisted meaning evaluation (Phase J). |
 | `mcs/semantic/semantic_assessment.py` | Durable medication-event detail assessment. |
 | `mcs/semantic/semantic_audit.py` | Semantic audit gates (spec §16): code-level checks, per-claim Jev support evaluation, and the audit-status decision t… |
 | `mcs/semantic/semantic_bench.py` | Auto-metrics benchmark for the semantic pipeline (Phase J tooling). |
@@ -89,12 +89,12 @@
 | `mcs/semantic/semantic_evaluation.py` | Offline evaluation for fixed semantic bundles and reviewed labels. |
 | `mcs/semantic/semantic_extraction.py` | Durable, whole-source fact extraction helpers. |
 | `mcs/semantic/semantic_facts.py` | Canonical ``semantic-facts/v2`` contract: enums, identity derivation, and validators. |
-| `mcs/semantic/semantic_jev.py` | thin in-process adapter (Phase J, WP-03). |
+| `mcs/semantic/semantic_jev.py` | TypeSafe Jev client — thin in-process adapter (Phase J, WP-03). |
 | `mcs/semantic/semantic_lifecycle.py` | Derive observed verified/rendered/delivered fact-ID sets for evaluation records from a read-only ledger snapshot. |
 | `mcs/semantic/semantic_llm.py` | Local-LLM extraction and summarization (spec §13.1, §15): prompts, response parsing, fact extraction wrapper, and the… |
 | `mcs/semantic/semantic_loops.py` | Revision-bound advisory candidates; formal requests remain human-owned. |
 | `mcs/semantic/semantic_metrics.py` | Semantic audit history and coverage for the current generation. |
-| `mcs/semantic/semantic_observe.py` | one command for the daily check. |
+| `mcs/semantic/semantic_observe.py` | Shadow-mode observation snapshot — one command for the daily check. |
 | `mcs/semantic/semantic_policy.py` | Semantic policy + config layer (spec §22.1): mode names, artifact kind constants, schema/policy versions, config vali… |
 | `mcs/semantic/semantic_projection.py` | Canonical ``semantic-facts/v2`` -> legacy read-model projection. |
 | `mcs/semantic/semantic_qc.py` | extract_qc: Jev quality control over extract_llm artifacts. |
@@ -102,7 +102,7 @@
 | `mcs/semantic/semantic_relations.py` | Candidate relation reconciliation for semantic-facts/v2. |
 | `mcs/semantic/semantic_render.py` | Semantic notice rendering (spec §20, §19.3): the human-readable summary text, the code-only degraded notice, outbox d… |
 | `mcs/semantic/semantic_runtime.py` | Durable execution guards for the semantic worker. |
-| `mcs/semantic/semantic_send_gate.py` | last-moment policy re-verification. |
+| `mcs/semantic/semantic_send_gate.py` | Send-time semantic gate — last-moment policy re-verification. |
 | `mcs/semantic/semantic_store.py` | Semantic input bundle + artifact read helpers (spec §12.1): thread bundling, fingerprints, current-artifact lookup, a… |
 | `mcs/semantic/semantic_v4.py` | v4 publication, stage receipts, and fail-closed legacy migration. |
 | `mcs/semantic/semantic_workflow.py` | Synthetic pharmacist workflow comparison harness (T6). |
