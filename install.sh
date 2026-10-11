@@ -405,7 +405,6 @@ facts = mcs_setup._runtime_probe(actual) if actual is not None else None
 problem = mcs_setup._runtime_problem(facts, recovery=True)
 if problem:
     print("recovery " + problem, file=sys.stderr)
-if problem:
     sys.exit(1)
 print(desired)
 ' "$REPO" "$RECOVERY_TEMPLATE" "$HOME/.mcs/config.json" "$RECOVERY_OPTION" "$SKIP_RECOVERY"
@@ -923,11 +922,7 @@ esac
 mkdir -p "$HERMES_BIN_DIR"
 printf '%s\n' "$MCS_BODY" > "$MCS_SHIM.tmp.$$"
 chmod 700 "$MCS_SHIM.tmp.$$"
-if cmp -s "$MCS_SHIM.tmp.$$" "$MCS_SHIM"; then
-    rm -f "$MCS_SHIM.tmp.$$"
-else
-    mv -f "$MCS_SHIM.tmp.$$" "$MCS_SHIM"
-fi
+publish "$MCS_SHIM.tmp.$$" "$MCS_SHIM" || :
 sum "launcher:    $MCS_SHIM (interpreter $MCS_PY)"
 case ":$PATH:" in
     *":$HERMES_BIN_DIR:"*) ;;
@@ -957,12 +952,10 @@ if not isinstance(cfg, dict):
 cfg["runtime_mode"] = sys.argv[2]
 if sys.argv[3]:
     cfg["recovery_python"] = sys.argv[3]
-if "recovery_python" in cfg:
-    import mcs_setup
-    why = mcs_setup._recovery_python_problem(cfg["recovery_python"], sys.argv[1]) or \
-        mcs_setup._runtime_problem(mcs_setup._runtime_probe(cfg["recovery_python"]), recovery=True)
-    if why:
-        raise SystemExit("desired recovery " + why + " — config not written")
+import mcs_setup
+why = mcs_setup._init_recovery_problem(cfg, sys.argv[1])
+if why:
+    raise SystemExit("desired recovery " + why + " — config not written")
 atomic_write(str(path), lambda handle: json.dump(cfg, handle, ensure_ascii=False, indent=2), 0o600)
 PYMODE
 fi
