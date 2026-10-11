@@ -87,6 +87,11 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
     return None
 
 
+# 4xx statuses that mean "try again later", not a permanent refusal
+# (408 timeout, 425 too early, 429 rate limit)
+RETRY_LATER_4XX = frozenset({408, 425, 429})
+
+
 def publish_tmp(tmp: str, dest: str, mode: int | None = None) -> None:
     """[chmod] -> fsync tmp -> os.replace -> dir fsync for a finished tmp
     file: readers see the whole old ``dest`` or the whole new one."""

@@ -32,7 +32,7 @@ import uuid
 from pathlib import Path
 from contextlib import suppress
 
-from mcs_util import html_to_text, loads_dict, publish_tmp
+from mcs_util import RETRY_LATER_4XX, html_to_text, loads_dict, publish_tmp
 
 
 SCHEMA_VERSION = 9
@@ -64,9 +64,8 @@ def job_reason_class(value: object) -> str:
         return "authentication"
     if code == "waiting_replies":
         return "deferred"
-    # 408/425/429 are retry-later by definition, not a permanent 4xx
-    if code.startswith("http_") and code not in ("http_408", "http_425", "http_429") \
-            and int(code[5:]) < 500:
+    if code.startswith("http_") and int(code[5:]) < 500 \
+            and int(code[5:]) not in RETRY_LATER_4XX:
         return "unavailable"
     return "transient"
 
@@ -2387,7 +2386,7 @@ class Ledger:
                           retry_in: float = 900, max_attempts: int = 6,
                           semantic: bool = False):
         """Classified failure recording (F11). PERMANENT kinds (4xx other
-        than 408/429, oversize, policy blocks) can never succeed on the
+        than RETRY_LATER_4XX, oversize, policy blocks) can never succeed on the
         same url -> 'failed' now; a fresh signed url on re-save revives
         the row (see _save_attachments). Transient kinds back off to the
         attempt cap as before."""
@@ -2396,7 +2395,7 @@ class Ledger:
             or (kind.startswith("http_")
                 and kind[5:].isdigit()
                 and 400 <= int(kind[5:]) < 500
-                and int(kind[5:]) not in (408, 429)))
+                and int(kind[5:]) not in RETRY_LATER_4XX))
         with self.db:
             source = self.db.execute(
                 "SELECT m.project_id,m.message_id,a.state,"
