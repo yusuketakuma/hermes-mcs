@@ -77,14 +77,14 @@ def _jev_failure_class(error) -> str:
     ``resource`` means no external request should be counted as a failed
     input (daily cap, missing key, or exhausted job budget).  All other Jev
     retryable failures use finite job retries, as does one malformed
-    answer (``_malformed_answer``) at every evaluation site; permanent
+    answer (``jev.is_answer_defect``) at every evaluation site; permanent
     failures stop the generation until explicitly reseeded.
     """
     if getattr(error, "kind", "") in {"budget_exceeded", "no_api_key",
                                       "payment_required"}:
         return "resource"
     return "retry" if getattr(error, "retryable", False) \
-        or _malformed_answer(error) else "failed"
+        or jev.is_answer_defect(error) else "failed"
 
 
 def _jev_fail_flag(error) -> str | None:
@@ -1398,21 +1398,6 @@ class _TimedClient:
 
     def __setattr__(self, name, value):
         setattr(self._client, name, value)
-
-
-def _malformed_answer(error) -> bool:
-    """A protocol_error raised while validating ONE answer of a
-    per-fact/per-dimension question (2026-09-30: two jobs died on a
-    single malformed medication-detail reply after ~100 s of local
-    generation). Such a reply is a per-request defect of the remote
-    model, not a contract break like auth/model_mismatch: the job
-    retries within its bounded attempts and the already-persisted
-    detail answers are reused. Response-shape errors on the whole
-    envelope (answers/usage missing) stay hard failures. Every
-    per-answer code is ``{qid}:<reason>`` and no envelope code carries
-    a colon (semantic_jev.validate_answers), so the colon is the
-    discriminator."""
-    return jev.is_answer_defect(error)
 
 
 def _jev_error_brief(error) -> dict | None:
