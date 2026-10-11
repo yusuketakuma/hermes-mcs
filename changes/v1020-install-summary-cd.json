@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "導入完了時に表示するコマンドを、どのディレクトリからでも実行できるよう修正",
+  "summary": "install.sh を checkout の外から実行した場合、完了時に表示される `-m mcs_standalone status` と `-m lineworks_adapter init/check/service` をそのまま実行すると「モジュールが見つからない」で失敗していました。これらの行の先頭に checkout へ移動する `cd`（checkout のパス）と `&&` を付けて表示します。",
+  "upgrade": "追加操作は不要です。表示される案内文だけの変更です。",
+  "details": [
+    "python -m は現在のディレクトリからモジュールを探すため、checkout の外では mcs_standalone / lineworks_adapter を読み込めなかった。同じ表示の mcs_setup.py の行は従来から絶対パス。",
+    "--dry-run の計画表示には同種のコマンドがないことを確認した。"
+  ],
+  "refs": [
+    "install.sh",
+    "tests/meta/test_install_sh.py"
+  ]
+}
