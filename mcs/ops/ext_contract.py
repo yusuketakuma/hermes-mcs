@@ -1194,7 +1194,8 @@ def _read_records(path):
     return records
 
 
-def main(argv=None) -> int:
+def _build_parser():
+    """The ext_contract argparse tree (one subparser per action)."""
     import argparse
     ap = argparse.ArgumentParser(description=__doc__)
     commands = ap.add_subparsers(dest="action", required=True)
@@ -1247,190 +1248,244 @@ def main(argv=None) -> int:
     hints.add_argument("--snapshot", help="published static snapshot")
     hints.add_argument("--limit", type=int, default=200)
     hints.add_argument("--cursor")
+    return ap
+
+
+def _print_json(res) -> None:
+    print(json.dumps(res, ensure_ascii=False, allow_nan=False))
+
+
+def _cmd_link_hints(args, ap, legacy) -> int:
+    """Local Hermes terminal only: paged patient ids/names, no export."""
+    from mcs_runtime import mode
+    from mcs_setup import HOME, load_config
+    from mcs_view import View
+    if mode(load_config()) != "hermes" or not sys.stdout.isatty():
+        raise ContractError("link_hints_local_terminal_required")
+    view = View(args.snapshot or str(
+        Path(HOME) / "data" / "snapshots" / "ledger-snapshot.db"))
+    try:
+        page = view._page(
+            """SELECT p.project_id AS _key, p.project_id, p.patient_name,
+               (SELECT MAX(m.posted_at_ts) FROM messages m
+                WHERE m.project_id=p.project_id) AS last_message_at
+               FROM patients p WHERE 1=1""",
+            [], ("p.project_id",), ["link-hints"], args.limit, args.cursor)
+        items = page["items"]
+        assert isinstance(items, list)
+        for row in items:
+            timestamp = row["last_message_at"]
+            if not isinstance(timestamp, int | float) \
+                    or not finite_number(timestamp) or timestamp <= 0:
+                row["last_message_at"] = None
+        res = {**page, "snapshot": view.meta, "binding": "local_hint_only"}
+        _print_json(res)
+        return 0
+    finally:
+        view.close()
+
+
+def _cmd_receive(args, ap, legacy) -> int:
+    res = _receive(args)
+    _print_json(res)
+    return 0 if set(res["transport"]) <= {"accepted", "deleted", "skipped"} else 2
+
+
+def _cmd_health(args, ap, legacy) -> int:
+    res = health(args.state, auth_path=args.auth, sink_root=args.sink,
+                 max_entries=args.max_entries)
+    _print_json(res)
+    return 0 if res["status"] == "ok" else 2
+
+
+def _cmd_handoff(args, ap, legacy) -> int:
+    """handoff with no explicit inputs fills them from config ext_export."""
+    if not any((args.auth, args.state, args.sink, args.records, args.snapshot)):
+        from mcs_setup import HOME, load_config
+        profile = load_config().get("ext_export")
+        if not isinstance(profile, dict) or set(profile) != {
+                "auth", "state_dir", "outbox", "since_days"}:
+            raise ContractError("handoff_profile_required")
+        for key in ("auth", "state_dir", "outbox"):
+            if not isinstance(profile[key], str) or not Path(profile[key]).is_absolute():
+                raise ContractError("handoff_profile_path_invalid")
+        if type(profile["since_days"]) is not int or profile["since_days"] < 1:
+            raise ContractError("handoff_profile_window_invalid")
+        args.auth, args.state, args.sink = (
+            profile["auth"], profile["state_dir"], profile["outbox"])
+        args.snapshot = str(Path(HOME) / "data" / "snapshots" / "ledger-snapshot.db")
+        args.c1, args.only_with_facts = True, True
+        if args.since_days is None:
+            args.since_days = profile["since_days"]
+    if not all((args.auth, args.state, args.sink, args.records or args.snapshot)):
+        ap.error("handoff requires --auth, --state, --sink and one source")
+    return _cmd_deliver(args, ap, legacy)
+
+
+def _c1_envelopes(args, auth):
+    """export/2 selection + envelopes from a snapshot or export.jsonl."""
+    from c1_records import SnapshotError, assemble_records, select_records
+    for directory in (args.state, args.sink):
+        path = Path(directory)
+        if not path.is_absolute() or path.is_symlink():
+            raise ContractError("c1_private_directory_required")
+        if path.exists():
+            st = path.stat()
+            if not path.is_dir() or st.st_uid != os.getuid() or st.st_mode & 0o077:
+                raise ContractError("c1_private_directory_required")
+    try:
+        if args.snapshot:
+            from mcs_view import View
+            view = View(args.snapshot)
+            try:
+                policy = None
+                if args.classify_senders:
+                    from mcs_setup import load_config
+                    from self_identity import self_sender_id
+                    orgs = (load_config().get("signals") or {}).get(
+                        "self_organizations")
+                    policy = {"self_sender_id": self_sender_id(view.db),
+                              "self_organizations": [
+                                  o for o in orgs if isinstance(o, str) and o]
+                              if isinstance(orgs, list) else []}
+                records = assemble_records(
+                    view.db, signal_limit=args.signal_limit,
+                    sender_policy=policy)["records"]
+            finally:
+                view.close()
+        else:
+            records = _read_records(args.records)
+        selection = select_records(
+            records, auth["fields"], only_with_facts=args.only_with_facts,
+            since_days=args.since_days)
+        envelopes = build_envelopes(
+            selection["records"], profile={k: auth[k] for k in (
+                "fields", "patients", "max_snapshot_age_s", "retention_days")},
+            auth_id=auth["auth_id"], destination=auth["destination"],
+            purpose=auth["purpose"], now=time.time(), max_bytes=args.max_bytes)
+    except (C1ContractError, SnapshotError) as e:
+        raise ContractError(e.code) from e
+    return envelopes, selection
+
+
+def _sink_for(args, kind):
+    return HandoffSink(args.sink) if kind == "handoff" else LocalSink(args.sink)
+
+
+def _journal_exit(args, res, results, kind, legacy) -> int:
+    """Print the result and map journal statuses to the exit code."""
+    _print_json(res)
+    statuses = {result["status"] for result in results}
+    if not statuses or statuses - {
+            "acked", "already_acked", "withdrawn", "held", "delete_held"}:
+        return 1
+    if statuses & {"held", "delete_held"}:
+        return 0 if args.action in ("deliver", "handoff") and kind == "handoff" else \
+            1 if legacy else 2
+    return 0
+
+
+def _cmd_deliver(args, ap, legacy) -> int:
+    selection = None
+    if not args.c1 and (args.snapshot or args.only_with_facts
+                       or args.since_days is not None or args.signal_limit != 200
+                       or args.max_bytes != MAX_WIRE_BYTES or args.classify_senders):
+        raise ContractError("c1_option_required")
+    if args.classify_senders and not args.snapshot:
+        raise ContractError("classify_senders_snapshot_required")
+    auth = load_authorization(args.auth, c1=args.c1)
+    if args.c1:
+        envelopes, selection = _c1_envelopes(args, auth)
+    else:
+        records = _read_records(args.records)
+        snap = next((r.get("snapshot") for r in records if r.get("type") == "meta"), None)
+        gen_at = snap.get("generated_at") if isinstance(snap, dict) else None
+        envelopes = [build_envelope(records, auth, gen_at)]
+    if args.dry_run:
+        res: dict[str, object] = {"status": "dry_run", "envelopes": [{
+            "envelope_id": e["envelope_id"], "part": e.get("part"),
+            "records": e["record_count"],
+            "bytes": len(encode_envelope(e)) if args.c1
+            else len(_canonical(e).encode("utf-8"))} for e in envelopes]}
+        if selection is not None:
+            res.update({k: selection[k] for k in ("dropped_types", "messages_dropped")})
+        _print_json(res)
+        return 0
+    kind = "handoff" if args.action == "handoff" else args.sink_kind
+    sink = _sink_for(args, kind)
+    exporter = GovernedExporter(args.state)
+    results = [exporter.deliver(e, sink, auth_path=args.auth) for e in envelopes]
+    if args.c1:
+        assert selection is not None
+        res = {"envelopes": [{
+            **result, "part": e.get("part"), "records": e["record_count"],
+            "bytes": len(encode_envelope(e))}
+            for e, result in zip(envelopes, results)]}
+        res.update({k: selection[k] for k in ("dropped_types", "messages_dropped")})
+        kept = sum(r["type"] == "message" for r in selection["records"])
+        res["messages_kept"] = kept
+        res["warnings"] = ["messages_kept_zero"] if kept == 0 else []
+    else:
+        res = results[0]
+    return _journal_exit(args, res, results, kind, legacy)
+
+
+def _cmd_withdraw(args, ap, legacy) -> int:
+    if args.envelope_id is not None:
+        _check_id(args.envelope_id)
+    kind = args.sink_kind
+    sink = _sink_for(args, kind)
+    exporter = GovernedExporter(args.state)
+    if args.generation is not None:
+        results = exporter.withdraw_generation(args.generation, sink, args.reason)
+        res = {"results": results}
+    else:
+        res = exporter.withdraw(args.envelope_id, sink, args.reason)
+        results = [res]
+    return _journal_exit(args, res, results, kind, legacy)
+
+
+def _cmd_reconcile(args, ap, legacy) -> int:
+    if args.envelope_id is not None:
+        _check_id(args.envelope_id)
+    kind = args.sink_kind
+    sink = _sink_for(args, kind)
+    exporter = GovernedExporter(args.state)
+    if args.receipts is not None:
+        results = exporter.import_receipts(args.receipts, sink)
+        res = {"results": results}
+    elif args.all:
+        results = [exporter.reconcile(path.stem, sink)
+                   for path in sorted(_journal_paths(args.state))
+                   if re.fullmatch(r"[0-9a-f]{24}\.json", path.name)]
+        res = {"results": results}
+    else:
+        res = exporter.reconcile(args.envelope_id, sink)
+        results = [res]
+    return _journal_exit(args, res, results, kind, legacy)
+
+
+_COMMANDS = {
+    "deliver": _cmd_deliver, "handoff": _cmd_handoff, "reconcile": _cmd_reconcile,
+    "withdraw": _cmd_withdraw, "health": _cmd_health, "receive": _cmd_receive,
+    "link-hints": _cmd_link_hints,
+}
+
+
+def main(argv=None) -> int:
+    ap = _build_parser()
     argv = list(sys.argv[1:] if argv is None else argv)
     legacy = bool(argv and argv[0].startswith("--") and argv[0] != "--help")
     if legacy:
         argv.insert(0, "deliver")
     args = ap.parse_args(argv)
     try:
-        res: dict[str, object]
-        env = None
-        envelopes = []
-        selection = None
-        if args.action == "link-hints":
-            from mcs_runtime import mode
-            from mcs_setup import HOME, load_config
-            from mcs_view import View
-            if mode(load_config()) != "hermes" or not sys.stdout.isatty():
-                raise ContractError("link_hints_local_terminal_required")
-            view = View(args.snapshot or str(
-                Path(HOME) / "data" / "snapshots" / "ledger-snapshot.db"))
-            try:
-                page = view._page(
-                    """SELECT p.project_id AS _key, p.project_id, p.patient_name,
-                       (SELECT MAX(m.posted_at_ts) FROM messages m
-                        WHERE m.project_id=p.project_id) AS last_message_at
-                       FROM patients p WHERE 1=1""",
-                    [], ("p.project_id",), ["link-hints"], args.limit, args.cursor)
-                items = page["items"]
-                assert isinstance(items, list)
-                for row in items:
-                    timestamp = row["last_message_at"]
-                    if not isinstance(timestamp, int | float) \
-                            or not finite_number(timestamp) or timestamp <= 0:
-                        row["last_message_at"] = None
-                res = {**page, "snapshot": view.meta, "binding": "local_hint_only"}
-                print(json.dumps(res, ensure_ascii=False, allow_nan=False))
-                return 0
-            finally:
-                view.close()
-        if args.action == "handoff" and not any(
-                (args.auth, args.state, args.sink, args.records, args.snapshot)):
-            from mcs_setup import HOME, load_config
-            profile = load_config().get("ext_export")
-            if not isinstance(profile, dict) or set(profile) != {
-                    "auth", "state_dir", "outbox", "since_days"}:
-                raise ContractError("handoff_profile_required")
-            for key in ("auth", "state_dir", "outbox"):
-                if not isinstance(profile[key], str) or not Path(profile[key]).is_absolute():
-                    raise ContractError("handoff_profile_path_invalid")
-            if type(profile["since_days"]) is not int or profile["since_days"] < 1:
-                raise ContractError("handoff_profile_window_invalid")
-            args.auth, args.state, args.sink = (
-                profile["auth"], profile["state_dir"], profile["outbox"])
-            args.snapshot = str(Path(HOME) / "data" / "snapshots" / "ledger-snapshot.db")
-            args.c1, args.only_with_facts = True, True
-            if args.since_days is None:
-                args.since_days = profile["since_days"]
-        if args.action == "handoff" and not all(
-                (args.auth, args.state, args.sink, args.records or args.snapshot)):
-            ap.error("handoff requires --auth, --state, --sink and one source")
-        if args.action == "receive":
-            res = _receive(args)
-            print(json.dumps(res, ensure_ascii=False, allow_nan=False))
-            return 0 if set(res["transport"]) <= {"accepted", "deleted", "skipped"} else 2
-        if args.action == "health":
-            res = health(args.state, auth_path=args.auth, sink_root=args.sink,
-                         max_entries=args.max_entries)
-            print(json.dumps(res, ensure_ascii=False, allow_nan=False))
-            return 0 if res["status"] == "ok" else 2
-        if args.action in ("deliver", "handoff"):
-            if not args.c1 and (args.snapshot or args.only_with_facts
-                               or args.since_days is not None or args.signal_limit != 200
-                               or args.max_bytes != MAX_WIRE_BYTES or args.classify_senders):
-                raise ContractError("c1_option_required")
-            if args.classify_senders and not args.snapshot:
-                raise ContractError("classify_senders_snapshot_required")
-            auth = load_authorization(args.auth, c1=args.c1)
-            if args.c1:
-                from c1_records import SnapshotError, assemble_records, select_records
-                for directory in (args.state, args.sink):
-                    path = Path(directory)
-                    if not path.is_absolute() or path.is_symlink():
-                        raise ContractError("c1_private_directory_required")
-                    if path.exists():
-                        st = path.stat()
-                        if not path.is_dir() or st.st_uid != os.getuid() or st.st_mode & 0o077:
-                            raise ContractError("c1_private_directory_required")
-                try:
-                    if args.snapshot:
-                        from mcs_view import View
-                        view = View(args.snapshot)
-                        try:
-                            policy = None
-                            if args.classify_senders:
-                                from mcs_setup import load_config
-                                from self_identity import self_sender_id
-                                orgs = (load_config().get("signals") or {}).get(
-                                    "self_organizations")
-                                policy = {"self_sender_id": self_sender_id(view.db),
-                                          "self_organizations": [
-                                              o for o in orgs if isinstance(o, str) and o]
-                                          if isinstance(orgs, list) else []}
-                            records = assemble_records(
-                                view.db, signal_limit=args.signal_limit,
-                                sender_policy=policy)["records"]
-                        finally:
-                            view.close()
-                    else:
-                        records = _read_records(args.records)
-                    selection = select_records(
-                        records, auth["fields"], only_with_facts=args.only_with_facts,
-                        since_days=args.since_days)
-                    envelopes = build_envelopes(
-                        selection["records"], profile={k: auth[k] for k in (
-                            "fields", "patients", "max_snapshot_age_s", "retention_days")},
-                        auth_id=auth["auth_id"], destination=auth["destination"],
-                        purpose=auth["purpose"], now=time.time(), max_bytes=args.max_bytes)
-                except (C1ContractError, SnapshotError) as e:
-                    raise ContractError(e.code) from e
-            else:
-                records = _read_records(args.records)
-                snap = next((r.get("snapshot") for r in records if r.get("type") == "meta"), None)
-                gen_at = snap.get("generated_at") if isinstance(snap, dict) else None
-                env = build_envelope(records, auth, gen_at)
-                envelopes = [env]
-            if args.dry_run:
-                res = {"status": "dry_run", "envelopes": [{
-                    "envelope_id": e["envelope_id"], "part": e.get("part"),
-                    "records": e["record_count"],
-                    "bytes": len(encode_envelope(e)) if args.c1
-                    else len(_canonical(e).encode("utf-8"))} for e in envelopes]}
-                if selection is not None:
-                    res.update({k: selection[k] for k in ("dropped_types", "messages_dropped")})
-                print(json.dumps(res, ensure_ascii=False, allow_nan=False))
-                return 0
-        elif getattr(args, "envelope_id", None) is not None:
-            _check_id(args.envelope_id)
-        kind = "handoff" if args.action == "handoff" else args.sink_kind
-        sink = HandoffSink(args.sink) if kind == "handoff" else LocalSink(args.sink)
-        exporter = GovernedExporter(args.state)
-        if args.action in ("deliver", "handoff"):
-            results = [exporter.deliver(e, sink, auth_path=args.auth) for e in envelopes]
-            if args.c1:
-                assert selection is not None
-                res = {"envelopes": [{
-                    **result, "part": e.get("part"), "records": e["record_count"],
-                    "bytes": len(encode_envelope(e))}
-                    for e, result in zip(envelopes, results)]}
-                res.update({k: selection[k] for k in ("dropped_types", "messages_dropped")})
-                kept = sum(r["type"] == "message" for r in selection["records"])
-                res["messages_kept"] = kept
-                res["warnings"] = ["messages_kept_zero"] if kept == 0 else []
-            else:
-                res = results[0]
-        elif args.action == "withdraw" and args.generation is not None:
-            results = exporter.withdraw_generation(args.generation, sink, args.reason)
-            res = {"results": results}
-        elif args.action == "withdraw":
-            res = exporter.withdraw(args.envelope_id, sink, args.reason)
-            results = [res]
-        elif args.receipts is not None:
-            results = exporter.import_receipts(args.receipts, sink)
-            res = {"results": results}
-        elif args.all:
-            results = [exporter.reconcile(path.stem, sink)
-                       for path in sorted(_journal_paths(args.state))
-                       if re.fullmatch(r"[0-9a-f]{24}\.json", path.name)]
-            res = {"results": results}
-        else:
-            res = exporter.reconcile(args.envelope_id, sink)
-            results = [res]
-        print(json.dumps(res, ensure_ascii=False, allow_nan=False))
-        statuses = {result["status"] for result in results}
-        if not statuses or statuses - {
-                "acked", "already_acked", "withdrawn", "held", "delete_held"}:
-            return 1
-        if statuses & {"held", "delete_held"}:
-            return 0 if args.action in ("deliver", "handoff") and kind == "handoff" else \
-                1 if legacy else 2
-        return 0
+        return _COMMANDS[args.action](args, ap, legacy)
     except (ContractError, OSError, ValueError, TypeError, RecursionError) as e:
         reason = str(e) if isinstance(e, ContractError) else type(e).__name__
         print(json.dumps({"status": "refused", "reason": reason},
                          ensure_ascii=False))
         return 1
-
 
 if __name__ == "__main__":
     sys.exit(main())
