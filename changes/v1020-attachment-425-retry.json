@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "添付取得で HTTP 425 を受けたとき、すぐに失敗扱いにせず再試行するよう修正",
+  "summary": "添付ファイルの取得が HTTP 425（Too Early）で返されたとき、恒久的な失敗として即座に「取得失敗」にしていた問題を修正しました。408・429 と同じく一時的な失敗として扱い、待機してから再試行します。取得ジョブの理由分類とも一致します。",
+  "upgrade": "追加操作は不要です。更新前に HTTP 425 で失敗扱いになった添付は、従来どおり新しい署名付きURLで再保存されたときに再取得されます。",
+  "details": [
+    "mcs/core/mcs_util.py に RETRY_LATER_4XX（408・425・429）を置き、mcs/core/ledger.py の job_reason_class と attachment_failed が同じ集合を使う。",
+    "MCS 取得経路（mcs_adapter・mcs_worker）の retryable 判定は別の担当範囲で、この変更には含まない。"
+  ],
+  "refs": [
+    "mcs/core/ledger.py",
+    "mcs/core/mcs_util.py",
+    "tests/core/test_http_retry_later_4xx.py"
+  ]
+}
