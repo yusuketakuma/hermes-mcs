@@ -11,6 +11,8 @@ from contextlib import ExitStack, suppress
 from datetime import date
 from pathlib import Path
 
+from mcs_util import fsync_dir
+
 MAX_COMMAND_BYTES = 16384
 STATUSES = ("open", "in_progress", "done", "cancelled")
 SCHEMA = """
@@ -385,11 +387,7 @@ def enqueue(req, cmd_dir):
         os.link(temp, temp[:-4] + ".json")  # Atomic publication without clobbering pending input.
         published = True
         os.unlink(temp)
-        directory = os.open(cmd_dir, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        fsync_dir(cmd_dir)
     except OSError:
         if not published:
             raise

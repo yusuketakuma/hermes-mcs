@@ -97,6 +97,8 @@ RETRY_LATER_4XX = frozenset({408, 425, 429})
 
 def fsync_dir(path) -> None:
     """fsync a directory so a rename or link inside it survives a crash."""
+    # deployment/recovery/mcs_recover.py keeps its own copy on purpose:
+    # recovery must run without the repo's modules.
     fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(fd)
