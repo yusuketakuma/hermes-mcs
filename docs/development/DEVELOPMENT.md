@@ -122,6 +122,15 @@
 
 <!-- END GENERATED:modules -->
 
+### 関数内 import の使い分け（手書き）
+
+import はモジュール先頭に置くのが原則。関数内に残すのは次の場合だけ。
+
+- **循環回避**: 相互に参照するモジュール（例: semantic_store・semantic_projection・semantic_extraction と semantic_v4）。
+- **facade の差し替え点**: `semantic_drain`・`semantic_extraction`・`semantic_send_gate` などが関数内で `import semantic` するのは、テストが `monkeypatch.setattr(semantic, ...)` で差し替えた実装を呼出し時に読むため。先頭へ移すとテストの差し替えが効かなくなる。
+- **起動コストの抑制**: 10分ジョブや CLI が使わない重いモジュール（`mcs_setup`・`ledger` など）。
+- **任意 SDK**: `adapters/discord/{actions,cards}.py` の `discord`、独立実行の公式 SDK（AGENTS.md・`ci/gates.py` の制約）。
+
 ### データ・設定ファイル（手書き詳細）
 
 モジュール一覧は上の自動生成表を参照。以下はコード外のデータ・設定。
