@@ -7,14 +7,11 @@ from types import SimpleNamespace
 import pytest
 
 
-def test_lineworks_compatibility_entry_uses_canonical_classes_and_cli_wrapper():
+def test_lineworks_cli_entry_is_only_the_module_wrapper():
     import importlib.util
     import lineworks_adapter
-    from adapters import lineworks
 
-    assert lineworks_adapter.ClientError is lineworks.ClientError
-    assert lineworks_adapter.Credentials is lineworks.Credentials
-    assert lineworks_adapter.LineWorksClient is lineworks.LineWorksClient
+    assert not hasattr(lineworks_adapter, "LineWorksClient")
     assert Path(importlib.util.find_spec("lineworks_adapter.__main__").origin) == (
         Path(__file__).resolve().parents[3] / "lineworks_adapter" / "__main__.py")
 
