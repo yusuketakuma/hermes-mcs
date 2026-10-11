@@ -6,7 +6,7 @@
 
 ### 1.0.18への更新で確認すること
 
-- 1.0.18はPython 3.14以上が必要です。更新は必ず更新ツール（`scripts/mcs_upgrade.py`、下記の手順）で行います。更新ツールは定期処理とworkerを止めた状態のまま、3.14未満の実行環境（venv）を`<venv>.pre-python314`へ退避して3.14で作り直し、Hermesのcheckoutが過去の固定commitにあれば新しい固定commitへ進めます。失敗・中断時は旧環境とcheckoutを戻します。退避した旧環境は削除しません。
+- 1.0.18はPython 3.14以上が必要です。更新は必ず更新ツール（`scripts/mcs_upgrade.py`、下記の手順）で行います。更新ツールは定期処理とworkerを止めた状態のまま、3.14未満の実行環境（venv）を`<venv>.pre-python314`へ退避して3.14で作り直し、Hermesのcheckoutが過去の固定commitにあれば新しい固定commitへ進めます。更新ツールの実行中に失敗した場合は、その場で旧版のコード・旧環境・checkoutへ戻します。電源断や強制終了でinstall.shの途中に止まった場合は、独立の復旧watchdogが自動では再実行も復元もせず`reinstall_incomplete`として管理者へ通知して止まります。このときは`/opt/homebrew/bin/python3.14 "$REPO/mcs/ops/mcs_update.py" recover`（Python 3.10以上の任意のPython）を実行すると、旧版のコード・旧環境・checkoutへ戻してworkerを再開し、更新ツールでの再更新を通知します。退避した旧環境は削除しません。
 - 1.0.17以前の自動更新（`update.mode=auto`）は実行環境を移行できないため、1.0.18の適用を取り消して元の版に戻り、更新ツールの利用を通知します。通知を受けたら下記の手順で更新ツールを実行してください。
 - Hermesのcheckoutが過去の固定commit・新しい固定commit以外、ブランチ上、またはローカル変更ありの場合は、`plan`の事前確認で`runtime_migration: hermes_checkout_*`として止まり、何も変更しません。checkoutを固定commitへ揃えてから再実行します。
 - 復旧watchdogのPythonもPython 3.14以上とSQLiteのWAL-reset修正が必要です。既存の選択が`/usr/bin/python3`（3.9系）などの場合、事前確認で`recovery_runtime: runtime Python version unsupported`として止まります。`brew install python@3.14`の後、`mcs_setup.py init --yes --recovery-python /opt/homebrew/bin/python3.14`（実在する絶対パス）で選び直してから更新します。

@@ -16,6 +16,23 @@ v1.0.17以降のmain（意味解析の滞留修正・Jev聞き直し・要約形
 
 未リリース記録は34件。独立監査で29件をsourceと照合し、既定値変更の誤記・上限値・表示先・置換済み経路の6件を修正、重複した確率合計の記録1件を統合した。CHANGELOGは34件の技術根拠を折りたたみに保持し、本文を利用目的ごとに編集した。
 
+## 2026-10-11後半の追加（Python 3.14・依存更新・導入/更新/復旧）
+
+ユーザーの追加指示（インストーラー・更新・復旧の見直し、デスクトップ版からの導入、推奨Hermesの更新、Python 3.14以上への固定と依存の最新安定版への更新、前版からの差分の整理）により、次を追加で統合した。各項目は相互の独立レビューで技術受入した。
+
+| 変更 | 内容 | 独立レビュー |
+|---|---|---|
+| 推奨Hermesの固定先 | `yusuketakuma/hermes-agent` の `6f35b1ed`（ブランチ`mcs-pin/20261011`）。本番で稼働実績のある統合（上流v0.21.6を含むmain f925b01791＋MCS用追加変更）から、ローカル専用の指示ファイル等7ファイルを公開版に戻した統合commit。私的なcommit履歴は公開していない。上流v0.21.6単体はMCSの契約テストが2件失敗（コマンド文脈の受渡し）するため使わない | ユーザー承認のうえ公開、root確認 |
+| Python 3.14と依存 | CI全job 3.14、Hermesのdev依存はdependency groupから導入、ruff 0.17.0、aiohttp 3.14.5、multidict 7.1.0、setup-node v7.1.0、wiki更新のNode 24・openwiki 0.7.2・jsdom 30.1.2（mermaidはopenwikiの要求で11.17.2）。PyPI・npm registryで2026-10-11時点の最新を照合。更新した2依存のGitHub Advisory照会は該当0件 | root受入 |
+| インストーラーと初期設定 | Python 3.14・新固定先、設定の検証を認証情報の保存前に実行、Slack/Discordのチャンネル設定の引継ぎ、空のモデル一覧を利用可能と扱わない、使用中・既設の実行環境は更新ツール経由以外で置き換えない | Claude受入（阻害3点の修正後） |
+| 更新ツールでのPython移行 | 更新処理が保持するrun.lockのFDをinstall.shへ継承し、検証できた場合だけ旧venvを退避して3.14で再構築。過去の固定commit（または新固定commit）で未変更・detachedのHermes checkoutだけを進める。失敗・ロールバックで旧venvとcheckoutを戻し、強制中断はrecoverで旧版へ戻す。旧版の自動更新からは移行せず元の版に戻る | root受入（予備指摘を含む6点の修正後） |
+| デスクトップ版からの導入 | `scripts/install_local.py`。恒久的な置き場所を決めてからinstall.shを実行し、ローカル実行を確認できない環境では書き込まない | root受入 |
+| 前版からの差分の整理 | 実行経路から使われない補助関数3件の削除と外部評価の判定の共通化。公開互換入口・過去のmigrationは保持 | Claude受入 |
+
+Python 3.14では深い入れ子のJSONを標準ライブラリが読めるため、読取り不能の分岐はテストで旧来の失敗を再現して検証する（本番の検証は弱めていない）。Hermes連携の契約テスト21件・独立実行SDKの契約テスト25件はPython 3.14.8で成功。
+
+本番のHermes checkoutは独自ブランチ（`local/org-build`）上のため、本番へ1.0.18を適用する際は移行の安全条件（固定commit・detached）で止まる。本番の実行環境（Python 3.11のvenv）の移行方法は本番適用時に別途判断する。
+
 ## 公式医薬品masterの当該リリース確認
 
 2026-10-11T00:25Zに[公式menu](https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/)と固定URLの[yFile](https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/yFile)をno-proxy/no-redirect、1応答32MiB・全体90秒の上限で新しく取得した。

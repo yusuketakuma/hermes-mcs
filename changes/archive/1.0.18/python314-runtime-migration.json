@@ -6,8 +6,14 @@
   "details": [
     "更新処理が保持している実行ロック（data/run.lock）のファイル記述子を install.sh へ引き継ぎ、install.sh はその実体・所有者・ロックを確認できた場合だけ既存環境を退避して作り直す。退避先は事前に更新記録へ書く。",
     "Hermesモードでは、過去の固定commit（Python 3.14未満でしか導入できない）にある変更なし・detachedのcheckoutだけを新しい固定commitへ進めてから導入する。",
-    "サービスの再設定は作り直した環境のPythonで行い、失敗・中断・後日の明示的なロールバックでは旧環境とcheckoutのcommitを戻す。",
+    "サービスの再設定は作り直した環境のPythonで行い、更新ツールの実行中の失敗と後日の明示的なロールバックでは旧環境とcheckoutのcommitを戻す。install.shの途中での強制中断は無人で再実行せず、mcs_update.py recover で旧版・旧環境・checkoutへ戻す（独立watchdogは管理者へ通知して止まる）。",
     "完全合成の venv・git・ロックで、移行要否の判定、記録、引継ぎ、検証、復元と、install.sh 側の受入・拒否を検証する。"
   ],
-  "refs": ["mcs/ops/mcs_update.py", "install.sh", "tests/ops/test_python314_runtime_migration.py", "tests/meta/test_install_runtime_migration.py"]
+  "refs": [
+    "mcs/ops/mcs_update.py",
+    "install.sh",
+    "tests/ops/test_python314_runtime_migration.py",
+    "tests/meta/test_install_runtime_migration.py",
+    "docs/guides/UPGRADE_AGENT.md"
+  ]
 }

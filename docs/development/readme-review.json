@@ -2,7 +2,7 @@
   "version": "1.0.18",
   "sections": {
     "features": {
-      "notes": "2026-10-11、v1.0.17以降の34記録（統合候補release/1.0.18-candidate）をsourceと照合。新機能は同梱公式医薬品masterからの私有辞書作成（mcs drug install-bundled / status、運用者の確認日・確認者必須、承認者なしは参考専用、config/DB/通信は不変）と、Hermes cronに依存しないlaunchdヘルス監視local.mcs-health。README機能表の薬剤行をinstall-bundledへ更新。意味解析の滞留修正・Jev聞き直し・要約形式修復・ルール20はREADMEの機能説明を変えないため本文は維持し、最新更新の生成要約に記載。モデル・取得10分・既読化・人承認・Jev既定offは不変。",
+      "notes": "2026-10-11、v1.0.17以降の34記録（統合候補release/1.0.18-candidate）をsourceと照合。新機能は同梱公式医薬品masterからの私有辞書作成（mcs drug install-bundled / status、運用者の確認日・確認者必須、承認者なしは参考専用、config/DB/通信は不変）と、Hermes cronに依存しないlaunchdヘルス監視local.mcs-health。README機能表の薬剤行をinstall-bundledへ更新。意味解析の滞留修正・Jev聞き直し・要約形式修復・ルール20はREADMEの機能説明を変えないため本文は維持し、最新更新の生成要約に記載。モデル・取得10分・既読化・人承認・Jev既定offは不変。 追加照合（2026-10-11後半）: Python 3.14必須・推奨Hermes 6f35b1ed・依存更新、更新ツールでのPython移行、デスクトップ導入補助、初期設定の検証強化、不要コード整理の7記録を追加。README機能表は変更なし（運用・導入側の変更のため）。",
       "sources": [
         "README.md",
         "mcs/ops/mcs_drug.py",
@@ -13,7 +13,10 @@
         "mcs/semantic/semantic_drain.py",
         "mcs/semantic/semantic_jev.py",
         "mcs/extract/v1/extract.py",
-        "CHANGELOG.md"
+        "CHANGELOG.md",
+        "mcs/ops/mcs_update.py",
+        "scripts/install_local.py",
+        "install.sh"
       ]
     },
     "demos": {
@@ -29,7 +32,7 @@
       ]
     },
     "quickstart": {
-      "notes": "2026-10-11、install.sh・mcs CLI・setup/doctor・更新/復旧の入口は不変。install.sh・更新が実行するmcs_setup.py servicesがHermesモードでlocal.mcs-healthを配置し、standaloneでは配置しない。更新元manifestをv1.0.17追加の全18公開版・Hermes18+standalone8へ拡張（v1.0.17はshape-10とDDL同一）し、target v1.0.18。サービス再設定は所有プロセス群の停止へ統一。INSTALLATION/UPGRADE_AGENTを1.0.18へ更新し、薬剤辞書の作成手順はUSER_GUIDEへ案内。実brew・実MCS・実機更新は検証範囲外。",
+      "notes": "2026-10-11、install.sh・mcs CLI・setup/doctor・更新/復旧の入口は不変。install.sh・更新が実行するmcs_setup.py servicesがHermesモードでlocal.mcs-healthを配置し、standaloneでは配置しない。更新元manifestをv1.0.17追加の全18公開版・Hermes18+standalone8へ拡張（v1.0.17はshape-10とDDL同一）し、target v1.0.18。サービス再設定は所有プロセス群の停止へ統一。INSTALLATION/UPGRADE_AGENTを1.0.18へ更新し、薬剤辞書の作成手順はUSER_GUIDEへ案内。実brew・実MCS・実機更新は検証範囲外。 追加照合: 導入はPython 3.14（install.shがpython@3.14を導入）、既存環境の更新はscripts/mcs_upgrade.pyでPython 3.14へ移行。Quickstartの「AIに導入を任せる場合」にデスクトップ版からの scripts/install_local.py と LOCAL_AGENT_INSTALL への導線を追加。導入・セットアップ・更新・バックアップ・LINE WORKSガイドのPython表記を3.14へ同期。",
       "sources": [
         "README.md",
         "install.sh",
@@ -40,11 +43,15 @@
         "docs/guides/UPGRADE_AGENT.md",
         "docs/guides/USER_GUIDE.md",
         "tests/fixtures/schema_upgrade/origins.json",
-        "tests/fixtures/schema_upgrade/update-paths.json"
+        "tests/fixtures/schema_upgrade/update-paths.json",
+        "scripts/install_local.py",
+        "docs/guides/LOCAL_AGENT_INSTALL.md",
+        "docs/guides/UPGRADE_AGENT.md",
+        "docs/guides/SETUP_AGENT.md"
       ]
     },
     "safety": {
-      "notes": "2026-10-11、外部送信先は増えない（install-bundledは無通信、Jevの送信内容は主張検査をまとめるだけで範囲不変、既定off維持）。私有辞書は運用者の確認日・確認者・承認者を入力として要求し、manifestのreference_checked_onから作らない。0600新規作成・上書きなし・config/DB変更なし。辞書候補は処方・成分・同等性を確定しない。公開用snapshotは別プロセス検証で期限超過時に前回を保持し、整合性検証を省略しない。読めない保存記録を0件や成功に読み替えない。既読化・人承認・no-redirect/no-proxyは不変。",
+      "notes": "2026-10-11、外部送信先は増えない（install-bundledは無通信、Jevの送信内容は主張検査をまとめるだけで範囲不変、既定off維持）。私有辞書は運用者の確認日・確認者・承認者を入力として要求し、manifestのreference_checked_onから作らない。0600新規作成・上書きなし・config/DB変更なし。辞書候補は処方・成分・同等性を確定しない。公開用snapshotは別プロセス検証で期限超過時に前回を保持し、整合性検証を省略しない。読めない保存記録を0件や成功に読み替えない。既読化・人承認・no-redirect/no-proxyは不変。 追加照合: install_local.pyはローカル実行（launchd guiドメイン・HOME書込み・git）を確認できない環境では何も書き込まず、データを移動しない。Python移行は実行ロックの継承を確認できた更新ツール経路だけで旧環境を退避し、失敗時は旧環境へ戻す。設定の検証は認証情報の保存より前。",
       "sources": [
         "README.md",
         "SECURITY.md",
@@ -57,7 +64,7 @@
       ]
     },
     "docs": {
-      "notes": "2026-10-11、最新更新の生成要約をCHANGELOG 1.0.18から同期。34記録の技術根拠は折りたたみに保持し、本文は利用目的ごとに編集。導入・更新ガイドの対象版と受入票リンクを1.0.18へ更新、USER_GUIDEに同梱master辞書の節を追加、resources/drug-master/READMEと出所仕様に作成経路を追記。旧版ノート・archive・ライセンスは保持。",
+      "notes": "2026-10-11、最新更新の生成要約をCHANGELOG 1.0.18から同期。34記録の技術根拠は折りたたみに保持し、本文は利用目的ごとに編集。導入・更新ガイドの対象版と受入票リンクを1.0.18へ更新、USER_GUIDEに同梱master辞書の節を追加、resources/drug-master/READMEと出所仕様に作成経路を追記。旧版ノート・archive・ライセンスは保持。 追加: CHANGELOG 1.0.18へ7記録（計41記録）を追記し更新前の確認を冒頭へ追加、README要約を再同期、LOCAL_AGENT_INSTALLを導線へ追加。",
       "sources": [
         "README.md",
         "CHANGELOG.md",
@@ -66,7 +73,8 @@
         "docs/guides/UPGRADE_AGENT.md",
         "docs/development/acceptance/ACCEPTANCE_1.0.18.md",
         "resources/drug-master/README.md",
-        "docs/specs/official-drug-master.md"
+        "docs/specs/official-drug-master.md",
+        "docs/guides/LOCAL_AGENT_INSTALL.md"
       ]
     }
   }
