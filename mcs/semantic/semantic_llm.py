@@ -1,5 +1,6 @@
-"""Local-LLM extraction and summarization (spec §13.1, §15):
-prompts, response parsing, fact extraction wrapper, and the
+"""Local-LLM extraction and summarization (spec §13.1, §15).
+
+Prompts, response parsing, the fact extraction wrapper, and the
 summary/repair pass. llm_fn is injected — transport stays on the
 facade (semantic.llm_chat) so endpoint/timeout patch points hold."""
 from __future__ import annotations

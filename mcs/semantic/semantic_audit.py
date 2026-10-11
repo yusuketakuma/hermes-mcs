@@ -1,5 +1,6 @@
-"""Semantic audit gates (spec §16): code-level checks, per-claim Jev
-support evaluation, and the audit-status decision tree.
+"""Semantic audit gates and the audit-status decision tree (spec §16).
+
+Covers code-level checks and per-claim Jev support evaluation.
 
 Leaf module — deliberately independent of the semantic facade so the
 audit logic can be exercised without the drain machinery."""
