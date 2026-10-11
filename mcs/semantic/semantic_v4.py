@@ -215,7 +215,7 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
         return existing["artifact_id"]
     import semantic
     content = project_v2_doc_legacy(v2_doc)
-    ledger.artifact_add_tx(
+    return ledger.artifact_add_tx(
         KIND_V4, json.dumps(content, ensure_ascii=False,
                             allow_nan=False),
         project_id=pid, message_id=mid, model=semantic.llm_model(),
@@ -226,10 +226,6 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
               "fact_source": "canonical",
               "doc_hash": doc_hash,
               "projection_version": PROJECTION_VERSION})
-    row = ledger.db.execute(
-        "SELECT MAX(artifact_id) FROM artifacts WHERE kind=? "
-        "AND message_id=?", (KIND_V4, mid)).fetchone()
-    return row[0] if row else None
 
 
 # Rows re-projected per tick — the pass is a pure function of stored
@@ -476,7 +472,7 @@ def _seed_rebuild(ledger, scfg, pid: int, mid: int, meta: dict):
     return None
 
 
-def _rebuild_hint_docs(ledger, scfg: dict, limit: int, out: dict) -> None:
+def _rebuild_hint_docs(ledger, scfg: dict, limit: int, out: dict) -> int:
     """Bounded pass over current semantic_facts_v2 documents whose hint
     merge predates the evidence-span rule (``FACTS_V2_BUILD``).
 
