@@ -21,6 +21,7 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 import drug_map  # noqa: E402
+from safe_io import read_regular_nofollow  # noqa: E402
 
 JSON: TypeAlias = None | bool | int | float | str | list["JSON"] | dict[str, "JSON"]
 MENU_URL = "https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/"
@@ -57,12 +58,7 @@ class Conversion:
 def _read(path: Path, bound: int) -> bytes:
     if not path.is_absolute():
         raise MasterError("absolute_input_required")
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, "rb") as stream:
-        info = os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_size > bound:
-            raise MasterError("input_file_or_size")
-        raw = stream.read(bound + 1)
+    raw = read_regular_nofollow(path, bound, lambda: MasterError("input_file_or_size"))
     if len(raw) > bound:
         raise MasterError("input_size")
     return raw

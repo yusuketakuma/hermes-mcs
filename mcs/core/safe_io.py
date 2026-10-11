@@ -9,6 +9,7 @@ Stdlib only and free of side effects at import, so any entry point can
 use it.
 """
 import os
+import stat
 import tempfile
 from contextlib import suppress
 
@@ -69,3 +70,20 @@ def create_exclusive(path, mode: int = 0o600, *, dir_fd: int | None = None,
     if dir_fd is None:
         return os.open(path, flags, mode)
     return os.open(path, flags, mode, dir_fd=dir_fd)
+
+
+def read_regular_nofollow(path, limit: int, error, *,
+                          check_size: bool = True) -> bytes:
+    """Read at most ``limit + 1`` bytes of a regular file, never following
+    a symlink or blocking on a FIFO.
+
+    Opens ``O_RDONLY | O_NOFOLLOW | O_NONBLOCK`` and raises ``error()``
+    unless fstat shows a regular file (and, with ``check_size``, a size
+    within ``limit``).  The caller rejects a result longer than ``limit``
+    with its own error, since the file may grow after the fstat."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        st = os.fstat(stream.fileno())
+        if not stat.S_ISREG(st.st_mode) or (check_size and st.st_size > limit):
+            raise error()
+        return stream.read(limit + 1)
