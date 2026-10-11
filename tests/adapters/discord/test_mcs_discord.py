@@ -1125,6 +1125,8 @@ def test_action_foreign_thread_denied(world):
     # the denial reason is journaled — the user-facing text stays generic
     denials = [f for e, f in world.logs if e == "interaction_denied"]
     assert denials and denials[0]["reason"] == "chat_not_allowed"
+    # user and channel IDs stay out of the operational log
+    assert denials[0] == {"reason": "chat_not_allowed"}
 
 
 def test_confirm_preview_text_per_transport():

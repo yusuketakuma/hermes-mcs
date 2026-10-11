@@ -185,9 +185,7 @@ class Actions:
     def _deny_reason(self, interaction, denial: str) -> None:
         """The user only sees 「権限がありません。」— the reason stays
         diagnosable in the journal."""
-        self._log("interaction_denied", reason=denial,
-                  actor=_actor(interaction),
-                  channel=str(interaction.channel_id))
+        self._log("interaction_denied", reason=denial)
 
     def _result_log(self, interaction, action: str, result: dict | None,
                     **fields) -> None:
@@ -195,9 +193,7 @@ class Actions:
         denials alone are not an audit trail."""
         self._log("interaction_result", action=action,
                   outcome=(result or {}).get("outcome") or "timeout",
-                  error=(result or {}).get("error"),
-                  actor=_actor(interaction),
-                  channel=str(interaction.channel_id), **fields)
+                  error=(result or {}).get("error"), **fields)
 
     # -- result polling --------------------------------------------------
 

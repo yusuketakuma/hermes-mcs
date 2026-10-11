@@ -65,17 +65,9 @@ def _standalone_owned(data_root) -> bool:
 
 
 def _event_logger(name: str):
-    """The worker's structured log sink: '<name> <event> <json>'."""
-    import logging
-    log = logging.getLogger(f"hermes.plugin.{name}")
-
-    fmt = name + " %s %s"      # record.msg stays '<name> %s %s'
-
-    def _event(event: str, **fields: Any) -> None:
-        log.info(fmt, event,
-                 json.dumps(fields, ensure_ascii=False,
-                            sort_keys=True, default=str))
-    return _event
+    """The worker's structured log sink: one allowlisted JSON line per event."""
+    from adapters.common import eventlog
+    return eventlog.make_logger(f"hermes.plugin.{name}")
 
 
 def make_discord_factory(ctx):
