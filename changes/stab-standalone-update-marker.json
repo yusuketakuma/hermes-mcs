@@ -6,7 +6,8 @@
   "details": [
     "判定は mcs_update / mcs_recover と同じ: update.lock と run.lock をともに取得でき、update_state.json に apply/stage の記録がないときだけmarkerを削除する。記録が読めない場合も止めたままにする。",
     "host自身の update ジョブ実行中は判定しない。判定は60秒に1回まで。",
-    "markerの検出時刻と判定結果を standalone-status.json の update_marker に記録する。"
+    "markerの検出時刻と判定結果を standalone-status.json の update_marker に記録する。",
+    "更新ジャーナルが読めても、更新処理自身が不正と判定する形（applied が配列でない等）の場合は、印を消さず更新中のまま扱う。"
   ],
   "refs": [
     "mcs_standalone/runtime.py",

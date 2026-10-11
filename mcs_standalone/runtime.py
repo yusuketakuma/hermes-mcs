@@ -85,9 +85,8 @@ def _journal_empty(path):
         return True
     except (OSError, ValueError, RecursionError, UnicodeError):
         return None
-    if not isinstance(state, dict) or state.get("v") != 1 \
-            or not isinstance(state.get("stages", []), list) \
-            or not isinstance(state.get("applying"), (dict, type(None))):
+    from mcs_update import _valid_state   # the updater's own shape check
+    if not _valid_state(state):
         return None
     return not state.get("applying") and not state.get("stages")
 

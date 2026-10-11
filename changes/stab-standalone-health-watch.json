@@ -8,7 +8,8 @@
     "health.json が古い・ない場合も、host側の現在の原因を理由として示す。",
     "独立モードの対処案内を Hermes gateway や launchctl list ではなく mcs_standalone status と ai.mcs.standalone / mcs-standalone.service の再起動に直した。",
     "失敗回数の監視対象は抽出worker・LINE WORKS・cmd/cmd_int・mcs_check・mcs_deep のみ（LLM再起動など非0終了があり得る補助ジョブは除外）。",
-    "mcs_setup.py doctor は監視の未配置・差分・未稼働とhost状態の問題を報告する。Hermesへ戻すとLinuxの監視timerも撤去する。"
+    "mcs_setup.py doctor は監視の未配置・差分・未稼働とhost状態の問題を報告する。Hermesへ戻すとLinuxの監視timerも撤去する。",
+    "health.json が古い状態の途中でホストが停止した場合も、新しい原因として改めて通知する。"
   ],
   "refs": [
     "mcs/ingest/health_watch.py",

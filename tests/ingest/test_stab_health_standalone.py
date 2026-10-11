@@ -94,3 +94,15 @@ def test_hermes_mode_is_unchanged(tmp_path):
     assert report["status"] == "ok" and "runtime_mode" not in report
     rows = health_watch._reason_rows({"oldest_age_s": {}}, ["card_delivery_stalled"])
     assert "hermes gateway restart" in rows[1]
+
+
+def test_host_dying_during_a_stale_episode_alerts_again(tmp_path):
+    _write(tmp_path, "health.json", {"overall": "ok", "at": NOW - 7200, "state_reasons": []})
+    _status(tmp_path)
+    first = health_watch.evaluate(home=str(tmp_path), now=NOW, cfg=CFG)
+    assert first["status"] == "stale" and first["alert"] is True
+    assert health_watch.evaluate(home=str(tmp_path), now=NOW + 60, cfg=CFG)["alert"] is False
+    _status(tmp_path, updated_at=NOW - 600)          # the host stops reporting
+    report = health_watch.evaluate(home=str(tmp_path), now=NOW + 120, cfg=CFG)
+    assert report["state_reasons"] == ["standalone_host_down"] and report["alert"] is True
+    assert health_watch.evaluate(home=str(tmp_path), now=NOW + 180, cfg=CFG)["alert"] is False

@@ -188,6 +188,13 @@ def test_marker_with_pending_journal_or_live_updater_is_kept(tmp_path, monkeypat
     (data / "update_state.json").write_text("{not json")
     host.marker["probed_at"] = None
     assert host._updating(QUIET + 3700) is True and host.marker["state"] == "journal_unreadable"
+    # parseable, nothing staged, but a shape the updater itself rejects
+    for corrupt in ({"v": 1, "stages": [], "applying": None, "applied": "x"},
+                    {"v": 1, "stages": [], "applying": None, "restore_consent": []}):
+        (data / "update_state.json").write_text(json.dumps(corrupt))
+        host.marker["probed_at"] = None
+        assert host._updating(QUIET + 3700) is True
+        assert host.marker["state"] == "journal_unreadable"
     (data / "update_state.json").unlink()
     with open(data / "update.lock", "w") as holder:
         fcntl.flock(holder, fcntl.LOCK_EX)

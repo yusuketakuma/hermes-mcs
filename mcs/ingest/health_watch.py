@@ -359,9 +359,13 @@ def evaluate(home: str = HOME, now: float | None = None,
     else:
         seen = (set(seen) if isinstance(seen, list)
                 and all(isinstance(r, str) for r in seen) else set())
-    new_reason = (prior_known and not transition
-                  and obs["status"] not in ("ok", "stale")
-                  and not set(reasons) <= seen)
+    # a stale file's own codes are not current, but the standalone
+    # host's evidence merged into it is (a host that died mid-episode)
+    gained = set(reasons) - seen
+    new_reason = bool(prior_known and not transition and gained
+                  and obs["status"] != "ok"
+                  and (obs["status"] != "stale"
+                       or any(r.startswith("standalone_") for r in gained)))
     alerted_at = state.get("detected_at", state.get("alerted_at"))
     invalid_alert_at = not _finite_number(alerted_at) \
         or alerted_at > now
