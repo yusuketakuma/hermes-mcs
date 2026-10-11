@@ -51,6 +51,15 @@ def test_edit_without_mentions_stays_unknown_until_they_are_recaptured(store):
     assert counts["self_target"] == 1 and counts["unknown_target"] == 0
 
 
+def test_edit_capture_without_any_metadata_does_not_keep_old_mentions(store):
+    assert _capture(store, NOW, "synthetic original", mentions=MENTION,
+                    reactions=[])["self_target"] == 1
+    counts = _capture(store, NOW + 10, "synthetic edited")
+    assert counts["self_target"] == 0 and counts["unknown_target"] == 1
+    counts = _capture(store, NOW + 20, "synthetic edited", reactions=[])
+    assert counts["self_target"] == 0 and counts["unknown_target"] == 1
+
+
 def test_unedited_partial_capture_keeps_the_observed_mentions(store):
     assert _capture(store, NOW, "synthetic body", mentions=MENTION,
                     reactions=[])["self_target"] == 1

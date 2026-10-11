@@ -1514,7 +1514,8 @@ class Ledger:
     def _save_message_metadata(self, m, *, source, now, body_changed=False):
         metadata = getattr(m, "metadata", {})
         errors = getattr(m, "metadata_errors", [])
-        if not metadata and not errors and source == "capture":
+        if (not metadata and not errors and source == "capture"
+                and not body_changed):
             return
         row = self.db.execute(
             "SELECT content FROM message_metadata WHERE message_id=? AND source=?",
