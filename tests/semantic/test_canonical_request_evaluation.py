@@ -213,3 +213,59 @@ def test_shadow_corrupt_evidence_does_not_block_other_candidate(bad_field, bad_v
         assert result['compared'] == result['matched'] == 1
     finally:
         db.close()
+
+
+@pytest.mark.parametrize('unreadable, error', [
+    ('9' * 10000, ValueError),
+    ('[' * 999 + '0' + ']' * 999, RecursionError),
+], ids=['oversized_integer', 'deep_json'])
+def test_shadow_unreadable_legacy_stays_unknown_and_other_candidate_is_compared(
+        unreadable, error, monkeypatch):
+    import sqlite3
+    db = sqlite3.connect(':memory:')
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute('CREATE TABLE messages(message_id INTEGER,project_id INTEGER,'
+                   'content_hash TEXT,body_state TEXT)')
+        db.execute('CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY,kind TEXT,'
+                   'project_id INTEGER,message_id INTEGER,content TEXT,meta TEXT)')
+        text = '架空資料を確認してください'
+        candidate = {'source': {'revision': 'synthetic'},
+                     'projection': {'requests': [{'action': text}]},
+                     'loop_facts': [{'_v2_kind': 'request_pending', 'statement': text,
+                                     '_evidence': {'quote': text}}]}
+        normal = json.dumps({'requests': [{'action': text, 'evidence': text}]})
+        broken = normal[:-1] + ',"synthetic_unused":' + unreadable + '}'
+        assert db.execute('SELECT json_valid(?)', (broken,)).fetchone()[0] == 1
+        decode = json.loads
+        try:
+            decode(broken)
+        except error:
+            pass
+        else:
+            # Decoder limits vary by interpreter; fail only this stored row.
+            def limited_decode(raw, *args, **kwargs):
+                if raw == broken:
+                    raise error('synthetic decoder limit')
+                return decode(raw, *args, **kwargs)
+
+            monkeypatch.setattr(support.json, 'loads', limited_decode)
+        with pytest.raises(error):
+            json.loads(broken)
+        for mid, legacy in ((1, broken), (2, normal)):
+            db.execute('INSERT INTO messages VALUES(?,?,?,?)', (mid, 1, 'synthetic', 'full'))
+            db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,meta) VALUES(?,?,?,?,?)',
+                       ('v4_stage', 1, mid, json.dumps({'candidate': candidate}),
+                        json.dumps({'stage': 'request_following_candidate'})))
+            db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,meta) VALUES(?,?,?,?,?)',
+                       ('extract_llm', 1, mid, legacy, json.dumps({'hash': 'synthetic'})))
+        before = tuple(db.iterdump())
+        changes = db.total_changes
+        result = support.shadow_compare(db)
+        assert db.total_changes == changes and tuple(db.iterdump()) == before
+        assert result['candidates'] == 2 and result['legacy_unknown'] == 1
+        assert result['compared'] == result['matched'] == 1
+        assert result['stale_or_invalid'] == result['legacy_partial'] == 0
+        assert result['unmatched_legacy'] == result['unmatched_candidate'] == 0
+    finally:
+        db.close()

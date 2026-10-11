@@ -135,6 +135,34 @@ def test_calibration_skips_malformed_or_nonprobability_records(monkeypatch, caps
     assert "1 claim verdicts collected" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("raw", ['{"unused":' + '9' * 5000 + '}',
+                                 '[' * 1500 + '0' + ']' * 1500],
+                         ids=["integer_limit", "decoder_depth"])
+def test_calibration_skips_unreadable_stored_meta(monkeypatch, capsys, raw):
+    good = json.dumps({"claim_audit": {"ok": {"confidence": 0.9, "choice": "supports"}}})
+    original_loads, errors = json.loads, []
+
+    def loads(value, *args, **kwargs):
+        if value == raw:
+            try:
+                if raw.startswith("["):
+                    raise RecursionError("synthetic decoder depth")
+                return original_loads(value, *args, **kwargs)
+            except (ValueError, RecursionError) as error:
+                errors.append(type(error).__name__)
+                raise
+        return original_loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", loads)
+    fake = SimpleNamespace(
+        db=SimpleNamespace(execute=lambda _: SimpleNamespace(fetchall=lambda: [(raw,), (good,)])),
+        close=lambda: None)
+    monkeypatch.setattr(bench, "LedgerReader", lambda _: fake)
+    assert bench.cmd_calibrate(SimpleNamespace()) == 0
+    assert "1 claim verdicts collected" in capsys.readouterr().out
+    assert errors == ["RecursionError" if raw.startswith("[") else "ValueError"]
+
+
 def test_report_delta_uses_the_same_reads_as_the_table(tmp_path, monkeypatch, capsys):
     paths = [tmp_path / f"{tag}.json" for tag in ("first", "second")]
     for path, count in zip(paths, (2, 1)):

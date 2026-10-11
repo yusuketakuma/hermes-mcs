@@ -9,10 +9,9 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-import json
 import time
 
-from mcs_requests import payload_hash
+from mcs_requests import payload_hash, positive
 from mcs_util import loads_dict
 import semantic_facts as sf
 
@@ -275,14 +274,11 @@ def _outbox_has_delivery(ledger, delivery_key: str) -> bool:
 
 
 def _arrival_ids(raw) -> list[int]:
-    try:
-        payload = json.loads(raw)
-    except (TypeError, ValueError):
-        return []
+    payload = loads_dict(raw)
     if not isinstance(payload, dict):
         return []
     ids = payload.get("message_ids")
-    if not isinstance(ids, list) or any(type(mid) is not int or mid <= 0 for mid in ids):
+    if not isinstance(ids, list) or any(not positive(mid) for mid in ids):
         return []
     return ids
 
@@ -310,11 +306,8 @@ def _notify_src_event(ledger, project_id: int,
     for row in ledger.db.execute(
             "SELECT payload,state,attempts,progress FROM notify_outbox "
             "WHERE kind='semantic_notice' AND project_id=?", (project_id,)):
-        try:
-            payload = json.loads(row["payload"])
-            progress = json.loads(row["progress"] or "{}")
-        except (TypeError, ValueError):
-            return None
+        payload = loads_dict(row["payload"])
+        progress = loads_dict(row["progress"] or "{}")
         if not isinstance(payload, dict) or not isinstance(progress, dict):
             return None
         if payload.get("degraded"):
@@ -360,10 +353,7 @@ def _emit_degraded(ledger, scfg: dict) -> int:
         "WHERE kind='new_messages' AND state IN ('pending','failed') AND attempts=0 "
         "AND created_at<?", (cutoff,))
     for ev in events:
-        try:
-            progress = json.loads(ev["progress"] or "{}")
-        except (TypeError, ValueError):
-            continue
+        progress = loads_dict(ev["progress"] or "{}")
         if not isinstance(progress, dict) or progress.get("sent"):
             continue
         ids = _arrival_ids(ev["payload"])

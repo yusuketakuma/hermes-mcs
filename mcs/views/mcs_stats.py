@@ -1227,6 +1227,21 @@ def st_signal_feedback(db, scope):
                 "suppression_day_straddles_window" if straddled else None))
 
 
+def _validate_interaction_options(profession_map, privacy_policy):
+    roles = {"doctor", "nurse", "pharmacist", "care_manager", "care_worker",
+             "family", "other"}
+    if profession_map is not None:
+        if (not isinstance(profession_map, dict)
+                or any(not isinstance(k, str) or not k or not isinstance(v, str) or v not in roles
+                       for k, v in profession_map.items())):
+            raise ValueError("bad_profession_map")
+    if privacy_policy is not None:
+        keys = {"min_pairs", "min_actors", "min_projects"}
+        if (not isinstance(privacy_policy, dict) or set(privacy_policy) != keys
+                or any(type(v) is not int or v < 2 for v in privacy_policy.values())):
+            raise ValueError("bad_interaction_privacy_policy")
+
+
 def st_interaction_latency(db, scope, *, profession_map=None, privacy_policy=None):
     """Structural first thread-reply latency; owner policy gates all role cells.
 
@@ -1235,21 +1250,11 @@ def st_interaction_latency(db, scope, *, profession_map=None, privacy_policy=Non
     are fixed role categories, never caller-supplied free text. Multiple recorded
     professions form one sorted role-set cell, without duplication or weighting.
     """
-    roles = {"doctor", "nurse", "pharmacist", "care_manager", "care_worker",
-             "family", "other"}
+    _validate_interaction_options(profession_map, privacy_policy)
     mapping = {"医師": "doctor", "看護師": "nurse", "薬剤師": "pharmacist",
                "ケアマネ": "care_manager", "介護士": "care_worker", "家族": "family"}
     if profession_map is not None:
-        if (not isinstance(profession_map, dict)
-                or any(not isinstance(k, str) or not k or not isinstance(v, str) or v not in roles
-                       for k, v in profession_map.items())):
-            raise ValueError("bad_profession_map")
         mapping = profession_map
-    if privacy_policy is not None:
-        keys = {"min_pairs", "min_actors", "min_projects"}
-        if (not isinstance(privacy_policy, dict) or set(privacy_policy) != keys
-                or any(type(v) is not int or v < 2 for v in privacy_policy.values())):
-            raise ValueError("bad_interaction_privacy_policy")
 
     def timed(ts):
         return type(ts) is int and 0 < ts <= 253402300799
@@ -1454,6 +1459,9 @@ def run_stats(db, snapshot_ts: int, args: dict) -> dict:
     scope = _scope(args, snapshot_ts)
     stats = {}
     for name in names:
+        if name == "interaction_latency":
+            _validate_interaction_options(args.get("profession_map"),
+                                          args.get("interaction_privacy_policy"))
         try:
             if name == "interaction_latency":
                 stats[name] = st_interaction_latency(
@@ -1461,7 +1469,7 @@ def run_stats(db, snapshot_ts: int, args: dict) -> dict:
                     privacy_policy=args.get("interaction_privacy_policy"))
             else:
                 stats[name] = REGISTRY[name]["fn"](db, scope)
-        except (json.JSONDecodeError, RecursionError, TypeError, KeyError,
+        except (ValueError, RecursionError, TypeError, KeyError,
                 AttributeError, OverflowError, sqlite3.Error) as e:
             stats[name] = _result("unavailable", scope, {},
                                   reason=f"data_error:{type(e).__name__}")
