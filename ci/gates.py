@@ -39,10 +39,15 @@ _STANDALONE_SDK = {
     "mcs_discord/runtime_compat.py": {"discord"},
     "mcs_slack/runtime_compat.py": {"slack_sdk", "slack_bolt"},
 }
-_STANDALONE_DISCORD_MEMBERS = {"", "__version__", "Intents.none", "Intents.default",
-                                "app_commands.Command", "AllowedMentions.none", "File", "ForumChannel",
-                                "app_commands.command", "app_commands.describe",
-                                "ext.commands.Bot"}
+# Exactly the discord.py surface each independent file uses; "" lets
+# standalone.py's _sdk() hand the verified module back to its callers.
+_STANDALONE_DISCORD_MEMBERS = {
+    "mcs_discord/standalone.py": {"", "__version__", "Intents.none", "AllowedMentions.none",
+                                  "app_commands.Command", "ext.commands.Bot"},
+    "mcs_discord/runtime_compat.py": {"Intents.none", "Intents.default", "AllowedMentions.none",
+                                      "File", "ForumChannel", "app_commands.command",
+                                      "app_commands.describe", "ext.commands.Bot"},
+}
 _STANDALONE_ASYNC = {"Event", "FIRST_COMPLETED", "create_task", "current_task", "gather",
                      "get_running_loop", "wait", "wait_for", "TimeoutError"}
 
@@ -183,8 +188,8 @@ def gate_stdlib_only() -> list[str]:
                 if m not in stdlib and m not in _LOCAL_MODULES:
                     bad.append(f"{path.name}:{node.lineno} imports {m}")
         native = path.is_relative_to(ADAPTERS) or path.is_relative_to(STANDALONE)
-        members = (_STANDALONE_DISCORD_MEMBERS if native and _plugin_path(path) in _STANDALONE_SDK
-                   else _SDK_MEMBERS)
+        members = (_STANDALONE_DISCORD_MEMBERS.get(_plugin_path(path), set())
+                   if native and _plugin_path(path) in _STANDALONE_SDK else _SDK_MEMBERS)
         if _plugin_path(path) == "mcs_discord/cards.py":
             members = members | {"Embed"}
         bad.extend(f"{path.name}:{v}" for v in _module_surface(tree, "discord", members))

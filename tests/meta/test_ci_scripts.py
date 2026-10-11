@@ -255,6 +255,11 @@ def test_adapter_async_gate_keeps_process_and_network_blocked(monkeypatch, tmp_p
     ("discord/standalone.py", "def make():\n from discord import Client\n return Client()\n", False),
     ("discord/standalone.py", "def make():\n from discord.ext import commands\n return commands.Cog()\n", False),
     ("discord/standalone.py", "def make():\n from discord import app_commands as a\n return a.Group()\n", False),
+    # Each independent file gets only the surface it uses, not the union.
+    ("discord/standalone.py", "def make():\n from discord import app_commands\n"
+     " return app_commands.command(name='synthetic')\n", False),
+    ("discord/runtime_compat.py", "def make():\n import discord\n return getattr(discord, 'Client')\n", False),
+    ("discord/standalone.py", "def make():\n import discord\n return discord\n", True),
     ("slack/standalone.py", "from asyncio import sleep\n", True),
     ("slack/standalone.py", "from asyncio import create_subprocess_exec\n", False),
     ("lineworks/actions.py", "from asyncio import open_connection as connect\n", False),
