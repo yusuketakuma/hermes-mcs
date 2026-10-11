@@ -453,6 +453,13 @@ async def send(root, target, payload):
     except Exception as exc:
         result = ("not_sent" if not attempted or (not ids and worker.is_definitive_reject(exc))
                   else "unknown")
-        return {"result": result, "error_code": worker.err_code(exc)}
+        code = worker.err_code(exc)
+        if not attempted and not isinstance(exc, ValueError) \
+                and type(exc).__name__ != "LoginFailure" \
+                and not worker.is_definitive_reject(exc):
+            # login/channel lookup never answered (network, outage, 5xx):
+            # transient, unlike a rejected token or a configuration code
+            code = "discord_unreachable"
+        return {"result": result, "error_code": code}
     finally:
         await bot.close()
