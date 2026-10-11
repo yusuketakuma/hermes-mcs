@@ -24,8 +24,10 @@ import pytest
 import mcs_adapter
 
 ROOT = Path(__file__).resolve().parents[2]
+# deployment/ holds scheduled Python entrypoints (mcs_recover.py under
+# launchd) and scripts/ the installer/upgrade helpers; both run unattended.
 PRODUCTION_ROOTS = ("mcs", "adapters", "hermes_plugin", "mcs_standalone",
-                    "lineworks_adapter")
+                    "lineworks_adapter", "deployment", "scripts")
 ADAPTER = Path("mcs/ingest/mcs_adapter.py")
 # Unrelated HTTP clients that define their own ``_request`` (LINE WORKS
 # Bot REST, Slack SDK shim). Neither can reach the MCS API origin.
@@ -110,6 +112,18 @@ def test_every_mcs_request_call_is_a_literal_get():
     assert not bad, f"non-GET (or non-literal) MCS request: {bad}"
 
 
+def test_request_forwards_its_method_unmodified():
+    """_request passes its caller's literal method straight through; a
+    reassignment inside it could turn a caller's GET into a POST."""
+    fn = next(node for node in ast.walk(_parse(ADAPTER))
+              if isinstance(node, ast.FunctionDef) and node.name == "_request")
+    assert fn.args.args[1].arg == "method"
+    rebinds = [node.lineno for node in ast.walk(fn)
+               if isinstance(node, (ast.Name)) and node.id == "method"
+               and isinstance(node.ctx, (ast.Store, ast.Del))]
+    assert not rebinds, f"_request rebinds method at {rebinds}"
+
+
 def _operation_of(call):
     """The _io operation as a literal, or None when it is not one."""
     for kw in call.keywords:
@@ -156,6 +170,40 @@ def test_no_mcs_write_route_is_named_in_code():
             if "mark_as_read" in text or "reactions/delete" in text:
                 hits.append(f"{rel}:{node.lineno}")
     assert not hits, hits
+
+
+# Who may hold the MCS endpoint constants: cross_lists hands API to the
+# pinned _io("api", method="GET") call; the worker only prefix-checks it.
+ENDPOINT_IMPORTERS = {Path("mcs/ingest/cross_lists.py")}
+ENDPOINT_ATTRIBUTE_READERS = {Path("mcs/ingest/mcs_worker.py")}
+MCS_ENDPOINT_NAMES = {"API", "BASE"}
+
+
+def test_mcs_endpoint_constants_are_confined():
+    """No module can build its own MCS client from the adapter's endpoint
+    constants (e.g. urllib Request(API + ..., method="POST"))."""
+    imports, attributes = set(), set()
+    for rel in _production_files():
+        for node in ast.walk(_parse(rel)):
+            if isinstance(node, ast.ImportFrom) and node.module == "mcs_adapter" \
+                    and {a.name for a in node.names} & (MCS_ENDPOINT_NAMES | {"*"}):
+                imports.add(rel)
+            elif isinstance(node, ast.Attribute) and node.attr in MCS_ENDPOINT_NAMES \
+                    and rel != ADAPTER:
+                attributes.add(rel)
+    assert imports == ENDPOINT_IMPORTERS, sorted(map(str, imports))
+    assert attributes <= ENDPOINT_ATTRIBUTE_READERS, sorted(map(str, attributes))
+
+
+def test_endpoint_holders_open_no_connection_of_their_own():
+    """The endpoint holders reach MCS only via the adapter's worker; the
+    worker's api branch is the single urllib Request for MCS."""
+    for rel in ENDPOINT_IMPORTERS:
+        names = {node.attr if isinstance(node, ast.Attribute) else node.id
+                 for node in ast.walk(_parse(rel))
+                 if isinstance(node, (ast.Attribute, ast.Name))}
+        assert not names & {"urlopen", "Request", "HTTPSConnection",
+                            "HTTPConnection", "build_opener"}, rel
 
 
 def test_mcs_origin_literal_is_confined():
