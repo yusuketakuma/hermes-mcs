@@ -78,7 +78,8 @@ def test_agent_labels_and_ownership_follow_the_runtime():
     assert mcs_setup._agent_labels({}) == mcs_setup.AGENT_LABELS
     labels = mcs_setup._agent_labels(config())
     cron = [mcs_setup._cron_label(s) for _, _, s in mcs_setup.CRON_JOBS]
-    assert labels == [mcs_setup.STANDALONE_LABEL]
+    # the health watch stays outside the host it watches
+    assert labels == [mcs_setup.STANDALONE_LABEL, mcs_setup.HEALTH_LABEL]
     # The same host owns collection even without a card connection.
     assert mcs_setup._agent_labels(config("off")) == labels
     for label in cron + [mcs_setup.STANDALONE_LABEL, "local.mcs-cmd"]:
@@ -134,7 +135,11 @@ def test_standalone_services_use_launchd_not_hermes(monkeypatch, tmp_path):
     assert len(host.schedules) == 6
     assert not any(a[0] == "/x/hermes" for a in calls)
     manifest = json.loads((tmp_path / "data" / "service_manifest.json").read_text())
-    assert manifest["cron"] == [] and len(manifest["agents"]) == 1
+    assert manifest["cron"] == [] and [row["label"] for row in manifest["agents"]] == [
+        mcs_setup.STANDALONE_LABEL, mcs_setup.HEALTH_LABEL]
+    health = plistlib.loads((tmp_path / "agents" / "local.mcs-health.plist").read_bytes())
+    assert health["ProgramArguments"][0] == venv and health["StartInterval"] == 300
+    assert health["EnvironmentVariables"] == {"MCS_ROOT": str(tmp_path)}
 
 
 @pytest.mark.parametrize("state,expected", [(3, 0), (0, 1), (1, 1)])

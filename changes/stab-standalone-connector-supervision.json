@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "独立モードでSlack/Discordの接続失敗がhost全体の再起動を繰り返さないように修正",
+  "summary": "独立モード（runtime_mode=standalone）で、トークン失効・Slack/Discordの障害・起動時のネット断により接続が終わっても、収集・抽出・定期ジョブは止まらず動き続けます。接続だけを30秒から倍々（上限30分）の間隔で再接続し、設定・認証情報の変更による終了はすぐ再接続します。",
+  "upgrade": "独立モードでは更新後に mcs_setup.py services を1回実行してhostを新しいコードで再起動してください。Hermesモードでは操作は不要です。",
+  "details": [
+    "これまでは接続タスクの終了でhost全体が再起動し、30秒ごとに収集・抽出・healthジョブも巻き添えで止まっていた。",
+    "host全体の再起動は config.json の変更・services の再起動要求・停止シグナルのときだけ。",
+    "接続の状態（running/waiting、連続失敗回数、失敗開始時刻、終了コード）を standalone-status.json の connector に記録する。終了理由はコードか例外の型名だけを記録する。",
+    "10分以上続いた接続の後の終了は失敗回数を数え直す。"
+  ],
+  "refs": [
+    "mcs_standalone/runtime.py",
+    "tests/adapters/standalone/test_stab_runtime_supervision.py"
+  ]
+}

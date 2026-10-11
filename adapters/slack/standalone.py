@@ -157,21 +157,30 @@ def _client(credentials, verify_current=None):
 
 
 async def _identity(client, settings):
+    """None when the token is this configured bot; otherwise a fixed code:
+    slack_identity_unreachable (the check itself failed: network, Slack
+    outage, rate limit — transient) or slack_identity_unverified (Slack
+    answered and the token is not this bot — permanent until fixed)."""
     try:
         identity = _payload(await client.auth_test())
         if identity.get("ok") is not True \
                 or identity.get("team_id") != settings["team_id"] \
                 or not identity.get("bot_id"):
-            return False
+            return "slack_identity_unverified"
         bot = _payload(await client.bots_info(bot=identity["bot_id"]))
-        return (bot.get("ok") is True and isinstance(bot.get("bot"), dict)
-                and bot["bot"].get("id") == identity["bot_id"]
-                and bot["bot"].get("app_id") == settings["application_id"]
-                and bot["bot"].get("deleted") is False)
+        verified = (bot.get("ok") is True and isinstance(bot.get("bot"), dict)
+                    and bot["bot"].get("id") == identity["bot_id"]
+                    and bot["bot"].get("app_id") == settings["application_id"]
+                    and bot["bot"].get("deleted") is False)
+        return None if verified else "slack_identity_unverified"
     except asyncio.CancelledError:
         raise
-    except Exception:
-        return False
+    except Exception as exc:
+        # The SDK raises SlackApiError for an answered error (invalid_auth,
+        # account_inactive): that is a verdict, not an outage.
+        if type(exc).__name__ == "SlackApiError":
+            return "slack_identity_unverified"
+        return "slack_identity_unreachable"
 
 
 async def _socket(client, credentials, inflight):
@@ -244,8 +253,9 @@ async def run(root, stopping=None):
     handler = supervisor = connecting = None
     inflight = set()
     try:
-        if not await _identity(client, settings):
-            raise ValueError("slack_identity_unverified")
+        problem = await _identity(client, settings)
+        if problem:
+            raise ValueError(problem)
         app, handler = await _socket(client, credentials, inflight)
         supervisor = Supervisor(ctx=host, app=app, adapter=None,
                                 settings=settings, log=_event)
@@ -346,8 +356,9 @@ async def send(root, target, payload):
     client, session = _client(credentials, current)
     message_id = None
     try:
-        if not await _identity(client, settings):
-            return {"result": "not_sent", "error_code": "slack_identity_unverified"}
+        problem = await _identity(client, settings)
+        if problem:
+            return {"result": "not_sent", "error_code": problem}
         try:
             # Slack parses explicit <!channel>/<@U…> even with parse=none.
             response = _payload(await client.chat_postMessage(

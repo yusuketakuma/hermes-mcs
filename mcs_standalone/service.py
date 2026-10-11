@@ -14,6 +14,11 @@ from mcs_runtime import python_executable
 from mcs_util import atomic_write
 
 LABEL = "ai.mcs.standalone"
+# Watches the host from outside it: the same label as Hermes mode's agent.
+HEALTH_LABEL = "local.mcs-health"
+HEALTH_UNIT = "mcs-health.service"
+HEALTH_TIMER = "mcs-health.timer"
+HEALTH_INTERVAL_S = 300
 STATUS_FILE = "standalone-status.json"
 RESTART_FILE = "standalone-restart.request"
 STATUS_TTL = 15
@@ -60,6 +65,43 @@ def request_restart(root):
     return value["request_id"]
 
 
+def _systemd_quote(value):
+    if any(c in value for c in "\n\r\x00"):
+        raise ValueError("standalone_service_path_invalid")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$") + '"'
+
+
+def render_health(root, platform=None):
+    """The independent health watcher as [(file name, content)] for launchd or
+    systemd. It runs outside the host, so a dead, wedged or crash-looping host
+    still raises an alert (health_watch reads standalone-status.json)."""
+    root = Path(root).expanduser().resolve()
+    platform = platform or sys.platform
+    repository = str(Path(__file__).resolve().parents[1])
+    python = python_executable({"runtime_mode": "standalone"}, root=root)
+    argv = [python, repository + "/mcs/ingest/health_watch.py", "--home", str(root)]
+    logfile = str(root / "data/health_watch.log")
+    if platform == "darwin":
+        value = {"Label": HEALTH_LABEL, "ProgramArguments": argv,
+                 "EnvironmentVariables": {"MCS_ROOT": str(root)},
+                 "WorkingDirectory": repository, "StartInterval": HEALTH_INTERVAL_S,
+                 "RunAtLoad": False, "StandardOutPath": logfile,
+                 "StandardErrorPath": logfile, "Umask": 0o077}
+        return [(HEALTH_LABEL + ".plist", plistlib.dumps(value).decode("utf-8"))]
+    if platform.startswith("linux"):
+        _systemd_quote(repository)
+        unit = ("[Unit]\nDescription=Independent MCS health watch\n\n"
+                "[Service]\nType=oneshot\nWorkingDirectory=" + repository.replace("%", "%%") + "/."
+                + "\nEnvironment=" + _systemd_quote("MCS_ROOT=" + str(root))
+                + "\nExecStart=" + " ".join(_systemd_quote(v) for v in argv)
+                + "\nTimeoutStartSec=300\nUMask=0077\n")
+        timer = ("[Unit]\nDescription=Independent MCS health watch timer\n\n"
+                 f"[Timer]\nOnBootSec={HEALTH_INTERVAL_S}s\nOnUnitActiveSec={HEALTH_INTERVAL_S}s\n"
+                 f"Unit={HEALTH_UNIT}\n\n[Install]\nWantedBy=timers.target\n")
+        return [(HEALTH_UNIT, unit), (HEALTH_TIMER, timer)]
+    raise ValueError("standalone_service_platform_unsupported")
+
+
 def render(root, platform=None):
     root = Path(root).expanduser().resolve()
     platform = platform or sys.platform
@@ -75,10 +117,7 @@ def render(root, platform=None):
                  "StandardErrorPath": logfile, "Umask": 0o077}
         return LABEL + ".plist", plistlib.dumps(value).decode("utf-8")
     if platform.startswith("linux"):
-        def quote(value):
-            if any(c in value for c in "\n\r\x00"):
-                raise ValueError("standalone_service_path_invalid")
-            return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$") + '"'
+        quote = _systemd_quote
         quote(repository)  # reject newline/NUL in the repository path too
         # Path directives keep literal spaces/$; only %-specifiers need escaping.
         body = ("[Unit]\nDescription=Independent MCS runtime\nAfter=network-online.target\n\n"

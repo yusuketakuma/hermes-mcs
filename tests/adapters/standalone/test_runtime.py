@@ -145,7 +145,6 @@ def test_restart_keeps_waiting_for_a_running_core_job(tmp_path, monkeypatch):
 
 def test_log_and_status_failures_still_drain_children_and_close_connector(tmp_path, monkeypatch):
     import asyncio
-    import pytest
     # Keep scheduled core jobs out: these stub children finish only on terminate.
     now = datetime(2026, 10, 2, 5, 11, tzinfo=timezone.utc).timestamp()
     monkeypatch.setattr(runtime.time, 'time', lambda: now)
@@ -186,8 +185,9 @@ def test_log_and_status_failures_still_drain_children_and_close_connector(tmp_pa
     monkeypatch.setattr(runtime, 'atomic_write', broken_status)
     monkeypatch.setattr(runtime.config, 'load', lambda root: cfg)
     monkeypatch.setattr(runtime.asyncio, 'sleep', fast_sleep)
-    with pytest.raises(OSError, match='synthetic status failure'):
-        asyncio.run(runtime.serve(tmp_path, cfg, connector))
+    # A status write failure (e.g. a full disk) is logged, never a crash loop.
+    assert asyncio.run(runtime.serve(tmp_path, cfg, connector)) == 0
+    assert hosts[0].write_error.get(runtime.service.STATUS_FILE) == 'unknown'
     assert len(children) == 1 and children[0].code == 0
     assert not hosts[0].children and closed == [True]
 
@@ -319,7 +319,7 @@ def test_crash_loop_is_visible_in_log_and_status(tmp_path, monkeypatch):
     host = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
     now = datetime(2026, 10, 2, 5, 11, 30, tzinfo=timezone.utc).timestamp()
     for i, code in enumerate((1, 1, 0)):
-        t = now + i * 31
+        t = now + i * 100   # outlasts the 30 s, then 60 s, crash backoff
         host.tick(t)
         host.children["extract-0"]["process"].code = code
         host.tick(t + 1)

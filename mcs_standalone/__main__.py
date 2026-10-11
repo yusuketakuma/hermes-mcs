@@ -13,6 +13,7 @@ import getpass
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -33,6 +34,7 @@ _SETUP_INCOMPLETE = {"credentials_missing", "env_file_permissions",
                      "standalone_credentials_missing", "standalone_credentials_invalid",
                      "standalone_configuration_invalid"}
 _MAX_FILES = 10
+_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _REQUIREMENTS = Path(__file__).resolve().parents[1] / "deployment" / "requirements-standalone.txt"
 
 
@@ -54,7 +56,11 @@ def run(root: str) -> int:
         cfg = config.load(root)
     except config.ConfigError as exc:
         if str(exc) == "runtime_mode_not_standalone":
-            log("runtime_mode_not_standalone")   # switched back: stay down
+            # Switched back to Hermes: exit without serving. The service
+            # keeps restarting this (launchd KeepAlive / systemd
+            # Restart=always, every 30 s) until `mcs_setup.py services`
+            # retires it; each start only logs this code.
+            log("runtime_mode_not_standalone")
             return 0
         raise
     transport = config.interactive(cfg)
@@ -111,7 +117,11 @@ def send(root: str, target: str) -> int:
     if result.get("result") == "delivered":
         return 0
     if result.get("result") == "not_sent":
-        raise NotSent("delivery_not_accepted")
+        # The connector's fixed code is the last stderr word: notify_flush
+        # tells a transient outage from a permanent refusal by it.
+        code = result.get("error_code")
+        raise NotSent(code if isinstance(code, str) and _CODE.fullmatch(code)
+                      else "delivery_not_accepted")
     return 1
 
 

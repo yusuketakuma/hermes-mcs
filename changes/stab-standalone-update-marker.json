@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "独立モードで残った更新markerにより全ジョブが止まり続ける問題を修正",
+  "summary": "更新処理が異常終了して更新markerだけが残った場合、独立モードのhostが60秒後にそれを孤立と判断して消し、収集・抽出を再開します。更新の記録が残っている場合は安全のため止めたままにし、復旧ツールと監視警報（standalone_update_stuck）に任せます。",
+  "upgrade": "独立モードでは更新後に mcs_setup.py services を1回実行してください。Linuxで更新記録が残って止まった場合は警報に従い mcs_update.py recover を実行してください。Hermesモードでは操作は不要です。",
+  "details": [
+    "判定は mcs_update / mcs_recover と同じ: update.lock と run.lock をともに取得でき、update_state.json に apply/stage の記録がないときだけmarkerを削除する。記録が読めない場合も止めたままにする。",
+    "host自身の update ジョブ実行中は判定しない。判定は60秒に1回まで。",
+    "markerの検出時刻と判定結果を standalone-status.json の update_marker に記録する。"
+  ],
+  "refs": [
+    "mcs_standalone/runtime.py",
+    "tests/adapters/standalone/test_stab_runtime_supervision.py"
+  ]
+}

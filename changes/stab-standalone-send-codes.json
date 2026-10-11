@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "独立モードの送信失敗の理由コードを通知処理へ渡すように修正",
+  "summary": "独立モードのSlack/Discord送信が送られなかった場合、一律の delivery_not_accepted ではなく実際の理由コード（例: slack_identity_unreachable、discord_unreachable、http_429）を返します。通知処理が一時的な障害と恒久的な拒否を区別できます。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "Slackの本人確認は、通信失敗（slack_identity_unreachable、一時的）と、Slackが応答したうえでの不一致・認証エラー（slack_identity_unverified、恒久的）を区別する。",
+    "Discordは、ログインやchannel確認が応答しなかった場合を discord_unreachable（一時的）とし、トークン拒否（loginfailure）・4xx（http_ステータス番号）・設定コードはそのまま返す。",
+    "mcs_standalone send は stderr の最後の語として理由コードを出力し、コード形式でない値は delivery_not_accepted にする。"
+  ],
+  "refs": [
+    "mcs_standalone/__main__.py",
+    "adapters/slack/standalone.py",
+    "adapters/discord/standalone.py",
+    "tests/adapters/standalone/test_stab_send_codes.py"
+  ]
+}
