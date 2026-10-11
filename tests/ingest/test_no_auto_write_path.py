@@ -430,3 +430,28 @@ def test_worker_sends_the_callers_method_unchanged(monkeypatch):
         "url": mcs_adapter.API + "/projects", "headers": {}})
     assert result["status"] == 404
     assert sent == [("GET", None)]
+
+
+def test_worker_takes_every_method_straight_from_the_envelope():
+    """Statically, too: every Request the worker builds takes method= from
+    a name bound only to the envelope's own value — no URL-dependent pick."""
+    fn = next(node for node in ast.walk(_parse(Path("mcs/ingest/mcs_worker.py")))
+              if isinstance(node, ast.FunctionDef) and node.name == "_execute")
+    binds = [node for node in ast.walk(fn)
+             if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign,
+                                  ast.NamedExpr))
+             and any(isinstance(t, ast.Name) and t.id == "method"
+                     for t in ast.walk(node) if isinstance(t, ast.Name)
+                     and isinstance(t.ctx, ast.Store))]
+    assert binds
+    for node in binds:
+        src = ast.unparse(node.value)
+        assert src in ('envelope["method"]', "envelope['method']",
+                       "envelope.get('method', 'GET')"), src
+    requests = [node for node in ast.walk(fn) if isinstance(node, ast.Call)
+                and getattr(node.func, "attr", None) == "Request"]
+    assert requests
+    for node in requests:
+        kw = [k.value for k in node.keywords if k.arg == "method"]
+        assert len(kw) == 1 and isinstance(kw[0], ast.Name) \
+            and kw[0].id == "method", ast.unparse(node)
