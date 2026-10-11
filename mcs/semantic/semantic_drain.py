@@ -712,6 +712,270 @@ def _publish_v4(ledger, pid: int, mid: int, fp: str, policy: str,
                         final_status, tx=True, doc_hash=doc_hash)
 
 
+def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
+                   prev, deadline):
+    """Primary Jev proposition assessment of one target, durably recorded.
+
+    Returns (verdicts, flag): verdicts is None when no answer arrived (the
+    wait/error row is recorded once per status change); flag is the
+    _jev_fail_flag of a raised JevError, else None."""
+    flag = None
+    state = jev_state(bundle, mid)
+    meta_base = {"fingerprint": fp, "policy_fingerprint": policy, "model": jev.JEV_MODEL,
+                 "registry": jev.REGISTRY_VERSION,
+                 "schema": SCHEMA_VERSION}
+    answers = None
+    req0 = jev_client.requests_made if jev_client else 0
+    if jev_client is not None and state is not None:
+        qs = {k: jev.noul_question(p["instructions"], p["true"],
+                                   p["false"])
+              for k, p in jev.PROPOSITIONS.items()}
+        try:
+            out = _eval_chunked(
+                jev_client, state, qs, deadline,
+                scfg["max_questions_per_request"])
+            answers = out["answers"]
+        except jev.JevError as e:
+            meta_base["technical_status"] = (
+                "retry_wait" if e.retryable else "error")
+            meta_base["error_kind"] = e.kind
+            flag = _jev_fail_flag(e)
+            _why(f"assess_jev_{flag}")
+    meta_base["jev_requests"] = (
+        jev_client.requests_made - req0) if jev_client else 0
+    if answers is None:
+        meta_base.setdefault("technical_status", "pending")
+        meta_base.setdefault("error_kind", "jev_unavailable")
+        # an identical wait/error record adds no information —
+        # only a status CHANGE earns a new row, so a durable
+        # resource wait (Jev down, no key, budget hold) does not
+        # append one artifact per drain forever
+        if prev is None or (
+                prev["meta"].get("technical_status"),
+                prev["meta"].get("error_kind")) != (
+                meta_base["technical_status"],
+                meta_base.get("error_kind")):
+            ledger.artifact_add(
+                KIND_ASSESS,
+                json.dumps({"target_message_id": mid,
+                            "verdicts": {}},
+                           ensure_ascii=False),
+                project_id=pid, message_id=mid,
+                model=jev.JEV_MODEL, meta=meta_base)
+        return None, flag
+    target_verdicts = {k: {"noul": a["noul"],
+                           "verdict": jev.verdict_for(
+                               a["noul"], scfg["match_threshold"],
+                               scfg["nomatch_threshold"])}
+                       for k, a in answers.items()}
+    ledger.artifact_add(
+        KIND_ASSESS,
+        # "detail" stays in the stored shape (medication detail
+        # lives in semantic_assessment rows)
+        json.dumps({"target_message_id": mid,
+                    "verdicts": target_verdicts,
+                    "detail": {}}, ensure_ascii=False),
+        project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+        meta={**meta_base, "technical_status": "complete"})
+    return target_verdicts, flag
+
+
+def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
+                    facts, verdicts, existing, deadline):
+    """Stored, candidate, or freshly generated summary for one target, with
+    the one reserved format repair.
+
+    Returns (summary, summary_reason, summary_error, sent_error): sent_error
+    is the LLMNotSent/RuntimeBudget stop that left no summary, else None;
+    any other runtime guard error propagates."""
+    import semantic
+    sent_error = None
+    summary_reason = None
+    summary_error = {}
+    if existing is not None:
+        summary = existing["content"]
+        if existing["meta"].get("input_oversize"):
+            summary["_input_oversize"] = True
+    else:
+        candidate = _current(ledger, KIND_CANDIDATE, mid, fp, policy)
+        if candidate and candidate["meta"].get("publication_mode") == scfg["summary_mode"]:
+            summary = candidate["content"]
+        else:
+            format_repair_id = None
+            try:
+                summary, summary_reason = summarize(
+                    llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
+                    deadline=deadline, return_reason=True,
+                    error_out=summary_error)
+                if summary is None and summary_reason == "model" \
+                        and summary_error.get("code") \
+                        and semantic.last_llm_failure() != "length_stop" \
+                        and _current(ledger, KIND_SUMMARY_FORMAT_REPAIR,
+                                     mid, fp, policy) is None:
+                    if _PASS_REASON.get("summary_validation_error") is None:
+                        _PASS_REASON["summary_validation_error"] = summary_error["code"]
+                    guard("summary_format_repair_reservation")
+                    format_repair_id = ledger.artifact_add(
+                        KIND_SUMMARY_FORMAT_REPAIR,
+                        json.dumps({"target_message_id": mid}),
+                        project_id=pid, message_id=mid,
+                        model=semantic.llm_model(),
+                        meta={"fingerprint": fp, "policy_fingerprint": policy,
+                              "repair_count": 1})
+                    summary, summary_reason = summarize(
+                        llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
+                        format_repair=True,
+                        deadline=deadline, return_reason=True,
+                        error_out=summary_error)
+            except runtime.RuntimeGuardError as e:
+                if format_repair_id is not None and (
+                        isinstance(e, runtime.LLMNotSent)
+                        or e.stage in _PRE_DISPATCH_STAGES):
+                    with ledger.db:
+                        ledger.db.execute(
+                            "DELETE FROM artifacts WHERE artifact_id=?",
+                            (format_repair_id,))
+                if not isinstance(e, (runtime.LLMNotSent, runtime.RuntimeBudget)):
+                    raise
+                # the local model never got (or ran out of budget
+                # for) this target's request: stop here like any
+                # incomplete pass, so targets already audited are
+                # still committed below; re-raised for _process_job
+                sent_error = e
+                summary, summary_reason = None, "not_sent"
+    return summary, summary_reason, summary_error, sent_error
+
+
+def _apply_mandatory_render(summary: dict, findings: list, status: str,
+                            v2_doc: dict) -> str:
+    """Merge the adjudicated mandatory render layer into ``summary`` and
+    ``findings`` in place; returns the (possibly downgraded) status."""
+    from semantic_render import mandatory_render
+    mandatory = mandatory_render(v2_doc)
+    if mandatory["facts"]:
+        summary["mandatory_facts"] = mandatory["facts"]
+        summary["mandatory_fact_ids"] = mandatory["fact_ids"]
+        summary["mandatory_pages"] = mandatory["pages"]
+        summary["mandatory_overview"] = mandatory["overview"]
+    if mandatory["limitations"]:
+        existing_lims = summary.get("limitations") or []
+        summary["limitations"] = existing_lims + [
+            x for x in mandatory["limitations"]
+            if x not in existing_lims]
+    # A verified fact that cannot reach any page (oversized
+    # single line, or a packing gap) is publication-incomplete —
+    # flag it instead of letting a partial list pass as done.
+    if not mandatory["complete"]:
+        findings.append({"code": "mandatory_render_incomplete"})
+        status = "NEEDS_REVIEW"
+    return status
+
+
+def _promote_loops(ledger, scfg, pl, pid, bundle, facts_by_target,
+                   jev_client, deadline):
+    """Loop candidates/relation events for the live generation.
+
+    Returns (loops_done, loops_short, resource, retryable, hard): the last
+    three are failure flags the caller ORs into its own."""
+    loops_short = False
+    resource = retryable = hard = False
+    rejections = []
+    scope = pl.get("retry_command_id")
+    try:
+        _, loops_done = update_loops(
+            ledger, pid, bundle, facts_by_target, jev_client,
+            scfg, deadline,
+            retry_scope=scope if isinstance(scope, str) else "",
+            rejections=rejections)
+    except runtime.RuntimeBudgetShort:
+        # the Jev cutoff stopped the relation pass: the results below
+        # still commit and the job resumes the remaining pairs next
+        # tick (last_error is not this stop's cause — no flag)
+        loops_done = False
+        loops_short = True
+    else:
+        flag = _jev_fail_flag(getattr(jev_client, "last_error", None)) \
+            if not loops_done and jev_client is not None else None
+        if rejections:
+            if _PASS_REASON.get("loops_rejected") is None:
+                _PASS_REASON["loops_rejected"] = rejections[0]["code"]
+            if flag is None:
+                # Only cached rejections, or a later pair's success
+                # reset last_error: the known rejection is the cause —
+                # a bounded retry, never a free defer that would loop
+                # forever. A later hard/resource failure keeps its own
+                # handling below.
+                _why("loops_jev_rejected")
+                retryable = True
+        if not loops_done and jev_client is not None:
+            _why(f"loops_jev_{flag}")
+            resource |= flag == "resource"
+            retryable |= flag == "retryable"
+            hard |= flag == "hard"
+    return loops_done, loops_short, resource, retryable, hard
+
+
+def _record_notice_plan_tx(ledger, scfg, pl, pid, root, mid, fp, policy,
+                           r: dict, final_status: str, bundle: dict,
+                           members: dict, all_targets: list) -> None:
+    """Notice outbox intent and plan row for one target — called INSIDE the
+    caller's ``with ledger.db`` with the analysis result."""
+    # notification plan + outbox intent commit in the SAME
+    # transaction as the analysis result — a crash can never
+    # leave a saved summary without its notification intent
+    # (§18.3). Reused results re-enter here so an intent lost
+    # by an older crash is recreated on the next run. The two
+    # dedupes are independent: the plan row keys on
+    # (fingerprint, audit_status), the outbox row on its
+    # delivery_key — a plan written by an earlier PENDING/shadow
+    # run must not block a now-PASS enforce enqueue.
+    summary_clean = {k: v for k, v in r["summary"].items()
+                     if not k.startswith("_")}
+    text = render_notice(ledger, pid, root, summary_clean,
+                         final_status, targets=all_targets,
+                         quality=bundle["content_quality"],
+                         focus_mid=mid)
+    enqueued = False
+    if (scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce"
+            and final_status == "PASS" and not pl.get("notification_free")):
+        # per-target delivery key — one generation emits one
+        # notice PER audited target; a shared (root, fp) key
+        # would dedup every later target's claims out of the
+        # notice while the header still claims them
+        dkey = payload_hash({"kind": "semantic_notice",
+                             "root": root, "fp": fp,
+                             "mid": mid, "policy": policy})
+        # per-target eligibility: THIS message must be covered
+        # by a stored new_messages intent — a target that only
+        # ever arrived via import/replay produces artifacts but
+        # no notice, even when a sibling target was notified
+        # (INV-20, AT-055)
+        src_mid = _notify_src_event(ledger, pid, [mid])
+        if src_mid is not None \
+                and not _outbox_has_delivery(ledger, dkey):
+            ledger.outbox_add_tx("semantic_notice", pid, {
+                "delivery_key": dkey, "root_id": root,
+                "target_message_id": mid,
+                "target_revision": members[mid]["revision"],
+                "src_event_id": src_mid, "text": text,
+                "fingerprint": fp,
+                "policy_version": POLICY_VERSION,
+                "policy_fingerprint": policy})
+            enqueued = True
+    if not _plan_exists(ledger, mid, fp, final_status, policy):
+        plan_meta = {"fingerprint": fp, "policy_fingerprint": policy,
+                     "audit_status": final_status, "publication_mode": scfg["summary_mode"],
+                     "mode": scfg["mode"],
+                     "origin": pl.get("origin")}
+        if enqueued:
+            plan_meta["enqueued"] = True
+        ledger.artifact_add_tx(KIND_PLAN, json.dumps(
+            {"root_id": root, "target_message_id": mid,
+             "text": text}, ensure_ascii=False),
+            project_id=pid, message_id=mid,
+            meta=plan_meta)
+
+
 def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                        cfg_path: str | None = None,
                        config_generation: str | None = None,
@@ -833,67 +1097,16 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             if time.monotonic() > deadline - 5:
                 incomplete = True
                 break
-            state = jev_state(bundle, mid)
-            meta_base = {"fingerprint": fp, "policy_fingerprint": policy, "model": jev.JEV_MODEL,
-                         "registry": jev.REGISTRY_VERSION,
-                         "schema": SCHEMA_VERSION}
-            answers = None
-            req0 = jev_client.requests_made if jev_client else 0
-            if jev_client is not None and state is not None:
-                qs = {k: jev.noul_question(p["instructions"], p["true"],
-                                           p["false"])
-                      for k, p in jev.PROPOSITIONS.items()}
-                try:
-                    out = _eval_chunked(
-                        jev_client, state, qs, deadline,
-                        scfg["max_questions_per_request"])
-                    answers = out["answers"]
-                except jev.JevError as e:
-                    meta_base["technical_status"] = (
-                        "retry_wait" if e.retryable else "error")
-                    meta_base["error_kind"] = e.kind
-                    flag = _jev_fail_flag(e)
-                    _why(f"assess_jev_{flag}")
-                    resource_wait |= flag == "resource"
-                    retryable_failure |= flag == "retryable"
-                    hard_fail |= flag == "hard"
-            meta_base["jev_requests"] = (
-                jev_client.requests_made - req0) if jev_client else 0
-            if answers is None:
-                meta_base.setdefault("technical_status", "pending")
-                meta_base.setdefault("error_kind", "jev_unavailable")
-                # an identical wait/error record adds no information —
-                # only a status CHANGE earns a new row, so a durable
-                # resource wait (Jev down, no key, budget hold) does not
-                # append one artifact per drain forever
-                if prev is None or (
-                        prev["meta"].get("technical_status"),
-                        prev["meta"].get("error_kind")) != (
-                        meta_base["technical_status"],
-                        meta_base.get("error_kind")):
-                    ledger.artifact_add(
-                        KIND_ASSESS,
-                        json.dumps({"target_message_id": mid,
-                                    "verdicts": {}},
-                                   ensure_ascii=False),
-                        project_id=pid, message_id=mid,
-                        model=jev.JEV_MODEL, meta=meta_base)
+            target_verdicts, flag = _assess_target(
+                ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
+                prev, deadline)
+            resource_wait |= flag == "resource"
+            retryable_failure |= flag == "retryable"
+            hard_fail |= flag == "hard"
+            if target_verdicts is None:
                 incomplete = True
                 continue
-            verdicts[mid] = {k: {"noul": a["noul"],
-                                 "verdict": jev.verdict_for(
-                                     a["noul"], scfg["match_threshold"],
-                                     scfg["nomatch_threshold"])}
-                             for k, a in answers.items()}
-            ledger.artifact_add(
-                KIND_ASSESS,
-                # "detail" stays in the stored shape (medication detail
-                # lives in semantic_assessment rows)
-                json.dumps({"target_message_id": mid,
-                            "verdicts": verdicts[mid],
-                            "detail": {}}, ensure_ascii=False),
-                project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-                meta={**meta_base, "technical_status": "complete"})
+            verdicts[mid] = target_verdicts
         if scfg["summary_mode"] == "off" and scfg["loop_mode"] == "off":
             continue
         stage = _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
@@ -1003,59 +1216,11 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         if time.monotonic() > deadline - 5:
             incomplete = True
             break
-        summary_reason = None
-        summary_error = {}
-        if existing is not None:
-            summary = existing["content"]
-            if existing["meta"].get("input_oversize"):
-                summary["_input_oversize"] = True
-        else:
-            candidate = _current(ledger, KIND_CANDIDATE, mid, fp, policy)
-            if candidate and candidate["meta"].get("publication_mode") == scfg["summary_mode"]:
-                summary = candidate["content"]
-            else:
-                format_repair_id = None
-                try:
-                    summary, summary_reason = summarize(
-                        llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
-                        deadline=deadline, return_reason=True,
-                        error_out=summary_error)
-                    if summary is None and summary_reason == "model" \
-                            and summary_error.get("code") \
-                            and semantic.last_llm_failure() != "length_stop" \
-                            and _current(ledger, KIND_SUMMARY_FORMAT_REPAIR,
-                                         mid, fp, policy) is None:
-                        if _PASS_REASON.get("summary_validation_error") is None:
-                            _PASS_REASON["summary_validation_error"] = summary_error["code"]
-                        guard("summary_format_repair_reservation")
-                        format_repair_id = ledger.artifact_add(
-                            KIND_SUMMARY_FORMAT_REPAIR,
-                            json.dumps({"target_message_id": mid}),
-                            project_id=pid, message_id=mid,
-                            model=semantic.llm_model(),
-                            meta={"fingerprint": fp, "policy_fingerprint": policy,
-                                  "repair_count": 1})
-                        summary, summary_reason = summarize(
-                            llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
-                            format_repair=True,
-                            deadline=deadline, return_reason=True,
-                            error_out=summary_error)
-                except runtime.RuntimeGuardError as e:
-                    if format_repair_id is not None and (
-                            isinstance(e, runtime.LLMNotSent)
-                            or e.stage in _PRE_DISPATCH_STAGES):
-                        with ledger.db:
-                            ledger.db.execute(
-                                "DELETE FROM artifacts WHERE artifact_id=?",
-                                (format_repair_id,))
-                    if not isinstance(e, (runtime.LLMNotSent, runtime.RuntimeBudget)):
-                        raise
-                    # the local model never got (or ran out of budget
-                    # for) this target's request: stop here like any
-                    # incomplete pass, so targets already audited are
-                    # still committed below; re-raised for _process_job
-                    not_sent = e
-                    summary, summary_reason = None, "not_sent"
+        summary, summary_reason, summary_error, sent_error = _obtain_summary(
+            ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
+            facts, verdicts, existing, deadline)
+        if sent_error is not None:
+            not_sent = sent_error
         if summary is None:
             _why(f"summary_{summary_reason}")
             if _PASS_REASON.get("summary_validation_error") is None:
@@ -1185,24 +1350,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             # model summary dropped them. Per-target doc: the LAST
             # member's doc must never leak into another target's
             # summary (C02).
-            from semantic_render import mandatory_render
-            mandatory = mandatory_render(v2_doc)
-            if mandatory["facts"]:
-                summary["mandatory_facts"] = mandatory["facts"]
-                summary["mandatory_fact_ids"] = mandatory["fact_ids"]
-                summary["mandatory_pages"] = mandatory["pages"]
-                summary["mandatory_overview"] = mandatory["overview"]
-            if mandatory["limitations"]:
-                existing_lims = summary.get("limitations") or []
-                summary["limitations"] = existing_lims + [
-                    x for x in mandatory["limitations"]
-                    if x not in existing_lims]
-            # A verified fact that cannot reach any page (oversized
-            # single line, or a packing gap) is publication-incomplete —
-            # flag it instead of letting a partial list pass as done.
-            if not mandatory["complete"]:
-                findings.append({"code": "mandatory_render_incomplete"})
-                status = "NEEDS_REVIEW"
+            status = _apply_mandatory_render(summary, findings, status,
+                                             v2_doc)
         summary["audit_status"] = status
         if fact_source == "canonical":
             v4.record_stage(ledger, pid, mid, fp, policy,
@@ -1262,39 +1411,12 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         # kept OUT of the commit tx because matching makes Jev calls
         # (no network inside a DB transaction, §6.2); replay-safe via
         # candidate_fp and pair dedup.
-        rejections = []
-        scope = pl.get("retry_command_id")
-        try:
-            _, loops_done = update_loops(
-                ledger, pid, bundle, facts_by_target, jev_client,
-                scfg, deadline,
-                retry_scope=scope if isinstance(scope, str) else "",
-                rejections=rejections)
-        except runtime.RuntimeBudgetShort:
-            # the Jev cutoff stopped the relation pass: the results below
-            # still commit and the job resumes the remaining pairs next
-            # tick (last_error is not this stop's cause — no flag)
-            loops_done = False
-            loops_short = True
-        else:
-            flag = _jev_fail_flag(getattr(jev_client, "last_error", None)) \
-                if not loops_done and jev_client is not None else None
-            if rejections:
-                if _PASS_REASON.get("loops_rejected") is None:
-                    _PASS_REASON["loops_rejected"] = rejections[0]["code"]
-                if flag is None:
-                    # Only cached rejections, or a later pair's success
-                    # reset last_error: the known rejection is the cause —
-                    # a bounded retry, never a free defer that would loop
-                    # forever. A later hard/resource failure keeps its own
-                    # handling below.
-                    _why("loops_jev_rejected")
-                    retryable_failure = True
-            if not loops_done and jev_client is not None:
-                _why(f"loops_jev_{flag}")
-                resource_wait |= flag == "resource"
-                retryable_failure |= flag == "retryable"
-                hard_fail |= flag == "hard"
+        loops_done, loops_short, resource, retryable, hard = _promote_loops(
+            ledger, scfg, pl, pid, bundle, facts_by_target, jev_client,
+            deadline)
+        resource_wait |= resource
+        retryable_failure |= retryable
+        hard_fail |= hard
     # notification eligibility is derived from the stored origin event,
     # not from this job's seed provenance (INV-20, §20.3) — evaluated
     # per target below: a covering new_messages intent must exist for
@@ -1315,60 +1437,9 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                         r.get("findings") or [], fact_source)
             if stale:
                 continue
-            # notification plan + outbox intent commit in the SAME
-            # transaction as the analysis result — a crash can never
-            # leave a saved summary without its notification intent
-            # (§18.3). Reused results re-enter here so an intent lost
-            # by an older crash is recreated on the next run. The two
-            # dedupes are independent: the plan row keys on
-            # (fingerprint, audit_status), the outbox row on its
-            # delivery_key — a plan written by an earlier PENDING/shadow
-            # run must not block a now-PASS enforce enqueue.
-            summary_clean = {k: v for k, v in r["summary"].items()
-                             if not k.startswith("_")}
-            text = render_notice(ledger, pid, root, summary_clean,
-                                 final_status, targets=all_targets,
-                                 quality=bundle["content_quality"],
-                                 focus_mid=mid)
-            enqueued = False
-            if (scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce"
-                    and final_status == "PASS" and not pl.get("notification_free")):
-                # per-target delivery key — one generation emits one
-                # notice PER audited target; a shared (root, fp) key
-                # would dedup every later target's claims out of the
-                # notice while the header still claims them
-                dkey = payload_hash({"kind": "semantic_notice",
-                                     "root": root, "fp": fp,
-                                     "mid": mid, "policy": policy})
-                # per-target eligibility: THIS message must be covered
-                # by a stored new_messages intent — a target that only
-                # ever arrived via import/replay produces artifacts but
-                # no notice, even when a sibling target was notified
-                # (INV-20, AT-055)
-                src_mid = _notify_src_event(ledger, pid, [mid])
-                if src_mid is not None \
-                        and not _outbox_has_delivery(ledger, dkey):
-                    ledger.outbox_add_tx("semantic_notice", pid, {
-                        "delivery_key": dkey, "root_id": root,
-                        "target_message_id": mid,
-                        "target_revision": members[mid]["revision"],
-                        "src_event_id": src_mid, "text": text,
-                        "fingerprint": fp,
-                        "policy_version": POLICY_VERSION,
-                        "policy_fingerprint": policy})
-                    enqueued = True
-            if not _plan_exists(ledger, mid, fp, final_status, policy):
-                plan_meta = {"fingerprint": fp, "policy_fingerprint": policy,
-                             "audit_status": final_status, "publication_mode": scfg["summary_mode"],
-                             "mode": scfg["mode"],
-                             "origin": pl.get("origin")}
-                if enqueued:
-                    plan_meta["enqueued"] = True
-                ledger.artifact_add_tx(KIND_PLAN, json.dumps(
-                    {"root_id": root, "target_message_id": mid,
-                     "text": text}, ensure_ascii=False),
-                    project_id=pid, message_id=mid,
-                    meta=plan_meta)
+            _record_notice_plan_tx(ledger, scfg, pl, pid, root, mid, fp,
+                                   policy, r, final_status, bundle,
+                                   members, all_targets)
         if (not stale and not pending and loops_done
                 and not runtime.transition_tx(ledger, token, "done")):
             raise runtime.RuntimeStale("promote")
