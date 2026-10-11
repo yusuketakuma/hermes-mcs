@@ -1170,7 +1170,8 @@ def test_standalone_installer_has_no_hermes_checkout_or_commands(tmp_path):
     first = _run(env, None, "--mode", "standalone", "--no-llm")
     assert first.returncode == 0, first.stdout + first.stderr
     assert json.loads((home / ".mcs/config.json").read_text())["runtime_mode"] == "standalone"
-    assert "-m lineworks_adapter init" in first.stdout
+    for command in ("-m lineworks_adapter init", "-m mcs_standalone status"):
+        assert f"cd '{ROOT}' && " in first.stdout.split(command)[0].splitlines()[-1]
     assert "do not also run a separate lineworks_adapter service" in " ".join(first.stdout.split())
     assert "-m lineworks_adapter service" not in first.stdout
     calls = _calls(stub)
@@ -1238,5 +1239,5 @@ def test_hermes_install_routes_lineworks_without_plugin_or_gateway(tmp_path):
     assert "notify.interactive=lineworks does not use it" in r.stdout
     assert "interactive cards need this plugin" not in r.stdout
     for sub in ("init", "check", "service"):
-        assert f"-m lineworks_adapter {sub}" in r.stdout
+        assert f"cd '{ROOT}' && " in r.stdout.split(f"-m lineworks_adapter {sub}")[0].splitlines()[-1]
     assert "docs/guides/LINEWORKS.md" in r.stdout

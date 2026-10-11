@@ -1173,6 +1173,8 @@ fi
 # ------------------------------------------------------------ summary
 PYQ="$(shell_quote "$MCS_PY")"
 SETUPQ="$(shell_quote "$SETUP")"
+# `-m` resolves only from the checkout: install.sh may run from elsewhere.
+INREPO="cd $(shell_quote "$REPO") &&"
 printf '\n============================================================\n'
 printf 'Installed. Summary:\n'
 printf '%s' "$SUMMARY"
@@ -1191,14 +1193,14 @@ Run init first; the host waits until configuration and credentials are ready.
 Then run the required-condition check and inspect status:
 EOF
     printf '    %s %s check\n' "$PYQ" "$SETUPQ"
-    printf '    %s -m mcs_standalone status\n' "$PYQ"
+    printf '    %s %s -m mcs_standalone status\n' "$INREPO" "$PYQ"
     cat <<'EOF'
 
 LINE WORKS (notify.interactive=lineworks): enter its secrets on your own
 terminal with the command below; the standalone host starts the adapter,
 so do not also run a separate lineworks_adapter service.
 EOF
-    printf '    %s -m lineworks_adapter init\n' "$PYQ"
+    printf '    %s %s -m lineworks_adapter init\n' "$INREPO" "$PYQ"
     printf '\nSee docs/guides/STANDALONE.md (including switching from Hermes).\n'
     exit 0
 fi
@@ -1243,7 +1245,7 @@ generate the resident service (docs/guides/LINEWORKS.md):
 
 EOF
 for sub in init check service; do
-    printf '    %s -m lineworks_adapter %s\n' "$PYQ" "$sub"
+    printf '    %s %s -m lineworks_adapter %s\n' "$INREPO" "$PYQ" "$sub"
 done
 cat <<'EOF'
 
