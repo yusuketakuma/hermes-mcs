@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MCS LLM extraction — extract_v2 layer via local llama.cpp (Qwen3.5-9B).
+"""MCS LLM extraction — the extract_llm layer via local llama.cpp (Qwen3.5-9B).
 
 Adds what rule extraction (extract_v1) cannot: dose-less medication names,
 negated symptoms ("食欲低下なし"), request targets by profession, and a
@@ -32,7 +32,7 @@ import time
 import unicodedata
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every module dir (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
@@ -46,7 +46,7 @@ import local_llm
 import patient_context
 from patient_context import CATEGORIES, DETAIL_KEYS, context_items
 from ledger import Ledger, LedgerReader
-from mcs_queries import (EXTRACT_FEEDBACK_KIND, current_extract_pred,
+from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, current_extract_pred,
                          current_qc_pred,
                          current_v4_id, json_or_null, qc_source_id)
 from mcs_util import (CONF_PATH, HOME, acquire_run_lock, circuit_failure, circuit_open_s,
@@ -294,8 +294,6 @@ def _batch_prompt(jobs: list) -> str:
             i=i, posted=posted or "不明", body=body)
     return prompt + "JSON:"
 
-# loopback-only opener: no proxy and no redirect may route message bodies.
-
 # Output-contract schema for response_format=json_schema. _validate
 # remains the authority — the schema's job is to make the output
 # PARSEABLE and structurally shaped before validation runs.
@@ -456,7 +454,7 @@ _REPAIR_CLOSE = """
 
 
 def _repair_prompt(posted_at: str | None, issues: list[str],
-                   prior: dict, hints: dict | None) -> str:
+                   prior: dict) -> str:
     """Feedback prompt for the bounded repair retry — ends with the
     OPEN target fence; the caller appends the body then _PROMPT_TAIL.
     `issues` are the concrete validation failures; `prior` is
@@ -465,7 +463,7 @@ def _repair_prompt(posted_at: str | None, issues: list[str],
     prompt = _REPAIR_HEAD + "\n".join(issues) + _REPAIR_MID
     prompt += _sanitize_ctx(json.dumps(prior, ensure_ascii=False))
     prompt += _REPAIR_CLOSE
-    prompt += _TARGET_HEAD.format(posted=posted_at or "不明")
+    prompt += _target_head(posted_at)
     return prompt
 
 
@@ -480,14 +478,20 @@ _PROBE_RETRY_S = 600
 _NEXT_FMT = {"schema": "object", "object": "plain"}
 
 
+def resolved_model(cfg: dict | None) -> str:
+    """Return the extraction model name for `cfg`; a patched MODEL constant wins."""
+    return MODEL if MODEL != _MODEL_PIN else local_llm.resolve(cfg)[1]
+
+
 def _resolved_llm() -> tuple[str, str]:
     """Resolve the configured server for generation and its health/format probes."""
     pinned = getattr(_CALL_NOTES, "target", None)
     if pinned is not None:
         return pinned
-    endpoint, model = local_llm.resolve(load_config())
+    cfg = load_config()
+    endpoint = local_llm.resolve(cfg)[0]
     return (ENDPOINT if ENDPOINT != _ENDPOINT_PIN else endpoint,
-            MODEL if MODEL != _MODEL_PIN else model)
+            resolved_model(cfg))
 
 
 def _probe_format(deadline: float | None = None) -> str | None:
@@ -510,18 +514,13 @@ def _probe_format(deadline: float | None = None) -> str | None:
         _FMT_MODE = local_llm.admitted_probe_format(
             "mcs.extract", endpoint, model, _SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
-            slot=_choose_slot(deadline=deadline),
+            slot=_choose_slot(),
             verify=lambda text: json_object(text) is not None)
     else:
-        slot = _choose_slot(deadline=deadline)
-        if slot is None:
-            # no idle slot in time — keep the current mode (None when
-            # unprobed: _llm_call defers) and re-probe on the next call
-            return _FMT_MODE
         _FMT_MODE = local_llm.probe_format(
             endpoint, model, _SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
-            slot=slot,
+            slot=_choose_slot(),
             verify=lambda text: json_object(text) is not None)
     _FMT_TS = time.monotonic()
     return _FMT_MODE
@@ -805,7 +804,7 @@ def _vitals_guard(body: str | None, vit: dict,
 # Free-text fields (summary/points): the model sometimes parrots JSON
 # fragments or slips into another language's output — structural
 # characters never belong in a Japanese one-liner.
-_RX_BAD_TEXT = re.compile(r'[{}\[\]"\n\r\t]')
+_BAD_TEXT = re.compile(r'[{}\[\]"\n\r\t]')
 
 
 def _cap(v, maxlen: int):
@@ -820,7 +819,7 @@ def _clean_text(v, maxlen: int) -> str | None:
     if not isinstance(v, str):
         return None
     s = v.strip()
-    if not s or _RX_BAD_TEXT.search(s):
+    if not s or _BAD_TEXT.search(s):
         return None
     return s[:maxlen]
 
@@ -1249,7 +1248,7 @@ class _Validator:
                 self.drop_item("requests")
                 continue
             # Ungrounded free text reaches notifications — bound its
-            # length (the prompt asks for 15 chars; a runaway or
+            # length (the prompt asks for 30 chars; a runaway or
             # injected string must not ride through unbounded).
             item = {"to": _cap(r.get("to"), 30),
                     "action": _cap(r.get("action"), 60)}
@@ -1492,16 +1491,11 @@ def _llm_call(prompt: str, deadline: float | None = None,
             if response is not None and response.get("admission"):
                 return _DEFERRED
         else:
-            slot = _choose_slot(deadline=deadline)
-            if slot is None:
-                # both slots stayed busy — pinning one aborts
-                # llama-server; defer without burning an attempt
-                return _DEFERRED
             response = local_llm.chat(
                 prompt, endpoint=endpoint, model=model,
                 max_tokens=max_tokens, timeout=TIMEOUT, deadline=deadline,
                 response_format=rf,
-                extra_payload={"id_slot": slot},
+                extra_payload={"id_slot": _choose_slot()},
                 request_fn=_opener_request, error_out=err_out)
         if response is None and (err_out.get("kind") == "unreachable"
                                  or (deadline is not None
@@ -1809,8 +1803,8 @@ def llm_extract(body: str, *, context: str | None = None,
     QC findings on the current extraction — unsupported items to drop
     or re-anchor, applied as a one-shot repair steer.
 
-    Bodies longer than _CHUNK_SIZE are covered in full via text_chunks;
-    each chunk's output validates against the WHOLE body so evidence
+    Long bodies are covered in full via plan_chunks; each piece's output
+    validates against the piece first and then the WHOLE body so evidence
     stays anchored to the real source, then merges deterministically.
     Actual output length stops halve the source-bound layout and checkpoint it;
     completed smaller chunks remain reusable across a later interruption.
@@ -1923,7 +1917,7 @@ def llm_extract(body: str, *, context: str | None = None,
                            or time.monotonic() < deadline):
                 repair_start = len(notes)
                 rd = _llm_call(
-                    reference + _repair_prompt(posted_at, issues, d, piece_hints)
+                    reference + _repair_prompt(posted_at, issues, d)
                     + piece + _PROMPT_TAIL,
                     deadline=deadline, need_s=_MIN_REPAIR_S)
                 if meta_out is not None:
@@ -2057,9 +2051,7 @@ def _karte_block(ledger, project_id: int, posted_at: str | None) -> str:
     if any(not isinstance(value, str) for value in values):
         return ""
     try:
-        # Python 3.10 accepts an explicit UTC offset, but not a Z suffix.
-        upd, post = (datetime.fromisoformat(value[:-1] + "+00:00"
-                     if value.endswith("Z") else value) for value in values)
+        upd, post = (datetime.fromisoformat(value) for value in values)
     except (TypeError, ValueError):
         return ""
     # Keep fractional seconds and compare explicit instants across offsets.
@@ -2131,7 +2123,7 @@ def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0):
                                    (r["message_id"], r["content_hash"])).fetchone()
         if source is not None:
             r = {**dict(source), **dict(r)}
-    actual_model = r["_target"][1] if "_target" in r.keys() else MODEL
+    actual_model = _actual_model(r)
     can_bind = all(key in r.keys() for key in ("parent_id", "posted_at", "posted_at_ts"))
     context = (r["_context"] if "_context" in r.keys() else _thread_context(ledger, r)) if can_bind else None
     meta.update(actual_model=actual_model, plan_version=PLAN_VERSION,
@@ -2139,7 +2131,7 @@ def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0):
     if auto_retry:
         meta["auto_retry"] = auto_retry
     ledger.artifact_add_tx(
-        KIND, json.dumps({"_model": MODEL, "_error": True},
+        KIND, json.dumps({"_model": actual_model, "_error": True},
                          ensure_ascii=False),
         project_id=r["project_id"], message_id=r["message_id"],
         model=actual_model, meta=meta)
@@ -2258,8 +2250,15 @@ def _write_lock(enabled: bool):
     The tick caller already holds the lock for the whole run, so it
     passes False. The standalone --all backlog drainer passes True so it
     never holds the lock longer than a single write — holding it across
-    the whole backlog would starve the 5-min tick
-    for days."""
+    the whole backlog would starve the 10-min tick for days.
+
+    Only result writes go through this lock: ``_commit``, ``_fail`` and
+    the QC/thin/human re-mints. The drainer's other writes are lockless
+    on purpose — claim leases (a cross-process fence of their own),
+    rule-only ``extract_v1``/prefilter markers and chunk checkpoints.
+    Each is fenced by content hash and the v4 predicate inside its own
+    SQLite transaction, and taking the lock per row (up to 60 s each)
+    while leases are held would stall the drainer for no proven gain."""
     fd = None
     if enabled:
         for _ in range(60):
@@ -2314,7 +2313,7 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
         if source is None:
             return False                # fence before any missing-row context read
         r = {**dict(source), **dict(r)}
-    actual_model = r["_target"][1] if "_target" in r.keys() else MODEL
+    actual_model = _actual_model(r)
     bound_context = r["_context"] if "_context" in r.keys() else _thread_context(ledger, r)
     meta.update(actual_model=actual_model, plan_version=PLAN_VERSION,
                 context_binding=_chunk_context(r, bound_context))
@@ -2353,8 +2352,8 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
 
 def _rerender_cards(ledger, project_id, message_id) -> None:
     """Queue the current extraction or progress on its existing source-bound card."""
-    from extraction_refresh import refresh_extraction_cards
-    refresh_extraction_cards(ledger, project_id, message_id, cfg=load_config())
+    extraction_refresh.refresh_extraction_cards(ledger, project_id, message_id,
+                                                cfg=load_config())
 
 
 def _thin_pending_sql() -> str:
@@ -2423,8 +2422,7 @@ def _human_flagged_sql(val: str = "h.artifact_id") -> str:
 
 def pending_pred() -> str:
     """Shared body-current extraction and quality-retry eligibility."""
-    return f"""m.body_text IS NOT NULL AND m.body_text != ''
-        AND (m.body_state IS NULL OR m.body_state='full')
+    return f"""{ELIGIBLE_MESSAGE}
         AND {current_v4_id()} IS NULL
         AND ((NOT EXISTS (SELECT 1 FROM artifacts f
                         WHERE f.kind='{KIND}' AND f.message_id=m.message_id
@@ -2583,7 +2581,7 @@ def _elastic_hold(gate: dict, now: float) -> bool:
     return now - gate.get("rt_busy_at", float("-inf")) < _ELASTIC_QUIET_S
 
 
-def _choose_slot(deadline: float | None = None) -> int:
+def _choose_slot() -> int:
     """Pin each process to its configured lane; never borrow realtime."""
     if _SLOT_OVERRIDE in local_llm.BACKGROUND_SLOTS \
             and type(_SLOT_OVERRIDE) is int:
@@ -2598,7 +2596,7 @@ def pinned_slot_busy(deadline: float | None = None) -> bool:
     if local_llm.admission_enabled():
         return False
     busy = _slots_busy(deadline)
-    return bool(busy) and busy.get(_choose_slot(deadline)) is True
+    return bool(busy) and busy.get(_choose_slot()) is True
 
 
 _EXTRACT_LEASE_S = 900   # crash → the claim self-expires; a stolen
@@ -2675,11 +2673,16 @@ def _release(ledger, r, lease: float | None):
     ledger.db.commit()
 
 
+def _actual_model(r) -> str:
+    """Return the model that served this row: its pinned target, else the default."""
+    return r["_target"][1] if "_target" in r.keys() else MODEL
+
+
 def _chunk_context(r, context: str | None, *, checkpoint: bool = False) -> str:
     """Bind completed results to their source and checkpoints to the local-hint contract."""
     return hashlib.sha256(json.dumps(
         [r["posted_at"], context,
-         r["_target"][1] if "_target" in r.keys() else MODEL,
+         _actual_model(r),
          _PROMPT_HEAD, _SCHEMA, "clinical-plan/v4" if checkpoint else "clinical-plan/v3", PLAN_VERSION],
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
@@ -2792,7 +2795,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
             meta = {"hash": r["content_hash"], "ver": EXTRACT_VERSION, "chunk": key,
                     "context": _chunk_context(r, context, checkpoint=True), "chunk_size": chunk_size,
                     "piece_sha256": hashlib.sha256(piece.encode()).hexdigest(),
-                    "actual_model": r["_target"][1] if "_target" in r.keys() else MODEL,
+                    "actual_model": _actual_model(r),
                     "plan_version": PLAN_VERSION}
             if split_size is not None:
                 meta["split_size"] = split_size
@@ -3056,8 +3059,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                       =?
                   AND json_extract(e.meta,'$.hash')=m.content_hash
                  ELSE 0 END
-      WHERE m.body_text IS NOT NULL AND m.body_text != ''
-        AND (m.body_state IS NULL OR m.body_state='full'){adm_sql}
+      WHERE {ELIGIBLE_MESSAGE}{adm_sql}
         AND NOT EXISTS (SELECT 1 FROM fetch_jobs claim
                         WHERE claim.kind='extract_claim'
                           AND claim.project_id=m.project_id
@@ -3285,7 +3287,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     prior = None
                 if not _improves(d, prior):
                     d = prior
-            d["_model"] = MODEL
+            d["_model"] = _actual_model(r)
             with lock(per_write_lock) as held:
                 if held:
                     _commit(r, d, ctx, integrity, qc)
@@ -3539,6 +3541,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             "selected": len(rows), "deferred": deferred,
             "skipped": skipped, "lock_lost": lock_lost,
             "circuit_open_s": round(circuit_s) or None,
+            "disk_low": disk_low,
             "disk_free_mb": round(free_mb) if free_mb is not None
                             else None,
             "pids": sorted(done_pids),
@@ -3778,7 +3781,7 @@ def _main() -> int:
     try:
         if args.all:
             # Backlog drainer: per-write locking only — holding the run
-            # lock across the whole backlog would starve the 5-min tick
+            # lock across the whole backlog would starve the 10-min tick
             stop = (time.monotonic() + args.stop_after
                     if args.stop_after > 0 else None)
 
@@ -3881,8 +3884,14 @@ def _main() -> int:
                     # selected). Stay resident and poll instead of exiting:
                     # under launchd KeepAlive an exit just means a respawn
                     # every 30 s re-running the full scan forever, and the
-                    # poll interval still beats the 5-min tick for picking up newly fetched messages.
+                    # poll interval still beats the 10-min tick for picking up newly fetched messages.
                     pause(120)
+                    continue
+                if r["done"] == 0 and (r.get("circuit_open_s")
+                                       or r.get("disk_low")):
+                    # the LLM lane is gated: re-scanning every few seconds
+                    # cannot claim anything until the breaker/disk clears
+                    pause(min(120, r.get("circuit_open_s") or 120))
                     continue
                 if r["done"] == 0 and r["failed"] == 0:
                     # rows were selected but nothing committed — either
@@ -3896,7 +3905,10 @@ def _main() -> int:
                     # wait for the earliest retry instead of quitting.
                     nt = _next_retry(led)
                     if nt is None:
-                        break
+                        # no retriable error row (e.g. endpoint-down
+                        # failures write none): stay resident and poll
+                        pause(120)
+                        continue
                     pause(min(300.0, max(5.0, nt - time.time())))
                 else:
                     pause(1)  # yield the write window between batches

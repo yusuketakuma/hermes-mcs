@@ -83,17 +83,17 @@ def test_deletion_possibility_changes_are_immediate(db, monkeypatch):
         db.db.execute('UPDATE messages SET updated_seen=? WHERE message_id=2',
                       (now[0] - rollup.STALE_DAYS * 86400 + 5,))
     rollup.rebuild(db, 1)
-    assert json.loads(_content(db))['possibly_deleted'] == []
+    assert json.loads(_content(db))['unrefreshed_message_ids'] == []
     now[0] += 10
     db.save_messages([_message(mid=1, body='合成の投稿', posted_at='2026-09-20T10:00:00+09:00')])
     assert rollup.dirty_projects(db) == [1]
     rollup.rebuild(db, 1)
-    assert json.loads(_content(db))['possibly_deleted'] == [2]
+    assert json.loads(_content(db))['unrefreshed_message_ids'] == [2]
     now[0] += 10
     db.save_messages([older])
     assert rollup.dirty_projects(db) == [1]
     rollup.rebuild(db, 1)
-    assert json.loads(_content(db))['possibly_deleted'] == []
+    assert json.loads(_content(db))['unrefreshed_message_ids'] == []
 
 
 def test_registered_data_state_change_is_immediately_dirty(db, monkeypatch):
@@ -158,3 +158,31 @@ def test_reobservation_does_not_call_the_heavy_builder(db, monkeypatch):
     rollup.rebuild_many(db, rollup.dirty_projects(db))
     assert calls == []
     assert _content(db) == before
+
+
+def test_unrefreshed_ids_are_a_capped_staleness_heuristic():
+    day = 86400
+    now = 1_790_000_000.0
+    fresh = now - day
+    stale = fresh - rollup.STALE_DAYS * day - 1
+    rows = [(1, fresh), (2, stale), (3, None)] + [(i, stale) for i in range(4, 40)]
+    # Newest-first input anchors on the newest row; NULL legacy stamps count as unrefreshed.
+    assert rollup._unrefreshed_ids(rows, now) == [2, 3] + list(range(4, 22))
+    assert rollup._unrefreshed_ids([(1, fresh), (2, fresh - rollup.STALE_DAYS * day + 1)], now) == []
+    # A NULL newest stamp falls back to the caller's clock.
+    assert rollup._unrefreshed_ids([(1, None), (2, stale)], now) == [1, 2]
+    assert rollup._unrefreshed_ids([], now) == []
+
+
+def test_tombstone_is_not_excluded_from_unrefreshed_ids(db, monkeypatch):
+    now = [1_790_000_000.0]
+    monkeypatch.setattr(rollup.time, 'time', lambda: now[0])
+    _setup(db, now)
+    db.save_messages([_message(mid=2, body='古い合成投稿')])
+    with db.db:
+        db.db.execute("UPDATE messages SET updated_seen=?, body_state='deleted', body_text='' "
+                      "WHERE message_id=2", (now[0] - rollup.STALE_DAYS * 86400 - 120,))
+    rollup.rebuild(db, 1)
+    content = json.loads(_content(db))
+    assert content['unrefreshed_message_ids'] == [2]
+    assert 'possibly_deleted' not in content

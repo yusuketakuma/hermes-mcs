@@ -166,3 +166,22 @@ def test_doctor_restart_receipt_is_supervisor_evidence_only(tmp_path, monkeypatc
     assert source["restart_request"]["status"] == expected
     assert source["gateway"]["source_revision"] is None
     assert "synthetic-secret" not in json.dumps(source)
+
+
+@pytest.mark.parametrize("rc,out,expected", [(0, "", False), (0, " M mcs/ops/x.py\n", True),
+                                             (128, "", None)])
+def test_doctor_dirty_comes_from_a_refreshing_status(monkeypatch, rc, out, expected):
+    """An mtime-only change (touch/rsync) is clean: plumbing diff-index
+    compares stale index stat data, status refreshes it."""
+    seen = []
+
+    def git(argv, **kw):
+        seen.append(argv)
+        if "rev-parse" in argv:
+            return SimpleNamespace(returncode=0, stdout="a" * 40 + "\n")
+        if "diff-index" in argv:
+            return SimpleNamespace(returncode=1, stdout="")   # stale stat data
+        return SimpleNamespace(returncode=rc, stdout=out)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", git)
+    assert mcs_setup._doctor_source({}, probe=False)["disk"]["dirty"] is expected
+    assert not any("diff-index" in argv for argv in seen)

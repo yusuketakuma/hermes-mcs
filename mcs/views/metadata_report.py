@@ -7,7 +7,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sqlite3
 import sys
 import time
@@ -19,7 +18,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
-_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 NOTE = "不一致0は未読保持の証明ではありません（照合できた投稿の件数だけです）。"
 LAG_BUCKETS = ((3600, "lt_1h"), (6 * 3600, "1h_6h"), (86400, "6h_24h"),
                (7 * 86400, "1d_7d"), (float("inf"), "ge_7d"))
@@ -53,14 +51,14 @@ def _watch(reader, now, project_id, shadow_checks):
 
 def build_report(reader, now=None, *, project_id=None) -> dict:
     """Count-only comparison of capture and shadow rows."""
-    from message_metadata import REACTION_LABELS, _decode_metadata
+    from message_metadata import ERROR_CODE, REACTION_LABELS, _decode_metadata
+    from read_model import _table_exists
     now = time.time() if now is None else now
     db = reader.db
     counts = Counter()
     count_diff, self_diff = Counter(), Counter()
     failures, lag, direction = Counter(), Counter(), Counter()
-    has_table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
-                           "AND name='message_metadata'").fetchone()
+    has_table = _table_exists(db, "message_metadata")
     rows = []
     if has_table:
         sql = ("SELECT md.message_id,md.source,md.content,md.checked_at,md.last_error "
@@ -85,7 +83,7 @@ def build_report(reader, now=None, *, project_id=None) -> dict:
             raw = sources["shadow"][2]
             # codes only: anything not code-shaped is never echoed
             for code in str(raw).split(","):
-                failures[code if _CODE.fullmatch(code) else "metadata_error"] += 1
+                failures[code if ERROR_CODE.fullmatch(code) else "metadata_error"] += 1
             continue
         if sh["checked_at"] is None and sh["reactions"] is None:
             counts["shadow_check_time_unknown" if "shadow" in sources else

@@ -81,6 +81,18 @@ def valid_hash(value):
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
+# The one release-tag grammar: updater detection/notice, approval and the
+# CLI share it; scripts/mcs_upgrade.py keeps a self-contained copy.
+RELEASE_TAG_RE = re.compile(
+    r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$")
+
+
+def release_tag(value):
+    """Return whether value is a vX.Y.Z[-pre] release tag of at most 255 characters."""
+    return isinstance(value, str) and len(value) <= 255 \
+        and RELEASE_TAG_RE.fullmatch(value) is not None
+
+
 def valid_uuid(value):
     try:
         return isinstance(value, str) and str(uuid.UUID(value)) == value
@@ -346,12 +358,10 @@ def _apply_request_tx(db, req, pid, now):
                     "INSERT INTO artifacts(kind,project_id,message_id,"
                     "content,model,meta,created_at) VALUES(?,?,?,?,?,?,?)",
                     ("request_loop_link", pid, mid,
-                     json.dumps(link, ensure_ascii=False, sort_keys=True,
-                                separators=(",", ":"), allow_nan=False),
-                     "human", json.dumps({
+                     canonical(link).decode(),
+                     "human", canonical({
                          "command_id": req["command_id"],
-                         "actor": req["actor"]}, ensure_ascii=False,
-                         sort_keys=True, separators=(",", ":")), now),
+                         "actor": req["actor"]}).decode(), now),
                 )
     return error, rid, before, after
 

@@ -172,8 +172,8 @@ def test_a_jev_answer_arriving_after_the_cutoff_is_kept_and_no_new_send_starts(
 
     client = jev.JevClient(api_key="synthetic", post_fn=post, max_attempts=1,
                            attempt_timeout=30)
-    guarded, _ = runtime.bind_jev(client, lambda stage: None, None,
-                                  cutoff=1000.0 + 300.0)
+    guarded = runtime.bind_jev(client, lambda stage: None, None,
+                               cutoff=1000.0 + 300.0)
     question = {"q": jev.noul_question("synthetic", "t", "f")}
     out = guarded.evaluate({}, question, 1000.0 + 900.0)
     assert out["answers"]["q"]["noul"] == 0.5 and len(posts) == 1
@@ -188,9 +188,167 @@ def test_a_jev_send_that_could_outlast_the_cutoff_is_not_started(monkeypatch):
     monkeypatch.setattr(jev.time, "monotonic", lambda: clock[0])
     client = jev.JevClient(api_key="synthetic", max_attempts=1, attempt_timeout=30,
                            post_fn=lambda body, timeout: (200, {}, _answer_body()))
-    guarded, _ = runtime.bind_jev(client, lambda stage: None, None,
-                                  cutoff=1000.0 + 20.0)    # < attempt_timeout away
+    guarded = runtime.bind_jev(client, lambda stage: None, None,
+                               cutoff=1000.0 + 20.0)    # < attempt_timeout away
     with pytest.raises(runtime.RuntimeBudgetShort):
         guarded.evaluate({}, {"q": jev.noul_question("synthetic", "t", "f")},
                          1000.0 + 900.0)
     assert client.requests_made == 0
+
+
+_TERMINAL = ("PASS", "NEEDS_REVIEW")
+
+
+def _job(db):
+    return db.db.execute(
+        "SELECT state, attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
+
+
+def _audits(db, mid):
+    return [json.loads(r[0])["status"] for r in db.db.execute(
+        "SELECT content FROM artifacts WHERE kind='semantic_audit' "
+        "AND message_id=? ORDER BY artifact_id", (mid,))]
+
+
+def _rerun(db, cfg, **kw):
+    with db.db:
+        db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+    return semantic.run_due(db, cfg, {"errors": []}, semantic.time.monotonic() + 300,
+                            jev_client=_FakeJev(), llm_fn=_llm, **kw)
+
+
+def test_a_jev_cutoff_in_a_later_targets_audit_keeps_the_earlier_target(
+        tmp_path, monkeypatch):
+    """F07: the cutoff on target 2's claim audit commits target 1's audited
+    summary instead of discarding it, and charges no attempt."""
+    audited = []
+
+    def audit_claims(client, bundle, summary, *a, **k):
+        audited.append(1)
+        if len(audited) == 2:
+            raise runtime.RuntimeBudgetShort("jev_next_call")
+        return [], True
+
+    monkeypatch.setattr(semantic, "audit_claims", audit_claims)
+    db = _seeded_two(tmp_path)
+    try:
+        out = _rerun(db, _cfg("shadow", loop_mode="off"), lane="backlog", max_jobs=1)
+        assert out["job_metrics"][0]["status"] == "deferred_short"
+        assert _job(db)["state"] != "done" and _job(db)["attempts"] == 0
+        assert _audits(db, 1)[-1] in _TERMINAL
+        assert db.artifacts("semantic_summary", message_id=1)
+        assert not db.artifacts("semantic_summary", message_id=2)
+        _rerun(db, _cfg("shadow", loop_mode="off"), lane="backlog", max_jobs=1)
+        assert _job(db)["state"] == "done"
+        assert len(audited) == 3        # target 1 was not audited again
+    finally:
+        db.close()
+
+
+def test_a_jev_cutoff_in_the_re_audit_keeps_the_repaired_summary(
+        tmp_path, monkeypatch):
+    """F07: a repaired summary whose re-audit hits the cutoff is stored as
+    PENDING and re-audited next pass — never replaced by the pre-repair
+    text, and the one repair is not spent again (INV-10)."""
+    audited, repairs = [], []
+    real_summarize = semantic_drain.summarize
+
+    def summarize(*args, **kwargs):
+        out = real_summarize(*args, **kwargs)
+        if kwargs.get("feedback"):
+            repairs.append(1)
+            out["limitations"] = ["合成の修復済み"]
+        return out
+
+    def audit_claims(client, bundle, summary, *a, **k):
+        audited.append(1)
+        if len(audited) == 1:
+            return [{"code": "claim_not_supported", "claim": "synthetic"}], True
+        if len(audited) == 2:
+            raise runtime.RuntimeBudgetShort("jev_next_call")
+        return [], True
+
+    monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic, "audit_claims", audit_claims)
+    db = _seeded(tmp_path)
+    with db.db:
+        row = db.db.execute(
+            "SELECT job_id,payload FROM fetch_jobs WHERE kind='semantic'").fetchone()
+        payload = json.loads(row["payload"])
+        payload["targets"] = [1]
+        db.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
+                      (json.dumps(payload), row["job_id"]))
+    cfg = _cfg("shadow", loop_mode="off")
+    try:
+        out = _rerun(db, cfg, lane="backlog", max_jobs=1)
+        assert out["job_metrics"][0]["status"] == "deferred_short"
+        assert _job(db)["attempts"] == 0
+        assert _audits(db, 1) == ["PENDING"]
+        _rerun(db, cfg, lane="backlog", max_jobs=1)
+        assert _job(db)["state"] == "done"
+        assert _audits(db, 1)[-1] == "PASS"
+        final = json.loads(db.artifacts("semantic_summary", message_id=1)[-1]["content"])
+        assert final["limitations"] == ["合成の修復済み"]
+        assert repairs == [1]
+        assert len(db.artifacts("semantic_repair", message_id=1)) == 1
+    finally:
+        db.close()
+
+
+def test_a_jev_cutoff_in_the_relation_pass_commits_results_and_resumes(
+        tmp_path, monkeypatch):
+    """F07: the cutoff inside update_loops still commits the audited
+    summaries; the job stays pending (deferred_short, no attempt) and the
+    next pass finishes the relation pass."""
+    real_update = semantic_drain.update_loops
+    cut = [True]
+
+    def update_loops(ledger, pid, bundle, facts, jev_client, *a, **k):
+        if jev_client is not None and cut[0]:
+            cut[0] = False
+            raise runtime.RuntimeBudgetShort("jev_next_call")
+        return real_update(ledger, pid, bundle, facts, jev_client, *a, **k)
+
+    monkeypatch.setattr(semantic_drain, "update_loops", update_loops)
+    db = _seeded_two(tmp_path)
+    try:
+        out = _rerun(db, _cfg("shadow"), lane="backlog", max_jobs=1)
+        assert out["job_metrics"][0]["status"] == "deferred_short"
+        assert _job(db)["state"] != "done" and _job(db)["attempts"] == 0
+        for mid in (1, 2):
+            assert _audits(db, mid)[-1] in _TERMINAL
+        _rerun(db, _cfg("shadow"), lane="backlog", max_jobs=1)
+        assert _job(db)["state"] == "done"
+    finally:
+        db.close()
+
+
+def test_a_budget_stop_after_a_repair_dispatch_keeps_the_earlier_target(
+        tmp_path, monkeypatch):
+    """F07: a post-dispatch budget stop of target 2's repair still commits
+    target 1 and keeps target 2's spent repair reservation (INV-10)."""
+    audited = []
+    real_summarize = semantic_drain.summarize
+
+    def summarize(*args, **kwargs):
+        if kwargs.get("feedback"):
+            raise runtime.RuntimeBudget("llm_result")
+        return real_summarize(*args, **kwargs)
+
+    def audit_claims(client, bundle, summary, *a, **k):
+        audited.append(1)
+        if len(audited) == 2:
+            return [{"code": "claim_not_supported", "claim": "synthetic"}], True
+        return [], True
+
+    monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic, "audit_claims", audit_claims)
+    db = _seeded(tmp_path)
+    try:
+        out = _rerun(db, _cfg("shadow", loop_mode="off"))
+        assert out["job_metrics"][0]["status"] == "retry"
+        assert _job(db)["state"] != "done"
+        assert _audits(db, 1)[-1] in _TERMINAL
+        assert len(db.artifacts("semantic_repair", message_id=2)) == 1
+    finally:
+        db.close()

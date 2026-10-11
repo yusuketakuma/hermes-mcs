@@ -1113,6 +1113,59 @@ def test_stage_fetch_probe_notifies_own_post_backfill_would_absorb(
     db.close()
 
 
+def test_self_post_burst_past_probe_pages_notifies_every_new_post(
+        tmp_path, monkeypatch):
+    """A self_posts burst larger than SELF_PROBE_PAGES: the probe stores
+    the newest pages and the same tick's backfill stores the rest — that
+    remainder must notify too, or the next tick sees the latest id stored
+    and never probes again. Rows at/below the pre-probe cutoff stay quiet."""
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(90))
+    db.save_messages([_msg_at(100, 90, _iso(1), unread=False)])
+    # lagging coverage: backfill walks below the watermark and newly
+    # stores an old gap row, which must not be announced
+    db.set_coverage(90, int(time.time()) - 3 * 86400)
+    # newest-first timeline: 21 new read/own posts, then the old gap row
+    items = [{"id": i, "comment": "synthetic own post",
+              "created_at": _iso(0), "is_unread": False}
+             for i in range(121, 100, -1)]
+    items.append({"id": 50, "comment": "synthetic old gap",
+                  "created_at": _iso(2), "is_unread": False})
+
+    class Adapter(mcs_adapter.MCSAdapter):
+        def __init__(self):
+            self.calls = []
+
+        def fetch_latest(self, pid):
+            return {"message_id": 121, "is_self_only": True}
+
+        def _get(self, path, params=None, **kwargs):
+            assert path == "/projects/90/messages"
+            self.calls.append(params["page"])
+            start = (params["page"] - 1) * params["per_page"]
+            return {"messages": items[start:start + params["per_page"]],
+                    "paginate": {"has_next":
+                                 start + params["per_page"] < len(items)}}
+
+    monkeypatch.setattr(run_check, "stage_unread", lambda *a, **k: None)
+    monkeypatch.setattr(run_check, "_outage_since", lambda: None)
+    args = SimpleNamespace(jobs_only=False, no_backfill=False)
+    adapter = Adapter()
+    for run_id in (1, 2):
+        result = {"errors": [], "new_messages": 0, "backfilled": 0}
+        run_check._stage_fetch(adapter, db, args, {"self_posts": True},
+                               result, time.monotonic() + 300, run_id,
+                               False, None)
+        assert result["errors"] == []
+    rows = db.db.execute(
+        "SELECT kind,payload FROM notify_outbox").fetchall()
+    notified = sorted({i for r in rows if r["kind"] == "new_messages"
+                       for i in json.loads(r["payload"])["message_ids"]})
+    assert db.has_message(50)
+    assert notified == list(range(101, 122))
+    db.close()
+
+
 def test_self_probe_skips_when_latest_already_stored(tmp_path):
     """The latest endpoint returns no timestamp — freshness is decided
     by whether the returned id is already in the ledger."""
@@ -1476,6 +1529,67 @@ def _health_unread_at(tmp_path, monkeypatch, unread_at):
     path = tmp_path / "health.json"
     path.write_text(json.dumps({"overall": "failed", "unread_at": unread_at}))
     monkeypatch.setattr(run_check, "HEALTH_FILE", str(path))
+
+
+def test_relogin_replay_drops_the_aborted_attempts_records(tmp_path):
+    """Recovered mid-stage expiry: the replay re-records the stage, so the
+    aborted attempt's incomplete/errors/messages must not linger (F10)."""
+    db = _ledger(tmp_path)
+    expired = []
+
+    def replies(m):
+        if m.project_id == 2 and not expired:
+            expired.append(1)
+            raise mcs_adapter.SessionExpired(status=403)
+        return mcs_adapter.ReplyBatch([], [])
+    adapter = SimpleNamespace(
+        auto_login=lambda **kw: "ok",
+        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+            timestamp=123, patients=[_unread_patient(1), _unread_patient(2)]),
+        fetch_unread_messages=lambda pid, ts: mcs_adapter.MessageBatch(
+            messages=[_message(mid=pid, project_id=pid, unread=True)], reached=True),
+        fetch_unread_replies=replies,
+        mark_patient_read=lambda *a, **k: None)
+    result = {"errors": [], "incomplete": [], "messages": 0,
+              "new_messages": 0, "marked_read": [], "run_id": 7}
+    run_check._with_relogin(
+        adapter, db, result, "unread", run_check.stage_unread, adapter, db,
+        SimpleNamespace(mark_read=False), result, time.monotonic() + 30,
+        db.begin_run(None))
+    assert expired == [1]
+    assert result["incomplete"] == [] and result["errors"] == []
+    assert result["messages"] == 2                 # not double-counted
+    assert result["new_messages"] == 2
+    assert [a["state"] for a in result["relogin_attempts"]] == ["ok"]
+    assert run_check._collection(result)["collection"] == "ok"
+    db.close()
+
+
+def test_relogin_replay_keeps_job_drain_failures(tmp_path):
+    """A reply job deferred by job_retry in the aborted attempt is not due
+    on replay, so its recorded failure must survive the relogin."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(80)
+    db.job_add("reply", 80, message_id=11, parent_id=10)
+    db.job_add("reply", 80, message_id=21, parent_id=20)
+    expired = []
+
+    def fetch_thread(pid, parent):
+        if parent == 10:
+            raise mcs_adapter.MCSError("network_error", retryable=True)
+        if not expired:
+            expired.append(1)
+            raise mcs_adapter.SessionExpired(status=403)
+        return []
+    adapter = SimpleNamespace(auto_login=lambda **kw: "ok",
+                              fetch_thread=fetch_thread)
+    result = {"errors": [], "run_id": 7}
+    run_check._with_relogin(
+        adapter, db, result, "reply_jobs", job_ops.run_reply_jobs,
+        adapter, db, result, time.monotonic() + 60)
+    assert expired == [1]
+    assert result["errors"] == ["reply 11: network_error"]
+    db.close()
 
 
 def test_relogin_journals_heal_facts_without_seeding(tmp_path, monkeypatch):

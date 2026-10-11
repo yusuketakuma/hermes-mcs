@@ -27,12 +27,17 @@ def answer(settings, raw, *, user, channel):
                 "route_epoch": settings["route_epoch"]}
     scoped = {**settings, "inbox": settings.get("inbox") or str(Path(settings["data_root"]) / "cmd"),
               "allowed_chat_ids": {channel}}
+    # only a parse error is the caller's; a handler bug is operation_failed,
+    # as in the Hermes /mcs handler
     try:
         data = _parse(raw)
-        if not isinstance(data, dict) or "op" not in data:
-            return _deny("bad_command")
-        return _dispatch(data, scoped, identity)
     except (ValueError, UnicodeError, TypeError):
         return _deny("bad_command")
+    except Exception:
+        return _deny("operation_failed")
+    if not isinstance(data, dict) or "op" not in data:
+        return _deny("bad_command")
+    try:
+        return _dispatch(data, scoped, identity)
     except Exception:
         return _deny("operation_failed")

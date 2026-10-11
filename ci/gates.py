@@ -39,8 +39,15 @@ _STANDALONE_SDK = {
     "mcs_discord/runtime_compat.py": {"discord"},
     "mcs_slack/runtime_compat.py": {"slack_sdk", "slack_bolt"},
 }
-_STANDALONE_DISCORD_MEMBERS = {"", "__version__", "Intents.none", "Intents.default",
-                                "app_commands.Command", "AllowedMentions.none", "File", "ForumChannel"}
+# Exactly the discord.py surface each independent file uses; "" and
+# "ext.commands" let standalone.py's _sdk() hand the verified modules back.
+_STANDALONE_DISCORD_MEMBERS = {
+    "mcs_discord/standalone.py": {"", "__version__", "Intents.none", "AllowedMentions.none",
+                                  "app_commands.Command", "ext.commands", "ext.commands.Bot"},
+    "mcs_discord/runtime_compat.py": {"Intents.none", "Intents.default", "AllowedMentions.none",
+                                      "File", "ForumChannel", "app_commands.command",
+                                      "app_commands.describe", "ext.commands.Bot"},
+}
 _STANDALONE_ASYNC = {"Event", "FIRST_COMPLETED", "create_task", "current_task", "gather",
                      "get_running_loop", "wait", "wait_for", "TimeoutError"}
 
@@ -117,6 +124,33 @@ def _module_surface(tree, module: str, permitted: set[str]) -> list[str]:
             member.append(current.attr)
         if ".".join(member) not in permitted:
             bad.append(f"{node.lineno} forbidden {module} surface")
+    # ``from module[.sub] import name`` binds a member path, not the module;
+    # check it within the import's own function so unrelated locals reusing
+    # the name elsewhere in the file are not mistaken for the SDK.
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.ImportFrom) and not node.level and node.module
+                and (node.module == module or node.module.startswith(module + "."))):
+            continue
+        scope = parents.get(node)
+        while scope is not None and not isinstance(scope, ast.FunctionDef | ast.AsyncFunctionDef):
+            scope = parents.get(scope)
+        for alias in node.names:
+            prefix = node.module.split(".")[1:] + [alias.name]
+            path = ".".join(prefix)
+            if path not in permitted and not any(p.startswith(path + ".") for p in permitted):
+                bad.append(f"{node.lineno} forbidden {module} surface")
+                continue
+            for use in ast.walk(scope or tree):
+                if not isinstance(use, ast.Name) or use.id != (alias.asname or alias.name):
+                    continue
+                member, current = list(prefix), use
+                while isinstance(parents.get(current), ast.Attribute) \
+                        and parents[current].value is current:
+                    current = parents[current]
+                    member.append(current.attr)
+                # A bare name is the exact import path, so it must be permitted too.
+                if ".".join(member) not in permitted:
+                    bad.append(f"{use.lineno} forbidden {module} surface")
     return bad
 
 
@@ -155,8 +189,8 @@ def gate_stdlib_only() -> list[str]:
                 if m not in stdlib and m not in _LOCAL_MODULES:
                     bad.append(f"{path.name}:{node.lineno} imports {m}")
         native = path.is_relative_to(ADAPTERS) or path.is_relative_to(STANDALONE)
-        members = (_STANDALONE_DISCORD_MEMBERS if native and _plugin_path(path) in _STANDALONE_SDK
-                   else _SDK_MEMBERS)
+        members = (_STANDALONE_DISCORD_MEMBERS.get(_plugin_path(path), set())
+                   if native and _plugin_path(path) in _STANDALONE_SDK else _SDK_MEMBERS)
         if _plugin_path(path) == "mcs_discord/cards.py":
             members = members | {"Embed"}
         bad.extend(f"{path.name}:{v}" for v in _module_surface(tree, "discord", members))
@@ -414,17 +448,32 @@ def gate_writer_lock() -> list[str]:
 
 
 _CHANNEL_LITERAL = re.compile(r"discord:\d{10,}|\b\d{17,20}\b")
+# A whole string constant naming a Slack conversation (optionally a thread).
+# Anchoring to the entire constant leaves help-text placeholders such as
+# "e.g. slack:C0CHANNELID" and the built '"slack:" + channel_id' alone.
+_SLACK_TARGET = re.compile(r"slack:[CDGUW][A-Z0-9]{8,}(?:[:/]\S+)?")
 
 
 def gate_notify_fail_closed() -> list[str]:
     """No hardcoded delivery destination: a missing notify_target must
     skip, never fall back to a baked-in channel (patient-content risk)."""
     bad = []
-    for path in _py_files(MCS, PLUGIN, ADAPTERS):
-        for i, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), 1):
-            if _CHANNEL_LITERAL.search(line) and "test" not in path.name:
+    for path in _py_files(MCS, PLUGIN, ADAPTERS, STANDALONE, ROOT / "lineworks_adapter"):
+        if "test" in path.name:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _CHANNEL_LITERAL.search(line):
                 bad.append(f"{path.name}:{i} hardcoded channel/chat id")
+        try:
+            tree = ast.parse(text)
+        except SyntaxError as e:
+            bad.append(f"{path.name}: unparseable ({e})")
+            continue
+        bad += [f"{path.name}:{node.lineno} hardcoded Slack destination"
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and _SLACK_TARGET.fullmatch(node.value)]
     return bad
 
 

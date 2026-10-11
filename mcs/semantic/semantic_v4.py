@@ -29,6 +29,8 @@ import json
 import math
 import time
 from mcs_util import loads_dict
+from semantic_policy import (JOB_KIND, KIND_AUDIT, KIND_COVERAGE,
+                             KIND_FACT_AUDIT, KIND_LOOP, KIND_SUMMARY)
 
 ENGINE_VERSION = 4
 KIND_V4 = "semantic_facts_v4"
@@ -213,7 +215,7 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
         return existing["artifact_id"]
     import semantic
     content = project_v2_doc_legacy(v2_doc)
-    ledger.artifact_add_tx(
+    return ledger.artifact_add_tx(
         KIND_V4, json.dumps(content, ensure_ascii=False,
                             allow_nan=False),
         project_id=pid, message_id=mid, model=semantic.llm_model(),
@@ -224,10 +226,6 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
               "fact_source": "canonical",
               "doc_hash": doc_hash,
               "projection_version": PROJECTION_VERSION})
-    row = ledger.db.execute(
-        "SELECT MAX(artifact_id) FROM artifacts WHERE kind=? "
-        "AND message_id=?", (KIND_V4, mid)).fetchone()
-    return row[0] if row else None
 
 
 # Rows re-projected per tick — the pass is a pure function of stored
@@ -373,8 +371,8 @@ _FACT_OBJECT = "CASE WHEN f.type='object' THEN f.value ELSE '{}' END"
 _PROVENANCE = (f"CASE WHEN json_type({_FACT_OBJECT},'$.provenance')='text' "
                f"THEN json_extract({_FACT_OBJECT},'$.provenance') ELSE '' END")
 
-_HELD_KINDS = ("semantic_summary", "semantic_audit", "semantic_coverage",
-               "semantic_facts_audit", "loop_candidate")
+_HELD_KINDS = (KIND_SUMMARY, KIND_AUDIT, KIND_COVERAGE, KIND_FACT_AUDIT,
+               KIND_LOOP)
 
 
 def _count(out: dict, key: str) -> None:
@@ -466,7 +464,7 @@ def _seed_rebuild(ledger, scfg, pid: int, mid: int, meta: dict):
     row = ledger.db.execute(
         "SELECT COALESCE(parent_id,message_id) r FROM messages "
         "WHERE project_id=? AND message_id=?", (pid, mid)).fetchone()
-    state = ledger.job_state("semantic", pid, row["r"]) if row else None
+    state = ledger.job_state(JOB_KIND, pid, row["r"]) if row else None
     if state in ("failed", "pending"):
         return f"job_{state}"
     ledger._semantic_seed_tx(pid, [mid], {"source": "hint_rebuild",
@@ -474,7 +472,7 @@ def _seed_rebuild(ledger, scfg, pid: int, mid: int, meta: dict):
     return None
 
 
-def _rebuild_hint_docs(ledger, scfg: dict, limit: int, out: dict) -> None:
+def _rebuild_hint_docs(ledger, scfg: dict, limit: int, out: dict) -> int:
     """Bounded pass over current semantic_facts_v2 documents whose hint
     merge predates the evidence-span rule (``FACTS_V2_BUILD``).
 

@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "LLM抽出結果の本文に、実際に使ったモデル名を記録",
+  "summary": "config.json の local_llm.model で既定以外のモデルを指定している環境で、抽出結果の本文（JSON）の _model に既定のモデル名が書かれていた問題を修正しました。本文にも、記録の model 列・meta と同じ実際に使ったモデル名が入ります。",
+  "upgrade": "追加操作は不要です。更新後に新しく保存される抽出結果から反映され、保存済みの結果は書き換えません。",
+  "details": [
+    "mcs/extract/v4/extract_llm.py は成功時と失敗記録の本文の _model に、その行で固定した対象モデル（_target）を記録する。EXTRACT_VERSION は変えない。"
+  ],
+  "refs": [
+    "mcs/extract/v4/extract_llm.py",
+    "tests/extract/test_extract_content_model.py"
+  ]
+}

@@ -1156,3 +1156,40 @@ def test_changed_active_named_body_uses_exact_prior_but_unchanged_and_new_do_not
     assert "edit_only" not in bodies["m:101#1"]
     assert bodies["m:101#1"]["prior_remote_id"] == "original/body:0002"
     assert "edit_only" not in bodies["m:300#1"] and "prior_remote_id" not in bodies["m:300#1"]
+
+
+def test_publish_failure_on_a_later_spec_leaves_no_open_transaction(led, monkeypatch):
+    """A publish error on the 2nd spec must not leave the 1st spec's
+    UPDATE in an open implicit transaction — the next BEGIN IMMEDIATE
+    would fail — and the 1st spec's published flag stays committed."""
+    import sqlite3
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET spec_published=0 "
+                       "WHERE delivery_id=?", (render["delivery_id"],))
+    real = notify_cards.publish_file
+    calls = []
+
+    def flaky(directory, name, raw):
+        calls.append(name)
+        if len(calls) == 2:
+            raise OSError("synthetic ENOSPC")
+        return real(directory, name, raw)
+
+    monkeypatch.setattr(notify_cards, "publish_file", flaky)
+    first = _spec(render)
+    second = {**first, "delivery_id": _uuid(9001)}
+    root = notify_cards.data_root(led)
+    with pytest.raises(OSError):
+        notify_cards._publish_specs(led.db, notify_cards.notify_dirs(root),
+                                    [first, second], NOW + 1)
+    assert not led.db.in_transaction
+    other = sqlite3.connect(led.db.execute("PRAGMA database_list").fetchone()[2])
+    try:
+        assert other.execute("SELECT spec_published FROM notification_renders "
+                             "WHERE delivery_id=?", (render["delivery_id"],)
+                             ).fetchone()[0] == 1
+    finally:
+        other.close()

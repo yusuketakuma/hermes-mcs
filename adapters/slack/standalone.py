@@ -18,7 +18,7 @@ from .tasks import Supervisor
 _API_METHODS = frozenset({
     "auth.test", "bots.info", "users.info", "apps.connections.open",
     "chat.postMessage", "chat.postEphemeral", "chat.update", "chat.delete",
-    "conversations.replies", "views.open", "files.getUploadURLExternal",
+    "conversations.history", "conversations.replies", "views.open", "files.getUploadURLExternal",
     "files.completeUploadExternal", "files.info",
 })
 _RESPONSE_LIMIT = 1024 * 1024

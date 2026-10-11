@@ -10,16 +10,17 @@ import time
 from pathlib import Path
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every directory under mcs/ that holds .py files, at any depth
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
 from ledger import LedgerReader, reaction_actor_summary
 from project_metadata_view import physician_viewed_status
+from mcs_adapter import project_url
 from mcs_queries import incomplete_reply_roots
 from mcs_signals import is_own_station_message
-from mcs_util import loads_dict, register_search_fold, search_fold
+from mcs_util import HOME, loads_dict, register_search_fold, search_fold
 from read_model import _snapshot_meta, message_patient_context
 from message_metadata import (
     flag_lines, get_message_metadata, get_metadata_shadow_status, is_self_sender)
@@ -78,6 +79,13 @@ class View:
             self.close()
             raise
 
+    def _current_policy(self):
+        """Content of the newest semantic_policy artifact, or None."""
+        row = self.db.execute(
+            "SELECT content FROM artifacts WHERE kind='semantic_policy' "
+            "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+        return row["content"] if row else None
+
     def close(self):
         self.reader.close()
 
@@ -132,7 +140,7 @@ class View:
     def _evidence(self, row):
         pid, mid = row["project_id"], row["message_id"]
         # Only return the known project URL, never an upstream signed URL or guessed deep link.
-        if row.get("source_url") != f"https://www.medical-care.net/projects/medical/{pid}":
+        if row.get("source_url") != project_url(pid):
             row["source_url"] = None
         row["stored_replies"] = self.db.execute(
             "SELECT count(*) FROM messages WHERE project_id=? AND parent_id=?", (pid, mid)).fetchone()[0]
@@ -541,10 +549,7 @@ class View:
                         else [])
         bundle = thread_bundle(self, pid, row["parent_id"] or mid)
         fingerprint = bundle["source_fingerprint"] if bundle else None
-        policy_row = self.db.execute(
-            "SELECT content FROM artifacts WHERE kind='semantic_policy' "
-            "ORDER BY artifact_id DESC LIMIT 1").fetchone()
-        policy = policy_row["content"] if policy_row else None
+        policy = self._current_policy()
         out = {}
         for kind in ("semantic_bundle", "semantic_assess",
                      "semantic_facts", "semantic_summary",
@@ -622,10 +627,7 @@ class View:
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("bad_limit")
         items = []
-        policy_row = self.db.execute(
-            "SELECT content FROM artifacts WHERE kind='semantic_policy' "
-            "ORDER BY artifact_id DESC LIMIT 1").fetchone()
-        policy = policy_row["content"] if policy_row else None
+        policy = self._current_policy()
         bundles = {}
         for r in self.db.execute(
                 "SELECT artifact_id,message_id,content,meta,created_at "
@@ -982,8 +984,8 @@ class _Parser(argparse.ArgumentParser):
 def _parser():
     parser = _Parser(description=__doc__)
     parser.add_argument("--snapshot", type=Path,
-                        default=Path.home() / ".mcs/data/snapshots/ledger-snapshot.db")
-    parser.add_argument("--cmd-dir", type=Path, default=Path.home() / ".mcs/data/cmd")
+                        default=Path(HOME) / "data/snapshots/ledger-snapshot.db")
+    parser.add_argument("--cmd-dir", type=Path, default=Path(HOME) / "data/cmd")
     subs = parser.add_subparsers(dest="kind", required=True)
     for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "staff", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals", "read_model", "project_metadata", "cross_lists", "response_observations"):
         sub = subs.add_parser(kind)

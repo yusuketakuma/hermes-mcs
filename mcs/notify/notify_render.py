@@ -23,8 +23,6 @@ from message_metadata import (get_message_metadata, is_self_sender,
 import structured_view
 # LINE WORKS' card split lives with its presenter; re-exported for the
 # worker (adapters/lineworks/cards.py) and notify_cards
-from present_lineworks import CARD_LIMIT as LINEWORKS_CARD_LIMIT  # noqa: F401
-from present_lineworks import MORE as LINEWORKS_MORE  # noqa: F401
 from present_lineworks import card_split as lineworks_card_split  # noqa: F401
 
 PAGE_DIGEST = 5           # digest candidates per page (count cap)
@@ -128,22 +126,7 @@ def notification_preview(db, card, content, *, limit=600) -> str:
 
 def display_text(parts: dict) -> str:
     """カードの可視本文を順序どおり連結し、通知を発生させるメンションを除く。"""
-    lines = []
-    for item in parts["containers"]:
-        kind = item["type"]
-        if kind == "meta":
-            continue
-        if item.get("rule") and lines:
-            lines.append(SECTION_RULE)
-        value = (f"{item['name']}: {item['value']}"
-                 if kind == "field" else item["text"])
-        lines.append(f"引用: {value}" if kind == "quote" else value)
-    footer = [item["text"] for item in parts.get("footer") or []
-              if item["type"] == "text"]
-    if footer and lines:
-        lines.append(SECTION_RULE)
-    lines.extend(footer)
-    return re.sub(r"<@[^>\n]+>", "メンバー", "\n".join(lines))
+    return render_text(parts, head="{}")
 
 
 # the shared display model's text budget (adapters/common/spec.py
@@ -155,19 +138,11 @@ _FOLD_RE = re.compile(r"^・…他([0-9]+)件$")
 def _text_cost(parts: dict) -> int:
     """Text size as the strictest consumer counts it: the larger of the
     visible text and adapters/common/spec.py's per-item accounting
-    (+4 per container / footer line, +3 per quote line, +6 per field),
-    so a folded card never fails the worker's ``text_budget`` check."""
-    cost = 0
-    for c in parts["containers"]:
-        if c["type"] == "quote":
-            cost += sum(len(ln) + 3 for ln in c["text"].splitlines())
-        elif c["type"] == "field":
-            cost += len(c["name"]) + len(c["value"]) + 6
-        elif c["type"] != "meta":
-            cost += len(c["text"]) + 4
-    cost += sum(len(ln) + 4 for c in parts.get("footer") or []
-                if c["type"] == "text" for ln in c["text"].splitlines())
-    return max(cost, len(display_text(parts)))
+    (_blocks_len/_footer_len — the container types are spec's closed
+    set), so a folded card never fails the worker's ``text_budget`` check."""
+    return max(_blocks_len(parts["containers"])
+               + _footer_len(parts.get("footer") or []),
+               len(display_text(parts)))
 
 
 def fit_parts(parts: dict, limit: int = PARTS_TEXT_BUDGET) -> dict:
@@ -274,7 +249,7 @@ def _latest_signals(db, keys: list, project_id=None) -> dict:
 def _patient_name(db, pid) -> str:
     if not positive(pid):
         return ""
-    r = db.execute("SELECT patient_name, is_archived FROM patients "
+    r = db.execute("SELECT patient_name FROM patients "
                    "WHERE project_id=?", (pid,)).fetchone()
     return (r["patient_name"] or "").strip() if r else ""
 
@@ -305,6 +280,17 @@ def _when_posted(posted_at) -> str:
     """MM-DD HH:MM of a post, or a plain word when no time is stored —
     never a row of question marks on a notification."""
     return f"{_mmdd(posted_at)} {_hhmm(posted_at)}" if posted_at else "日時未取得"
+
+
+def thread_stamp_row(db, mid, sender_id) -> str:
+    """A post's stamp row for its thread message, or "" for an observed
+    zero (owner 2026-10-07): unfetched, failed and own stamps still show."""
+    meta = get_message_metadata(db, mid)
+    meta["own_post"] = is_self_sender(db, sender_id)
+    if stamp_counts(meta) == {} and not self_stamps(meta) \
+            and not meta["last_error"]:
+        return ""
+    return thread_stamp_line(meta, reaction_actor_summary(db, mid))
 
 
 def _sender_tag(m, db=None) -> str:
@@ -548,8 +534,7 @@ SIGNAL_STATE_LABEL = {"open": "未確認", "resolved": "解消",
 # One spelling on every surface and layout, no source qualifier (owner
 # 2026-10-09): the model verdict carries 🚨 plus words so it never reads
 # weaker than the icon-only lexical rule match.
-URGENCY_PLAIN = {"llm": "🚨 緊急度高", "rule": "🚨"}
-LAYOUT2_URGENCY = URGENCY_PLAIN
+URGENCY_PLAIN = structured_view.URGENCY_LABEL_PLAIN
 
 
 def signal_label(sig: dict) -> str:
@@ -732,12 +717,8 @@ def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
         out.append(_summary_block(db, mid, cfg=cfg, label=layout < 2)["text"])
     stamp_line = ""
     if stamps:
-        meta = get_message_metadata(db, mid)
-        sid = m["sender_id"] if "sender_id" in m.keys() else None
-        meta["own_post"] = is_self_sender(db, sid)
-        line = thread_stamp_line(meta, reaction_actor_summary(db, mid))
-        if line != "スタンプ なし":       # an observed zero needs no row
-            stamp_line = line
+        stamp_line = thread_stamp_row(
+            db, mid, m["sender_id"] if "sender_id" in m.keys() else None)
     body = m["body_text"] or ""
     if layout >= 2:
         if include_summary:
@@ -848,7 +829,7 @@ def _card_content(db, card, *, cfg=None) -> dict:
             # urgency leads the line under it, then start date and counts
             containers = [{"type": "heading", "text":
                            f"💬 {patient_heading(db, card['project_id'])}"}]
-            meta = [LAYOUT2_URGENCY[u] for u in ("llm", "rule") if u in urgency][:1]
+            meta = [URGENCY_PLAIN[u] for u in ("llm", "rule") if u in urgency][:1]
             meta.append(f"{_mmdd(first.get('posted_at'))}〜")
             if context:
                 meta.append(context)

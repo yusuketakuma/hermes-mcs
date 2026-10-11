@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "網羅性評価の失敗理由が実際の再試行扱いと食い違う問題を修正",
+  "summary": "Jev の通信失敗などで網羅性評価が完了しなかったとき、記録上は「資源待ち（resource）」と表示されながら、実際には再試行として試行回数を消費していました。記録される失敗理由をジョブの扱いと同じ分類にそろえ、再試行になる失敗は「retry」と記録します。",
+  "upgrade": "追加操作は不要です。スケジュールの扱い（待機・再試行・停止）は変わりません。過去の記録は書き換えません。",
+  "details": [
+    "失敗分類を semantic_jev.failure_class に一本化し、意味解析ドレイン・網羅性評価・抽出 QC が同じ分類を使う。semantic_drain._jev_failure_class は同じ関数の別名として残す。",
+    "網羅性評価（semantic_coverage）の failure_reason は resource / retry / model のいずれかになる。Jev クライアントがない場合は従来どおり resource。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_jev.py",
+    "mcs/semantic/semantic_audit.py",
+    "mcs/semantic/semantic_drain.py",
+    "mcs/semantic/semantic_qc.py",
+    "tests/semantic/test_semantic_extraction.py"
+  ]
+}

@@ -32,7 +32,7 @@ import uuid
 from pathlib import Path
 from contextlib import suppress
 
-from mcs_util import html_to_text, loads_dict, publish_tmp
+from mcs_util import RETRY_LATER_4XX, html_to_text, loads_dict, publish_tmp
 
 
 SCHEMA_VERSION = 9
@@ -64,9 +64,8 @@ def job_reason_class(value: object) -> str:
         return "authentication"
     if code == "waiting_replies":
         return "deferred"
-    # 408/425/429 are retry-later by definition, not a permanent 4xx
-    if code.startswith("http_") and code not in ("http_408", "http_425", "http_429") \
-            and int(code[5:]) < 500:
+    if code.startswith("http_") and int(code[5:]) < 500 \
+            and int(code[5:]) not in RETRY_LATER_4XX:
         return "unavailable"
     return "transient"
 
@@ -220,19 +219,15 @@ class Ledger:
 
     def _preflight(self, tables: set[str]):
         """Reject ambiguous existing rows before any persistent change."""
-        checks = (("attachments", "attachment_id", "message_id,file_id",
-                   "duplicate attachment keys"),
-                  ("read_marks", "id", "project_id,snapshot_ts",
-                   "duplicate read mark keys"))
-        for table, marker, keys, error in checks:
+        errors = {"attachments": "duplicate attachment keys",
+                  "read_marks": "duplicate read mark keys"}
+        for table in KEY_FENCES:
             if table not in tables:
                 continue
             cols = {r[1] for r in self.db.execute(
-                f"PRAGMA table_info({table})")}
-            if marker in cols and self.db.execute(
-                    f"SELECT 1 FROM {table} GROUP BY {keys} "
-                    "HAVING COUNT(*) > 1 LIMIT 1").fetchone():
-                raise MigrationError(error)
+                f'PRAGMA table_info("{table}")')}
+            if _key_fence_breached(self.db, table, cols):
+                raise MigrationError(errors[table])
 
     def _init(self):
         self.db.executescript("""
@@ -1323,7 +1318,8 @@ class Ledger:
                       notify: dict | None = None,
                       semantic: bool = False,
                       notify_max_age_s: float | None = None,
-                      notify_all_new: bool = False) -> list:
+                      notify_all_new: bool = False,
+                      notify_new_after_ts: float | None = None) -> list:
         """Backfill path: upsert messages (+reply attachments) without
         touching patient fetch_state. Optional notify intent lands in the
         same transaction. Returns ids of newly-inserted messages.
@@ -1336,7 +1332,10 @@ class Ledger:
         With notify_max_age_s, newly stored read posts with a known
         recent timestamp also qualify through the shared save gate.
         notify_all_replies on the ledger exempts new replies from the age
-        and unread gates only when this call supplies a notify template."""
+        and unread gates only when this call supplies a notify template.
+        notify_new_after_ts widens eligibility like notify_all_new, but
+        only to new rows posted strictly after it (a page-limited
+        self-post probe's cutoff; older history stays quiet)."""
         new_ids = []
         now = time.time()
         before_semantic = (self._semantic_generation_snapshot(msgs)
@@ -1356,6 +1355,13 @@ class Ledger:
                 if notify_all_new:
                     fresh_unread = list(dict.fromkeys(
                         fresh_unread + new_ids))
+                elif notify_new_after_ts is not None and new_ids:
+                    fresh_unread = list(dict.fromkeys(fresh_unread + [
+                        r[0] for r in self.db.execute(
+                            "SELECT message_id FROM messages WHERE message_id IN ("
+                            + ",".join("?" * len(new_ids))
+                            + ") AND posted_at_ts > ?",
+                            [*new_ids, notify_new_after_ts])]))
                 notify_ids = self._unnotified(fresh_unread) if notify else []
                 self._queue_saved_messages_tx(
                     project_id, new_ids, changed_semantic.get(project_id, []),
@@ -1427,10 +1433,11 @@ class Ledger:
             (m.message_id,)).fetchone()
         if existing is not None and existing["project_id"] != m.project_id:
             raise ValueError("message_project_mismatch")
-        if (existing is not None and existing["content_hash"] is not None
-                and existing["body_state"] in TERMINAL_BODY_STATES
-                and m.body_state in TERMINAL_BODY_STATES
-                and existing["content_hash"] != chash):
+        edited = (existing is not None and existing["content_hash"] is not None
+                  and existing["body_state"] in TERMINAL_BODY_STATES
+                  and m.body_state in TERMINAL_BODY_STATES
+                  and existing["content_hash"] != chash)
+        if edited:
             # seed seq 1 once, then chain off the latest revision inside the
             # INSERT itself: seq and prev_content_hash come from the row
             # read under the write lock, and an edit an overlapping writer
@@ -1511,18 +1518,24 @@ class Ledger:
               m.posted_at, posted_ts, int(bool(m.is_unread)),
               m.body_html, body_text, m.body_state, chash, m.reply_count,
               now, now))
-        self._save_message_metadata(m, source="capture", now=now)
+        self._save_message_metadata(m, source="capture", now=now,
+                                    body_changed=edited)
         return 0 if existing is not None else 1
 
-    def _save_message_metadata(self, m, *, source, now):
+    def _save_message_metadata(self, m, *, source, now, body_changed=False):
         metadata = getattr(m, "metadata", {})
         errors = getattr(m, "metadata_errors", [])
-        if not metadata and not errors and source == "capture":
+        if (not metadata and not errors and source == "capture"
+                and not body_changed):
             return
         row = self.db.execute(
             "SELECT content FROM message_metadata WHERE message_id=? AND source=?",
             (m.message_id, source)).fetchone()
         content = (loads_dict(row["content"]) or {}) if row else {}
+        if body_changed:
+            # a field this capture did not re-observe belongs to the earlier
+            # body; keeping it under the new checked_at would re-bind it
+            content = {k: v for k, v in content.items() if k in metadata}
         # observed_at marks when this value was first seen: unread posts
         # are re-captured every tick, and refreshing an unchanged value
         # would re-render cards and recount digests each time.
@@ -1556,27 +1569,23 @@ class Ledger:
             if publish is True and error is None and not getattr(m, "metadata_errors", []):
                 self._save_message_metadata(m, source="capture", now=now)
 
-    def _reaction_actor_watch_sql(self):
-        """Roots and replies of threads active in the last 7 days in active
-        rooms (第2層 watch set) — stamps are pressed on both."""
-        return ("""SELECT m.message_id FROM messages m
-          JOIN patients p ON p.project_id=m.project_id
-          WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
-            AND m.posted_at_ts<=?
-            AND (SELECT MAX(x.posted_at_ts) FROM messages x
-                 WHERE x.project_id=m.project_id
-                   AND x.body_state IS NOT 'deleted' AND x.posted_at_ts<=?
-                   AND COALESCE(x.parent_id,x.message_id)=COALESCE(m.parent_id,m.message_id))>=?""",
-                None)
-
     def reaction_actor_targets(self, limit=4, *, now=None):
         """Watched posts whose captured reactions changed since the last
         complete actor fetch, or whose complete set expired; failures back off."""
         now = time.time() if now is None else now
-        watch, _ = self._reaction_actor_watch_sql()
-        return self.db.execute(f"""
+        # w: roots and replies of threads active in the last 7 days in
+        # active rooms (第2層 watch set) — stamps are pressed on both.
+        return self.db.execute("""
           SELECT m.message_id,m.project_id FROM messages m
-          JOIN ({watch}) w ON w.message_id=m.message_id
+          JOIN (SELECT m.message_id FROM messages m
+            JOIN patients p ON p.project_id=m.project_id
+            WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
+              AND m.posted_at_ts<=?
+              AND (SELECT MAX(x.posted_at_ts) FROM messages x
+                   WHERE x.project_id=m.project_id
+                     AND x.body_state IS NOT 'deleted' AND x.posted_at_ts<=?
+                     AND COALESCE(x.parent_id,x.message_id)=COALESCE(m.parent_id,m.message_id))>=?
+          ) w ON w.message_id=m.message_id
           JOIN message_metadata md ON md.message_id=m.message_id AND md.source=(
             SELECT source FROM message_metadata latest
             WHERE latest.message_id=m.message_id AND latest.last_error IS NULL
@@ -1791,7 +1800,7 @@ class Ledger:
         payload=None is the unregistered form and is stored as
         empty=true/comment=null so 空 (fetched, nothing registered) stays
         distinct from 未取得 (never fetched). An unchanged summary (same
-        sha256) writes no new artifact — only the newest row's
+        sha256 and karte_id) writes no new artifact — only the newest row's
         fetched_at moves. Either way the project's due flag is cleared."""
         p = payload or {}
         user = p.get("user") or {}
@@ -1810,7 +1819,9 @@ class Ledger:
         if row:
             with suppress(ValueError, TypeError, RecursionError):
                 meta = json.loads(row["meta"] or "{}")
-                if isinstance(meta, dict) and meta.get("sha256") == sha:
+                # karte_id too: readers bind the newest row to patients.karte_id
+                if (isinstance(meta, dict) and meta.get("sha256") == sha
+                        and meta.get("karte_id") == karte_id):
                     meta["fetched_at"] = now
                     self.db.execute(
                         "UPDATE artifacts SET meta=? WHERE artifact_id=?",
@@ -1838,12 +1849,6 @@ class Ledger:
             (time.time(), project_id))
         self.db.commit()
 
-    def _karte_summary_due(self, project_id: int, flag: int):
-        self.db.execute(
-            "UPDATE patients SET karte_summary_due=? WHERE project_id=?",
-            (flag, project_id))
-        self.db.commit()
-
     def karte_summary_mark_due(self, project_id: int, due: bool = True):
         """Flag (or unflag) a project for a 連携サマリー GET on the next run.
 
@@ -1853,7 +1858,10 @@ class Ledger:
         stage on a non-retryable failure (the next new message re-arms
         it). The flag persists for a project whose karte_id is still
         unknown and fires once it is."""
-        self._karte_summary_due(project_id, 1 if due else 0)
+        self.db.execute(
+            "UPDATE patients SET karte_summary_due=? WHERE project_id=?",
+            (1 if due else 0, project_id))
+        self.db.commit()
 
     def karte_summary_due(self) -> list:
         """Projects flagged for a summary GET that have a karte_id, newest last_seen first.
@@ -1980,7 +1988,11 @@ class Ledger:
                                payload, next_try,
                                revive_failed=revive_failed)
         self.db.commit()
-        return cur.lastrowid
+        if cur.rowcount < 1:  # kept an in-flight row; lastrowid is stale here
+            return None
+        return self.db.execute(
+            "SELECT job_id FROM fetch_jobs WHERE kind=? AND project_id=?"
+            " AND message_id=?", (kind, project_id, message_id)).fetchone()[0]
 
     def job_set_flag(self, kind: str, project_id: int, message_id: int,
                      key: str) -> None:
@@ -2392,7 +2404,7 @@ class Ledger:
                           retry_in: float = 900, max_attempts: int = 6,
                           semantic: bool = False):
         """Classified failure recording (F11). PERMANENT kinds (4xx other
-        than 408/429, oversize, policy blocks) can never succeed on the
+        than RETRY_LATER_4XX, oversize, policy blocks) can never succeed on the
         same url -> 'failed' now; a fresh signed url on re-save revives
         the row (see _save_attachments). Transient kinds back off to the
         attempt cap as before."""
@@ -2401,7 +2413,7 @@ class Ledger:
             or (kind.startswith("http_")
                 and kind[5:].isdigit()
                 and 400 <= int(kind[5:]) < 500
-                and int(kind[5:]) not in (408, 429)))
+                and int(kind[5:]) not in RETRY_LATER_4XX))
         with self.db:
             source = self.db.execute(
                 "SELECT m.project_id,m.message_id,a.state,"
@@ -2818,6 +2830,102 @@ def reaction_actor_summary(db, message_id, *, now=None) -> dict:
     return out
 
 
+# Static recovery-DB contract, one copy for valid_mcs_db, Ledger._preflight,
+# ledger_audit and the bounded backup inventory. Source columns are the ones
+# recovery cannot reconstruct (_migrate_body adds derived columns, not these).
+STATIC_SOURCE_COLUMNS = {
+    "runs": frozenset({"run_id", "started_at", "finished_at",
+                       "snapshot_ts", "status", "error"}),
+    "patients": frozenset({"project_id", "project_type", "patient_name",
+                           "disease", "station_name", "url", "last_seen"}),
+    "messages": frozenset({"message_id", "project_id", "parent_id",
+                           "sender_id", "sender_name", "sender_type",
+                           "profession", "organization", "posted_at",
+                           "body_html", "reply_count", "first_seen"}),
+}
+STATIC_BASE_COLUMNS = {
+    "attachments": frozenset({"attachment_id", "message_id", "file_id",
+                              "name", "url", "local_path", "bytes",
+                              "sha256", "state", "downloaded_at",
+                              "created_at"}),
+    "read_marks": frozenset({"project_id", "snapshot_ts", "marked_at"}),
+    "notify_outbox": frozenset({"event_id", "kind", "project_id", "payload",
+                                "state", "attempts", "next_try",
+                                "accepted_ref", "created_at", "updated_at"}),
+    "artifacts": frozenset({"artifact_id", "kind", "project_id", "message_id",
+                            "content", "model", "meta", "created_at"}),
+    "fetch_jobs": frozenset({"job_id", "kind", "project_id", "message_id",
+                             "parent_id", "payload", "state", "attempts",
+                             "next_try", "created_at", "updated_at"}),
+    "message_metadata": frozenset({"message_id", "source", "content",
+                                   "checked_at", "last_error"}),
+}
+# Pre-attachment_id table layout (no attachment_id column).
+LEGACY_ATTACHMENT_COLUMNS = frozenset({"message_id", "file_id", "name", "url",
+                                       "downloaded_path", "first_seen"})
+# table: (marker column, key) — with the marker, a duplicate key is ambiguous.
+KEY_FENCES = {"attachments": ("attachment_id", "message_id,file_id"),
+              "read_marks": ("id", "project_id,snapshot_ts")}
+
+
+def static_required_tables(version: int) -> set[str]:
+    """Tables a static ledger of this schema version must have.
+
+    Older backups may lack later tables; _init creates them on reopen."""
+    required = set(STATIC_SOURCE_COLUMNS)
+    if version >= 5:
+        required |= {"attachments", "notify_outbox", "read_marks",
+                     "artifacts", "fetch_jobs"}
+    if version >= 8:
+        required.add("message_metadata")
+    return required
+
+
+def static_required_columns(table: str, columns: set[str]) -> frozenset[str]:
+    """Columns a present contract table needs, given the columns it has."""
+    if table == "attachments" and "attachment_id" not in columns:
+        return LEGACY_ATTACHMENT_COLUMNS
+    required = STATIC_SOURCE_COLUMNS.get(table) or STATIC_BASE_COLUMNS[table]
+    if table == "read_marks" and "id" in columns:
+        required |= {"status"}
+    return required
+
+
+def _key_fence_breached(db: sqlite3.Connection, table: str, columns: set[str]) -> bool:
+    """True when a fenced table with its marker column has a duplicate key."""
+    fence = KEY_FENCES.get(table)
+    return bool(fence and fence[0] in columns and db.execute(
+        f'SELECT 1 FROM "{table}" GROUP BY {fence[1]} '
+        "HAVING COUNT(*) > 1 LIMIT 1").fetchone())
+
+
+def static_contract_ok(db: sqlite3.Connection) -> bool:
+    """True when an open static candidate meets the recovery schema contract.
+
+    Checks journal_mode=delete, the supported version, no interrupted
+    migration, the version's required tables, each present table's columns
+    and the ambiguous-key fences. SQLite errors propagate, so each caller
+    keeps its own budget, connection and failure mapping."""
+    if db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
+        return False
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    if not 0 <= version <= SCHEMA_VERSION:
+        return False
+    tables = {r[0] for r in db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if ({"attachments_v1", "read_marks_v1"} & tables
+            or not static_required_tables(version) <= tables):
+        return False
+    for table in (*STATIC_SOURCE_COLUMNS, *STATIC_BASE_COLUMNS):
+        if table not in tables:
+            continue  # _init creates absent tables for older backups.
+        columns = {row[1] for row in db.execute(f'PRAGMA table_info("{table}")')}
+        if (not static_required_columns(table, columns) <= columns
+                or _key_fence_breached(db, table, columns)):
+            return False
+    return True
+
+
 def valid_mcs_db(path: str, *, deadline: float | None = None) -> bool:
     """Validate a static recovery/publication candidate without sidecars."""
     if not os.path.isfile(path) or os.path.getsize(path) == 0:
@@ -2831,76 +2939,8 @@ def valid_mcs_db(path: str, *, deadline: float | None = None) -> bool:
             if deadline is not None:
                 db.set_progress_handler(lambda: int(monotonic() >= deadline), 1000)
             if db.execute("PRAGMA quick_check").fetchone()[0] != "ok" \
-                    or db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
+                    or not static_contract_ok(db):
                 return False
-            version = db.execute("PRAGMA user_version").fetchone()[0]
-            if not 0 <= version <= SCHEMA_VERSION:
-                return False
-            tables = {r[0] for r in db.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'")}
-            if {"attachments_v1", "read_marks_v1"} & tables:
-                return False
-            # _migrate_body adds derived columns, not these source fields.
-            # Older backups may lack tables that _init creates on reopen.
-            core_columns = {
-                "runs": {"run_id", "started_at", "finished_at",
-                         "snapshot_ts", "status", "error"},
-                "patients": {"project_id", "project_type", "patient_name",
-                             "disease", "station_name", "url", "last_seen"},
-                "messages": {"message_id", "project_id", "parent_id",
-                             "sender_id", "sender_name", "sender_type",
-                             "profession", "organization", "posted_at",
-                             "body_html", "reply_count", "first_seen"},
-            }
-            if not core_columns.keys() <= tables:
-                return False
-            if version >= 5 and not {
-                    "attachments", "notify_outbox", "read_marks",
-                    "artifacts", "fetch_jobs"} <= tables:
-                return False
-            if version >= 8 and "message_metadata" not in tables:
-                return False
-            base_columns = {
-                **core_columns,
-                "attachments": {"attachment_id", "message_id", "file_id",
-                                "name", "url", "local_path", "bytes",
-                                "sha256", "state", "downloaded_at",
-                                "created_at"},
-                "read_marks": {"project_id", "snapshot_ts", "marked_at"},
-                "notify_outbox": {"event_id", "kind", "project_id", "payload",
-                                  "state", "attempts", "next_try",
-                                  "accepted_ref", "created_at", "updated_at"},
-                "artifacts": {"artifact_id", "kind", "project_id", "message_id",
-                              "content", "model", "meta", "created_at"},
-                "fetch_jobs": {"job_id", "kind", "project_id", "message_id",
-                               "parent_id", "payload", "state", "attempts",
-                               "next_try", "created_at", "updated_at"},
-            }
-            if "message_metadata" in tables:
-                base_columns["message_metadata"] = {
-                    "message_id", "source", "content", "checked_at", "last_error"}
-            for table, required in base_columns.items():
-                if table not in tables:
-                    continue  # _init creates absent tables for older backups.
-                columns = {row[1] for row in db.execute(
-                    f"PRAGMA table_info({table})")}
-                if table == "attachments" and "attachment_id" not in columns:
-                    required = {"message_id", "file_id", "name", "url",
-                                "downloaded_path", "first_seen"}
-                elif table == "read_marks" and "id" in columns:
-                    required = required | {"status"}
-                if not required <= columns:
-                    return False
-                # Match the ambiguous-key fence in Ledger._preflight before
-                # a recovery candidate can replace the live database.
-                key_check = {
-                    "attachments": ("attachment_id", "message_id,file_id"),
-                    "read_marks": ("id", "project_id,snapshot_ts"),
-                }.get(table)
-                if key_check and key_check[0] in columns and db.execute(
-                        f"SELECT 1 FROM {table} GROUP BY {key_check[1]} "
-                        "HAVING COUNT(*) > 1 LIMIT 1").fetchone():
-                    return False
             return deadline is None or monotonic() < deadline
         finally:
             db.close()

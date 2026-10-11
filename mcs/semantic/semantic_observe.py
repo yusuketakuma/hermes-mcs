@@ -25,12 +25,12 @@ import time
 from types import SimpleNamespace
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every subdir holding .py files (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
-from semantic_policy import JOB_KIND, QC_JOB_KIND  # noqa: E402
+from semantic_policy import JOB_KIND, KIND_DRAIN_RUN, QC_JOB_KIND  # noqa: E402
 from semantic_drain import SCHED_KIND  # noqa: E402
 
 from mcs_util import HOME, loads_dict  # noqa: E402 — honours MCS_ROOT
@@ -54,35 +54,26 @@ def _observe(c, cfg, days: int = 14) -> dict:
         return c.execute(sql, p).fetchall()
 
     jobs = dict(q(
-        "SELECT state, COUNT(*) FROM fetch_jobs WHERE kind='semantic' "
-        "GROUP BY state"))
+        "SELECT state, COUNT(*) FROM fetch_jobs WHERE kind=? "
+        "GROUP BY state", (JOB_KIND,)))
     history = audit_history(ledger)
     eligible_pending = q(
-        "SELECT COUNT(*) FROM fetch_jobs WHERE kind='semantic' "
+        "SELECT COUNT(*) FROM fetch_jobs WHERE kind=? "
         "AND state='pending' AND CASE WHEN json_valid(payload) THEN "
-        "json_extract(payload,'$.eligible')=1 ELSE 0 END")[0][0]
-    # version-aware: counts the messages still lacking a CURRENT-schema
-    # artifact — matches run_pending's `left`, so migration progress is
-    # visible instead of reading 0 while the v2 backlog drains
-    from extract_llm import EXTRACT_VERSION
-    extract_left = q(
-        "SELECT COUNT(*) FROM messages m WHERE m.body_text IS NOT NULL "
-        "AND m.body_text != '' "
-        "AND (m.body_state IS NULL OR m.body_state='full') "
-        "AND NOT EXISTS "
-        "(SELECT 1 FROM artifacts a WHERE a.kind='extract_llm' "
-        " AND a.message_id=m.message_id AND json_valid(a.meta) "
-        " AND json_extract(a.meta,'$.error') IS NOT 1 "
-        " AND json_extract(a.meta,'$.hash')=m.content_hash "
-        " AND json_extract(a.meta,'$.extract_version')=?)",
-        (EXTRACT_VERSION,))[0][0]
+        "json_extract(payload,'$.eligible')=1 ELSE 0 END", (JOB_KIND,))[0][0]
+    # run_pending's own `left` predicate, so the backlog and its age
+    # drain exactly as the extractor works it (v4-current rows excluded)
+    from extract_llm import pending_pred
+    extract_left, oldest_msg = q(
+        "SELECT COUNT(*), MIN(m.posted_at_ts) FROM messages m WHERE "
+        + pending_pred())[0]
     from semantic_store import jev_usage_today
     try:
         usage = {"jev_requests_today": jev_usage_today(ledger)}
     except ValueError:
         usage = {"jev_requests_today": None, "jev_usage_error": "semantic_usage_invalid"}
     # ---- T14: queue ages, cohort split, scheduler, recent rates ----
-    queue_ages, cohorts, scheduler = _queue_stats(c)
+    queue_ages, cohorts, scheduler = _queue_stats(c, oldest_msg)
     recent = _recent_runs(c, days)
     extract_recent = _extract_recent(c)
     return {
@@ -104,14 +95,13 @@ def _observe(c, cfg, days: int = 14) -> dict:
     }
 
 
-def _queue_stats(c):
+def _queue_stats(c, oldest_msg):
     """T14: queue ages, cohort split, scheduler — every field stays
     None (unknown) when its data is absent; a missing measurement is
     never reported as zero."""
     def q(sql, p=()):
         return c.execute(sql, p).fetchall()
 
-    from extract_llm import EXTRACT_VERSION
     now = time.time()
     queue_ages = {}
     for name, kinds in (("semantic", (JOB_KIND,)),
@@ -122,17 +112,6 @@ def _queue_stats(c):
             kinds)[0][0]
         queue_ages[name] = (max(0.0, now - oldest)
                             if oldest is not None else None)
-    oldest_msg = q(
-        "SELECT MIN(posted_at_ts) FROM messages m "
-        "WHERE m.body_text IS NOT NULL AND m.body_text != '' "
-        "AND (m.body_state IS NULL OR m.body_state='full') "
-        "AND NOT EXISTS "
-        "(SELECT 1 FROM artifacts a WHERE a.kind='extract_llm' "
-        " AND a.message_id=m.message_id AND json_valid(a.meta) "
-        " AND json_extract(a.meta,'$.error') IS NOT 1 "
-        " AND json_extract(a.meta,'$.hash')=m.content_hash "
-        " AND json_extract(a.meta,'$.extract_version')=?)",
-        (EXTRACT_VERSION,))[0][0]
     queue_ages["extract_llm"] = (max(0.0, now - oldest_msg)
                                  if oldest_msg is not None else None)
     cohorts = {"arrival": 0, "backfill": 0}
@@ -181,9 +160,9 @@ def _recent_runs(c, days: int = 14) -> dict:
     `days` days (capacity gate: llm_s per window + per-job llm_s p90)."""
     from semantic_evaluation import _percentile
     rows = c.execute(
-        "SELECT content FROM artifacts WHERE kind='semantic_drain_run' "
+        "SELECT content FROM artifacts WHERE kind=? "
         "AND created_at >= ? ORDER BY artifact_id DESC",
-        (time.time() - days * 86400,)).fetchall()
+        (KIND_DRAIN_RUN, time.time() - days * 86400)).fetchall()
     recent = {"runs": 0, "done": 0, "deferred": 0, "failed": 0}
     phases = {key: [] for key in ("llm_s", "jev_s", "post_s", "queue_wait_s")}
     tokens = []

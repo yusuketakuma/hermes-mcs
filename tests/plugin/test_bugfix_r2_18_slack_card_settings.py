@@ -52,3 +52,26 @@ def test_factory_settings_pass_the_command_epoch_gate(tmp_path, monkeypatch):
     assert captured["route_epoch"] == 3
     result = commands.answer(captured, "not json", user="U1", channel="C1")
     assert json.loads(result)["error"] == "bad_command"
+
+
+def test_dispatch_type_error_is_an_operation_failure_not_bad_command(
+        tmp_path, monkeypatch):
+    """Only a parse error is the caller's bad_command; a TypeError raised
+    inside an op handler is operation_failed, as in the Hermes handler."""
+    (tmp_path / "flags").mkdir()
+    (tmp_path / "flags" / "notify.json").write_text(json.dumps(
+        {"interactive": True, "transport": "slack", "route_epoch": 3}))
+    settings = {"transport": "slack", "allowed_user_ids": ["U1"],
+                "channel_id": "C1", "data_root": str(tmp_path),
+                "route_epoch": 3, "team_id": "T1", "profile": "p",
+                "application_id": "A1"}
+
+    def broken(*_args):
+        raise TypeError("synthetic handler bug")
+
+    monkeypatch.setattr(commands, "_dispatch", broken)
+    result = commands.answer(settings, '{"op":"summary"}', user="U1",
+                             channel="C1")
+    assert json.loads(result)["error"] == "operation_failed"
+    assert json.loads(commands.answer(settings, "not json", user="U1",
+                                      channel="C1"))["error"] == "bad_command"

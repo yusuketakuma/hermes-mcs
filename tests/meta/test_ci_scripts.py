@@ -248,6 +248,69 @@ def test_adapter_async_gate_keeps_process_and_network_blocked(monkeypatch, tmp_p
     assert bool(gates.gate_plugin_sandbox()) is not allowed
 
 
+@pytest.mark.parametrize(("relative", "source", "allowed"), [
+    ("discord/runtime_compat.py", "def make():\n from discord.ext import commands\n return commands.Bot()\n", True),
+    ("discord/runtime_compat.py", "def make():\n from discord import app_commands\n"
+     " return app_commands.command(name='synthetic')\n", True),
+    ("discord/standalone.py", "def make():\n from discord import Client\n return Client()\n", False),
+    ("discord/standalone.py", "def make():\n from discord.ext import commands\n return commands.Cog()\n", False),
+    ("discord/standalone.py", "def make():\n from discord import app_commands as a\n return a.Group()\n", False),
+    # Each independent file gets only the surface it uses, not the union.
+    ("discord/standalone.py", "def make():\n from discord import app_commands\n"
+     " return app_commands.command(name='synthetic')\n", False),
+    ("discord/runtime_compat.py", "def make():\n import discord\n return getattr(discord, 'Client')\n", False),
+    ("discord/standalone.py", "def make():\n import discord\n return discord\n", True),
+    ("discord/standalone.py", "def make():\n import discord\n from discord.ext import commands\n"
+     " return discord, commands\n", True),
+    # A bare from-imported name gets no wider access than the module form.
+    ("discord/runtime_compat.py", "def make():\n from discord.ext import commands\n"
+     " return getattr(commands, 'Cog')\n", False),
+    ("discord/runtime_compat.py", "def make():\n from discord import Intents\n"
+     " return Intents(guilds=True)\n", False),
+    ("discord/runtime_compat.py", "def make():\n from discord import app_commands\n return app_commands\n", False),
+    ("discord/runtime_compat.py", "def make():\n from discord import Intents\n return Intents.none()\n", True),
+    ("slack/standalone.py", "from asyncio import sleep\n", True),
+    ("slack/standalone.py", "from asyncio import create_subprocess_exec\n", False),
+    ("lineworks/actions.py", "from asyncio import open_connection as connect\n", False),
+])
+def test_from_import_cannot_bypass_sdk_and_asyncio_surface(monkeypatch, tmp_path, relative, source, allowed):
+    gates = _load("ci_from_surface", "ci/gates.py")
+    adapters = tmp_path / "adapters"
+    path = adapters / relative
+    path.parent.mkdir(parents=True)
+    path.write_text(source)
+    monkeypatch.setattr(gates, "ADAPTERS", adapters)
+    monkeypatch.setattr(gates, "STANDALONE", tmp_path / "mcs_standalone")
+    monkeypatch.setattr(gates, "_py_files", lambda *args: [path])
+    assert bool(gates.gate_stdlib_only() + gates.gate_plugin_sandbox()) is not allowed
+
+
+@pytest.mark.parametrize(("source", "hardcoded"), [
+    ('target = cfg.get("notify_target") or "slack:C0123ABCDEF"\n', True),
+    ('THREAD = "slack:G0123ABCDEF:1700000000.000100"\n', True),
+    ('DM = "slack:W0123ABCDEF"\n', True),
+    ('target = cfg.get("notify_target") or "discord:123456789012"\n', True),
+    ('HELP = "hermes send target (e.g. slack:C0CHANNELID, discord:1234)"\n', False),
+    ('HELP = "slack:C0CHANNELID: the channel to post to"\n', False),
+    ('def same(target, cid):\n return target == "slack:" + cid\n', False),
+    ('def build(cid):\n return f"slack:{cid}"\n', False),
+])
+def test_notify_gate_catches_baked_in_slack_destination(monkeypatch, tmp_path, source, hardcoded):
+    gates = _load("ci_notify_literal", "ci/gates.py")
+    path = tmp_path / "synthetic_notify.py"
+    path.write_text(source)
+    monkeypatch.setattr(gates, "_py_files", lambda *args: [path])
+    assert bool(gates.gate_notify_fail_closed()) is hardcoded
+
+
+def test_notify_gate_scans_independent_entry_points(monkeypatch):
+    gates = _load("ci_notify_scope", "ci/gates.py")
+    seen = []
+    monkeypatch.setattr(gates, "_py_files", lambda *dirs: seen.extend(dirs) or [])
+    gates.gate_notify_fail_closed()
+    assert {gates.STANDALONE, gates.ROOT / "lineworks_adapter"} <= set(seen)
+
+
 @pytest.mark.parametrize("filename", ["standalone.py", "runtime_compat.py"])
 def test_independent_sdk_exception_keeps_core_and_ambient_secrets_blocked(monkeypatch, tmp_path, filename):
     gates = _load("ci_standalone_sdk", "ci/gates.py")
@@ -311,9 +374,9 @@ def test_suite_guard_denies_any_path_on_live_llm_authority():
             bounded_http.bounded_http_request(url, "GET", None, 1)
 
 
-# ---------- module table: first sentence, name prefix only ----------
+# ---------- module table: whole first sentence, subject included ----------
 
-def test_update_readme_module_description_keeps_hyphenated_words(tmp_path):
+def test_update_readme_module_description_keeps_subject_and_hyphens(tmp_path):
     ur = _load("update_readme_docline", "scripts/development/update_readme.py")
     cases = {
         "a.py": ('"""Durable medication-event detail assessment."""',
@@ -321,7 +384,7 @@ def test_update_readme_module_description_keeps_hyphenated_words(tmp_path):
         "b.py": ('"""Auto-metrics benchmark for the pipeline."""',
                  "Auto-metrics benchmark for the pipeline."),
         "c.py": ('"""MCS self-update — detection, apply, rollback."""',
-                 "detection, apply, rollback."),
+                 "MCS self-update — detection, apply, rollback."),
         "d.py": ('"""Semantic audit gates: code-level checks and\n'
                  'the status decision."""',
                  "Semantic audit gates: code-level checks and the status "
@@ -330,5 +393,29 @@ def test_update_readme_module_description_keeps_hyphenated_words(tmp_path):
     for name, (src, expected) in cases.items():
         path = tmp_path / name
         path.write_text(src + "\n")
-        assert ur._clean(ur._mod_docline(path), strip_prefix=True) \
-            == expected
+        assert ur._clean(ur._mod_docline(path)) == expected
+
+
+def test_generated_module_table_publishes_docstring_subject(monkeypatch, tmp_path):
+    ur = _load("update_readme_table", "scripts/development/update_readme.py")
+    mcs = tmp_path / "mcs"
+    mcs.mkdir()
+    (mcs / "synthetic_render.py").write_text('"""Synthetic cards — display model."""\n')
+    monkeypatch.setattr(ur, "ROOT", tmp_path)
+    monkeypatch.setattr(ur, "MCS_DIR", mcs)
+    monkeypatch.setattr(ur, "TESTS_DIR", tmp_path / "tests")
+    assert "| `mcs/synthetic_render.py` | Synthetic cards — display model. |" in ur.gen_modules()
+
+
+def test_generated_summary_is_cut_at_a_word_boundary():
+    ur = _load("update_readme_cut", "scripts/development/update_readme.py")
+    long = ("Synthetic drain engine (spec §1): the durable worker — claiming jobs, "
+            "staged extraction and summary, retries, receipts and the final decision table.")
+    cut = ur._first_sentence(long)
+    assert len(cut) <= 120 and cut.endswith("…")
+    assert cut.startswith("Synthetic drain engine (spec §1):")
+    assert long.startswith(cut[:-1]) and not long[len(cut) - 1].isalnum()
+    assert ur._first_sentence("Short synthetic summary.") == "Short synthetic summary."
+    # Unspaced text after an early space must not collapse to the first word.
+    cjk = "MCS の" + "合成" * 65
+    assert ur._first_sentence(cjk) == cjk[:118] + "…"

@@ -22,7 +22,9 @@ import _mcs_path  # noqa: F401
 
 from ledger import JOB_REASON_CODES, LedgerReader
 from ledger_audit import AuditReport, audit_db
-from mcs_requests import canonical, parse_command, valid_hash, valid_uuid
+from mcs_queries import REPLY_GAP
+from mcs_requests import canonical, valid_hash, valid_uuid
+from mcs_util import has_sqlite_sidecars
 
 FORMAT = "mcs-repair/1"
 STAGES = ("backup", "audit", "coverage", "reconcile", "supplement", "artifacts", "rollup")
@@ -68,17 +70,10 @@ class RepairParser(argparse.ArgumentParser):
     def error(self, message):
         super().error("repair_arguments_invalid")
 
-# Same criterion as the view and the thread job (full or tombstone);
-# not a claim about what the API's reply_count means.
-REPLY_GAP = """m.parent_id IS NULL AND m.reply_count >
-    (SELECT COUNT(*) FROM messages r WHERE r.project_id=m.project_id
-     AND r.parent_id=m.message_id AND r.body_state IN ('full','deleted'))"""
-
-
 def _hash_file(path: str | Path) -> str:
     """Hash an explicit regular file, refusing symlinks and live sidecars."""
     path = Path(path)
-    if any(Path(str(path) + suffix).exists() for suffix in ("-wal", "-journal")):
+    if has_sqlite_sidecars(path):
         raise ValueError("static_snapshot_required")
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as stream:
@@ -358,6 +353,29 @@ def save_new(path: str | Path, value) -> None:
         os.unlink(temporary)
 
 
+def _pairs(items):
+    result = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError("duplicate_key")
+        result[key] = value
+    return result
+
+
+def _invalid_number(_):
+    raise ValueError("invalid_number")
+
+
+def _parse_json(raw):
+    """Parse strict JSON bounded by MAX_BYTES, not the 16 KiB command-queue cap."""
+    if len(raw) > MAX_BYTES:
+        raise ValueError("input_too_large")
+    try:
+        return json.loads(raw, object_pairs_hook=_pairs, parse_constant=_invalid_number)
+    except RecursionError:
+        raise ValueError("input_too_deep") from None
+
+
 def _read_json(path):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as stream:
@@ -366,7 +384,7 @@ def _read_json(path):
         raw = stream.read(MAX_BYTES + 1)
     if len(raw) > MAX_BYTES:
         raise ValueError("input_too_large")
-    return parse_command(raw)
+    return _parse_json(raw)
 
 
 def _entries(stream, digest, nonce, count_keys):
@@ -377,7 +395,7 @@ def _entries(stream, digest, nonce, count_keys):
     entries = []
     previous = digest
     for line in raw.splitlines():
-        entry = parse_command(line)
+        entry = _parse_json(line)
         if not isinstance(entry, dict) or entry.get("previous_digest") != previous \
                 or entry.get("plan_digest") != digest or entry.get("nonce") != nonce \
                 or len(entries) >= len(STAGES) \

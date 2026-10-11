@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "修復計画の静的スナップショット判定をバックアップと同じ基準に統一",
+  "summary": "mcs_repair が修復計画の対象として受け付ける台帳スナップショットの判定が、バックアップより緩くなっていました。-shm ファイルや、リンク先のない -wal・-journal の symlink が隣にあっても静的なスナップショットとして扱っていたため、バックアップと同じく static_snapshot_required で拒否します。",
+  "upgrade": "追加操作は不要です。修復計画で static_snapshot_required が出た場合は、バックアップと同じく付随ファイルのない静的スナップショットを指定してください。",
+  "details": [
+    "mcs/core/mcs_util.py に has_sqlite_sidecars を追加した。-wal・-shm・-journal を os.path.lexists で調べるため、リンク先のない symlink も検出する。",
+    "mcs/ops/mcs_backup.py の4か所と mcs/ops/mcs_repair.py の _hash_file がこの判定を共有する。mcs_restore（固定した dir_fd 基準）と独立復旧ツール mcs_recover の判定は変えない。"
+  ],
+  "refs": [
+    "mcs/core/mcs_util.py",
+    "mcs/ops/mcs_repair.py",
+    "mcs/ops/mcs_backup.py",
+    "tests/ops/test_mcs_repair_sidecars.py"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "外部出力（C1）が2回目の実行から拒否される問題を修正",
+  "summary": "外部出力（C1、既定は無効）の手渡し・配送を初めて実行したときに、状態ディレクトリ（local の配送先を使う場合はその配送先も）が他のユーザーも読める権限で作られ、2回目以降の実行が毎回「私有ディレクトリが必要」として拒否されていた問題を修正しました。新しく作るディレクトリは本人だけが読み書きできる権限になります。",
+  "upgrade": "C1 を使っていない場合は操作不要です。以前の実行で作られた状態ディレクトリや配送先が他のユーザーも読める権限のままの場合は、自動では変更しないため、中身を確認したうえで chmod 700 を実行してください。",
+  "details": [
+    "mcs/ops/ext_contract.py の GovernedExporter は journal/ を mkdir(mode=0o700, parents=True) で作っていたが、mode は末端にしか効かず、状態ディレクトリ自体は umask（通常 0755）で作られていた。状態ディレクトリを先に 0700 で作る。",
+    "LocalSink は配送時に、まだ存在しない配送先だけを 0700 で作る。既存のディレクトリは従来どおり chmod しない。",
+    "reconcile --receipts にディレクトリを渡したとき、dotfile（.DS_Store など）とシンボリックリンクを受領記録として読まない。以前はこれらが混ざると受領の束全体が拒否されていた。"
+  ],
+  "refs": [
+    "mcs/ops/ext_contract.py",
+    "tests/ops/test_c1_cli.py",
+    "tests/ops/test_ext_contract_cli.py",
+    "docs/roadmap/connector.md"
+  ]
+}

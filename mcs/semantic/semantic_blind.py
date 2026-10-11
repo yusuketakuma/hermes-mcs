@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every subdir holding .py files (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
@@ -120,9 +120,10 @@ def fixed_bundle_outputs(bundle: dict, target_id: int, candidate: dict,
     """Build comparison texts; baseline_fn is explicitly supplied by the caller.
 
     candidate/final are decoded artifact rows (content and meta are objects).
-    The baseline receives the target body plus the same thread context the
-    production extractor would see (earlier bundle members of its thread),
-    so it measures the same input configuration as run_pending.
+    The baseline receives the target body plus the earlier bundle members
+    of its thread, selected and budgeted like the production extractor's
+    thread context.  It does not get the extractor's 連携サマリー block:
+    the semantic methods it is compared with never see it either.
     """
     import semantic
     from summary_review import _validate_candidate, _validate_baseline
@@ -176,10 +177,11 @@ def fixed_bundle_outputs(bundle: dict, target_id: int, candidate: dict,
             or candidate["meta"].get("publication_mode") != final["meta"].get("publication_mode")):
         raise EvaluationError("artifact_stage_mismatch")
     # The production extractor receives earlier thread members as
-    # reference context — the baseline must see the same input or it
-    # measures a different configuration than production.
-    # Mirror extract_llm._thread_context: epoch timestamps, root always,
-    # replies strictly earlier (same second -> lower id), NULL excluded.
+    # reference context, so the baseline gets them too.
+    # Row selection follows extract_llm._thread_context: epoch timestamps,
+    # root always, replies strictly earlier (same second -> lower id), NULL
+    # excluded.  Its 連携サマリー block and the budget it takes are left
+    # out, as for the semantic methods, so _ctx_lines keeps its full budget.
     from extract_llm import _ctx_lines
     from ledger import _posted_epoch
     t_ts = _posted_epoch(target.get("posted_at")) or 0

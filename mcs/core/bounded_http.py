@@ -28,7 +28,7 @@ import urllib.request
 from contextlib import suppress
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every module dir (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
@@ -48,6 +48,7 @@ def _loopback_endpoint_allowed(endpoint: str) -> bool:
     """Allow only an unauthenticated HTTP endpoint on loopback."""
     try:
         parts = urlsplit(endpoint)
+        parts.port  # noqa: B018 -- raises on a non-numeric/out-of-range port
     except ValueError:
         return False
     return (parts.scheme == "http" and parts.hostname in

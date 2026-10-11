@@ -248,11 +248,9 @@ def evaluate_source_fact_coverage(jev_client, source_text: str, facts: list,
     except RuntimeGuardError:
         raise
     except Exception as error:
-        reason = ("resource" if getattr(error, "retryable", False)
-                  or getattr(error, "kind", "") in {
-                      "no_api_key", "budget_exceeded", "payment_required",
-                      "transport"}
-                  else "model")
+        # the drain's scheduling classes; a permanent failure reads 'model'
+        reason = {"resource": "resource", "retry": "retry"}.get(
+            jev.failure_class(error), "model")
         return _coverage_incomplete("source_fact_coverage_unevaluated", reason)
 
     confidence = float(confidence)
@@ -452,8 +450,7 @@ def audit_status_for(code_findings: list, jev_findings: list,
                                  "evidence_span_mismatch",
                                  "input_oversize", "source_fact_coverage_missing",
                                  "source_fact_coverage_ambiguous",
-                                 "source_fact_coverage_low_confidence",
-                                 "medication_detail_low_confidence")
+                                 "source_fact_coverage_low_confidence")
                 or f["code"].startswith("medication_detail_")]
     if blocking:
         return "NEEDS_REVIEW"

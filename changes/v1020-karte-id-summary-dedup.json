@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "カルテが変わっても連携サマリーが「不明」のままになる問題を修正",
+  "summary": "患者のカルテ（karte_id）が変わり、新しいカルテの連携サマリーが以前と同じ内容（未登録同士を含む）だった場合に、機械可読の読取りモデル（read_model）でその患者の連携サマリーが「不明」のまま戻らなかった問題を修正しました。新しいカルテで取得したサマリーは、そのカルテに結び付けて保存されるようになります。",
+  "upgrade": "追加操作は不要です。すでに「不明」になっている患者は、次に連携サマリーを再取得したときに自動で解消します。",
+  "details": [
+    "mcs/core/ledger.py の karte_summary_store は内容の sha256 だけで重複を判定し、karte_id が変わっても既存行の fetched_at だけを更新していた。重複判定に karte_id の一致を加え、カルテが変わったときは新しい artifact を保存する。",
+    "job_add の戻り値を、そのキーの job_id にした。処理待ちの行を保持して何も更新しなかった場合は None を返す。以前は接続上で直前に挿入された無関係な行の rowid を返していた。本番の呼出し元はこの戻り値を使っていない。"
+  ],
+  "refs": [
+    "mcs/core/ledger.py",
+    "mcs/views/read_model.py",
+    "tests/core/test_ledger_v1020_karte_and_job_add.py"
+  ]
+}

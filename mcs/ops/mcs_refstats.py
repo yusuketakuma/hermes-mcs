@@ -39,12 +39,12 @@ import time
 from pathlib import Path
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every subdirectory (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
-from mcs_util import atomic_write, file_sha256
+from mcs_util import HOME, atomic_write, file_sha256
 
 APPROVAL_KIND = "refstat_approval_v1"
 _NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
@@ -342,11 +342,11 @@ def main(argv=None) -> int:
     ls.set_defaults(fn=cmd_list)
     for s in (c, v):
         s.add_argument("--snapshot",
-                       default=os.path.expanduser(
-                           "~/.mcs/data/snapshots/ledger-snapshot.db"))
+                       default=os.path.join(
+                           HOME, "data", "snapshots", "ledger-snapshot.db"))
     for s in (c, v, p, ls):
         s.add_argument("--data-dir",
-                       default=os.path.expanduser("~/.mcs/data"))
+                       default=os.path.join(HOME, "data"))
     args = ap.parse_args(argv)
     try:
         return args.fn(args)

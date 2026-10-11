@@ -180,3 +180,20 @@ def test_link_hints_cursor_cannot_cross_generation(world, monkeypatch, capsys):
         "link-hints", "--snapshot", str(snapshot), "--limit", "1",
         "--cursor", first["next_cursor"]])
     assert code == 1 and second["status"] == "refused"
+
+
+@pytest.mark.parametrize("command", [["handoff"], ["deliver", "--sink-kind", "local"]])
+def test_c1_state_and_new_sink_stay_private_across_runs(tmp_path, monkeypatch, capsys, command):
+    monkeypatch.setattr(ext.time, "time", lambda: 1030)
+    auth = _auth(tmp_path, fields=list(C1_FIELDS), expires_at=2000, created_at=1000,
+                 max_snapshot_age_s=3600)
+    source = tmp_path / "records.jsonl"
+    source.write_text("\n".join(json.dumps(row) for row in _records()))
+    state, sink = tmp_path / "state", tmp_path / "sink"
+    for _ in range(2):
+        code, result = _cli(capsys, [
+            *command, "--c1", "--auth", str(auth), "--records", str(source),
+            "--state", str(state), "--sink", str(sink)])
+        assert code == 0, result
+    assert state.stat().st_mode & 0o777 == 0o700
+    assert sink.stat().st_mode & 0o777 == 0o700

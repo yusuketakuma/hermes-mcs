@@ -23,15 +23,14 @@ from typing import TypedDict
 
 from c1_contract import C1ContractError, C1_FIELDS, canonical_json
 from c1_envelopes import (
-    CONTRACT, Record, encode_envelope, intent_hash, parse_envelope, parse_withdrawal,
-    validate_collection, validate_envelope,
+    CONTRACT, RECEIPT_CONTRACT, Record, _hash, encode_envelope, intent_hash, parse_envelope,
+    parse_withdrawal, validate_collection, validate_envelope,
 )
 from mcs_util import atomic_write
 
 _ENTRY_FIELDS = {
     "status", "header", "records", "received_at", "expires_at", "wire_sha256",
     "intent_sha256", "counts", "items", "journal"}
-_RECEIPT = "mcs-ext-receipt/1"
 
 
 class Part(TypedDict):
@@ -209,10 +208,6 @@ class Diagnostics(TypedDict):
     status: str
     reasons: list[str]
     counts: dict[str, int]
-
-
-def _hash(value) -> str:
-    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
 def _now(value) -> int | float:
@@ -552,7 +547,7 @@ class ReferenceReceiver:
             entry = self._load()["envelopes"].get(eid)
             if entry is None or entry["header"] is None:
                 return None
-            return json.loads(json.dumps({"contract": _RECEIPT, "kind": "receive", "status": "accepted",
+            return json.loads(json.dumps({"contract": RECEIPT_CONTRACT, "kind": "receive", "status": "accepted",
                     "envelope_id": eid, "acked_at": entry["received_at"],
                     "records": entry["header"]["record_count"],
                     "records_sha256": entry["header"]["records_sha256"],
@@ -596,7 +591,7 @@ class ReferenceReceiver:
                 entry.update(status="withdrawn", records=None)
                 entry["journal"].append({"status": "withdrawn", "at": now})
                 self._save(state)
-            return {"contract": _RECEIPT, "kind": "delete", "envelope_id": eid,
+            return {"contract": RECEIPT_CONTRACT, "kind": "delete", "envelope_id": eid,
                     "deleted": True, "deleted_at": entry["journal"][-1]["at"]}
 
     def expire(self, *, now=None) -> dict[str, int]:
@@ -645,6 +640,11 @@ class ReferenceReceiver:
         now = _now(now)
         with self._locked():
             return self._collections(self._load(), now)
+
+    def _signal_key(self, record: Record) -> str:
+        # history and current keys must match, or every signal reads not_detected
+        return _hash([self.source_label, record["project_id"], record["signal_type"],
+                      _normalize(record.get("evidence"))])
 
     def _view(self, state: State, now: int | float) -> ReceiverView:
         entries, selected = state["envelopes"], state["selected"]
@@ -748,16 +748,12 @@ class ReferenceReceiver:
                     continue
                 for record in entries[eid]["records"] or []:
                     if record["type"] == "signal":
-                        key = _hash([self.source_label, record["project_id"], record["signal_type"],
-                                     _normalize(record.get("evidence"))])
-                        grouped.setdefault(key, []).append(record)
+                        grouped.setdefault(self._signal_key(record), []).append(record)
             signal_history.update(grouped)
         current_signals: dict[str, list[Record]] = {}
         for record in current_records:
             if record["type"] == "signal":
-                key = _hash([self.source_label, record["project_id"], record["signal_type"],
-                             _normalize(record.get("evidence"))])
-                current_signals.setdefault(key, []).append(record)
+                current_signals.setdefault(self._signal_key(record), []).append(record)
         truncated = any(r["type"] == "signals_truncated" for r in current_records)
         for key, records in sorted(signal_history.items()):
             current_rows = current_signals.get(key, [])

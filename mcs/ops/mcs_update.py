@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401,E402  registers every subdir as import root
 import mcs_runtime  # noqa: E402
-from mcs_requests import parse_command  # noqa: E402
+from mcs_requests import RELEASE_TAG_RE, parse_command, release_tag  # noqa: E402
 
 from mcs_util import (HOME, REPO, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
                       atomic_write, launchd_bootstrap, load_config)
@@ -98,8 +98,6 @@ WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int", "local.mcs-health")
 # S5: only the labels listed above are touched; install.sh-owned
 # ai.mcs.llamaserver / org.mcs.recovery must never be.
 PROTECTED = ("data/", "config.json", ".env", "chrome-profile/", "venv/", "models/")
-SEMVER_RE = re.compile(
-    r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?$")
 HEX_RE = re.compile(r"^[0-9a-f]{40}$")
 _MENTION_RE = re.compile(r"<@[!&]?\d+>|<#\d+>|@everyone|@here")
 # drainer stray sweep: interpreter argv0 + script path — never matches
@@ -164,7 +162,7 @@ _SERVICES_PYTHON: str | None = None   # rebuilt runtime after a migration
 _HELD_RUN_LOCK_FD: int | None = None  # apply's run.lock, inherited by post-merge
 # bail reasons that mean "we never attempted" — do NOT consume the
 # receipt or poison attempts[]; the next check may legitimately retry
-_TRANSIENT_BAIL = frozenset({"run_lock_timeout", "update_lock_busy"})
+_TRANSIENT_BAIL = frozenset({"run_lock_timeout"})
 
 
 class UpdateError(Exception):
@@ -357,14 +355,10 @@ def remote_tag_sha(tag: str) -> str | None:
 def _ver_key(name: str) -> tuple | None:
     """Semver ordering key: (major, minor, patch, release-flag, pre).
     A prerelease sorts BELOW the same release; None when not semver."""
-    if not isinstance(name, str) or len(name) > 255:
+    if not release_tag(name):
         return None
-    m = SEMVER_RE.fullmatch(name)
-    if not m:
-        return None
+    m = RELEASE_TAG_RE.fullmatch(name)
     pre = m.group(4)
-    if pre and any(not part for part in pre.split(".")):
-        return None
     identifiers = tuple((0, int(part)) if part.isdigit() else (1, part)
                         for part in pre.split(".")) if pre else ()
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)),
@@ -468,14 +462,32 @@ def impact_summary(cur_sha: str, tag: str) -> list[str]:
     if "install.sh" in names:
         notes.append("install.sh に差分 — 依存追加の可能性、"
                      "auto モードでは適用を中止します")
+    cfg = load_config()
     # mcs_standalone/ is loaded only by the standalone connector
-    connector = ("mcs_standalone/",) if mcs_runtime.standalone(load_config()) else ()
-    if any(n.startswith(("hermes_plugin/", "adapters/common/", "adapters/slack/", "adapters/discord/",
-                         *connector)) for n in names):
+    connector = ("mcs_standalone/",) if mcs_runtime.standalone(cfg) else ()
+    if any(n.startswith(tuple(path + "/" for path in mcs_runtime.GATEWAY_SOURCE_DIRS)
+                        + connector) for n in names):
         notes.append("plugin 変更 — 適用後に gateway restart（standalone では ai.mcs.standalone の再起動）が必要です")
-    if any(n.startswith(("adapters/common/", "adapters/lineworks/", "lineworks_adapter/")) for n in names):
+    # same condition as plan()'s lineworks_adapter restart
+    interactive = (cfg.get("notify") or {}).get("interactive") \
+        if isinstance(cfg.get("notify"), dict) else None
+    if interactive == "lineworks" and any(n.startswith((
+            "mcs/", "adapters/common/", "adapters/lineworks/", "lineworks_adapter/")) for n in names):
         notes.append("LINE WORKS 変更 — 適用後に独立アダプターの check と再起動が必要です")
     return notes
+
+
+def _tag_is_newer(tag, sha, cur_sha) -> bool:
+    """Whether the latest tag is ahead of HEAD. HEAD already containing it
+    (a checkout ahead of the tag) is not newer; only an exit-0 ancestry
+    proof suppresses — missing objects (128) or a git failure keep the
+    notice/auto path."""
+    newer = bool(tag and sha and sha != cur_sha)
+    if newer and cur_sha:
+        with suppress(UpdateError):
+            newer = _git(["merge-base", "--is-ancestor", sha, "HEAD"]
+                         ).returncode != 0
+    return newer
 
 
 # -------------------------------------------------------------- gates
@@ -485,8 +497,8 @@ def precheck_local(cfg: dict) -> list[str]:
     errors = []
     if not _tree_clean():
         errors.append("tree_dirty")
+    import mcs_setup
     try:
-        import mcs_setup
         errs, _ = mcs_setup.validate_config(cfg)
         errors.extend("config: " + e for e in errs)
     except Exception as e:
@@ -495,7 +507,6 @@ def precheck_local(cfg: dict) -> list[str]:
         need = os.path.getsize(LEDGER) * 2 + 64 * 1024 * 1024
         if shutil.disk_usage(DATA).free < need:
             errors.append("insufficient_disk")
-    import mcs_setup
     # an owned idle watchdog whose explicit selection drifted is repaired by
     # the post-merge `services`; anything else still blocks before merge
     errors.extend(mcs_setup.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO,
@@ -619,7 +630,8 @@ def _ls_tree_paths(tag: str, subdir: str | None = None
 def precheck_tag(tag: str) -> list[str]:
     """Candidate-tree content gates — all work on fetched objects."""
     errors: list[str] = []
-    if load_config().get("runtime_mode") == "standalone" and not _standalone_target_supported(tag):
+    standalone = mcs_runtime.standalone(load_config())
+    if standalone and not _standalone_target_supported(tag):
         errors.append("standalone_runtime_missing_in_target")
     paths = []
     for mode, otype, _sha, path in _ls_tree_paths(tag):
@@ -742,7 +754,7 @@ def precheck_tag(tag: str) -> list[str]:
             ).returncode != 0:
         errors.append("install_sh_changed")
     # standalone SDK pins live in ~/.mcs/venv, which only install.sh updates
-    if mcs_runtime.standalone(load_config()) and _git(
+    if standalone and _git(
             ["diff", "--quiet", "HEAD", tag, "--",
              "deployment/requirements-standalone.txt"]).returncode != 0:
         errors.append("standalone_requirements_changed")
@@ -752,7 +764,7 @@ def precheck_tag(tag: str) -> list[str]:
 def _plugin_changed(tag: str, cfg: dict) -> bool:
     return bool(_git_out(
         ["diff", "--name-only", "-z", "HEAD", tag, "--",
-         "hermes_plugin", "adapters/common", "adapters/slack", "adapters/discord",
+         *mcs_runtime.GATEWAY_SOURCE_DIRS,
          *(["mcs_standalone"] if mcs_runtime.standalone(cfg) else [])]).strip("\0"))
 
 
@@ -818,7 +830,8 @@ def plan(tag: str) -> dict:
                 "blockers": ["tag_not_fetched"]}
     try:
         return _plan(tag, cfg, state, current, target_sha)
-    except (UpdateError, subprocess.SubprocessError, OSError) as e:
+    except (UpdateError, subprocess.SubprocessError, OSError,
+            ValueError) as e:           # ValueError: invalid runtime_mode
         return {"route": "blocked", "current": current,
                 "target": {"tag": tag, "sha": target_sha},
                 "blockers": [f"plan_failed: {e}"[:200]]}
@@ -1288,7 +1301,7 @@ def scan_pending_approvals(state: dict
     # superseded and must not fire later
     ordered = sorted(
         by_tag.values(),
-        key=lambda p: _ver_key(p.get("tag")) or (-1, -1, -1, -1, ""),
+        key=lambda p: _ver_key(p["tag"]),   # _scan_receipt kept valid tags only
         reverse=True)
     consumed.extend((p["command_id"], "superseded")
                     for p in ordered[1:])
@@ -1583,25 +1596,22 @@ def _post_merge(state: dict) -> int:
     """Post-merge stages, run as a NEW-code subprocess while the parent
     (old code) holds both locks (--locks-held)."""
     applying = state["applying"]
-    try:
-        _plan_runtime_migration(state)
-        if applying.get("reinstall") and not applying.get("reinstall_done"):
-            _reinstall(applying)
-            journal(state, "reinstall")      # persists reinstall_done
-        if applying.get("runtime_migration"):
-            _use_migrated_runtime(applying["runtime_migration"])
-        _services_reconcile()
-        journal(state, "services")
-        problems = restart_agents()
-        if problems:
-            raise UpdateError("restart_failed: " + ",".join(problems))
-        journal(state, "restart")
-        errors = _postcheck(state, applying["sha"])
-        if errors:
-            raise UpdateError("postcheck_failed: " + ",".join(errors))
-        journal(state, "postcheck")
-    except UpdateError:
-        raise
+    _plan_runtime_migration(state)
+    if applying.get("reinstall") and not applying.get("reinstall_done"):
+        _reinstall(applying)
+        journal(state, "reinstall")      # persists reinstall_done
+    if applying.get("runtime_migration"):
+        _use_migrated_runtime(applying["runtime_migration"])
+    _services_reconcile()
+    journal(state, "services")
+    problems = restart_agents()
+    if problems:
+        raise UpdateError("restart_failed: " + ",".join(problems))
+    journal(state, "restart")
+    errors = _postcheck(state, applying["sha"])
+    if errors:
+        raise UpdateError("postcheck_failed: " + ",".join(errors))
+    journal(state, "postcheck")
     state.setdefault("applied", []).append({
         "tag": applying["tag"], "sha": applying["sha"],
         "prev_sha": applying["prev_sha"],
@@ -1749,7 +1759,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
     the long pre-checks) — run.lock holders (drainer ticks) never
     block on update.lock, so no lock-order inversion exists."""
     global _HELD_RUN_LOCK_FD
-    if not tag or not SEMVER_RE.fullmatch(tag):
+    if not release_tag(tag):
         print("apply: bad tag", tag)
         return 2
     if sha is not None and not HEX_RE.fullmatch(sha):
@@ -1815,6 +1825,8 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                     command_id or entry.get("command_id"))
                 journal(state, "rollback")
             try:
+                # The post-merge child may have restarted writers before failing.
+                quiesce()
                 _rollback_tree(entry, lambda report: _consent_hold(
                     state, RestoreConsentPending(report), entry["backup_path"]))
                 state.pop("restore_consent", None)
@@ -1848,12 +1860,17 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                     return 2
                 rollback_failed = True
                 reason += f" (rollback failed: {e} — escalate)"
+                if state["applying"].get("rollback"):
+                    # the tree may be on the old code while the DB keeps the
+                    # newer schema: recovery keeps writers stopped until the
+                    # restore completes (no consent report exists to hold on)
+                    state["applying"]["restore_incomplete"] = True
         if not rollback_failed:
             # keep remnants when the rollback itself failed — recovery
             # must still be able to see and escalate the wedged state
             state["applying"] = None
             state["stages"] = []
-        if transient:
+        if transient and not rollback_failed:
             # never attempted: clean journal, leave the receipt
             # pending, no attempt record, no notification — the next
             # check retries
@@ -1866,7 +1883,13 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                 "at": time.time()}
         _record_attempt(state, tag, "failed", reason)
         save_state(state)
-        if quiesced:
+        if rollback_failed and state["applying"].get("restore_incomplete"):
+            # same report-only freeze as recover_interrupted's escalate: an
+            # outbox notice would write the newer-schema DB under the old
+            # code and join the later restore's loss report
+            _report("escalate", reason, writers_stopped=True)
+            return 1
+        if quiesced and not rollback_failed:
             problems = restart_agents()
             _remove_marker()
             if problems:
@@ -2018,7 +2041,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         return bail(f"unexpected:{type(e).__name__}")
     finally:
         _HELD_RUN_LOCK_FD = None
-        if quiesced and not consent_hold:
+        if quiesced and not consent_hold and not rollback_failed:
             _remove_marker()
         for fd in (run_fd, upd_fd):
             if fd is not None:
@@ -2052,6 +2075,9 @@ def _reconcile_membership(desired: dict) -> list[str]:
     if cfg.get("runtime_mode") == "standalone":
         # One host owns jobs; its restored code reconciles membership on restart.
         return []
+    if cfg.get("runtime_mode", "hermes") != "hermes":
+        # same token as mcs_recover; reported before any cron/agent removal
+        return ["runtime_mode_unverifiable"]
     desired = {} if desired is None else desired
     if not isinstance(desired, dict):
         return ["service_snapshot_invalid"]
@@ -2064,7 +2090,7 @@ def _reconcile_membership(desired: dict) -> list[str]:
             return ["service_snapshot_invalid"]
     hermes = mcs_setup._hermes_exe(cfg)
     desired_cron = {(d.get("script") or ""): d for d in
-                    (desired or {}).get("cron", [])}
+                    desired.get("cron", [])}
     known_scripts = {s for _, _, s in mcs_setup.CRON_JOBS} | {"mcs_offsite.sh"}
     current = {}
     try:
@@ -2081,9 +2107,7 @@ def _reconcile_membership(desired: dict) -> list[str]:
         evidence += current["cron"]
     desired_paths = {os.path.normpath(os.path.join(SCRIPTS_DIR, script))
                      for script in desired_cron if script}
-    if mcs_runtime.standalone(cfg):
-        pass        # launchd agents (below) carry the schedule; no hermes cron
-    elif mcs_setup._hermes_ok(hermes):
+    if mcs_setup._hermes_ok(hermes):
         try:
             # one parser with mcs_setup: ANSI-tolerant, None = unparsable
             entries = mcs_setup._cron_list(hermes)
@@ -2111,7 +2135,7 @@ def _reconcile_membership(desired: dict) -> list[str]:
     else:
         problems.append("cron_list_unverifiable")
     desired_agents = {a.get("label") for a in
-                      (desired or {}).get("agents", [])}
+                      desired.get("agents", [])}
     current = set(mcs_setup._agent_labels(cfg))
     for path in glob.glob(os.path.join(AGENTS_DIR, "*.plist")):
         label = os.path.basename(path)[:-6]
@@ -2239,7 +2263,7 @@ def rollback(command_id: str | None = None) -> int:
             upd_fd = None
             return recover_interrupted()
         applied = state.get("applied") or []
-        entry = applied[-1] if applied else state.get("applying")
+        entry = applied[-1] if applied else None
         if not entry or not entry.get("prev_sha"):
             if command_id:
                 state.setdefault("executed", {})[command_id] = {
@@ -2628,6 +2652,9 @@ def _replace_database(backup_path, expected_sha, before_replace):
                 raise OSError("live_journal_busy")
         finally:
             live.close()
+        # = deployment/recovery/mcs_recover._replace_database: same lexists
+        # sidecar rule, kept as an independent copy (recovery must run
+        # without the repo's modules)
         if any(os.path.lexists(LEDGER + suffix)
                for suffix in ("-wal", "-shm", "-journal")):
             raise OSError("live_sidecars_remaining")
@@ -2855,7 +2882,9 @@ def recover_interrupted(if_stale: bool = False) -> int:
             loss report's content digest, voiding the consent it
             awaits. An invalid hold record (wrong journal shape) is
             held the same way: only a human can repair it. The journal
-            stays, so the next check / consent respawn retries."""
+            stays, so the next check / consent respawn retries. A schema
+            rollback apply could not finish (applying.restore_incomplete)
+            keeps the same report-only freeze until a pass restores."""
             if held():
                 _report("restore_consent_blocked",
                         detail[:240] + " — hold kept, retried next pass")
@@ -2867,8 +2896,16 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     "at": time.time()}
                 save_state(state)
             key = _alert_key(state, detail)
-            dkey = _drainers_key(state, head)
+            if (applying or {}).get("restore_incomplete"):
+                # apply's schema rollback failed before the DB restore
+                # finished: same freeze as a consent hold (drainers down,
+                # marker kept, report only) — an outbox notice would write
+                # the newer-schema DB under the old code and join the later
+                # restore's loss report
+                _report("escalate", detail, alert_key=key, writers_stopped=True)
+                return 1
             notify, notified_at = _alert_due("escalate", key, time.time())
+            dkey = _drainers_key(state, head)
             _report("escalate", detail, alert_key=key,
                     notified_at=notified_at, drainers_key=dkey)
             problems = drainers(dkey)
@@ -2947,7 +2984,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 # the DB is at the backup schema and the marker left
                 # awaiting_consent: the hold is over — later failures
                 # escalate normally (drainers up on a consistent DB)
-                if state.pop("restore_consent", None) is not None:
+                held_before = state.pop("restore_consent", None) is not None
+                if applying.pop("restore_incomplete", None) or held_before:
                     save_state(state)
             try:
                 if applying.get("rollback"):
@@ -3162,6 +3200,8 @@ def _drainers_key(state: dict, head: str | None) -> str:
     return hashlib.sha256(json.dumps(
         [state.get("applying"), state.get("stages"), head or None],
         sort_keys=True, default=str).encode()).hexdigest()[:32]
+
+
 # -------------------------------------------------------------------- CLI
 
 def cmd_check() -> int:
@@ -3188,7 +3228,11 @@ def cmd_check() -> int:
             tag = sha = None            # receipts still get processed
     cur_tag, cur_sha = current_version()
     notes = impact = None
-    if tag and tag != state.get("latest_tag"):
+    newer = _tag_is_newer(tag, sha, cur_sha)
+    # refetch for a deferred notice only while one is still owed — a
+    # checkout ahead of the latest tag never gets it and must not refetch
+    if tag and (tag != state.get("latest_tag")
+                or (newer and state.get("notified_at") != tag)):
         with suppress(UpdateError):
             # fetch objects BEFORE notes/impact — otherwise the summary
             # silently runs against missing objects (dead code, F15)
@@ -3196,16 +3240,9 @@ def cmd_check() -> int:
         notes = fetch_notes(tag)
         try:
             impact = impact_summary(cur_sha, tag) if cur_sha else []
-        except UpdateError:
+        except (UpdateError, ValueError):     # ValueError: invalid runtime_mode
             impact = []
-    # HEAD already containing the newest tag (a checkout ahead of it) is
-    # not "newer"; only an exit-0 ancestry proof suppresses — missing
-    # objects (128) or a git failure keep the notice/auto path
-    newer = bool(tag and sha and sha != cur_sha)
-    if newer and cur_sha:
-        with suppress(UpdateError):
-            newer = _git(["merge-base", "--is-ancestor", sha, "HEAD"]
-                         ).returncode != 0
+        newer = _tag_is_newer(tag, sha, cur_sha)   # objects present now
     # --- serialized state update + decision --------------------------
     picked = auto = None
     held = False
@@ -3330,7 +3367,7 @@ def main() -> int:
                      base_sha=args.base_sha, reinstall=args.reinstall,
                      install_args=tuple(args.install_arg))
     if args.cmd == "plan":
-        if not SEMVER_RE.fullmatch(args.tag):
+        if not release_tag(args.tag):
             print("plan: bad tag", args.tag)
             return 2
         print(json.dumps(plan(args.tag), ensure_ascii=False, indent=2))

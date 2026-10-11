@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "再ログイン後の再実行で、取込遅れの件数が二重に数えられる問題を修正",
+  "summary": "収集の途中でセッションが切れて自動再ログインで回復した場合、再実行した段の「取込が遅れている患者」（coverage_gaps・coverage_stalled）と「最新投稿の確認で取得した患者」（self_probe_fetched）が二重に記録され、health の遅延件数が実際より多く表示されることがありました。再実行の前に中断した試行の分を取り除くようにしました。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "mcs/ingest/run_check.py の _with_relogin は、全件を再走査する stage（unread・self_probe・backfill）の再実行前に、errors・incomplete に加えて coverage_gaps・coverage_stalled・self_probe_fetched も stage 開始時点の長さへ戻す。",
+    "new_messages・backfilled・realtime_ids は戻さない。中断した試行で保存済みの投稿は再実行では新規にならず、戻すと保存済みの件数が消えるため。ジョブ系の stage は従来どおり巻き戻さない。"
+  ],
+  "refs": [
+    "mcs/ingest/run_check.py",
+    "tests/ingest/test_relogin_replay_lists.py"
+  ]
+}

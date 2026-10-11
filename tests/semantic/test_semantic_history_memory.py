@@ -32,7 +32,7 @@ def add(ledger, kind, content, meta):
 
 @pytest.mark.parametrize("project_id", [1, None])
 def test_detail_uses_newest_valid_matching_generation(ledger, project_id):
-    meta = {"schema": assessment.SCHEMA_VERSION, "source_fingerprint": "fp",
+    meta = {"schema": assessment.ASSESSMENT_SCHEMA_VERSION, "source_fingerprint": "fp",
             "policy_fingerprint": "policy", "fact_id": "fact1", "dimension": "dim",
             "technical_status": "complete"}
     for confidence in (0.5, 0.9, "invalid"):
@@ -81,7 +81,7 @@ def test_cache_readers_preserve_artifacts_only_ledger_protocol(ledger):
 
     legacy = LegacyLedger()
     assert not hasattr(legacy, "db") and not hasattr(legacy, "iter_artifacts")
-    detail_meta = {"schema": assessment.SCHEMA_VERSION, "source_fingerprint": "fp",
+    detail_meta = {"schema": assessment.ASSESSMENT_SCHEMA_VERSION, "source_fingerprint": "fp",
                    "policy_fingerprint": "policy", "fact_id": "fact1", "dimension": "dim",
                    "technical_status": "complete"}
     for confidence in (0.5, 0.9):

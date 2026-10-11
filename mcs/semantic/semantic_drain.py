@@ -27,10 +27,14 @@ from semantic_audit import audit_code, audit_status_for
 from semantic_llm import _chunks, extract_facts, summarize
 from semantic_loops import update_loops
 from semantic_policy import (JOB_KIND, KIND_ASSESS, KIND_AUDIT,
-                             KIND_BUNDLE, KIND_FACT_AUDIT, KIND_FACT_PROJ,
+                             KIND_BUNDLE, KIND_CANDIDATE, KIND_COVERAGE,
+                             KIND_DRAIN_RUN, KIND_FACT_AUDIT, KIND_FACT_PROJ,
                              KIND_FACT_REPAIR, KIND_FACTS, KIND_FACTS_V2,
-                             KIND_PLAN,
-                             KIND_SUMMARY, KIND_USAGE, POLICY_VERSION,
+                             KIND_LOOP, KIND_LOOP_EVENT,
+                             KIND_PLAN, KIND_POLICY, KIND_REPAIR,
+                             KIND_SHADOW_V2, KIND_SUMMARY,
+                             KIND_SUMMARY_FORMAT_REPAIR, KIND_USAGE,
+                             POLICY_VERSION,
                              QC_JOB_KIND, SCHEMA_VERSION,
                              policy_fingerprint, semantic_config)
 from semantic_render import (_emit_degraded, _notify_src_event,
@@ -57,11 +61,6 @@ def _eval_chunked(jev_client, state: dict, questions: dict,
     return merged
 
 
-# Receipt of a shadow v2 comparison that ran for a source + policy and
-# stayed incomplete (the incomplete document itself is never stored).
-KIND_SHADOW_V2 = "semantic_shadow_v2"
-
-
 def _shadow_v2_tried(ledger, mid: int, fp: str, policy: str) -> bool:
     """This source + policy already ran the current v2 extraction in shadow
     and it stayed incomplete — a receipt, never a completed document."""
@@ -71,20 +70,8 @@ def _shadow_v2_tried(ledger, mid: int, fp: str, policy: str) -> bool:
             and row["meta"].get("generation") == v2_generation())
 
 
-def _jev_failure_class(error) -> str:
-    """Classify an evaluation failure for durable job scheduling.
-
-    ``resource`` means no external request should be counted as a failed
-    input (daily cap, missing key, or exhausted job budget).  All other Jev
-    retryable failures use finite job retries, as does one malformed
-    answer (``jev.is_answer_defect``) at every evaluation site; permanent
-    failures stop the generation until explicitly reseeded.
-    """
-    if getattr(error, "kind", "") in {"budget_exceeded", "no_api_key",
-                                      "payment_required"}:
-        return "resource"
-    return "retry" if getattr(error, "retryable", False) \
-        or jev.is_answer_defect(error) else "failed"
+# kept under the drain's name for semantic.py, semantic_qc and tests
+_jev_failure_class = jev.failure_class
 
 
 def _jev_fail_flag(error) -> str | None:
@@ -527,7 +514,14 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                                 "repaired_fact_ids":
                                     repair["repaired_fact_ids"],
                                 "owner_chunk_ids":
-                                    repair["owner_chunk_ids"]},
+                                    repair["owner_chunk_ids"],
+                                # pair scan cut by the deadline: the
+                                # repaired doc was not kept and the
+                                # spent repair parks for review below
+                                **({"relation_pairs_skipped":
+                                    repair["relation_pairs_skipped"]}
+                                   if repair.get("relation_pairs_skipped")
+                                   else {})},
                                ensure_ascii=False, allow_nan=False),
                     project_id=pid, message_id=mid,
                     model=semantic.llm_model(),
@@ -736,7 +730,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     # through the same identity check.  A real Jev client additionally gets
     # a hook before each internal retry attempt and a durable reservation
     # immediately before the POST.
-    jev_client, _ = runtime.bind_jev(
+    jev_client = runtime.bind_jev(
         jev_client, guard, reserve_fn,
         cutoff=transport_deadline if lane == "backlog" else None)
     llm_fn = runtime.guarded_llm(
@@ -838,14 +832,13 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                      a["noul"], scfg["match_threshold"],
                                      scfg["nomatch_threshold"])}
                              for k, a in answers.items()}
-            detail = {}
-            meta_base["jev_requests"] = (
-                jev_client.requests_made - req0) if jev_client else 0
             ledger.artifact_add(
                 KIND_ASSESS,
+                # "detail" stays in the stored shape (medication detail
+                # lives in semantic_assessment rows)
                 json.dumps({"target_message_id": mid,
                             "verdicts": verdicts[mid],
-                            "detail": detail}, ensure_ascii=False),
+                            "detail": {}}, ensure_ascii=False),
                 project_id=pid, message_id=mid, model=jev.JEV_MODEL,
                 meta={**meta_base, "technical_status": "complete"})
         if scfg["summary_mode"] == "off" and scfg["loop_mode"] == "off":
@@ -894,7 +887,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             guard("loop_candidates")
             update_loops(ledger, pid, bundle, {mid: facts}, None, scfg, deadline)
         if scfg["summary_mode"] != "off":
-            previous = _current(ledger, "semantic_coverage", mid, fp, policy)
+            previous = _current(ledger, KIND_COVERAGE, mid, fp, policy)
             coverage = previous["content"] if previous else None
             if not coverage or not coverage.get("evaluated"):
                 from semantic_audit import evaluate_source_fact_coverage
@@ -903,7 +896,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     target_id=f"m{mid}", match_threshold=scfg["match_threshold"])
                 guard("coverage_result")
                 ledger.artifact_add(
-                    "semantic_coverage", json.dumps(coverage, ensure_ascii=False),
+                    KIND_COVERAGE, json.dumps(coverage, ensure_ascii=False),
                     project_id=pid, message_id=mid, model=jev.JEV_MODEL,
                     meta={"fingerprint": fp, "policy_fingerprint": policy,
                           "technical_status": "complete" if coverage["evaluated"] else "pending"})
@@ -914,7 +907,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 if error is not None and _jev_failure_class(error) == "failed":
                     hard_fail = True
                 elif (error is not None and _jev_failure_class(error) == "retry"
-                      or coverage.get("failure_reason") == "model"):
+                      or coverage.get("failure_reason") in ("model", "retry")):
                     retryable_failure = True
                 break
     if incomplete:
@@ -964,7 +957,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             if existing["meta"].get("input_oversize"):
                 summary["_input_oversize"] = True
         else:
-            candidate = _current(ledger, "semantic_candidate", mid, fp, policy)
+            candidate = _current(ledger, KIND_CANDIDATE, mid, fp, policy)
             if candidate and candidate["meta"].get("publication_mode") == scfg["summary_mode"]:
                 summary = candidate["content"]
             else:
@@ -977,13 +970,13 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     if summary is None and summary_reason == "model" \
                             and summary_error.get("code") \
                             and semantic.last_llm_failure() != "length_stop" \
-                            and _current(ledger, "semantic_summary_format_repair",
+                            and _current(ledger, KIND_SUMMARY_FORMAT_REPAIR,
                                          mid, fp, policy) is None:
                         if _PASS_REASON.get("summary_validation_error") is None:
                             _PASS_REASON["summary_validation_error"] = summary_error["code"]
                         guard("summary_format_repair_reservation")
                         format_repair_id = ledger.artifact_add(
-                            "semantic_summary_format_repair",
+                            KIND_SUMMARY_FORMAT_REPAIR,
                             json.dumps({"target_message_id": mid}),
                             project_id=pid, message_id=mid,
                             model=semantic.llm_model(),
@@ -1044,17 +1037,17 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                             else "done")
         # Preserve the pre-audit output for the fixed-bundle comparison (§24.1).
         # It is never eligible for publication or automatic adoption.
-        if existing is None and _current(ledger, "semantic_candidate", mid, fp, policy) is None:
+        if existing is None and _current(ledger, KIND_CANDIDATE, mid, fp, policy) is None:
             guard("candidate_snapshot")
             ledger.artifact_add(
-                "semantic_candidate", json.dumps(summary, ensure_ascii=False),
+                KIND_CANDIDATE, json.dumps(summary, ensure_ascii=False),
                 project_id=pid, message_id=mid, model=semantic.llm_model(),
                 meta={"fingerprint": fp, "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION, "stage": "pre_audit",
                       "publication_mode": scfg["summary_mode"],
                       "target_revision": members[mid]["revision"]})
         # Reserve before dispatch: a crash cannot refund the repair (INV-10).
-        repaired = bool(_current(ledger, "semantic_repair", mid, fp)
+        repaired = bool(_current(ledger, KIND_REPAIR, mid, fp)
                         or (prev_audit
                             and prev_audit["meta"].get("repair_count", 0) >= 1))
         summary["_facts"] = facts   # evidence context for the Jev audit
@@ -1064,9 +1057,26 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         for _attempt in range(2):      # initial + at most one repair
             code_f = (audit_code(bundle, facts, summary) + coverage_by_target.get(mid, [])
                       + detail_findings.get(mid, []))
-            jev_f, evaluated = semantic.audit_claims(
-                jev_client, bundle, summary, deadline, scfg["match_threshold"],
-                scfg["max_questions_per_request"])
+            try:
+                jev_f, evaluated = semantic.audit_claims(
+                    jev_client, bundle, summary, deadline,
+                    scfg["match_threshold"], scfg["max_questions_per_request"])
+            except (runtime.LLMNotSent, runtime.RuntimeBudget) as error:
+                # Jev cutoff/budget: earlier targets commit below. A repair
+                # already applied this pass is kept as a PENDING result, so
+                # the next pass re-audits the repaired text (INV-10: the
+                # one repair is spent, never refunded).
+                not_sent = error
+                incomplete = True
+                if _attempt:
+                    summary["audit_status"] = "PENDING"
+                    results[mid] = {
+                        "summary": summary, "status": "PENDING",
+                        "findings": code_f + [{"code": "support_unevaluated"}],
+                        "repaired": True, "fresh": True,
+                        "jev_requests": (jev_client.requests_made - req0)
+                        if jev_client else 0}
+                break
             if not evaluated and jev_client is not None:
                 flag = _jev_fail_flag(getattr(jev_client, "last_error",
                                               None))
@@ -1080,7 +1090,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             if status == "REPAIR_REQUIRED" and not repaired:
                 guard("repair_reservation")
                 repair_id = ledger.artifact_add(
-                    "semantic_repair", json.dumps({"target_message_id": mid}),
+                    KIND_REPAIR, json.dumps({"target_message_id": mid}),
                     project_id=pid, message_id=mid, model=semantic.llm_model(),
                     meta={"fingerprint": fp, "policy_fingerprint": policy, "repair_count": 1})
                 repaired = True
@@ -1100,7 +1110,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                 "DELETE FROM artifacts WHERE artifact_id=?",
                                 (repair_id,))
                     if isinstance(error, (runtime.LLMNotSent,
-                                          runtime.RuntimeBudgetShort)):
+                                          runtime.RuntimeBudget)):
                         not_sent = error
                         incomplete = True
                         break
@@ -1193,6 +1203,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     pending = not stale and any(r["status"] == "PENDING"
                                 for r in results.values())
     loops_done = True
+    loops_short = False
     if not stale and scfg["loop_mode"] != "off":
         # loop candidates/relation events for the LIVE generation —
         # kept OUT of the commit tx because matching makes Jev calls
@@ -1200,28 +1211,37 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         # candidate_fp and pair dedup.
         rejections = []
         scope = pl.get("retry_command_id")
-        _, loops_done = update_loops(ledger, pid, bundle,
-                                     facts_by_target, jev_client,
-                                     scfg, deadline,
-                                     retry_scope=scope if isinstance(scope, str) else "",
-                                     rejections=rejections)
-        flag = _jev_fail_flag(getattr(jev_client, "last_error", None)) \
-            if not loops_done and jev_client is not None else None
-        if rejections:
-            if _PASS_REASON.get("loops_rejected") is None:
-                _PASS_REASON["loops_rejected"] = rejections[0]["code"]
-            if flag is None:
-                # Only cached rejections, or a later pair's success reset
-                # last_error: the known rejection is the cause — a bounded
-                # retry, never a free defer that would loop forever. A
-                # later hard/resource failure keeps its own handling below.
-                _why("loops_jev_rejected")
-                retryable_failure = True
-        if not loops_done and jev_client is not None:
-            _why(f"loops_jev_{flag}")
-            resource_wait |= flag == "resource"
-            retryable_failure |= flag == "retryable"
-            hard_fail |= flag == "hard"
+        try:
+            _, loops_done = update_loops(
+                ledger, pid, bundle, facts_by_target, jev_client,
+                scfg, deadline,
+                retry_scope=scope if isinstance(scope, str) else "",
+                rejections=rejections)
+        except runtime.RuntimeBudgetShort:
+            # the Jev cutoff stopped the relation pass: the results below
+            # still commit and the job resumes the remaining pairs next
+            # tick (last_error is not this stop's cause — no flag)
+            loops_done = False
+            loops_short = True
+        else:
+            flag = _jev_fail_flag(getattr(jev_client, "last_error", None)) \
+                if not loops_done and jev_client is not None else None
+            if rejections:
+                if _PASS_REASON.get("loops_rejected") is None:
+                    _PASS_REASON["loops_rejected"] = rejections[0]["code"]
+                if flag is None:
+                    # Only cached rejections, or a later pair's success
+                    # reset last_error: the known rejection is the cause —
+                    # a bounded retry, never a free defer that would loop
+                    # forever. A later hard/resource failure keeps its own
+                    # handling below.
+                    _why("loops_jev_rejected")
+                    retryable_failure = True
+            if not loops_done and jev_client is not None:
+                _why(f"loops_jev_{flag}")
+                resource_wait |= flag == "resource"
+                retryable_failure |= flag == "retryable"
+                hard_fail |= flag == "hard"
     # notification eligibility is derived from the stored origin event,
     # not from this job's seed provenance (INV-20, §20.3) — evaluated
     # per target below: a covering new_messages intent must exist for
@@ -1303,20 +1323,24 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         return "stale"
     if hard_fail:
         return "failed"
+    if loops_short:
+        # same mapping as a cutoff raised anywhere else in the pass
+        _why("budget_short")
+        return "deferred_short"
     if pending:
         # evaluation incomplete (e.g. Jev outage mid-audit) — the job
         # must not sit 'done' on an unfinished audit; consume a bounded
         # retry attempt so a persistent outage eventually fails rather
         # than busy-loops (AT-058)
         _why("audit_pending")
-        return "deferred" if resource_wait and not (
-            hard_fail or retryable_failure) else "retry"
+        return "deferred" if resource_wait and not retryable_failure \
+            else "retry"
     if not loops_done:
         # relation pass truncated by the pair budget/deadline — the
         # results committed above stand; the job re-runs to evaluate
         # the remaining (candidate, target) pairs (§17.2 持ち越し)
         _why("loops_incomplete")
-        return "retry" if hard_fail or retryable_failure else "deferred"
+        return "retry" if retryable_failure else "deferred"
     return "done"
 
 
@@ -1412,15 +1436,15 @@ def _jev_error_brief(error) -> dict | None:
             "class": _jev_failure_class(error)}
 
 
+# guard stages raised before a local-model request leaves (runtime)
+_PRE_DISPATCH_STAGES = ("llm_attempt", "llm_next_call", "llm")
+
 # Artifact kinds a semantic pass persists as durable stage results.
 # Scoped (kind + project) so a concurrent drainer's extract_llm rows or
 # another project's work never read as this job's progress (2026-09-30:
 # a job looped 19 passes 'progressing' on foreign writes).
-# guard stages raised before a local-model request leaves (runtime)
-_PRE_DISPATCH_STAGES = ("llm_attempt", "llm_next_call", "llm")
-
-_STAGE_KINDS = ("canonical_projection", "v4_stage", "loop_candidate",
-                "loop_event", "notify_plan")
+_STAGE_KINDS = (KIND_FACT_PROJ, v4.KIND_V4_STAGE, KIND_LOOP,
+                KIND_LOOP_EVENT, KIND_PLAN)
 
 
 def _last_stage_artifact(ledger, project_id) -> int:
@@ -1435,7 +1459,7 @@ def _last_stage_artifact(ledger, project_id) -> int:
         # artifacts scan for every job, twice per pass
         "WHERE project_id=? AND (kind GLOB 'semantic_*' "
         f"OR kind IN ({ph})) AND kind NOT IN (?,?,?)",
-        (project_id, *_STAGE_KINDS, KIND_USAGE, "semantic_drain_run",
+        (project_id, *_STAGE_KINDS, KIND_USAGE, KIND_DRAIN_RUN,
          SCHED_KIND)).fetchone()[0]
 
 
@@ -1687,10 +1711,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     out["done_by_kind"] = {}
     policy = policy_fingerprint(scfg)
     previous_policy = ledger.db.execute(
-        "SELECT content FROM artifacts WHERE kind='semantic_policy' "
-        "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+        "SELECT content FROM artifacts WHERE kind=? "
+        "ORDER BY artifact_id DESC LIMIT 1", (KIND_POLICY,)).fetchone()
     if previous_policy is None or previous_policy["content"] != policy:
-        ledger.artifact_add("semantic_policy", policy)
+        ledger.artifact_add(KIND_POLICY, policy)
     if llm_fn is None:
         llm_fn = semantic.llm_chat
     if jev_client is None and scfg["daily_request_budget"] > 0:
@@ -2133,7 +2157,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             # evidence instead of an in-memory-only result (T14).
             try:
                 ledger.artifact_add(
-                    "semantic_drain_run",
+                    KIND_DRAIN_RUN,
                     json.dumps({
                         "v": 1, "mode": scfg["mode"],
                         "done": out["done"], "deferred": out["deferred"],
@@ -2256,7 +2280,7 @@ def main() -> int:
     if not math.isfinite(args.stop_after) or args.stop_after < 0:
         ap.error("stop-after must be a finite nonnegative number")
     from ledger import Ledger
-    from mcs_util import acquire_run_lock, CONF_PATH, HOME
+    from mcs_util import acquire_run_lock, CONF_PATH, DB
     led = None
     stop = time.monotonic() + args.stop_after
     totals = {"done": 0, "deferred": 0, "failed": 0, "batches": 0}
@@ -2268,7 +2292,7 @@ def main() -> int:
                 continue
             try:
                 if led is None:
-                    led = Ledger(os.path.join(HOME, "data", "ledger.db"))
+                    led = Ledger(DB)
                     if args.revive_failed:
                         totals["revive"] = revive_failed(led)
                 cfg = load_config()

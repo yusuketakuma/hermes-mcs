@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "患者要約の読取りと規則抽出が長い投稿で遅くなる問題を修正",
+  "summary": "家族・医療者・「以前」などの言及を含む患者で、🧾 要約や brain_export を開くたびに、最新の集約結果があっても全投稿の再集約をやり直していた問題を修正しました。あわせて、長い投稿の出典主体の判定が本文長の二乗で遅くなっていた処理を、同じ判定結果のまま、本文全体の走査は投稿ごとに1回、各判定は該当する文節の範囲だけを見るようにしました。表示内容は変わりません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "mcs/extract/rollup.py の current_cached_refs は、主体の混在による再計算を period_check_version が現行と異なる（または未記録の）旧キャッシュに限る。現行版のキャッシュは build_rollup が同じ主体ガードで作ったもので、投稿や患者名の変更は従来どおり dirty_projects が次の定期処理で再構築する。そのため、変更から再構築までの間は、他の患者と同じくキャッシュの値を返す。",
+    "mcs/extract/v1/extract.py の patient_source_scope は、範囲に依存しない本文全体の見出し・人物の走査を _scope_events に分け、直近32件の本文について結果を再利用する。所有者表現（例: 母の）と区切り語の前方検索は、句読点・改行で区切られた該当文節の範囲だけを走査する（所有者表現と区切り語は句読点・改行をまたがないため結果は同一）。",
+    "mcs/extract/clinical_values.py の patient_item_scope は、引用位置が特定できない旧項目の判定で、患者以外の区切りが見つかった時点で走査を止める。空本文は従来どおり unknown。"
+  ],
+  "refs": [
+    "mcs/extract/rollup.py",
+    "mcs/extract/v1/extract.py",
+    "mcs/extract/clinical_values.py",
+    "tests/extract/test_rollup_subject_scope.py"
+  ]
+}

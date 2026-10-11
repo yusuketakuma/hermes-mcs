@@ -276,6 +276,26 @@ def test_cron_timeout_wrapper_kills_the_whole_job(tmp_path):
     assert ok.returncode == 3                     # normal exits pass through
 
 
+@pytest.mark.parametrize("signal_name", ["SIGTERM", "SIGKILL"])
+def test_cron_timeout_wrapper_preserves_child_signal_failure(signal_name):
+    import signal
+    import subprocess
+    import sys
+
+    child = "import os, signal, sys; os.kill(os.getpid(), getattr(signal, sys.argv[1]))"
+    proc = subprocess.run(["/usr/bin/perl", "-e", mcs_setup._TIMEOUT_PL, "30",
+                           sys.executable, "-c", child, signal_name], timeout=10)
+    assert proc.returncode == 128 + getattr(signal, signal_name)
+
+
+def test_cron_timeout_wrapper_preserves_success():
+    import subprocess
+
+    proc = subprocess.run(["/usr/bin/perl", "-e", mcs_setup._TIMEOUT_PL, "30",
+                           "/bin/sh", "-c", "exit 0"], timeout=10)
+    assert proc.returncode == 0
+
+
 @pytest.mark.parametrize("target,ok", [
     ("slack:C0SYNTHETIC", True), ("slack:G0SYNTHETIC", True), ("slack:D0SYNTHETIC", True),
     ("slack:U0SYNTHETIC", False), ("slack:#general", False), ("slack:general", False),
@@ -341,3 +361,165 @@ def test_retire_previous_hermes_removes_plists_so_login_does_not_reload(monkeypa
             "agents": [{"label": "ai.mcs.extract-drainer"}, {"label": "local.mcs-cmd"}]}
     assert mcs_setup._retire_previous_runtime(prev, "standalone", lambda m: None, False) == 0
     assert list(agents.iterdir()) == []
+
+
+@pytest.mark.parametrize("print_code", [124, 127])
+def test_unverifiable_launchd_stop_keeps_the_old_agent_and_starts_nothing(
+        monkeypatch, tmp_path, print_code):
+    """A timed-out or unstartable `launchctl print` is unknown, not stopped:
+    the old plist stays and the new runtime is not bootstrapped."""
+    label = "ai.mcs.extract-drainer"
+    real_loaded = mcs_setup._agent_loaded
+    calls, args = _standalone_services(monkeypatch, tmp_path, config(), loaded={label})
+    fixture_loaded = mcs_setup._agent_loaded
+    monkeypatch.setattr(mcs_setup, "_agent_loaded",
+                        lambda name: real_loaded(name) if name == label else fixture_loaded(name))
+    fixture_run = mcs_setup.subprocess.run
+
+    def run(argv, **kw):
+        if argv[:2] in (["launchctl", "bootout"], ["launchctl", "print"]) \
+                and argv[2].endswith("/" + label):
+            calls.append(list(argv))
+            return SimpleNamespace(returncode=124 if argv[1] == "bootout" else print_code,
+                                   stdout="", stderr="synthetic unavailable")
+        return fixture_run(argv, **kw)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", run)
+    (tmp_path / "agents").mkdir()
+    (tmp_path / "data").mkdir()
+    old = tmp_path / "agents" / (label + ".plist")
+    old.write_text("synthetic old service")
+    manifest = tmp_path / "data" / "service_manifest.json"
+    manifest.write_text(json.dumps({"runtime_mode": "hermes", "agents": [{"label": label}], "cron": []}))
+    assert mcs_setup.cmd_services(args) == 1
+    assert old.exists()
+    assert not any(a[:2] == ["launchctl", "bootstrap"] and a[-1].endswith(mcs_setup.STANDALONE_LABEL + ".plist")
+                   for a in calls)
+    assert json.loads(manifest.read_text())["runtime_mode"] == "hermes"
+
+
+@pytest.mark.parametrize("print_code", [124, 127])
+def test_retiring_an_agent_with_unknown_state_keeps_its_plist(monkeypatch, tmp_path, print_code):
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    plist = agents / "ai.mcs.cron.mcs-check.plist"
+    plist.write_text("synthetic")
+    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
+    monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
+    monkeypatch.setattr(mcs_setup, "_run", lambda argv, **kw: SimpleNamespace(
+        returncode=print_code if argv[1] == "print" else 0, stdout="", stderr=""))
+    assert mcs_setup._agent_loaded("ai.mcs.cron.mcs-check") is None
+    assert mcs_setup._retire_agents({"ai.mcs.cron.mcs-check"}, lambda m: None, False) == 1
+    assert plist.exists()
+
+
+def _switch_back_env(monkeypatch, tmp_path):
+    """standalone -> hermes with a supervised gateway already running."""
+    cfg = config()
+    cfg["runtime_mode"] = "hermes"
+    calls, args = _standalone_services(monkeypatch, tmp_path, cfg, loaded={mcs_setup.STANDALONE_LABEL})
+    (tmp_path / "agents").mkdir()
+    (tmp_path / "data").mkdir()
+    (tmp_path / "agents" / (mcs_setup.STANDALONE_LABEL + ".plist")).write_text("synthetic old host")
+    manifest = tmp_path / "data" / "service_manifest.json"
+    manifest.write_text(json.dumps({"runtime_mode": "standalone",
+                                    "agents": [{"label": mcs_setup.STANDALONE_LABEL}], "cron": []}))
+    return calls, args, manifest
+
+
+def _restarts(calls):
+    return sum(a[1:3] == ["gateway", "restart"] for a in calls)
+
+
+def test_partial_switch_back_keeps_the_gateway_restart_for_the_next_run(monkeypatch, tmp_path):
+    calls, args, manifest = _switch_back_env(monkeypatch, tmp_path)
+    fixture_run = mcs_setup.subprocess.run
+    fail, creates = [True], [0]
+
+    def run(argv, **kw):
+        if argv[1:3] == ["cron", "create"]:
+            creates[0] += 1
+            if fail[0] and creates[0] == 2:
+                calls.append(list(argv))
+                return SimpleNamespace(returncode=1, stdout="", stderr="synthetic create failure")
+        if argv[1:3] == ["gateway", "status"]:
+            calls.append(list(argv))
+            return SimpleNamespace(returncode=0, stdout="supervised", stderr="")
+        return fixture_run(argv, **kw)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", run)
+    assert mcs_setup.cmd_services(args) == 1
+    assert _restarts(calls) == 0
+    saved = json.loads(manifest.read_text())
+    assert saved["runtime_mode"] == "hermes" and saved["gateway_restart_pending"] is True
+    split, fail[0] = len(calls), False
+    assert mcs_setup.cmd_services(args) == 0
+    assert _restarts(calls[split:]) == 1
+    assert "gateway_restart_pending" not in json.loads(manifest.read_text())
+
+
+def test_flags_publish_failure_fails_services_and_defers_the_switch_restart(monkeypatch, tmp_path):
+    import notify_cards
+    calls, args, manifest = _switch_back_env(monkeypatch, tmp_path)
+    fixture_run = mcs_setup.subprocess.run
+
+    def run(argv, **kw):
+        if argv[1:3] == ["gateway", "status"]:
+            calls.append(list(argv))
+            return SimpleNamespace(returncode=0, stdout="supervised", stderr="")
+        return fixture_run(argv, **kw)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", run)
+
+    publish = notify_cards.publish_flags
+
+    def broken(cfg, data):
+        raise OSError("synthetic flags write failure")
+    monkeypatch.setattr(notify_cards, "publish_flags", broken)
+    assert mcs_setup.cmd_services(args) == 1
+    assert _restarts(calls) == 0
+    saved = json.loads(manifest.read_text())   # the verified jobs are still recorded
+    assert saved["runtime_mode"] == "hermes" and saved["gateway_restart_pending"] is True
+    monkeypatch.setattr(notify_cards, "publish_flags", publish)
+    split = len(calls)
+    assert mcs_setup.cmd_services(args) == 0
+    assert _restarts(calls[split:]) == 1
+
+
+def _slack_target_config():
+    cfg = config(interactive="off")
+    cfg["notify_target"] = "slack:C0SYNTHETIC"
+    cfg["notify"] = {"interactive": "off", "slack": {
+        "profile": "default", "application_id": "A0SYNTHETIC", "team_id": "T0SYNTHETIC",
+        "channel_id": "C0SYNTHETIC", "allowed_user_ids": ["U0OLD"], "project_ids": [1]}}
+    return cfg
+
+
+def test_init_applies_plugin_flags_to_the_single_delivery_transport(monkeypatch, tmp_path, capsys):
+    """interactive=off with a Slack target: the grants belong to the Slack
+    scope the validator requires; Discord-only grants stay unapplied."""
+    from test_mcs_setup import _init_env
+    _init_env(monkeypatch, tmp_path, _slack_target_config())
+    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(mcs_setup.sys, "argv",
+                        ["mcs_setup", "init", "--yes", "--plugin-user-ids", "U1,U2",
+                         "--plugin-project-ids", "5", "--plugin-chat-ids", "9"])
+    assert mcs_setup.main() == 0
+    out = capsys.readouterr().out
+    assert "--plugin-chat-ids" in out and "--plugin-user-ids" not in out
+    slack = json.loads((tmp_path / "c.json").read_text())["notify"]["slack"]
+    assert slack["allowed_user_ids"] == ["U1", "U2"] and slack["project_ids"] == [5]
+    assert "allowed_chat_ids" not in slack
+
+
+def test_init_leaves_plugin_flags_unapplied_when_two_transports_need_scopes(monkeypatch, tmp_path, capsys):
+    from test_mcs_setup import _init_env
+    cfg = _slack_target_config()
+    cfg["notify"]["interactive"] = "discord"
+    cfg["notify"]["discord"] = config()["notify"]["discord"]
+    _init_env(monkeypatch, tmp_path, cfg)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(mcs_setup.sys, "argv",
+                        ["mcs_setup", "init", "--yes", "--plugin-user-ids", "U1"])
+    assert mcs_setup.main() == 0
+    assert "--plugin-user-ids" in capsys.readouterr().out
+    saved = json.loads((tmp_path / "c.json").read_text())["notify"]
+    assert saved["slack"]["allowed_user_ids"] == ["U0OLD"]
+    assert saved["discord"]["allowed_user_ids"] == ["4000000000000000004"]

@@ -16,7 +16,7 @@ import sys
 from pathlib import Path, PureWindowsPath
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every subdir holding .py files (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
@@ -142,6 +142,12 @@ def _eval_member(case: dict, msg: dict, cid: str) -> dict:
             "body_state": "full",
             "posted_at": msg.get("posted_at", ""),
             "sender": {"id": "eval", "type": "staff", "profession": ""}}
+
+
+def _case_messages(case: dict, cid: str) -> list:
+    """A case's messages; a single-body case becomes one message."""
+    return case.get("messages") or [
+        {"message_id": cid, "revision": "r1", "body": case.get("body", "")}]
 
 
 def _item_id(item: dict, field: str) -> str:
@@ -939,10 +945,6 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
 # ---------------------------------------------------------------------
 # Jev incremental-value evaluation (T14)
 #
@@ -1008,9 +1010,7 @@ def evaluate_jev_incremental(cases: list, llm_fn, jev_client,
         expected = [f for f in (case.get("expect", {}) or {})
                     .get("facts", [])
                     if isinstance(f, dict) and f.get("mandatory")]
-        messages = case.get("messages") or [
-            {"message_id": cid, "revision": "r1",
-             "body": case.get("body", "")}]
+        messages = _case_messages(case, cid)
         for msg in messages:
             member = _eval_member(case, msg, cid)
             mid = f"{cid}:{member['message_id']}"
@@ -1094,9 +1094,7 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
     complete = 0
     for case in cases:
         cid = str(case.get("id", "case"))
-        messages = case.get("messages") or [
-            {"message_id": cid, "revision": "r1",
-             "body": case.get("body", "")}]
+        messages = _case_messages(case, cid)
         active_facts = []
         stages = {"extract": "ok", "relations": "ok", "audit": None,
                   "repair": "skipped", "render": "ok"}
@@ -1117,8 +1115,10 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
                 stages["extract"] = "incomplete"
             try:
                 rels = semantic_relations.reconcile_facts(
-                    active_facts, doc["facts"])
+                    active_facts, doc["facts"], deadline=deadline)
                 doc["relations"] = rels["relations"]
+                if rels.get("pairs_skipped"):
+                    stages["relations"] = "incomplete"
             except Exception as error:
                 stages["relations"] = f"error:{type(error).__name__}"
             audit = semantic_audit.audit_facts_v2(
@@ -1142,8 +1142,11 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
                     if repair["repaired"]:
                         doc = repair["doc"]
                         try:
-                            doc["relations"] = semantic_relations.reconcile_facts(
-                                active_facts, doc["facts"])["relations"]
+                            rels = semantic_relations.reconcile_facts(
+                                active_facts, doc["facts"], deadline=deadline)
+                            doc["relations"] = rels["relations"]
+                            if rels.get("pairs_skipped"):
+                                stages["relations"] = "incomplete"
                         except Exception as error:
                             stages["relations"] = f"error:{type(error).__name__}"
                         audit = semantic_audit.audit_facts_v2(
@@ -1173,3 +1176,7 @@ def run_shadow_e2e(cases: list, llm_fn, jev_client,
     return {"schema_version": "shadow-e2e-v1",
             "cases": len(per_case), "complete": complete,
             "per_case": per_case}
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

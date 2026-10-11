@@ -17,7 +17,8 @@ Design contract:
 - **Class from route, not payload** — a client authenticates as a
   named route registered with a fixed class; a caller-supplied class
   value can never grant RT. Unknown routes are rejected.
-- **Permit lifecycle** — ``reserved → admitted → sent → terminal``
+- **Permit lifecycle** — ``admitted → sent → terminal`` (the legacy
+  ``reserved`` state is never written but still counts as occupying)
   with the honest side states ``waiting`` (RT registered, backlog
   draining), ``unknown`` (completion unproven — still occupies its
   class), and ``cancel_pending`` (a cancel verb is not an ack).
@@ -86,9 +87,14 @@ DEFAULT_ROUTES = {
     "gbrain.query": "RT",
 }
 
-# permit states that still occupy backend capacity for their class
+# permit states that still occupy backend capacity for their class.
+# 'reserved' is never written now; it stays so rows an older broker may
+# have left behind are still counted and fenced.
 OCCUPYING = ("reserved", "admitted", "sent", "unknown",
              "cancel_pending")
+# every non-terminal state: OCCUPYING plus RT 'waiting' intent
+LIVE = OCCUPYING + ("waiting",)
+_LIVE_IN = f"({','.join('?' * len(LIVE))})"
 TERMINAL = ("terminal", "fenced")
 # Occupancy lease: 2x the longest client timeout (a backlog semantic
 # call is bounded by its job budget, at most 900 s). Only combined with
@@ -350,16 +356,14 @@ class Broker:
                 return
             live = self.db.execute(
                 "SELECT COUNT(*) FROM permits WHERE epoch=? AND state "
-                "IN ('reserved','admitted','sent','unknown',"
-                "'cancel_pending','waiting')",
-                (row["epoch"],)).fetchone()[0]
+                f"IN {_LIVE_IN}",
+                (row["epoch"], *LIVE)).fetchone()[0]
             if live or row["state"] == "dirty":
                 new_epoch = row["epoch"] + 1
                 self.db.execute(
                     "UPDATE permits SET state='fenced',"
                     " outcome='epoch_fence' WHERE epoch=? AND state IN"
-                    " ('reserved','admitted','sent','unknown',"
-                    "'cancel_pending','waiting')", (row["epoch"],))
+                    f" {_LIVE_IN}", (row["epoch"], *LIVE))
                 self.db.execute(
                     "UPDATE admission_meta SET epoch=?,"
                     " state='closed', rt_waiting=0, rotated_at=?"
@@ -471,12 +475,11 @@ class Broker:
         epoch = self._meta()["epoch"]
         stale = self.db.execute(
             "SELECT permit_id,cls,state,owner_pid,owner_started FROM permits"
-            " WHERE epoch=? AND state IN"
-            " ('reserved','admitted','sent','unknown','cancel_pending',"
-            "'waiting') AND owner_pid IS NOT NULL"
+            f" WHERE epoch=? AND state IN {_LIVE_IN}"
+            " AND owner_pid IS NOT NULL"
             " AND COALESCE(sent_at,admitted_at,created_at)<?"
             " ORDER BY permit_id LIMIT ?",
-            (epoch, now - LEASE_S, RECLAIM_BATCH)).fetchall()
+            (epoch, *LIVE, now - LEASE_S, RECLAIM_BATCH)).fetchall()
         # ponytail: an owner whose start identity is unreadable (old row,
         # probe failure, same-second reuse under ps) stays until the epoch
         # fence; a live recorded owner is never freed.

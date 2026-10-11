@@ -45,6 +45,11 @@ def test_sweep_sends_done_only_task_list_without_view(monkeypatch):
     act._bot = SimpleNamespace()
     act._log = lambda ev, **kw: logs.append((ev, kw))
     act._followup_authorized = lambda rec: True
+
+    async def still_allowed(rec):
+        return True
+
+    act._actor_still_allowed = still_allowed
     act._allowed_pid = lambda pid: True
     asyncio.run(act.sweep_followups())
     assert not logs

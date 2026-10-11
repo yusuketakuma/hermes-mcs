@@ -63,7 +63,7 @@ def test_interleaved_clients_stop_at_the_durable_cap_without_charging_an_attempt
             runtime.guard(ledger, token, deadline=end, expected_config_generation=None,
                           expected_mode=scfg["mode"], stage=stage)
 
-        hooked, _ = runtime.bind_jev(client, guard, kwargs["reserve_fn"])
+        hooked = runtime.bind_jev(client, guard, kwargs["reserve_fn"])
         try:
             for _ in range(1 if nesting[0] else 2):
                 hooked.evaluate({"target": {"id": "opaque", "text": "synthetic token"}}, question, end)

@@ -4,6 +4,7 @@
 Split from run_check orchestration: these run at the end of every tick
 and must each be independently failure-isolated by the caller.
 """
+import errno
 import glob
 import os
 import shutil
@@ -103,9 +104,10 @@ def daily_backup(db_path: str):
         return
     if shutil.disk_usage(BACKUP_DIR).free / (1024 * 1024) < _backup_need_mb(db_path):
         return "skipped_disk_low"
-    tmp = dest + ".tmp"
-    with suppress(FileNotFoundError):
-        os.unlink(tmp)
+    # private from creation; prune_leftovers sweeps a copy a hard kill strands
+    fd, tmp = tempfile.mkstemp(
+        prefix=f"ledger-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
+    os.close(fd)
     _publish_backup(db_path, tmp, dest)
     sig = _stat_sig(dest)
     if sig:
@@ -204,7 +206,10 @@ def rotate_log(paths=None):
     generation). The drainer logs are held open by resident launchd
     writers, so rename-rotation would strand them on the old inode —
     copy the content aside then truncate the live file in place
-    (copytruncate): the writer's O_APPEND fd resumes at offset 0 (F21)."""
+    (copytruncate): the writer's O_APPEND fd resumes at offset 0 (F21).
+    A symlinked <name>.1 is refused and that log left unrotated; the other
+    logs still rotate, then MaintenanceError reports the refusal."""
+    refused = []
     for path in paths or (LOGFILE,
                           os.path.join(HOME, "data", "extract_drain.log"),
                           os.path.join(HOME, "data",
@@ -220,14 +225,27 @@ def rotate_log(paths=None):
                           os.path.join(HOME, "data", "update.log"),
                           os.path.join(HOME, "data", "recovery.log"),
                           os.path.join(HOME, "data", "cmd_int.log"),
-                          # ai.mcs.llamaserver plist (__HERMES_HOME__/logs)
+                          # ai.mcs.llamaserver plist (__HERMES_HOME__/logs):
+                          # Hermes mode ~/.hermes, standalone ~/.mcs
                           os.path.join(os.path.expanduser("~/.hermes"),
-                                       "logs", "llamacpp.log")):
-        with suppress(OSError):
+                                       "logs", "llamacpp.log"),
+                          os.path.join(HOME, "logs", "llamacpp.log")):
+        try:
             if os.path.getsize(path) > LOG_MAX:
-                shutil.copyfile(path, path + ".1")
+                with open(path, "rb") as src:
+                    # owner-only regardless of umask, also for an older loose .1
+                    fd = os.open(path + ".1", os.O_WRONLY | os.O_CREAT
+                                 | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                    with open(fd, "wb") as dst:
+                        os.fchmod(fd, 0o600)
+                        shutil.copyfileobj(src, dst)
                 with open(path, "w"):
                     pass
+        except OSError as e:
+            if e.errno == errno.ELOOP:   # a symlinked .1 is never followed
+                refused.append(path)
+    if refused:
+        raise MaintenanceError("log_rotate_symlink_refused")
 
 
 def prune_attachments(db_path: str) -> int:
@@ -259,11 +277,13 @@ def prune_attachments(db_path: str) -> int:
           WHERE kind='attachment_followup' AND state IN ('pending','failed')
             AND json_valid(payload)""")}
         # An accepted card can still have unsent or uncertain companion
-        # files. Their durable part journal owns those payloads until settled.
+        # files. Their durable part journal owns those payloads until settled;
+        # parts held by card revocation can never be sent and own nothing.
         keep_ids.update(r[0] for r in con.execute("""
           SELECT p.attachment_id FROM notification_render_parts p
           LEFT JOIN notification_renders r USING(delivery_id)
           WHERE p.kind='attachment_part' AND p.state IN ('pending','unknown','held')
+            AND p.error_code IS NOT 'card_revoked'
             AND r.state IS NOT 'cancelled' AND p.attachment_id IS NOT NULL
         """))
         rows = [a for a in con.execute("""
@@ -354,14 +374,19 @@ def _unlink_attachment(path: str, root: Path) -> bool:
 
 def prune_leftovers() -> int:
     """Delete day-old download temp files (a hard kill skips the
-    adapter's own cleanup) and quarantined cmd/ and cmd_int/
-    *.json.invalid files. ctime: a quarantine rename keeps the original
+    adapter's own cleanup), quarantined cmd/ and cmd_int/
+    *.json.invalid files and the backup/snapshot staging copies (PHI)
+    and their SQLite sidecars a hard kill strands. ctime: a quarantine rename keeps the original
     mtime."""
     cutoff = time.time() - LEFTOVER_KEEP_S
     removed = 0
     for pattern in (os.path.join(HOME, "data", "attachments", ".download-*.part"),
                     os.path.join(HOME, "data", "cmd", "*.json.invalid"),
-                    os.path.join(HOME, "data", "cmd_int", "*.json.invalid")):
+                    os.path.join(HOME, "data", "cmd_int", "*.json.invalid"),
+                    *(os.path.join(directory, stage + sidecar)
+                      for directory, stage in ((BACKUP_DIR, "*.db.tmp"),
+                                               (SNAPSHOT_DIR, ".snapshot.*.tmp"))
+                      for sidecar in ("", "-journal", "-wal", "-shm"))):
         for path in glob.glob(pattern):
             with suppress(OSError):
                 if os.stat(path).st_ctime < cutoff:

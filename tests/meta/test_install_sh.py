@@ -12,6 +12,7 @@ internals; here the venv `python` is a recording stub so the SHELL
 contract — stage ordering, idempotent rerun, partial-failure recovery —
 is what is tested.
 """
+import hashlib
 import os
 import json
 import plistlib
@@ -247,6 +248,9 @@ exit 0
 """
 
 
+STUB_MODEL_SHA256 = hashlib.sha256(b"stub-model-bytes\n").hexdigest()
+
+
 def _world(tmp_path, *, brew=True, git_head=None, path_hermes=False):
     home = tmp_path / "home"
     hermes_home = home / ".hermes"
@@ -321,6 +325,8 @@ exec(compile(code, '<installer-runtime-check>', 'exec'))
         "STUB_GIT_HEAD": git_head or _pin(),
         "STUB_CLONE_HEAD": CLONE_HEAD,
         "STUB_PARSE_PYTHON": sys.executable,
+        # sha256 of the stub curl's model bytes ("stub-model-bytes\n")
+        "MCS_MODEL_SHA256": STUB_MODEL_SHA256,
     })
     return home, hermes_home, stub_root, env
 
@@ -340,6 +346,41 @@ def _calls(stub_root):
 def _bootstraps(stub_root, label):
     return [c for c in _calls(stub_root)
             if c.startswith("launchctl bootstrap") and label in c]
+
+
+@pytest.mark.parametrize("root_value", ["empty", "different"])
+def test_install_refuses_unsupported_data_root_before_writes(tmp_path, root_value):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    other = tmp_path / "other-root"
+    env["MCS_ROOT"] = "" if root_value == "empty" else str(other)
+    result = _run(env, None, "--mode", "standalone", "--no-brew", "--no-llm")
+    assert result.returncode != 0
+    assert "MCS_ROOT" in result.stderr
+    assert list(home.iterdir()) == []
+    assert not other.exists()
+    assert not hermes_home.exists()
+    assert not any(call.startswith(("git clone", "uv ", "launchctl bootstrap"))
+                   for call in _calls(stub_root))
+
+
+@pytest.mark.parametrize("root_value", ["unset", "default", "normalized", "physical", "tilde"])
+def test_install_accepts_default_data_root_spellings(tmp_path, root_value):
+    home, _, _, env = _world(tmp_path)
+    env.pop("MCS_ROOT", None)
+    if root_value == "default":
+        env["MCS_ROOT"] = str(home / ".mcs")
+    elif root_value == "normalized":
+        env["MCS_ROOT"] = str(home) + "/./.mcs/"
+    elif root_value == "physical":
+        alias = tmp_path / "home-alias"
+        alias.symlink_to(home, target_is_directory=True)
+        env["MCS_ROOT"] = str(alias / ".mcs")
+    elif root_value == "tilde":
+        env["MCS_ROOT"] = "~/.mcs"
+    result = _run(env, None, "--mode", "standalone", "--no-brew", "--no-llm",
+                  "--no-services", "--no-recovery")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / ".mcs/venv").is_dir()
 
 
 @pytest.mark.parametrize("runtime", ["unsafe", "unknown", "failed", "unsupported"])
@@ -933,7 +974,8 @@ def test_complete_part_is_not_requested_again(tmp_path):
     models.mkdir(parents=True)
     part = models / "Qwen3.5-9B-Q4_K_M.gguf.part"
     part.write_text("complete-model")
-    r = _run({**env, "STUB_MODEL_SIZE": str(part.stat().st_size)},
+    r = _run({**env, "STUB_MODEL_SIZE": str(part.stat().st_size),
+              "MCS_MODEL_SHA256": hashlib.sha256(b"complete-model").hexdigest()},
              hermes_home)
     assert r.returncode == 0, r.stderr
     assert (models / "Qwen3.5-9B-Q4_K_M.gguf").read_text() == "complete-model"
@@ -957,6 +999,20 @@ def test_dry_run_plans_no_second_llm_when_hermes_manages_it(tmp_path):
 def test_model_checksum_mismatch_is_fatal(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     r = _run({**env, "MCS_MODEL_SHA256": "0" * 64}, hermes_home)
+    assert r.returncode == 1 and "checksum mismatch" in r.stderr
+    assert not (hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf").exists()
+
+
+def test_model_download_is_pinned_and_verified_by_default(tmp_path):
+    """The GGUF comes from a fixed revision and is checked against its
+    published sha256 even when MCS_MODEL_SHA256 is not set."""
+    text = INSTALL.read_text()
+    assert re.search(r'^MODEL_URL="https://huggingface\.co/[^"]+/resolve/[0-9a-f]{40}/[^"]+\.gguf"$',
+                     text, re.M)
+    assert re.search(r'^MODEL_SHA256="\$\{MCS_MODEL_SHA256:-[0-9a-f]{64}\}"$', text, re.M)
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    del env["MCS_MODEL_SHA256"]
+    r = _run(env, hermes_home)
     assert r.returncode == 1 and "checksum mismatch" in r.stderr
     assert not (hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf").exists()
 
@@ -1114,7 +1170,8 @@ def test_standalone_installer_has_no_hermes_checkout_or_commands(tmp_path):
     first = _run(env, None, "--mode", "standalone", "--no-llm")
     assert first.returncode == 0, first.stdout + first.stderr
     assert json.loads((home / ".mcs/config.json").read_text())["runtime_mode"] == "standalone"
-    assert "-m lineworks_adapter init" in first.stdout
+    for command in ("-m lineworks_adapter init", "-m mcs_standalone status"):
+        assert f"cd '{ROOT}' && " in first.stdout.split(command)[0].splitlines()[-1]
     assert "do not also run a separate lineworks_adapter service" in " ".join(first.stdout.split())
     assert "-m lineworks_adapter service" not in first.stdout
     calls = _calls(stub)
@@ -1182,5 +1239,5 @@ def test_hermes_install_routes_lineworks_without_plugin_or_gateway(tmp_path):
     assert "notify.interactive=lineworks does not use it" in r.stdout
     assert "interactive cards need this plugin" not in r.stdout
     for sub in ("init", "check", "service"):
-        assert f"-m lineworks_adapter {sub}" in r.stdout
+        assert f"cd '{ROOT}' && " in r.stdout.split(f"-m lineworks_adapter {sub}")[0].splitlines()[-1]
     assert "docs/guides/LINEWORKS.md" in r.stdout

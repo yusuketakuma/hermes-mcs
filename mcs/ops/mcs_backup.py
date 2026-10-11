@@ -38,7 +38,6 @@ import gzip
 import hashlib
 import hmac
 import json
-import math
 import os
 from pathlib import Path
 import re
@@ -54,10 +53,13 @@ import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
-from ledger import valid_mcs_db  # noqa: E402
+from ledger import static_contract_ok, valid_mcs_db  # noqa: E402
 from maintenance import MaintenanceError  # noqa: E402
-from mcs_repair import REPLY_GAP  # noqa: E402
-from mcs_util import atomic_write, file_sha256, publish_tmp  # noqa: E402
+from mcs_queries import REPLY_GAP  # noqa: E402
+# _finite_number stays a module name: mcs_restore reads it from here
+from export_schema import finite_number as _finite_number  # noqa: E402
+from mcs_util import (  # noqa: E402
+    atomic_write, file_sha256, fsync_dir, has_sqlite_sidecars, publish_tmp)
 import notify_cards  # noqa: E402
 
 MAGIC = b"MCSBKP1\n"
@@ -65,6 +67,7 @@ ITERATIONS = 600000
 OPENSSL = "/usr/bin/openssl"
 CHUNK = 65536
 MAX_HEADER = 65536
+MAX_REASON = 2000  # keeps the escrow witness well under MAX_HEADER
 SUITE = "aes-256-cbc+pbkdf2-sha256-600000+hmac-sha256"
 KEYCHAIN_SERVICE = "mcs-backup"
 SECURITY = "/usr/bin/security"
@@ -110,6 +113,21 @@ class Verification(TypedDict):
     attachment_payloads_included: bool
 
 
+def _report(expected_sha256: str, manifest: dict, *,
+            restore_pending: bool) -> Verification:
+    """Build the verification report; mcs_restore fences its exact key set."""
+    return {"v": 1, "sha256": expected_sha256,
+            "plain_sha256": manifest["plain_sha256"],
+            "verified_at": time.time(), "inventory": manifest["inventory"],
+            "restore_pending": restore_pending,
+            "attachment_payloads_included": False}
+
+
+def _bundle_ceiling(policy) -> int:
+    """Largest encrypted bundle accepted for `policy`: 1% framing plus 1 MiB."""
+    return policy.max_snapshot_bytes * 101 // 100 + 1048576
+
+
 class BackupError(MaintenanceError):
     """A stable reason token, never OpenSSL stderr, key material or DB rows."""
 
@@ -148,15 +166,6 @@ FAILURE_CODES = frozenset({
     "backup_static_snapshot_required", "backup_truncated",
     "backup_trusted_receipt_required",
 })
-
-
-def _finite_number(value) -> bool:
-    if type(value) not in (int, float):
-        return False
-    try:
-        return math.isfinite(value)
-    except OverflowError:
-        return False
 
 
 class KeychainStore(Protocol):
@@ -275,7 +284,8 @@ def keygen(state_dir: str, *, show_escrow: bool, confirm_human: bool,
     retries cannot silently replace a possibly stored key. No key is recorded.
     """
     if (show_escrow is not True or confirm_human is not True
-            or not isinstance(reason, str) or not reason.strip()):
+            or not isinstance(reason, str) or not reason.strip()
+            or len(reason) > MAX_REASON):
         raise BackupError("backup_human_escrow_required")
     records = _records(state_dir)
     with _record_lock(records):
@@ -289,14 +299,15 @@ def keygen(state_dir: str, *, show_escrow: bool, confirm_human: bool,
         account = "key-" + os.urandom(16).hex()
         witness = {"v": 1, "service": KEYCHAIN_SERVICE, "account": account,
                    "created_at": time.time(), "status": "pending",
-                   "escrow_displayed": False, "custody_confirmed": False}
+                   "escrow_displayed": False, "custody_confirmed": False,
+                   "reason": reason}
         records.check()
         with (records.root / "key_escrow.json").open("xb") as stream:
             os.chmod(stream.name, 0o600)
             stream.write(_canonical(witness))
             stream.flush()
             os.fsync(stream.fileno())
-        _fsync_directory(records.root)
+        fsync_dir(records.root)
         if not keychain_store(account, key.hex(), service=KEYCHAIN_SERVICE):
             raise BackupError("backup_keychain_store_failed")
         if not hmac.compare_digest(_key(keychain_reader), key):
@@ -305,14 +316,6 @@ def keygen(state_dir: str, *, show_escrow: bool, confirm_human: bool,
             **witness, "status": "stored", "escrow_displayed": True})
         return {"service": KEYCHAIN_SERVICE, "account": account,
                 "escrow_key_hex": key.hex(), "escrow_displayed": True}
-
-
-def _fsync_directory(path: Path) -> None:
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
 
 
 def _state(records: _Records, policy: BackupPolicy):
@@ -482,44 +485,9 @@ class _InspectionBudgetExhausted(BackupError):
 
 
 def _bounded_inventory_schema(db: sqlite3.Connection) -> None:
-    """Check the existing static recovery contract on the budgeted connection."""
-    from ledger_audit import SCHEMA_VERSION, _BASE, _SOURCE
-
-    if db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
+    """Check the shared static recovery contract on the budgeted connection."""
+    if not static_contract_ok(db):
         raise BackupError("backup_invalid_database")
-    version = db.execute("PRAGMA user_version").fetchone()[0]
-    tables = {row[0] for row in db.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'")}
-    if (not 0 <= version <= SCHEMA_VERSION
-            or {"attachments_v1", "read_marks_v1"} & tables
-            or not _SOURCE.keys() <= tables
-            or (version >= 5 and not {
-                "attachments", "read_marks", "notify_outbox", "artifacts", "fetch_jobs"
-            } <= tables)
-            or (version >= 8 and "message_metadata" not in tables)):
-        raise BackupError("backup_invalid_database")
-    for table, fields in {**_SOURCE, **_BASE}.items():
-        if table not in tables:
-            continue
-        columns = {row[1] for row in db.execute(f'PRAGMA table_info("{table}")')}
-        required = set(fields.split())
-        if table == "attachments":
-            required.update(
-                "attachment_id local_path bytes sha256 state downloaded_at created_at"
-                .split() if "attachment_id" in columns else
-                "downloaded_path first_seen".split())
-        if table == "read_marks" and "id" in columns:
-            required.add("status")
-        if not required <= columns:
-            raise BackupError("backup_invalid_database")
-        key = {
-            "attachments": ("attachment_id", "message_id,file_id"),
-            "read_marks": ("id", "project_id,snapshot_ts"),
-        }.get(table)
-        if key and key[0] in columns and db.execute(
-                f'SELECT 1 FROM "{table}" GROUP BY {key[1]} '
-                "HAVING COUNT(*) > 1 LIMIT 1").fetchone():
-            raise BackupError("backup_invalid_database")
 
 
 @contextmanager
@@ -696,8 +664,7 @@ def offsite(snapshot: str, policy: BackupPolicy,
     if (not source.is_absolute() or source.is_symlink()
             or not stat.S_ISREG(source.stat().st_mode)
             or source.stat().st_size > policy.max_snapshot_bytes
-            or any(os.path.lexists(str(source) + suffix)
-                   for suffix in ("-wal", "-shm", "-journal"))):
+            or has_sqlite_sidecars(source)):
         raise BackupError("backup_static_snapshot_required")
     if len(list(dest.glob("snapshot-*.mcsb"))) >= policy.max_snapshots:
         raise BackupError("backup_retention_capacity")
@@ -766,11 +733,9 @@ def _decode(bundle: Path, expected_sha256: str, key: bytes,
         raise BackupError("backup_trusted_receipt_required")
     frozen = work / "authenticated.mcsb"
     if (bundle.is_symlink() or not stat.S_ISREG(bundle.stat().st_mode)
-            or bundle.stat().st_size > (
-                policy.max_snapshot_bytes * 101 // 100 + 1048576)):
+            or bundle.stat().st_size > _bundle_ceiling(policy)):
         raise BackupError("backup_bundle_size_or_type_invalid")
-    _copy_private(bundle, frozen,
-                  policy.max_snapshot_bytes * 101 // 100 + 1048576)
+    _copy_private(bundle, frozen, _bundle_ceiling(policy))
     if not hmac.compare_digest(file_sha256(frozen), expected_sha256):
         raise BackupError("backup_receipt_mismatch")
     with frozen.open("rb") as src:
@@ -855,11 +820,8 @@ def verify(bundle: str, expected_sha256: str, policy: BackupPolicy,
     with tempfile.TemporaryDirectory(prefix="mcs-verify-", dir=policy.scratch_dir) as work:
         plain, manifest = _decode(
             Path(bundle), expected_sha256, key, policy, Path(work))
-        report: Verification = {"v": 1, "sha256": expected_sha256,
-                  "plain_sha256": manifest["plain_sha256"],
-                  "verified_at": time.time(), "inventory": manifest["inventory"],
-                  "restore_pending": target is not None,
-                  "attachment_payloads_included": False}
+        report = _report(expected_sha256, manifest,
+                         restore_pending=target is not None)
         if target is not None:
             # Exclusive mkdir reserves ownership; never swap an existing DB.
             target.mkdir(mode=0o700)
@@ -876,7 +838,7 @@ def verify(bundle: str, expected_sha256: str, policy: BackupPolicy,
                 os.link(plain, target / "ledger.db")
                 published = True
                 plain.unlink()
-                _fsync_directory(target)
+                fsync_dir(target)
             except (OSError, BackupError):
                 # A concurrent ledger is not ours to replace or remove. Keep
                 # its consent hold, as on the corresponding restore path.
@@ -914,11 +876,7 @@ def restore(bundle: str, expected_sha256: str, policy: BackupPolicy,
             notify_cards.mark_restored(
                 str(target), by="mcs_backup_restore", phase="awaiting_consent",
                 report_id=expected_sha256)
-            report: Verification = {
-                "v": 1, "sha256": expected_sha256,
-                "plain_sha256": manifest["plain_sha256"],
-                "verified_at": time.time(), "inventory": manifest["inventory"],
-                "restore_pending": True, "attachment_payloads_included": False}
+            report = _report(expected_sha256, manifest, restore_pending=True)
             atomic_write(str(target / "restore.json"),
                          lambda stream: json.dump(report, stream, sort_keys=True),
                          mode=0o600)
@@ -930,7 +888,7 @@ def restore(bundle: str, expected_sha256: str, policy: BackupPolicy,
             os.link(staging, target / "ledger.db")
             published = True
             staging.unlink()
-            _fsync_directory(target)
+            fsync_dir(target)
             return report
         except (OSError, BackupError):
             # A concurrent ledger collision belongs to somebody else. Keep
@@ -948,8 +906,7 @@ def _latest_snapshot(directory: str, policy: BackupPolicy) -> str:
     for path in sorted(root.iterdir(), reverse=True):
         if (re.fullmatch(r"ledger-[0-9]{8}\.db", path.name)
                 and not path.is_symlink()
-                and not any(os.path.lexists(str(path) + suffix)
-                            for suffix in ("-wal", "-shm", "-journal"))
+                and not has_sqlite_sidecars(path)
                 and valid_mcs_db(str(path))):
             return str(path)
     raise BackupError("backup_no_valid_daily_snapshot")
@@ -1006,8 +963,7 @@ def _snapshot_info(snapshot: str, policy: BackupPolicy, *,
     if (source.resolve() != source or not source.is_absolute()
             or not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
             or stat.S_IMODE(st.st_mode) != 0o600
-            or any(os.path.lexists(str(source) + suffix)
-                   for suffix in ("-wal", "-shm", "-journal"))):
+            or has_sqlite_sidecars(source)):
         raise BackupError("backup_static_snapshot_required")
     before_hash, before = _inspection_hash(source, policy.max_snapshot_bytes)
     inventory = _inventory(
@@ -1015,8 +971,7 @@ def _snapshot_info(snapshot: str, policy: BackupPolicy, *,
     after_hash, after = _inspection_hash(source, policy.max_snapshot_bytes)
     if (before_hash != after_hash
             or _inspection_signature(before) != _inspection_signature(after)
-            or any(os.path.lexists(str(source) + suffix)
-                   for suffix in ("-wal", "-shm", "-journal"))):
+            or has_sqlite_sidecars(source)):
         raise BackupError("backup_source_changed")
     _fresh(inventory["last_successful_run"], policy)
     return after.st_size, inventory
@@ -1066,7 +1021,7 @@ def plan(policy_path: str | Path, *, snapshot: str | None = None,
             max_snapshots=policy.max_snapshots, max_rpo_seconds=policy.max_rpo_seconds,
             # This is the decoder's input ceiling, not a compression prediction
             # or a proven peak scratch-space requirement.
-            bundle_input_ceiling_bytes=policy.max_snapshot_bytes * 101 // 100 + 1048576)
+            bundle_input_ceiling_bytes=_bundle_ceiling(policy))
         count, stored_bytes = 0, 0
         with os.scandir(medium) as entries:
             for visited, entry in enumerate(entries, 1):
@@ -1155,7 +1110,7 @@ def plan(policy_path: str | Path, *, snapshot: str | None = None,
                 if not path.is_absolute() or path.resolve() != path:
                     raise BackupError("backup_bundle_size_or_type_invalid")
                 digest, st = _inspection_hash(
-                    path, policy.max_snapshot_bytes * 101 // 100 + 1048576)
+                    path, _bundle_ceiling(policy))
                 if not hmac.compare_digest(digest, expected_sha256):
                     raise BackupError("backup_receipt_mismatch")
                 facts.update(bundle_bytes=st.st_size, trusted_receipt_hash_matches=True)

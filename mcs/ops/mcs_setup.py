@@ -60,7 +60,7 @@ if sys.version_info < (3, 10):
         "(/usr/bin/python3 is too old)")
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every subdirectory holding .py files (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 sys.path.insert(0, os.path.dirname(os.path.dirname(
@@ -246,7 +246,6 @@ def _validate_llm(ll: dict) -> list[str]:
     url = ll.get("url")
     if isinstance(url, str) and url.strip():
         try:
-            import bounded_http
             allowed = bounded_http._loopback_endpoint_allowed(url)
         except Exception:
             allowed = False
@@ -256,6 +255,11 @@ def _validate_llm(ll: dict) -> list[str]:
                 "(127.0.0.1/localhost/::1), no credentials/fragment — "
                 "message bodies must not leave the machine")
     return errors
+
+
+# = notify_cmds.SCOPE_MAX: the runner rejects, and the plugin truncates to,
+# a static project scope longer than this
+PROJECT_SCOPE_MAX = 1000
 
 
 def _validate_notify(ntf: dict) -> list[str]:
@@ -457,6 +461,15 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
                 warnings.append(
                     f"notify.{other}: scope configured but interactive "
                     f"is {act!r} — ignored until you switch back")
+        for transport in ("discord", "slack", "lineworks"):
+            scope = cfg["notify"].get(transport)
+            projects = scope.get("project_ids") if isinstance(scope, dict) else None
+            if isinstance(projects, list) and len(projects) > PROJECT_SCOPE_MAX \
+                    and scope.get("project_ids_auto") is not True:
+                warnings.append(
+                    f"notify.{transport}.project_ids: {len(projects)} ids exceed "
+                    f"the {PROJECT_SCOPE_MAX}-project card/summary scope — only "
+                    "the lowest ids are counted; use project_ids_auto=true")
     if isinstance(cfg.get("local_llm"), dict):
         errors.extend(_validate_llm(cfg["local_llm"]))
     if isinstance(cfg.get("semantic"), dict):
@@ -534,7 +547,7 @@ def _hermes_ok(exe: str) -> bool:
 
 
 def _run(argv: list, *, timeout: int = 60, input_text: str | None = None,
-         cwd: str | None = None):
+         cwd: str | None = None, env: dict | None = None):
     """subprocess.run bounded by `timeout` — a wedged launchd, a keychain
     prompt this context cannot show, or a stuck gateway must fail the
     check, not hang the session. Timeout yields a returncode=124 result
@@ -543,7 +556,8 @@ def _run(argv: list, *, timeout: int = 60, input_text: str | None = None,
     raising."""
     try:
         return subprocess.run(argv, input=input_text, capture_output=True,
-                              text=True, timeout=timeout, **({"cwd": cwd} if cwd else {}))
+                              text=True, timeout=timeout, **({"cwd": cwd} if cwd else {}),
+                              **({"env": env} if env is not None else {}))
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
             argv, 124, "", f"timed out after {timeout}s")
@@ -586,19 +600,27 @@ def _plugin_newer_than_gateway(status_out: str) -> bool:
     Unparseable states fail
     open to False (no warning) rather than a false alarm."""
     m = re.search(r"PID\s+(\d+)", status_out or "")
-    if not m:
-        return False
-    r = _run(["ps", "-o", "lstart=", "-p", m.group(1)])
-    if r.returncode != 0:
-        return False
-    stamp = re.sub(r"\s+", " ", (r.stdout or "").strip())
-    try:
-        started = time.mktime(
-            time.strptime(stamp, "%a %b %d %H:%M:%S %Y"))
-    except (ValueError, OverflowError):
+    started = _process_started_at(int(m.group(1))) if m else None
+    if started is None:
         return False
     newest = _gateway_sources_mtime()
     return newest is not None and newest > started
+
+
+def _process_started_at(pid: int) -> float | None:
+    """Local-time start of `pid` from `ps -o lstart=`, or None when unknown.
+
+    LC_ALL=C keeps the stamp in the English format strptime parses
+    (a ja_JP locale prints the weekday in kanji)."""
+    r = _run(["ps", "-o", "lstart=", "-p", str(pid)], timeout=10,
+             env={**os.environ, "LC_ALL": "C"})
+    if r.returncode != 0:
+        return None
+    stamp = re.sub(r"\s+", " ", (getattr(r, "stdout", "") or "").strip())
+    try:
+        return time.mktime(time.strptime(stamp, "%a %b %d %H:%M:%S %Y"))
+    except (ValueError, OverflowError):
+        return None
 
 
 def _gateway_sources_mtime() -> float | None:
@@ -609,7 +631,7 @@ def _gateway_sources_mtime() -> float | None:
     # loads (Python sources and the plugin manifest) represent code the
     # running process hasn't picked up; a docs-only edit (README) never
     # needs a restart.
-    for source in ("hermes_plugin", "adapters/common", "adapters/slack", "adapters/discord"):
+    for source in mcs_runtime.GATEWAY_SOURCE_DIRS:
         for base, dirs, files in os.walk(os.path.join(REPO_ROOT, source)):
             dirs[:] = [d for d in dirs if d != "__pycache__"]
             for name in files:
@@ -691,10 +713,6 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
     llm_errors, llm_warnings = _check_llm(cfg)
     errors.extend(llm_errors)
     warnings.extend(llm_warnings)
-    profile = cfg.get("notify_bot_profile")
-    if isinstance(profile, str) and profile \
-            and not re.fullmatch(r"[a-z0-9_-]+", profile):
-        errors.append("notify_bot_profile: must match [a-z0-9_-]+")
     # Delivery is `hermes send` — the binary must resolve the same way
     # notify_flush._hermes_exe does: config hermes_bin, else PATH, else the
     # standard user-local install (launchd PATH is minimal).
@@ -710,8 +728,7 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
         if r.returncode:
             errors.append("standalone check failed — see "
                           "docs/guides/STANDALONE.md")
-        if sys.platform == "darwin" and STANDALONE_LABEL in _agent_labels(cfg) \
-                and _agent_loaded("ai.hermes.gateway"):
+        if sys.platform == "darwin" and _agent_loaded("ai.hermes.gateway"):
             warnings.append("ai.hermes.gateway is loaded while MCS serves "
                             "Slack/Discord itself — remove that platform from "
                             "Hermes or stop the gateway (docs/guides/STANDALONE.md)")
@@ -738,7 +755,9 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
             # worker serves cards without companion thread bodies
             # (2026-09 incident); surface the pending restart here
             warnings.append(
-                "hermes_plugin/ is newer than the running gateway — "
+                "gateway-loaded sources (" + ", ".join(
+                    d + "/" for d in mcs_runtime.GATEWAY_SOURCE_DIRS)
+                + ") are newer than the running gateway — "
                 "`hermes gateway restart` so workers load current code")
     sem = cfg.get("semantic")
     if isinstance(sem, dict) and sem.get("mode", "off") != "off" \
@@ -1543,10 +1562,34 @@ def _guard_config(yes: bool) -> bool:
     return True
 
 
-def _init_recovery_problem(cfg) -> str | None:
+def _owner_config(path, limit=65536) -> dict:
+    """Read config.json for install.sh: a regular file the user owns, bounded, a JSON object."""
+    if not os.path.lexists(path):
+        return {}
+    try:
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+            st = os.fstat(stream.fileno())
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > limit:
+                raise ValueError("size/ownership/type invalid")
+            raw = stream.read(limit + 1)
+    except OSError:
+        raise ValueError("unreadable") from None
+    if len(raw) > limit:
+        raise ValueError("too large")
+    try:
+        cfg = json.loads(raw)
+    except (ValueError, RecursionError):
+        raise ValueError("not valid JSON") from None
+    if not isinstance(cfg, dict):
+        raise ValueError("must be an object")
+    return cfg
+
+
+def _init_recovery_problem(cfg, update_repo=None) -> str | None:
+    """Why the configured recovery interpreter is unusable, or None (install.sh shares it)."""
     if "recovery_python" not in cfg:
         return None
-    return _recovery_python_problem(cfg["recovery_python"]) or _runtime_problem(
+    return _recovery_python_problem(cfg["recovery_python"], update_repo) or _runtime_problem(
         _runtime_probe(cfg["recovery_python"]), recovery=True)
 
 
@@ -1676,24 +1719,32 @@ def cmd_init(args) -> int:
     if mcs_runtime.standalone(cfg):
         # the --plugin-* grants Hermes keeps in plugin settings live in
         # notify.<transport> when MCS serves Slack/Discord itself
-        ntf = cfg.get("notify")
-        scope = ntf.get(ntf.get("interactive")) if isinstance(ntf, dict) else None
+        # notify.<transport>; the transports follow _validate_standalone_scope
+        # and the grants apply only when exactly one Slack/Discord scope is used
+        ntf = cfg.get("notify") if isinstance(cfg.get("notify"), dict) else {}
+        used = {ntf["interactive"]} if isinstance(ntf.get("interactive"), str) else set()
+        used |= {t.split(":", 1)[0] for t in (cfg.get("notify_target"),
+                                             cfg.get("notify_system_target"))
+                 if isinstance(t, str)}
+        used &= {"slack", "discord"}
+        transport = next(iter(used)) if len(used) == 1 else None
+        scope = ntf.get(transport) if transport else None
         ignored = ["--plugin-profile"] \
             if getattr(args, "plugin_profile", None) else []
-        if isinstance(scope, dict):
-            for flag, key in (("plugin_user_ids", "allowed_user_ids"),
-                              ("plugin_chat_ids", "allowed_chat_ids"),
-                              ("plugin_role_ids", "allowed_role_ids"),
-                              ("plugin_project_ids", "project_ids")):
-                value = getattr(args, flag, None)
-                if value:
-                    scope[key] = standalone_projects if key == "project_ids" \
-                        else _csv_list([value])
-        else:
-            ignored += ["--plugin-" + f[7:].replace("_", "-") for f in
-                        ("plugin_user_ids", "plugin_chat_ids",
-                         "plugin_role_ids", "plugin_project_ids")
-                        if getattr(args, f, None)]
+        for flag, key in (("plugin_user_ids", "allowed_user_ids"),
+                          ("plugin_chat_ids", "allowed_chat_ids"),
+                          ("plugin_role_ids", "allowed_role_ids"),
+                          ("plugin_project_ids", "project_ids")):
+            value = getattr(args, flag, None)
+            if not value:
+                continue
+            if not isinstance(scope, dict) or (
+                    transport != "discord"
+                    and key in ("allowed_chat_ids", "allowed_role_ids")):
+                ignored.append("--plugin-" + flag[7:].replace("_", "-"))
+            else:
+                scope[key] = standalone_projects if key == "project_ids" \
+                    else _csv_list([value])
         if ignored:
             print(f"init: {', '.join(ignored)} は standalone では適用されません"
                   " — カード権限は config.json の notify.<transport> に設定してください")
@@ -1895,7 +1946,8 @@ def cmd_fact_source(args) -> int:
     sem["fact_source"] = source
     # Fail closed: never write a config the production validator rejects.
     errors, _ = validate_config(cfg)
-    sem_errors = [e for e in errors if e.startswith("config: semantic")]
+    sem_errors = [e for e in errors
+                  if e.startswith(("config: semantic", "semantic:"))]
     if sem_errors:
         print("fact_source: refusing to write invalid semantic config — "
               + "; ".join(sem_errors))
@@ -2056,7 +2108,6 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
     if not os.path.exists(db_path):
         return out
     try:
-        import sqlite3
         with closing(sqlite3.connect(
                 Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as db:
             now = time.time()
@@ -2438,9 +2489,12 @@ def _doctor_source(cfg: dict, *, probe: bool) -> dict:
         value = (r.stdout or "").strip()
         if r.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", value):
             revision = value
-            r = subprocess.run(["git", "-C", REPO_ROOT, "diff-index", "--quiet", "HEAD"],
-                               capture_output=True, timeout=5)
-            dirty = bool(r.returncode) if r.returncode in (0, 1) else None
+            # status refreshes stale index stat data (touch/rsync); the
+            # plumbing diff-index would report those files as modified
+            r = subprocess.run(["git", "-C", REPO_ROOT, "status", "--porcelain",
+                                "--untracked-files=no"],
+                               capture_output=True, text=True, timeout=5)
+            dirty = bool((r.stdout or "").strip()) if r.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
         pass
     running = {"status": "not_checked", "pid": None, "started_at": None,
@@ -2456,14 +2510,7 @@ def _doctor_source(cfg: dict, *, probe: bool) -> dict:
                 pids.add(int(match.group(1)))
         if len(pids) == 1:
             running["pid"] = pids.pop()
-            r = _run(["ps", "-o", "lstart=", "-p", str(running["pid"])], timeout=10)
-            if r.returncode == 0:
-                try:
-                    running["started_at"] = time.mktime(time.strptime(
-                        re.sub(r"\s+", " ", (getattr(r, "stdout", "") or "").strip()),
-                        "%a %b %d %H:%M:%S %Y"))
-                except (ValueError, OverflowError):
-                    pass
+            running["started_at"] = _process_started_at(running["pid"])
             # A PID/start time proves liveness, never the SHA of loaded code.
             running["status"] = "running_revision_unknown"
     modified = _gateway_sources_mtime()
@@ -2696,8 +2743,10 @@ def _cron_label(script: str) -> str:
 
 
 def _calendar(schedule: str) -> list[dict]:
-    """launchd StartCalendarInterval entries for a CRON_JOBS schedule —
-    launchd has no `*/n`, so minute/hour lists are expanded."""
+    """Expand a CRON_JOBS schedule into calendar entries for the standalone scheduler.
+
+    Each entry is a {"Hour", "Minute"} dict (the launchd StartCalendarInterval
+    shape); `*/n` and comma lists are expanded, other fields must be `*`."""
     minute, hour, *rest = schedule.split()
     if rest != ["*", "*", "*"]:
         raise ValueError(f"unsupported schedule {schedule!r}")
@@ -2723,7 +2772,8 @@ _TIMEOUT_PL = ("my $t = shift; my $p = 0;"
                " $p = fork; die unless defined $p;"
                " if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 }"
                " $SIG{ALRM} = sub { kill 'TERM', -$p; sleep 5; kill 'KILL', -$p; exit 124 };"
-               " alarm $t; waitpid($p, 0); exit($? >> 8)")
+               " alarm $t; waitpid($p, 0); my $s = $?;"
+               " exit(($s & 127) ? 128 + ($s & 127) : ($s >> 8))")
 
 
 def _agent_labels(cfg: dict) -> list[str]:
@@ -2899,9 +2949,13 @@ def _norm_sched(s: str) -> str | None:
     return " ".join(m.group(1).split()) if m else None
 
 
-def _agent_loaded(label: str) -> bool:
+def _agent_loaded(label: str) -> bool | None:
+    """Whether launchd has `label` loaded; None when the probe timed out or
+    could not start (124/127) — unknown is falsy but never proof of a stop."""
     uid = os.getuid()
     r = _run(["launchctl", "print", f"gui/{uid}/{label}"])
+    if r.returncode in (124, 127):
+        return None
     return r.returncode == 0
 
 
@@ -3055,7 +3109,7 @@ def _desired_agents(subs, cfg) -> dict[str, str]:
     return out
 
 
-def _sync_agents(subs, prev, manifest, note, dry, cfg=None, keep=frozenset()) -> int:
+def _sync_agents(subs, manifest, note, dry, cfg=None, keep=frozenset()) -> int:
     """Stage 2: launchd agents (macOS only) — converge content AND
     loaded state; retire owned-but-undesired agents from our naming
     space only, never install.sh-owned labels (S5)."""
@@ -3127,8 +3181,8 @@ def _retire_agents(labels, note, dry) -> int:
         note(f"agent {label}: undesired — bootout + remove")
         if not dry:
             _run(["launchctl", "bootout", f"gui/{uid}/{label}"])
-            if _agent_loaded(label):
-                note(f"  agent {label}: still loaded; keeping plist")
+            if _agent_loaded(label) is not False:
+                note(f"  agent {label}: still loaded or unverifiable; keeping plist")
                 problems += 1
                 continue
             try:
@@ -3368,7 +3422,7 @@ def _retire_previous_runtime(prev, desired_mode, note, dry):
         return 0
     for label in sorted(labels):
         _run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"])
-        if _agent_loaded(label):
+        if _agent_loaded(label) is not False:
             note(f"previous agent {label}: stop unverifiable — no new service started")
             return 1
         # bootout does not persist: launchd reloads a left plist at next login
@@ -3530,15 +3584,20 @@ def cmd_services(args) -> int:
     hermes = _hermes_exe(cfg)
     cron_labels = frozenset(
         _cron_label(script) for _, _, script in configured_cron_jobs(cfg))
-    problems += _sync_agents(subs, prev, manifest, note, dry, cfg,
+    problems += _sync_agents(subs, manifest, note, dry, cfg,
                              cron_labels | {STANDALONE_LABEL})
-    # the Hermes plugin decides from these flags whether to stand down
+    # the Hermes plugin decides from these flags whether to stand down;
+    # a failed publish fails the run but never blocks the manifest below
+    flags_failed = False
     if not dry and isinstance(cfg.get("notify"), dict) \
             and not _validate_notify(cfg["notify"]):
-        with suppress(Exception):
+        try:
             import notify_cards
             notify_cards.ensure_dirs(os.path.join(HOME, "data"))
             notify_cards.publish_flags(cfg, os.path.join(HOME, "data"))
+        except Exception as e:
+            note(f"notify flags publish failed: {type(e).__name__}: {e} — re-run services")
+            flags_failed = True
 
     if not _hermes_ok(hermes):
         note(f"cron: hermes not resolvable ({hermes}) — skipped")
@@ -3551,18 +3610,28 @@ def cmd_services(args) -> int:
         if not cron_problems:
             retire_problems = _retire_agents(cron_labels | {STANDALONE_LABEL}, note, dry)
             problems += retire_problems
-        switching = prev.get("runtime_mode") == "standalone"
-        if not switching or not (cron_problems or retire_problems):
+        # a partial switch saves runtime_mode=hermes: the pending flag keeps
+        # the restart owed until a run completes it
+        switching = prev.get("runtime_mode") == "standalone" \
+            or prev.get("gateway_restart_pending") is True
+        blocked = bool(cron_problems or retire_problems)
+        if not switching or not blocked:
             problems += _sync_gateway(cfg, hermes, note, dry)
-        if switching and not (cron_problems or retire_problems):
+        restarted = False
+        if switching and not blocked and flags_failed:
+            note("gateway: restart deferred until the notify flags publish")
+        elif switching and not blocked:
             # a gateway that loaded while standalone owned the bot skipped
             # /mcs and the card workers — reload it under the new flags
             note("gateway: restart (switched back from standalone)")
             if not dry:
                 r = _hermes_cli(hermes, "", "gateway", "restart")
-                if not (r and r.returncode == 0):
+                restarted = bool(r and r.returncode == 0)
+                if not restarted:
                     note("  gateway restart failed — run `hermes gateway restart`")
                     problems += 1
+        if switching and not restarted:
+            manifest["gateway_restart_pending"] = True
 
     _record_llm_slots(manifest, note)
     # manifest — the rollback snapshot's source of truth (R6).
@@ -3575,7 +3644,7 @@ def cmd_services(args) -> int:
         except OSError as e:
             note(f"manifest write failed: {e}")
             problems += 1
-    return 1 if problems else 0
+    return 1 if problems or flags_failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:

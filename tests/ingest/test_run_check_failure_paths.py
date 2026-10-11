@@ -68,6 +68,7 @@ def _tick_world(tmp_path, monkeypatch, failure, *, overdue):
 FAILURES = {
     "mcs_error": (mcs_adapter.MCSError("network_error", retryable=True), 1),
     "session": (mcs_adapter.SessionExpired("session_expired"), 2),
+    "crash": (RuntimeError("synthetic crash"), 1),
 }
 
 

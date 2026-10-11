@@ -15,7 +15,7 @@ import re
 from typing import BinaryIO
 
 from adapters.common.spec import MAX_COMPONENTS, MAX_TEXT, PRIMARY_ACTIONS
-from adapters.common.text import notification_preview
+from adapters.common.text import escape_md, notification_preview
 
 # discord.py releases whose HTTPClient.request retry loop and private
 # aiohttp session (``_HTTPClient__session``) the single-post guard was
@@ -43,29 +43,12 @@ def _accent(spec):
         return _URGENT_ACCENT
     return _ACCENTS.get(spec.get("kind"))
 
+ACTION_PREFIX = "mcs:a:"          # card button custom_id = prefix + token
 MENU_ID = "mcs:menu"              # the 他の操作 select — value = token
 _MENU_PLACEHOLDER = "その他の操作…"     # the same words as the LINE WORKS button
 _POST_BUTTONS_MAX = 5                   # one action row of per-post 💊 buttons
 _MENU_MAX = 25                    # options per select
-# kept verbatim: runner footer mentions (pings stay off via
-# allowed_mentions) and URLs (a substitution would break the link)
-_MD_KEEP = re.compile(r"(<@[!&]?\w+>|https?://\S+)")
-# same-length look-alikes, so escaping never moves a text budget
-_MD_INLINE = str.maketrans("*_~|`[]<\\", "＊＿～｜｀［］＜＼")
-_MD_LINE = re.compile(r"^([ \t]*)(?:(\d+)\.|([#>+-]))", re.M)
-_MD_LEAD = str.maketrans("#>+-", "＃＞＋－")
 
-
-def escape_md(text: str) -> str:
-    """User-authored text as literal Discord text with the same length:
-    inline markup (``* _ ~ | ` [ ] < \\`` — no masked link, no tag)
-    and the block markers at a line start (``#``/``-#`` headings, ``>``
-    quote, ``-``/``+``/``1.`` lists) become fullwidth look-alikes."""
-    text = "".join(part if i % 2 else part.translate(_MD_INLINE)
-                   for i, part in enumerate(_MD_KEEP.split(text)))
-    return _MD_LINE.sub(
-        lambda m: m.group(1) + (f"{m.group(2)}．" if m.group(2)
-                                else m.group(3).translate(_MD_LEAD)), text)
 
 
 def _text_chunks(lines, limit=MAX_TEXT):
@@ -135,6 +118,11 @@ def _zones(spec: dict, esc) -> tuple:
     return zones, footer
 
 
+def _zone_text(zone) -> list:
+    """A zone's lines with each post-action (line, button) pair reduced to its line."""
+    return [ln if isinstance(ln, str) else ln[0] for ln in zone]
+
+
 def _button_items(spec, primary_actions=PRIMARY_ACTIONS):
     """The same durable primary/link buttons and secondary menu in both formats."""
     import discord
@@ -150,7 +138,7 @@ def _button_items(spec, primary_actions=PRIMARY_ACTIONS):
             elif button.get("id") in primary_actions:
                 primary.append(discord.ui.Button(
                     style=getattr(discord.ButtonStyle, button.get("style", "secondary")),
-                    label=button["label"], custom_id=f"mcs:a:{button['token']}"))
+                    label=button["label"], custom_id=f"{ACTION_PREFIX}{button['token']}"))
             else:
                 menu.append(discord.SelectOption(label=button["label"], value=button["token"]))
     return primary + links, menu
@@ -187,7 +175,7 @@ def message_payload(spec, *, components_v2=False):
     # and its 💊 becomes a button in a row of its own, labelled with the
     # post's time when more than one post has one
     posts = [ln for zone in zones for ln in zone if not isinstance(ln, str)]
-    zones = [[ln if isinstance(ln, str) else ln[0] for ln in zone] for zone in zones]
+    zones = [_zone_text(zone) for zone in zones]
     face = "\n\n".join(["\n".join(zone) for zone in zones] + ["\n".join(footer)]).strip() or "—"
     if len(face) > 4096:
         raise ValueError("discord_embed_budget")
@@ -206,7 +194,7 @@ def message_payload(spec, *, components_v2=False):
         view.add_item(discord.ui.Button(
             style=discord.ButtonStyle.secondary,
             label=button["label"] if len(posts) == 1 else f"💊 {stamp}"[:80],
-            custom_id=f"mcs:a:{button['token']}", row=2))
+            custom_id=f"{ACTION_PREFIX}{button['token']}", row=2))
     payload = {"content": escape_md(notification_preview(spec["parts"])),
                "embed": discord.Embed(description=face, colour=_accent(spec))}
     if primary or menu or posts:
@@ -227,7 +215,7 @@ def build_view(spec: dict):
         return discord.ui.Separator(
             visible=True, spacing=discord.SeparatorSpacing.small)
 
-    primary, menu = discord.ui.ActionRow(), []
+    primary = discord.ui.ActionRow()
     buttons, menu = _button_items(spec)
     for button in buttons:
         primary.add_item(button)
@@ -261,7 +249,7 @@ def build_view(spec: dict):
                         accessory=discord.ui.Button(
                             style=discord.ButtonStyle.secondary,
                             label=button["label"],
-                            custom_id=f"mcs:a:{button['token']}")))
+                            custom_id=f"{ACTION_PREFIX}{button['token']}")))
         return out
 
     def layout(groups):
@@ -284,9 +272,6 @@ def build_view(spec: dict):
         return len(children) > _CONTAINER_MAX or 1 + len(children) + nested + sum(
             len(r.children) for r in rows) > MAX_COMPONENTS
 
-    def plain(zone):
-        return [ln if isinstance(ln, str) else ln[0] for ln in zone]
-
     children = layout(zones)
     if too_big(children):
         # too many rule zones: one text zone (no rule lines — the text
@@ -295,7 +280,7 @@ def build_view(spec: dict):
     if too_big(children):
         # still too many parts: post buttons fall back to text lines
         # (the card's 💊 menu entry still reaches every post)
-        children = layout([plain([ln for z in zones for ln in z])])
+        children = layout([_zone_text([ln for z in zones for ln in z])])
     if not children:
         children.append(discord.ui.TextDisplay("—"))
     view = discord.ui.LayoutView(timeout=None)

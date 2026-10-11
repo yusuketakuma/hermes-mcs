@@ -23,6 +23,7 @@ from c1_contract import (
 CONTRACT = "mcs-ext-export/2"
 MAX_WIRE_BYTES = 1_048_576
 AUTH_ID_MAX = 256  # same limit as withdraw/1, so every sealed auth_id stays withdrawable
+RECEIPT_CONTRACT = "mcs-ext-receipt/1"  # receive/delete receipts for /1 and /2
 Record: TypeAlias = dict[str, JSONValue]
 _SHARED = ("meta", "coverage", "signals_truncated", "patient_coverage")
 _CONTEXT = (

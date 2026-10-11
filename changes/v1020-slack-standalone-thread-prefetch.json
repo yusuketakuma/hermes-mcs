@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "独立実行のSlackでスレッド内の通知が送れない問題を修正",
+  "summary": "Hermesを使わない独立実行のSlackで、元のスレッドへの緊急通知やカードの投稿が、スレッド先頭の確認に失敗して毎回送信されずに終わっていた問題を修正しました。Hermes経由のSlackは影響を受けていません。",
+  "upgrade": "独立実行のSlackを使っている場合は、更新後にホスト（mcs_standalone）が再起動されて反映されます。設定の変更は不要です。",
+  "details": [
+    "adapters/slack/delivery.py はスレッド先頭の確認に conversations.history を優先して使うが、独立実行の接続先の許可リスト（adapters/slack/standalone.py の _API_METHODS）に含まれておらず、要求が拒否されて thread_prefetch_failed になっていた。許可リストに追加した。固定ホスト・443番ポート・proxyとredirectの拒否は変えない。",
+    "Slackアダプターが呼ぶWeb APIメソッドがすべて許可リストに含まれることを、ソースの走査で確かめるテストを追加した。"
+  ],
+  "refs": [
+    "adapters/slack/standalone.py",
+    "tests/adapters/slack/test_slack_standalone.py"
+  ]
+}

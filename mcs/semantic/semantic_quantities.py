@@ -330,13 +330,11 @@ def claim_quantity_findings(claim: dict, facts: list) -> list[dict]:
     # establish which amount belongs to which claim.  Keep the relation
     # explicitly unverified rather than claiming the values were swapped
     # safely (spec §16.1).
-    claim_amounts = [q for q in claim_quantities if q["kind"] == "amount"]
-    if claim_quantities and (
-            len(evidence_facts) > 1
-            or any(any(count > 1 for count in counts.values())
-                   for counts in quantity_counts_by_fact.values())
-            and (claim_amounts or any(q["kind"] == "frequency"
-                                      for q in claim_quantities))):
+    # Every quantity is an amount or a frequency today; a new kind must
+    # decide here whether it needs this relation check.
+    if len(evidence_facts) > 1 or any(
+            count > 1 for counts in quantity_counts_by_fact.values()
+            for count in counts.values()):
         return [_finding("claim_quantity_relation_unverified", claim_id,
                          fact_refs=refs)]
 

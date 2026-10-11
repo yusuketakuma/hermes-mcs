@@ -123,6 +123,18 @@ $HOME/.mcs/venv/bin/python3 mcs/ops/mcs_setup.py services
 同じBot認証情報で二重に接続しないようHermes側の該当接続を停止・無効化してください。
 手動crontab、manifest外のworker、単体LINE WORKSサービスは別途確認して停止します。
 
+ローカルLLMのモデル（約5.7 GB）の保存先はモードごとに分かれます（Hermes: `~/.hermes/models`、
+独立: `~/.mcs/models`）。そのまま切り替えると`install.sh`が新しい保存先へ再ダウンロードし、
+元の場所のモデルは自動では削除しません。再ダウンロードを避けるには、`install.sh`の前に移動します。
+
+```bash
+mkdir -p ~/.mcs/models
+mv ~/.hermes/models/Qwen3.5-9B-Q4_K_M.gguf ~/.mcs/models/
+```
+
+`:8080`のLLMを自分で用意する場合は`--no-llm`を付けます。再ダウンロードした場合、
+元の場所のモデルは不要になれば手動で削除できます。Hermesへ戻す場合も同様で、移動の向きが逆になります。
+
 Hermesへ戻す場合は`./install.sh --mode hermes`、HermesのPythonで`init --runtime-mode hermes`と
 `services`を実行します。独立サービスが停止したことを確認してからHermesの該当接続を使います。
 実データや配送履歴を削除する必要はありません。

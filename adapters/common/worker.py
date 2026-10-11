@@ -8,10 +8,12 @@ receipt is published. Crashes land between those records and are
 classified honestly on the next start — pre-HTTP grants settle as
 ``not_sent`` (journal integrity + the scope lock prove it), post-HTTP
 silences stay ``unknown`` for an operator to resolve, and an in-flight
-send is never retried by a new worker. (A transport SDK may still retry
-inside one ``_perform`` call: discord.py re-POSTs on 5xx/ECONNRESET, so
-a lost response can duplicate a Discord post; Slack strips its retry
-handlers. See hermes_plugin/README.md.)
+send is never retried by a new worker. (Inside one ``_perform`` call
+discord.py would re-POST on 5xx/ECONNRESET, so every Discord create POST
+runs under ``cards.single_post``, which stops a second POST unless the
+previous answer was a 429 — verified for discord.py 2.7.1 only, other
+versions fail closed as ``retry_policy_unknown``; edits and deletes are
+not guarded. Slack strips its retry handlers. See hermes_plugin/README.md.)
 
 The transport's own wire calls live behind ``_perform`` and
 ``_perform_part``; everything around them — claims, grants, journals,
@@ -37,7 +39,8 @@ POLL_S = 2.0
 REPUBLISH_BEGIN_S = 60.0       # re-send the same begin if no result
 RETRY_IN_FLIGHT_S = 15.0       # denied_in_flight re-begin backoff
 SIGNAL_OFF_RETRY_S = 300.0     # denied_signal_notify_off re-claim backoff
-MAX_BEGIN_RETRIES = 20         # ~5min of in_flight before giving up
+MAX_BEGIN_RETRIES = 20         # shared cap on begin republishes and in_flight
+                               # re-begins (each in_flight cycle spends 2)
 CLAIM_STALE_S = 60.0           # orphan .claimed marker age before reclaim
 JOURNAL_SEGMENT_BYTES = 8 << 20  # rotate the live journal segment past this
 EXPIRE_EVERY_S = 300.0         # registry TTL sweep cadence (TTLs are
@@ -730,8 +733,10 @@ class DeliveryWorker:
                           delivery_id=spec["delivery_id"],
                           error=result.get("error"))
             error = str(result.get("error") or "")
+            # +1: the re-begin this stages is itself a republish, which
+            # the result-None branch only sends below the cap
             if error == "denied_in_flight" \
-                    and claim["begin_retries"] < MAX_BEGIN_RETRIES:
+                    and claim["begin_retries"] + 1 < MAX_BEGIN_RETRIES:
                 # another attempt owns the card — a re-begin needs a
                 # fresh attempt_id AND a fresh envelope (the stored
                 # begin_env still carries the dead attempt_id and

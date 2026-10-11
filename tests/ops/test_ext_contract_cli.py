@@ -208,6 +208,10 @@ def test_manual_receipt_import_reconciles_handoff_without_resend(
         directory = tmp_path / "receipts"
         directory.mkdir()
         path.rename(directory / "one.json")
+        # Finder metadata and symlinks are not receipts and must not void the bundle
+        (directory / ".DS_Store").write_bytes(b"\x00synthetic")
+        (tmp_path / "outside.json").write_text("not a receipt")
+        (directory / "linked.json").symlink_to(tmp_path / "outside.json")
         path = directory
     code, imported = _cli(capsys, [
         "reconcile", "--state", inputs["state"], "--sink", inputs["sink"],

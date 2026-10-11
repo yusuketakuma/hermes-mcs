@@ -22,10 +22,12 @@ def patient_item_scope(item, body, *, patient_name=None, surface=None, default="
         # Older parsed artifacts did not require a literal quote. Preserve
         # that contract only when the source has no explicit other-person
         # or noncurrent scope; a mixed source cannot prove an unlocated item.
-        scopes = [extract.patient_source_scope(body, max(0, m.start() - 1), m.start(),
+        if not body:
+            return "unknown"  # no clause end to check (a non-empty body always has `$`)
+        scopes = (extract.patient_source_scope(body, max(0, m.start() - 1), m.start(),
                                                patient_name=patient_name, default=default)
-                  for m in re.finditer(r"[。！？!?;；、,\n]|$", body) if m.start() > 0]
-        return "patient" if scopes and all(scope == "patient" for scope in scopes) else "unknown"
+                  for m in re.finditer(r"[。！？!?;；、,\n]|$", body) if m.start() > 0)
+        return "patient" if all(scope == "patient" for scope in scopes) else "unknown"
     # A full-sentence quote may start before its explicit subject. Locate the
     # item's own surface inside that quote, while retaining surrounding scope.
     anchors = (surface, item.get("value"))

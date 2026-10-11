@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "launchd の停止を確認できないときに旧サービスを残すよう修正",
+  "summary": "services で実行方式を切り替えるとき、launchctl の応答がタイムアウトした・起動できなかった場合に、旧サービスを停止済みとみなして plist を削除し新しい実行方式を起動していた問題を修正しました。停止を確認できないときは旧 plist を残し、新しいサービスは起動せず、services は失敗（終了コード 1）で終わります。",
+  "upgrade": "追加操作は不要です。services が「stop unverifiable」で失敗した場合は、launchd が応答する状態で services を再実行してください。",
+  "details": [
+    "mcs_setup._agent_loaded は launchctl print の 124（タイムアウト）・127（起動失敗）を「不明」(None) として返す。",
+    "_retire_agents と _retire_previous_runtime は、停止が確認できた（未ロードが確定した）ときだけ plist を削除する。",
+    "Linux の systemd 経路（is-active の 3/4 だけを停止とみなす）は従来どおり。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "tests/ops/test_mcs_setup_standalone.py"
+  ]
+}

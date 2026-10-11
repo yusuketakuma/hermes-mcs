@@ -116,3 +116,19 @@ def test_rerun_on_an_existing_install_never_prompts_or_writes(tmp_path):
                        capture_output=True, text=True, timeout=120)
     assert cfg.read_text() == '{"mcs_login_id": "synthetic"}\n'
     assert not any(c.startswith("venv-python - ") for c in _calls(stub_root))
+
+
+def test_mode_selection_refuses_a_symlinked_config(tmp_path):
+    """The --mode writer reads config.json like the recovery check: a symlink is
+    refused, not followed and then replaced by a regular file."""
+    import sys
+    home, _, _, env = _world(tmp_path)
+    env["STUB_REAL_PYTHON"] = sys.executable
+    (home / ".mcs").mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_text(json.dumps({"runtime_mode": "hermes"}))
+    (home / ".mcs" / "config.json").symlink_to(elsewhere)
+    r = _run(env, None, "--mode", "standalone", "--no-llm", "--no-brew", "--no-recovery")
+    assert r.returncode == 1 and "config.json unreadable" in r.stderr, r.stdout + r.stderr
+    assert (home / ".mcs" / "config.json").is_symlink()
+    assert json.loads(elsewhere.read_text()) == {"runtime_mode": "hermes"}

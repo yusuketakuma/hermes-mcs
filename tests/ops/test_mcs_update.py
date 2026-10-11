@@ -330,9 +330,15 @@ def test_impact_summary(updater, tmp_path):
 def test_impact_summary_distinguishes_gateway_and_independent_adapter(
         updater, monkeypatch, path, gateway, lineworks):
     monkeypatch.setattr(updater, "_git_out", lambda args: "M\t" + path + "\n")
+    monkeypatch.setattr(updater, "load_config",
+                        lambda: {"notify": {"interactive": "lineworks"}})
     impact = updater.impact_summary("synthetic-before", "v1.1.0")
     assert any("gateway restart" in line for line in impact) is gateway
     assert any("LINE WORKS" in line and "再起動" in line for line in impact) is lineworks
+    # without the LINE WORKS adapter (plan() restarts none) there is no note
+    monkeypatch.setattr(updater, "load_config", lambda: {})
+    impact = updater.impact_summary("synthetic-before", "v1.1.0")
+    assert not any("LINE WORKS" in line for line in impact)
 
 
 # ------------------------------------------------------- protected paths
@@ -1506,12 +1512,9 @@ def test_apply_consent_hold_survives_a_failing_quiesce(updater, tmp_path,
                         lambda t: ["schema_bump:7->8"])
     monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: str(back))
     monkeypatch.setattr(mcs_update, "_baseline_check", lambda c: [])
-    calls = {"n": 0}
-
     def quiesce():
-        calls["n"] += 1
         mcs_update._write_marker()
-        if calls["n"] >= 2:
+        if mcs_update.load_state().get("restore_consent"):
             raise mcs_update.UpdateError("drainer_stop_failed: synthetic")
         return []
 

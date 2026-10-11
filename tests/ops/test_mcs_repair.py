@@ -579,3 +579,18 @@ def test_invalid_cli_arguments_never_echo_private_input(capsys):
     # Then.
     assert error.value.code == 2
     assert "SYNTHETIC_PRIVATE" not in capsys.readouterr().err
+
+
+def test_repair_inputs_use_own_size_bound_not_command_queue_cap(tmp_path):
+    big = {"padding": "p" * 20_000, "nested": {"k": 1}}
+    path = tmp_path / "plan.json"
+    path.write_bytes(repair.canonical(big))
+    assert path.stat().st_size > 16384
+    assert repair._read_json(path) == big
+    for raw, code in ((b'{"a":1,"a":2}', "duplicate_key"),
+                      (b'{"a":NaN}', "invalid_number"),
+                      (b"[" * 200_000, "too_deep"),
+                      (b" " * (1_048_576 + 1), "input_too_large")):
+        path.write_bytes(raw)
+        with pytest.raises(ValueError, match=code):
+            repair._read_json(path)

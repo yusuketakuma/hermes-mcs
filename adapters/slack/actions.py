@@ -13,7 +13,8 @@ from adapters.common import envelopes, paths, registry
 from adapters.common.text import (MODAL_ACTIONS, MODAL_TITLES, SEARCH_EMPTY,
                                  VIEW_FORMS, digest_inputs,
                                  ja, modal_fields, preview_text,
-                                 search_query, split_body, view_answer)
+                                 search_query, split_body, view_answer,
+                                 view_scope_ok)
 from .cards import LINK_ACTION, MENU_ACTION, _sections, render_parts
 
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$")
@@ -316,29 +317,22 @@ class Actions:
         # task_status tokens ride an ephemeral task list — the ctx pins
         # only the card/project scope; origin() already bound the click
         # to this app/team/channel and an allowed user.
-        allowed = self._settings.get("project_ids")
-        if not allowed and not self._settings.get("project_ids_auto"):
+        if not projects.context_allowed(self._settings, ctx):
             return None
-        project = ctx.get("project_id")
-        if project is not None:
-            if not projects.project_allowed(self._settings, project):
-                return None
-        else:
-            signals = (ctx.get("context") or {}).get("signals") or {}
-            if not signals or any(
-                    not projects.project_allowed(
-                        self._settings, s.get("project_id"))
-                    for s in signals.values()):
-                return None
         return ctx
 
     async def _say(self, channel, user, text, *, blocks=None, thread_ts=None,
                    navigation=None):
-        from .delivery import _call   # one Retry-After resend, as for cards
+        from .delivery import RETRY_ALLOWED, _call   # one Retry-After resend, as for cards
         client = self._client()
         if client is None:
             self._log("followup_failed", error="retry_policy_unknown")
             return
+
+        async def still_active():
+            return self._active
+
+        token = RETRY_ALLOWED.set(still_active)
         try:
             for index, chunk in enumerate(_ephemeral_chunks(text)):
                 if not self._active:
@@ -355,6 +349,8 @@ class Actions:
                 await _call(client.chat_postEphemeral, **kwargs)
         except Exception as exc:
             self._log("followup_failed", error=type(exc).__name__)
+        finally:
+            RETRY_ALLOWED.reset(token)
 
     async def _clicker_name(self, user) -> str:
         """The clicker's Slack display/real name (users.info, cached by
@@ -642,18 +638,27 @@ class Actions:
         if taken == "cancelled":
             await self._say(origin["channel_id"], user, "取り消しました。")
             return
-        try:
-            await self._publish(payload)
-        except (OSError, ValueError):
-            self._reg.end_confirm(confirm_id)
-            await self._say(origin["channel_id"], user, "送信に失敗しました。")
-            return
-        self._reg.consume_confirm(confirm_id)
+        # before the publish: a publish error after the file landed still
+        # owes the receipt (same order as LINE WORKS)
         self._reg.put_followup(payload["command_id"], {
             "kind": "human", "origin": origin, "actor": actor,
             "token": pending["token"], "user": user,
             "route_epoch": self._settings.get("route_epoch"),
             "project_id": payload["project_id"]})
+        try:
+            await self._publish(payload)
+        except (OSError, ValueError):
+            if await asyncio.to_thread(envelopes.command_queued,
+                                       self._dirs["cmd_int"],
+                                       payload["command_id"]):
+                # possibly applied: keep the confirm in flight and the followup
+                await self._say(origin["channel_id"], user,
+                                "受付結果を確認できませんでした。結果の通知をお待ちください。")
+                return
+            self._reg.end_confirm(confirm_id)
+            await self._say(origin["channel_id"], user, "送信に失敗しました。")
+            return
+        self._reg.consume_confirm(confirm_id)
         await self._say(origin["channel_id"], user, "受け付けました。")
         await self.sweep_followups()
 
@@ -722,9 +727,9 @@ class Actions:
                     await self._say(origin["channel_id"], rec["user"],
                                     ja(result))
                 continue
-            answer = view_answer(
-                result, lambda pid: projects.project_allowed(
-                    self._settings, pid), markdown=False, plain=True)
+            def allowed(pid):
+                return projects.project_allowed(self._settings, pid)
+            answer = view_answer(result, allowed, markdown=False, plain=True)
             if answer is not None:
                 pin = self._pinned(rec["token"],
                                    {**origin, "actor": rec["actor"]}, rec["actor"])
@@ -770,7 +775,8 @@ class Actions:
                 if token_ctx:
                     await asyncio.to_thread(self._reg.put_tokens, token_ctx,
                                             durable=bool(thread_ts))
-                cards = _parts_blocks(result)
+                cards = (_parts_blocks(result)
+                         if view_scope_ok(result, allowed) else None)
                 if cards:
                     # 📊: one Block Kit card; the text is the fallback
                     answer = answer[:1]

@@ -25,8 +25,9 @@ Contract enforced here (spec MCS-REFACTOR-FIRST-20260920 §13):
 - message bodies are DATA — every instruction tells the model to treat
   state text as data, not commands (prompt-injection boundary, AT-044)
 
-Assumed wire shape (verified only against mocks — real API evaluation is
-gate G2 and needs the approved budget): request {"model","state",
+Wire shape (gate G2 passed 2026-09-21 with one synthetic POST and one GET,
+fixed model echo jev-1.13.0 — docs/dev-records/acceptance-map.md; re-check
+with ``--smoke --live`` after a wire change): request {"model","state",
 "questions"} (choice criteria on each question) -> response
 {"model","answers":{qid: {"type": ..., ...}}, "usage":
 {"input_tokens": ..., "output_tokens": ...}}.
@@ -36,13 +37,11 @@ import json
 import math
 import os
 import random
-import socket
 import sys
 import time
-import urllib.error
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every subdir holding .py files (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
@@ -226,6 +225,22 @@ def is_answer_defect(error) -> bool:
         and ":" in str(getattr(error, "detail", "") or "")
 
 
+def failure_class(error) -> str:
+    """Classify an evaluation failure for durable job scheduling.
+
+    ``resource`` means no external request should be counted as a failed
+    input (daily cap, missing key, or exhausted job budget).  All other
+    retryable failures use finite job retries, as does one malformed
+    answer (``is_answer_defect``) at every evaluation site; permanent
+    failures (``failed``) stop the generation until explicitly reseeded.
+    """
+    if getattr(error, "kind", "") in {"budget_exceeded", "no_api_key",
+                                      "payment_required"}:
+        return "resource"
+    return "retry" if getattr(error, "retryable", False) \
+        or is_answer_defect(error) else "failed"
+
+
 def evaluate_once_more(client, state: dict, questions: dict,
                        deadline: float) -> dict:
     """``client.evaluate()``, asking the same request once more after a
@@ -364,9 +379,8 @@ class JevClient:
                     status, headers, raw = self._post_fn(body, timeout)
                 finally:
                     self._active_deadline = previous_deadline
-            except (OSError, urllib.error.URLError, TimeoutError) as e:
-                kind = ("timeout" if isinstance(e, TimeoutError | socket.timeout)
-                        else "transport")
+            except OSError as e:     # URLError and TimeoutError included
+                kind = "timeout" if isinstance(e, TimeoutError) else "transport"
                 last = JevError(kind, type(e).__name__,
                                 retryable=True)
             else:
@@ -450,11 +464,10 @@ class JevClient:
         try:
             status, _headers, raw = self._http_request(
                 "GET", None, timeout, endpoint=JEV_MODELS_URL)
-        except (OSError, urllib.error.URLError, TimeoutError) as e:
+        except OSError as e:     # URLError and TimeoutError included
             # surface transport failure as JevError like evaluate() does —
             # the smoke harness only catches JevError
-            kind = ("timeout" if isinstance(e, TimeoutError | socket.timeout)
-                    else "transport")
+            kind = "timeout" if isinstance(e, TimeoutError) else "transport"
             raise JevError(kind, type(e).__name__, retryable=True) from e
         if status != 200:
             raise JevError("protocol_error", f"http_{status}", status=status)

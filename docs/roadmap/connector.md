@@ -251,7 +251,7 @@ B. 入力選別と分割:
 
 C. receipt と sink:
 - `parse_receipt()`（CD-5）。journal に `rejected` 終端を追加する（:449-451、`_reconcile` の終端 :573、`_deliver` の prior 判定 :493-510）。`_valid_ack` に status 検査を足す（:546-553）。
-- `HandoffSink(LocalSink)`: `drop_ack` / `drop_delete_ack` を恒久 True にし、dir を 0700 にする（`LocalSink` の dir は既定で 0755 になる: 実測）。outbox への書込みだけを行う。`reconcile --receipts PATH` は strict parse の後に `acks/`・`deletions/`・`rejections/` へ原子的に置き、既存の `reconcile`（:566-599）と `_delete_ack`（:638-650）に任せる。終端（acked / rejected / withdrawn）に達したら outbox の payload を削除する（journal と audit は残す）。brain_export の 62 日 sweep（`brain_export.py:32,267-292`）の対象外になる PHI 近傍ファイルを残さないため。`sent` の payload が欠けていたら、health で `payload_missing` と報告する。
+- `HandoffSink(LocalSink)`: `drop_ack` / `drop_delete_ack` を恒久 True にし、dir を 0700 にする（1.0.20 以降、`LocalSink` も存在しない dir を 0700 で作る。既存の dir は chmod しない）。outbox への書込みだけを行う。`reconcile --receipts PATH` は strict parse の後に `acks/`・`deletions/`・`rejections/` へ原子的に置き、既存の `reconcile`（:566-599）と `_delete_ack`（:638-650）に任せる。終端（acked / rejected / withdrawn）に達したら outbox の payload を削除する（journal と audit は残す）。brain_export の 62 日 sweep（`brain_export.py:32,267-292`）の対象外になる PHI 近傍ファイルを残さないため。`sent` の payload が欠けていたら、health で `payload_missing` と報告する。
 - `_set_journal(..., "sent", ...)` に `snapshot_generation_id` と `part` を保存する。
 - **撤回指示書の出力（第2回計画レビュー追加）**: `withdraw --sink-kind handoff` は `sink.delete` だけでなく、`mcs-ext-withdraw/1` 指示書（`contract`・`envelope_id`・`auth_id`・理由コード、4 KiB 以下）を outbox の `withdrawals/` へ `.tmp` → rename で原子的に書き出す。手渡しで相手へ運び、返ってくる削除 receipt（`mcs-ext-receipt/1` の `deleted` 形）は `reconcile --receipts` の対象に含めて `_delete_ack` の経路に流す。指示書の ledger への tombstone 記録は withdraw 時点で既に行われている。
 

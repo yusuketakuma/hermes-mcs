@@ -763,3 +763,34 @@ def test_unrenderable_snapshot_time_is_rejected_before_exports(env, capsys, time
     assert json.loads(capsys.readouterr().out)["error"] == "snapshot_time_unrepresentable"
     assert {str(p.relative_to(out)): p.read_bytes()
             for p in out.rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.parametrize(("period_key", "ids_key"), [
+    ("med_period_candidate", "unrefreshed_message_ids"),
+    ("current_med_period", "possibly_deleted")])  # pre-9 rollups until rebuilt
+def test_period_candidate_and_unrefreshed_ids_are_labelled(env, period_key, ids_key):
+    snap, out = env
+    with sqlite3.connect(snap) as conn:
+        conn.execute(
+            "UPDATE artifacts SET content=? WHERE kind='patient_rollup'",
+            (json.dumps({"project_id": 1, "generated_at": SNAP_TS, "msg_count": 2,
+                         period_key: {"start": "2026-09-01", "end": "2026-09-30"},
+                         ids_key: [7, 8]}),))
+    assert brain_export.run(out, snap)["ok"]
+    text = (out / "patients" / "p1.md").read_text()
+    assert "## med period candidate（規則抽出・未確認）" in text
+    assert '"start": "2026-09-01"' in text
+    assert ("> unrefreshed_message_ids: 2 message ids"
+            " (削除の証拠ではない。tombstone は coverage.collection.deleted)") in text
+    assert "current med period" not in text and "possibly_deleted" not in text
+
+
+def test_signal_note_is_escaped_as_one_table_cell(env):
+    snap, out = env
+    with sqlite3.connect(snap) as conn:
+        conn.execute("UPDATE artifacts SET content=json_set(content,'$.note',?) "
+                     "WHERE kind='signal_v1'", ("SYNTH 一行目\n| 二行目",))
+    assert brain_export.run(out, snap)["ok"]
+    signals = (out / "signals" / "latest.md").read_text()
+    row = next(line for line in signals.splitlines() if "SYNTH 一行目" in line)
+    assert "SYNTH 一行目 \\| 二行目" in row

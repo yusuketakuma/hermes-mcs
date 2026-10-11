@@ -337,7 +337,7 @@ def validate(spec) -> dict:
     if "drug_view_navigation" in parts and (
             parts["drug_view_navigation"] is not True
             or not any(b.get("id") == "meds"
-                       for row in parts["action_rows"] for b in row)):
+                       for row in parts.get("action_rows") or [] for b in row)):
         _err("bad_drug_view_navigation")
     if "thread_drug_actions" in parts and (
             parts["thread_drug_actions"] is not True

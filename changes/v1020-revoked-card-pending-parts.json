@@ -1,0 +1,18 @@
+{
+  "category": "fixed",
+  "title": "患者のアーカイブ後に、配送済みカードの未送信本文が送られる問題を修正",
+  "summary": "カードとスレッドは届いたが本文の一部がまだ送られていない間に患者をアーカイブすると、取り消し後もその本文がチャットへ送られることがありました。カードの取り消し時に未送信の本文・添付を保留にし、配送用の指示ファイルも取り下げるため、取り消し後に新しく送られることはなくなります。すでに送信を始めていた部分は、これまでどおり送信記録に従って扱います。取り消しで保留にした添付は送られることがないため、保存期間（14日）を過ぎれば他の添付と同じく削除されます。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "mcs/notify/notify_cards.py の revoke_card が、取り消したカードの描画に残る未送信の部品（thread/body/attachment、card 部品は除く）を state='held'・error_code='card_revoked' にし、parts_state を更新する。",
+    "sweep は取り消しを確定した後、該当する spec ファイルを即座に取り下げる。worker は DB を読まず spec ファイルから再開するため、これで再開が止まる。途中で停止した場合も、未送信部品が残らないので gc が同じファイルを削除し、recover も再公開しない。",
+    "mcs/core/maintenance.py の prune_attachments は、error_code='card_revoked' で保留にした attachment_part を保持対象に数えない。保留のまま添付ファイルが期限を越えて残り続けることはない。",
+    "取り消しの時点で worker がすでにメモリ上で進めていた送信は、その回の処理だけ完了し得る。その結果は part_conflict として拒否され、照合で journal_conflict として表示される（記録が消えることはない）。"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "mcs/core/maintenance.py",
+    "tests/adapters/lineworks/test_revoked_card_pending_parts.py",
+    "tests/notify/test_card_attachment_followups.py"
+  ]
+}

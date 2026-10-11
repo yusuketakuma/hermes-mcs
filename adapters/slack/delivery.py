@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
+import contextvars
 import copy
 from html import escape
 import math
@@ -83,9 +84,17 @@ def _rate_wait(exc) -> float | None:
         else RATE_WAIT_MAX_S
 
 
+# The caller's current send authority (an async () -> bool), set around
+# each card/part send: the wait can outlive a kill switch, route epoch
+# change or restore hold that the pre-send check passed.
+RETRY_ALLOWED = contextvars.ContextVar("slack_retry_allowed", default=None)
+
+
 async def _call(fn, **kwargs):
-    """One Slack write; a 429 waits out Retry-After and resends once.
-    A second failure propagates for _failed() to classify as before."""
+    """One Slack write; a 429 waits out Retry-After and resends once,
+    only if RETRY_ALLOWED still allows it — otherwise the 429 stands as
+    the not_sent outcome. A second failure propagates for _failed() to
+    classify as before."""
     try:
         return await fn(**kwargs)
     except asyncio.CancelledError:
@@ -94,7 +103,11 @@ async def _call(fn, **kwargs):
         wait = _rate_wait(exc)
         if wait is None:
             raise
+        rejected = exc
     await asyncio.sleep(wait)
+    allowed = RETRY_ALLOWED.get()
+    if allowed is not None and not await allowed():
+        raise rejected
     return await fn(**kwargs)
 
 
@@ -325,8 +338,23 @@ class DeliveryWorker(_BaseWorker):
     def _validate_spec(self, spec):
         validate(spec)
 
+    def _retry_gate(self, spec):
+        """RETRY_ALLOWED for one send: the current authority, logged
+        when it withholds the 429 resend (the receipt says only
+        ratelimited)."""
+        async def allowed():
+            if await self._send_allowed(spec):
+                return True
+            self._log("retry_skipped", delivery_id=spec["delivery_id"])
+            return False
+        return allowed
+
     async def _perform(self, claim):
-        outcome = await self._sender.perform(claim["spec"])
+        token = RETRY_ALLOWED.set(self._retry_gate(claim["spec"]))
+        try:
+            outcome = await self._sender.perform(claim["spec"])
+        finally:
+            RETRY_ALLOWED.reset(token)
         message_id = outcome.get("message_id")
         if outcome.get("result") == "delivered" and message_id \
                 and claim["spec"]["op"] != "revoke":
@@ -378,7 +406,11 @@ class DeliveryWorker(_BaseWorker):
         await super()._drive_parts(claim, manifest, ctx, records)
 
     async def _attempt_part(self, claim, part, ctx):
-        await super()._attempt_part(claim, part, ctx)
+        token = RETRY_ALLOWED.set(self._retry_gate(claim["spec"]))
+        try:
+            await super()._attempt_part(claim, part, ctx)
+        finally:
+            RETRY_ALLOWED.reset(token)
         if part["kind"] == "body_part":
             records = await asyncio.to_thread(self._jview.refresh)
             self._pin_active_thread(claim, ctx, records)

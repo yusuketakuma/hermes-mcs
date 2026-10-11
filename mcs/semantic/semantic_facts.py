@@ -3,9 +3,10 @@ and validators.
 
 Leaf module for the canonical evidence-backed fact layer.  It imports the
 stdlib and ``mcs_requests.payload_hash`` only; every canonical semantic
-stage shares these enums and stable IDs so a restart or a changed chunk
-layout never produces a different identity for the same source
-statement.
+stage shares these enums and stable atom/fact/relation IDs so a restart
+or a changed chunk layout never produces a different identity for the
+same source statement.  The source fingerprint itself comes from the
+caller (the thread bundle's fingerprint); this module only validates it.
 
 Importance (``T0``–``T3``/``unknown``) is ordering and review-priority
 metadata only: a lower tier must never remove, hide, or downgrade a
@@ -23,7 +24,6 @@ CONTRACT_VERSION = "semantic-facts/v2"
 
 ATOM_KINDS = ("clause", "list_item", "table_row", "heading", "attachment_ref")
 IMPORTANCE_TIERS = ("T0", "T1", "T2", "T3", "unknown")
-IMPORTANCE_RANK = {tier: index for index, tier in enumerate(IMPORTANCE_TIERS)}
 
 FACT_KINDS = (
     "medication_event", "medication_exposure", "allergy_intolerance",
@@ -130,26 +130,6 @@ def _normalize_name(value: str) -> str:
     return unicodedata.normalize("NFKC", str(value)).casefold().strip()
 
 
-def source_fingerprint(message_id, revision, content_hash,
-                       body_codepoints, content_quality,
-                       attachments_complete) -> str:
-    """Bind a generation to an exact source snapshot."""
-    _id_value(message_id, "message_id")
-    _id_value(revision, "revision")
-    _id_value(content_hash, "content_hash")
-    _int_range(body_codepoints, "body_codepoints")
-    _enum(content_quality, "content_quality", CONTENT_QUALITIES)
-    if type(attachments_complete) is not bool:
-        _fail("attachments_complete_invalid")
-    return "sf_" + payload_hash({
-        "message_id": str(message_id), "revision": str(revision),
-        "content_hash": str(content_hash),
-        "body_codepoints": body_codepoints,
-        "content_quality": content_quality,
-        "attachments_complete": attachments_complete,
-    })[:16]
-
-
 def atom_id(source_fp: str, index: int) -> str:
     _id_value(source_fp, "source_fingerprint")
     _int_range(index, "atom_index")
@@ -238,12 +218,6 @@ def subject_identity(project_id, *, sender_id=None, role=None,
     if role is not None:
         return f"role:{_normalize_name(role)}"
     return UNKNOWN
-
-
-def importance_rank(tier: str) -> int:
-    """Ordering key only — importance never filters a fact out."""
-    _enum(tier, "importance", IMPORTANCE_TIERS)
-    return IMPORTANCE_RANK[tier]
 
 
 def validate_source_binding(binding: dict) -> dict:

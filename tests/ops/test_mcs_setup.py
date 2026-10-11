@@ -1,6 +1,7 @@
 """mcs_setup.validate_config — the typesafe required-condition gate."""
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -228,10 +229,13 @@ def test_check_environment_resolves_hermes_binary(monkeypatch,
     assert not any("hermes CLI" in e for e in errors)
     assert calls[-1] == "/opt/h/hermes"
 
-    # invalid profile pattern still an error
+    # the profile pattern is validate_config's alone — `check` joins both
+    # lists, so a second copy here printed and counted the blocker twice
     errors, _ = mcs_setup.check_environment(
         {"notify_bot_profile": "Bad Name!"})
-    assert any("notify_bot_profile" in e for e in errors)
+    assert not any("notify_bot_profile" in e for e in errors)
+    assert any("notify_bot_profile" in e for e in
+               mcs_setup.validate_config({"notify_bot_profile": "Bad Name!"})[0])
 
 
 def test_check_environment_detects_locked_keychain(monkeypatch):
@@ -406,6 +410,9 @@ def test_queue_warning_uses_the_exact_database_read_only(monkeypatch, tmp_path, 
     ("adapters/slack/actions.py", True),
     ("adapters/discord/delivery.py", True),
     ("adapters/lineworks/actions.py", False),
+    # the plugin imports mcs/ modules in-process (notify_cards, ledger, ...)
+    ("mcs/notify/notify_cards.py", True),
+    ("mcs/core/mcs_runtime.py", True),
 ])
 def test_plugin_newer_ignores_pycache(monkeypatch, tmp_path, source, needs_restart):
     """The gateway regenerates __pycache__ at load — pyc mtimes are
@@ -439,6 +446,28 @@ def test_plugin_newer_ignores_pycache(monkeypatch, tmp_path, source, needs_resta
     # Newer Hermes-owned source warns; the independent LINE worker does not.
     os.utime(src, (started + 100, started + 100))
     assert mcs_setup._plugin_newer_than_gateway("PID 123 running") is needs_restart
+
+
+def test_process_start_is_parsed_in_the_c_locale(monkeypatch):
+    """`ps -o lstart=` follows LC_ALL/LANG (ja_JP prints a weekday in
+    kanji); both the check warning and doctor must still parse it."""
+    import time
+    stamp = "Sun Oct 11 16:24:47 2026"
+
+    def ps(argv, **kw):
+        if argv[0] == "launchctl":
+            return SimpleNamespace(returncode=0, stdout="pid = 123\n")
+        c_locale = (kw.get("env") or {}).get("LC_ALL") == "C"
+        return SimpleNamespace(returncode=0, stdout=stamp if c_locale else "\u65e5 10/11 16:24:47 2026")
+    monkeypatch.setenv("LC_ALL", "ja_JP.UTF-8")
+    monkeypatch.setattr(mcs_setup, "_run", ps)
+    started = time.mktime(time.strptime(stamp, "%a %b %d %H:%M:%S %Y"))
+    monkeypatch.setattr(mcs_setup, "_gateway_sources_mtime", lambda: started + 60)
+    assert mcs_setup._plugin_newer_than_gateway("PID 123 running") is True
+    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
+    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1, stdout=""))
+    gateway = mcs_setup._doctor_source({}, probe=True)["gateway"]
+    assert gateway["started_at"] == started and gateway["restart_required"] is True
 
 
 @pytest.mark.parametrize("service", [mcs_setup.KEYCHAIN_SERVICE, "mcs-backup"])
@@ -2264,3 +2293,34 @@ def test_alerts_need_an_interactive_transport():
         {**base, "notify": {"interactive": "slack", "slack": scope}})[0] == []
     assert mcs_setup.validate_config(
         {**base, "signals": {"notify": False}})[0] == []
+
+
+def test_fact_source_refuses_when_the_semantic_validator_crashes(monkeypatch, tmp_path):
+    import semantic_policy
+    conf = tmp_path / "c.json"
+    conf.write_text(json.dumps({"mcs_login_id": "synthetic", "semantic": {"mode": "off"}}))
+    before = conf.read_bytes()
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(conf))
+    monkeypatch.setattr(mcs_setup, "load_config",
+                        lambda path=None: mcs_util.load_config(path or str(conf)))
+
+    def crash(cfg):
+        raise TypeError("synthetic validator crash")
+    monkeypatch.setattr(semantic_policy, "semantic_config", crash)
+    assert mcs_setup.cmd_fact_source(SimpleNamespace(fact_source="shadow", gate_evidence=None)) == 1
+    assert conf.read_bytes() == before
+
+
+@pytest.mark.parametrize("transport", ["slack", "discord", "lineworks"])
+def test_check_warns_on_a_static_project_scope_over_the_runner_cap(transport):
+    import notify_cmds
+    assert mcs_setup.PROJECT_SCOPE_MAX == notify_cmds.SCOPE_MAX
+    ids = list(range(1, mcs_setup.PROJECT_SCOPE_MAX + 2))
+    cfg = {"notify": {transport: {"project_ids": ids}}}
+    warnings = [w for w in mcs_setup.validate_config(cfg)[1] if "project_ids" in w]
+    assert len(warnings) == 1 and f"notify.{transport}.project_ids" in warnings[0]
+    assert all("project_ids" not in e or "positive" in e for e in mcs_setup.validate_config(cfg)[0])
+    cfg["notify"][transport]["project_ids_auto"] = True
+    assert not [w for w in mcs_setup.validate_config(cfg)[1] if "project_ids" in w]
+    cfg["notify"][transport] = {"project_ids": ids[:-1]}
+    assert not [w for w in mcs_setup.validate_config(cfg)[1] if "project_ids" in w]

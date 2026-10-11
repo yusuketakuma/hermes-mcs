@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "再ログインで回復した収集が「一部失敗」と記録される問題を修正",
+  "summary": "収集の途中でセッションが切れ、自動再ログインで回復して再実行が成功した場合に、最初の失敗分の記録（未取得の患者、session_expired のエラー、取得件数）が残り、回復した収集が partial／degraded と記録され、取得件数も二重に数えられていた問題を修正しました。また、MCS 以外の原因で収集が異常終了した場合にも、期限を過ぎた日次バックアップなどのローカル整理を実行するようにしました。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "mcs/ingest/run_check.py の _with_relogin は、自動再ログインが成功して全件を再走査する stage（unread・self_probe・backfill）を再実行する直前に、incomplete・errors・messages を stage 開始時点の値へ戻す。relogin_attempts と session_recovered 通知はそのまま残す。再ログインに失敗した場合や期限切れの経路は従来どおり記録を残して run 境界へ渡す。",
+    "ジョブ系の stage（discovery・reply_jobs・history_jobs・thread_read・attachments・trickle_jobs・reconcile）は巻き戻さない。中断前の試行で失敗・延期したジョブは再実行の対象にならないため、その取得失敗は従来どおり run の errors と health に残る。",
+    "汎用例外（crash）の失敗経路でも _overdue_housekeeping を呼ぶ。バックアップが期限切れのときだけ実行し、失敗は errors に記録する。1.0.17 で SessionExpired・MCSError の経路に限っていた範囲を広げる変更で、所有者の確認対象。RunLockLost の経路には追加しない。"
+  ],
+  "refs": [
+    "mcs/ingest/run_check.py",
+    "tests/ingest/test_run_check_stages.py",
+    "tests/ingest/test_run_check_failure_paths.py"
+  ]
+}

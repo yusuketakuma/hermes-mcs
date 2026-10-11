@@ -11,7 +11,8 @@ Verified contract (live session, 2026-09):
             &include_meta=1&exclude_terminated_ex_application=1&include_paginate_totals=1
   threads : GET /api/v2t/projects/{pid}/messages/{mid}/messages  (full reply bodies)
   latest  : GET /api/v2t/projects/{id}/messages/latest -> {is_self_only,message{id}}
-  files   : GET {files[].url}  (anonymous 200 — no auth/cookie needed)
+  files   : GET {files[].url} with Bearer; /files/* 302s to a signed URL on
+            files.medical-care.net, followed WITHOUT Authorization
   mark    : GET /api/v2t/projects/{id}/messages?unread=1&timestamp={ts}
             without keep_read_status, followed by project-detail confirmation.
             The adapter requires the collection snapshot timestamp.
@@ -361,6 +362,8 @@ class UnreadPatient:
     ack_fallback: bool = False
     # MCS karte id (patient record) — the 連携サマリー route is keyed by it
     karte_id: int | None = None
+    # epoch of the last message; only list_projects fills it (0 = unknown)
+    last_activity: int = 0
 
 
 @dataclass
@@ -472,6 +475,15 @@ def _attachments(files: list | None) -> list[Attachment]:
     return out
 
 
+_REACTION_KIND = re.compile(r"[a-zA-Z0-9_-]{1,64}")
+
+
+def _reaction_kind_ok(kind) -> bool:
+    """A concrete reaction kind: a short token, never the 'all' aggregate."""
+    return isinstance(kind, str) and bool(_REACTION_KIND.fullmatch(kind)) \
+        and kind != "all"
+
+
 def _message_metadata(m: dict, project_id: int) -> tuple[dict, list[str]]:
     """Normalize optional metadata independently of the required chat body."""
     out, errors = {}, []
@@ -489,9 +501,8 @@ def _message_metadata(m: dict, project_id: int) -> tuple[dict, list[str]]:
                 normalized, seen = [], set()
                 for r in value:
                     if (not isinstance(r, dict)
-                            or not isinstance(r.get("type"), str)
-                            or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", r["type"])
-                            or r["type"] == "all" or r["type"] in seen
+                            or not _reaction_kind_ok(r.get("type"))
+                            or r["type"] in seen
                             or type(r.get("count")) is not int
                             or not 0 <= r["count"] <= 2**63 - 1
                             or type(r.get("self_reacted")) is not bool
@@ -521,9 +532,6 @@ def _message_metadata(m: dict, project_id: int) -> tuple[dict, list[str]]:
     return out, errors
 
 
-_REACTION_KIND = re.compile(r"[a-zA-Z0-9_-]{1,64}")
-
-
 def walk_reaction_actors(get, project_id: int, message_id: int, *,
                          reaction_type: str | None = None,
                          max_pages: int = 10, per_page: int = 50) -> dict:
@@ -537,10 +545,8 @@ def walk_reaction_actors(get, project_id: int, message_id: int, *,
     if (not _valid_id(project_id) or not _valid_id(message_id)
             or type(max_pages) is not int or not 1 <= max_pages <= 10
             or type(per_page) is not int or not 1 <= per_page <= 50
-            or (reaction_type is not None and (
-                not isinstance(reaction_type, str)
-                or not _REACTION_KIND.fullmatch(reaction_type)
-                or reaction_type == "all"))):
+            or (reaction_type is not None
+                and not _reaction_kind_ok(reaction_type))):
         raise ValueError("invalid actor arguments")
     suffix, key = (("user_reactions", "reactions") if reaction_type is None
                    else ("reactions", "users"))
@@ -609,8 +615,7 @@ def walk_reaction_actors(get, project_id: int, message_id: int, *,
                 user = row.get("user") if reaction_type is None else row
                 kind = row.get("reaction_type") if reaction_type is None else reaction_type
                 if (not isinstance(user, dict) or not _valid_id(user.get("id"))
-                        or not isinstance(kind, str)
-                        or not _REACTION_KIND.fullmatch(kind) or kind == "all"):
+                        or not _reaction_kind_ok(kind)):
                     raise SchemaError("actors: identity invalid")
                 identity = (user["id"], kind)
                 if identity in actors:
@@ -721,6 +726,12 @@ def _norm_threads(items, project_id: int, parent_id: int) -> list[Message]:
     return [_norm_message(m, project_id, parent_id=parent_id) for m in items]
 
 
+def thread_page_budget(reply_count: int) -> dict:
+    """fetch_thread kwargs that cover a thread of reply_count replies (10 per page)."""
+    # fetch_thread's default 10 pages already covers 100 replies
+    return {"max_pages": (reply_count + 9) // 10} if reply_count > 100 else {}
+
+
 def _disk_kind(e: BaseException) -> str:
     """'disk_full' for a local out-of-space write, so the caller can
     defer instead of burning a download attempt; else download_failed."""
@@ -739,6 +750,8 @@ class MCSAdapter:
         self._dl_opener = no_proxy_opener(_SameHostRedirect)
         self._deadline: float | None = None
         self._worker = bounded_call if worker is None else worker
+        # per-attempt browser repair facts, journaled by run_check
+        self.healed_tabs, self.chrome_restarted = 0, False
 
     def set_deadline(self, monotonic_deadline: float | None):
         """Absolute run budget enforced by reaped I/O workers (F13)."""
@@ -1003,24 +1016,22 @@ class MCSAdapter:
                 return
         raise BootstrapError("chrome launch timed out")
 
-    def _stop_profile_chrome(self, profile_dir: str, chrome_bin: str) -> bool:
-        """Stop Chrome main processes of exactly this dedicated profile
-        (helpers exit with them): SIGTERM, bounded wait, then SIGKILL.
-        Nothing else is touched; an unparseable listing stops nothing."""
-        import signal
+    @staticmethod
+    def _profile_chrome_pids(profile_dir: str, chrome_bin: str) -> list[int]:
+        """Pids of Chrome main processes of exactly this dedicated profile; [] when unknown."""
         import subprocess
         if (not profile_dir or not os.path.isabs(profile_dir)
                 or not chrome_bin or not os.path.isabs(chrome_bin)):
-            return False
+            return []
         flag = re.compile(r"(?:^|\s)--user-data-dir=" + re.escape(profile_dir)
                           + r"(?:\s|$)")
         try:
             result = subprocess.run(["ps", "-axww", "-o", "pid=,command="],
                                     capture_output=True, text=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
-            return False
+            return []
         if result.returncode != 0:
-            return False
+            return []
         pids = []
         for line in result.stdout.splitlines():
             pid, _, command = line.strip().partition(" ")
@@ -1031,6 +1042,55 @@ class MCSAdapter:
                     and flag.search(command)
                     and " --type=" not in f" {command}"):
                 pids.append(int(pid))
+        return pids
+
+    def _cdp_peer_owned(self, ws_url: str, profile_dir: str,
+                        chrome_bin: str) -> bool:
+        """True only when ws_url is the CDP endpoint and its listener is this profile's Chrome run by this OS user.
+
+        A loopback address does not identify the peer: another local
+        account could hold the CDP port while the profile's Chrome is
+        down and answer every probe itself. Fails closed when the socket
+        listing is unavailable (no lsof, timeout, unparseable output)."""
+        import subprocess
+        try:
+            cdp = urllib.parse.urlparse(self.cdp_url)
+            ws = urllib.parse.urlparse(ws_url)
+            if (cdp.port is None or ws.scheme != "ws"
+                    or (ws.hostname, ws.port) != (cdp.hostname, cdp.port)):
+                return False
+        except ValueError:
+            return False
+        pids = self._profile_chrome_pids(profile_dir, chrome_bin)
+        lsof = next((p for p in ("/usr/sbin/lsof", "/usr/bin/lsof")
+                     if os.access(p, os.X_OK)), None)
+        if not pids or lsof is None:
+            return False
+        host = f"[{cdp.hostname}]" if ":" in cdp.hostname else cdp.hostname
+        try:
+            listing = subprocess.run(
+                [lsof, "-nP", "-a", f"-iTCP@{host}:{cdp.port}",
+                 "-sTCP:LISTEN", "-Fpu"], capture_output=True, text=True,
+                timeout=self._remaining_timeout(10))
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if listing.returncode != 0:
+            return False
+        listeners, pid = set(), None
+        for line in listing.stdout.splitlines():
+            if line[:1] == "p" and line[1:].isdigit():
+                pid = int(line[1:])
+            elif line[:1] == "u" and line[1:].isdigit() and pid is not None:
+                listeners.add((pid, int(line[1:])))
+        return bool(listeners) and all(
+            pid in pids and uid == os.getuid() for pid, uid in listeners)
+
+    def _stop_profile_chrome(self, profile_dir: str, chrome_bin: str) -> bool:
+        """Stop Chrome main processes of exactly this dedicated profile
+        (helpers exit with them): SIGTERM, bounded wait, then SIGKILL.
+        Nothing else is touched; an unparseable listing stops nothing."""
+        import signal
+        pids = self._profile_chrome_pids(profile_dir, chrome_bin)
         if not pids:
             return False
 
@@ -1198,7 +1258,9 @@ class MCSAdapter:
         Returns 'ok' | 'manual_required' | 'keychain_locked' | 'failed'.
         'manual_required:no_form' distinguishes a missing login form
         (page never rendered / app redirected) from a submitted login
-        that never validated."""
+        that never validated. Credentials are filled only into a CDP
+        listener verified as this profile's Chrome (_cdp_peer_owned);
+        any other peer ends the attempt as 'failed'."""
         # per-attempt journal facts (run_check records them)
         self.healed_tabs, self.chrome_restarted = 0, False
         try:
@@ -1236,6 +1298,11 @@ class MCSAdapter:
                 if not pw:
                     return "keychain_locked" if locked else \
                         "manual_required"
+                # shortcut: the listener is checked, then the fill opens its
+                # own socket; a profile Chrome dying in that gap re-opens
+                # the race — a pinned connection would close it
+                if not self._cdp_peer_owned(ws, profile_dir, chrome_bin):
+                    return "failed"
                 login_id = self._config().get("mcs_login_id", "")
                 fill = self._cdp_eval(ws, f"""(() => {{
                   if (location.origin !== 'https://www.medical-care.net')
@@ -1370,7 +1437,11 @@ class MCSAdapter:
 
     def fetch_project_members(self, project_id: int, *, max_pages: int = 5,
                               per_page: int = 50, retain_names: bool = False) -> MetadataFetch:
-        """Bounded current membership GET; no photos, contacts or departed members."""
+        """Bounded current membership GET; no photos, contacts or departed members.
+
+        Kept since 1.0.13 as a compatibility entry point for callers outside
+        the scheduler; production paths call project_metadata.fetch_metadata.
+        """
         from project_metadata import fetch_metadata
         return fetch_metadata(self._get, "care_team", project_id,
                               max_pages=max_pages, per_page=per_page,
@@ -1378,7 +1449,11 @@ class MCSAdapter:
 
     def fetch_observation_values(self, karte_id: int, lab_test_item_id: int, *,
                                  max_pages: int = 5, per_page: int = 50) -> MetadataFetch:
-        """Read one evidenced lab-test item's values without fetching full karte data."""
+        """Read one evidenced lab-test item's values without fetching full karte data.
+
+        Kept since 1.0.13 as a compatibility entry point for callers outside
+        the scheduler; production paths call project_metadata.fetch_metadata.
+        """
         from project_metadata import fetch_metadata
         return fetch_metadata(self._get, "observation_values", karte_id,
                               item_id=lab_test_item_id,
@@ -1386,7 +1461,11 @@ class MCSAdapter:
 
     def fetch_group_consultations(self, project_id: int, *, project_type: str,
                                   max_pages: int = 5, per_page: int = 20) -> MetadataFetch:
-        """Read group consultation metadata only; never infer patient associations."""
+        """Read group consultation metadata only; never infer patient associations.
+
+        Kept since 1.0.13 as a compatibility entry point for callers outside
+        the scheduler; production paths call project_metadata.fetch_metadata.
+        """
         from project_metadata import fetch_metadata
         if project_type != "group":
             raise ValueError("group project evidence required")
@@ -1627,9 +1706,8 @@ class MCSAdapter:
         as complete (Oracle B05)."""
         if not any(t.is_unread for t in msg.replies):
             return ReplyBatch([], [])
-        kwargs = ({"max_pages": (msg.reply_count + 9) // 10}
-                  if msg.reply_count > 100 else {})
-        full = self.fetch_thread(msg.project_id, msg.message_id, **kwargs)
+        full = self.fetch_thread(msg.project_id, msg.message_id,
+                                 **thread_page_budget(msg.reply_count))
         got_ids = {m.message_id for m in full
                    if m.body_state in ("full", "deleted")}
         unread_ids = {t.message_id for t in msg.replies if t.is_unread}
@@ -1777,6 +1855,11 @@ class MCSAdapter:
                             raise SchemaError("history: created_at invalid") from e
                         newest = parent_ts
                         for t in nm.replies:
+                            if not t.posted_at:
+                                # an undated reply may be newer than since —
+                                # keep the parent, like an undated parent
+                                newest = float("inf")
+                                break
                             try:
                                 newest = max(newest, datetime.fromisoformat(
                                     t.posted_at).timestamp())

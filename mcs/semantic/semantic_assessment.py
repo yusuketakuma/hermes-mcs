@@ -13,10 +13,10 @@ import json
 import time
 
 from mcs_util import loads_dict
+from semantic_policy import KIND_ASSESS
 
-
-KIND_ASSESS = "semantic_assess"
-SCHEMA_VERSION = "semantic-assessment/v2"
+# per-fact detail rows; distinct from semantic_policy.SCHEMA_VERSION
+ASSESSMENT_SCHEMA_VERSION = "semantic-assessment/v2"
 
 
 def _result(details: dict, findings: list, complete: bool,
@@ -53,7 +53,7 @@ def _cached_detail(ledger, project_id, target_id, source_fp, policy_fp,
         if meta is None:
             continue
         row_source = meta.get("source_fingerprint", meta.get("fingerprint"))
-        if (meta.get("schema") != SCHEMA_VERSION
+        if (meta.get("schema") != ASSESSMENT_SCHEMA_VERSION
                 or row_source != source_fp
                 or meta.get("policy_fingerprint") != policy_fp
                 or meta.get("fact_id") != fact_id
@@ -77,7 +77,7 @@ def _persist_detail(ledger, project_id, target_id, source_fp, policy_fp,
     if ledger is None:
         return
     content = {
-        "schema": SCHEMA_VERSION,
+        "schema": ASSESSMENT_SCHEMA_VERSION,
         "target_message_id": target_id,
         "fact_id": fact_id,
         "dimension": dimension,
@@ -85,7 +85,7 @@ def _persist_detail(ledger, project_id, target_id, source_fp, policy_fp,
         "confidence": confidence,
     }
     meta = {
-        "schema": SCHEMA_VERSION,
+        "schema": ASSESSMENT_SCHEMA_VERSION,
         "technical_status": "complete",
         "fingerprint": source_fp,
         "source_fingerprint": source_fp,
@@ -127,8 +127,8 @@ def _member_context(bundle: dict) -> tuple[list, dict[int, dict]]:
     return context, by_id
 
 
-def _event_state(bundle: dict, target_id, fact: dict,
-                 context: list, members: dict[int, dict]) -> tuple[dict, str | None]:
+def _event_state(fact: dict, context: list,
+                 members: dict[int, dict]) -> tuple[dict, str | None]:
     fact_id = fact.get("fact_id")
     statement = fact.get("statement")
     evidence = fact.get("_evidence")
@@ -263,8 +263,7 @@ def evaluate_medication_events(ledger, bundle: dict, target_id, facts: list,
 
     for fact in events:
         fact_id = fact["fact_id"]
-        state, state_error = _event_state(bundle, target_id, fact,
-                                          context, members)
+        state, state_error = _event_state(fact, context, members)
         if state_error:
             _append_finding(findings, state_error, fact_id)
             return _result(details, findings, False, "invalid")

@@ -29,6 +29,7 @@ SPEC_URL = "https://shinryohoshu.mhlw.go.jp/shinryohoshu/file/spec/R08rec3.pdf"
 PIN_SCHEMA = "mcs-official-drug-master-pin/1"
 LAYOUT = "R08rec3-medicine-42"
 EDITION = "20260930"
+EDITION_DATE = date(int(EDITION[:4]), int(EDITION[4:6]), int(EDITION[6:]))  # pin as_of floor
 MAX_INPUT_BYTES = 32 * 1024 * 1024
 MAX_CSV_BYTES = 32 * 1024 * 1024
 MAX_ROWS = 100000
@@ -91,7 +92,7 @@ def _check_pin(pin: dict[str, JSON]):
     if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise MasterError("pin_hash_invalid")
     as_of = _iso(pin.get("as_of"))
-    if as_of < date(2026, 9, 30) or pin.get("member") != f"y_{EDITION}.csv":
+    if as_of < EDITION_DATE or pin.get("member") != f"y_{EDITION}.csv":
         raise MasterError("pin_edition_or_member")
     policy = pin.get("status_policy", {})
     if not isinstance(policy, dict) or set(policy) - {

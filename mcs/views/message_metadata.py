@@ -41,6 +41,8 @@ _FIELDS = {"reactions": (_valid_reactions, "reactions_status"),
            "is_bookmarked": (lambda v: type(v) is bool, "bookmark_status"),
            "is_pinned": (lambda v: type(v) is bool, "pin_status")}
 _FIELD_ONLY_ERRORS = {k + "_invalid" for k in _FIELDS if k != "reactions"}
+# stored last_error codes; metadata_report validates its tally with the same rule
+ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 
 def _read_metadata(db, mid, source) -> dict:
@@ -68,7 +70,7 @@ def _decode_metadata(row) -> dict:
     # 反応以外の項目の不正は各 <key>_status で示し、取得失敗とは扱わない。
     if any(e not in _FIELD_ONLY_ERRORS for e in errors):
         result["last_error"] = (error if isinstance(error, str)
-                                and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error)
+                                and ERROR_CODE.fullmatch(error)
                                 else "metadata_error")
     try:
         content = json.loads(raw)

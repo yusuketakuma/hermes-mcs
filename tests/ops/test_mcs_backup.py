@@ -584,7 +584,22 @@ def test_keygen_failed_readback_never_returns_or_records_key(tmp_path, monkeypat
                       keychain_store=lambda *args, **kwargs: True)
     text = (tmp_path / "key_escrow.json").read_text()
     assert KEY.hex() not in text and json.loads(text)["status"] == "pending"
+    assert json.loads(text)["reason"] == "synthetic"
 
+
+
+def test_keygen_records_bounded_human_reason_in_witness(tmp_path, monkeypatch):
+    entries, _, reader = _fake_keychain(monkeypatch)
+    with pytest.raises(backup.BackupError, match="human_escrow_required"):
+        backup.keygen(str(tmp_path), show_escrow=True, confirm_human=True,
+                      reason="r" * 2001, keychain_reader=reader)
+    assert not entries and not (tmp_path / "key_escrow.json").exists()
+    reason = "synthetic " + "r" * 1990
+    backup.keygen(str(tmp_path), show_escrow=True, confirm_human=True,
+                  reason=reason, keychain_reader=reader)
+    witness = json.loads((tmp_path / "key_escrow.json").read_text())
+    assert witness["reason"] == reason and witness["status"] == "stored"
+    assert backup._records(str(tmp_path)).load("key_escrow.json")["reason"] == reason
 
 @pytest.mark.parametrize("rc,stdout,expected", [
     (44, b"", None), (0, KEY.hex().encode() + b"\n", KEY),

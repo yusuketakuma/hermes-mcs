@@ -15,6 +15,8 @@ Usage:
   python3 extract.py --stats            # aggregate stats only
 """
 import argparse
+import bisect
+import functools
 import json
 import os
 import re
@@ -97,12 +99,12 @@ _PERSON = re.compile(
     rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|私|自分|{_NAMED_PERSON})"
     rf"(?P<link>について|の{_OWNER_MODIFIER}(?:{_CLINICAL_OWNER})|[ \t　]+(?={_CLINICAL_OWNER})|に対して|に対し|への|には|に(?={_CLINICAL_OWNER})|は|が|も|を|から|より|[:：])", re.I)
 _DIRECT_OWNER = re.compile(rf"(?P<person>{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})の{_OWNER_MODIFIER}[ \t　]*$")
-_CLINICAL_ACTOR = re.compile(r"^(?:が|は)[、,\s]*[^。！？!?;；\n、,]*?を(?:開始|中止|増量|減量|変更|処方|投与|測定)")
+_CLINICAL_ACTOR = re.compile(r"(?:が|は)[、,\s]*[^。！？!?;；\n、,]*?を(?:開始|中止|増量|減量|変更|処方|投与|測定)")
 _CLINICAL_RECIPIENT = re.compile(rf"(?:{_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|{_NAMED_PERSON})(?:に対して|に対し|への)")
 _SCOPE_HEADING = re.compile(
     rf"(?m)^[ \t　]*(?:[【［\[](.*?)[】］\]]|([^\n:：]{{1,24}})[:：]|"
     rf"({_COMPOUND_PERSON}|{_SELF_PERSON}|{_FAMILY_PERSON}|{_OTHER_PERSON}|過去|既往|現在|予定|目標|参考|基準)[ \t　]*$)[ \t　]*")
-_REPORTING = re.compile(r"^(?:より|から|が(?:報告|連絡|説明|相談|話)|は(?:報告|連絡|説明|相談|話))")
+_REPORTING = re.compile(r"(?:より|から|が(?:報告|連絡|説明|相談|話)|は(?:報告|連絡|説明|相談|話))")
 _CURRENT_MARK = re.compile(r"現在|今も|今は|本日|今日|続いて|持続|(?:昨日|先週|先月)から|(?:昨日|先週|先月)より")
 _NONCURRENT_MARK = re.compile(r"過去|既往|以前(?!から|より)|先月(?!から|より)|先週(?!から|より)|昨年|一昨年")
 _CONDITIONAL_MARK = re.compile(
@@ -165,11 +167,18 @@ def _person_scope(person, patient_name):
     return "patient" if re.fullmatch(_SELF_PERSON, person) or known_name else "unknown"
 
 
-def patient_source_scope(body, start, end, *, patient_name=None, default="patient", provider_fields=False):
-    """Resolve an original span's reported person and explicit noncurrent scope, never from a keyword mask."""
-    if not isinstance(body, str) or not 0 <= start < end <= len(body):
-        return "unknown"
+@functools.lru_cache(maxsize=32)
+def _scope_puncts(body):
+    """Positions of the single-character _SCOPE_BREAK marks, cached per body."""
+    return tuple(m.start() for m in re.finditer(r"[。！？!?;；、,\n]", body))
+
+
+@functools.lru_cache(maxsize=32)
+def _scope_events(body, patient_name, provider_fields):
+    """Collect span-independent person/period events once per body, sorted by position, for patient_source_scope."""
     events, assignments = [], []
+    # _REPORTING/_CLINICAL_ACTOR are matched in place (pos), never on a copied tail.
+    stops = [m.start() for m in re.finditer(r"[。！？!?;；\n]", body)]
     for match in _SCOPE_HEADING.finditer(body):
         label = (match[1] or match[2] or match[3] or "").strip()
         if (provider_fields and (
@@ -200,33 +209,51 @@ def patient_source_scope(body, start, end, *, patient_name=None, default="patien
         if any(left <= match.start() < right for left, right in assignments):
             continue
         person = match["person"]
-        tail = body[match.start() + len(person):]
-        if _REPORTING.match(tail) and not re.fullmatch(_SELF_PERSON, person) and not re.fullmatch(_COMPOUND_PERSON, person):
+        tail = match.start() + len(person)
+        if _REPORTING.match(body, tail) and not re.fullmatch(_SELF_PERSON, person) and not re.fullmatch(_COMPOUND_PERSON, person):
             continue
         if (re.fullmatch(r"(?:職員|スタッフ|看護師|医師|薬剤師|ケアマネ)(?:さん|様)?", person)
-                and _CLINICAL_ACTOR.match(tail)
-                and _CLINICAL_RECIPIENT.search(re.split(r"[。！？!?;；\n]", body[:match.start()])[-1])
-                and not re.search(r"自身|自分", re.split(r"[。！？!?;；\n]", tail)[0])):
-            continue  # A prescribing/measuring clinician is the actor, not the recipient.
+                and _CLINICAL_ACTOR.match(body, tail)):
+            k = bisect.bisect_left(stops, match.start())
+            before = body[stops[k - 1] + 1 if k else 0:match.start()]
+            k = bisect.bisect_left(stops, tail)
+            after = body[tail:stops[k] if k < len(stops) else len(body)]
+            if _CLINICAL_RECIPIENT.search(before) and not re.search(r"自身|自分", after):
+                continue  # A prescribing/measuring clinician is the actor, not the recipient.
         subject = _person_scope(person, patient_name)
         events.append((match.start(), subject, None))
-    owner = _DIRECT_OWNER.search(body[:start])
-    if owner is not None:
-        events.append((owner.start(), _person_scope(owner["person"], patient_name), None))
+    return tuple(sorted(events, key=lambda event: event[0]))
+
+
+def patient_source_scope(body, start, end, *, patient_name=None, default="patient", provider_fields=False):
+    """Resolve an original span's reported person and explicit noncurrent scope, never from a keyword mask."""
+    if not isinstance(body, str) or not 0 <= start < end <= len(body):
+        return "unknown"
+    # Non-str names never match (_person_scope), so None keeps the cache key hashable.
+    events = list(_scope_events(body, patient_name if isinstance(patient_name, str) else None,
+                                bool(provider_fields)))  # already sorted by position
+    # Owner phrases and break words never span these marks, so only the span's own clause is scanned.
+    puncts = _scope_puncts(body)
+    marks = bisect.bisect_left(puncts, start - 1)  # `$` may sit before a trailing newline at start-1
+    owner = _DIRECT_OWNER.search(body, puncts[marks - 1] + 1 if marks else 0, start)
+    if owner is not None:  # after equal positions, as a stable sort of an appended event
+        bisect.insort_right(events, (owner.start(), _person_scope(owner["person"], patient_name), None),
+                            key=lambda event: event[0])
     scope, period = default, "current"
-    for position, subject, phase in sorted(events, key=lambda event: event[0]):
-        if position <= start:
-            if subject is not None:
-                scope = subject
-            if phase is not None:
-                period = phase
+    for position, subject, phase in events[:bisect.bisect_right(events, start, key=lambda event: event[0])]:
+        if subject is not None:
+            scope = subject
+        if phase is not None:
+            period = phase
     if scope != "patient":
         return scope
     # Qualifiers are evaluated in the span's own source clause, not from an
     # unrelated patient's/history sentence elsewhere in the same message.
-    left = max((m.end() for m in _SCOPE_BREAK.finditer(body[:start])), default=0)
-    right = _SCOPE_BREAK.search(body[end:])
-    clause = body[left:end + right.start() if right else len(body)]
+    marks = bisect.bisect_left(puncts, start)
+    left = puncts[marks - 1] + 1 if marks else 0
+    left = max((m.end() for m in _SCOPE_BREAK.finditer(body, left, start)), default=left)
+    right = _SCOPE_BREAK.search(body, end)
+    clause = body[left:right.start() if right else len(body)]
     if _CONDITIONAL_MARK.search(clause):
         return "conditional"
     if period != "current" and not _CURRENT_MARK.search(clause):

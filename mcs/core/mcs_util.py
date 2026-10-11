@@ -64,10 +64,15 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
     for path in (paths if paths is not None else
                  (os.path.join(HOME, ".env"),
                   os.path.expanduser("~/.hermes/.env"))):
-        with suppress(OSError), open(path, encoding="utf-8") as f:
+        # an undecodable (non-UTF-8) dotenv is skipped like an unreadable one
+        with suppress(OSError, UnicodeDecodeError), \
+                open(path, encoding="utf-8") as f:
             for line in f:
                 if line.startswith(key + "="):
                     v = line.split("=", 1)[1].strip()
+                    # decodes mcs_setup._env_write's quoting; the standalone
+                    # credential loader (mcs_standalone.config._env_tokens)
+                    # keeps a stricter copy that fails closed on bad JSON
                     if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
                         if v[0] == '"':
                             try:
@@ -85,6 +90,20 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
     return None
 
 
+# 4xx statuses that mean "try again later", not a permanent refusal
+# (408 timeout, 425 too early, 429 rate limit)
+RETRY_LATER_4XX = frozenset({408, 425, 429})
+
+
+def fsync_dir(path) -> None:
+    """fsync a directory so a rename or link inside it survives a crash."""
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def publish_tmp(tmp: str, dest: str, mode: int | None = None) -> None:
     """[chmod] -> fsync tmp -> os.replace -> dir fsync for a finished tmp
     file: readers see the whole old ``dest`` or the whole new one."""
@@ -96,11 +115,7 @@ def publish_tmp(tmp: str, dest: str, mode: int | None = None) -> None:
     finally:
         os.close(fd)
     os.replace(tmp, dest)
-    dfd = os.open(os.path.dirname(dest) or ".", os.O_RDONLY)
-    try:
-        os.fsync(dfd)
-    finally:
-        os.close(dfd)
+    fsync_dir(os.path.dirname(dest) or ".")
 
 
 def atomic_write(path: str, writer, mode: int | None = None,
@@ -121,11 +136,7 @@ def atomic_write(path: str, writer, mode: int | None = None,
         if mode is not None:
             os.chmod(tmp, mode)
         os.replace(tmp, path)
-        dfd = os.open(parent, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        fsync_dir(parent)
     except BaseException:
         with suppress(OSError):
             os.unlink(tmp)
@@ -221,6 +232,13 @@ def disk_floor_mb() -> float:
         return value if math.isfinite(value) and value >= 0 else 512.0
     except ValueError:
         return 512.0
+
+
+def has_sqlite_sidecars(path) -> bool:
+    """True when a -wal, -shm or -journal entry (even a dangling symlink)
+    sits next to ``path`` — the file is then not a static snapshot."""
+    return any(os.path.lexists(f"{path}{suffix}")
+               for suffix in ("-wal", "-shm", "-journal"))
 
 
 def file_sha256(path) -> str:
@@ -398,7 +416,10 @@ def acquire_run_lock(path: str | None = None) -> int | None:
     (hold it in main() scope; process exit releases it). Returns None
     when another writer holds it. Every entry point that writes the
     ledger must hold this lock so a manual CLI can never interleave
-    writes with a scheduled tick."""
+    writes with a scheduled tick. The one documented exception is the
+    resident extract_llm drainer, which takes it per result write and
+    leaves its fenced bookkeeping writes lockless (see
+    ``extract_llm._write_lock``)."""
     path = path or RUN_LOCK
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)

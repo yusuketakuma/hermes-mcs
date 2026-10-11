@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -1113,4 +1114,57 @@ def test_second_confirm_after_queueing_reads_as_in_progress(tmp_path):
             "この確認は処理中です。結果をお待ちください。"]
         confirm_id = confirm_action["action_id"].split(":")[2]
         assert reg.confirm(confirm_id)["consumed"] is True
+    asyncio.run(scenario())
+
+
+def test_confirm_publish_error_after_the_file_landed_keeps_the_confirm(
+        tmp_path, monkeypatch):
+    """An OSError raised after os.replace (the directory fsync) must not
+    be reported as a send failure: the command is queued, so the confirm
+    stays in flight and the followup still reports the receipt."""
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="request")
+        body, (confirm_action, _) = await _to_confirm(
+            actions, app, dirs, 123)
+
+        real = shared_paths.fsync_dir
+
+        def fail(d):
+            if os.path.samefile(d, dirs["cmd_int"]):
+                raise OSError("synthetic fsync failure")
+            real(d)
+        monkeypatch.setattr(shared_paths, "fsync_dir", fail)
+        await actions._confirm(ack, body, confirm_action)
+        monkeypatch.setattr(shared_paths, "fsync_dir", real)
+        files = list(Path(dirs["cmd_int"]).glob("*.json"))
+        assert len(files) == 2
+        human = next(json.loads(p.read_text()) for p in files
+                     if json.loads(p.read_text()).get("cmd") == "request.create")
+        assert not any("送信に失敗" in m["text"] for m in app.client.messages)
+        assert "受付結果を確認できませんでした" in app.client.messages[-1]["text"]
+        confirm_id = confirm_action["action_id"].split(":")[2]
+        assert reg.confirm(confirm_id).get("in_flight")
+        assert reg.followup(human["command_id"]) is not None
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("project_id,signals", [
+    (None, {"synthetic-key": "not-a-dict"}),     # crashed the click
+    (True, None),                                # bool passed as project 1
+])
+def test_malformed_token_scope_is_denied(tmp_path, project_id, signals):
+    """A token context naming no valid positive int project is refused,
+    as on Discord, instead of raising or passing a bool as project 1."""
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, project_ids=frozenset({1}))
+        context = {"source_message_id": 456, "source_hash": "a" * 64}
+        if signals is not None:
+            context["signals"] = signals
+        reg.put_tokens({TOKEN: {
+            "action": "body", "team_id": SCOPE["team_id"],
+            "channel_id": SCOPE["channel_id"], "message_id": TS,
+            "project_id": project_id, "context": context}})
+        body, action = click()
+        await actions._action(ack, body, action)
+        assert list(Path(dirs["cmd_int"]).glob("*.json")) == []
     asyncio.run(scenario())

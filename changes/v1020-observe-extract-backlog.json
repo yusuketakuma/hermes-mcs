@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "観測スナップショットの抽出残数と経過時間が減らない問題を修正",
+  "summary": "semantic_observe の観測スナップショットで、抽出の残数（extract_llm_left）と最古の待ち時間（queue_ages_s.extract_llm）が抽出処理の実際の対象と食い違い、v4 の事実が公開済みのメッセージが残数に残り続けて値が減らなかった問題を修正しました。抽出処理（run_pending）の残数と同じ条件で数えるため、v4 の行がある環境では表示される値が下がります。",
+  "upgrade": "追加操作は不要です。observe の出力を記録して比較している場合、更新後に残数と経過時間が下がることがありますが、数え方の修正によるものです。",
+  "details": [
+    "mcs/semantic/semantic_observe.py は extract_llm の pending_pred() を使い、SELECT COUNT(*), MIN(m.posted_at_ts) を1回だけ集計する。以前は現行 v4 行の除外や、QC・薄い抽出・人の指摘による再抽出の条件を持たない独自の述語を2か所に複製していた。",
+    "semantic ジョブの件数集計は種別の文字列を直接書かず、JOB_KIND をパラメータとして渡す。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_observe.py",
+    "tests/semantic/test_semantic_observe.py"
+  ]
+}

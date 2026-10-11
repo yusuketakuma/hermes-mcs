@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "カードの送信待ちが上限到達後に止まったままになる問題を修正",
+  "summary": "同じカードを別の送信処理が扱っていると判定される状態が続いたとき、再試行の上限ちょうどでカードが送信も破棄もされず、そのまま残ることがありました。上限に達する最後の判定でカードを破棄するようにしたため、残り続けることはなくなりました。また、形式に不備のあるカード指示を受け取ったとき、その周回の処理全体が止まらず、そのカードだけを不正として扱います。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "adapters/common/worker.py の _step_begin は、denied_in_flight の再試行を begin_retries + 1 が MAX_BEGIN_RETRIES 未満の間だけ行う。再試行は再公開を1回伴い、再公開は上限未満でしか行われないため、上限ちょうどで begin_cid が空のまま残る状態を作らない。最後の denial は既存の dead drop になる。MAX_BEGIN_RETRIES のコメントを、通常の再公開と in_flight の再試行で共有する上限であることに改めた。",
+    "adapters/common/spec.py の validate は、manifest のない spec が drug_view_navigation を持ち action_rows が無い・None のとき、KeyError/TypeError ではなく ValueError(bad_drug_view_navigation) を返す。_scan_specs は ValueError だけを不正 spec として扱うため、ほかの spec の処理が続く。"
+  ],
+  "refs": [
+    "adapters/common/worker.py",
+    "adapters/common/spec.py",
+    "tests/adapters/discord/test_mcs_discord.py",
+    "tests/adapters/common/test_card_buttons_render.py"
+  ]
+}

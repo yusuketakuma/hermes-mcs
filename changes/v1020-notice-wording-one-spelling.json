@@ -1,0 +1,18 @@
+{
+  "category": "fixed",
+  "title": "通知の緊急度表記・スタンプ行・日時未取得の表示をそろえる",
+  "summary": "テキスト通知の投稿見出しに付いていた「⚠️」をやめ、緊急度は要約の「🚨」行だけで示すようにしました。スタンプが1件もないことを確認できた投稿では、テキスト通知とスレッド投稿の「スタンプ なし」の行を出しません（未取得・再取得失敗・自分のスタンプは従来どおり表示します）。再確認候補の通知では、投稿日時や判定日時が保存されていないとき「不明」ではなく「日時未取得」と表示します。",
+  "upgrade": "追加操作は不要です。配信済みのスレッド投稿は、次にそのカードが更新されたときに新しい表示になります。",
+  "details": [
+    "mcs/notify/notify_flush.py の _fmt_row は見出しに ⚠️ を付けない（structured_lines が 🚨 行を出す）。",
+    "notify_render.thread_stamp_row を追加し、テキスト通知とスレッド投稿で共有する。以前のスレッド投稿の判定は時点付きの行と比較していたため、観測済みの0件を一度も省略できていなかった。",
+    "mcs/notify/alert_view.py の投稿日時は notify_render._when_posted を使い、判定日時の欠測も「日時未取得」にする。SELECT から未使用の posted_at_ts を外す。Slack・LINE WORKS の画面例は日時のある合成データなので変化しない（再生成して差分なしを確認）。"
+  ],
+  "refs": [
+    "mcs/notify/notify_flush.py",
+    "mcs/notify/notify_render.py",
+    "mcs/notify/alert_view.py",
+    "tests/notify/test_text_route_post_rows.py",
+    "tests/notify/test_alert_view.py"
+  ]
+}

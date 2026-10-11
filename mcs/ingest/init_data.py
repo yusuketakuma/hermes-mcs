@@ -22,7 +22,7 @@ import sys
 import time
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every subdir holding .py files, at any depth, as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
@@ -111,6 +111,8 @@ def main() -> int:
         if time.monotonic() > deadline:
             stats["errors"].append("deadline_exceeded")
             break
+        if stats["deadline"]:
+            break  # expired session (re-login failed) ends the run
         ledger.ensure_patient(p.project_id)
         floor = ledger.history_floor(p.project_id)
         if floor and floor <= since:

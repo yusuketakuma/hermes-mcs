@@ -7,7 +7,9 @@ M2MZSSUK (observation services at 23700..25300, value formatter at 180200),
 4WFEVJDT / IGJY24TN (group consultation lists). These are client contracts,
 not proof of server-side read/session preservation.
 
-No scheduler, publication, extraction, patient-group association or new schema.
+No publication, extraction, patient-group association or new schema. The only
+scheduled caller is run_check's jobs-only run, which calls sync_clinical_metadata
+when config clinical_metadata is true.
 sync_metadata requires enabled=True and resolves project/karte from the ledger.
 Names require separate owner opt-in; photos/contact fields are never retained.
 CLI: project_metadata.py sync|view --database PATH --project-id ID --dataset NAME
@@ -35,6 +37,14 @@ from mcs_util import loads_dict
 
 DATASETS = ("care_team", "medication_periods", "observation_items",
             "observation_values", "consultations")
+CLINICAL_DATASETS = ("medication_periods", "observation_items", "observation_values")
+# datasets whose bound scope can move under a fetch (reason scope_changed)
+SCOPED_DATASETS = ("consultations", *CLINICAL_DATASETS)
+# MCSError kinds an attempt keeps verbatim; any other kind becomes fetch_error
+FETCH_ERROR_KINDS = frozenset({"schema_error", "http_error", "forbidden", "session_expired",
+                               "network_error", "deadline_exceeded", "capacity_limit"})
+# a consultations walk stopped by these still stored complete pages
+PARTIAL_REASONS = ("snapshot_missing", "page_limit")
 ARTIFACT_KIND = "project_metadata_v1"
 MAX_ROWS = 250
 MAX_VALUE_ROWS = 10000
@@ -42,6 +52,24 @@ CLINICAL_PROGRESS_KIND = "clinical_metadata_progress_v1"
 CLINICAL_REFRESH_S = 24 * 3600
 CLINICAL_BACKOFF_S = 6 * 3600
 CLINICAL_GET_CAP = 12
+
+
+def accepted_reasons(dataset: str) -> frozenset:
+    """Every failure reason an attempt artifact of `dataset` may carry; readers reject the rest.
+
+    Stored artifacts outlive the writer, so a reason is only ever added
+    here — removing one would make already-written attempts unreadable."""
+    return FETCH_ERROR_KINDS | {"fetch_error", *PARTIAL_REASONS} | (
+        {"scope_changed"} if dataset in SCOPED_DATASETS else set())
+
+
+def attempt_state(dataset: str, complete: bool, reason) -> str:
+    """complete | partial | failed for one fetch attempt."""
+    if complete:
+        return "complete"
+    return "partial" if dataset == "consultations" and reason in PARTIAL_REASONS else "failed"
+
+
 JSON: TypeAlias = None | bool | int | float | str | list["JSON"] | dict[str, "JSON"]
 
 
@@ -317,11 +345,8 @@ def fetch_metadata(get, dataset: str, entity_id: int, *, item_id: int | None = N
                 raise _ClinicalHold("page_slice")
             result["reason"] = "page_limit"
     except MCSError as error:
-        result["reason"] = error.kind if error.kind in {
-            "schema_error", "http_error", "forbidden", "session_expired",
-            "network_error", "deadline_exceeded", "capacity_limit"} | (
-                {"scope_changed"} if dataset in ("consultations", "medication_periods",
-                                                "observation_items", "observation_values") else set()) else "fetch_error"
+        result["reason"] = error.kind if error.kind in FETCH_ERROR_KINDS or (
+            error.kind == "scope_changed" and dataset in SCOPED_DATASETS) else "fetch_error"
         result["http_status"] = error.status
     if result["complete"]:
         result["rows"] = items
@@ -424,10 +449,7 @@ def sync_metadata(ledger, adapter, project_id: int, dataset: str, *,
         payload["project_type"] = "group"
     aid = ledger.artifact_add(ARTIFACT_KIND, json.dumps(payload, ensure_ascii=False, allow_nan=False),
                               project_id=project_id)
-    state = "complete" if result["complete"] else "failed"
-    if dataset == "consultations" and result["reason"] in ("snapshot_missing", "page_limit"):
-        state = "partial"
-    return {"state": state,
+    return {"state": attempt_state(dataset, result["complete"], result["reason"]),
             "reason": result["reason"], "artifact_id": aid}
 
 
@@ -537,7 +559,7 @@ def sync_clinical_metadata(ledger, adapter, *, enabled=False, deadline):
         pid, kid = row["project_id"], row["karte_id"]
         state = loads_dict(row["content"]) or {}
         if (not isinstance(state, dict) or state.get("karte_id") != kid
-                or state.get("phase") not in ("medication_periods", "observation_items", "observation_values")
+                or state.get("phase") not in CLINICAL_DATASETS
                 or type(state.get("item_cursor", 0)) is not int or state.get("item_cursor", 0) < 0):
             state = {"karte_id": kid, "phase": "medication_periods", "item_cursor": 0}
         state.update(checked_at=now, next_due_at=0)

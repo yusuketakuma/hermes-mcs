@@ -9,7 +9,7 @@ import sqlite3
 import sys
 import time
 from contextlib import contextmanager, suppress
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from stat import S_ISREG
 
@@ -23,7 +23,7 @@ import mcs_signals
 import mcs_view
 import read_model
 from export_schema import project_record
-from mcs_queries import item_unverified
+from mcs_queries import JST, item_unverified
 from drug_map import candidate_note
 from rollup import current_cached_refs
 import mcs_util
@@ -36,7 +36,6 @@ OUT_DIR = HOME / "data" / "exports"
 # they expire on a bounded retention; the original ledger/messages are
 # never touched by this sweep (T15)
 EXPORT_RETENTION_DAYS = 62
-_JST = timezone(timedelta(hours=9))
 HONESTY = ("候補・数値は公開スナップショット由来です。"
            "記録の欠如は対応の欠如を意味しません。")
 FACTS_HEADER = ("| # | claim | kind | who | weight | since | source "
@@ -108,7 +107,7 @@ def _fm(title: str) -> str:
 
 def _jst(timestamp: float, pattern: str) -> str:
     try:
-        return datetime.fromtimestamp(timestamp, _JST).strftime(pattern)
+        return datetime.fromtimestamp(timestamp, JST).strftime(pattern)
     except (OverflowError, OSError, ValueError):
         raise ValueError("snapshot_time_unrepresentable") from None
 
@@ -219,7 +218,7 @@ def _signals_md(view, res: dict) -> str:
         pid = c.get("project_id", "?")
         at = c.get("detected_at")
         detected = _jst(at, "%Y-%m-%d") if at else "?"
-        note = str(c.get("note") or "")[:120].replace("|", "\\|")
+        note = _cell(str(c.get("note") or "")[:120])
         ev = json.dumps(c.get("evidence"), ensure_ascii=False)[:120] \
             if c.get("evidence") else ""
         lines.append(f"| {_cell(typ)} | {pid} | {detected} | {note} "
@@ -247,9 +246,9 @@ def _patient_md(pid: int, name: str, info: dict, roll: dict) -> str:
         rows = {k: v for k, v in vit.items() if k != "at"}
         lines.append(f"\n## latest vitals ({vit.get('at')})\n\n"
                      + "\n".join(f"- {k}: {v}" for k, v in rows.items()) + "\n")
-    if roll.get("current_med_period"):
-        lines.append("\n## current med period\n\n```json\n"
-                     + json.dumps(roll["current_med_period"],
+    if roll.get("med_period_candidate"):
+        lines.append("\n## med period candidate（規則抽出・未確認）\n\n```json\n"
+                     + json.dumps(roll["med_period_candidate"],
                                   ensure_ascii=False)[:1000] + "\n```\n")
     if roll.get("medications"):
         lines.append("\n## current medications\n\n| name | dose | last | 成分候補（未確認） |\n"
@@ -278,8 +277,9 @@ def _patient_md(pid: int, name: str, info: dict, roll: dict) -> str:
     if roll.get("top_senders"):
         lines.append("\n## top senders\n\n"
                      + ", ".join(f"{n}({c})" for n, c in roll["top_senders"]) + "\n")
-    if roll.get("possibly_deleted"):
-        lines.append(f"\n> possibly_deleted: {len(roll['possibly_deleted'])} message ids\n")
+    if roll.get("unrefreshed_message_ids"):
+        lines.append(f"\n> unrefreshed_message_ids: {len(roll['unrefreshed_message_ids'])} message ids"
+                     " (削除の証拠ではない。tombstone は coverage.collection.deleted)\n")
     return "".join(lines)
 
 
@@ -338,7 +338,7 @@ def _sweep_exports(out_dir: Path, now: float) -> list:
                         name, dir_fd=directory, follow_symlinks=False).st_mode):
                     continue
                 try:
-                    day = datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=_JST).timestamp()
+                    day = datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=JST).timestamp()
                 except (ValueError, OverflowError):
                     continue
                 if day >= cutoff:

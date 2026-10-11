@@ -138,6 +138,32 @@ link_target() {
 }
 
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
+if [ "${MCS_ROOT+x}" = x ]; then
+    [ -n "$MCS_ROOT" ] || die "MCS_ROOT is empty; unset MCS_ROOT before installing (data root is ~/.mcs)"
+    case "$MCS_ROOT" in
+        \~/*) _mcs_root="$HOME/${MCS_ROOT#\~/}" ;;
+        *) _mcs_root="$MCS_ROOT" ;;
+    esac
+    _mcs_root="$(abspath "$_mcs_root")"
+    # Match the runtime's lexical normalization before resolving symlinks.
+    _mcs_root="$(awk 'BEGIN {
+        n = split(ARGV[1], parts, "/"); top = 0
+        for (i = 1; i <= n; i++) {
+            if (parts[i] == "" || parts[i] == ".") continue
+            if (parts[i] == "..") { if (top > 0) top--; continue }
+            stack[++top] = parts[i]
+        }
+        out = ""; for (i = 1; i <= top; i++) out = out "/" stack[i]
+        print (out == "" ? "/" : out)
+    }' "$_mcs_root")"
+    _mcs_default="$(physpath "$HOME/.mcs")"
+    _mcs_root="$(physpath "$_mcs_root" 2>/dev/null)" \
+        || die "MCS_ROOT is unsupported by the installer; unset MCS_ROOT (data root is ~/.mcs)"
+    [ "$_mcs_root" = "$_mcs_default" ] \
+        || die "MCS_ROOT is unsupported by the installer; unset MCS_ROOT (data root is ~/.mcs)"
+fi
+MCS_ROOT="$(abspath "$HOME")/.mcs"
+export MCS_ROOT
 if [ -e "$HOME/.mcs/config.json" ] || [ -L "$HOME/.mcs/config.json" ]; then
     MODE_PY="$HOME/.mcs/venv/bin/python3"
     if [ ! -x "$MODE_PY" ]; then MODE_PY="$(command -v python3 || true)"; fi
@@ -199,9 +225,10 @@ PLUGIN_LINK="$HERMES_HOME/plugins/mcs-discord-commands"
 LLM_MODELS_URL="http://127.0.0.1:8080/v1/models"
 MODEL_DIR="$RUNTIME_HOME/models"
 MODEL_FILE="$MODEL_DIR/Qwen3.5-9B-Q4_K_M.gguf"
-MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf"
-# optional integrity check — set when the published sha256 is known
-MODEL_SHA256="${MCS_MODEL_SHA256:-}"
+# Pinned revision and its LFS sha256 (Hugging Face API + resolve headers,
+# 2026-10-11); a floating main could swap the bytes that read PHI bodies.
+MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf"
+MODEL_SHA256="${MCS_MODEL_SHA256:-03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8}"
 AGENTS_DIR="$HOME/Library/LaunchAgents"
 LLAMA_PLIST="$AGENTS_DIR/ai.mcs.llamaserver.plist"
 HERMES_LLAMA_PLIST="$AGENTS_DIR/ai.hermes.llamacpp.plist"
@@ -332,25 +359,15 @@ preserve_old_venv() {
 
 recovery_runtime_ok() {  # <probe host Python>; never substitutes the template's executable
     "$1" -I -B -c '
-import json, os, plistlib, stat, sys
+import os, plistlib, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1] + "/mcs")
 import _mcs_path
 import mcs_setup
-cfg = {}
-path = Path(sys.argv[3])
-if os.path.lexists(path):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, "rb") as stream:
-        st = os.fstat(stream.fileno())
-        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > 65536:
-            raise SystemExit("recovery config size/ownership/type invalid")
-        raw = stream.read(65537)
-    if len(raw) > 65536:
-        raise SystemExit("recovery config too large")
-    cfg = json.loads(raw)
-    if not isinstance(cfg, dict):
-        raise SystemExit("recovery config must be an object")
+try:
+    cfg = mcs_setup._owner_config(sys.argv[3])
+except ValueError as exc:
+    raise SystemExit("recovery config " + str(exc)) from None
 if sys.argv[4]:
     cfg["recovery_python"] = sys.argv[4]
 if sys.argv[5] == "1" and "recovery_python" not in cfg:
@@ -378,7 +395,6 @@ facts = mcs_setup._runtime_probe(actual) if actual is not None else None
 problem = mcs_setup._runtime_problem(facts, recovery=True)
 if problem:
     print("recovery " + problem, file=sys.stderr)
-if problem:
     sys.exit(1)
 print(desired)
 ' "$REPO" "$RECOVERY_TEMPLATE" "$HOME/.mcs/config.json" "$RECOVERY_OPTION" "$SKIP_RECOVERY"
@@ -896,11 +912,7 @@ esac
 mkdir -p "$HERMES_BIN_DIR"
 printf '%s\n' "$MCS_BODY" > "$MCS_SHIM.tmp.$$"
 chmod 700 "$MCS_SHIM.tmp.$$"
-if cmp -s "$MCS_SHIM.tmp.$$" "$MCS_SHIM"; then
-    rm -f "$MCS_SHIM.tmp.$$"
-else
-    mv -f "$MCS_SHIM.tmp.$$" "$MCS_SHIM"
-fi
+publish "$MCS_SHIM.tmp.$$" "$MCS_SHIM" || :
 sum "launcher:    $MCS_SHIM (interpreter $MCS_PY)"
 case ":$PATH:" in
     *":$HERMES_BIN_DIR:"*) ;;
@@ -915,28 +927,23 @@ fi
 # Persist explicit selections only; never discard an unreadable config.
 if [ "$RUNTIME_EXPLICIT" -eq 1 ] || [ -n "$RECOVERY_OPTION" ]; then
     "$MCS_PY" - "$REPO" "$RUNTIME_MODE" "$RECOVERY_OPTION" <<'PYMODE'
-import json, os, sys
+import json, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "mcs"))
 import _mcs_path
+import mcs_setup
 from mcs_util import CONF_PATH, atomic_write
-path = Path(CONF_PATH)
 try:
-    cfg = json.loads(path.read_text()) if path.exists() else {}
-except (OSError, ValueError):
-    raise SystemExit("config.json unreadable — repair it before selecting a runtime")
-if not isinstance(cfg, dict):
-    raise SystemExit("config.json must be an object")
+    cfg = mcs_setup._owner_config(CONF_PATH)
+except ValueError as exc:
+    raise SystemExit(f"config.json {exc} — repair it before selecting a runtime") from None
 cfg["runtime_mode"] = sys.argv[2]
 if sys.argv[3]:
     cfg["recovery_python"] = sys.argv[3]
-if "recovery_python" in cfg:
-    import mcs_setup
-    why = mcs_setup._recovery_python_problem(cfg["recovery_python"], sys.argv[1]) or \
-        mcs_setup._runtime_problem(mcs_setup._runtime_probe(cfg["recovery_python"]), recovery=True)
-    if why:
-        raise SystemExit("desired recovery " + why + " — config not written")
-atomic_write(str(path), lambda handle: json.dump(cfg, handle, ensure_ascii=False, indent=2), 0o600)
+why = mcs_setup._init_recovery_problem(cfg, sys.argv[1])
+if why:
+    raise SystemExit("desired recovery " + why + " — config not written")
+atomic_write(CONF_PATH, lambda handle: json.dump(cfg, handle, ensure_ascii=False, indent=2), 0o600)
 PYMODE
 fi
 
@@ -1029,12 +1036,10 @@ else
                         -o "$MODEL_FILE.part" "$MODEL_URL" \
                     || die "model download failed — re-run install.sh to resume (partial file: $MODEL_FILE.part)"
             fi
-            if [ -n "$MODEL_SHA256" ]; then
-                _got="$(shasum -a 256 "$MODEL_FILE.part" | awk '{print $1}')"
-                if [ "$_got" != "$MODEL_SHA256" ]; then
-                    rm -f "$MODEL_FILE.part"
-                    die "model checksum mismatch (got $_got) — the partial file was removed; re-run install.sh"
-                fi
+            _got="$(shasum -a 256 < "$MODEL_FILE.part" | awk '{print $1}')"
+            if [ "$_got" != "$MODEL_SHA256" ]; then
+                rm -f "$MODEL_FILE.part"
+                die "model checksum mismatch (got $_got) — the partial file was removed; re-run install.sh"
             fi
             mv -f "$MODEL_FILE.part" "$MODEL_FILE"
             ok "model downloaded"
@@ -1148,6 +1153,8 @@ fi
 # ------------------------------------------------------------ summary
 PYQ="$(shell_quote "$MCS_PY")"
 SETUPQ="$(shell_quote "$SETUP")"
+# `-m` resolves only from the checkout: install.sh may run from elsewhere.
+INREPO="cd $(shell_quote "$REPO") &&"
 printf '\n============================================================\n'
 printf 'Installed. Summary:\n'
 printf '%s' "$SUMMARY"
@@ -1166,14 +1173,14 @@ Run init first; the host waits until configuration and credentials are ready.
 Then run the required-condition check and inspect status:
 EOF
     printf '    %s %s check\n' "$PYQ" "$SETUPQ"
-    printf '    %s -m mcs_standalone status\n' "$PYQ"
+    printf '    %s %s -m mcs_standalone status\n' "$INREPO" "$PYQ"
     cat <<'EOF'
 
 LINE WORKS (notify.interactive=lineworks): enter its secrets on your own
 terminal with the command below; the standalone host starts the adapter,
 so do not also run a separate lineworks_adapter service.
 EOF
-    printf '    %s -m lineworks_adapter init\n' "$PYQ"
+    printf '    %s %s -m lineworks_adapter init\n' "$INREPO" "$PYQ"
     printf '\nSee docs/guides/STANDALONE.md (including switching from Hermes).\n'
     exit 0
 fi
@@ -1218,7 +1225,7 @@ generate the resident service (docs/guides/LINEWORKS.md):
 
 EOF
 for sub in init check service; do
-    printf '    %s -m lineworks_adapter %s\n' "$PYQ" "$sub"
+    printf '    %s %s -m lineworks_adapter %s\n' "$INREPO" "$PYQ" "$sub"
 done
 cat <<'EOF'
 

@@ -43,7 +43,7 @@ from contextlib import suppress
 from types import SimpleNamespace
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every subdir holding .py files, at any depth, as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
@@ -224,6 +224,12 @@ def _jev_block_reason(db) -> str | None:
     return kind if kind in _JEV_BLOCK_KINDS else None
 
 
+# extraction-eligible message (alias m); the same predicate extract_llm
+# and read_model spell out — keep them in step
+_ELIGIBLE = ("m.body_text IS NOT NULL AND m.body_text != '' "
+             "AND (m.body_state IS NULL OR m.body_state='full')")
+
+
 def _backlog_stalls(ledger, cfg, now: float) -> list:
     """Degraded reasons for work that silently stopped moving. Each
     check is gated on its feature being enabled and needs BOTH an old
@@ -274,9 +280,7 @@ def _backlog_stalls(ledger, cfg, now: float) -> list:
             "SELECT created_at FROM artifacts WHERE kind='extract_llm' "
             "ORDER BY artifact_id DESC LIMIT 1").fetchone()
         if (newest is None or (newest[0] or 0) < window) and db.execute(
-                "SELECT 1 FROM messages m WHERE m.body_text IS NOT NULL "
-                "AND m.body_text != '' "
-                "AND (m.body_state IS NULL OR m.body_state='full') "
+                f"SELECT 1 FROM messages m WHERE {_ELIGIBLE} "
                 "AND m.first_seen < ? AND NOT EXISTS(SELECT 1 FROM artifacts a "
                 "  WHERE a.kind='extract_llm' AND a.message_id=m.message_id) "
                 f"AND {current_v4_id()} IS NULL LIMIT 1",
@@ -351,19 +355,16 @@ def _health(ledger, result: dict, status: str,
     qc = ledger.db.execute(
         "SELECT COUNT(*) c, MIN(created_at) o FROM fetch_jobs "
         "WHERE kind='extract_qc' AND state='pending'").fetchone()
-    eligible_where = (
-        "m.body_text IS NOT NULL AND m.body_text != '' "
-        "AND (m.body_state IS NULL OR m.body_state='full')")
     poison = ledger.db.execute(
-        f"SELECT COUNT(*) FROM messages m WHERE {eligible_where} "
+        f"SELECT COUNT(*) FROM messages m WHERE {_ELIGIBLE} "
         "AND EXISTS(SELECT 1 FROM artifacts bad "
         "  WHERE bad.kind='extract_llm' AND bad.message_id=m.message_id"
         "    AND NOT json_valid(bad.meta))").fetchone()[0]
     total = ledger.db.execute(
-        f"SELECT COUNT(*) FROM messages m WHERE {eligible_where}"
+        f"SELECT COUNT(*) FROM messages m WHERE {_ELIGIBLE}"
     ).fetchone()[0]
     current = ledger.db.execute(f"""
-      SELECT COUNT(*) FROM messages m WHERE {eligible_where}
+      SELECT COUNT(*) FROM messages m WHERE {_ELIGIBLE}
         AND EXISTS(SELECT 1 FROM artifacts a
           WHERE a.kind='extract_llm' AND a.message_id=m.message_id
             {current_extract_pred('a', 'm')}
@@ -495,6 +496,7 @@ def _health(ledger, result: dict, status: str,
         "extract_qc_jobs": {"pending": qc["c"],
                             "oldest_age_s": (round(now - qc["o"], 1)
                                              if qc["o"] else 0)},
+        # key kept for health.json consumers; the value is the current version
         "extract_v2_coverage": {
             "extract_version": extract_llm.EXTRACT_VERSION,
             "current": current, "eligible": total,
@@ -652,6 +654,16 @@ def _outage_since(now: float | None = None) -> float | None:
     return unread_at
 
 
+def _seed_notifying_head(ledger, pid: int, since: float) -> None:
+    """Queue a bounded history_head walk that notifies every row it stores.
+
+    A pending head job keeps its own `since` and only gains the flag."""
+    ledger.job_add("history_head", pid, payload={
+        "since": max(0, int(since)), "page": 1,
+        "pages": BACKFILL_MAX_PAGES, "trickle": False, "notify": True})
+    ledger.job_set_flag("history_head", pid, 0, "notify")
+
+
 def _seed_outage_catchup(ledger, result, since: float) -> None:
     """Queue the bounded notifying history_head walk _post_ack_gap uses
     for every active patient — it finishes what this run's backfill did
@@ -661,14 +673,15 @@ def _seed_outage_catchup(ledger, result, since: float) -> None:
     seeded = 0
     for row in ledger.frontier_patients():
         pid = row["project_id"]
-        start = min(since, ledger.coverage_ts(pid) or ledger.high_watermark(pid)
-                    or since) - BACKFILL_OVERLAP_S
-        ledger.job_add("history_head", pid, payload={
-            "since": max(0, int(start)), "page": 1,
-            "pages": BACKFILL_MAX_PAGES, "trickle": False, "notify": True})
-        ledger.job_set_flag("history_head", pid, 0, "notify")
+        _seed_notifying_head(ledger, pid, min(
+            since, ledger.coverage_ts(pid) or ledger.high_watermark(pid)
+            or since) - BACKFILL_OVERLAP_S)
         seeded += 1
     result["outage_catchup"] = seeded
+
+
+_REPLAYED_LISTS = ("errors", "incomplete", "coverage_gaps",
+                   "coverage_stalled", "self_probe_fetched")
 
 
 def _with_relogin(adapter, ledger, result, where: str, fn, *args,
@@ -682,6 +695,11 @@ def _with_relogin(adapter, ledger, result, where: str, fn, *args,
     auto_login (detail 'auto_login=…'), a run over the relogin budget,
     or a session that dies again right after recovery is not retried —
     it escalates to the run boundary."""
+    # walk-derived lists the replay records again; save-derived counters
+    # (new_messages, backfilled, realtime_ids) stay — the deduped saves
+    # add nothing for rows the aborted attempt already stored
+    sizes = {k: len(result[k]) for k in _REPLAYED_LISTS if k in result}
+    msgs = result.get("messages")
     try:
         return fn(*args, **kwargs)
     except SessionExpired as e:
@@ -695,6 +713,18 @@ def _with_relogin(adapter, ledger, result, where: str, fn, *args,
             raise
         if state != "ok":
             raise SessionExpired(f"auto_login={state}") from e
+        # these stages re-walk everything, so the replay re-records them;
+        # drop the aborted attempt's walk records and messages. Job drains
+        # are excluded: a job failed or deferred by the aborted attempt is
+        # not due on replay, so its recorded error must stay.
+        if where in ("unread", "self_probe", "backfill"):
+            for key in _REPLAYED_LISTS:
+                if key in sizes:
+                    del result[key][sizes[key]:]
+                else:
+                    result.pop(key, None)
+            if msgs is not None:
+                result["messages"] = msgs
         try:
             return fn(*args, **kwargs)
         except SessionExpired as e2:
@@ -744,14 +774,11 @@ def _post_ack_gap(adapter, ledger, pid: int, result):
         gap = True
     if not gap:
         return
-    cutoff = (ledger.coverage_ts(pid) or ledger.high_watermark(pid)) \
-        - BACKFILL_OVERLAP_S
     # notify: the rows it finds arrive already read — the walk must
     # offer every new row, merged into an already-pending head job too
-    ledger.job_add("history_head", pid, payload={
-        "since": max(0, cutoff), "page": 1,
-        "pages": BACKFILL_MAX_PAGES, "trickle": False, "notify": True})
-    ledger.job_set_flag("history_head", pid, 0, "notify")
+    _seed_notifying_head(ledger, pid, (ledger.coverage_ts(pid)
+                                       or ledger.high_watermark(pid))
+                         - BACKFILL_OVERLAP_S)
     result["errors"].append(f"mark {pid}: post_ack_gap")
 
 
@@ -969,10 +996,13 @@ def stage_thread_read(adapter, ledger, result, deadline):
 def stage_backfill(adapter, ledger, result, deadline, run_id,
                    semantic: bool = False,
                    notify_max_age_s: float | None = None,
-                   notify_all_new: bool = False):
+                   notify_all_new: bool = False,
+                   notify_after: dict | None = None):
     """Catch posts the unread API misses (e.g. read by another human).
     notify_all_new (the first collecting run after an outage) announces
-    every newly stored row, not only unread ones.
+    every newly stored row, not only unread ones. notify_after maps a
+    pid to the cutoff of this run's page-limited self-post probe: new
+    rows posted after it notify like the probe's own.
     Walk each patient's history down to CONFIRMED coverage — never the
     newest stored message, so storing a new unread cannot skip older
     unfetched items (Oracle B06). Coverage only advances on a complete
@@ -1003,9 +1033,15 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
             hist, project_id=pid,
             notify={"run_id": run_id, "source": "history"},
             semantic=semantic, notify_max_age_s=notify_max_age_s,
-            notify_all_new=notify_all_new)
+            notify_all_new=notify_all_new,
+            notify_new_after_ts=(notify_after or {}).get(pid))
         if new_ids:
             result["backfilled"] += len(new_ids)
+        if pid in (notify_after or {}) and not batch.reached \
+                and not batch.error:
+            # rows past this walk stay unobtained — and would be stored
+            # silently by a later tick — so surface it
+            result["errors"].append(f"probe {pid}: history_incomplete")
         if merged.error:
             raise merged.error
         if batch.error:
@@ -1106,12 +1142,12 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
             continue                     # nothing newer than stored
         if ledger.probe_marker(pid) == mid:
             continue                     # unfetchable id — already tried
+        # overlap the watermark: fetch_history drops items with ts <=
+        # since, and a same-second post would be skipped then marked
+        since = max(1, wm - BACKFILL_OVERLAP_S)
         try:
-            # overlap the watermark: fetch_history drops items with ts <=
-            # since, and a same-second post would be skipped then marked
             batch = adapter.fetch_history(
-                pid, max(1, wm - BACKFILL_OVERLAP_S),
-                max_pages=SELF_PROBE_PAGES)
+                pid, since, max_pages=SELF_PROBE_PAGES)
         except SessionExpired:
             raise
         except MCSError as e:
@@ -1129,6 +1165,11 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
             result.setdefault("realtime_ids", []).extend(new_ids)
             ledger.karte_summary_mark_due(pid)
         result.setdefault("self_probe_fetched", []).append(pid)
+        if not batch.reached:
+            # page-limited: this run's backfill stores the rest and must
+            # keep the probe's notify policy, or the next tick sees the
+            # latest id stored and the remainder is never announced
+            result.setdefault("self_probe_after", {})[pid] = since
         # A page-limited walk has not established that the latest id is
         # unfetchable. Only a completed walk may suppress later probes.
         if not batch.error and batch.reached and merged.checkpoint_safe:
@@ -1383,7 +1424,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
     Two lanes, one lineage: the rule pass is pure-pattern and instant —
     it keeps real-time analysis at ingest speed so notifications and
     signals never wait on the LLM queue. The extract_llm pass
-    (mcs/extract/v4, EXTRACT_VERSION=4) then folds the same rule output
+    (mcs/extract/v4, extract_llm.EXTRACT_VERSION) then folds the same rule output
     in as prompt hints and mints the extract_v1 artifact itself when
     the rule pass has not."""
     try:
@@ -1654,12 +1695,18 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
                       stage_self_probe, adapter, ledger, result,
                       deadline, run_id, semantic=sem_on,
                       notify_max_age_s=notify_max_age_s)
-    if not args.no_backfill:
+    probe_after = result.pop("self_probe_after", None)
+    if args.no_backfill:
+        # no backfill to finish the probe's walk this run
+        result["errors"].extend(f"probe {pid}: history_incomplete"
+                                for pid in probe_after or {})
+    else:
         _with_relogin(adapter, ledger, result, "backfill",
                       stage_backfill, adapter, ledger, result, deadline,
                       run_id, semantic=sem_on,
                       notify_max_age_s=notify_max_age_s,
-                      notify_all_new=outage_since is not None)
+                      notify_all_new=outage_since is not None,
+                      notify_after=probe_after)
     if outage_since is not None:
         _seed_outage_catchup(ledger, result, outage_since)
 
@@ -1908,7 +1955,7 @@ def _housekeeping(result):
 
 
 def _overdue_housekeeping(result) -> None:
-    """An MCS failure ends the tick before housekeeping; a long outage or
+    """An MCS failure or crash ends the tick before housekeeping; a long outage or
     manual re-login wait must not also stop the local daily backup. Once
     it is overdue (no backup yet is not overdue), run the local-only
     housekeeping — no MCS request, no send — and keep its errors."""
@@ -2107,9 +2154,8 @@ def _main() -> int:
                    notify_max_age_s)
 
         # -- derived data ----------------------------------------------
-        # jobs-only runs skip fetch entirely, so the LLM extract slice
-        # can be wider than the 10-min tick's — still capped well under
-        # RUN_DEADLINE_S so history/trickle stages keep their share.
+        # jobs-only runs give the realtime LLM slice no budget: the
+        # resident backlog workers own background extraction.
         if not _code_changed(result):
             _run_stage(result, "derive", deadline, stage_derive,
                        ledger, result, deadline, cfg,
@@ -2193,6 +2239,7 @@ def _main() -> int:
             _fail_run(ledger, args, result, run_id, "failed",
                       f"crash: {type(e).__name__}", deadline,
                       alert="run_failed")
+        _overdue_housekeeping(result)
         _write_health(ledger, result, "failed", run_id=run_id, cfg=cfg)
         print(json.dumps(result, ensure_ascii=False))
         return 1

@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "brain_export のシグナル一覧で注記の改行が表を崩す問題を修正",
+  "summary": "brain_export の signals ページで、注記に改行を含むシグナルがあると表の行が途中で切れていた問題を修正しました。注記も他の列と同じく、改行を空白に置き換えて1つのセルに収めます。",
+  "upgrade": "追加操作は不要です。次回の brain_export から反映されます。",
+  "details": [
+    "mcs/ops/brain_export.py の _signals_md は note を _cell で整形する（| のエスケープと改行の空白化）。",
+    "mcs/ops/mcs_signals.py の dismiss_reason_counts は、どの検出器も出さない種別 med_followup を既知の種別として扱わず unknown に数える。本番では出現しない種別のため集計値は変わらない。"
+  ],
+  "refs": [
+    "mcs/ops/brain_export.py",
+    "mcs/ops/mcs_signals.py"
+  ]
+}

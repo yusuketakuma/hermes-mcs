@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "患者一覧の登録失敗に原因の種類を記録",
+  "summary": "患者一覧の取得（discovery）で患者情報の保存に失敗したとき、実行記録のエラーが「patient_write_failed」だけで原因が分かりませんでした。最初に起きた例外の種類を「patient_write_failed:TypeError」のように付けて記録するようにしました。",
+  "upgrade": "追加操作は不要です。実行記録・health のエラー文字列を完全一致で監視している場合は、末尾に例外の種類が付く点に合わせてください。",
+  "details": [
+    "mcs/ingest/job_ops.py の run_discovery は、通常患者・保管患者の保存で最初に捕まえた例外の型名だけを残す。例外の本文や患者情報は記録しない。",
+    "1人の失敗で他の患者の登録を止めない扱いと、discovery を失敗状態にせず再試行する扱いは変えていない。"
+  ],
+  "refs": [
+    "mcs/ingest/job_ops.py",
+    "tests/ingest/test_discovery_write_failure_type.py"
+  ]
+}

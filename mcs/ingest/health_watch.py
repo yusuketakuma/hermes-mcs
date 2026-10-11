@@ -18,6 +18,7 @@ patient data. stdout carries one alert line on alert transitions
 machine-readable status, published atomically.
 """
 import argparse
+from datetime import datetime
 import fcntl
 import json
 import math
@@ -31,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 
 import maintenance
+from mcs_queries import JST
 from mcs_util import HOME, load_config
 
 HEALTH_REL = os.path.join("data", "health.json")
@@ -49,6 +51,8 @@ OVERALL_STATUS = {"ok": "ok", "degraded": "degraded",
 
 
 def _finite_number(value) -> bool:
+    # mirrors mcs_backup's finite check; the tick_no_ext gate keeps the
+    # watchdog off the manual-only C1 modules that hold the shared copy
     if type(value) not in (int, float):
         return False
     try:
@@ -459,7 +463,7 @@ def _jst(ts) -> str:
     if not _finite_number(ts):
         return "不明"
     try:
-        return time.strftime("%m-%d %H:%M", time.gmtime(ts + 9 * 3600))
+        return datetime.fromtimestamp(ts, JST).strftime("%m-%d %H:%M")
     except (OverflowError, OSError, ValueError):
         return "不明"
 
