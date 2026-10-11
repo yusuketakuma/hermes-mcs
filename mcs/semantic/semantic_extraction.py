@@ -9,6 +9,7 @@ network client is created here.
 from __future__ import annotations
 
 import bisect
+import copy
 import json
 import re
 import time
@@ -894,12 +895,7 @@ def _normalise_facts_v2(items: list, member: dict, source: str, semantic,
         name = item.get("subject_name")
         role = role if isinstance(role, str) and role else None
         name = name if isinstance(name, str) and name else None
-        if role == "patient" and name is None:
-            subject = sf.subject_identity(project_id, role="patient")
-        elif role is None and name is None:
-            subject = sf.UNKNOWN
-        else:
-            subject = sf.subject_identity(project_id, role=role, name=name)
+        subject = sf.subject_identity(project_id, role=role, name=name)
         span = _resolve_evidence(item.get("evidence_quote"), piece,
                                  piece_start, source, semantic)
         evidence_ids = []
@@ -1306,12 +1302,27 @@ def extract_facts_v2(llm_fn, member: dict,
     evidence = {}
     clean_facts = _collect_facts(facts, evidence)
 
+    # Intra-document relation reconciliation (T6): every pair of kept
+    # facts is classified — ordered transitions supersede, unordered
+    # conflicts contradict, never silent latest-wins.  A pair scan cut
+    # by the deadline leaves the document incomplete, and the cached
+    # chunks let the next pass finish it.
+    from semantic_relations import reconcile_facts
+    reconciled = reconcile_facts([], clean_facts, deadline=deadline)
+    relations = reconciled["relations"]
+    pairs_skipped = reconciled["pairs_skipped"]
+    if pairs_skipped and failure_reason is None:
+        failure_reason = "deadline"
+
     limitations = []
     if failed:
         limitations.append("chunks_incomplete")
+    if pairs_skipped:
+        limitations.append("relations_incomplete")
     if any(f["validation_status"] == "unverified" for f in clean_facts):
         limitations.append("unverified_facts")
-    complete = len(completed) == len(specs) and not failed
+    complete = len(completed) == len(specs) and not failed \
+        and not pairs_skipped
     status = "complete" \
         if complete and not open_ids and not limitations else "incomplete"
     coverage = {
@@ -1320,12 +1331,6 @@ def extract_facts_v2(llm_fn, member: dict,
         "limitations": limitations,
         "status": status,
     }
-
-    # Intra-document relation reconciliation (T6): every pair of kept
-    # facts is classified — ordered transitions supersede, unordered
-    # conflicts contradict, never silent latest-wins.
-    from semantic_relations import reconcile_facts
-    relations = reconcile_facts([], clean_facts)["relations"]
 
     member_quality = "full" if member.get("body_state") == "full" \
         else "partial"
@@ -1367,6 +1372,7 @@ def extract_facts_v2(llm_fn, member: dict,
         **_chunk_progress(specs, completed, reused, failed,
                           failure_reason, failed_dropped, source_fp),
         "dropped_reasons": drop_reasons,     # the failed chunk's, by code
+        "relation_pairs_skipped": pairs_skipped,
         "null_contexts_omitted": omitted.get("context_null", 0),
         **({"generation": generation} if request_following else {}),
     }
@@ -1610,20 +1616,21 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     unusable input) — the caller then keeps the prior doc and holds the
     generation rather than degrading it.
     """
+    import semantic
+    import semantic_llm
+
     if type(request_following) is not bool:
         raise ValueError("request_following must be boolean")
     generation_detail = {}
     if request_following:
-        import semantic
-        import semantic_llm
         generation_detail["generation"] = _chunk_generation(
             semantic.llm_model(), semantic_llm._FACT_V2_REQUEST_FOLLOWING_PROMPT, chunk_size=chunk_size)
+    # Only one return runs per call, so the early exits share this dict.
+    unchanged = {"doc": doc, "repaired": False, "repaired_fact_ids": [],
+                 "owner_chunk_ids": [], **generation_detail}
     if not isinstance(doc, dict) or not isinstance(member, dict) \
             or not rejected or not callable(llm_fn):
-        return {"doc": doc, "repaired": False,
-                 "repaired_fact_ids": [], "owner_chunk_ids": [], **generation_detail}
-    import semantic
-    import semantic_llm
+        return unchanged
     prompt_template = (semantic_llm._FACT_V2_REQUEST_FOLLOWING_PROMPT
                        if request_following else semantic_llm._FACT_V2_PROMPT)
 
@@ -1633,8 +1640,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
             or source_meta.get("content_hash") != _sha256(source)
             or source_meta.get("message_id") != str(member.get("message_id"))
             or source_meta.get("revision") != str(member.get("revision", ""))):
-        return {"doc": doc, "repaired": False,
-                 "repaired_fact_ids": [], "owner_chunk_ids": [], **generation_detail}
+        return unchanged
     source_fp = doc["source"]["source_fingerprint"]
     manifest = build_manifest(source, source_fp, chunk_size)
     specs = _manifest_specs(manifest)
@@ -1643,8 +1649,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
             or manifest["atoms"] != doc.get("atoms")):
         # The stored doc does not match a fresh atomization of the
         # source — repair cannot locate owners safely.
-        return {"doc": doc, "repaired": False,
-                 "repaired_fact_ids": [], "owner_chunk_ids": [], **generation_detail}
+        return unchanged
 
     atom_owner = {}
     for chunk in manifest["chunks"]:
@@ -1658,8 +1663,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
                    if isinstance(f, dict) and f.get("fact_id")}
     rejected_ids = [fid for fid in rejected if fid in facts_by_id]
     if not rejected_ids:
-        return {"doc": doc, "repaired": False,
-                 "repaired_fact_ids": [], "owner_chunk_ids": [], **generation_detail}
+        return unchanged
 
     # rejected fact -> owning chunks via obligation links; evidence
     # quotes inside a chunk's text are a fallback locator.
@@ -1678,8 +1682,7 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
                     if ev is not None and ev["quote"] in spec["text"]:
                         owner_ids.add(spec["chunk_id"])
     if not owner_ids:
-        return {"doc": doc, "repaired": False,
-                 "repaired_fact_ids": [], "owner_chunk_ids": [], **generation_detail}
+        return unchanged
 
     repaired_items = {}
     dispatched = []
@@ -1708,17 +1711,19 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
         repaired_items[cid] = items
         dispatched.append(cid)
     if not dispatched:
-        return {"doc": doc, "repaired": False,
-                 "repaired_fact_ids": [], "owner_chunk_ids": [], **generation_detail}
+        return unchanged
 
-    # Normalise repaired items per owning chunk, then merge by fact_id.
-    facts = [f for f in doc["facts"]
-             if f.get("fact_id") not in rejected_ids]
-    by_fact_id = {f["fact_id"]: f for f in facts}
+    # Normalise repaired items per owning chunk, then merge by fact_id
+    # once, with the same rules as extraction's duplicate merge.  The
+    # merge edits facts in place, so it works on copies: an unrepaired
+    # return must hand back the stored doc untouched.
+    facts = copy.deepcopy([f for f in doc["facts"]
+                           if f.get("fact_id") not in rejected_ids])
+    kept_ids = {f["fact_id"] for f in facts}
     for ob in obligations.values():
         ob["fact_ids"] = [fid for fid in ob.get("fact_ids", [])
-                          if fid in by_fact_id]
-    repaired_fact_ids = []
+                          if fid in kept_ids]
+    collected = []
     for spec in specs:
         cid = spec["chunk_id"]
         items = repaired_items.get(cid)
@@ -1738,20 +1743,12 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
             for oid, mark in link_marks.items():
                 del obligations[oid]["fact_ids"][mark:]
             continue
-        for fact in new_facts:
-            existing = by_fact_id.get(fact["fact_id"])
-            if existing is None:
-                by_fact_id[fact["fact_id"]] = fact
-                facts.append(fact)
-                repaired_fact_ids.append(fact["fact_id"])
-                continue
-            for oid in fact["obligation_ids"]:
-                if oid not in existing["obligation_ids"]:
-                    existing["obligation_ids"].append(oid)
-            if fact["validation_status"] == "verified":
-                existing["validation_status"] = "verified"
-            if fact.get("_evidence") and not existing.get("_evidence"):
-                existing["_evidence"] = fact["_evidence"]
+        collected.extend(new_facts)
+    # One merge over every chunk: a detail that conflicted in one chunk
+    # cannot be revived by a later one.
+    facts = _merge_dupe_facts(facts + collected)
+    repaired_fact_ids = list(dict.fromkeys(
+        f["fact_id"] for f in collected if f["fact_id"] not in kept_ids))
 
     # A covered jev_pre obligation snapshots its deterministic
     # counterpart's links at extraction; re-sync so repaired facts
@@ -1816,9 +1813,14 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     new_doc["facts"] = clean_facts
     new_doc["coverage"] = coverage
     # Relations referencing removed facts dangle — recompute over the
-    # surviving set so every endpoint resolves.
+    # surviving set so every endpoint resolves.  A scan cut by the
+    # deadline must not publish a partial set: keep the prior doc.
     from semantic_relations import reconcile_facts
-    new_doc["relations"] = reconcile_facts([], clean_facts)["relations"]
+    reconciled = reconcile_facts([], clean_facts, deadline=deadline)
+    if reconciled["pairs_skipped"]:
+        return {**unchanged, "owner_chunk_ids": dispatched,
+                "relation_pairs_skipped": reconciled["pairs_skipped"]}
+    new_doc["relations"] = reconciled["relations"]
     sf.validate_facts_doc(new_doc)
     return {"doc": new_doc, "repaired": True,
             "repaired_fact_ids": repaired_fact_ids,

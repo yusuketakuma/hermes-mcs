@@ -28,11 +28,11 @@ import notify_cards
 import notify_transport
 import notify_cmds
 
-from hermes_plugin.mcs_delivery import (envelopes, journal, paths,
+from adapters.common import (envelopes, journal, paths,
                                         registry, text)
-from hermes_plugin.mcs_delivery import spec as spec_mod
-from hermes_plugin.mcs_delivery import worker as worker_mod
-from hermes_plugin.mcs_discord import (actions as actions_mod, cards,
+from adapters.common import spec as spec_mod
+from adapters.common import worker as worker_mod
+from adapters.discord import (actions as actions_mod, cards,
                                        delivery, tasks)
 from notify_testkit import _add_request, _llm_extract
 from discord_testkit import (
@@ -714,6 +714,38 @@ def test_in_flight_retry_mints_fresh_envelope(world, monkeypatch):
     assert new["attempt_id"] == claim["attempt_id"] != first_attempt
 
 
+def test_in_flight_denial_at_the_retry_cap_drops_the_claim(world, monkeypatch):
+    """The last denied_in_flight before MAX_BEGIN_RETRIES drops the claim
+    dead — staging one more re-begin would leave begin_cid unset with the
+    republish branch already capped, so nothing is sent or dropped."""
+    monkeypatch.setattr(worker_mod, "RETRY_IN_FLIGHT_S", 0)
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+
+    async def run():
+        await worker.tick()             # claim + begin published
+        render, spec = world.spec()
+        did = spec["delivery_id"]
+        claim = reg.claimed(did)
+        # an odd count: one ordinary 60 s republish happened earlier
+        reg.claim(did, {**claim,
+                        "begin_retries": worker_mod.MAX_BEGIN_RETRIES - 1})
+        result = {"granted": False, "error": "denied_in_flight",
+                  "command_id": claim["begin_cid"],
+                  "attempt_id": claim["attempt_id"], "delivery_id": did}
+        (world.data / "cmd_results"
+         / (paths.safe_name(claim["begin_cid"]) + ".json")).write_text(
+             json.dumps(result))
+        await worker.tick()
+        await worker.tick()
+        return did
+
+    did = asyncio.run(run())
+    assert reg.claimed(did) is None and reg.is_dead(did)
+    assert not bot.channels[42].sent
+
+
 def test_kill_switch_skips_claim_then_recovers(world):
     """interactive:false in flags -> no claim at all (no denial churn,
     no tombstone); flipping back on -> the same spec delivers."""
@@ -1093,6 +1125,8 @@ def test_action_foreign_thread_denied(world):
     # the denial reason is journaled — the user-facing text stays generic
     denials = [f for e, f in world.logs if e == "interaction_denied"]
     assert denials and denials[0]["reason"] == "chat_not_allowed"
+    # user and channel IDs stay out of the operational log
+    assert denials[0] == {"reason": "chat_not_allowed"}
 
 
 def test_confirm_preview_text_per_transport():
@@ -1662,6 +1696,68 @@ def test_confirm_publish_failure_releases_in_flight(world, monkeypatch,
     cancel = FakeInteraction(cid + ":cancel", message_id=msg.id)
     asyncio.run(act.on_interaction(cancel))
     assert "取り消し" in cancel.response.message["content"]
+
+
+def test_confirm_publish_error_after_the_file_landed_keeps_the_confirm(
+        world, monkeypatch):
+    """An OSError after os.replace (the directory fsync) is not a send
+    failure: the command is queued, so the confirm stays in flight (a
+    cancel reads as busy) and the followup still reports the receipt."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "request")
+    act = world.mkactions(reg, bot)
+    msg = bot.channels[42].sent[0]
+    cid = _drive_to_confirm(world, act, tok, msg)
+
+    real = paths.fsync_dir
+
+    def fail(d):
+        if os.path.samefile(d, world.data / "cmd_int"):
+            raise OSError("synthetic fsync failure")
+        real(d)
+    monkeypatch.setattr(paths, "fsync_dir", fail)
+    ok = FakeInteraction(cid, message_id=msg.id)
+    asyncio.run(act.on_interaction(ok))
+    monkeypatch.setattr(paths, "fsync_dir", real)
+    assert not any("送信に失敗" in m["content"] for m in ok.followup.sent)
+    assert "受付結果を確認できませんでした" in ok.followup.sent[-1]["content"]
+    assert reg.confirm(cid[len("mcs:c:"):]).get("in_flight")
+    human = [json.loads(p.read_text())
+             for p in (world.data / "cmd_int").glob("*.json")
+             if json.loads(p.read_text()).get("human_confirmed")]
+    assert len(human) == 1
+    assert reg.followup(human[0]["command_id"]) is not None
+    cancel = FakeInteraction(cid + ":cancel", message_id=msg.id)
+    asyncio.run(act.on_interaction(cancel))
+    assert "処理中" in cancel.response.message["content"]
+
+
+@pytest.mark.parametrize("project_id,signals", [
+    (None, {"synthetic-key": "not-a-dict"}),
+    (True, None),
+])
+def test_malformed_token_scope_is_denied(world, project_id, signals):
+    """A token context naming no valid positive int project is refused."""
+    world.seed()
+    world.dispatch()
+    worker, reg, bot = world.mkworker()
+    asyncio.run(_deliver(world, worker))
+    _, spec = world.spec()
+    tok = world.token(spec, "request")
+    context = {**reg.token(tok), "project_id": project_id,
+               "context": {"source_message_id": 100, "source_hash": "a" * 64}}
+    if signals is not None:
+        context["context"]["signals"] = signals
+    reg.put_tokens({tok: context})
+    act = world.mkactions(reg, bot)
+    ix = FakeInteraction(f"mcs:a:{tok}", message_id=bot.channels[42].sent[0].id)
+    asyncio.run(act.on_interaction(ix))
+    assert "権限がありません" in ix.response.message["content"]
+    assert not list((world.data / "cmd_int").glob("*.json"))
 
 
 def test_confirm_expiring_before_take_never_publishes(world):

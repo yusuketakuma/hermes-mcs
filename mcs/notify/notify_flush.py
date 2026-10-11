@@ -36,12 +36,19 @@ import mcs_runtime
 import mcs_signals
 import semantic_send_gate
 import structured_view
+from mcs_queries import HOLD_PROGRESS_SET
 from mcs_util import CONF_PATH, html_to_text, load_config
+from mcs_util import hermes_exe as _hermes_exe
 from mcs_requests import positive
-from notify_render import SECTION_RULE, _extraction_failed, _signal_evidence
+from notify_render import (SECTION_RULE, _extraction_failed, _signal_evidence,
+                           thread_stamp_row)
 # Re-exported send-gate verdicts — the canonical definitions live in
 # semantic_send_gate (the send-time semantic policy layer); the legacy
 # private names stay so existing tests and flush() catches are stable.
+# Some private names are also cross-module API, so renames must reach:
+# health_watch (_target, _send_argv, _send, _SendFailed, _SendUsage),
+# semantic_lifecycle (_MAX_LEN, _target, _delivery_fingerprint) and
+# notify_reconcile (_ALERT_KINDS, _hold_event).
 from semantic_send_gate import (
     DeferredSend as _DeferredSend,
     FreezeSend as _FreezeSend,
@@ -63,17 +70,6 @@ _ALERT_KINDS = frozenset({
 
 def _config() -> dict:
     return load_config(CONF_PATH)
-
-
-def _hermes_exe(cfg: dict) -> str:
-    """`hermes` binary for delivery. config {hermes_bin} overrides; the
-    default falls back to the standard user-local install because the
-    launchd PATH is minimal."""
-    exe = cfg.get("hermes_bin")
-    if isinstance(exe, str) and exe.strip():
-        return exe.strip()
-    return (shutil.which("hermes")
-            or os.path.expanduser("~/.local/bin/hermes"))
 
 
 def _target(cfg: dict, kind: str) -> str | None:
@@ -387,12 +383,8 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         return text, []
     if ev["kind"] == "signal":
         return _signal_notice_text(ledger, payload), []
-    if ev["kind"] == "urgent_notice":
-        import notify_urgent
-        checked = notify_urgent.check_delivery(ledger, _config(), ev, now=time.time())
-        if not checked["ok"]:
-            raise _StaleSend(checked["reason"])
-        return notify_urgent.render_text(checked, ledger.db), []
+    # urgent_notice never reaches the text path: flush moves a never-begun
+    # one to the card route and holds a begun one (see flush)
     if ev["kind"] == "attachment_followup":
         return _followup_files(ledger, payload, ev["project_id"])
     return _message_notice(ledger, ev, payload)
@@ -424,7 +416,6 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
              skipped: dict, *, stamps=True, summary_suffix="") -> str:
     s_lines = structured_view.structured_lines(
         ledger.db, r["message_id"], plain=True)
-    urg = structured_view.message_urgency(ledger.db, r["message_id"])
     body = html_to_text(r["body_html"])
     cap = 500 if s_lines else 600
     if len(body) > cap:
@@ -433,9 +424,9 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
     meta = " / ".join(x for x in (r["profession"], r["organization"]) if x)
     parent = " (返信)" if r["parent_id"] and not indent else ""
     state = "" if r["body_state"] == "full" else f" [{r['body_state']}]"
-    warn = " ⚠️" if urg else ""
+    # urgency stays on the summary's own 🚨 line (one spelling, owner 2026-10-09)
     head = (f"{indent}**{r['patient_name'] or ev['project_id']}**"
-            f"{parent}{state}{warn}\n"
+            f"{parent}{state}\n"
             f"{indent}{who}{f' ({meta})' if meta else ''} — "
             f"{(r['posted_at'] or '?')[:16]}")
     atts = att_map.get(r["message_id"], [])
@@ -454,12 +445,9 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
     empty = "作成失敗" if not s_lines and _extraction_failed(ledger.db, r["message_id"]) else "処理待ち"
     summary = ([f"{indent}📋 要約"] + [f"{indent}・" + ln.replace("\n", f"\n{indent}") for ln in s_lines]
                if s_lines else [f"{indent}📋 要約 {empty}"])
-    if stamps:
-        from ledger import reaction_actor_summary
-        from message_metadata import get_message_metadata, is_self_sender, thread_stamp_line
-        metadata = get_message_metadata(ledger.db, r["message_id"])
-        metadata["own_post"] = is_self_sender(ledger.db, r["sender_id"])
-        summary.append(indent + thread_stamp_line(metadata, reaction_actor_summary(ledger.db, r["message_id"])))
+    line = thread_stamp_row(ledger.db, r["message_id"], r["sender_id"]) if stamps else ""
+    if line:            # an observed zero needs no row (as on the card)
+        summary.append(indent + line)
     return (head + "\n" + "\n".join(summary) + summary_suffix + "\n"
             + indent + SECTION_RULE + "\n" + indent + "📄 本文\n"
             + indent + (body or "(本文なし)") + att_line)
@@ -583,18 +571,9 @@ def _hold_event(ledger, ev, cfg, proven_undelivered=False,
                            (ev["event_id"],)).fetchone()
     if ev is None:
         return
-    # Store only a stable code alongside the existing receipt; never replace
-    # its in-flight evidence with a guessed negative acknowledgement.
-    try:
-        progress = json.loads(ev["progress"] or "{}")
-    except (ValueError, TypeError, RecursionError):
-        progress = None
-    if not isinstance(progress, dict):
-        progress = {"invalid_progress": ev["progress"]}
-    progress["hold_reason"] = reason
-    ledger.db.execute(
-        "UPDATE notify_outbox SET progress=? WHERE event_id=?",
-        (json.dumps(progress), ev["event_id"]))
+    # The hold stores only a stable code alongside the existing receipt
+    # (HOLD_PROGRESS_SET); never replace its in-flight evidence with a
+    # guessed negative acknowledgement.
     if rescue and (proven_undelivered or _send_never_began(ev)) \
             and not _has_sent_progress(ev):
         try:
@@ -636,15 +615,54 @@ def _hold_event(ledger, ev, cfg, proven_undelivered=False,
                             ledger, payload, time.time(), interval_h,
                             origin_id=ev["event_id"])
                     ledger.db.execute(
-                        "UPDATE notify_outbox SET state='failed',"
-                        "next_try=NULL,updated_at=? WHERE event_id=?",
-                        (time.time(), ev["event_id"]))
+                        "UPDATE notify_outbox SET state='failed',next_try=NULL,"
+                        f"{HOLD_PROGRESS_SET},updated_at=? WHERE event_id=?",
+                        (reason, time.time(), ev["event_id"]))
                 return
-    ledger.outbox_hold(ev["event_id"])
+    ledger.outbox_hold(ev["event_id"], reason)
 
 
 class _SendFailed(OSError):
-    """Delivery did not begin; the outbox may safely retry."""
+    """Delivery did not begin; the outbox may safely retry.
+
+    ``code`` is the direct sender's final stderr token (empty when the
+    failure was local); it only selects the hold policy, never whether
+    delivery may have begun."""
+
+    code = ""
+
+
+# Direct-sender codes (exit 75) that prove nothing was accepted AND name a
+# condition that heals on its own: connectivity/DNS/timeout before any post,
+# a busy local sender lock, or a platform rate limit. The standalone
+# Slack/Discord sender reports every not_sent outcome (including its
+# identity check failing on a network error) as delivery_not_accepted.
+_TRANSIENT_SEND_CODES = frozenset({
+    "transport_unknown", "rate_limited", "sender_busy",
+    "delivery_not_accepted", "http_429", "slack_identity_unreachable",
+    "discord_unreachable", "lineworks_token_unavailable",
+    "slack_configuration_changed_restart_required"})
+# Transient pre-send failures quarantine on elapsed time, not on a retry
+# count: a ~45 min network outage must not park every text notification
+# for manual release. Auth/config/attachment failures keep the 5-attempt cap.
+TRANSIENT_HOLD_AFTER_S = 86400
+PRE_SEND_MAX_ATTEMPTS = 4
+
+
+def _retry_backoff(attempts: int) -> int:
+    return min(3600, 60 * (2 ** min(int(attempts), 6)))
+
+
+def _transient_failing_for(attempts: int) -> int:
+    """Lower bound of seconds spent failing after ``attempts`` failed
+    tries — each retry waits at least its backoff, so the schedule sum
+    never overstates the real elapsed time."""
+    return sum(_retry_backoff(i) for i in range(max(0, int(attempts))))
+
+
+def _transient_pre_send(exc) -> bool:
+    return (isinstance(exc, _SendFailed) and not isinstance(exc, _SendBudget)
+            and exc.code in _TRANSIENT_SEND_CODES)
 
 
 class _SendBudget(_SendFailed):
@@ -766,7 +784,12 @@ def _send(argv: list[str], content: str,
             ("/mcs_standalone/__main__.py", "/lineworks_adapter/__main__.py")):
         # EX_TEMPFAIL from a direct sender: the platform provably
         # accepted nothing (failed before the post, or a definitive reject).
-        raise _SendFailed(detail or "send not accepted")
+        exc = _SendFailed(detail or "send not accepted")
+        # The sender prints its fixed code last; earlier lines may be logs.
+        lines = (r.stderr or "").strip().splitlines()
+        words = lines[-1].split() if lines else []
+        exc.code = words[-1] if words and len(words[-1]) <= 64 else ""
+        raise exc
     if r.returncode != 0:
         # A failed child can have delivered text or some attachments
         # before losing its response. Its exit status is not a negative ACK.
@@ -970,12 +993,6 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
 
     def gate(i, payload) -> bool:
         """Last-moment pre-chunk gate, re-evaluated before a retry."""
-        if ev["kind"] == "urgent_notice":
-            import notify_urgent
-            checked = notify_urgent.check_delivery(ledger, _config(), ev, now=time.time())
-            if not checked["ok"]:
-                raise _StaleSend(checked["reason"])
-            return True
         if ev["kind"] == "semantic_notice":
             _semantic_gate(ledger, ev, payload,
                            in_progress=bool(start or i))
@@ -1036,11 +1053,7 @@ def _fail_event(ledger, ev, cfg, res, exc):
             _hold_event(ledger, ev, cfg, reason="deferred_after_partial")
             res["failed"] += 1
         else:
-            ledger.db.execute(
-                "UPDATE notify_outbox SET next_try=?,updated_at=? "
-                "WHERE event_id=?",
-                (time.time() + 3600, time.time(), ev["event_id"]))
-            ledger.db.commit()
+            ledger.outbox_defer(ev["event_id"], 3600)
             res["parked"] += 1
     elif isinstance(exc, _FreezeSend):
         # An accepted chunk is immutable. Keep its receipt/progress and
@@ -1069,16 +1082,21 @@ def _fail_event(ledger, ev, cfg, res, exc):
         _hold_event(ledger, ev, cfg, reason="payload_or_progress_invalid")
         res["failed"] += 1
     elif isinstance(exc, OSError | TimeoutError | KeyError):
-        # Same 5-attempt ceiling as the generic path: a permanent
-        # pre-send failure (revoked token, deleted channel, missing
-        # attach) quarantines — with the never-began receipt its digest
-        # members still salvage — while a transient fault self-heals on
-        # the backoff retries instead of either looping forever.
-        if ev["attempts"] >= 4:
+        # A permanent pre-send failure (revoked token, deleted channel,
+        # missing attach) quarantines after the generic 5-attempt ceiling
+        # — with the never-began receipt its digest members still salvage.
+        # A provably transient refusal (network, busy sender, rate limit)
+        # keeps retrying on backoff and holds only after
+        # TRANSIENT_HOLD_AFTER_S of failure, so neither loops forever.
+        if _transient_pre_send(exc):
+            exhausted = _transient_failing_for(ev["attempts"]) >= TRANSIENT_HOLD_AFTER_S
+        else:
+            exhausted = ev["attempts"] >= PRE_SEND_MAX_ATTEMPTS
+        if exhausted:
             _hold_event(ledger, ev, cfg, reason="pre_send_failure")
         else:
-            backoff = min(3600, 60 * (2 ** ev["attempts"]))
-            ledger.outbox_mark(ev["event_id"], "failed", retry_in=backoff)
+            ledger.outbox_mark(ev["event_id"], "failed",
+                               retry_in=_retry_backoff(ev["attempts"]))
         res["failed"] += 1
     else:
         # Per-event containment: an unexpected failure inside

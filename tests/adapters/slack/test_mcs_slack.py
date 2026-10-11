@@ -8,15 +8,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import hermes_plugin
-import ledger
 import pytest
-from hermes_plugin.mcs_slack.actions import Actions
-from hermes_plugin.mcs_slack.delivery import DeliveryWorker, SlackCardAdapter
+from adapters.slack.actions import Actions
+from adapters.slack.delivery import DeliveryWorker, SlackCardAdapter
 from hermes_plugin.card_workers import make_slack_factory
-from hermes_plugin.mcs_delivery import envelopes, journal, registry
-from hermes_plugin.mcs_delivery import worker as worker_mod
-from hermes_plugin.mcs_delivery.spec import token_map
-from hermes_plugin.mcs_slack import paths as slack_paths
+from adapters.common import envelopes, journal, registry
+from adapters.common import worker as worker_mod
+from adapters.common.spec import token_map
+from adapters.slack import paths as slack_paths
 import notify_cards as runner_cards
 import notify_cmds as runner_cmds
 import notify_reconcile
@@ -25,6 +24,7 @@ from notify_testkit import (
 )
 from slack_card_testkit import _spec
 from slack_testkit import SCOPE, SLACK, FakeClient, _granted_card, _mkworld
+from common_testkit import ledger_fixture
 
 
 @pytest.fixture(autouse=True)
@@ -32,13 +32,7 @@ def _pin_wall_clock(monkeypatch):
     monkeypatch.setattr(runner_cards.time, "time", lambda: NOW)
 
 
-@pytest.fixture(name="led")
-def isolated_slack_ledger(tmp_path):
-    root = tmp_path / "data"
-    root.mkdir()
-    instance = ledger.Ledger(str(root / "ledger.db"))
-    yield instance
-    instance.close()
+isolated_slack_ledger = ledger_fixture(data_dir=True)
 
 
 def _adapter(client):
@@ -186,7 +180,7 @@ def test_factory_uses_existing_secondary_workspace_client(tmp_path, monkeypatch)
         (tmp_path / name).mkdir()
     (tmp_path / "flags" / "notify.json").write_text(
         json.dumps({"interactive": True, "transport": "slack"}))
-    from hermes_plugin.mcs_slack.tasks import Supervisor
+    from adapters.slack.tasks import Supervisor
     monkeypatch.setattr(Supervisor, "start", lambda self: None)
     primary = FakeClient(team="T_PRIMARY")
     secondary = FakeClient()
@@ -1388,7 +1382,7 @@ def test_rebuilt_slack_app_takes_over_from_live_predecessor(tmp_path,
     """Hermes rebuilds its AsyncApp on an in-process reconnect and re-runs
     the factory on the new app while the old supervisor still holds the
     scope lock; the successor must take over and wire its handlers."""
-    from hermes_plugin.mcs_slack import tasks as slack_tasks
+    from adapters.slack import tasks as slack_tasks
     monkeypatch.setattr(slack_tasks, "POLL_S", 0.01)
     monkeypatch.setattr(slack_tasks, "_LIVE", {}, raising=False)
     for name in ("slack_render", "flags", "cmd_int", "cmd_results"):

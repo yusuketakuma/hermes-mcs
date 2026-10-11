@@ -7,10 +7,10 @@ import time
 
 import pytest
 
-import ledger as ledger_mod
 import mcs_signals
 from semantic_projection import PROJECTION_VERSION
 from ops_testkit import DAY, NOW, _extract_v1, _msg
+from common_testkit import ledger_fixture
 
 
 @pytest.mark.parametrize("raw", ["{broken", "[" * 1500 + "0" + "]" * 1500,
@@ -57,11 +57,7 @@ def test_corrupt_latest_roster_never_revives_prior_membership(led, raw):
     assert led.db.total_changes == before
 
 
-@pytest.fixture
-def led(tmp_path):
-    lg = ledger_mod.Ledger(str(tmp_path / "ledger.db"))
-    yield lg
-    lg.db.close()
+led = ledger_fixture()
 
 
 def _extract_llm(db, mid, chash, meds, events=None):
@@ -2152,3 +2148,103 @@ def test_unreadable_latest_signal_reports_unknown_without_reviving_history(led):
 def test_measured_empty_signal_list_has_no_read_errors(led):
     result = mcs_signals.current_open(led.db)
     assert result["total"] == 0 and result["errors"] == []
+
+
+# Regression: med_change_no_followup evidence keeps the NEWEST mentions
+# so message_ids[-1] (group key / urgency) is the latest mention.
+def _extract_llm_meds(db, mid, chash, meds):
+    db.execute(
+        "INSERT INTO artifacts(kind,message_id,content,meta) "
+        "VALUES ('extract_llm',?,?,?)",
+        (mid, json.dumps({"meds": meds}), json.dumps({"hash": chash})))
+
+
+def test_eleven_mentions_keep_latest_in_evidence(led):
+    for mid in range(1, 12):
+        _msg(led.db, mid, ts=NOW - (89 - 8 * (mid - 1)) * DAY,
+             chash=f"h{mid}")
+        meds = [{"name": "薬A", "action": "change"}]
+        if mid == 11:
+            meds.append({"name": "薬B", "action": "start"})
+        _extract_llm_meds(led.db, mid, f"h{mid}", meds)
+    mcs_signals.evaluate(led, {}, now=NOW)
+    sigs = {s["evidence"]["med"]: s
+            for s in mcs_signals.current_open(led.db)["items"]
+            if s["type"] == "med_change_no_followup"}
+    a = sigs["薬A"]["evidence"]
+    assert a["mention_count"] == 11
+    assert a["message_ids"] == list(range(2, 12))
+    assert (mcs_signals.med_group_key(sigs["薬A"])
+            == mcs_signals.med_group_key(sigs["薬B"]) == (1, 11))
+
+
+# rx_period signals carry their source post as evidence.message_id; a
+# high-urgency extraction on that post must escalate them to immediate.
+def test_rx_period_expiry_high_urgency_escalates(led):
+    _msg(led.db, 1, body="本人の内服期間9/1-9/24。急変につき至急ご連絡ください。")
+    led.db.execute(
+        "INSERT INTO artifacts(kind,message_id,content,meta) "
+        "VALUES ('extract_v1',1,?,?)",
+        (json.dumps({"urgency": "high", "med_periods": [
+            {"start": "2026-09-01", "end": "2026-09-24",
+             "raw": "9/1-9/24"}]}), json.dumps({"hash": "h1"})))
+    mcs_signals.evaluate(led, {"signals": {"notify": True}}, now=NOW)
+    items = mcs_signals.current_open(led.db)["items"]
+    assert [s["type"] for s in items] == ["rx_period_expiry"]
+    pls = [json.loads(r[0]) for r in led.db.execute(
+        "SELECT payload FROM notify_outbox ORDER BY event_id")]
+    assert pls and all(p.get("urgent") for p in pls)
+    assert not any(p.get("digest") for p in pls)
+
+
+# Regressions: multi-value profession/organization columns (joined
+# with ", " by mcs_adapter) match per element, and adherence_concern
+# honours the unverified fail-closed gate. Synthetic data only.
+def _open_types(db):
+    return {s["type"] for s in mcs_signals.current_open(db)["items"]}
+
+
+def test_multi_profession_reply_counts_as_responder(led):
+    _msg(led.db, 1, ts=NOW - 4 * DAY)
+    _extract_doc(led.db, 1, "h1",
+                 requests=[{"to": "薬剤師", "action": "残薬確認"}])
+    _msg(led.db, 2, ts=NOW - 3 * DAY, chash="h2",
+         prof="薬剤師, ケアマネジャー")
+    _ev(led)
+    assert "pharmacist_request_unanswered" not in _open_types(led.db)
+
+
+def test_multi_station_reply_counts_as_responder(led):
+    _msg(led.db, 1, ts=NOW - 4 * DAY)
+    _extract_doc(led.db, 1, "h1",
+                 requests=[{"to": "薬剤師", "action": "残薬確認"}])
+    _msg(led.db, 2, ts=NOW - 3 * DAY, chash="h2",
+         org="SYN第二薬局, SYN薬局")
+    _ev(led, {"signals": {"self_organizations": ["SYN薬局"],
+                          "self_professions": []}})
+    assert "pharmacist_request_unanswered" not in _open_types(led.db)
+
+
+def test_multi_station_self_post_excluded(led):
+    _msg(led.db, 1, ts=NOW - DAY, body="飲み忘れが多い",
+         org="SYN薬局, SYN第二薬局")
+    _ev(led, {"signals": {"self_organizations": ["SYN薬局"]}})
+    assert "adherence_concern" not in _open_types(led.db)
+    # a station merely containing the name as a substring is not ours
+    _msg(led.db, 2, pid=2, ts=NOW - DAY, chash="h2", body="飲み忘れが多い",
+         org="SYN薬局東")
+    _ev(led, {"signals": {"self_organizations": ["SYN薬局"]}})
+    assert {s["project_id"] for s in mcs_signals.current_open(led.db)["items"]
+            if s["type"] == "adherence_concern"} == {2}
+
+
+@pytest.mark.parametrize("flag,opens", [
+    (None, True), (False, True), (True, False), (1, False), ("", False)])
+def test_adherence_meds_respect_unverified(led, flag, opens):
+    med = {"name": "薬A", "action": None, "negated": True}
+    if flag is not None:
+        med["unverified"] = flag
+    _msg(led.db, 1, ts=NOW - DAY, body="記録のみ")
+    _extract_doc(led.db, 1, "h1", meds=[med])
+    _ev(led)
+    assert ("adherence_concern" in _open_types(led.db)) is opens

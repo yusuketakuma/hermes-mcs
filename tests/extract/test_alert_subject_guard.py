@@ -155,5 +155,7 @@ def test_mixed_high_quotes_keep_only_current_patient_reason(tmp_path):
         assert details["source"] == "llm" and details["subject"] == "patient"
         assert details["reasons"] == ["意識を失っています"]
         assert "母" not in json.dumps(details["reasons"], ensure_ascii=False)
+        rendered = "\n".join(structured_view.structured_lines(db.db, 1))
+        assert "根拠:「意識を失っています」" in rendered and "根拠:「母" not in rendered
     finally:
         db.close()

@@ -12,13 +12,11 @@ from dataclasses import dataclass
 import inspect
 import json
 import math
-import socket
 import time
-import urllib.error
 import uuid
 from contextlib import suppress
 
-from mcs_requests import payload_hash
+from mcs_util import payload_hash
 from mcs_util import loads_dict
 
 
@@ -284,9 +282,9 @@ def _circuit_failure_class(error) -> str | None:
         return "http_429"
     if kind in ("transport", "timeout"):
         return kind
-    if isinstance(error, TimeoutError | socket.timeout):
+    if isinstance(error, TimeoutError):
         return "timeout"
-    if isinstance(error, OSError | urllib.error.URLError):
+    if isinstance(error, OSError):      # URLError included
         return "transport"
     return None
 
@@ -397,10 +395,6 @@ def job_deadline(scfg: dict, tick_deadline: float) -> float:
     return min(float(tick_deadline), time.monotonic() + max(0.0, seconds))
 
 
-def _call_guard(guard, stage: str):
-    guard(stage)
-
-
 def accepts_timeout(fn) -> bool:
     """Whether an injected callable takes a ``timeout`` kwarg — inspect
     the signature rather than catch a TypeError that could hide a real
@@ -451,14 +445,14 @@ class _GuardedLLM:
         self._calls = 0
 
     def __call__(self, prompt):
-        _call_guard(self._guard, "llm_attempt")
+        self._guard("llm_attempt")
         if self._calls and self._deadline - time.monotonic() \
                 < self._reserve:
             raise RuntimeBudgetShort("llm_next_call")
         value = llm_call(self._fn, prompt, self._deadline,
                          timeout_cap=self._timeout_cap)
         self._calls += 1
-        _call_guard(self._guard, "llm_result")
+        self._guard("llm_result")
         return value
 
 
@@ -469,7 +463,7 @@ class _GuardedJev:
         self._cutoff = cutoff
 
     def evaluate(self, state, questions, deadline):
-        _call_guard(self._guard, "jev_attempt")
+        self._guard("jev_attempt")
         _jev_cutoff(self._cutoff)
         try:
             value = self._client.evaluate(state, questions, deadline)
@@ -478,7 +472,7 @@ class _GuardedJev:
                 with suppress(Exception):
                     self._client.last_error = error
             raise
-        _call_guard(self._guard, "jev_result")
+        self._guard("jev_result")
         return value
 
     def __getattr__(self, name):
@@ -504,12 +498,12 @@ class _HookedJev:
         attempt_s = float(getattr(self._client, "attempt_timeout", 0) or 0)
 
         def before_attempt():
-            _call_guard(self._guard, "jev_attempt")
+            self._guard("jev_attempt")
             _jev_cutoff(self._cutoff, attempt_s)
 
         self._client.before_attempt = before_attempt
         self._client.after_result = \
-            lambda: _call_guard(self._guard, "jev_result")
+            lambda: self._guard("jev_result")
         self._client.reserve_fn = self._reserve
         try:
             try:
@@ -548,13 +542,13 @@ def bind_jev(client, guard, reserve=None, cutoff=None):
 
     The Jev adapter marks itself hookable.  Other clients are wrapped at the
     evaluate boundary, preserving their public counters through __getattr__.
-    Returns ``(client_for_pipeline, cleanup)``.
+    Hooks are restored by ``_HookedJev`` itself, so no cleanup is returned.
     """
     if client is None:
-        return None, lambda: None
+        return None
     if not getattr(client, "_mcs_jev_hookable", False):
-        return _GuardedJev(client, guard, cutoff), lambda: None
-    return _HookedJev(client, guard, reserve, cutoff), lambda: None
+        return _GuardedJev(client, guard, cutoff)
+    return _HookedJev(client, guard, reserve, cutoff)
 
 
 def usage_reserver(ledger, token: JobToken, *, kind: str,
@@ -601,7 +595,7 @@ def guard(ledger, token: JobToken, *, deadline: float,
     """Re-read all mutable execution identity immediately before a side effect."""
     if time.monotonic() >= deadline:
         raise RuntimeBudget(stage)
-    from mcs_operations import paused
+    from mcs_queries import paused
     if paused(ledger.db, token.project_id):
         raise RuntimeOff(stage)
     if cfg_path is not None and load_cfg is not None and parse_cfg is not None:

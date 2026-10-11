@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "事実どうしの関係づけが処理期限を越えて続く問題を修正",
+  "summary": "1件の投稿から多くの事実が抽出されると、事実どうしのすべての組み合わせを比べる関係づけの処理が、ジョブの処理期限を過ぎても最後まで続いていました（事実が64件なら2016組）。期限を過ぎたら比較を止め、比べられなかった組の数を記録し、その文書は「未完了」として扱うようにしました。途中までの関係を完成品として保存・公開することはありません。",
+  "upgrade": "追加操作は不要です。期限内に終わる通常の投稿では結果は変わりません。期限で止まった抽出は、保存済みのチャンクを使って次の回に関係づけからやり直します。修復後の関係づけが期限で止まった場合だけは、その世代を公開せず人による確認待ちにします。",
+  "details": [
+    "semantic_relations.reconcile_facts に deadline を渡せるようにした。64組ごとに時計を確認し、期限を過ぎたら止めて pairs_skipped（比べなかった組の数）を返す。",
+    "extract_facts_v2 は関係づけが途中で止まった場合、extraction_complete を偽、failure_reason を deadline とし、coverage.limitations に relations_incomplete を加え、relation_pairs_skipped を返す。意味解析ドレインは従来の期限切れと同じく、次の回にチャンクを再利用して続ける。",
+    "repair_facts_v2 は修復後の関係づけが期限で止まった場合、修復前の文書を変更せずに返し（repaired は偽）、修復記録（semantic_facts_repair）に relation_pairs_skipped を残す。修復の統合は保存済みの事実の複製に対して行う。修復は1回だけなので、この世代は自動では公開せず人による確認待ち（needs_review）になる。",
+    "評価用の run_shadow_e2e も同じ期限を渡し、止まった場合は relations を incomplete と記録する。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_relations.py",
+    "mcs/semantic/semantic_extraction.py",
+    "mcs/semantic/semantic_drain.py",
+    "mcs/semantic/semantic_evaluation.py",
+    "tests/semantic/test_semantic_relation_bound.py"
+  ]
+}

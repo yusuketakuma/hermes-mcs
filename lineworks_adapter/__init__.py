@@ -1,4 +1,1 @@
-"""Stable CLI entry point and exports of the canonical LINE WORKS adapter."""
-from adapters.lineworks import ClientError, Credentials, LineWorksClient, verify_signature
-
-__all__ = ["ClientError", "Credentials", "LineWorksClient", "verify_signature"]
+"""Stable ``python -m lineworks_adapter`` CLI entry point for the LINE WORKS adapter."""

@@ -43,4 +43,5 @@ env -i \
     TZ=UTC \
     PYTHONDONTWRITEBYTECODE=1 \
     MCS_TEST_SANDBOX=1 \
+    MCS_TEST_TIMEOUT="${MCS_TEST_TIMEOUT:-300}" \
     "$test_python" -m pytest "$@"

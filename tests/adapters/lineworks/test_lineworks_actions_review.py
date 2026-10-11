@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from hermes_plugin.mcs_delivery import envelopes, paths
+from adapters.common import envelopes, paths
 from test_lineworks_adapter import SCOPE, TOKEN, command_files, event, world
 
 
@@ -326,3 +326,20 @@ def test_rate_limited_followup_is_restored_for_the_next_sweep(tmp_path):
     asyncio.run(w.actions.sweep_followups())
     assert w.reg.followup(first["command_id"]) is None
     assert "合成の要約" in w.client.calls[-1][1]["text"]
+
+
+@pytest.mark.parametrize("project_id,signals", [
+    (None, {"synthetic-key": "not-a-dict"}),     # crashed the click
+    (True, None),                                # bool passed as project 1
+])
+def test_malformed_token_scope_is_denied(tmp_path, project_id, signals):
+    """A token context naming no valid positive int project is refused,
+    as on Discord, instead of raising or passing a bool as project 1."""
+    w = world(tmp_path, action="body")
+    context = {**w.reg.token(TOKEN), "project_id": project_id,
+               "context": {"source_message_id": 100, "source_hash": "a" * 64}}
+    if signals is not None:
+        context["context"]["signals"] = signals
+    w.reg.put_tokens({TOKEN: context})
+    asyncio.run(w.actions.handle(event(postback="mcs:a:" + TOKEN)))
+    assert command_files(w) == []

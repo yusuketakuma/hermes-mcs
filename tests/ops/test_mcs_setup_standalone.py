@@ -1,8 +1,13 @@
 """runtime_mode=standalone: config grants, launchd schedules and services
 without Hermes; Hermes mode keeps its existing surface."""
 import json
+import os
 import plistlib
+import time
 from types import SimpleNamespace
+import shlex
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -10,7 +15,38 @@ import mcs_runtime
 import mcs_setup
 import mcs_util
 from test_mcs_setup import _services_env
-from mcs_standalone import runtime
+from mcs_standalone import runtime, service
+
+
+def _process_gone(pid, wait=10.0):
+    """Poll until ``pid`` no longer runs. A zombie (state Z in /proc) counts
+    as gone: a container's pid 1 may never reap an orphan. Without /proc
+    (macOS) signal 0 is the probe."""
+    deadline = time.monotonic() + wait
+    while True:
+        if os.path.isdir("/proc/self"):
+            try:
+                with open(f"/proc/{pid}/stat") as handle:
+                    gone = handle.read().rsplit(")", 1)[1].split()[0] == "Z"
+            except FileNotFoundError:
+                gone = True
+        else:
+            gone = not _signal0(pid)
+        if gone:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def _signal0(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def config(interactive="discord"):
@@ -45,7 +81,8 @@ def test_agent_labels_and_ownership_follow_the_runtime():
     assert mcs_setup._agent_labels({}) == mcs_setup.AGENT_LABELS
     labels = mcs_setup._agent_labels(config())
     cron = [mcs_setup._cron_label(s) for _, _, s in mcs_setup.CRON_JOBS]
-    assert labels == [mcs_setup.STANDALONE_LABEL]
+    # the health watch stays outside the host it watches
+    assert labels == [mcs_setup.STANDALONE_LABEL, mcs_setup.HEALTH_LABEL]
     # The same host owns collection even without a card connection.
     assert mcs_setup._agent_labels(config("off")) == labels
     for label in cron + [mcs_setup.STANDALONE_LABEL, "local.mcs-cmd"]:
@@ -101,7 +138,11 @@ def test_standalone_services_use_launchd_not_hermes(monkeypatch, tmp_path):
     assert len(host.schedules) == 6
     assert not any(a[0] == "/x/hermes" for a in calls)
     manifest = json.loads((tmp_path / "data" / "service_manifest.json").read_text())
-    assert manifest["cron"] == [] and len(manifest["agents"]) == 1
+    assert manifest["cron"] == [] and [row["label"] for row in manifest["agents"]] == [
+        mcs_setup.STANDALONE_LABEL, mcs_setup.HEALTH_LABEL]
+    health = plistlib.loads((tmp_path / "agents" / "local.mcs-health.plist").read_bytes())
+    assert health["ProgramArguments"][0] == venv and health["StartInterval"] == 300
+    assert health["EnvironmentVariables"] == {"MCS_ROOT": str(tmp_path)}
 
 
 @pytest.mark.parametrize("state,expected", [(3, 0), (0, 1), (1, 1)])
@@ -259,7 +300,6 @@ def test_services_never_reloads_the_job_it_runs_inside(monkeypatch, tmp_path):
 
 def test_cron_timeout_wrapper_kills_the_whole_job(tmp_path):
     import subprocess
-    import time
     marker = tmp_path / "child.pid"
     script = tmp_path / "job.sh"
     # the job's own child must die too (it would hold run.lock otherwise)
@@ -269,11 +309,30 @@ def test_cron_timeout_wrapper_kills_the_whole_job(tmp_path):
                            "/bin/bash", str(script)], timeout=60)
     assert proc.returncode == 124 and time.monotonic() - started < 30
     child = int(marker.read_text())
-    time.sleep(0.5)
-    assert subprocess.run(["kill", "-0", str(child)], capture_output=True).returncode != 0
+    assert _process_gone(child)
     ok = subprocess.run(["/usr/bin/perl", "-e", mcs_setup._TIMEOUT_PL, "30",
                          "/bin/sh", "-c", "exit 3"], timeout=60)
     assert ok.returncode == 3                     # normal exits pass through
+
+
+@pytest.mark.parametrize("signal_name", ["SIGTERM", "SIGKILL"])
+def test_cron_timeout_wrapper_preserves_child_signal_failure(signal_name):
+    import signal
+    import subprocess
+    import sys
+
+    child = "import os, signal, sys; os.kill(os.getpid(), getattr(signal, sys.argv[1]))"
+    proc = subprocess.run(["/usr/bin/perl", "-e", mcs_setup._TIMEOUT_PL, "30",
+                           sys.executable, "-c", child, signal_name], timeout=10)
+    assert proc.returncode == 128 + getattr(signal, signal_name)
+
+
+def test_cron_timeout_wrapper_preserves_success():
+    import subprocess
+
+    proc = subprocess.run(["/usr/bin/perl", "-e", mcs_setup._TIMEOUT_PL, "30",
+                           "/bin/sh", "-c", "exit 0"], timeout=10)
+    assert proc.returncode == 0
 
 
 @pytest.mark.parametrize("target,ok", [
@@ -312,21 +371,19 @@ def test_self_reload_waits_for_the_updater_not_for_services(monkeypatch, tmp_pat
 def test_cron_timeout_wrapper_forwards_sigterm(tmp_path):
     import signal
     import subprocess
-    import time
     marker = tmp_path / "child.pid"
     script = tmp_path / "job.sh"
     script.write_text(f"sleep 300 & echo $! > {marker}; wait\n")
     proc = subprocess.Popen(["/usr/bin/perl", "-e", mcs_setup._TIMEOUT_PL, "3600",
                              "/bin/bash", str(script)])
-    for _ in range(100):
-        if marker.exists() and marker.read_text().strip():
-            break
+    deadline = time.monotonic() + 30
+    while not (marker.exists() and marker.read_text().strip()):
+        assert time.monotonic() < deadline, "job never started its child"
         time.sleep(0.05)
     proc.send_signal(signal.SIGTERM)          # what launchd does on bootout
     assert proc.wait(timeout=30) == 143
-    time.sleep(0.5)
     child = int(marker.read_text())
-    assert subprocess.run(["kill", "-0", str(child)], capture_output=True).returncode != 0
+    assert _process_gone(child)
 
 
 def test_retire_previous_hermes_removes_plists_so_login_does_not_reload(monkeypatch, tmp_path):
@@ -341,3 +398,231 @@ def test_retire_previous_hermes_removes_plists_so_login_does_not_reload(monkeypa
             "agents": [{"label": "ai.mcs.extract-drainer"}, {"label": "local.mcs-cmd"}]}
     assert mcs_setup._retire_previous_runtime(prev, "standalone", lambda m: None, False) == 0
     assert list(agents.iterdir()) == []
+
+
+@pytest.mark.parametrize("print_code", [124, 127])
+def test_unverifiable_launchd_stop_keeps_the_old_agent_and_starts_nothing(
+        monkeypatch, tmp_path, print_code):
+    """A timed-out or unstartable `launchctl print` is unknown, not stopped:
+    the old plist stays and the new runtime is not bootstrapped."""
+    label = "ai.mcs.extract-drainer"
+    real_loaded = mcs_setup._agent_loaded
+    calls, args = _standalone_services(monkeypatch, tmp_path, config(), loaded={label})
+    fixture_loaded = mcs_setup._agent_loaded
+    monkeypatch.setattr(mcs_setup, "_agent_loaded",
+                        lambda name: real_loaded(name) if name == label else fixture_loaded(name))
+    fixture_run = mcs_setup.subprocess.run
+
+    def run(argv, **kw):
+        if argv[:2] in (["launchctl", "bootout"], ["launchctl", "print"]) \
+                and argv[2].endswith("/" + label):
+            calls.append(list(argv))
+            return SimpleNamespace(returncode=124 if argv[1] == "bootout" else print_code,
+                                   stdout="", stderr="synthetic unavailable")
+        return fixture_run(argv, **kw)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", run)
+    (tmp_path / "agents").mkdir()
+    (tmp_path / "data").mkdir()
+    old = tmp_path / "agents" / (label + ".plist")
+    old.write_text("synthetic old service")
+    manifest = tmp_path / "data" / "service_manifest.json"
+    manifest.write_text(json.dumps({"runtime_mode": "hermes", "agents": [{"label": label}], "cron": []}))
+    assert mcs_setup.cmd_services(args) == 1
+    assert old.exists()
+    assert not any(a[:2] == ["launchctl", "bootstrap"] and a[-1].endswith(mcs_setup.STANDALONE_LABEL + ".plist")
+                   for a in calls)
+    assert json.loads(manifest.read_text())["runtime_mode"] == "hermes"
+
+
+@pytest.mark.parametrize("print_code", [124, 127])
+def test_retiring_an_agent_with_unknown_state_keeps_its_plist(monkeypatch, tmp_path, print_code):
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    plist = agents / "ai.mcs.cron.mcs-check.plist"
+    plist.write_text("synthetic")
+    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
+    monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(agents))
+    monkeypatch.setattr(mcs_setup, "_run", lambda argv, **kw: SimpleNamespace(
+        returncode=print_code if argv[1] == "print" else 0, stdout="", stderr=""))
+    assert mcs_setup._agent_loaded("ai.mcs.cron.mcs-check") is None
+    assert mcs_setup._retire_agents({"ai.mcs.cron.mcs-check"}, lambda m: None, False) == 1
+    assert plist.exists()
+
+
+def _switch_back_env(monkeypatch, tmp_path):
+    """standalone -> hermes with a supervised gateway already running."""
+    cfg = config()
+    cfg["runtime_mode"] = "hermes"
+    calls, args = _standalone_services(monkeypatch, tmp_path, cfg, loaded={mcs_setup.STANDALONE_LABEL})
+    (tmp_path / "agents").mkdir()
+    (tmp_path / "data").mkdir()
+    (tmp_path / "agents" / (mcs_setup.STANDALONE_LABEL + ".plist")).write_text("synthetic old host")
+    manifest = tmp_path / "data" / "service_manifest.json"
+    manifest.write_text(json.dumps({"runtime_mode": "standalone",
+                                    "agents": [{"label": mcs_setup.STANDALONE_LABEL}], "cron": []}))
+    return calls, args, manifest
+
+
+def _restarts(calls):
+    return sum(a[1:3] == ["gateway", "restart"] for a in calls)
+
+
+def test_partial_switch_back_keeps_the_gateway_restart_for_the_next_run(monkeypatch, tmp_path):
+    calls, args, manifest = _switch_back_env(monkeypatch, tmp_path)
+    fixture_run = mcs_setup.subprocess.run
+    fail, creates = [True], [0]
+
+    def run(argv, **kw):
+        if argv[1:3] == ["cron", "create"]:
+            creates[0] += 1
+            if fail[0] and creates[0] == 2:
+                calls.append(list(argv))
+                return SimpleNamespace(returncode=1, stdout="", stderr="synthetic create failure")
+        if argv[1:3] == ["gateway", "status"]:
+            calls.append(list(argv))
+            return SimpleNamespace(returncode=0, stdout="supervised", stderr="")
+        return fixture_run(argv, **kw)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", run)
+    assert mcs_setup.cmd_services(args) == 1
+    assert _restarts(calls) == 0
+    saved = json.loads(manifest.read_text())
+    assert saved["runtime_mode"] == "hermes" and saved["gateway_restart_pending"] is True
+    split, fail[0] = len(calls), False
+    assert mcs_setup.cmd_services(args) == 0
+    assert _restarts(calls[split:]) == 1
+    assert "gateway_restart_pending" not in json.loads(manifest.read_text())
+
+
+def test_flags_publish_failure_fails_services_and_defers_the_switch_restart(monkeypatch, tmp_path):
+    import notify_cards
+    calls, args, manifest = _switch_back_env(monkeypatch, tmp_path)
+    fixture_run = mcs_setup.subprocess.run
+
+    def run(argv, **kw):
+        if argv[1:3] == ["gateway", "status"]:
+            calls.append(list(argv))
+            return SimpleNamespace(returncode=0, stdout="supervised", stderr="")
+        return fixture_run(argv, **kw)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", run)
+
+    publish = notify_cards.publish_flags
+
+    def broken(cfg, data):
+        raise OSError("synthetic flags write failure")
+    monkeypatch.setattr(notify_cards, "publish_flags", broken)
+    assert mcs_setup.cmd_services(args) == 1
+    assert _restarts(calls) == 0
+    saved = json.loads(manifest.read_text())   # the verified jobs are still recorded
+    assert saved["runtime_mode"] == "hermes" and saved["gateway_restart_pending"] is True
+    monkeypatch.setattr(notify_cards, "publish_flags", publish)
+    split = len(calls)
+    assert mcs_setup.cmd_services(args) == 0
+    assert _restarts(calls[split:]) == 1
+
+
+def _slack_target_config():
+    cfg = config(interactive="off")
+    cfg["notify_target"] = "slack:C0SYNTHETIC"
+    cfg["notify"] = {"interactive": "off", "slack": {
+        "profile": "default", "application_id": "A0SYNTHETIC", "team_id": "T0SYNTHETIC",
+        "channel_id": "C0SYNTHETIC", "allowed_user_ids": ["U0OLD"], "project_ids": [1]}}
+    return cfg
+
+
+def test_init_applies_plugin_flags_to_the_single_delivery_transport(monkeypatch, tmp_path, capsys):
+    """interactive=off with a Slack target: the grants belong to the Slack
+    scope the validator requires; Discord-only grants stay unapplied."""
+    from test_mcs_setup import _init_env
+    _init_env(monkeypatch, tmp_path, _slack_target_config())
+    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(mcs_setup.sys, "argv",
+                        ["mcs_setup", "init", "--yes", "--plugin-user-ids", "U1,U2",
+                         "--plugin-project-ids", "5", "--plugin-chat-ids", "9"])
+    assert mcs_setup.main() == 0
+    out = capsys.readouterr().out
+    assert "--plugin-chat-ids" in out and "--plugin-user-ids" not in out
+    slack = json.loads((tmp_path / "c.json").read_text())["notify"]["slack"]
+    assert slack["allowed_user_ids"] == ["U1", "U2"] and slack["project_ids"] == [5]
+    assert "allowed_chat_ids" not in slack
+
+
+def test_init_leaves_plugin_flags_unapplied_when_two_transports_need_scopes(monkeypatch, tmp_path, capsys):
+    from test_mcs_setup import _init_env
+    cfg = _slack_target_config()
+    cfg["notify"]["interactive"] = "discord"
+    cfg["notify"]["discord"] = config()["notify"]["discord"]
+    _init_env(monkeypatch, tmp_path, cfg)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(mcs_setup.sys, "argv",
+                        ["mcs_setup", "init", "--yes", "--plugin-user-ids", "U1"])
+    assert mcs_setup.main() == 0
+    assert "--plugin-user-ids" in capsys.readouterr().out
+    saved = json.loads((tmp_path / "c.json").read_text())["notify"]
+    assert saved["slack"]["allowed_user_ids"] == ["U0OLD"]
+    assert saved["discord"]["allowed_user_ids"] == ["4000000000000000004"]
+
+
+# Regression: keychain update under a different account; standalone
+# target scope warned as ignored.
+def test_keychain_store_updates_existing_item_under_its_account(monkeypatch):
+    items = [("mcs", "oldpw")]   # first interactive init: login id unknown
+
+    def run(argv, *, timeout=60, input_text=None, cwd=None):
+        def ok(out=""):
+            return subprocess.CompletedProcess(argv, 0, out, "")
+
+        if argv[:2] == ["security", "-i"]:
+            toks = shlex.split(input_text)
+            a, w = toks[toks.index("-a") + 1], toks[toks.index("-w") + 1]
+            for i, (acc, _) in enumerate(items):
+                if acc == a:
+                    items[i] = (a, w)
+                    break
+            else:
+                items.append((a, w))
+            return ok()
+        if argv[1] == "find-generic-password":
+            m = [x for x in items
+                 if "-a" not in argv or x[0] == argv[argv.index("-a") + 1]]
+            if not m:
+                return subprocess.CompletedProcess(argv, 44, "", "")
+            acc, w = m[0]
+            return ok(w + "\n" if "-w" in argv
+                      else f'attributes:\n    "acct"<blob>="{acc}"\n')
+        if argv[1] == "delete-generic-password":
+            a = argv[argv.index("-a") + 1]
+            items[:] = [x for x in items if x[0] != a]
+            return ok()
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(mcs_setup, "_run", run)
+    assert mcs_setup._keychain_store("user1", "newpw") is True
+    assert items == [("mcs", "newpw")]
+
+
+def test_standalone_target_scope_is_not_warned_as_ignored():
+    cfg = config("slack")
+    warn = "notify.discord: scope configured but interactive"
+    assert not any(w.startswith(warn) for w in mcs_setup.validate_config(cfg)[1])
+    del cfg["runtime_mode"]
+    assert any(w.startswith(warn) for w in mcs_setup.validate_config(cfg)[1])
+
+
+# Linux standalone unit: WorkingDirectory unquoted, '$' escaped in ExecStart.
+def test_linux_unit_working_directory_unquoted_and_dollar_escaped(tmp_path):
+    root = tmp_path / "a$b"
+    root.mkdir()
+    _, body = service.render(root, platform="linux")
+    repo = str(Path(service.__file__).resolve().parents[1])
+    assert "WorkingDirectory=" + repo.replace("%", "%%") + "/.\n" in body
+    exec_line = next(line for line in body.splitlines() if line.startswith("ExecStart="))
+    assert "a$$b" in exec_line and "a$b" not in exec_line.replace("$$", "")
+
+
+def test_host_service_creates_owner_only_files(tmp_path):
+    """Jobs inherit the host umask: both service forms must set 077."""
+    import plistlib
+    _, plist = service.render(tmp_path, platform="darwin")
+    assert plistlib.loads(plist.encode())["Umask"] == 0o077
+    _, unit = service.render(tmp_path, platform="linux")
+    assert "\nUMask=0077\n" in unit.split("[Service]", 1)[1].split("[Install]", 1)[0]

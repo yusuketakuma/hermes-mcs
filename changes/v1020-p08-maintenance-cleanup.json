@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "独立稼働のllama-serverログの肥大化と、強制終了後に残る台帳コピーを修正",
+  "summary": "独立稼働（runtime_mode=standalone）では llama-server のログ ~/.mcs/logs/llamacpp.log が一度もローテーションされず増え続けていた問題を修正し、5MB を超えると他のログと同じく1世代だけ退避するようにしました。バックアップやスナップショットの作成中にプロセスが強制終了されると台帳全体（患者情報を含む）の作業コピーが残り続けていたため、1日以上経過したものを定期処理で削除します。退避したログ（.1）は umask に関係なく本人だけが読める権限で作ります。",
+  "upgrade": "追加操作は不要です。更新後の最初の定期処理で、1日以上前の作業コピー（data/backups/*.db.tmp と data/snapshots/.snapshot.*.tmp）が削除されます。既存の .1 ログは次回のローテーション時に本人だけが読める権限へ変わります。",
+  "details": [
+    "mcs/core/maintenance.py の rotate_log の既定リストに MCS ホーム配下の logs/llamacpp.log を追加した。Hermes モード用の ~/.hermes/logs/llamacpp.log も引き続き対象とする。install.sh に既定以外の HERMES_HOME を渡した構成のログは対象外。",
+    "ローテーション先の .1 を os.open(O_NOFOLLOW, 0o600) と fchmod で作り、copyfileobj で複製する。copytruncate の動作は変えない。",
+    "prune_leftovers の対象に BACKUP_DIR の *.db.tmp と SNAPSHOT_DIR の .snapshot.*.tmp を追加した。既存と同じく ctime が LEFTOVER_KEEP_S（24時間）を超えたものだけを消すため、実行中の作成処理とは競合しない。公開済みのバックアップとスナップショットは対象外。"
+  ],
+  "refs": [
+    "mcs/core/maintenance.py",
+    "tests/core/test_maintenance_retention_cleanup.py"
+  ]
+}

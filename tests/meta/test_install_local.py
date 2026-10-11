@@ -89,6 +89,22 @@ def test_existing_same_project_checkout_is_reused_untouched(home, source):
     assert Path(_ran(home)[0]) == dest.resolve()
 
 
+@pytest.mark.parametrize("shallow_source", [True, False])
+def test_same_head_shallow_and_full_checkouts_are_reused(home, source, tmp_path, shallow_source):
+    (source / "README").write_text("fictional second revision")
+    _git(source, "commit", "-am", "second fictional commit")
+    shallow = tmp_path / "shallow"
+    subprocess.run(["git", "clone", "-q", "--depth", "1", source.as_uri(), str(shallow)],
+                   check=True, capture_output=True)
+    assert _git(shallow, "rev-parse", "--is-shallow-repository") == "true"
+    assert _git(shallow, "rev-parse", "HEAD") == _git(source, "rev-parse", "HEAD")
+    origin, dest = (shallow, source) if shallow_source else (source, shallow)
+    before = _git(dest, "rev-parse", "HEAD")
+    assert install_local.main(["--dest", str(dest)], source=str(origin)) == 0
+    assert _git(dest, "rev-parse", "HEAD") == before
+    assert Path(_ran(home)[0]) == dest.resolve()
+
+
 def test_recorded_install_location_wins_without_dest(home, source, tmp_path):
     previous = tmp_path / "elsewhere" / "mcs"
     subprocess.run(["git", "clone", "-q", str(source), str(previous)], check=True)
@@ -104,6 +120,53 @@ def test_empty_explicit_dest_with_spaces_is_cloned(home, source, tmp_path):
     dest.mkdir(parents=True)
     assert install_local.main(["--dest", str(dest)], source=str(source)) == 0
     assert (dest / "README").read_text() == "mcs"
+    assert Path(_ran(home)[0]) == dest.resolve()
+
+
+@pytest.mark.parametrize("root_value", ["empty", "different"])
+def test_unsupported_data_root_is_refused_before_clone(home, source, tmp_path, monkeypatch, capsys, root_value):
+    dest = tmp_path / "permanent-source"
+    other = tmp_path / "other-root"
+    monkeypatch.setenv("MCS_ROOT", "" if root_value == "empty" else str(other))
+    assert install_local.main(["--dest", str(dest)], source=str(source)) == 2
+    assert "MCS_ROOT" in capsys.readouterr().err
+    assert not dest.exists() and not other.exists()
+    assert list(home.iterdir()) == []
+
+
+@pytest.mark.parametrize("root_value", ["unset", "default", "normalized", "physical", "tilde"])
+def test_default_data_root_spellings_keep_custom_source_dest(home, source, tmp_path, monkeypatch, root_value):
+    monkeypatch.delenv("MCS_ROOT", raising=False)
+    if root_value == "default":
+        monkeypatch.setenv("MCS_ROOT", str(home / ".mcs"))
+    elif root_value == "normalized":
+        monkeypatch.setenv("MCS_ROOT", str(home) + "/./.mcs/")
+    elif root_value == "physical":
+        alias = tmp_path / "home-alias"
+        alias.symlink_to(home, target_is_directory=True)
+        monkeypatch.setenv("MCS_ROOT", str(alias / ".mcs"))
+    elif root_value == "tilde":
+        monkeypatch.setenv("MCS_ROOT", "~/.mcs")
+    dest = tmp_path / "permanent-source"
+    assert install_local.main(["--dest", str(dest)], source=str(source)) == 0
+    assert Path(_ran(home)[0]) == dest.resolve()
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_relative_data_root_stays_default_when_installer_changes_directory(home, source, tmp_path, monkeypatch, dry_run):
+    with (source / "install.sh").open("a") as stream:
+        stream.write('printf \'%s\\n\' "$MCS_ROOT" > "$HOME/installer-root"\n')
+    _git(source, "commit", "-am", "record synthetic installer root")
+    dest = tmp_path / "permanent-source"
+    if dry_run:
+        subprocess.run(["git", "clone", "-q", str(source), str(dest)],
+                       check=True, capture_output=True)
+    monkeypatch.chdir(home)
+    monkeypatch.setenv("MCS_ROOT", ".mcs")
+    args = ["--dest", str(dest), *(["--dry-run"] if dry_run else [])]
+    assert install_local.main(args, source=str(source)) == 0
+    assert (home / "installer-root").read_text().strip() == str(home / ".mcs")
+    assert os.environ["MCS_ROOT"] == ".mcs"
     assert Path(_ran(home)[0]) == dest.resolve()
 
 

@@ -149,6 +149,71 @@ def _broker(path: str | None = None):
         return b
 
 
+# Unknown-permit reconciliation: at most one evidence probe per broker
+# path per interval, and only when aged unresolved permits exist.
+RECONCILE_INTERVAL_S = 300.0
+_IDLE_SAMPLES = 3
+_IDLE_GAP_S = 1.0
+_RECONCILED_AT: dict = {}
+
+
+def _slots_idle(endpoint: str, deadline: float | None) -> bool:
+    try:
+        status, _headers, raw = bounded_request(
+            probe_urls(endpoint)[1], "GET", None, 2, deadline)
+        if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
+            return False
+        slots = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return False
+    return (isinstance(slots, list) and bool(slots)
+            and all(isinstance(s, dict) and s.get("is_processing") is False
+                    for s in slots))
+
+
+def backend_idle_evidence(endpoint: str = ENDPOINT,
+                          deadline: float | None = None) -> str | None:
+    """Proof string when ``/slots`` reports every slot idle in each of
+    several spaced samples, else None. Used only to reconcile permits
+    already past ``llm_admission.UNKNOWN_HOLD_S`` — a single idle sample
+    is never treated as retirement evidence."""
+    for i in range(_IDLE_SAMPLES):
+        if i:
+            if deadline is not None and time.monotonic() + _IDLE_GAP_S >= deadline:
+                return None
+            time.sleep(_IDLE_GAP_S)
+        if not _slots_idle(endpoint, deadline):
+            return None
+    return f"slots_idle_x{_IDLE_SAMPLES}"
+
+
+def _maybe_reconcile(broker, path: str, endpoint: str,
+                     deadline: float | None) -> bool:
+    """Throttled ``reconcile_unknown``; True when it freed a permit."""
+    last = _RECONCILED_AT.get(path)
+    if last is not None and time.monotonic() - last < RECONCILE_INTERVAL_S:
+        return False
+
+    def evidence():
+        # the throttle counts probes, not the cheap candidate query
+        _RECONCILED_AT[path] = time.monotonic()
+        return backend_idle_evidence(endpoint, deadline)
+    try:
+        out = broker.reconcile_unknown(evidence)
+    except Exception:
+        return False
+    return bool(out.get("reconciled"))
+
+
+def admission_status(broker_path: str | None = None) -> dict | None:
+    """Broker occupancy for health/alerting (None when admission is off):
+    ``unresolved`` permits and ``oldest_unresolved_age_s`` show width held
+    by completion-unproven requests."""
+    if not admission_enabled() and broker_path is None:
+        return None
+    return _broker(broker_path).status()
+
+
 def admitted_chat(client_route: str, prompt: str, *,
                   broker_path: str | None = None,
                   wait_s: float = 0, deadline: float | None = None,
@@ -176,6 +241,12 @@ def admitted_chat(client_route: str, prompt: str, *,
                         kw.get("timeout", TIMEOUT),
                         kw.get("max_tokens", MAX_TOKENS), deadline)
     acq = broker.acquire(client_route, cls)
+    if not acq.get("admitted") \
+            and acq.get("reason") in ("class_full", "rt_pending") \
+            and _maybe_reconcile(broker, broker_path or _admission_db_path(),
+                                 kw.get("endpoint", ENDPOINT), deadline):
+        # aged completion-unproven permits were retired on evidence
+        acq = broker.acquire(client_route, cls)
     pid = acq.get("permit_id")
     if not acq.get("admitted") and acq.get("reason") == "waiting" \
             and wait_s > 0 and pid is not None:
@@ -247,16 +318,7 @@ def admitted_chat(client_route: str, prompt: str, *,
         broker.mark_unknown(pid, "interrupted")
         raise
     if response is None:
-        if err_out.get("kind") == "unreachable":
-            # connection refused — provably never reached the backend
-            broker.terminal(pid, "not_sent", proof="unreachable")
-        elif err_out.get("kind") == "protocol":
-            # HTTP 200 with an unusable body — the backend finished
-            broker.terminal(pid, "done", proof="malformed_200")
-        else:
-            # transport failure — the backend may still be decoding;
-            # unknown, never assumed free
-            broker.mark_unknown(pid, "transport")
+        _retire_failed_send(broker, pid, err_out.get("kind"), "")
     else:
         broker.terminal(pid,
                         "done" if response.get("status") == 200
@@ -309,14 +371,27 @@ def admitted_probe_format(client_route: str, endpoint: str, model: str,
         # neither completion nor that the backend stopped decoding.
         p = broker._permit(pid)
         if p is not None and p["state"] == "sent":
-            if err_out.get("kind") == "unreachable":
-                broker.terminal(pid, "not_sent", proof="unreachable")
-            elif err_out.get("kind") == "protocol":
-                broker.terminal(pid, "done", proof="probe_malformed_200")
-            elif err_out.get("kind"):
-                broker.mark_unknown(pid, "probe_transport")
+            if err_out.get("kind"):
+                _retire_failed_send(broker, pid, err_out["kind"], "probe_")
             else:
                 broker.terminal(pid, "done", proof="probe_returned")
+
+
+def _retire_failed_send(broker, pid: int, kind: str | None,
+                        proof_prefix: str) -> None:
+    """Retire a sent permit whose request produced no usable answer.
+
+    Only a refused connection proves the backend never saw the request,
+    and only an HTTP 200 with an unusable body proves it finished; any
+    other failure leaves the permit ``unknown`` so it keeps occupying
+    its class (the module's fail-closed rule)."""
+    if kind == "unreachable":
+        broker.terminal(pid, "not_sent", proof="unreachable")
+    elif kind == "protocol":
+        broker.terminal(pid, "done", proof=f"{proof_prefix}malformed_200")
+    else:
+        # the backend may still be decoding — never assumed free
+        broker.mark_unknown(pid, f"{proof_prefix}transport")
 
 
 def bounded_request(endpoint: str, method: str, body, timeout: float,
@@ -326,12 +401,6 @@ def bounded_request(endpoint: str, method: str, body, timeout: float,
     absolute deadline."""
     return bounded_http.bounded_http_request(
         endpoint, method, body, timeout, api_key=None, deadline=deadline)
-
-
-def _default_request(endpoint: str, method: str, body, timeout: float,
-                     deadline: float | None):
-    """Use a reaped worker so a slow response cannot extend the deadline."""
-    return bounded_request(endpoint, method, body, timeout, deadline)
 
 
 def _usage_dict(usage) -> dict | None:
@@ -418,7 +487,8 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
         body["response_format"] = response_format
     if extra_payload:
         body.update(extra_payload)
-    send = request_fn or _default_request
+    # a reaped worker, so a slow response cannot extend the deadline
+    send = request_fn or bounded_request
     try:
         status, _headers, raw = send(endpoint, "POST", body, timeout,
                                      deadline)

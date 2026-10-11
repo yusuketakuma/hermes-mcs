@@ -128,8 +128,9 @@ def test_real_sdk_upload_no_retries_and_closed_session_never_falls_back(monkeypa
         monkeypatch.setattr(session, "_live", lambda: wire)
         try:
             assert client.retry_handlers == [] and client.proxy is None
+            # None means verified; a failure is a slack_identity_* code
             assert await standalone._identity(client, {"team_id": "T_SYNTHETIC",
-                                                       "application_id": "A_SYNTHETIC"})
+                                                       "application_id": "A_SYNTHETIC"}) is None
             result = await client.files_upload_v2(channel="C_SYNTHETIC", thread_ts="1790000000.000001",
                                                 file=b"sample", filename="sample.txt", title="sample.txt")
             assert result["ok"]

@@ -22,10 +22,9 @@ Loop候補の採用も既存requestのpreview/confirmを使う。
 ## アダプターの配置
 
 Slack・Discord の接続先固有処理の正本は `adapters/slack/` と
-`adapters/discord/` にあります。`hermes_plugin/mcs_slack/` と
-`hermes_plugin/mcs_discord/` は既存 import を維持する互換入口です。
-共通の配送・承認・receipt 基盤は `adapters/common/` にあります。
-`hermes_plugin/mcs_delivery/` は既存 import を維持する互換入口です。
+`adapters/discord/` にあります。共通の配送・承認・receipt 基盤は
+`adapters/common/` にあります。`card_workers.py` は Hermes が別のパッケージ名で
+plugin を読み込んでもリポジトリのルートを `sys.path` に加え、`adapters.*` を直接 import します。
 LINE WORKS を含む構成は [接続アダプター](../adapters/README.md)を参照してください。
 
 ## 配置と設定
@@ -209,7 +208,7 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
         profile: mcs                 # runner 側 discord scope と一致させる
         application_id: "<discord app id>"
         channel_id: "<配送先 channel id>"
-        guild_id: "<guild id>"       # scope が guild を pin する場合
+        guild_id: "<guild id>"       # 必須。runner 側 discord scope と一致させる
         # 任意: このロールを持つメンバーもカードを操作できる
         # （channel・project の確認はユーザー許可と同じ）
         allowed_role_ids: ["<guild role id>"]
@@ -326,7 +325,9 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   見出しの件数が範囲外の project を数えないよう、📋・🗂 のクリックは
   静的な `project_ids`（`project_ids_auto` のときは送らない）を
   `input.projects` で渡し、runner はその範囲で数えて返す（plugin 側の
-  絞り込みは多重防御として残す）。
+  絞り込みは多重防御として残す）。runner は数えた範囲を結果の `projects`
+  に返し、遅れて届いた結果の範囲が現在の `project_ids` に含まれない
+  （待つ間に範囲が狭まった）場合、plugin は件数を出さず再操作を促す。
   入力を伴うクリックは notification envelope の任意フィールド `input`
   （`{"name"}` = 📋 の押した人の表示名、`{"query"}` = 🔎 のキーワード、各
   120 字以内。`{"projects"}` = 正の整数の配列、1000 件以内）で渡し、`command_id` の後半を actor＋input のハッシュにする

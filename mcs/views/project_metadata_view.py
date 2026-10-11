@@ -7,10 +7,9 @@ import math
 import time
 
 from mcs_adapter import SchemaError
-from project_metadata import (ARTIFACT_KIND, JSON, MAX_ROWS, clinical_definition_fingerprint,
-                              metadata_target, normalize_rows)
-
-_CLINICAL = ("medication_periods", "observation_items", "observation_values")
+from project_metadata import (ARTIFACT_KIND, CLINICAL_DATASETS, JSON, MAX_ROWS, accepted_reasons,
+                              attempt_state, clinical_definition_fingerprint, metadata_target,
+                              normalize_rows)
 
 
 def _text(value) -> bool:
@@ -158,7 +157,7 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
 
     try:
         invalid = (type(show_names) is not bool or type(include_chat) is not bool
-            or (include_chat and dataset not in _CLINICAL)
+            or (include_chat and dataset not in CLINICAL_DATASETS)
             or type(max_age_s) not in (int, float)
             or not math.isfinite(max_age_s) or max_age_s < 0
             or (now is not None and (type(now) not in (int, float)
@@ -228,11 +227,8 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
                 or (attempt["complete"] and (attempt.get("reason") is not None
                                              or attempt.get("http_status") is not None))
                 or (not attempt["complete"] and attempt.get("reason") is None)
-                or attempt.get("reason") not in {
-                    None, "schema_error", "http_error", "forbidden", "session_expired",
-                    "network_error", "deadline_exceeded", "fetch_error",
-                    "snapshot_missing", "page_limit", "capacity_limit"} | (
-                        {"scope_changed"} if dataset == "consultations" or dataset in _CLINICAL else set())
+                or (attempt.get("reason") is not None
+                    and attempt["reason"] not in accepted_reasons(dataset))
                 or (attempt.get("http_status") is not None
                     and (type(attempt["http_status"]) is not int
                          or not 100 <= attempt["http_status"] <= 599))):
@@ -240,9 +236,7 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
         result["attempted_at"] = attempt["attempted_at"]
         result["reason"] = attempt["reason"]
         result["http_status"] = attempt.get("http_status")
-        result["state"] = "failed"
-        if dataset == "consultations" and attempt["reason"] in ("snapshot_missing", "page_limit"):
-            result["state"] = "partial"
+        result["state"] = attempt_state(dataset, False, attempt["reason"])
         if complete is not None:
             payload = json.loads(complete["content"])
             if dataset == "consultations" and (

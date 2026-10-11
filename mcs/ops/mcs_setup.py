@@ -60,18 +60,20 @@ if sys.version_info < (3, 10):
         "(/usr/bin/python3 is too old)")
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every subdirectory holding .py files (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
+from backup_config import validate_backup_config as _backup_config
 import bounded_http
 import mcs_runtime
 
 from mcs_util import (CONF_PATH, HOME, REPO, atomic_write, env_value,
                       load_config)
+from mcs_util import hermes_exe as _hermes_exe
 
 ENV_PATH = os.path.join(HOME, ".env")
 KEYCHAIN_SERVICE = "mcs-adapter"
@@ -112,35 +114,6 @@ def _dict(v):
 def _drug_map_config(value):
     import drug_map
     return drug_map.config_error(value)
-
-
-def _backup_config(value):
-    keys = {"enabled", "policy", "snapshot", "snapshot_dir", "schedule",
-            "verify_interval_s", "drill_interval_s"}
-    if (not isinstance(value, dict) or set(value) - keys
-            or type(value.get("enabled")) is not bool):
-        return "must contain a boolean enabled and only supported backup keys"
-    if not value["enabled"]:
-        return None
-    sources = [key for key in ("snapshot", "snapshot_dir") if key in value]
-    if len(sources) != 1:
-        return "exactly one of snapshot or snapshot_dir must be explicit"
-    for key in ("policy", *sources):
-        if not isinstance(value.get(key), str) or not os.path.isabs(value[key]):
-            return f"{key} must be an explicit absolute path"
-    for key in ("verify_interval_s", "drill_interval_s"):
-        if type(value.get(key)) is not int or value[key] < 1:
-            return f"{key} must be an explicit positive integer"
-    schedule = value.get("schedule")
-    match = re.fullmatch(
-        r"([0-5]?[0-9])\s+((?:[01]?[0-9]|2[0-3])(?:,(?:[01]?[0-9]|2[0-3])){0,23})"
-        r"\s+\*\s+\*\s+\*", schedule) if isinstance(schedule, str) else None
-    if match is None:
-        return "schedule must have one explicit minute and 1–24 distinct explicit hours"
-    hours = [int(hour) for hour in match[2].split(",")]
-    if len(hours) != len(set(hours)):
-        return "schedule hours must be distinct"
-    return None
 
 
 def _recovery_python_problem(path, update_repo=None):
@@ -246,7 +219,6 @@ def _validate_llm(ll: dict) -> list[str]:
     url = ll.get("url")
     if isinstance(url, str) and url.strip():
         try:
-            import bounded_http
             allowed = bounded_http._loopback_endpoint_allowed(url)
         except Exception:
             allowed = False
@@ -256,6 +228,11 @@ def _validate_llm(ll: dict) -> list[str]:
                 "(127.0.0.1/localhost/::1), no credentials/fragment — "
                 "message bodies must not leave the machine")
     return errors
+
+
+# = notify_cmds.SCOPE_MAX: the runner rejects, and the plugin truncates to,
+# a static project scope longer than this
+PROJECT_SCOPE_MAX = 1000
 
 
 def _validate_notify(ntf: dict) -> list[str]:
@@ -457,6 +434,15 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
                 warnings.append(
                     f"notify.{other}: scope configured but interactive "
                     f"is {act!r} — ignored until you switch back")
+        for transport in ("discord", "slack", "lineworks"):
+            scope = cfg["notify"].get(transport)
+            projects = scope.get("project_ids") if isinstance(scope, dict) else None
+            if isinstance(projects, list) and len(projects) > PROJECT_SCOPE_MAX \
+                    and scope.get("project_ids_auto") is not True:
+                warnings.append(
+                    f"notify.{transport}.project_ids: {len(projects)} ids exceed "
+                    f"the {PROJECT_SCOPE_MAX}-project card/summary scope — only "
+                    "the lowest ids are counted; use project_ids_auto=true")
     if isinstance(cfg.get("local_llm"), dict):
         errors.extend(_validate_llm(cfg["local_llm"]))
     if isinstance(cfg.get("semantic"), dict):
@@ -519,22 +505,12 @@ def _validate_standalone_scope(cfg: dict) -> list[str]:
     return errors
 
 
-def _hermes_exe(cfg: dict, path: str | None = None) -> str:
-    """config hermes_bin -> PATH (or `path`) -> the standard user-local
-    install."""
-    exe = cfg.get("hermes_bin")
-    if isinstance(exe, str) and exe.strip():
-        return exe.strip()
-    return shutil.which("hermes", os.F_OK | os.X_OK, path) \
-        or os.path.expanduser("~/.local/bin/hermes")
-
-
 def _hermes_ok(exe: str) -> bool:
     return os.path.isfile(exe) and os.access(exe, os.X_OK)
 
 
 def _run(argv: list, *, timeout: int = 60, input_text: str | None = None,
-         cwd: str | None = None):
+         cwd: str | None = None, env: dict | None = None):
     """subprocess.run bounded by `timeout` — a wedged launchd, a keychain
     prompt this context cannot show, or a stuck gateway must fail the
     check, not hang the session. Timeout yields a returncode=124 result
@@ -543,7 +519,8 @@ def _run(argv: list, *, timeout: int = 60, input_text: str | None = None,
     raising."""
     try:
         return subprocess.run(argv, input=input_text, capture_output=True,
-                              text=True, timeout=timeout, **({"cwd": cwd} if cwd else {}))
+                              text=True, timeout=timeout, **({"cwd": cwd} if cwd else {}),
+                              **({"env": env} if env is not None else {}))
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
             argv, 124, "", f"timed out after {timeout}s")
@@ -586,19 +563,27 @@ def _plugin_newer_than_gateway(status_out: str) -> bool:
     Unparseable states fail
     open to False (no warning) rather than a false alarm."""
     m = re.search(r"PID\s+(\d+)", status_out or "")
-    if not m:
-        return False
-    r = _run(["ps", "-o", "lstart=", "-p", m.group(1)])
-    if r.returncode != 0:
-        return False
-    stamp = re.sub(r"\s+", " ", (r.stdout or "").strip())
-    try:
-        started = time.mktime(
-            time.strptime(stamp, "%a %b %d %H:%M:%S %Y"))
-    except (ValueError, OverflowError):
+    started = _process_started_at(int(m.group(1))) if m else None
+    if started is None:
         return False
     newest = _gateway_sources_mtime()
     return newest is not None and newest > started
+
+
+def _process_started_at(pid: int) -> float | None:
+    """Local-time start of `pid` from `ps -o lstart=`, or None when unknown.
+
+    LC_ALL=C keeps the stamp in the English format strptime parses
+    (a ja_JP locale prints the weekday in kanji)."""
+    r = _run(["ps", "-o", "lstart=", "-p", str(pid)], timeout=10,
+             env={**os.environ, "LC_ALL": "C"})
+    if r.returncode != 0:
+        return None
+    stamp = re.sub(r"\s+", " ", (getattr(r, "stdout", "") or "").strip())
+    try:
+        return time.mktime(time.strptime(stamp, "%a %b %d %H:%M:%S %Y"))
+    except (ValueError, OverflowError):
+        return None
 
 
 def _gateway_sources_mtime() -> float | None:
@@ -609,7 +594,7 @@ def _gateway_sources_mtime() -> float | None:
     # loads (Python sources and the plugin manifest) represent code the
     # running process hasn't picked up; a docs-only edit (README) never
     # needs a restart.
-    for source in ("hermes_plugin", "adapters/common", "adapters/slack", "adapters/discord"):
+    for source in mcs_runtime.GATEWAY_SOURCE_DIRS:
         for base, dirs, files in os.walk(os.path.join(REPO_ROOT, source)):
             dirs[:] = [d for d in dirs if d != "__pycache__"]
             for name in files:
@@ -691,13 +676,9 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
     llm_errors, llm_warnings = _check_llm(cfg)
     errors.extend(llm_errors)
     warnings.extend(llm_warnings)
-    profile = cfg.get("notify_bot_profile")
-    if isinstance(profile, str) and profile \
-            and not re.fullmatch(r"[a-z0-9_-]+", profile):
-        errors.append("notify_bot_profile: must match [a-z0-9_-]+")
-    # Delivery is `hermes send` — the binary must resolve the same way
-    # notify_flush._hermes_exe does: config hermes_bin, else PATH, else the
-    # standard user-local install (launchd PATH is minimal).
+    # Delivery is `hermes send` — the binary resolves through the same
+    # mcs_util.hermes_exe notify_flush uses: config hermes_bin, else PATH,
+    # else the standard user-local install (launchd PATH is minimal).
     ntf = cfg.get("notify") or {}
     exe = _hermes_exe(cfg) if cfg.get("runtime_mode") != "standalone" else ""
     lineworks = isinstance(ntf, dict) and ntf.get("interactive") == "lineworks"
@@ -710,8 +691,7 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
         if r.returncode:
             errors.append("standalone check failed — see "
                           "docs/guides/STANDALONE.md")
-        if sys.platform == "darwin" and STANDALONE_LABEL in _agent_labels(cfg) \
-                and _agent_loaded("ai.hermes.gateway"):
+        if sys.platform == "darwin" and _agent_loaded("ai.hermes.gateway"):
             warnings.append("ai.hermes.gateway is loaded while MCS serves "
                             "Slack/Discord itself — remove that platform from "
                             "Hermes or stop the gateway (docs/guides/STANDALONE.md)")
@@ -738,7 +718,9 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
             # worker serves cards without companion thread bodies
             # (2026-09 incident); surface the pending restart here
             warnings.append(
-                "hermes_plugin/ is newer than the running gateway — "
+                "gateway-loaded sources (" + ", ".join(
+                    d + "/" for d in mcs_runtime.GATEWAY_SOURCE_DIRS)
+                + ") are newer than the running gateway — "
                 "`hermes gateway restart` so workers load current code")
     sem = cfg.get("semantic")
     if isinstance(sem, dict) and sem.get("mode", "off") != "off" \
@@ -1275,6 +1257,126 @@ def _project_ids_yaml(text: str) -> str | None:
         return None
 
 
+def _apply_standalone_credentials(args, used: set, wanted: list) -> bool:
+    """Provision the wanted standalone tokens into the MCS .env."""
+    # Credentials already provisioned by the native initializer need no dotenv copy.
+    from mcs_standalone.config import credentials_path, load_credentials
+    if used & {"slack", "discord"} and all(
+            os.path.lexists(credentials_path(HOME, transport))
+            for transport in used & {"slack", "discord"}):
+        try:
+            for transport in used & {"slack", "discord"}:
+                load_credentials(HOME, transport)
+            return True
+        except ValueError:
+            return False
+    updates, missing = {}, []
+    for env_key, desc in wanted:
+        if env_value(env_key, paths=[ENV_PATH], check_env=False):
+            print(f"  {env_key}: 設定済み")
+            continue
+        tok = os.environ.get(env_key)
+        hermes_tok = None if tok or args.yes else env_value(
+            env_key, paths=[os.path.expanduser("~/.hermes/.env")], check_env=False)
+        # switching from Hermes: reuse its token only on explicit consent
+        if hermes_tok and input(f"  {env_key}: ~/.hermes/.env の値を使いますか？"
+                                "[y/N]: ").strip().lower() in ("y", "yes"):
+            tok = hermes_tok
+        if not tok and not args.yes:
+            tok = getpass.getpass(f"  {desc}（{ENV_PATH} へ保存。空欄=スキップ）: ") or None
+        if tok:
+            updates[env_key] = tok
+        else:
+            missing.append(env_key)
+    if updates:
+        try:
+            _env_write(ENV_PATH, updates)
+        except ValueError:
+            print("  .env: invalid token format; existing file retained")
+            return False
+        print(f"  {', '.join(sorted(updates))}: {ENV_PATH} へ保存 (0600)")
+    if missing:
+        print("  未設定: " + ", ".join(missing)
+              + f" — {ENV_PATH} に KEY=値 で追加するか init を再実行")
+    return not missing
+
+
+def _plugin_settings_plan(transport: str, nd: dict, args) -> tuple:
+    """Build the fixed plugin settings and the operator allowlists for a transport."""
+    data = os.path.join(HOME, "data")
+    fixed = {
+        "snapshot": os.path.join(data, "snapshots",
+                                 "ledger-snapshot.db"),
+        "inbox": os.path.join(data, "cmd"),
+        "data_root": data,
+        "interactive": "true",
+    }
+    if transport == "discord":
+        for k in ("profile", "application_id", "guild_id", "channel_id"):
+            if nd.get(k):
+                fixed[k] = nd[k]
+        # operator-specific allowlists: flag > existing value > prompt
+        lists = (
+            ("allowed_user_ids", getattr(args, "plugin_user_ids", None),
+             "カード操作を許可する Discord user ID", ""),
+            ("allowed_chat_ids", getattr(args, "plugin_chat_ids", None),
+             "コマンドを受け付ける Discord channel ID",
+             nd.get("channel_id", "")),
+            ("project_ids", getattr(args, "plugin_project_ids", None),
+             "対象とする MCS project ID", ""),
+        )
+    else:
+        fixed["slack_adapter_enabled"] = "true"
+        for k in ("profile", "application_id", "team_id", "channel_id"):
+            if nd.get(k):
+                fixed[f"slack_{k}"] = nd[k]
+        lists = (
+            ("slack_allowed_user_ids",
+             getattr(args, "plugin_user_ids", None),
+             "カード操作を許可する Slack user ID", ""),
+            ("project_ids", getattr(args, "plugin_project_ids", None),
+             "対象とする MCS project ID", ""),
+        )
+    return fixed, lists
+
+
+def _plugin_store_tokens(exe, profile: str, tokens, args) -> bool:
+    """Store the transport tokens in the serving profile; True when a write failed."""
+    # Pipe tokens to the public writer so process listings cannot expose
+    # them. Older Hermes versions must fail instead of falling back to
+    # argv. `config set` routes *_TOKEN keys to the profile .env. They
+    # must land in the SERVING profile's .env: under multiplex each
+    # profile's secret scope is authoritative and a miss never falls
+    # through to the default profile's .env (agent/secret_scope.py).
+    # Already-configured installs keep their existing tokens.
+    def _store(env_key, tok) -> bool:
+        ok = _hermes_config_set(exe, profile, env_key, tok)
+        print(f"  {env_key}: "
+              + (f"hermes {'-p ' + profile if profile else '既定'} "
+                 ".env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
+        return ok
+
+    failed = False
+    for env_key, desc in tokens:
+        tok = os.environ.get(env_key)
+        if tok:
+            failed |= not _store(env_key, tok)
+        elif _hermes_config_get(exe, profile, env_key):
+            print(f"  {env_key}: 設定済み")
+        else:
+            if not args.yes:
+                tok = getpass.getpass(
+                    f"  {desc}（hermes .env へ保存。"
+                    "空欄=スキップ）: ") or None
+                if tok:
+                    failed |= not _store(env_key, tok)
+            if not tok:
+                print(f"  {env_key}: 未設定 — `hermes "
+                      + (f"-p {profile} " if profile else "")
+                      + "setup` で後から設定")
+    return failed
+
+
 def _apply_plugin_integration(cfg: dict, args) -> bool:
     """Wire the mcs-discord-commands plugin into hermes through the
     public `hermes config` CLI — writes the serving profile's
@@ -1296,46 +1398,7 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
             wanted.append(("SLACK_BOT_TOKEN", "Slack bot token (xoxb-…)"))
         if interactive == "slack":
             wanted.append(("SLACK_APP_TOKEN", "Slack app-level token (xapp-…)"))
-        # Credentials already provisioned by the native initializer need no dotenv copy.
-        from mcs_standalone.config import credentials_path, load_credentials
-        if used & {"slack", "discord"} and all(
-                os.path.lexists(credentials_path(HOME, transport))
-                for transport in used & {"slack", "discord"}):
-            try:
-                for transport in used & {"slack", "discord"}:
-                    load_credentials(HOME, transport)
-                return True
-            except ValueError:
-                return False
-        updates, missing = {}, []
-        for env_key, desc in wanted:
-            if env_value(env_key, paths=[ENV_PATH], check_env=False):
-                print(f"  {env_key}: 設定済み")
-                continue
-            tok = os.environ.get(env_key)
-            hermes_tok = None if tok or args.yes else env_value(
-                env_key, paths=[os.path.expanduser("~/.hermes/.env")], check_env=False)
-            # switching from Hermes: reuse its token only on explicit consent
-            if hermes_tok and input(f"  {env_key}: ~/.hermes/.env の値を使いますか？"
-                                    "[y/N]: ").strip().lower() in ("y", "yes"):
-                tok = hermes_tok
-            if not tok and not args.yes:
-                tok = getpass.getpass(f"  {desc}（{ENV_PATH} へ保存。空欄=スキップ）: ") or None
-            if tok:
-                updates[env_key] = tok
-            else:
-                missing.append(env_key)
-        if updates:
-            try:
-                _env_write(ENV_PATH, updates)
-            except ValueError:
-                print("  .env: invalid token format; existing file retained")
-                return False
-            print(f"  {', '.join(sorted(updates))}: {ENV_PATH} へ保存 (0600)")
-        if missing:
-            print("  未設定: " + ", ".join(missing)
-                  + f" — {ENV_PATH} に KEY=値 で追加するか init を再実行")
-        return not missing
+        return _apply_standalone_credentials(args, used, wanted)
     if not isinstance(ntf, dict) \
             or ntf.get("interactive") not in ("discord", "slack"):
         return True
@@ -1361,41 +1424,10 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
           f"{'-p ' + profile if profile else '既定'}"
           " profile にプラグイン設定を書き込みます")
 
-    data = os.path.join(HOME, "data")
-    fixed = {
-        "snapshot": os.path.join(data, "snapshots",
-                                 "ledger-snapshot.db"),
-        "inbox": os.path.join(data, "cmd"),
-        "data_root": data,
-        "interactive": "true",
-    }
+    fixed, lists = _plugin_settings_plan(transport, nd, args)
     if transport == "discord":
-        for k in ("profile", "application_id", "guild_id", "channel_id"):
-            if nd.get(k):
-                fixed[k] = nd[k]
-        # operator-specific allowlists: flag > existing value > prompt
-        lists = (
-            ("allowed_user_ids", getattr(args, "plugin_user_ids", None),
-             "カード操作を許可する Discord user ID", ""),
-            ("allowed_chat_ids", getattr(args, "plugin_chat_ids", None),
-             "コマンドを受け付ける Discord channel ID",
-             nd.get("channel_id", "")),
-            ("project_ids", getattr(args, "plugin_project_ids", None),
-             "対象とする MCS project ID", ""),
-        )
         tokens = (("DISCORD_BOT_TOKEN", "Discord bot token"),)
     else:
-        fixed["slack_adapter_enabled"] = "true"
-        for k in ("profile", "application_id", "team_id", "channel_id"):
-            if nd.get(k):
-                fixed[f"slack_{k}"] = nd[k]
-        lists = (
-            ("slack_allowed_user_ids",
-             getattr(args, "plugin_user_ids", None),
-             "カード操作を許可する Slack user ID", ""),
-            ("project_ids", getattr(args, "plugin_project_ids", None),
-             "対象とする MCS project ID", ""),
-        )
         tokens = (("SLACK_BOT_TOKEN", "Slack bot token (xoxb-…)"),
                   ("SLACK_APP_TOKEN", "Slack app-level token (xapp-…)"))
     missing = []
@@ -1467,37 +1499,7 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
               " — 後で `hermes config set "
               f"{PLUGIN_SETTINGS}.<key> <値>` で設定してください")
 
-    # Pipe tokens to the public writer so process listings cannot expose
-    # them. Older Hermes versions must fail instead of falling back to
-    # argv. `config set` routes *_TOKEN keys to the profile .env. They
-    # must land in the SERVING profile's .env: under multiplex each
-    # profile's secret scope is authoritative and a miss never falls
-    # through to the default profile's .env (agent/secret_scope.py).
-    # Already-configured installs keep their existing tokens.
-    def _store(env_key, tok) -> bool:
-        ok = _hermes_config_set(exe, profile, env_key, tok)
-        print(f"  {env_key}: "
-              + (f"hermes {'-p ' + profile if profile else '既定'} "
-                 ".env へ保存" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
-        return ok
-
-    for env_key, desc in tokens:
-        tok = os.environ.get(env_key)
-        if tok:
-            failed |= not _store(env_key, tok)
-        elif _hermes_config_get(exe, profile, env_key):
-            print(f"  {env_key}: 設定済み")
-        else:
-            if not args.yes:
-                tok = getpass.getpass(
-                    f"  {desc}（hermes .env へ保存。"
-                    "空欄=スキップ）: ") or None
-                if tok:
-                    failed |= not _store(env_key, tok)
-            if not tok:
-                print(f"  {env_key}: 未設定 — `hermes "
-                      + (f"-p {profile} " if profile else "")
-                      + "setup` で後から設定")
+    failed |= _plugin_store_tokens(exe, profile, tokens, args)
     return not failed
 
 
@@ -1543,45 +1545,44 @@ def _guard_config(yes: bool) -> bool:
     return True
 
 
-def _init_recovery_problem(cfg) -> str | None:
+def _owner_config(path, limit=65536) -> dict:
+    """Read config.json for install.sh: a regular file the user owns, bounded, a JSON object."""
+    if not os.path.lexists(path):
+        return {}
+    try:
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+            st = os.fstat(stream.fileno())
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > limit:
+                raise ValueError("size/ownership/type invalid")
+            raw = stream.read(limit + 1)
+    except OSError:
+        raise ValueError("unreadable") from None
+    if len(raw) > limit:
+        raise ValueError("too large")
+    try:
+        cfg = json.loads(raw)
+    except (ValueError, RecursionError):
+        raise ValueError("not valid JSON") from None
+    if not isinstance(cfg, dict):
+        raise ValueError("must be an object")
+    return cfg
+
+
+def _init_recovery_problem(cfg, update_repo=None) -> str | None:
+    """Why the configured recovery interpreter is unusable, or None (install.sh shares it)."""
     if "recovery_python" not in cfg:
         return None
-    return _recovery_python_problem(cfg["recovery_python"]) or _runtime_problem(
+    return _recovery_python_problem(cfg["recovery_python"], update_repo) or _runtime_problem(
         _runtime_probe(cfg["recovery_python"]), recovery=True)
 
 
-def cmd_init(args) -> int:
-    # --yes may archive a corrupt config: defer that write until the desired
-    # interpreter (including --set overrides) has been verified.
-    if not args.yes and not _guard_config(False):
-        return 1
-    cfg = load_config()
-    try:
-        mode_before = mcs_runtime.mode(cfg)
-    except ValueError:
-        mode_before = None  # an explicit --runtime-mode may repair it
-    if getattr(args, "runtime_mode", None):
-        cfg["runtime_mode"] = args.runtime_mode
-    if getattr(args, "recovery_python", None) is not None:
-        cfg["recovery_python"] = args.recovery_python
-    def pick(flag, key):
-        # flag wins, else the existing value is kept — the wizard's req
-        # items do the interactive prompting for these
-        return flag if flag is not None else cfg.get(key)
-
-    login_id = pick(args.login_id, "mcs_login_id")
-    target = pick(args.notify_target, "notify_target")
-    updates = {}
-    if login_id:
-        cfg["mcs_login_id"] = login_id
-    if target:
-        cfg["notify_target"] = str(target)
-
+def _init_apply_set_overrides(cfg: dict, set_args) -> int | None:
+    """Apply `--set KEY=JSON` overrides to cfg; return 1 when init must stop."""
     # --set KEY=JSON gives non-interactive coverage of every config
     # key (dotted paths nest); the trailing cmd_check validates them.
     fact_selection = (_get_key(cfg, "semantic.fact_source"),
                       _get_key(cfg, "semantic.fact_source_gate"))
-    for kv in args.set or []:
+    for kv in set_args or []:
         k, sep, v = kv.partition("=")
         if not sep or not k.strip():
             print(f"--set: expected KEY=VALUE, got {kv!r}")
@@ -1604,30 +1605,11 @@ def cmd_init(args) -> int:
               "only be set via `mcs_setup.py fact-source canonical "
               "--gate-evidence <report>` — config not written")
         return 1
+    return None
 
-    # before any secret reaches Keychain/.env
-    try:
-        mcs_runtime.mode(cfg)
-    except ValueError:
-        print("init: runtime_mode must be 'hermes' or 'standalone' — nothing written")
-        return 1
-    why = _init_recovery_problem(cfg)
-    if why:
-        print("init: recovery_python " + why + " — nothing written")
-        return 1
-    checked_recovery = cfg.get("recovery_python")
-    # standalone keeps the plugin grants in config.json: an id list it
-    # cannot honour whole is refused like the Hermes path, before any
-    # secret, .env or config write — never silently narrowed
-    standalone_projects = None
-    if mcs_runtime.standalone(cfg) and getattr(args, "plugin_project_ids", None):
-        literal = _project_ids_yaml(args.plugin_project_ids)
-        if literal is None:
-            print("init: --plugin-project-ids: 正の整数の project ID を"
-                  "カンマ区切りで指定してください — nothing written")
-            return 1
-        standalone_projects = json.loads(literal)
 
+def _init_apply_section_flags(cfg: dict, args) -> None:
+    """Apply the semantic/signals flags and the manual self-identity override."""
     if args.semantic_mode:
         sem = cfg.get("semantic")
         if not isinstance(sem, dict):
@@ -1673,47 +1655,45 @@ def cmd_init(args) -> int:
         if profs:
             sig["self_professions"] = profs
 
-    if mcs_runtime.standalone(cfg):
-        # the --plugin-* grants Hermes keeps in plugin settings live in
-        # notify.<transport> when MCS serves Slack/Discord itself
-        ntf = cfg.get("notify")
-        scope = ntf.get(ntf.get("interactive")) if isinstance(ntf, dict) else None
-        ignored = ["--plugin-profile"] \
-            if getattr(args, "plugin_profile", None) else []
-        if isinstance(scope, dict):
-            for flag, key in (("plugin_user_ids", "allowed_user_ids"),
-                              ("plugin_chat_ids", "allowed_chat_ids"),
-                              ("plugin_role_ids", "allowed_role_ids"),
-                              ("plugin_project_ids", "project_ids")):
-                value = getattr(args, flag, None)
-                if value:
-                    scope[key] = standalone_projects if key == "project_ids" \
-                        else _csv_list([value])
+
+def _init_standalone_grants(cfg: dict, args, standalone_projects) -> None:
+    """Move the --plugin-* grants into notify.<transport> for standalone mode."""
+    # the --plugin-* grants Hermes keeps in plugin settings live in
+    # notify.<transport> when MCS serves Slack/Discord itself
+    # notify.<transport>; the transports follow _validate_standalone_scope
+    # and the grants apply only when exactly one Slack/Discord scope is used
+    ntf = cfg.get("notify") if isinstance(cfg.get("notify"), dict) else {}
+    used = {ntf["interactive"]} if isinstance(ntf.get("interactive"), str) else set()
+    used |= {t.split(":", 1)[0] for t in (cfg.get("notify_target"),
+                                         cfg.get("notify_system_target"))
+             if isinstance(t, str)}
+    used &= {"slack", "discord"}
+    transport = next(iter(used)) if len(used) == 1 else None
+    scope = ntf.get(transport) if transport else None
+    ignored = ["--plugin-profile"] \
+        if getattr(args, "plugin_profile", None) else []
+    for flag, key in (("plugin_user_ids", "allowed_user_ids"),
+                      ("plugin_chat_ids", "allowed_chat_ids"),
+                      ("plugin_role_ids", "allowed_role_ids"),
+                      ("plugin_project_ids", "project_ids")):
+        value = getattr(args, flag, None)
+        if not value:
+            continue
+        if not isinstance(scope, dict) or (
+                transport != "discord"
+                and key in ("allowed_chat_ids", "allowed_role_ids")):
+            ignored.append("--plugin-" + flag[7:].replace("_", "-"))
         else:
-            ignored += ["--plugin-" + f[7:].replace("_", "-") for f in
-                        ("plugin_user_ids", "plugin_chat_ids",
-                         "plugin_role_ids", "plugin_project_ids")
-                        if getattr(args, f, None)]
-        if ignored:
-            print(f"init: {', '.join(ignored)} は standalone では適用されません"
-                  " — カード権限は config.json の notify.<transport> に設定してください")
+            scope[key] = standalone_projects if key == "project_ids" \
+                else _csv_list([value])
+    if ignored:
+        print(f"init: {', '.join(ignored)} は standalone では適用されません"
+              " — カード権限は config.json の notify.<transport> に設定してください")
 
-    if not args.yes:
-        _wizard(cfg)
 
-    # The wizard can change the selected recovery interpreter.
-    why = None if cfg.get("recovery_python") == checked_recovery else _init_recovery_problem(cfg)
-    if why:
-        print("init: recovery_python " + why + " — config.json not written")
-        return 1
-    errors, _ = validate_config(cfg)
-    if errors:
-        print("init: invalid configuration — nothing written")
-        for error in errors:
-            print("  " + error)
-        return 1
-    login_id = cfg.get("mcs_login_id")
-
+def _init_store_secrets(args, login_id) -> int | None:
+    """Store the MCS password in Keychain and the .env fallback; return 1 on failure."""
+    updates = {}
     # secrets come from the environment (or getpass) — never argv flags,
     # which persist in shell history and `ps` (FIX-SU1)
     pw = os.environ.get("MCS_SETUP_PASSWORD")
@@ -1746,6 +1726,100 @@ def cmd_init(args) -> int:
         print(f".env: wrote {sorted(updates)} to {ENV_PATH} (0600)")
     if keychain_failed:
         return 1
+    return None
+
+
+def _init_standalone_connectors(cfg: dict, args, integration_ok: bool) -> bool:
+    """Run the native standalone initializer for each enabled transport."""
+    for transport in ("slack", "discord"):
+        if _transport_on(cfg, transport):
+            argv = [sys.executable, "-m", "mcs_standalone", "init", "--root", HOME,
+                    "--transport", transport] + (["--yes"] if args.yes else [])
+            # Terminal-bound getpass owns credentials; no secret ever travels in argv.
+            try:
+                result = subprocess.run(argv, timeout=300 if not args.yes else 30,
+                                        cwd=REPO_ROOT)
+                integration_ok = integration_ok and result.returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                integration_ok = False
+    return integration_ok
+
+
+def cmd_init(args) -> int:
+    # --yes may archive a corrupt config: defer that write until the desired
+    # interpreter (including --set overrides) has been verified.
+    if not args.yes and not _guard_config(False):
+        return 1
+    cfg = load_config()
+    try:
+        mode_before = mcs_runtime.mode(cfg)
+    except ValueError:
+        mode_before = None  # an explicit --runtime-mode may repair it
+    if getattr(args, "runtime_mode", None):
+        cfg["runtime_mode"] = args.runtime_mode
+    if getattr(args, "recovery_python", None) is not None:
+        cfg["recovery_python"] = args.recovery_python
+    def pick(flag, key):
+        # flag wins, else the existing value is kept — the wizard's req
+        # items do the interactive prompting for these
+        return flag if flag is not None else cfg.get(key)
+
+    login_id = pick(args.login_id, "mcs_login_id")
+    target = pick(args.notify_target, "notify_target")
+    if login_id:
+        cfg["mcs_login_id"] = login_id
+    if target:
+        cfg["notify_target"] = str(target)
+
+    if _init_apply_set_overrides(cfg, args.set):
+        return 1
+
+    # before any secret reaches Keychain/.env
+    try:
+        mcs_runtime.mode(cfg)
+    except ValueError:
+        print("init: runtime_mode must be 'hermes' or 'standalone' — nothing written")
+        return 1
+    why = _init_recovery_problem(cfg)
+    if why:
+        print("init: recovery_python " + why + " — nothing written")
+        return 1
+    checked_recovery = cfg.get("recovery_python")
+    # standalone keeps the plugin grants in config.json: an id list it
+    # cannot honour whole is refused like the Hermes path, before any
+    # secret, .env or config write — never silently narrowed
+    standalone_projects = None
+    if mcs_runtime.standalone(cfg) and getattr(args, "plugin_project_ids", None):
+        literal = _project_ids_yaml(args.plugin_project_ids)
+        if literal is None:
+            print("init: --plugin-project-ids: 正の整数の project ID を"
+                  "カンマ区切りで指定してください — nothing written")
+            return 1
+        standalone_projects = json.loads(literal)
+
+    _init_apply_section_flags(cfg, args)
+
+    if mcs_runtime.standalone(cfg):
+        _init_standalone_grants(cfg, args, standalone_projects)
+
+    if not args.yes:
+        _wizard(cfg)
+
+    # The wizard can change the selected recovery interpreter.
+    why = None if cfg.get("recovery_python") == checked_recovery else _init_recovery_problem(cfg)
+    if why:
+        print("init: recovery_python " + why + " — config.json not written")
+        return 1
+    errors, _ = validate_config(cfg)
+    if errors:
+        print("init: invalid configuration — nothing written")
+        for error in errors:
+            print("  " + error)
+        return 1
+    login_id = cfg.get("mcs_login_id")
+
+    if _init_store_secrets(args, login_id):
+        return 1
 
     if args.yes and not _guard_config(True):
         return 1
@@ -1761,17 +1835,7 @@ def cmd_init(args) -> int:
     print(f"config: wrote {CONF_PATH}")
     integration_ok = _apply_plugin_integration(cfg, args)
     if cfg.get("runtime_mode") == "standalone":
-        for transport in ("slack", "discord"):
-            if _transport_on(cfg, transport):
-                argv = [sys.executable, "-m", "mcs_standalone", "init", "--root", HOME,
-                        "--transport", transport] + (["--yes"] if args.yes else [])
-                # Terminal-bound getpass owns credentials; no secret ever travels in argv.
-                try:
-                    result = subprocess.run(argv, timeout=300 if not args.yes else 30,
-                                            cwd=REPO_ROOT)
-                    integration_ok = integration_ok and result.returncode == 0
-                except (OSError, subprocess.TimeoutExpired):
-                    integration_ok = False
+        integration_ok = _init_standalone_connectors(cfg, args, integration_ok)
     # an interactive transport needs the supervised gateway — on a
     # first install `services` ran BEFORE init could configure
     # interactive, so sync just the gateway here rather than leaving
@@ -1895,7 +1959,8 @@ def cmd_fact_source(args) -> int:
     sem["fact_source"] = source
     # Fail closed: never write a config the production validator rejects.
     errors, _ = validate_config(cfg)
-    sem_errors = [e for e in errors if e.startswith("config: semantic")]
+    sem_errors = [e for e in errors
+                  if e.startswith(("config: semantic", "semantic:"))]
     if sem_errors:
         print("fact_source: refusing to write invalid semantic config — "
               + "; ".join(sem_errors))
@@ -2056,7 +2121,6 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
     if not os.path.exists(db_path):
         return out
     try:
-        import sqlite3
         with closing(sqlite3.connect(
                 Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as db:
             now = time.time()
@@ -2438,9 +2502,12 @@ def _doctor_source(cfg: dict, *, probe: bool) -> dict:
         value = (r.stdout or "").strip()
         if r.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", value):
             revision = value
-            r = subprocess.run(["git", "-C", REPO_ROOT, "diff-index", "--quiet", "HEAD"],
-                               capture_output=True, timeout=5)
-            dirty = bool(r.returncode) if r.returncode in (0, 1) else None
+            # status refreshes stale index stat data (touch/rsync); the
+            # plumbing diff-index would report those files as modified
+            r = subprocess.run(["git", "-C", REPO_ROOT, "status", "--porcelain",
+                                "--untracked-files=no"],
+                               capture_output=True, text=True, timeout=5)
+            dirty = bool((r.stdout or "").strip()) if r.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
         pass
     running = {"status": "not_checked", "pid": None, "started_at": None,
@@ -2456,14 +2523,7 @@ def _doctor_source(cfg: dict, *, probe: bool) -> dict:
                 pids.add(int(match.group(1)))
         if len(pids) == 1:
             running["pid"] = pids.pop()
-            r = _run(["ps", "-o", "lstart=", "-p", str(running["pid"])], timeout=10)
-            if r.returncode == 0:
-                try:
-                    running["started_at"] = time.mktime(time.strptime(
-                        re.sub(r"\s+", " ", (getattr(r, "stdout", "") or "").strip()),
-                        "%a %b %d %H:%M:%S %Y"))
-                except (ValueError, OverflowError):
-                    pass
+            running["started_at"] = _process_started_at(running["pid"])
             # A PID/start time proves liveness, never the SHA of loaded code.
             running["status"] = "running_revision_unknown"
     modified = _gateway_sources_mtime()
@@ -2652,6 +2712,10 @@ RECOVERY_LABEL = "org.mcs.recovery"
 LLAMA_LABELS = ("ai.hermes.llamacpp", "ai.mcs.llamaserver")
 STANDALONE_LABEL = "ai.mcs.standalone"
 STANDALONE_UNIT = "mcs-standalone.service"
+# = mcs_standalone.service.HEALTH_*: the standalone host's external watcher
+HEALTH_LABEL = "local.mcs-health"
+HEALTH_UNITS = ("mcs-health.service", "mcs-health.timer")
+HEALTH_TIMER = "mcs-health.timer"
 
 
 CRON_LABEL_PREFIX = "ai.mcs.cron."
@@ -2696,8 +2760,10 @@ def _cron_label(script: str) -> str:
 
 
 def _calendar(schedule: str) -> list[dict]:
-    """launchd StartCalendarInterval entries for a CRON_JOBS schedule —
-    launchd has no `*/n`, so minute/hour lists are expanded."""
+    """Expand a CRON_JOBS schedule into calendar entries for the standalone scheduler.
+
+    Each entry is a {"Hour", "Minute"} dict (the launchd StartCalendarInterval
+    shape); `*/n` and comma lists are expanded, other fields must be `*`."""
     minute, hour, *rest = schedule.split()
     if rest != ["*", "*", "*"]:
         raise ValueError(f"unsupported schedule {schedule!r}")
@@ -2723,14 +2789,16 @@ _TIMEOUT_PL = ("my $t = shift; my $p = 0;"
                " $p = fork; die unless defined $p;"
                " if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 }"
                " $SIG{ALRM} = sub { kill 'TERM', -$p; sleep 5; kill 'KILL', -$p; exit 124 };"
-               " alarm $t; waitpid($p, 0); exit($? >> 8)")
+               " alarm $t; waitpid($p, 0); my $s = $?;"
+               " exit(($s & 127) ? 128 + ($s & 127) : ($s >> 8))")
 
 
 def _agent_labels(cfg: dict) -> list[str]:
     """Every LaunchAgent `services` owns for the selected runtime."""
     if not mcs_runtime.standalone(cfg):
         return list(AGENT_LABELS)
-    return [STANDALONE_LABEL]
+    # The health watch stays outside the host so its death still alerts.
+    return [STANDALONE_LABEL, HEALTH_LABEL]
 
 
 def _owned_label(label: str) -> bool:
@@ -2785,6 +2853,10 @@ def check_runtime(cfg: dict) -> tuple[list[str], list[str]]:
                     errors.append("standalone service differs from current source — run `mcs_setup.py services`")
             except (OSError, ValueError):
                 errors.append("standalone service content unverifiable")
+        if os.path.exists(path):
+            e, w = _check_standalone_health()
+            errors += e
+            warnings += w
     if sys.platform != "darwin":
         return errors, warnings
     uid = os.getuid()
@@ -2899,9 +2971,13 @@ def _norm_sched(s: str) -> str | None:
     return " ".join(m.group(1).split()) if m else None
 
 
-def _agent_loaded(label: str) -> bool:
+def _agent_loaded(label: str) -> bool | None:
+    """Whether launchd has `label` loaded; None when the probe timed out or
+    could not start (124/127) — unknown is falsy but never proof of a stop."""
     uid = os.getuid()
     r = _run(["launchctl", "print", f"gui/{uid}/{label}"])
+    if r.returncode in (124, 127):
+        return None
     return r.returncode == 0
 
 
@@ -3055,7 +3131,7 @@ def _desired_agents(subs, cfg) -> dict[str, str]:
     return out
 
 
-def _sync_agents(subs, prev, manifest, note, dry, cfg=None, keep=frozenset()) -> int:
+def _sync_agents(subs, manifest, note, dry, cfg=None, keep=frozenset()) -> int:
     """Stage 2: launchd agents (macOS only) — converge content AND
     loaded state; retire owned-but-undesired agents from our naming
     space only, never install.sh-owned labels (S5)."""
@@ -3101,10 +3177,10 @@ def _retire_agents(labels, note, dry) -> int:
     if sys.platform.startswith("linux") and STANDALONE_LABEL in labels:
         path = _standalone_service_path()
         if not os.path.exists(path):
-            return 0
+            return _retire_standalone_health(note, dry)
         note("standalone service: disable + stop")
         if dry:
-            return 0
+            return _retire_standalone_health(note, dry)
         if _run(["systemctl", "--user", "disable", "--now", STANDALONE_UNIT]).returncode:
             return 1
         state = _run(["systemctl", "--user", "is-active", "--quiet", STANDALONE_UNIT])
@@ -3115,7 +3191,8 @@ def _retire_agents(labels, note, dry) -> int:
             os.unlink(path)
         except OSError:
             return 1
-        return int(_run(["systemctl", "--user", "daemon-reload"]).returncode != 0)
+        return int(_run(["systemctl", "--user", "daemon-reload"]).returncode != 0) \
+            + _retire_standalone_health(note, dry)
     if sys.platform != "darwin" or not os.path.isdir(AGENTS_DIR):
         return 0
     problems = 0
@@ -3127,8 +3204,8 @@ def _retire_agents(labels, note, dry) -> int:
         note(f"agent {label}: undesired — bootout + remove")
         if not dry:
             _run(["launchctl", "bootout", f"gui/{uid}/{label}"])
-            if _agent_loaded(label):
-                note(f"  agent {label}: still loaded; keeping plist")
+            if _agent_loaded(label) is not False:
+                note(f"  agent {label}: still loaded or unverifiable; keeping plist")
                 problems += 1
                 continue
             try:
@@ -3345,6 +3422,120 @@ def _standalone_service_path():
     return os.path.expanduser("~/.config/systemd/user/" + STANDALONE_UNIT)
 
 
+def _health_unit_path(name):
+    """Where the standalone health watch file `name` lives (plist or unit)."""
+    if sys.platform == "darwin":
+        return os.path.join(AGENTS_DIR, name)
+    return os.path.join(os.path.dirname(_standalone_service_path()), name)
+
+
+def _standalone_health_loaded():
+    if sys.platform == "darwin":
+        return _agent_loaded(HEALTH_LABEL)
+    if sys.platform.startswith("linux"):
+        return _run(["systemctl", "--user", "is-active", "--quiet", HEALTH_TIMER]).returncode == 0
+    return False
+
+
+def _retire_standalone_health(note, dry) -> int:
+    """Linux: disable and remove the standalone health timer (launchd's
+    plist is retired like any other owned agent)."""
+    paths = [path for path in map(_health_unit_path, HEALTH_UNITS) if os.path.exists(path)]
+    if not paths:
+        return 0
+    note("standalone health watch: disable + stop")
+    if dry:
+        return 0
+    if _run(["systemctl", "--user", "disable", "--now", HEALTH_TIMER]).returncode:
+        return 1
+    for path in paths:
+        try:
+            os.unlink(path)
+        except OSError:
+            return 1
+    return int(_run(["systemctl", "--user", "daemon-reload"]).returncode != 0)
+
+
+def _check_standalone_health() -> tuple[list[str], list[str]]:
+    """doctor: the external health watch is installed, current and loaded,
+    and the host's own status shows no crash loop or stalled work."""
+    errors, warnings = [], []
+    try:
+        from mcs_standalone.service import render_health
+        bodies = render_health(HOME, platform=sys.platform)
+    except ValueError:
+        return errors, warnings
+    installed = True
+    for name, body in bodies:
+        try:
+            current = Path(_health_unit_path(name)).read_text(encoding="utf-8")
+        except OSError:
+            current = None
+        if current is None:
+            installed = False
+        elif current != body:
+            errors.append("standalone health watch differs from current source — run `mcs_setup.py services`")
+            break
+    if not installed:
+        warnings.append("standalone health watch not installed — a stopped host raises no alert; run `mcs_setup.py services`")
+    elif not _standalone_health_loaded():
+        errors.append("standalone health watch installed but not loaded — run `mcs_setup.py services`")
+    try:
+        import health_watch
+        _, reasons, details = health_watch.standalone_host_reasons(HOME, time.time(), load_config())
+    except Exception as exc:   # diagnostics only: never fail doctor on the reader
+        warnings.append(f"standalone status unreadable ({type(exc).__name__})")
+        return errors, warnings
+    for code in reasons:
+        extra = details.get(code)
+        warnings.append(f"standalone host: {code}" + (f" ({extra})" if extra else "")
+                        + " — see `python -m mcs_standalone status` and data/standalone.log")
+    return errors, warnings
+
+
+def _sync_standalone_health(manifest, note, dry) -> int:
+    """Install the health watch next to the host, never inside it: a dead,
+    wedged or crash-looping host must still raise an alert."""
+    from mcs_standalone.service import render_health
+    changed = False
+    bodies = render_health(HOME, platform=sys.platform)
+    for name, body in bodies:
+        path = _health_unit_path(name)
+        try:
+            current = Path(path).read_text(encoding="utf-8")
+        except OSError:
+            current = None
+        if current != body:
+            changed = True
+            note(f"standalone health watch: write {path}")
+            if not dry:
+                _write_atomic(path, body, 0o600)
+    loaded = _standalone_health_loaded()
+    if not changed and loaded:
+        note("standalone health watch: loaded")
+    elif not dry:
+        if sys.platform == "darwin":
+            if not _agent_reconcile(HEALTH_LABEL, _health_unit_path(bodies[0][0]), note, False):
+                return 1
+        else:
+            if changed and _run(["systemctl", "--user", "daemon-reload"]).returncode:
+                return 1
+            # restart (not start) so a rewritten timer takes its new schedule
+            if _run(["systemctl", "--user", "enable", HEALTH_TIMER]).returncode \
+                    or _run(["systemctl", "--user", "restart", HEALTH_TIMER]).returncode:
+                note("standalone health watch: enable failed")
+                return 1
+        if not _standalone_health_loaded():
+            note("standalone health watch did not become active")
+            return 1
+    else:
+        note("standalone health watch: load")
+    for name, body in bodies:
+        manifest["agents"].append({"label": HEALTH_LABEL if sys.platform == "darwin" else name,
+                                   "sha256": _sha256(body), "loaded": not dry})
+    return 0
+
+
 def _standalone_loaded():
     if sys.platform == "darwin":
         return _agent_loaded(STANDALONE_LABEL)
@@ -3368,7 +3559,7 @@ def _retire_previous_runtime(prev, desired_mode, note, dry):
         return 0
     for label in sorted(labels):
         _run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"])
-        if _agent_loaded(label):
+        if _agent_loaded(label) is not False:
             note(f"previous agent {label}: stop unverifiable — no new service started")
             return 1
         # bootout does not persist: launchd reloads a left plist at next login
@@ -3519,6 +3710,8 @@ def cmd_services(args) -> int:
     _sync_scripts(subs, manifest, note, dry)
     if selected_mode == "standalone":
         problems += _sync_standalone_service(manifest, note, dry)
+        if not problems:
+            problems += _sync_standalone_health(manifest, note, dry)
         _record_llm_slots(manifest, note)
         if not dry and not problems:
             try:
@@ -3530,15 +3723,20 @@ def cmd_services(args) -> int:
     hermes = _hermes_exe(cfg)
     cron_labels = frozenset(
         _cron_label(script) for _, _, script in configured_cron_jobs(cfg))
-    problems += _sync_agents(subs, prev, manifest, note, dry, cfg,
+    problems += _sync_agents(subs, manifest, note, dry, cfg,
                              cron_labels | {STANDALONE_LABEL})
-    # the Hermes plugin decides from these flags whether to stand down
+    # the Hermes plugin decides from these flags whether to stand down;
+    # a failed publish fails the run but never blocks the manifest below
+    flags_failed = False
     if not dry and isinstance(cfg.get("notify"), dict) \
             and not _validate_notify(cfg["notify"]):
-        with suppress(Exception):
+        try:
             import notify_cards
             notify_cards.ensure_dirs(os.path.join(HOME, "data"))
             notify_cards.publish_flags(cfg, os.path.join(HOME, "data"))
+        except Exception as e:
+            note(f"notify flags publish failed: {type(e).__name__}: {e} — re-run services")
+            flags_failed = True
 
     if not _hermes_ok(hermes):
         note(f"cron: hermes not resolvable ({hermes}) — skipped")
@@ -3551,18 +3749,28 @@ def cmd_services(args) -> int:
         if not cron_problems:
             retire_problems = _retire_agents(cron_labels | {STANDALONE_LABEL}, note, dry)
             problems += retire_problems
-        switching = prev.get("runtime_mode") == "standalone"
-        if not switching or not (cron_problems or retire_problems):
+        # a partial switch saves runtime_mode=hermes: the pending flag keeps
+        # the restart owed until a run completes it
+        switching = prev.get("runtime_mode") == "standalone" \
+            or prev.get("gateway_restart_pending") is True
+        blocked = bool(cron_problems or retire_problems)
+        if not switching or not blocked:
             problems += _sync_gateway(cfg, hermes, note, dry)
-        if switching and not (cron_problems or retire_problems):
+        restarted = False
+        if switching and not blocked and flags_failed:
+            note("gateway: restart deferred until the notify flags publish")
+        elif switching and not blocked:
             # a gateway that loaded while standalone owned the bot skipped
             # /mcs and the card workers — reload it under the new flags
             note("gateway: restart (switched back from standalone)")
             if not dry:
                 r = _hermes_cli(hermes, "", "gateway", "restart")
-                if not (r and r.returncode == 0):
+                restarted = bool(r and r.returncode == 0)
+                if not restarted:
                     note("  gateway restart failed — run `hermes gateway restart`")
                     problems += 1
+        if switching and not restarted:
+            manifest["gateway_restart_pending"] = True
 
     _record_llm_slots(manifest, note)
     # manifest — the rollback snapshot's source of truth (R6).
@@ -3575,7 +3783,7 @@ def cmd_services(args) -> int:
         except OSError as e:
             note(f"manifest write failed: {e}")
             problems += 1
-    return 1 if problems else 0
+    return 1 if problems or flags_failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:

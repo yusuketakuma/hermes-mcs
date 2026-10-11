@@ -11,10 +11,60 @@ narratives (mcs + hermes_plugin + fake clients only — e.g.
 `test_mcs_recovery_narrative.py`) run without the hermes checkout.
 New gateway-bound tests MUST keep the `test_hermes_*` prefix.
 """
+import faulthandler
 import importlib.util
 import json
+import os
 
 import pytest
+
+# Per-test hang guard (stdlib only): a test whose setup, call and teardown
+# together exceed the limit dumps every thread's traceback and exits the
+# run, so a wedged test cannot hold a CI runner until the job timeout.
+# MCS_TEST_TIMEOUT overrides the limit in seconds; 0 disables the guard.
+# The dump goes to a copy of the real stderr taken before output capture
+# redirects fd 2, otherwise it would vanish with the exiting process. The
+# functions are captured at import so a test that monkeypatches
+# faulthandler (tests/ingest/test_run_watchdog.py) cannot disarm the guard
+# for later tests. A test that arms its own in-process faulthandler timer
+# replaces the guard for the rest of that test only.
+_dump_later = faulthandler.dump_traceback_later
+_cancel_dump = faulthandler.cancel_dump_traceback_later
+_hang_stderr = None
+
+
+def _test_timeout():
+    try:
+        return max(0.0, float(os.environ.get("MCS_TEST_TIMEOUT", "300")))
+    except ValueError:
+        return 300.0
+
+
+def pytest_configure(config):
+    global _hang_stderr
+    if _hang_stderr is None and _test_timeout():
+        _hang_stderr = os.fdopen(os.dup(2), "w")
+
+
+def pytest_unconfigure(config):
+    global _hang_stderr
+    _cancel_dump()
+    if _hang_stderr is not None:
+        _hang_stderr.close()
+        _hang_stderr = None
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    limit = _test_timeout()
+    if limit and _hang_stderr is not None:
+        _dump_later(limit, exit=True, file=_hang_stderr)
+        try:
+            return (yield)
+        finally:
+            _cancel_dump()
+    return (yield)
+
 
 collect_ignore_glob = []
 # the hermes checkout's own venv carries every third-party import the

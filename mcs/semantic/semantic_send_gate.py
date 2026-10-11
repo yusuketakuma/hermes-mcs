@@ -90,6 +90,23 @@ def _summary_current(ledger, project_id: int, message_id: int,
     return None
 
 
+def enforce_block_reason(ledger, scfg: dict, project_id) -> str | None:
+    """The reason semantic content must not ride this send, or None.
+
+    Order is mode, project_id type, pause, scope: a malformed id never
+    reaches ``paused``. Each caller maps the reason to its own outcome."""
+    if scfg["mode"] != "enforce" or scfg["summary_mode"] != "enforce":
+        return "semantic_not_enforce"
+    if type(project_id) is not int or project_id <= 0:
+        return "payload_invalid"
+    from mcs_queries import paused
+    if paused(ledger.db, project_id):
+        return "semantic_paused"
+    if scfg["project_ids"] is not None and project_id not in scfg["project_ids"]:
+        return "project_out_of_scope"
+    return None
+
+
 def _source_event(ledger, project_id: int, event_id: int):
     """Load an origin event only inside the semantic notice's project."""
     row = ledger.db.execute(
@@ -109,20 +126,12 @@ def semantic_gate(ledger, ev, payload: dict, cfg: dict,
     if not isinstance(payload, dict):
         raise ValueError("payload_invalid")
     scfg, _ = _sem.semantic_config(cfg)
-    if scfg["mode"] != "enforce" or scfg["summary_mode"] != "enforce":
-        if in_progress:
-            raise FreezeSend("semantic_not_enforce")
-        raise DeferredSend("semantic_not_enforce")
     project_id = ev["project_id"]
-    if type(project_id) is not int or project_id <= 0:
-        raise ValueError("payload_invalid")
-    from mcs_operations import paused
-    if paused(ledger.db, project_id):
-        raise FreezeSend("semantic_paused") if in_progress \
-            else DeferredSend("semantic_paused")
-    if scfg["project_ids"] is not None and project_id not in scfg["project_ids"]:
-        raise FreezeSend("project_out_of_scope") if in_progress \
-            else DeferredSend("project_out_of_scope")
+    reason = enforce_block_reason(ledger, scfg, project_id)
+    if reason == "payload_invalid":
+        raise ValueError(reason)
+    if reason is not None:
+        raise FreezeSend(reason) if in_progress else DeferredSend(reason)
     policy_version = payload.get("policy_version")
     if not isinstance(policy_version, str) \
             or policy_version != _sem.POLICY_VERSION:
@@ -194,16 +203,9 @@ def semantic_gate(ledger, ev, payload: dict, cfg: dict,
 def semantic_render_state(ledger, ev, cfg: dict) -> tuple:
     """Current identities of audited summaries attached to a raw notice."""
     import semantic as _sem
-    from mcs_operations import paused
-    if paused(ledger.db, ev["project_id"]):
-        return ()
     scfg, _ = _sem.semantic_config(cfg)
-    if scfg["mode"] != "enforce" or scfg["summary_mode"] != "enforce":
-        return ()
-    if scfg["project_ids"] is not None and ev["project_id"] not in scfg["project_ids"]:
-        return ()
     project_id = ev["project_id"]
-    if type(project_id) is not int or project_id <= 0:
+    if enforce_block_reason(ledger, scfg, project_id) is not None:
         return ()
     try:
         payload = json.loads(ev["payload"])
@@ -234,15 +236,17 @@ def semantic_render_state(ledger, ev, cfg: dict) -> tuple:
 
 def semantic_render_gate(ledger, ev, initial: tuple, cfg: dict,
                          in_progress: bool = False):
+    """Freeze/defer a raw notice whose attached summaries left enforce
+    or changed since ``initial`` was snapshotted."""
     if not initial:
         return
-    sem_cfg = cfg.get("semantic")
-    current = semantic_render_state(ledger, ev, cfg)
-    if not isinstance(sem_cfg, dict) or sem_cfg.get("mode") != "enforce":
-        if in_progress:
-            raise FreezeSend("semantic_not_enforce")
-        raise DeferredSend("semantic_not_enforce")
-    if current != initial:
+    import semantic as _sem
+    scfg, _ = _sem.semantic_config(cfg)
+    # the cheap policy check runs before the thread_bundle-heavy snapshot
+    reason = enforce_block_reason(ledger, scfg, ev["project_id"])
+    if reason is not None:
+        raise FreezeSend(reason) if in_progress else DeferredSend(reason)
+    if semantic_render_state(ledger, ev, cfg) != initial:
         raise FreezeSend("semantic_generation_changed") if in_progress \
             else StaleSend("semantic_generation_changed")
 
@@ -337,13 +341,8 @@ def semantic_summary_block(ledger, r, cfg: dict) -> str:
     byte-identical to pre-Phase-J (INV-16, spec §20.2)."""
     try:
         import semantic as _sem
-        from mcs_operations import paused
-        if paused(ledger.db, r["project_id"]):
-            return ""
         scfg, _ = _sem.semantic_config(cfg)
-        if scfg["mode"] != "enforce" or scfg["summary_mode"] != "enforce":
-            return ""
-        if scfg["project_ids"] is not None and r["project_id"] not in scfg["project_ids"]:
+        if enforce_block_reason(ledger, scfg, r["project_id"]) is not None:
             return ""
         root = r["parent_id"] or r["message_id"]
         # The audited summary must describe the current whole-thread

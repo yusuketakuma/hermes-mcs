@@ -18,19 +18,17 @@ import stat
 import tempfile
 import time
 
-from mcs_requests import _text, canonical, payload_hash, positive, valid_hash
+from mcs_requests import (RELEASE_TAG_RE, _text, canonical, payload_hash, positive,
+                          release_tag, valid_hash)
+# paused() is a core read (mcs_queries); re-exported for callers
+from mcs_queries import SEMANTIC_CONTROL_KIND as _CONTROL_ARTIFACT, paused
+from safe_io import fsync_dir
 
 
-_OPS_COMMON = {
-    "version", "cmd", "command_id", "actor", "human_confirmed", "project_id",
-}
 _FEATURE = "semantic"
 _SEMANTIC_JOB = "semantic"
 _HISTORY_JOB = "history"
-_CONTROL_ARTIFACT = "semantic_control"
 _ADOPTION_ARTIFACT = "semantic_adoption"
-_REFSTAT_ARTIFACT = "refstat_approval_v1"
-_REFSTAT_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 _MAX_ADDITIONAL_ATTEMPTS = 3
 
 
@@ -179,8 +177,8 @@ def _v_signal_policy(req: dict, base: set) -> str | None:
 def _v_refstat_approve(req: dict, base: set) -> str | None:
     if req.keys() - (base | {"name", "file_hash", "reason"}):
         return "unknown_field"
-    if not isinstance(req.get("name"), str) \
-            or not _REFSTAT_NAME_RE.fullmatch(req["name"]):
+    from mcs_refstats import _name_ok
+    if not _name_ok(req.get("name")):
         return "bad_refstat_name"
     if not valid_hash(req.get("file_hash")):
         return "bad_file_hash"
@@ -229,15 +227,11 @@ def _v_update(req: dict, base: set) -> str | None:
         return "unknown_field"
     if not _text(req.get("reason"), 2000):
         return "bad_reason"
-    if req.get("cmd") == "ops.update_apply" and (
-            not isinstance(req.get("tag"), str)
-            or not re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+",
-                                req["tag"])):
+    if req.get("cmd") == "ops.update_apply" and "tag" not in req:
         return "bad_tag"
-    if "tag" in req and (
-            not isinstance(req["tag"], str)
-            or not re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+",
-                                req["tag"])):
+    # the updater's grammar, so a notified (opted-in prerelease) tag is
+    # approvable; the opt-in itself is enforced in _apply_update_op_tx
+    if "tag" in req and not release_tag(req["tag"]):
         return "bad_tag"
     for k in ("target_sha", "base_sha"):
         if k in req and (not isinstance(req[k], str)
@@ -263,9 +257,9 @@ _OPS_VALIDATORS = {
 }
 
 
-def validate_ops(req: dict, common: set[str] | None = None) -> str | None:
+def validate_ops(req: dict, common: set[str]) -> str | None:
     """Validate the operation-specific portion after common identity checks."""
-    base = set(_OPS_COMMON if common is None else common)
+    base = set(common)
     handler = _OPS_VALIDATORS.get(req.get("cmd"))
     return handler(req, base) if handler else "unknown_ops_cmd"
 
@@ -382,6 +376,8 @@ def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
     # invalidating a worker that captured the pre-retry payload.
     payload["retry_command_id"] = req["command_id"]
     extra = {"job_id": row["job_id"], "attempts": row["attempts"]}
+    if "reason" in req:
+        extra["reason"] = req["reason"]
     if additional is not None:
         new_limit = row["attempts"] + additional
         payload["manual_attempt_limit"] = new_limit
@@ -389,7 +385,6 @@ def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
             "old_attempt_limit": old_limit,
             "new_attempt_limit": new_limit,
             "additional_attempts": additional,
-            "reason": req["reason"],
         })
     db.execute(
         "UPDATE fetch_jobs SET state='pending',payload=?,next_try=0,updated_at=? "
@@ -429,9 +424,8 @@ def _apply_control_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
             continue
         parsed.append((row["job_id"], payload))
 
-    meta = json.dumps({"command_id": req["command_id"],
-                       "actor": req["actor"]}, ensure_ascii=False,
-                      sort_keys=True, separators=(",", ":"))
+    meta = canonical({"command_id": req["command_id"],
+                      "actor": req["actor"]}).decode("utf-8")
     cur = db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
         "created_at) VALUES(?,?,?,?,?,?,?)",
@@ -504,10 +498,8 @@ def _apply_adopt_summary_tx(db, req: dict, now: float) -> tuple[str | None, dict
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
         "created_at) VALUES(?,?,?,?,?,?,?)",
         (_ADOPTION_ARTIFACT, req["project_id"], req["message_id"],
-         json.dumps(content, ensure_ascii=False, sort_keys=True,
-                    separators=(",", ":"), allow_nan=False),
-         "human", json.dumps(meta, ensure_ascii=False, sort_keys=True,
-                              separators=(",", ":")), now),
+         canonical(content).decode("utf-8"),
+         "human", canonical(meta).decode("utf-8"), now),
     )
     return None, {
         "adoption_artifact_id": cur.lastrowid,
@@ -636,12 +628,10 @@ def _apply_signal_policy_tx(db, req: dict, now: float) -> tuple[str | None, dict
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES(?,?,NULL,?,?,?,?)",
         (POLICY_KIND, None,
-         json.dumps(content, ensure_ascii=False, sort_keys=True,
-                    separators=(",", ":"), allow_nan=False),
+         canonical(content).decode("utf-8"),
          "human",
-         json.dumps({"command_id": req["command_id"],
-                     "actor": req["actor"]}, ensure_ascii=False,
-                    sort_keys=True, separators=(",", ":")), now))
+         canonical({"command_id": req["command_id"],
+                    "actor": req["actor"]}).decode("utf-8"), now))
     return None, {"policy_artifact_id": cur.lastrowid,
                   "policy": dict(policy)}
 
@@ -704,11 +694,7 @@ def _refstat_promotion(pending: str, approved: str, expected_hash: str):
         os.replace(staged, approved)
         staged = None
         promoted = True
-        dirfd = os.open(os.path.dirname(approved), os.O_RDONLY)
-        try:
-            os.fsync(dirfd)
-        finally:
-            os.close(dirfd)
+        fsync_dir(os.path.dirname(approved), require_dir=False)
         yield
     except BaseException:
         recovering = True
@@ -745,17 +731,19 @@ def _apply_refstat_approve_tx(db, req: dict, now: float,
 
     File rollback remains armed through artifact/receipt insertion and
     the caller's COMMIT; only then can previous bytes be discarded."""
+    # the capture side owns the name rule, artifact kind and layout
+    from mcs_refstats import APPROVAL_KIND, _name_ok, _ref_path
     name, file_hash = req["name"], req["file_hash"]
     # re-asserted here too: apply_tx is public and this field reaches
     # the filesystem, unlike sibling ops' SQL-bound fields
-    if not isinstance(name, str) or not _REFSTAT_NAME_RE.fullmatch(name):
+    if not _name_ok(name):
         return "bad_refstat_name", {}
     main = db.execute("PRAGMA database_list").fetchone()["file"]
     if not main:
         return "refstat_no_data_dir", {}
-    base = os.path.join(os.path.dirname(os.path.abspath(main)), "refstats")
-    pending = os.path.join(base, "pending", name + ".json")
-    approved = os.path.join(base, "approved", name + ".json")
+    data_dir = os.path.dirname(os.path.abspath(main))
+    pending = _ref_path(data_dir, name, "pending")
+    approved = _ref_path(data_dir, name, "approved")
     if filesystem_changes is None:
         raise RuntimeError("refstat_transaction_scope_required")
     if not os.path.isfile(pending) or os.path.islink(pending):
@@ -774,13 +762,11 @@ def _apply_refstat_approve_tx(db, req: dict, now: float,
     cur = db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES(?,?,NULL,?,?,?,?)",
-        (_REFSTAT_ARTIFACT, None,
-         json.dumps(content, ensure_ascii=False, sort_keys=True,
-                    separators=(",", ":"), allow_nan=False),
+        (APPROVAL_KIND, None,
+         canonical(content).decode("utf-8"),
          "human",
-         json.dumps({"command_id": req["command_id"],
-                     "actor": req["actor"]}, ensure_ascii=False,
-                    sort_keys=True, separators=(",", ":")), now))
+         canonical({"command_id": req["command_id"],
+                    "actor": req["actor"]}).decode("utf-8"), now))
     return None, {"refstat_artifact_id": cur.lastrowid,
                   "name": name, "file_hash": file_hash}
 
@@ -845,6 +831,12 @@ def _apply_update_op_tx(db, req, current) -> tuple[str | None, dict]:
         # fail fast: accepting a receipt under mode=off would leave it
         # silently dormant while telling the user it was scheduled
         return "update_disabled", {}
+    if req["cmd"] == "ops.update_apply" \
+            and RELEASE_TAG_RE.fullmatch(req["tag"]).group(4) \
+            and not upd.get("include_prerelease"):
+        # same opt-in as cmd_check's detection: only a notified
+        # prerelease is approvable
+        return "prerelease_not_enabled", {}
     extra = {"cmd": req["cmd"], "scheduled": True}
     if "tag" in req:
         extra["tag"] = req["tag"]
@@ -908,19 +900,6 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     if req["cmd"] in ("ops.update_apply", "ops.update_rollback"):
         return _apply_update_op_tx(db, req, current)
     return "unknown_ops_cmd", {}
-
-
-def paused(db, project_id: int) -> bool:
-    """Return the latest semantic control state, failing closed on corruption."""
-    connection = getattr(db, "db", db)
-    row = connection.execute(
-        "SELECT content FROM artifacts WHERE kind=? AND project_id=? "
-        "ORDER BY artifact_id DESC LIMIT 1",
-        (_CONTROL_ARTIFACT, project_id),
-    ).fetchone()
-    if row is None:
-        return False
-    return row["content"] != "running"
 
 
 __all__ = ["apply_tx", "paused", "retry_error", "validate_ops"]

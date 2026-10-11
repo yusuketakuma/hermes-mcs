@@ -1,8 +1,10 @@
 """An opted-in card worker with incomplete config must say so once in
 the log instead of silently never delivering queued cards."""
 import logging
+import json
 
 from hermes_plugin import card_workers
+from adapters.common import commands
 
 
 class _Ctx:
@@ -19,10 +21,12 @@ def test_incomplete_opt_in_logs_worker_disabled(caplog):
         _Ctx({"interactive": True}))(None, None) is None
     assert card_workers.make_slack_factory(
         _Ctx({"slack_adapter_enabled": True}))(None, None) is None
-    lines = [r.getMessage() for r in caplog.records]
+    lines = [(r.name, r.getMessage()) for r in caplog.records]
     assert lines == [
-        'mcs_discord worker_disabled {"reason": "config_incomplete"}',
-        'mcs_slack worker_disabled {"reason": "config_incomplete"}']
+        ("hermes.plugin.mcs_discord",
+         '{"event": "worker_disabled", "reason": "config_incomplete"}'),
+        ("hermes.plugin.mcs_slack",
+         '{"event": "worker_disabled", "reason": "config_incomplete"}')]
 
 
 def test_opted_out_stays_silent(caplog):
@@ -30,3 +34,66 @@ def test_opted_out_stays_silent(caplog):
     assert card_workers.make_discord_factory(_Ctx({}))(None, None) is None
     assert card_workers.make_slack_factory(_Ctx({}))(None, None) is None
     assert caplog.records == []
+
+
+# Regression: Hermes Slack cards accept auto projects and pass the route epoch to /mcs.
+def _config(root, **extra):
+    return {"slack_adapter_enabled": True, "slack_team_id": "T1",
+            "slack_application_id": "A1", "slack_channel_id": "C1",
+            "slack_allowed_user_ids": ["U1"], "project_ids": [1],
+            "data_root": str(root), **extra}
+
+
+def test_empty_projects_allowed_with_auto(tmp_path):
+    settings = card_workers._slack_adapter_settings(
+        _Ctx(_config(tmp_path, project_ids=[], project_ids_auto=True)))
+    assert settings is not None
+    assert settings["project_ids"] == frozenset()
+    assert settings["project_ids_auto"] is True
+    assert card_workers._slack_adapter_settings(
+        _Ctx(_config(tmp_path, project_ids=[]))) is None
+
+
+def test_factory_settings_pass_the_command_epoch_gate(tmp_path, monkeypatch):
+    (tmp_path / "flags").mkdir()
+    (tmp_path / "flags" / "notify.json").write_text(json.dumps(
+        {"interactive": True, "transport": "slack", "route_epoch": 3}))
+    captured = {}
+
+    class FakeSupervisor:
+        def __init__(self, *, settings, **_):
+            captured.update(settings)
+
+        def start(self):
+            pass
+
+    from adapters.slack import tasks
+    monkeypatch.setattr(tasks, "Supervisor", FakeSupervisor)
+    assert card_workers.make_slack_factory(_Ctx(_config(tmp_path)))(
+        object(), None) is not None
+    assert captured["route_epoch"] == 3
+    result = commands.answer(captured, "not json", user="U1", channel="C1")
+    assert json.loads(result)["error"] == "bad_command"
+
+
+def test_dispatch_type_error_is_an_operation_failure_not_bad_command(
+        tmp_path, monkeypatch):
+    """Only a parse error is the caller's bad_command; a TypeError raised
+    inside an op handler is operation_failed, as in the Hermes handler."""
+    (tmp_path / "flags").mkdir()
+    (tmp_path / "flags" / "notify.json").write_text(json.dumps(
+        {"interactive": True, "transport": "slack", "route_epoch": 3}))
+    settings = {"transport": "slack", "allowed_user_ids": ["U1"],
+                "channel_id": "C1", "data_root": str(tmp_path),
+                "route_epoch": 3, "team_id": "T1", "profile": "p",
+                "application_id": "A1"}
+
+    def broken(*_args):
+        raise TypeError("synthetic handler bug")
+
+    monkeypatch.setattr(commands, "_dispatch", broken)
+    result = commands.answer(settings, '{"op":"summary"}', user="U1",
+                             channel="C1")
+    assert json.loads(result)["error"] == "operation_failed"
+    assert json.loads(commands.answer(settings, "not json", user="U1",
+                                      channel="C1"))["error"] == "bad_command"

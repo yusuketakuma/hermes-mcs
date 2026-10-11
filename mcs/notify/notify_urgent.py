@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import TypedDict
 
 import mcs_signals
+import self_identity
 import notify_cards
 import notify_render
 import structured_view
@@ -198,15 +199,15 @@ def _engagement(db, row, cfg, now):
         return "triage_claimed"
     if mcs_signals._request_registered(db, mid):
         return "request_registered"
-    self_id = mcs_signals.self_sender_id(db)
-    own_orgs = mcs_signals._self_sets(cfg.get("signals"), db)[0]
+    self_id = self_identity.self_sender_id(db)
+    own_orgs = self_identity._self_sets(cfg.get("signals"), db)[0]
     if self_id is None and not own_orgs:
         return "identity_unknown"
     for post in db.execute(
             "SELECT sender_id,organization FROM messages WHERE project_id=? "
             "AND posted_at_ts>? AND posted_at_ts<=? AND body_state IS NOT 'deleted'",
             (pid, row["posted_at_ts"], now)):
-        if ((self_id is not None and mcs_signals.normalize_sender_id(post[0]) == self_id)
+        if ((self_id is not None and self_identity.normalize_sender_id(post[0]) == self_id)
                 or post[1] in own_orgs):
             return "own_post_observed"
     return None
@@ -410,8 +411,3 @@ def check_delivery(ledger, cfg, event, *, now=None):
             "observed_at": candidate["row"]["created_at"],
             "subject": detail["subject"], "reasons": detail["reasons"]}
 
-
-def render_text(checked, db=None):
-    """元投稿の表示と業務完了を区別した、独立した再確認候補を示す。"""
-    import alert_view
-    return alert_view.render_text(checked, db)

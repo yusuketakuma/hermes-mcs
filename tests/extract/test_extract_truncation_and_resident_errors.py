@@ -105,3 +105,51 @@ def test_resident_exits_when_semantic_lost_the_run_lock(monkeypatch):
     # an updater changed the code: respawn on it instead of re-locking
     assert extract_llm.main() == 0
     assert calls == [1]
+
+
+def _resident(monkeypatch, result):
+    """Run the --all loop on a stubbed pass; return the pauses it took."""
+    now, sleeps = [0.0], []
+    monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
+    monkeypatch.setattr(extract_llm.time, "sleep", sleep)
+    monkeypatch.setattr(extract_llm.sys, "argv",
+                        ["extract_llm", "--all", "--stop-after", "400"])
+    monkeypatch.setattr(extract_llm, "Ledger",
+                        lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **k: dict(result))
+    monkeypatch.setattr(extract_llm, "_next_retry", lambda led: None)
+    assert extract_llm.main() == 0
+    return sleeps
+
+
+def test_resident_backs_off_while_circuit_open(monkeypatch):
+    sleeps = _resident(monkeypatch, {"done": 0, "failed": 0, "left": None,
+                                     "selected": 3, "deferred": 0,
+                                     "circuit_open_s": 600})
+    assert sleeps[:3] == [120, 120, 120]
+
+
+def test_resident_backs_off_by_the_remaining_cooldown(monkeypatch):
+    sleeps = _resident(monkeypatch, {"done": 0, "failed": 0, "left": None,
+                                     "selected": 3, "deferred": 0,
+                                     "circuit_open_s": 40})
+    assert sleeps[:2] == [40, 40]
+
+
+def test_resident_backs_off_while_disk_low(monkeypatch):
+    sleeps = _resident(monkeypatch, {"done": 0, "failed": 0, "left": None,
+                                     "selected": 3, "deferred": 0,
+                                     "circuit_open_s": None, "disk_low": True})
+    assert sleeps[:3] == [120, 120, 120]
+
+
+def test_resident_stays_after_a_failure_only_pass(monkeypatch):
+    # endpoint-down failures write no error row, so no retry time exists
+    sleeps = _resident(monkeypatch, {"done": 0, "failed": 2, "left": 2,
+                                     "selected": 2, "deferred": 0})
+    assert sleeps[:3] == [120, 120, 120]

@@ -8,9 +8,9 @@ import sys
 
 import pytest
 
-from hermes_plugin.mcs_delivery import envelopes, spec as spec_mod, text
-from hermes_plugin.mcs_discord import cards as discord_cards
-from hermes_plugin.mcs_slack import cards as slack_cards
+from adapters.common import envelopes, spec as spec_mod, text
+from adapters.discord import cards as discord_cards
+from adapters.slack import cards as slack_cards
 from discord_testkit import _fake_discord
 
 LINK = {"id": "link", "ui": "link", "label": "🔗 MCSで開く",
@@ -66,6 +66,23 @@ def test_validator_rejects_bad_link_or_mentions(mutate, error):
     spec = _spec()
     mutate(spec)
     with pytest.raises(ValueError, match=error):
+        spec_mod.validate(spec)
+
+
+@pytest.mark.parametrize("rows", ["missing", None])
+def test_drug_view_navigation_without_action_rows_is_a_validation_error(rows):
+    """A manifest-less spec flagging drug_view_navigation with no action
+    rows is rejected with ValueError — the only exception _scan_specs
+    skips — instead of KeyError/TypeError aborting the worker tick."""
+    spec = _spec()
+    parts = spec["parts"]
+    del parts["manifest"]
+    if rows == "missing":
+        del parts["action_rows"]
+    else:
+        parts["action_rows"] = rows
+    parts["drug_view_navigation"] = True
+    with pytest.raises(ValueError, match="bad_drug_view_navigation"):
         spec_mod.validate(spec)
 
 

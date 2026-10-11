@@ -28,7 +28,7 @@ import urllib.request
 from contextlib import suppress
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every module dir (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
@@ -48,6 +48,7 @@ def _loopback_endpoint_allowed(endpoint: str) -> bool:
     """Allow only an unauthenticated HTTP endpoint on loopback."""
     try:
         parts = urlsplit(endpoint)
+        parts.port  # noqa: B018 -- raises on a non-numeric/out-of-range port
     except ValueError:
         return False
     return (parts.scheme == "http" and parts.hostname in
@@ -136,6 +137,27 @@ def _http_worker_main() -> int:
     return 0
 
 
+REAP_TIMEOUT_S = 5.0
+
+
+def _reap(process) -> None:
+    """Collect a killed worker without trusting its pipes to close.
+
+    communicate() after kill waits for EOF, which never comes while
+    something else still holds the pipe (a stuck descendant, an
+    uninterruptible wait) — the caller's deadline would stop holding.
+    Drain for a bounded time, then close our pipe ends and leave."""
+    try:
+        process.communicate(timeout=REAP_TIMEOUT_S)
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                with suppress(OSError):
+                    stream.close()
+        with suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=0.1)
+
+
 def _worker_environment() -> dict:
     """Pass only runtime essentials; credentials remain stdin-only."""
     allowed = {"PATH", "PYTHONPATH", "PYTHONHOME", "SYSTEMROOT",
@@ -208,13 +230,13 @@ def bounded_http_request(endpoint: str, method: str, body,
         try:
             process.kill()
         finally:
-            process.communicate()
+            _reap(process)
         raise TimeoutError("http worker deadline exceeded") from error
     except BaseException:
         if process.poll() is None:
             process.kill()
         with suppress(Exception):
-            process.communicate()
+            _reap(process)
         raise
     if time.monotonic() >= operation_deadline:
         raise TimeoutError("http worker deadline exceeded")

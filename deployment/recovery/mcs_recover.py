@@ -54,9 +54,8 @@ def _installed_repo():
 
 
 REPO = _installed_repo()
-# mcs_setup needs Python >= 3.14 while this watchdog runs under the
-# system /usr/bin/python3 — reconcile services with the install-time
-# interpreter (mcs_setup.HERMES_PY)
+# install verifies recovery_python >= 3.14 for this watchdog; services are
+# still reconciled with the runtime's own interpreter (mcs_setup.HERMES_PY)
 HERMES_PY = os.path.expanduser("~/.hermes/hermes-agent/venv/bin/python")
 STATE_PATH = os.path.join(DATA, "update_state.json")
 UPDATE_LOCK = os.path.join(DATA, "update.lock")
@@ -196,44 +195,38 @@ def _load_state():
         return {"_corrupt": True}
 
 
-def _save_state(state):
-    fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".ustate.", suffix=".tmp")
+def _atomic_json(path, value, prefix, suffix=".tmp", **dump_kw):
+    """Publish JSON durably: private mkstemp, fsync, replace, dir fsync.
+    Raises after removing the temporary file; callers keep their own error
+    policy. Also frozen into _GATEWAY_RESTART_PROGRAM."""
+    directory = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=prefix, suffix=suffix)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, sort_keys=True)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, STATE_PATH)
-        dfd = os.open(DATA, os.O_RDONLY)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, **dump_kw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+        tmp = None
+        dfd = os.open(directory, os.O_RDONLY)
         try:
             os.fsync(dfd)
         finally:
             os.close(dfd)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def _report(result, detail, **extra):
-    tmp = None
-    try:
-        fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".rpt.",
-                                   suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(dict({"result": result, "detail": detail,
-                            "at": time.time()}, **extra), f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, REPORT_PATH)
-    except OSError:
-        pass
     finally:
         if tmp is not None:
             with suppress(OSError):
                 os.unlink(tmp)
+
+
+def _save_state(state):
+    _atomic_json(STATE_PATH, state, ".ustate.", ensure_ascii=False, sort_keys=True)
+
+
+def _report(result, detail, **extra):
+    with suppress(OSError):
+        _atomic_json(REPORT_PATH, dict({"result": result, "detail": detail,
+                                        "at": time.time()}, **extra), ".rpt.")
 
 
 def _alert_key(state, detail):
@@ -416,8 +409,8 @@ def _agent_pid(label):
 
 def _bootstrap_agent(label, plist):
     """Standalone copy of mcs_util.launchd_bootstrap (this file runs
-    outside the repo under system python3 — keep the semantics in
-    sync): retry any failed bootstrap up to 3x (launchd may still be
+    outside the repo under the install-verified recovery_python — keep
+    the semantics in sync): retry any failed bootstrap up to 3x (launchd may still be
     tearing down a just-booted-out job, "5: Input/output error"); an
     exit 0 is not proof — success is the label answering `print`."""
     for _ in range(3):
@@ -481,24 +474,10 @@ def _restart_drainers(bounce=True):
 
 def _gateway_restart_report(data, status, **facts):
     """Keep restart requests separate from verified process replacement."""
-    path = Path(data, "gateway_restart.json")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=data, prefix=".gateway-restart.")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump({"status": status, "at": time.time(), **facts}, handle)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-        fd = os.open(data, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-    finally:
-        with suppress(OSError):
-            os.unlink(tmp)
+    os.makedirs(data, exist_ok=True)
+    _atomic_json(os.path.join(data, "gateway_restart.json"),
+                 {"status": status, "at": time.time(), **facts},
+                 ".gateway-restart.", suffix="")
 
 
 def _gateway_restart_run(data, agents, uid):
@@ -680,7 +659,8 @@ def _gateway_restart_run(data, agents, uid):
 # No repo imports are needed after the parent exits or rolls the tree back.
 _GATEWAY_RESTART_PROGRAM = (
     "import os,sys,json,re,tempfile,time,subprocess\nfrom pathlib import Path\n"
-    "from contextlib import suppress\n" + inspect.getsource(_gateway_restart_report)
+    "from contextlib import suppress\n" + inspect.getsource(_atomic_json)
+    + "\n" + inspect.getsource(_gateway_restart_report)
     + "\n" + inspect.getsource(_gateway_restart_run)
     + "\nsys.exit(_gateway_restart_run(*sys.argv[1:]))\n")
 
@@ -714,26 +694,10 @@ def _restart_gateway():
             path = Path(DATA, "standalone-restart.request")
             value = {"generation": live["generation"], "request_id": uuid.uuid4().hex,
                      "requested_at": time.time()}
-            tmp = None
             try:
-                fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".restart.")
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    json.dump(value, handle)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.chmod(tmp, 0o600)
-                os.replace(tmp, path)
-                directory = os.open(DATA, os.O_RDONLY)
-                try:
-                    os.fsync(directory)
-                finally:
-                    os.close(directory)
+                _atomic_json(str(path), value, ".restart.", suffix="")
             except OSError:
                 return False
-            finally:
-                if tmp is not None:
-                    with suppress(OSError):
-                        os.unlink(tmp)
         return True
     if _runtime_mode() != "hermes":
         return True
@@ -997,24 +961,7 @@ def _mark_restored(backup_path, phase="restored", report_id=None):
         payload["restored_at"] = payload["at"]
     if report_id is not None:
         payload["report_id"] = report_id
-    fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".restore.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, sort_keys=True)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, marker)
-        dfd = os.open(DATA, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    _atomic_json(marker, payload, ".restore.", sort_keys=True)
 
 
 # Records the DB replace would silently erase — duplicated from
@@ -1107,26 +1054,9 @@ def _loss_report(backup_path):
         json.dumps(metrics, sort_keys=True, separators=(",", ":"),
                    ensure_ascii=False).encode("utf-8")).hexdigest()
     report = dict(metrics, computed_at=time.time())
-    tmp = None
-    try:
-        fd, tmp = tempfile.mkstemp(dir=DATA, prefix=".rreport.",
-                                   suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(report, f, ensure_ascii=False, sort_keys=True)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, os.path.join(DATA, "restore_report.json"))
-        dfd = os.open(DATA, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
-    except OSError:
-        pass                            # report file is best-effort
-    finally:
-        if tmp is not None:
-            with suppress(OSError):
-                os.unlink(tmp)
+    with suppress(OSError):             # report file is best-effort
+        _atomic_json(os.path.join(DATA, "restore_report.json"), report,
+                     ".rreport.", ensure_ascii=False, sort_keys=True)
     return report
 
 
@@ -1320,6 +1250,8 @@ def _replace_database(backup_path, expected_sha, before_replace):
                 raise OSError("live_journal_busy")
         finally:
             live.close()
+        # = mcs_update._replace_database: same lexists sidecar rule, kept as an
+        # independent copy (recovery must run without the repo's modules)
         if any(os.path.lexists(LEDGER + suffix)
                for suffix in ("-wal", "-shm", "-journal")):
             raise OSError("live_sidecars_remaining")
@@ -1527,6 +1459,15 @@ def recover(if_stale=False):
                     "result": "escalated", "detail": detail[:200],
                     "at": time.time()}
                 _save_state(state)
+            if (applying or {}).get("restore_incomplete"):
+                # = mcs_update: apply's schema rollback failed before the
+                # DB restore finished — keep drainers down and the marker
+                _report_alert("escalate", state, detail,
+                              "[MCS] 更新の中断復旧ができません"
+                              f"（要手動対応）: {detail} — DB の復元が"
+                              "未完了のため常駐処理は停止したままです",
+                              writers_stopped=True)
+                return 1
             dkey = _drainers_key(state, head)
             _report_alert("escalate", state, detail,
                           "[MCS] 更新の中断復旧ができません"
@@ -1614,7 +1555,8 @@ def recover(if_stale=False):
                     return escalate("rollback db restore: " + err)
                 # DB at the backup schema, marker left awaiting_consent:
                 # the hold is over — later failures escalate normally
-                if state.pop("restore_consent", None) is not None:
+                held_before = state.pop("restore_consent", None) is not None
+                if applying.pop("restore_incomplete", None) or held_before:
                     _save_state(state)
             if not applying.get("rollback") and applying.get("reinstall") \
                     and not applying.get("reinstall_done"):

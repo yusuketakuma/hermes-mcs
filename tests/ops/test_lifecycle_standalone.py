@@ -80,7 +80,7 @@ def test_update_ops_find_the_standalone_wrapper(monkeypatch, tmp_path):
 
 
 def test_connector_changes_restart_only_in_standalone(monkeypatch):
-    monkeypatch.setattr(mcs_update, "_git_out", lambda args: "M\tmcs_standalone/slack_runtime.py\n")
+    monkeypatch.setattr(mcs_update, "_git_out", lambda args: "M\tmcs_standalone/__main__.py\n")
     monkeypatch.setattr(mcs_update, "load_config", lambda *a: {})
     assert not any("gateway restart" in n for n in mcs_update.impact_summary("a", "v1"))
     monkeypatch.setattr(mcs_update, "load_config", lambda *a: {"runtime_mode": "standalone"})

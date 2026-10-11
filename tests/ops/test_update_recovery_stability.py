@@ -120,3 +120,62 @@ def test_approved_swap_failure_keeps_restore_hold(updater, tmp_path, monkeypatch
     monkeypatch.setattr(updater, "_replace_database", replace)
     assert updater.recover_interrupted() == 0
     assert updater.load_state()["applying"] is None and restarts == [1]
+
+
+@pytest.mark.parametrize("runtime_mode", ["hermes", "standalone"])
+def test_failed_schema_rollback_stays_frozen_until_restored(
+        updater, tmp_path, monkeypatch, runtime_mode):
+    import ledger
+    import maintenance
+    import mcs_setup
+    from ops_testkit import _git
+    repo, live, back, before, after, restarts = _schema_bump_world(
+        updater, tmp_path, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    updater.save_state(updater._default_state())
+    cfg = {"runtime_mode": runtime_mode, "update": {"mode": "notify"}}
+    monkeypatch.setattr(updater, "load_config", lambda: cfg)
+    monkeypatch.setattr(mcs_setup, "runtime_gate_errors", lambda *a, **k: [])
+    monkeypatch.setattr(updater, "precheck_local", lambda c: [])
+    monkeypatch.setattr(updater, "remote_tag_sha", lambda t: after)
+    monkeypatch.setattr(updater, "precheck_tag", lambda t: ["schema_bump:7->8"])
+    monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: back)
+    monkeypatch.setattr(updater, "_baseline_check", lambda c: [])
+    monkeypatch.setattr(updater, "_needs_migration", lambda v: False)
+    monkeypatch.setattr(updater, "_standalone_target_supported", lambda ref: True)
+    backup_broken = []
+    real_valid = ledger.valid_mcs_db
+    monkeypatch.setattr(ledger, "valid_mcs_db", lambda path, *a, **k: not (
+        backup_broken and str(path) == back) and real_valid(path, *a, **k))
+
+    def child_restarted_then_failed(sha):
+        restarts.append("child")
+        updater._remove_marker()
+        backup_broken.append(True)       # unreadable before any consent hold
+        raise updater.UpdateError("post_merge_failed: synthetic")
+
+    monkeypatch.setattr(updater, "_run_post_merge", child_restarted_then_failed)
+    damaged = Path(live).read_bytes()
+    assert updater.apply("v1.1.0", after, "synthetic-apply") == 1
+    assert updater._head_sha() == before and restarts == ["child"]
+
+    restarts.clear()
+    notices = []
+    monkeypatch.setattr(updater, "_enqueue_notice",
+                        lambda text, *a, **k: notices.append(text) or True)
+    assert updater.recover_interrupted() == 1
+    assert restarts == [] and Path(updater.MARKER_PATH).exists()
+    assert notices == []                 # frozen: report only, no ledger write
+    report = json.loads(Path(updater.REPORT_PATH).read_text())
+    assert report["result"] == "escalate" and report["writers_stopped"] is True
+    assert "drainers_key" not in report
+    assert updater.load_state()["applying"]["restore_incomplete"] is True
+    assert Path(live).read_bytes() == damaged
+    assert not Path(updater.DATA, "restore_pending.json").exists()
+
+    # once the backup is usable and the restore approved, the hold ends
+    backup_broken.clear()
+    _seed_consent(live, back)
+    assert updater.recover_interrupted() == 0
+    assert restarts == [1] and not Path(updater.MARKER_PATH).exists()
+    assert updater.load_state()["applying"] is None

@@ -6,8 +6,8 @@ from pathlib import Path
 
 from mcs_util import HOME
 
-HERMES_PY = os.path.expanduser("~/.hermes/hermes-agent/venv/bin/python")
 STANDALONE_LABEL = "ai.mcs.standalone"
+GATEWAY_SOURCE_DIRS = ("hermes_plugin", "adapters/common", "adapters/slack", "adapters/discord", "mcs")
 
 
 def mode(cfg: dict) -> str:

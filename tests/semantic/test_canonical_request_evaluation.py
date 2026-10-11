@@ -137,6 +137,38 @@ def test_synthetic_capacity_boundaries_and_missing_observations_are_not_acceptan
     assert support.capacity_report([])["daily_mean_llm_s"] is None
 
 
+def test_capacity_fractional_rounding_preserves_complete_telemetry():
+    days = _days()
+    for day in days:
+        day["llm_s"] = 0.3
+        day["job_llm_s"] = [0.1, 0.2]
+
+    report = support.capacity_report(days)
+
+    assert report["job_telemetry_complete"] is True
+    assert report["job_llm_s_p90"] == 0.2
+    assert report["thresholds_met"] is True
+    assert report["eligible"] is False
+
+
+@pytest.mark.parametrize("total,jobs", [
+    (0.30000001, [0.1, 0.2]),
+    (1_000_000_000.5, [1_000_000_000]),
+    (1e308, [1e308, 1e308]),
+])
+def test_capacity_real_deficits_remain_incomplete_without_relative_tolerance(total, jobs):
+    days = _days()
+    days[0]["llm_s"] = total
+    days[0]["job_llm_s"] = jobs
+
+    report = support.capacity_report(days)
+
+    assert report["job_telemetry_complete"] is False
+    assert report["job_llm_s_p90"] is None
+    assert report["thresholds_met"] is None
+    assert report["eligible"] is False
+
+
 @pytest.mark.parametrize("invalid", [float("inf"), float("nan"), True, -1])
 def test_capacity_invalid_measurements_cannot_become_zero(invalid):
     days = _days()

@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "gateway の再起動が必要な状態を check と doctor が見逃す問題を修正",
+  "summary": "mcs/ 配下（通知・台帳など gateway が読み込むモジュール）だけを更新したときや、日本語ロケールの端末で実行したときに、mcs_setup check の「gateway の再起動が必要」警告が出ず、doctor の起動時刻と再起動要否も「不明」になっていた問題を修正しました。",
+  "upgrade": "追加操作は不要です。更新直後の check で再起動の警告が出た場合は hermes gateway restart を実行してください。",
+  "details": [
+    "再起動判定の対象を更新器と同じ mcs_runtime.GATEWAY_SOURCE_DIRS（hermes_plugin・adapters の Slack/Discord/共通・mcs）にそろえた。",
+    "ps -o lstart= を LC_ALL=C で実行し、解析を _process_started_at に一本化した（check と doctor の重複を解消）。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "tests/ops/test_mcs_setup.py"
+  ]
+}

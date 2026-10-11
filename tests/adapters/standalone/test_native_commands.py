@@ -13,6 +13,7 @@ import semantic
 from adapters.common import commands, registry
 from adapters.slack.actions import Actions as SlackActions
 from adapters.lineworks.actions import Actions as LineWorksActions
+from adapters.lineworks.delivery import Sender as LineWorksSender
 from adapters.discord.standalone import _native_context
 from ops_testkit import _source
 
@@ -96,7 +97,8 @@ def route(tmp_path, request):
     app = App()
     reg = registry.Registry(str(data / "state"), scope=settings)
     sender = SimpleNamespace(single_attempt=lambda: app.client,
-        send=lambda content, **kw: sent.append({**kw, "text": content["text"]}))
+        send=lambda content, **kw: sent.append({**kw, "text": content["text"]}),
+        route_current=LineWorksSender(None, settings, str(data)).route_current)
     if transport == "slack":
         actions = SlackActions(app, settings, {}, reg, sender, lambda *a, **k: None)
         actions.register()

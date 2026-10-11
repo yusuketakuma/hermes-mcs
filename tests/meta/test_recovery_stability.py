@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from test_mcs_recover import _applying, _consent, _mk_db, _rollback_state, rec
 
 __all__ = ["rec"]
@@ -65,3 +67,66 @@ def test_approved_restore_swap_failure_keeps_journal_and_sender_hold(rec, tmp_pa
     assert json.loads(Path(rec.DATA, "restore_pending.json").read_text())["phase"] == "awaiting_consent"
     assert json.loads(Path(rec.REPORT_PATH).read_text())["result"] == "restore_consent_blocked"
     assert live.read_bytes() == before
+
+
+@pytest.mark.parametrize("runtime_mode", ["hermes", "standalone"])
+def test_failed_schema_rollback_hold_survives_independent_recovery(
+        rec, tmp_path, monkeypatch, runtime_mode):
+    live = tmp_path / "data/ledger.db"
+    backup = tmp_path / "data/backup.db"   # unreadable (missing) at first
+    _mk_db(live, 8)
+    state = _rollback_state(rec, tmp_path, str(backup))
+    state["applying"]["restore_incomplete"] = True   # set by apply's bail
+    Path(rec.STATE_PATH).write_text(json.dumps(state))
+    (tmp_path / "config.json").write_text(json.dumps({"runtime_mode": runtime_mode}))
+    monkeypatch.setattr(rec, "LEDGER", str(live))
+    monkeypatch.setattr(rec, "_reconcile_membership", lambda snapshot: [])
+    monkeypatch.setattr(rec, "_standalone_drainer_problems", lambda: [])
+    calls = []
+    restart = rec._restart_drainers
+    monkeypatch.setattr(rec, "_restart_drainers",
+                        lambda bounce=True: calls.append(bounce) or restart(bounce))
+    Path(rec.MARKER_PATH).write_text("synthetic")
+    before = live.read_bytes()
+    assert rec.recover() == 1
+    assert calls == [] and Path(rec.MARKER_PATH).exists()
+    report = json.loads(Path(rec.REPORT_PATH).read_text())
+    assert report["result"] == "escalate" and report["writers_stopped"] is True
+    assert "backup_unreadable" in report["detail"]
+    assert json.loads(Path(rec.STATE_PATH).read_text())["applying"]["restore_incomplete"]
+    assert live.read_bytes() == before
+    assert not Path(rec.DATA, "restore_pending.json").exists()
+
+    # a usable, approved backup completes the restore and ends the hold
+    _mk_db(backup, 7)
+    _consent(rec, live, backup)
+    assert rec.recover() == 0
+    assert calls == [True] and not Path(rec.MARKER_PATH).exists()
+    assert rec._db_version(str(live)) == 7
+    assert json.loads(Path(rec.STATE_PATH).read_text())["applying"] is None
+
+
+def test_frozen_gateway_program_carries_the_atomic_json_writer(rec, tmp_path):
+    namespace = {"__name__": "synthetic_frozen"}
+    exec(compile(rec._GATEWAY_RESTART_PROGRAM.rsplit("sys.exit(", 1)[0],
+                 "<frozen>", "exec"), namespace)
+    out = tmp_path / "frozen-data"
+    namespace["_gateway_restart_report"](str(out), "requested", error="synthetic")
+    written = out / "gateway_restart.json"
+    assert json.loads(written.read_text())["status"] == "requested"
+    assert written.stat().st_mode & 0o777 == 0o600
+    assert [p.name for p in out.iterdir()] == ["gateway_restart.json"]
+
+
+def test_atomic_json_failure_keeps_target_and_leaves_no_temp(rec, monkeypatch):
+    Path(rec.REPORT_PATH).write_text('{"result": "synthetic-previous"}')
+
+    def fail(src, dst):
+        raise OSError("synthetic replace failure")
+
+    monkeypatch.setattr(rec.os, "replace", fail)
+    rec._report("escalate", "synthetic")         # best-effort: swallowed
+    with pytest.raises(OSError):
+        rec._save_state({"v": 1})                # state writes raise
+    assert json.loads(Path(rec.REPORT_PATH).read_text())["result"] == "synthetic-previous"
+    assert not [p for p in Path(rec.DATA).iterdir() if p.name.endswith(".tmp")]

@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "日時のない返信を含む投稿で履歴取得が止まる問題を修正",
+  "summary": "履歴の差分取得で、返信の作成日時が空の投稿があると取得全体が schema_error で止まり、その患者の履歴ジョブが初回で失敗していました。日時のない返信を含む投稿は、日時のない親投稿と同じく取り込み対象に残すようにしました。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "mcs/ingest/mcs_adapter.py の fetch_history は、since を指定した走査で返信の created_at が空のとき、その親投稿をスキップせずに残す。空でない不正な日時は従来どおり schema_error で止める。",
+    "MCS が日時のない返信を返すことは実 API では未確認。取込範囲を広げる側にだけ倒す変更で、取り込まないことで「記録なし」が増える方向にはしていない。"
+  ],
+  "refs": [
+    "mcs/ingest/mcs_adapter.py",
+    "tests/ingest/test_history_undated_reply.py"
+  ]
+}

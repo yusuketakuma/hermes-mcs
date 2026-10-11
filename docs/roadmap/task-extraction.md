@@ -99,7 +99,7 @@ A〜C は extract_llm と読み側だけを触り、shadow/enforce の canonical
 
 - `python3 mcs/ops/mcs_setup.py init --set semantic.summary_mode=assist --set semantic.loop_mode=assist` を実行（オーナー実行。`check` が fail-closed で検証）。`semantic.mode` は shadow のまま（enforce は E2）。
 - 効果: 以後の要約候補が `summary_review` で採用可能になり、Loop 候補は従来通り閲覧・人手採用できる。通知・外部送信・Jev 予算は変わらない。
-- `python3 mcs/semantic/semantic_observe.py --json` を日次で追記し、PASS 率・failed 数・Jev 使用量・pending 消化率を E2 の判断材料にする。
+- `python3 mcs/ops/semantic_observe.py --json` を日次で追記し、PASS 率・failed 数・Jev 使用量・pending 消化率を E2 の判断材料にする。
 - **完了条件**: 設定反映と `check` 合格、観測ログの開始。
 
 ### 20-A 依頼の評価ケースと基準測定（S）
@@ -130,7 +130,7 @@ A〜C は extract_llm と読み側だけを触り、shadow/enforce の canonical
 ### 20-E2 calibration → enforce（設定 + オーナー判断）
 
 - 前提観測（20-E1 のログ）: 現行世代の監査 PASS 率が安定、failed job 0、Jev 日次使用量が予算の余裕を持つ、pending 消化率 ≥ 新着率。閾値の数値はオーナーが観測値を見て決める（`#20-D4`）。
-- `python3 mcs/semantic/semantic_bench.py calibrate`（実 DB 読み取り専用、オーナー実行）で claim 信頼度分布と match_threshold の what-if を確認し、必要なら `match_threshold`/`nomatch_threshold` を決める。
+- `python3 mcs/semantic/eval/semantic_bench.py calibrate`（実 DB 読み取り専用、オーナー実行）で claim 信頼度分布と match_threshold の what-if を確認し、必要なら `match_threshold`/`nomatch_threshold` を決める。
 - 設定: `--set semantic.threshold_mode=calibrated --set semantic.calibration_version="2026-MM-DD.1"` → `check` 合格 → `--set semantic.mode=enforce --set semantic.summary_mode=enforce --set semantic.loop_mode=enforce`。
 - 効果: 監査 PASS の要約が `semantic_notice` として配送され、degraded notice が出る。生の新着通知は semantic 処理を待たない（既存設計）。`calibration_version` 変更で現行結果が非 current になり再評価が走るため、切替直後の Jev 使用量と滞留を観測する。
 - 戻し: `semantic.mode=shadow` に戻すだけで配送が止まる（`semantic_gate` が deferred/freeze）。

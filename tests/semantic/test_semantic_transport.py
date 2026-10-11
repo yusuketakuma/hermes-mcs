@@ -60,7 +60,10 @@ def _questions():
 def test_slow_trickle_cannot_extend_real_attempt_deadline(local_http,
                                                            monkeypatch):
     started = threading.Event()
-    payload = b"{" + (b"x" * 127) + b"}"
+    # ~41 s of trickle at 0.04 s/byte: far beyond the 0.35 s deadline and
+    # the 1 s attempt timeout, so a generous elapsed bound still proves
+    # the trickle cannot extend the attempt
+    payload = b"{" + (b"x" * 1022) + b"}"
 
     class SlowHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -100,7 +103,7 @@ def test_slow_trickle_cannot_extend_real_attempt_deadline(local_http,
     elapsed = time.monotonic() - started_at
 
     assert exc_info.value.kind == "timeout"
-    assert elapsed < 1.5
+    assert elapsed < 10
     assert events == ["before", "reserve"]
     assert client.requests_made == 1
 

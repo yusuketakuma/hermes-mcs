@@ -8,10 +8,12 @@ receipt is published. Crashes land between those records and are
 classified honestly on the next start — pre-HTTP grants settle as
 ``not_sent`` (journal integrity + the scope lock prove it), post-HTTP
 silences stay ``unknown`` for an operator to resolve, and an in-flight
-send is never retried by a new worker. (A transport SDK may still retry
-inside one ``_perform`` call: discord.py re-POSTs on 5xx/ECONNRESET, so
-a lost response can duplicate a Discord post; Slack strips its retry
-handlers. See hermes_plugin/README.md.)
+send is never retried by a new worker. (Inside one ``_perform`` call
+discord.py would re-POST on 5xx/ECONNRESET, so every Discord create POST
+runs under ``cards.single_post``, which stops a second POST unless the
+previous answer was a 429 — verified for discord.py 2.7.1 only, other
+versions fail closed as ``retry_policy_unknown``; edits and deletes are
+not guarded. Slack strips its retry handlers. See hermes_plugin/README.md.)
 
 The transport's own wire calls live behind ``_perform`` and
 ``_perform_part``; everything around them — claims, grants, journals,
@@ -37,7 +39,8 @@ POLL_S = 2.0
 REPUBLISH_BEGIN_S = 60.0       # re-send the same begin if no result
 RETRY_IN_FLIGHT_S = 15.0       # denied_in_flight re-begin backoff
 SIGNAL_OFF_RETRY_S = 300.0     # denied_signal_notify_off re-claim backoff
-MAX_BEGIN_RETRIES = 20         # ~5min of in_flight before giving up
+MAX_BEGIN_RETRIES = 20         # shared cap on begin republishes and in_flight
+                               # re-begins (each in_flight cycle spends 2)
 CLAIM_STALE_S = 60.0           # orphan .claimed marker age before reclaim
 JOURNAL_SEGMENT_BYTES = 8 << 20  # rotate the live journal segment past this
 EXPIRE_EVERY_S = 300.0         # registry TTL sweep cadence (TTLs are
@@ -46,6 +49,8 @@ EXPIRE_EVERY_S = 300.0         # registry TTL sweep cadence (TTLs are
 STARTUP_RETRY_MAX_S = 300.0    # cap on the supervisor start-up retry backoff
 RESTORE_MARGIN_S = 86400.0     # journal rows this much older than the oldest
                                # restorable backup are no longer restore evidence
+NO_BACKUP_HORIZON_S = 90 * 86400.0  # with no local backup set, settled rows
+                               # older than this are not restore evidence either
 
 # HTTP statuses that prove the send was rejected outright — never
 # committed server-side. Timeouts/cancellations are unknown instead.
@@ -232,12 +237,19 @@ class DeliveryWorker:
     def _restore_horizon(self) -> float | None:
         """mtime of the oldest backup a restore could rewind to — journal
         rows newer than that are the post-restore reconcile's only
-        witness. No readable backup set means no pruning at all."""
+        witness. With no backup set at all (absent directory or no .db)
+        the horizon falls back to NO_BACKUP_HORIZON_S ago so the journal
+        cannot grow forever; an unreadable backup set prunes nothing."""
         backups = os.path.join(self._root, "backups")
         try:
             names = [n for n in os.listdir(backups) if n.endswith(".db")]
-            if not names:
-                return None
+        except FileNotFoundError:
+            names = []
+        except OSError:
+            return None
+        if not names:
+            return time.time() - NO_BACKUP_HORIZON_S
+        try:
             return min(os.stat(os.path.join(backups, n)).st_mtime
                        for n in names)
         except OSError:
@@ -302,6 +314,16 @@ class DeliveryWorker:
             self._log("journal_compacted", rows=dropped)
 
     # -- startup reconcile --------------------------------------------
+
+    async def reload_reconcile(self) -> dict:
+        """Reload the registry, settle orphaned attempts in one batch, and
+        log non-zero stats — the startup step shared by Slack and Discord."""
+        self._reg.reload()
+        with self._reg.batch():
+            stats = await self.reconcile()
+        if any(stats.values()):
+            self._log("reconciled", **stats)
+        return stats
 
     async def reconcile(self) -> dict:
         """Settle orphaned attempts before any new claim runs.
@@ -730,8 +752,10 @@ class DeliveryWorker:
                           delivery_id=spec["delivery_id"],
                           error=result.get("error"))
             error = str(result.get("error") or "")
+            # +1: the re-begin this stages is itself a republish, which
+            # the result-None branch only sends below the cap
             if error == "denied_in_flight" \
-                    and claim["begin_retries"] < MAX_BEGIN_RETRIES:
+                    and claim["begin_retries"] + 1 < MAX_BEGIN_RETRIES:
                 # another attempt owns the card — a re-begin needs a
                 # fresh attempt_id AND a fresh envelope (the stored
                 # begin_env still carries the dead attempt_id and
@@ -776,12 +800,11 @@ class DeliveryWorker:
     async def _send_allowed(self, spec: dict | None = None) -> bool:
         flags = await asyncio.to_thread(paths.read_flags, self._root)
         return (not self._stopping and not self._journal_incomplete
-                and flags.get("interactive") is True
-                and flags.get("transport", "discord") == self.transport
-                and not flags.get("restore_pending")
-                and (spec is None or (
-                    type(flags.get("route_epoch")) is int
-                    and flags["route_epoch"] == spec["delivery"]["route_epoch"])))
+                and paths.route_open(
+                    flags, self.transport,
+                    None if spec is None else spec["delivery"]["route_epoch"],
+                    check_epoch=spec is not None, int_epoch=True,
+                    default_transport="discord"))
 
     async def _step_claim(self, claim: dict, *, allow_parts: bool = True) -> None:
         spec = claim["spec"]

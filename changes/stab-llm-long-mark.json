@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "長い出力の印を保存できなかったとき、記録を残し同じ処理内では印を保つように修正",
+  "summary": "長い出力が必要なプロンプトの印を保存できなかったとき、これまでは何も残さず捨てていたため、次の試行で同じ長い呼び出しを繰り返すことがありました。保存できなかったときは原因を記録して数え、同じプロセス内では印を保ちます。次に保存できたときにまとめて書き込みます。",
+  "upgrade": "追加操作は不要です。保存できなかった回数は意味評価の実行結果に long_mark_unsaved として出ます。",
+  "details": [
+    "semantic._long_mark は例外を握りつぶさず、ロック競合(busy)とその他(error)を数え、プロンプトや鍵を含まない1行のJSONログを stderr に出す。",
+    "保存できなかった印は最大500件までプロセス内に保持し、_long_marks の結果に反映する。run_due はパス中の増加分を out.long_mark_unsaved に出す。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic.py",
+    "mcs/semantic/semantic_drain.py",
+    "tests/semantic/test_stab_semantic_lanes.py"
+  ]
+}

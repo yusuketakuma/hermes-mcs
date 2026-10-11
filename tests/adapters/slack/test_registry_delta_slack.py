@@ -1,8 +1,8 @@
 """Slack card bursts keep posted pins durable without a registry rewrite per card."""
 import asyncio
 
-from hermes_plugin.mcs_delivery import registry
-from hermes_plugin.mcs_slack.delivery import DeliveryWorker
+from adapters.common import registry
+from adapters.slack.delivery import DeliveryWorker
 from slack_card_testkit import _spec
 
 

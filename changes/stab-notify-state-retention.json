@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "配送記録とLINE WORKSの受信記録が増え続けないよう修正",
+  "summary": "バックアップを作っていない環境で、Slack・Discord・LINE WORKSのカード配送記録（journal）が削除されず増え続けていた問題を修正しました。バックアップがない場合は90日より古い送信完了済みの記録だけを整理します。また、LINE WORKSで処理結果が不明だった受信記録（内容は含まない状態ファイル）を30日後に削除します。",
+  "upgrade": "追加操作は不要です。LINE WORKSアダプターを常駐させている場合は、反映のためにアダプターを再起動してください。",
+  "details": [
+    "adapters/common/worker.py はバックアップ用ディレクトリがない、または .db が1つもない場合、90日前を整理の基準時刻にする。バックアップがある場合は従来どおり最古のバックアップ時刻を基準にし、ディレクトリを読めない場合や復元待ちの間は何も削除しない。結果不明・未完了・処理中の記録は従来どおり残す。",
+    "adapters/lineworks/server.py の結果不明の .done は30日後に削除する。同じ受信の重複判定は送信時刻が10分以内のものだけが対象のため影響しない。`status` の結果不明件数は30日以内のものになる。"
+  ],
+  "refs": [
+    "adapters/common/worker.py",
+    "adapters/lineworks/server.py",
+    "tests/adapters/discord/test_stab_journal_no_backup_horizon.py",
+    "tests/adapters/lineworks/test_stab_callback_receipt_ttl.py"
+  ]
+}

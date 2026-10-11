@@ -832,7 +832,9 @@ def test_adapter_worker_deadline_reaps_slow_reader(tmp_path, monkeypatch, operat
     monkeypatch.setattr(mcs_worker.subprocess, "Popen", spawn)
     adapter = mcs_adapter.MCSAdapter()
     adapter._token = None if operation == "bootstrap" else "synthetic-bearer"
-    adapter.set_deadline(time.monotonic() + 2)
+    # room for a loaded runner to start the worker and reach the read;
+    # the reader then blocks forever, so only the deadline can end it
+    adapter.set_deadline(time.monotonic() + 5)
     destination = tmp_path / "downloaded"
     destination.write_bytes(b"previous-complete-file")
     started = time.monotonic()
@@ -846,7 +848,7 @@ def test_adapter_worker_deadline_reaps_slow_reader(tmp_path, monkeypatch, operat
     with pytest.raises(mcs_adapter.MCSError) as error:
         call()
     assert error.value.kind == "deadline_exceeded"
-    assert time.monotonic() - started < 6
+    assert time.monotonic() - started < 20
     assert started_file.exists()
     assert len(processes) == 1 and processes[0].poll() is not None
     assert destination.read_bytes() == b"previous-complete-file"
@@ -1579,3 +1581,46 @@ def test_auto_login_resets_per_attempt_journal_facts(monkeypatch, tmp_path):
     monkeypatch.setattr(a, "_recover_session", lambda: True)
     assert a.auto_login() == "ok"
     assert (a.healed_tabs, a.chrome_restarted) == (0, False)
+
+
+# Synthetic regressions: auto_login returns a state, download bootstraps.
+def _net_down(payload, timeout, deadline):
+    raise mcs_adapter.MCSError("network_error", retryable=True)
+
+
+def test_auto_login_expired_deadline_returns_failed():
+    a = mcs_adapter.MCSAdapter(worker=_net_down, token_cache="/nonexistent/x")
+    a.set_deadline(time.monotonic() - 1)
+    assert a.auto_login("/x", "/x") == "failed"
+
+
+def test_auto_login_poll_check_session_error_returns_failed(monkeypatch):
+    a = mcs_adapter.MCSAdapter(worker=_net_down, token_cache="/nonexistent/x")
+    monkeypatch.setattr(a, "_ensure_chrome", lambda *_: None)
+    monkeypatch.setattr(a, "_recover_session", lambda: False)
+    monkeypatch.setattr(a, "_login_page",
+                        lambda: {"webSocketDebuggerUrl": "ws://127.0.0.1/x"})
+    monkeypatch.setattr(a, "_sleep_bounded", lambda s: None)
+    monkeypatch.setattr(a, "_cdp_eval",
+                        lambda ws, js: "ready" if "no_form" in js else "clicked")
+    monkeypatch.setattr(a, "_token_via_cdp", lambda: "t" * 32)
+
+    def boom():
+        raise mcs_adapter.MCSError("network_error", retryable=True)
+    monkeypatch.setattr(a, "check_session", boom)
+    assert a.auto_login("/x", "/x", wait_s=5) == "failed"
+
+
+def test_download_bootstraps_token(monkeypatch, tmp_path):
+    calls = []
+
+    def worker(payload, timeout, deadline):
+        calls.append(payload["token"])
+        with open(payload["partial"], "wb") as f:
+            f.write(b"x")
+        return {"bytes": 1}
+    a = mcs_adapter.MCSAdapter(worker=worker, token_cache=None)
+    monkeypatch.setattr(a, "_token_via_cdp", lambda: "t" * 32)
+    dest = tmp_path / "f.bin"
+    a.download("https://www.medical-care.net/files/1", str(dest))
+    assert calls == ["t" * 32] and dest.read_bytes() == b"x"

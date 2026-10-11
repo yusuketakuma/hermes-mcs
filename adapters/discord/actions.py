@@ -22,10 +22,9 @@ import time
 from typing import Any
 
 from hermes_plugin import projects
-from adapters.common import envelopes, paths, registry, text
-from .cards import MENU_ID, no_pings, thread_drug_view
+from adapters.common import confirm, envelopes, paths, registry, text
+from .cards import ACTION_PREFIX, MENU_ID, no_pings, thread_drug_view
 
-ACTION_PREFIX = "mcs:a:"
 MODAL_PREFIX = "mcs:m:"
 CONFIRM_PREFIX = "mcs:c:"
 
@@ -131,23 +130,6 @@ def _same_origin(pinned: dict, current: dict,
     return all((pinned.get(k) or None) == (current.get(k) or None) for k in keys)
 
 
-def _context_projects(context: dict) -> list[int]:
-    """Every project in a digest must be authorized before acting on it."""
-    if context.get("project_id") is not None:
-        values = [context["project_id"]]
-    else:
-        nested = context.get("context")
-        signals = nested.get("signals") if isinstance(nested, dict) else None
-        if not isinstance(signals, dict) or not signals:
-            return []
-        if not all(isinstance(item, dict) for item in signals.values()):
-            return []
-        values = [item.get("project_id") for item in signals.values()]
-    if not all(type(pid) is int and pid > 0 for pid in values):
-        return []
-    return sorted(set(values))
-
-
 class Actions:
     def __init__(self, *, bot: Any, settings: dict, root: str,
                  reg: registry.Registry, log) -> None:
@@ -196,17 +178,14 @@ class Actions:
         (as Slack ``_interactive`` and LINE WORKS ``_allowed``)."""
         flags = await asyncio.to_thread(paths.read_flags, self._root)
         epoch = self._settings.get("route_epoch")
-        return (flags.get("interactive") is True
-                and flags.get("transport", "discord") == "discord"
-                and not flags.get("restore_pending")
-                and (epoch is None or flags.get("route_epoch") == epoch))
+        return paths.route_open(flags, "discord", epoch,
+                                check_epoch=epoch is not None,
+                                default_transport="discord")
 
     def _deny_reason(self, interaction, denial: str) -> None:
         """The user only sees 「権限がありません。」— the reason stays
         diagnosable in the journal."""
-        self._log("interaction_denied", reason=denial,
-                  actor=_actor(interaction),
-                  channel=str(interaction.channel_id))
+        self._log("interaction_denied", reason=denial)
 
     def _result_log(self, interaction, action: str, result: dict | None,
                     **fields) -> None:
@@ -214,9 +193,7 @@ class Actions:
         denials alone are not an audit trail."""
         self._log("interaction_result", action=action,
                   outcome=(result or {}).get("outcome") or "timeout",
-                  error=(result or {}).get("error"),
-                  actor=_actor(interaction),
-                  channel=str(interaction.channel_id), **fields)
+                  error=(result or {}).get("error"), **fields)
 
     # -- result polling --------------------------------------------------
 
@@ -314,7 +291,7 @@ class Actions:
             return
         action = ctx.get("action")
 
-        pids = _context_projects(ctx)
+        pids = projects.context_projects(ctx)
         denial = self._authorized(interaction, pids)
         if denial:
             self._deny_reason(interaction, denial)
@@ -461,7 +438,7 @@ class Actions:
             return
         denial = self._authorized(
             interaction,
-            _context_projects({"project_id": pending.get("context", {}).get("project_id"),
+            projects.context_projects({"project_id": pending.get("context", {}).get("project_id"),
                                "context": pending.get("context")}))
         if denial:
             self._deny_reason(interaction, denial)
@@ -546,7 +523,7 @@ class Actions:
             ctx = pending.get("context") or {}
             await self._park_followup(
                 interaction, env["request_id"], pending["actor"],
-                pending["origin"], _context_projects(
+                pending["origin"], projects.context_projects(
                     {"project_id": ctx.get("project_id"), "context": ctx}))
             return
         self._result_log(interaction, pending["action"], result)
@@ -659,25 +636,9 @@ class Actions:
             self._reg.end_confirm(confirm_id)    # nothing was queued
             raise
         payload = pending["payload"]
-        try:
-            await asyncio.to_thread(envelopes.publish_command,
-                                    self._dirs["cmd_int"], payload)
-        except (OSError, ValueError):
-            # keep the confirm live — the user may retry
-            self._reg.end_confirm(confirm_id)
-            await self._followup(
-                interaction,
-                "送信に失敗しました。もう一度確定してください。")
-            return
-        # consumed only after the command file is durably queued
-        self._reg.consume_confirm(confirm_id)
-        self._result_log(interaction, payload.get("cmd"),
-                         {"outcome": "confirmed"},
-                         command_id=payload.get("command_id"))
         cid = payload["command_id"]
-        await self._followup(
-            interaction,
-            f"受け付けました（`{cid[:8]}…`）。結果は反映後に表示されます。")
+        # before the publish: a publish error after the file landed still
+        # owes the receipt (same order as LINE WORKS)
         self._reg.put_followup(cid, {
             "application_id": str(interaction.application_id),
             "token": interaction.token, "kind": "human",
@@ -685,6 +646,27 @@ class Actions:
             "origin": pending["origin"],
             "project_ids": [payload.get("project_id")],
             "roles": sorted(self._allowed_roles(_role_ids(interaction)))})
+        # consumed only after the command file is durably queued; a
+        # failure that queued nothing keeps the confirm live for a retry
+        if not await confirm.publish_confirmed(
+                self._reg, confirm_id,
+                lambda: asyncio.to_thread(envelopes.publish_command,
+                                          self._dirs["cmd_int"], payload),
+                lambda: asyncio.to_thread(envelopes.command_queued,
+                                          self._dirs["cmd_int"], cid),
+                on_queued=lambda: self._followup(
+                    interaction,
+                    "受付結果を確認できませんでした。結果の通知をお待ちください。"),
+                on_failed=lambda: self._followup(
+                    interaction,
+                    "送信に失敗しました。もう一度確定してください。")):
+            return
+        self._result_log(interaction, payload.get("cmd"),
+                         {"outcome": "confirmed"},
+                         command_id=cid)
+        await self._followup(
+            interaction,
+            f"受け付けました（`{cid[:8]}…`）。結果は反映後に表示されます。")
         result = await self._wait_result(cid, HUMAN_WAIT_S)
         if result is None:
             return                        # supervisor sweeps followups
@@ -714,6 +696,28 @@ class Actions:
         return (origin.get("channel_id") in chats
                 and all(projects.project_allowed(s, pid) for pid in pids))
 
+    async def _actor_still_allowed(self, record: dict) -> bool:
+        """A role-authorized actor must hold an allowed role NOW, not
+        only at click time: the member is fetched again through the host
+        client. An unknown member or role set fails closed, as for an
+        interaction (_role_ids)."""
+        users = {f"discord:{u}" for u in self._settings.get("allowed_user_ids") or []}
+        if record.get("actor") in users:
+            return True
+        try:
+            gid = int(record["origin"]["guild_id"])
+            uid = int(str(record["actor"]).removeprefix("discord:"))
+            guild = self._bot.get_guild(gid)
+            # never the member cache: without the privileged members
+            # intent it does not see a role removal
+            member = await guild.fetch_member(uid)
+            roles = {str(r.id) for r in member.roles} - {str(gid)}
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return False
+        return bool(self._allowed_roles(roles))
+
     async def sweep_followups(self) -> None:
         """Report results that outlived the first wait window — while
         the interaction token still lives (~14 min)."""
@@ -723,11 +727,18 @@ class Actions:
                 continue                         # expired — dropped
             if not self._followup_authorized(rec):
                 self._reg.drop_followup(cid)
+                self._log("followup_dropped", reason="unauthorized")
                 continue
             result = await asyncio.to_thread(
                 paths.read_result, self._dirs["cmd_results"], cid)
             if result is None or (rec.get("request_id") is not None
                                   and result.get("request_id") != rec["request_id"]):
+                continue
+            # membership is looked up once the answer is ready to send,
+            # not on every sweep tick while the result is pending
+            if not await self._actor_still_allowed(rec):
+                self._reg.drop_followup(cid)
+                self._log("followup_dropped", reason="role_check")
                 continue
             if not self._reg.drop_followup(cid):
                 continue                 # the inline wait delivered it

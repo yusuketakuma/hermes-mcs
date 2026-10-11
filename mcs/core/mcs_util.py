@@ -18,12 +18,14 @@ import json
 import math
 import os
 import re
+import shutil
 import sqlite3
-import tempfile
 import time
 import unicodedata
 import urllib.request
 from contextlib import contextmanager, suppress
+
+from safe_io import atomic_write, fsync_dir  # noqa: F401  (re-exported)
 
 HOME = os.path.abspath(os.path.expanduser(os.environ.get("MCS_ROOT", "~/.mcs")))
 # checkout root; scripts/mcs_upgrade.py runs a target tag's code from a
@@ -64,10 +66,15 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
     for path in (paths if paths is not None else
                  (os.path.join(HOME, ".env"),
                   os.path.expanduser("~/.hermes/.env"))):
-        with suppress(OSError), open(path, encoding="utf-8") as f:
+        # an undecodable (non-UTF-8) dotenv is skipped like an unreadable one
+        with suppress(OSError, UnicodeDecodeError), \
+                open(path, encoding="utf-8") as f:
             for line in f:
                 if line.startswith(key + "="):
                     v = line.split("=", 1)[1].strip()
+                    # decodes mcs_setup._env_write's quoting; the standalone
+                    # credential loader (mcs_standalone.config._env_tokens)
+                    # keeps a stricter copy that fails closed on bad JSON
                     if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
                         if v[0] == '"':
                             try:
@@ -85,6 +92,21 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
     return None
 
 
+# 4xx statuses that mean "try again later", not a permanent refusal
+# (408 timeout, 425 too early, 429 rate limit)
+RETRY_LATER_4XX = frozenset({408, 425, 429})
+
+
+def hermes_exe(cfg: dict, path: str | None = None) -> str:
+    """The `hermes` binary: config hermes_bin, else PATH (or `path`), else
+    the standard user-local install — the launchd PATH is minimal."""
+    exe = cfg.get("hermes_bin")
+    if isinstance(exe, str) and exe.strip():
+        return exe.strip()
+    return shutil.which("hermes", os.F_OK | os.X_OK, path) \
+        or os.path.expanduser("~/.local/bin/hermes")
+
+
 def publish_tmp(tmp: str, dest: str, mode: int | None = None) -> None:
     """[chmod] -> fsync tmp -> os.replace -> dir fsync for a finished tmp
     file: readers see the whole old ``dest`` or the whole new one."""
@@ -96,40 +118,7 @@ def publish_tmp(tmp: str, dest: str, mode: int | None = None) -> None:
     finally:
         os.close(fd)
     os.replace(tmp, dest)
-    dfd = os.open(os.path.dirname(dest) or ".", os.O_RDONLY)
-    try:
-        os.fsync(dfd)
-    finally:
-        os.close(dfd)
-
-
-def atomic_write(path: str, writer, mode: int | None = None,
-                 tmp_prefix: str = ".atomic.") -> None:
-    """tmp -> fsync -> [chmod] -> os.replace -> dir fsync: consumers see
-    the whole old file or the whole new one, and a mid-write crash never
-    leaves a torn file behind (tmp is unlinked on failure).  ``writer``
-    receives the open text-mode file object."""
-    parent = os.path.dirname(path) or "."
-    os.makedirs(parent, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=parent, prefix=tmp_prefix,
-                             suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            writer(f)
-            f.flush()
-            os.fsync(f.fileno())
-        if mode is not None:
-            os.chmod(tmp, mode)
-        os.replace(tmp, path)
-        dfd = os.open(parent, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
-    except BaseException:
-        with suppress(OSError):
-            os.unlink(tmp)
-        raise
+    fsync_dir(os.path.dirname(dest) or ".")
 
 
 # ---------- LLM lane stability gates ----------
@@ -175,33 +164,139 @@ def circuit_open_s(ledger) -> float:
     return max(0.0, until - _time.time()) if math.isfinite(until) else 0.0
 
 
+@contextmanager
+def _circuit_lock(path):
+    """Serialize the breaker/health read-modify-write across the extract
+    workers, the semantic lanes and the tick. Blocking but brief (one
+    small JSON rewrite); an unopenable lock file fails open so the guard
+    never stops the lane it protects."""
+    fd = None
+    try:
+        fd = os.open(f"{path}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError:
+        pass
+    try:
+        yield
+    finally:
+        if fd is not None:
+            with suppress(OSError):
+                os.close(fd)   # closing releases the flock; keep the inode
+
+
+# Health marker beside the breaker file: when the endpoint last answered
+# and since when it has been observed down. The breaker file is deleted
+# on success (absence = closed), so the marker lives apart. Stall checks
+# read it: an outage keeps the job queues' updated_at fresh (every free
+# defer rewrites it), so queue age alone never fires.
+_HEALTH_SUCCESS_REFRESH_S = 60.0
+
+
+def llm_health_path(ledger):
+    return circuit_state_path(ledger).with_name("llm_health.json")
+
+
+def _finite_ts(value) -> float | None:
+    if type(value) not in (int, float):
+        return None
+    try:
+        value = float(value)
+    except OverflowError:
+        return None
+    return value if math.isfinite(value) and value >= 0 else None
+
+
+def llm_health(ledger) -> dict:
+    """{"last_success": ts|None, "down_since": ts|None} in wall-clock
+    seconds. Missing/corrupt state reads as unknown, never as an outage."""
+    state = load_config(llm_health_path(ledger))
+    return {"last_success": _finite_ts(state.get("last_success")),
+            "down_since": _finite_ts(state.get("down_since"))}
+
+
+def llm_last_success(ledger) -> float | None:
+    """Wall-clock time the local LLM last answered a lane call, or None."""
+    return llm_health(ledger)["last_success"]
+
+
+def llm_down_since(ledger) -> float | None:
+    """Start of the current endpoint-down/timeout streak, or None."""
+    return llm_health(ledger)["down_since"]
+
+
+def llm_down_for_s(ledger, now: float | None = None) -> float | None:
+    """Seconds the endpoint has been observed down with no answered call
+    since; None when it is not currently observed down."""
+    since = llm_down_since(ledger)
+    if since is None:
+        return None
+    return max(0.0, (time.time() if now is None else now) - since)
+
+
+def _health_write(path, state: dict) -> None:
+    payload = json.dumps(state)
+    with suppress(OSError):
+        atomic_write(str(path), lambda f: f.write(payload))
+
+
+def _mark_llm_success(ledger) -> None:
+    now = time.time()
+    current = llm_health(ledger)
+    if current["down_since"] is None and current["last_success"] is not None \
+            and 0 <= now - current["last_success"] < _HEALTH_SUCCESS_REFRESH_S:
+        return   # one rewrite per minute on a busy healthy lane
+    _health_write(llm_health_path(ledger), {"last_success": now})
+
+
+def _mark_llm_down(ledger) -> None:
+    current = llm_health(ledger)
+    if current["down_since"] is not None:
+        return
+    state = {"down_since": time.time()}
+    if current["last_success"] is not None:
+        state["last_success"] = current["last_success"]
+    _health_write(llm_health_path(ledger), state)
+
+
 def circuit_success(ledger) -> None:
     """Any answered call proves the endpoint is alive — reset state."""
-    with suppress(OSError):
-        circuit_state_path(ledger).unlink(missing_ok=True)
+    path = circuit_state_path(ledger)
+    with _circuit_lock(path):
+        with suppress(OSError):
+            path.unlink(missing_ok=True)
+        _mark_llm_success(ledger)
+
+
+def circuit_streak(ledger) -> int:
+    """Trips of the current outage (0 = not tripped since the last
+    answered call). Corrupt state reads as 0."""
+    streak = _circuit_state(ledger).get("streak")
+    return streak if type(streak) is int and streak >= 0 else 0
 
 
 def circuit_failure(ledger) -> None:
     """Endpoint-down observation: count consecutive probes and open the
-    breaker on a doubling cooldown once the streak trips."""
-    import time as _time
+    breaker on a doubling cooldown once the streak trips. The read-
+    modify-write holds a flock so concurrent lanes never lose a count."""
     path = circuit_state_path(ledger)
-    state = _circuit_state(ledger)
-    fails, streak = state.get("failures"), state.get("streak")
-    fails = min(fails, _CIRCUIT_TRIP - 1) \
-        if type(fails) is int and fails >= 0 else 0
-    streak = min(streak, _CIRCUIT_MAX_STREAK) \
-        if type(streak) is int and streak >= 0 else 0
-    fails += 1
-    out = {"failures": fails, "streak": streak}
-    if fails >= _CIRCUIT_TRIP:
-        out["streak"] = min(streak + 1, _CIRCUIT_MAX_STREAK)
-        out["open_until"] = _time.time() + min(
-            _CIRCUIT_MAX_S, _CIRCUIT_BASE_S * 2 ** out["streak"])
-        out["failures"] = 0
-    payload = json.dumps(out)
-    with suppress(OSError):
-        atomic_write(str(path), lambda f: f.write(payload))
+    with _circuit_lock(path):
+        state = _circuit_state(ledger)
+        fails, streak = state.get("failures"), state.get("streak")
+        fails = min(fails, _CIRCUIT_TRIP - 1) \
+            if type(fails) is int and fails >= 0 else 0
+        streak = min(streak, _CIRCUIT_MAX_STREAK) \
+            if type(streak) is int and streak >= 0 else 0
+        fails += 1
+        out = {"failures": fails, "streak": streak}
+        if fails >= _CIRCUIT_TRIP:
+            out["streak"] = min(streak + 1, _CIRCUIT_MAX_STREAK)
+            out["open_until"] = time.time() + min(
+                _CIRCUIT_MAX_S, _CIRCUIT_BASE_S * 2 ** out["streak"])
+            out["failures"] = 0
+        payload = json.dumps(out)
+        with suppress(OSError):
+            atomic_write(str(path), lambda f: f.write(payload))
+        _mark_llm_down(ledger)
 
 
 def disk_free_mb(ledger) -> float | None:
@@ -223,6 +318,13 @@ def disk_floor_mb() -> float:
         return 512.0
 
 
+def has_sqlite_sidecars(path) -> bool:
+    """True when a -wal, -shm or -journal entry (even a dangling symlink)
+    sits next to ``path`` — the file is then not a static snapshot."""
+    return any(os.path.lexists(f"{path}{suffix}")
+               for suffix in ("-wal", "-shm", "-journal"))
+
+
 def file_sha256(path) -> str:
     """Streaming sha256 of a file — shared by operations/refstats so the
     digest contract (chunks of 64 KiB, hex digest) is defined once."""
@@ -231,6 +333,22 @@ def file_sha256(path) -> str:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def canonical(value) -> bytes:
+    """Canonical JSON bytes (sorted keys, compact, UTF-8, no NaN/inf) —
+    the one serialization every stored payload hash is computed over."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+
+def payload_hash(value) -> str:
+    return hashlib.sha256(canonical(value)).hexdigest()
+
+
+def positive(value) -> bool:
+    """A positive SQLite rowid-range int (bool excluded)."""
+    return type(value) is int and 0 < value < 2**63
 
 
 def loads_dict(raw) -> dict | None:
@@ -398,7 +516,10 @@ def acquire_run_lock(path: str | None = None) -> int | None:
     (hold it in main() scope; process exit releases it). Returns None
     when another writer holds it. Every entry point that writes the
     ledger must hold this lock so a manual CLI can never interleave
-    writes with a scheduled tick."""
+    writes with a scheduled tick. The one documented exception is the
+    resident extract_llm drainer, which takes it per result write and
+    leaves its fenced bookkeeping writes lockless (see
+    ``extract_llm._write_lock``)."""
     path = path or RUN_LOCK
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)

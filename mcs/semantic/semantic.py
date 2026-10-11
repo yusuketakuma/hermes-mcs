@@ -41,9 +41,10 @@ import json
 import os
 import sys
 import time
+from functools import partial
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every subdir holding .py files (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
@@ -218,11 +219,18 @@ def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
             and time.monotonic() - _FMT_TS < _PROBE_RETRY_S:
         return _FMT_MODE
     try:
-        _FMT_MODE = local_llm.probe_format(
-            endpoint, model, None, timeout=min(10, timeout),
-            request_fn=local_llm.bounded_request,
-            slot=local_llm.request_slot(),
-            verify=lambda text: _json_block(text) is not None) or "plain"
+        kw = dict(timeout=min(10, timeout),
+                  request_fn=local_llm.bounded_request,
+                  slot=local_llm.request_slot(),
+                  verify=lambda text: _json_block(text) is not None)
+        if local_llm.admission_enabled():
+            # T20: the probe sends real inference POSTs — it takes a
+            # class permit (a held verdict yields "plain")
+            _FMT_MODE = local_llm.admitted_probe_format(
+                "mcs.semantic", endpoint, model, None, **kw) or "plain"
+        else:
+            _FMT_MODE = local_llm.probe_format(
+                endpoint, model, None, **kw) or "plain"
     except Exception:
         _FMT_MODE = "plain"
     _FMT_TS = time.monotonic()
@@ -257,15 +265,34 @@ def _long_marks() -> dict:
         with open(_LONG_PATH, encoding="utf-8") as f:
             marks = json.load(f)
     except (OSError, ValueError, RecursionError):
-        return {}
+        marks = {}
     if not isinstance(marks, dict):
-        return {}
+        marks = {}
     # hand-edited values (non-int) would raise at `level >= 2`
-    return {k: v for k, v in marks.items() if type(v) is int}
+    out = {k: v for k, v in marks.items() if type(v) is int}
+    # marks this process could not persist still apply here (T8)
+    for k, v in _LONG_UNSAVED.items():
+        out[k] = max(v, out.get(k, 0))
+    return out
+
+
+# Marks whose durable save failed (lock busy, disk/permission error):
+# kept in-process so this worker does not repeat the doomed base-ceiling
+# call, bounded like the file. Counted for the run record instead of
+# being dropped silently (T8).
+_LONG_UNSAVED: dict = {}
+_LONG_MARK_FAILURES = {"busy": 0, "error": 0}
+
+
+def long_mark_failures() -> dict:
+    """Cumulative unsaved long-output marks of this process by cause."""
+    return dict(_LONG_MARK_FAILURES)
 
 
 def _long_mark(key: str, level: int) -> None:
-    """Keep retry suppression monotonic without waiting for another worker."""
+    """Keep retry suppression monotonic without waiting for another worker.
+    A failed save stays non-fatal but is logged, counted and remembered
+    in-process."""
     import fcntl
     try:
         import maintenance
@@ -278,8 +305,18 @@ def _long_mark(key: str, level: int) -> None:
             while len(marks) > _LONG_MAX:
                 marks.pop(next(iter(marks)))
             maintenance.atomic_publish_text(_LONG_PATH, json.dumps(marks))
-    except Exception:
-        pass
+        _LONG_UNSAVED.clear()   # the merged write persisted them all
+    except Exception as e:
+        cause = "busy" if isinstance(e, BlockingIOError) else "error"
+        _LONG_MARK_FAILURES[cause] += 1
+        _LONG_UNSAVED[key] = max(level, _LONG_UNSAVED.pop(key, 0))
+        while len(_LONG_UNSAVED) > _LONG_MAX:
+            _LONG_UNSAVED.pop(next(iter(_LONG_UNSAVED)))
+        # code and exception class only — never the prompt or its key
+        print(json.dumps({"event": "semantic_long_mark_unsaved",
+                          "cause": cause, "error": type(e).__name__,
+                          "level": level}),
+              file=sys.stderr, flush=True)
 
 
 _LLM_FAILURE: str | None = None
@@ -311,77 +348,73 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
     endpoint, model = llm_conf()
     err_out: dict = {}
     _failed(None)
-    if local_llm.admission_enabled():
-        # T20: route through the RT/BACKLOG admission boundary — the
-        # registered route binds the class; the response shape carries
-        # an `admission` verdict on denial/deferral (never model text)
-        response = local_llm.admitted_chat(
-            "mcs.semantic", prompt,
-            endpoint=endpoint, model=model, timeout=timeout,
-            max_tokens=max_tokens,
-            request_fn=local_llm.bounded_request, error_out=err_out)
-        if response is not None and response.get("admission"):
-            raise runtime.LLMNotSent(f"llm_admission:{response['admission']}")
-    else:
-        global _FMT_MODE, _FMT_TS
-        # the probe spends the caller's budget, never adds to it: the
-        # runtime sized ``timeout`` to the job deadline (absolute)
-        call_deadline = time.monotonic() + timeout
-        rf = {"type": "json_object"} \
-            if _probe_format(endpoint, model, timeout) == "object" else None
-        key = _long_key(model, prompt)
-        level = _long_marks().get(key, 0)
-        if level >= 2:
-            return _failed("long_ceiling")   # even the long ceiling stopped on length
+    global _FMT_MODE, _FMT_TS
+    # T20: under admission each send (retries included) takes its own
+    # class permit; the loop below is otherwise identical
+    send = partial(local_llm.admitted_chat, "mcs.semantic") \
+        if local_llm.admission_enabled() else local_llm.chat
+    # the probe spends the caller's budget, never adds to it: the
+    # runtime sized ``timeout`` to the job deadline (absolute)
+    call_deadline = time.monotonic() + timeout
+    rf = {"type": "json_object"} \
+        if _probe_format(endpoint, model, timeout) == "object" else None
+    key = _long_key(model, prompt)
+    level = _long_marks().get(key, 0)
+    if level >= 2:
+        return _failed("long_ceiling")   # even the long ceiling stopped on length
+    timeout = call_deadline - time.monotonic()
+    if timeout <= 0:
+        return _failed("deadline")
+    if level and timeout < _LONG_MIN_CALL_S:
+        _failed("long_output_needs_budget")
+        raise runtime.LLMNotSent("long_output_needs_budget")
+    while True:
         timeout = call_deadline - time.monotonic()
         if timeout <= 0:
             return _failed("deadline")
-        if level and timeout < _LONG_MIN_CALL_S:
-            _failed("long_output_needs_budget")
-            raise runtime.LLMNotSent("long_output_needs_budget")
-        while True:
+        response = send(
+            prompt, endpoint=endpoint, model=model,
+            timeout=timeout, deadline=call_deadline,
+            max_tokens=max(max_tokens, LLM_LONG_MAX_TOKENS)
+            if level else max_tokens,
+            response_format=rf,
+            extra_payload={"id_slot": local_llm.request_slot()},
+            request_fn=local_llm.bounded_request, error_out=err_out)
+        if response is not None and response.get("admission"):
+            # a denial/deferral never left — the verdict, never model text
+            raise runtime.LLMNotSent(
+                f"llm_admission:{response['admission']}")
+        timeout = call_deadline - time.monotonic()
+        if rf is not None and response is not None \
+                and response.get("status") in _FMT_REJECT_STATUSES:
+            # the server rejected the constraint (restart / model
+            # swap): degrade to plain for this and later calls —
+            # the retry shares what is left of the caller's budget
+            _FMT_MODE, _FMT_TS = "plain", time.monotonic()
+            _remember_plain(endpoint, model)
             timeout = call_deadline - time.monotonic()
+            rf = None
             if timeout <= 0:
-                return _failed("deadline")
-            response = local_llm.chat(
-                prompt, endpoint=endpoint, model=model,
-                timeout=timeout, deadline=call_deadline,
-                max_tokens=max(max_tokens, LLM_LONG_MAX_TOKENS)
-                if level else max_tokens,
-                response_format=rf,
-                extra_payload={"id_slot": local_llm.request_slot()},
-                request_fn=local_llm.bounded_request, error_out=err_out)
+                # A format refusal is not a plain-prompt rejection.
+                # Exhausted work stays retryable without another send.
+                return _failed("format_rejected")
+            if level and timeout < _LONG_MIN_CALL_S:
+                # The rejected request already left: do not report a
+                # free not-sent defer, or send a long call that cannot
+                # fit. A format refusal says nothing about the prompt,
+                # so this is a retryable model failure, never the plain
+                # HTTP 400 terminal rejection; plain is remembered and
+                # the mark kept for a later adequately sized try.
+                return _failed("format_rejected")
+            continue
+        if response is not None \
+                and response.get("finish_reason") == "length":
+            level += 1
+            _long_mark(key, level)
             timeout = call_deadline - time.monotonic()
-            if rf is not None and response is not None \
-                    and response.get("status") in _FMT_REJECT_STATUSES:
-                # the server rejected the constraint (restart / model
-                # swap): degrade to plain for this and later calls —
-                # the retry shares what is left of the caller's budget
-                _FMT_MODE, _FMT_TS = "plain", time.monotonic()
-                _remember_plain(endpoint, model)
-                timeout = call_deadline - time.monotonic()
-                rf = None
-                if timeout <= 0:
-                    # A format refusal is not a plain-prompt rejection.
-                    # Exhausted work stays retryable without another send.
-                    return _failed("format_rejected")
-                if level and timeout < _LONG_MIN_CALL_S:
-                    # The rejected request already left: do not report a
-                    # free not-sent defer, or send a long call that cannot
-                    # fit. A format refusal says nothing about the prompt,
-                    # so this is a retryable model failure, never the plain
-                    # HTTP 400 terminal rejection; plain is remembered and
-                    # the mark kept for a later adequately sized try.
-                    return _failed("format_rejected")
-                continue
-            if response is not None \
-                    and response.get("finish_reason") == "length":
-                level += 1
-                _long_mark(key, level)
-                timeout = call_deadline - time.monotonic()
-                if level == 1 and timeout >= _LONG_MIN_CALL_S:
-                    continue  # one long-ceiling retry in what is left
-            break
+            if level == 1 and timeout >= _LONG_MIN_CALL_S:
+                continue  # one long-ceiling retry in what is left
+        break
     if response is None and err_out.get("kind") == "unreachable":
         _failed("unreachable")
         raise runtime.LLMNotSent("llm_unreachable")
@@ -418,7 +451,7 @@ def seed(ledger, message_id: int, origin: str = "replay",
     row = ledger.db.execute(
         "SELECT project_id, COALESCE(parent_id,message_id) r "
         "FROM messages WHERE message_id=?", (message_id,)).fetchone()
-    from mcs_operations import paused
+    from mcs_queries import paused
     if row is None or paused(ledger.db, row["project_id"]):
         return None
     if cfg["project_ids"] is not None \
@@ -490,7 +523,7 @@ def status_report(ledger, cfg: dict | None = None) -> dict:
     loops = ledger.db.execute(
         "SELECT COUNT(*) c FROM artifacts WHERE kind=?",
         (KIND_LOOP,)).fetchone()["c"]
-    from mcs_operations import paused
+    from mcs_queries import paused
     paused_projects = [r[0] for r in ledger.db.execute(
         "SELECT DISTINCT project_id FROM artifacts WHERE kind='semantic_control' "
         "AND project_id IS NOT NULL ORDER BY project_id") if paused(ledger.db, r[0])]

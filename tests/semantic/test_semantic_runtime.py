@@ -9,7 +9,7 @@ from ledger import Ledger
 import semantic
 import semantic_jev as jev
 import semantic_runtime as runtime
-from semantic_testkit import _cfg, _llm, _message, _seeded
+from semantic_testkit import _cfg, _llm, _message, _seeded, _FakeJev, _seeded_two
 
 
 def _job(tmp_path):
@@ -79,7 +79,7 @@ def test_usage_reservation_survives_unknown_post_failure(tmp_path):
     reserve = runtime.usage_reserver(
         db, token, kind="semantic_usage", model=jev.JEV_MODEL,
         project_id=1, message_id=1)
-    guarded, _ = runtime.bind_jev(client, lambda stage: None, reserve)
+    guarded = runtime.bind_jev(client, lambda stage: None, reserve)
     with pytest.raises(jev.JevError) as error:
         guarded.evaluate({}, {"q": jev.noul_question("i", "t", "f")},
                          time.monotonic() + 10)
@@ -325,3 +325,42 @@ def test_guarded_llm_first_call_always_dispatches_next_needs_reserve(monkeypatch
         guarded("second")                    # follow-up needs the reserve
     assert calls == ["first"]
     assert issubclass(runtime.RuntimeBudgetShort, runtime.RuntimeBudget)
+
+
+# A budget stop on a later target's first summarize keeps earlier results.
+def test_budget_short_on_second_target_commits_first(tmp_path, monkeypatch):
+    state = {"sum": 0, "aud": 0}
+
+    def llm(prompt):
+        if "要約器" in prompt:
+            state["sum"] += 1
+            if state["sum"] == 2:      # target 2's first summarize
+                raise runtime.RuntimeBudgetShort("llm_next_call")
+        return _llm(prompt)
+
+    real = semantic.audit_claims
+
+    def audit(*a):
+        state["aud"] += 1
+        return real(*a)
+
+    monkeypatch.setattr(semantic, "audit_claims", audit)
+    db = _seeded_two(tmp_path)
+    cfg = _cfg("shadow", loop_mode="off")
+    jev = _FakeJev()
+    r1 = semantic.run_due(db, cfg, {"errors": []}, time.monotonic() + 300,
+                          jev_client=jev, llm_fn=llm)
+    assert r1["job_metrics"][0]["status"] == "deferred_short"
+    rows = db.artifacts("semantic_summary", message_id=1)
+    assert rows, "target 1's audited summary was discarded"
+    status1 = json.loads(rows[-1]["meta"] or "{}").get("audit_status")
+    assert status1 in ("PASS", "NEEDS_REVIEW")
+    audits_run1 = state["aud"]
+
+    db.db.execute("update fetch_jobs set next_try=0")
+    db.db.commit()
+    semantic.run_due(db, cfg, {"errors": []}, time.monotonic() + 300,
+                     jev_client=jev, llm_fn=llm)
+    # only target 2 is audited on the resumed pass
+    assert state["aud"] == audits_run1 + 1
+    assert db.artifacts("semantic_summary", message_id=2)

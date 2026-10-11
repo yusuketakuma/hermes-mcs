@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "期限打ち切りで履歴取込が止まる問題と、初回取込で再ログインを繰り返す問題を修正",
+  "summary": "MCS の応答が遅いと、実行期限による打ち切りが失敗として累計され、取込が進んでいても8回で過去履歴の取込（history・返信・スレッドのジョブ）が failed になり、自動で再開しなくなっていた問題を修正しました。進捗のあった打ち切りは失敗として数えず次回に続きから取得します（進捗なしの打ち切りだけを数え、履歴は連続8回、返信・スレッドは累計8回で failed）。また、初回取込（init_data）で再ログインに失敗したとき、残りの患者ごとに再ログインを繰り返し誤ったパスワードを送り続けることがあった問題を修正し、最初の失敗で実行を終了します。",
+  "upgrade": "追加操作は不要です。すでに failed になった履歴取込ジョブは自動では戻らないため、必要な患者は従来どおり取込の依頼で再開してください。",
+  "details": [
+    "run_history_jobs は deadline_exceeded の打ち切りで attempt を消費せず job_defer にする。カーソルが進まなかった打ち切りは payload の stalls を1増やし（カーソルが進めば従来どおり0に戻る）、連続 HISTORY_STALL_LIMIT（8）回で reason_code=deadline_exceeded の failed にする。",
+    "run_reply_jobs も、スレッド窓が1ページ以上進んだ deadline_exceeded では job_retry を呼ばない。",
+    "init_data は、再ログイン失敗やセッション切れで stats[\"deadline\"] が立った時点で患者ループを抜ける。結果の JSON と終了コード（ok=false, rc=1）は変わらない。"
+  ],
+  "refs": [
+    "mcs/ingest/job_ops.py",
+    "mcs/ingest/init_data.py",
+    "tests/ingest/test_deadline_cut_job_attempts.py",
+    "tests/ingest/test_init_relogin_failure_stops_run.py"
+  ]
+}

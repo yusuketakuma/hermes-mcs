@@ -130,6 +130,125 @@ def test_rotate_log_covers_update_recovery_cmd_int_and_llamacpp(monkeypatch, tmp
     assert str(tmp_path / ".hermes" / "logs" / "llamacpp.log") in checked
 
 
+def test_rotate_log_covers_standalone_llamacpp_log(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path / "user"))
+    monkeypatch.setattr(maintenance, "HOME", str(tmp_path / "mcs"))
+    checked = []
+
+    def getsize(path):
+        checked.append(path)
+        return 0
+
+    monkeypatch.setattr(maintenance.os.path, "getsize", getsize)
+    maintenance.rotate_log()
+    assert str(tmp_path / "mcs" / "logs" / "llamacpp.log") in checked
+    assert str(tmp_path / "user" / ".hermes" / "logs" / "llamacpp.log") in checked
+
+
+def test_rotate_log_keeps_rotated_copy_private_under_loose_umask(monkeypatch, tmp_path):
+    monkeypatch.setattr(maintenance, "LOG_MAX", 3)
+    fresh, stale = tmp_path / "fresh.log", tmp_path / "stale.log"
+    for log in (fresh, stale):
+        log.write_bytes(b"synthetic line\n")
+        log.chmod(0o600)
+    (tmp_path / "stale.log.1").write_bytes(b"old")
+    (tmp_path / "stale.log.1").chmod(0o644)
+    old = os.umask(0o022)
+    try:
+        maintenance.rotate_log([str(fresh), str(stale)])
+    finally:
+        os.umask(old)
+    for log in (fresh, stale):
+        rotated = tmp_path / (log.name + ".1")
+        assert rotated.read_bytes() == b"synthetic line\n"
+        assert rotated.stat().st_mode & 0o777 == 0o600
+        assert log.read_bytes() == b""
+
+
+def test_prune_leftovers_removes_stranded_backup_and_snapshot_copies(tmp_path, monkeypatch):
+    monkeypatch.setattr(maintenance, "HOME", str(tmp_path))
+    backups, snaps = tmp_path / "backups", tmp_path / "snapshots"
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(snaps))
+    backups.mkdir()
+    snaps.mkdir()
+    for f in (backups / "ledger-20260101.db.tmp", backups / "preupdate-x-1.db.tmp",
+              backups / "ledger-20260101.db", backups / "preupdate-x-2.db",
+              snaps / ".snapshot.abc.tmp", snaps / "ledger-snapshot.db"):
+        f.write_bytes(b"x")
+    assert maintenance.prune_leftovers() == 0               # in-flight copies stay
+    monkeypatch.setattr(maintenance, "LEFTOVER_KEEP_S", -60)
+    assert maintenance.prune_leftovers() == 3
+    assert sorted(p.name for p in backups.iterdir()) == [
+        "ledger-20260101.db", "preupdate-x-2.db"]
+    assert [p.name for p in snaps.iterdir()] == ["ledger-snapshot.db"]
+
+
+def test_prune_leftovers_removes_stranded_staging_sidecars(tmp_path, monkeypatch):
+    monkeypatch.setattr(maintenance, "HOME", str(tmp_path))
+    backups, snaps = tmp_path / "backups", tmp_path / "snapshots"
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(snaps))
+    backups.mkdir()
+    snaps.mkdir()
+    stranded = [backups / "ledger-20260101-ab.db.tmp-journal",
+                backups / "preupdate-x-1.db.tmp-wal",
+                backups / "preupdate-x-1.db.tmp-shm",
+                snaps / ".snapshot.abc.tmp-journal",
+                snaps / ".snapshot.abc.tmp-wal",
+                snaps / ".snapshot.abc.tmp-shm"]
+    kept = [backups / "ledger-20260101.db", snaps / "ledger-snapshot.db"]
+    for f in stranded + kept:
+        f.write_bytes(b"x")
+    assert maintenance.prune_leftovers() == 0               # in-flight copies stay
+    monkeypatch.setattr(maintenance, "LEFTOVER_KEEP_S", -60)
+    assert maintenance.prune_leftovers() == len(stranded)
+    assert sorted(p for p in [*backups.iterdir(), *snaps.iterdir()]) == sorted(kept)
+
+
+def test_rotate_log_refuses_symlinked_copy_and_still_rotates_the_rest(monkeypatch, tmp_path):
+    monkeypatch.setattr(maintenance, "LOG_MAX", 3)
+    linked, plain = tmp_path / "linked.log", tmp_path / "plain.log"
+    for log in (linked, plain):
+        log.write_bytes(b"synthetic line\n")
+    target = tmp_path / "elsewhere.txt"
+    target.write_bytes(b"keep")
+    (tmp_path / "linked.log.1").symlink_to(target)
+    with pytest.raises(maintenance.MaintenanceError, match="log_rotate_symlink_refused"):
+        maintenance.rotate_log([str(linked), str(plain)])
+    assert target.read_bytes() == b"keep"                   # never written through
+    assert linked.read_bytes() == b"synthetic line\n"      # not truncated unrotated
+    assert (tmp_path / "plain.log.1").read_bytes() == b"synthetic line\n"
+    assert plain.read_bytes() == b""
+
+
+def test_daily_backup_staging_copy_is_private_from_creation(tmp_path, monkeypatch):
+    source = tmp_path / "source.db"
+    writer = ledger.Ledger(str(source))
+    writer.ensure_patient(1)
+    writer.close()
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(maintenance, "disk_floor_mb", lambda: 0)
+    real_valid = maintenance.valid_mcs_db
+    staged = []
+
+    def spy(path, **kwargs):
+        if path.endswith(".tmp"):
+            staged.append(os.stat(path).st_mode & 0o777)
+        return real_valid(path, **kwargs)
+
+    monkeypatch.setattr(maintenance, "valid_mcs_db", spy)
+    old = os.umask(0o022)
+    try:
+        maintenance.daily_backup(str(source))
+    finally:
+        os.umask(old)
+    assert staged == [0o600]
+    assert list(backups.glob("*.tmp")) == []
+    assert len(list(backups.glob("ledger-*.db"))) == 1
+
+
 def test_alert_and_failed_job_lookups_use_indexes(tmp_path):
     db = ledger.Ledger(str(tmp_path / "ledger.db"))
     plan = " ".join(r[3] for r in db.db.execute(
@@ -141,3 +260,55 @@ def test_alert_and_failed_job_lookups_use_indexes(tmp_path):
         "WHERE state='failed' AND updated_at>=? GROUP BY kind", (0,)))
     assert "idx_fetch_jobs_failed_recent" in plan
     db.close()
+
+
+# Regression: preupdate backup survives prune before it is recorded, and a
+# failed backup never strands a partial *.db.tmp copy.
+def _source(tmp_path):
+    src = tmp_path / "ledger.db"
+    db = ledger.Ledger(str(src))
+    db.ensure_patient(1)
+    db.close()
+    return str(src)
+
+
+def test_unrecorded_fresh_preupdate_backup_survives_prune(tmp_path, monkeypatch):
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    state = tmp_path / "update_state.json"
+    state.write_text(json.dumps({"applied": [], "applying": None}))
+    fresh = maintenance.preupdate_backup(_source(tmp_path))
+    stale = backups / "preupdate-old.db"
+    stale.write_bytes(b"x")
+    old = time.time() - maintenance.PREUPDATE_GRACE_S - 60
+    os.utime(stale, (old, old))
+    assert maintenance.prune_preupdate_backups(str(state)) == 1
+    assert os.path.exists(fresh)
+    assert not stale.exists()
+
+
+@pytest.mark.parametrize("fn", ["preupdate_backup", "daily_backup"])
+def test_failed_backup_removes_tmp(tmp_path, monkeypatch, fn):
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    src = _source(tmp_path)
+    real_connect = sqlite3.connect
+
+    class Boom:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def backup(self, dst):
+            raise sqlite3.OperationalError("database or disk is full")
+
+        def close(self):
+            self.conn.close()
+
+    def connect(path, *a, **kw):
+        conn = real_connect(path, *a, **kw)
+        return Boom(conn) if kw.get("uri") else conn
+
+    monkeypatch.setattr(maintenance.sqlite3, "connect", connect)
+    with pytest.raises(sqlite3.OperationalError):
+        getattr(maintenance, fn)(src)
+    assert [p for p in os.listdir(backups) if p.endswith(".tmp")] == []

@@ -17,7 +17,8 @@ Design contract:
 - **Class from route, not payload** — a client authenticates as a
   named route registered with a fixed class; a caller-supplied class
   value can never grant RT. Unknown routes are rejected.
-- **Permit lifecycle** — ``reserved → admitted → sent → terminal``
+- **Permit lifecycle** — ``admitted → sent → terminal`` (the legacy
+  ``reserved`` state is never written but still counts as occupying)
   with the honest side states ``waiting`` (RT registered, backlog
   draining), ``unknown`` (completion unproven — still occupies its
   class), and ``cancel_pending`` (a cancel verb is not an ack).
@@ -86,9 +87,14 @@ DEFAULT_ROUTES = {
     "gbrain.query": "RT",
 }
 
-# permit states that still occupy backend capacity for their class
+# permit states that still occupy backend capacity for their class.
+# 'reserved' is never written now; it stays so rows an older broker may
+# have left behind are still counted and fenced.
 OCCUPYING = ("reserved", "admitted", "sent", "unknown",
              "cancel_pending")
+# every non-terminal state: OCCUPYING plus RT 'waiting' intent
+LIVE = OCCUPYING + ("waiting",)
+_LIVE_IN = f"({','.join('?' * len(LIVE))})"
 TERMINAL = ("terminal", "fenced")
 # Occupancy lease: 2x the longest client timeout (a backlog semantic
 # call is bounded by its job budget, at most 900 s). Only combined with
@@ -98,6 +104,11 @@ LEASE_S = 1800.0
 RETENTION_S = 7 * 86400.0
 PRUNE_BATCH = 100
 RECLAIM_BATCH = 20
+# Completion-unproven states. A live owner's such permit is retired only
+# by ``reconcile_unknown`` — after this hold (past any client deadline
+# and bounded generation) AND with backend evidence of an empty server.
+UNRESOLVED = ("unknown", "cancel_pending")
+UNKNOWN_HOLD_S = LEASE_S
 
 
 def _pid_alive(pid) -> bool:
@@ -350,16 +361,14 @@ class Broker:
                 return
             live = self.db.execute(
                 "SELECT COUNT(*) FROM permits WHERE epoch=? AND state "
-                "IN ('reserved','admitted','sent','unknown',"
-                "'cancel_pending','waiting')",
-                (row["epoch"],)).fetchone()[0]
+                f"IN {_LIVE_IN}",
+                (row["epoch"], *LIVE)).fetchone()[0]
             if live or row["state"] == "dirty":
                 new_epoch = row["epoch"] + 1
                 self.db.execute(
                     "UPDATE permits SET state='fenced',"
                     " outcome='epoch_fence' WHERE epoch=? AND state IN"
-                    " ('reserved','admitted','sent','unknown',"
-                    "'cancel_pending','waiting')", (row["epoch"],))
+                    f" {_LIVE_IN}", (row["epoch"], *LIVE))
                 self.db.execute(
                     "UPDATE admission_meta SET epoch=?,"
                     " state='closed', rt_waiting=0, rotated_at=?"
@@ -471,12 +480,11 @@ class Broker:
         epoch = self._meta()["epoch"]
         stale = self.db.execute(
             "SELECT permit_id,cls,state,owner_pid,owner_started FROM permits"
-            " WHERE epoch=? AND state IN"
-            " ('reserved','admitted','sent','unknown','cancel_pending',"
-            "'waiting') AND owner_pid IS NOT NULL"
+            f" WHERE epoch=? AND state IN {_LIVE_IN}"
+            " AND owner_pid IS NOT NULL"
             " AND COALESCE(sent_at,admitted_at,created_at)<?"
             " ORDER BY permit_id LIMIT ?",
-            (epoch, now - LEASE_S, RECLAIM_BATCH)).fetchall()
+            (epoch, *LIVE, now - LEASE_S, RECLAIM_BATCH)).fetchall()
         # ponytail: an owner whose start identity is unreadable (old row,
         # probe failure, same-second reuse under ps) stays until the epoch
         # fence; a live recorded owner is never freed.
@@ -729,6 +737,51 @@ class Broker:
                     "rt_waiting-1 WHERE singleton=1")
             return {"ok": True, "state": "unknown"}
 
+    # ---------- reconciliation ----------
+
+    def _aged_unresolved(self, epoch: int, now: float) -> list:
+        return [r["permit_id"] for r in self.db.execute(
+            "SELECT permit_id FROM permits WHERE epoch=? AND state IN"
+            f" ({','.join('?' * len(UNRESOLVED))})"
+            " AND COALESCE(sent_at,admitted_at,created_at)<?"
+            " ORDER BY permit_id LIMIT ?",
+            (epoch, *UNRESOLVED, now - UNKNOWN_HOLD_S, RECLAIM_BATCH))]
+
+    def reconcile_unknown(self, evidence) -> dict:
+        """Retire current-epoch ``unknown``/``cancel_pending`` permits whose
+        send is older than ``UNKNOWN_HOLD_S`` — only on backend evidence.
+
+        A resident owner never restarts, so without this its timed-out
+        permits held their class until the process exited: two of them
+        filled the backlog width for good. Age alone is never proof:
+        ``evidence`` is called (outside the store's write lock, only when
+        aged candidates exist) and must return a non-empty proof string
+        that the backend holds no work — e.g. repeated idle ``/slots``
+        samples taken after the hold, which cannot coexist with a request
+        still decoding. Anything else keeps the permits occupying."""
+        with self._mutex:       # the evidence probe runs unserialized
+            epoch = self._meta()["epoch"]
+            candidates = self._aged_unresolved(epoch, time.time())
+        if not candidates:
+            return {"reconciled": 0}
+        try:
+            proof = evidence() if callable(evidence) else None
+        except Exception:
+            proof = None
+        if not isinstance(proof, str) or not proof:
+            return {"reconciled": 0, "held": len(candidates)}
+        with self._mutex, self._write_tx():
+            if self._meta()["epoch"] != epoch:
+                return {"reconciled": 0}
+            marks = ",".join("?" * len(candidates))
+            cur = self.db.execute(
+                "UPDATE permits SET state='terminal', outcome='reconciled',"
+                " proof=?, terminal_at=? WHERE epoch=? AND permit_id IN"
+                f" ({marks}) AND state IN"
+                f" ({','.join('?' * len(UNRESOLVED))})",
+                (proof[:200], time.time(), epoch, *candidates, *UNRESOLVED))
+            return {"reconciled": cur.rowcount}
+
     # ---------- observability ----------
 
     @_serialized
@@ -742,9 +795,21 @@ class Broker:
             f"AND cls='BACKLOG' AND state IN "
             f"({','.join('?' * len(OCCUPYING))})",
             (meta["epoch"], *OCCUPYING)).fetchone()[0]
+        # unresolved = occupying without a live request behind it; a
+        # sustained non-zero count is the alert signal (width lost)
+        unresolved, oldest_unresolved = self.db.execute(
+            "SELECT COUNT(*), MIN(COALESCE(sent_at,admitted_at,created_at))"
+            " FROM permits WHERE epoch=? AND state IN"
+            f" ({','.join('?' * len(UNRESOLVED))})",
+            (meta["epoch"], *UNRESOLVED)).fetchone()
         return {"epoch": meta["epoch"], "state": meta["state"],
                 "rt_waiting": meta["rt_waiting"],
                 "occupying": occ,
+                "slots": self.slots,
+                "unresolved": unresolved,
+                "oldest_unresolved_age_s": (
+                    max(0.0, time.time() - oldest_unresolved)
+                    if oldest_unresolved is not None else None),
                 "overlap": bool(occ["RT"] and occ["BACKLOG"]),
                 "oldest_backlog_age_s": (
                     max(0.0, time.time() - oldest_bg)

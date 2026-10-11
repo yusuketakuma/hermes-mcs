@@ -42,7 +42,7 @@ def test_noncurrent_periods_are_not_current(db, monkeypatch, period, body):
                         lambda: datetime(2026, 9, 20, 12, tzinfo=JST).timestamp())
     _add_period(db, 1, period, body)
 
-    assert "current_med_period" not in rollup.build_rollup(db, 1)
+    assert "med_period_candidate" not in rollup.build_rollup(db, 1)
 
 
 def test_active_period_survives_newer_planned_period(db, monkeypatch):
@@ -53,7 +53,7 @@ def test_active_period_survives_newer_planned_period(db, monkeypatch):
     _add_period(db, 1, active)
     _add_period(db, 2, future, "合成薬を9/25-10/5に開始予定")
 
-    assert rollup.build_rollup(db, 1)["current_med_period"] == active
+    assert rollup.build_rollup(db, 1)["med_period_candidate"] == active
 
 
 def test_period_boundary_rebuilds_without_a_new_message(db, monkeypatch):
@@ -62,17 +62,17 @@ def test_period_boundary_rebuilds_without_a_new_message(db, monkeypatch):
     period = {"raw": "9/21-9/22", "start": "2026-09-21", "end": "2026-09-22"}
     _add_period(db, 1, period)
     rollup.rebuild(db, 1)
-    assert "current_med_period" not in rollup.build_rollup(db, 1)
+    assert "med_period_candidate" not in rollup.build_rollup(db, 1)
 
     current[0] = datetime(2026, 9, 21, 0, tzinfo=JST).timestamp()
     assert rollup.dirty_projects(db) == [1]
     rollup.rebuild(db, 1)
-    assert rollup.build_rollup(db, 1)["current_med_period"] == period
+    assert rollup.build_rollup(db, 1)["med_period_candidate"] == period
 
     current[0] = datetime(2026, 9, 23, 0, tzinfo=JST).timestamp()
     assert rollup.dirty_projects(db) == [1]
     rollup.rebuild(db, 1)
-    assert "current_med_period" not in rollup.build_rollup(db, 1)
+    assert "med_period_candidate" not in rollup.build_rollup(db, 1)
 
 
 def _rollup_rows(db):
@@ -134,3 +134,27 @@ def test_concurrent_delete_before_rebuild_reinserts(db, monkeypatch):
     monkeypatch.setattr(rollup, "build_rollup", build_then_delete)
     rollup.rebuild(db, 1)
     assert len(_rollup_rows(db)) == 1
+
+
+def test_pre9_rollup_keys_read_as_current_names_until_rebuilt(db, monkeypatch):
+    monkeypatch.setattr(rollup.time, "time",
+                        lambda: datetime(2026, 9, 20, 12, tzinfo=JST).timestamp())
+    period = {"raw": "9/15-9/24", "start": "2026-09-15", "end": "2026-09-24"}
+    _add_period(db, 1, period)
+    aid = rollup.rebuild(db, 1)
+    content = json.loads(_rollup_rows(db)[0]["content"])
+    content["current_med_period"] = content.pop("med_period_candidate")
+    content["possibly_deleted"] = content.pop("unrefreshed_message_ids")
+    meta = {"period_check_version": 8}
+    with db.db:
+        db.db.execute("UPDATE artifacts SET content=?, meta=? WHERE artifact_id=?",
+                      (json.dumps(content), json.dumps(meta), aid))
+    read = rollup.current_cached_refs(db.db, 1, content, meta)
+    assert read["med_period_candidate"] == period
+    assert read["unrefreshed_message_ids"] == []
+    assert "current_med_period" not in read and "possibly_deleted" not in read
+    assert rollup.dirty_projects(db) == [1]
+    rollup.rebuild(db, 1)
+    rebuilt = json.loads(_rollup_rows(db)[0]["content"])
+    assert rebuilt["med_period_candidate"] == period
+    assert "current_med_period" not in rebuilt and "possibly_deleted" not in rebuilt

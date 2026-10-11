@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "意味解析v4の読み込み処理を整理",
+  "summary": "意味解析v4で関数ごとに繰り返していた読み込みをモジュール先頭へまとめました。解析の内容と動作は変わりません。",
+  "upgrade": "設定変更・DB移行・追加操作は不要です。",
+  "details": [
+    "循環参照のないsemantic_policy・mcs_queries・hashlibの関数内importを先頭importへ移す。",
+    "関数内importを残す条件（循環回避・テストの差し替え点・起動コスト・任意SDK）を開発リファレンスに記載する。"
+  ],
+  "refs": ["mcs/semantic/semantic_v4.py", "docs/development/DEVELOPMENT.md"]
+}

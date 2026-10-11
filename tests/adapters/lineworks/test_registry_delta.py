@@ -4,7 +4,7 @@ import os
 import shutil
 
 import pytest
-from hermes_plugin.mcs_delivery import registry
+from adapters.common import registry
 from test_lineworks_adapter import TOKEN, overflow_spec, world
 from test_lineworks_adapter import _worker as lw_worker
 

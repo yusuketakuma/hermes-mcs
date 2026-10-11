@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "強制終了後に残る台帳コピーの付随ファイル掃除と、ログ退避先のsymlink拒否の表示",
+  "summary": "バックアップやスナップショットの作成中に強制終了されると、作業コピー本体に加えて SQLite の付随ファイル（-journal・-wal・-shm、患者情報を含み得る）も残っていたため、1日以上経過したものを定期処理で削除します。日次バックアップの作業コピーは作成時から本人だけが読める権限で作ります。ログの退避先（.1）が symlink のときは書き込まずにそのログのローテーションを止め、定期処理の errors に log_rotate として表示します（他のログは通常どおりローテーションします）。",
+  "upgrade": "追加操作は不要です。log_rotate のエラーが表示された場合は、該当ログの .1 が symlink になっている理由を確認し、不要なら削除してください。",
+  "details": [
+    "mcs/core/maintenance.py の prune_leftovers の対象に、data/backups の *.db.tmp と data/snapshots の .snapshot.*.tmp それぞれの -journal・-wal・-shm を追加した。ctime が24時間を超えたものだけを消す条件は変えない。",
+    "daily_backup の作業コピーを tempfile.mkstemp（ledger-YYYYMMDD-（乱数）.db.tmp、0600）で作る。以前の固定名 ledger-YYYYMMDD.db.tmp の残りも *.db.tmp の掃除対象に含まれる。",
+    "rotate_log は .1 の symlink（O_NOFOLLOW による ELOOP）を記録し、残りのログを処理した後に MaintenanceError(log_rotate_symlink_refused) を出す。ローテーションしなかったログは切り詰めない。元ログを先に開いてから .1 を作るため、ログが途中で消えても既存の .1 を空にしない。"
+  ],
+  "refs": [
+    "mcs/core/maintenance.py",
+    "tests/core/test_maintenance_retention_cleanup.py",
+    "tests/core/test_ledger_recovery_contract.py"
+  ]
+}

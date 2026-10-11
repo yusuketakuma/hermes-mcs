@@ -133,7 +133,7 @@ def test_signal_card_rejects_foreign_artifact_and_context(led):
 
 
 def test_long_thread_title_keeps_spec_deliverable(led):
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     _patient(led, 1, name="合成患者名" * 40)
     _msg(led, 100)
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
@@ -215,3 +215,49 @@ def test_signal_evidence_change_invalidates_old_action(led, change):
     request["origin"] = ORIGIN
     result = notify_cards.apply_notification(led, request, CFG, now=NOW + 1)
     assert result["outcome"] == "rejected" and result["error"] == "stale_source"
+
+
+# fit_parts の折りたたみ件数表示と、body_state NULL 投稿の反応表示（完全合成）。
+NOTE = "※ 記録が見つからない≠対応がなかった。"
+
+
+def test_fit_parts_merges_marker_before_trailing_note():
+    rows = [f"・合成行{i:02d} " + "x" * 10 for i in range(10)]
+    parts = {"containers": [{"type": "text", "fold": True,
+                             "text": "\n".join(rows + ["・…他5件", NOTE])}]}
+    lines = notify_render.fit_parts(parts, 150)["containers"][0]["text"].split("\n")
+    marks = [ln for ln in lines if notify_render._FOLD_RE.match(ln)]
+    kept = [ln for ln in lines if ln.startswith("・合成行")]
+    assert len(marks) == 1
+    assert marks[0] == f"・…他{5 + 10 - len(kept)}件"
+    assert lines[-1] == NOTE
+    assert lines.index(marks[0]) == len(kept)
+
+
+def test_card_reactions_keeps_posts_with_null_body_state(led):
+    db = led.db
+    db.execute("INSERT INTO messages(message_id,project_id,parent_id,posted_at_ts,body_state) "
+               "VALUES(1,'P',NULL,1,NULL)")
+    db.execute("INSERT INTO messages(message_id,project_id,parent_id,posted_at_ts,body_state) "
+               "VALUES(2,'P',1,2,'full')")
+    db.execute("INSERT INTO messages(message_id,project_id,parent_id,posted_at_ts,body_state) "
+               "VALUES(3,'P',1,3,'deleted')")
+    card = {"kind": "thread", "project_id": "P", "root_message_id": 1}
+    assert [m for m, _ in notify_render.card_reactions(db, card)] == [1, 2]
+
+
+# A reply with NULL posted_at_ts must not displace the thread root.
+def test_null_ts_reply_does_not_become_thread_root(led):
+    _patient(led)
+    _msg(led, 100)
+    _msg(led, 101, parent=100)
+    led.db.execute("UPDATE messages SET reply_count=5 WHERE message_id=100")
+    led.db.execute("UPDATE messages SET posted_at_ts=NULL, posted_at='bad' "
+                   "WHERE message_id=101")
+    led.db.commit()
+    _dispatch(led, _intent(led))
+    content = notify_render._card_content(led.db, _card(led))
+    assert content["shown"][0] == 100
+    text = notify_render.display_text(content)
+    assert "09-24〜" in text
+    assert "返信未取得 4件" in text

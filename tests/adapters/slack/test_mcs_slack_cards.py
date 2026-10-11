@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from hermes_plugin.mcs_slack.cards import render
+from adapters.slack.cards import render
 from slack_card_testkit import _spec
 
 
@@ -75,7 +75,7 @@ def test_select_click_resolves_the_same_token_as_a_button():
     """The compact 操作 select carries the durable token as the chosen
     option's value; it passes the same origin checks as a button and a
     forged action_id or an outsider is rejected."""
-    from hermes_plugin.mcs_slack import actions as slack_actions
+    from adapters.slack import actions as slack_actions
     body = {"team": {"id": "T"}, "api_app_id": "A",
             "channel": {"id": "C"}, "user": {"id": "U1"},
             "message": {"ts": "1790000000.000001"}}

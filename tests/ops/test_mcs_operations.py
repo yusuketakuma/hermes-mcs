@@ -55,6 +55,29 @@ def test_ops_retry_preserves_attempts_and_receipt_is_idempotent(tmp_path):
     db.close()
 
 
+def test_ops_retry_records_optional_reason_in_receipt(tmp_path):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    db.ensure_patient(1)
+    payload = {"generation": "g1", "targets": [42]}
+    job_id = db.job_add("semantic", 1, 42, payload=payload)
+    db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=2 "
+                  "WHERE job_id=?", (job_id,))
+    db.db.commit()
+    req = _command(
+        "ops.retry", job_id=job_id, reason="synthetic restart note",
+        expected_payload_hash=mcs_requests.payload_hash(payload),
+    )
+
+    receipt = mcs_requests.apply_command(db, req)
+    stored = json.loads(db.db.execute(
+        "SELECT receipt_json FROM command_receipts WHERE command_id=?",
+        (req["command_id"],)).fetchone()[0])
+    assert receipt["outcome"] == "applied"
+    assert receipt["reason"] == stored["reason"] == "synthetic restart note"
+    assert "additional_attempts" not in stored
+    db.close()
+
+
 def test_ops_scan_deepens_existing_history_without_resetting_cursor(tmp_path):
     db = Ledger(str(tmp_path / "ledger.db"))
     db.ensure_patient(1)
@@ -529,3 +552,36 @@ def test_restore_approve_drains_during_consent_hold(tmp_path, monkeypatch):
     assert legacy.exists()
     assert db.db.execute("SELECT 1 FROM patients WHERE project_id=99").fetchone() is None
     db.close()
+
+
+# Corrupt stored coverage floors cannot strand a confirmed scan or create work.
+@pytest.mark.parametrize("floor", ["synthetic-invalid", b"synthetic-invalid", float("inf"),
+                                  float("-inf"), -2])
+def test_corrupt_stored_floor_returns_rejected_receipt_without_new_job(tmp_path, floor):
+    store = Ledger(str(tmp_path / "synthetic.db"))
+    try:
+        store.ensure_patient(1)
+        with store.db:
+            store.db.execute("UPDATE patients SET history_floor=? WHERE project_id=1", (floor,))
+        result = mcs_requests.apply_command(store, _command("ops.scan", days=14, pages=5))
+        assert result["outcome"] == "rejected" and result["error"] == "invalid_history_floor"
+        assert store.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 0
+        assert store.db.execute("SELECT COUNT(*) FROM command_receipts").fetchone()[0] == 1
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("floor,expected", [(None, "applied"), (0, "applied"),
+                                          (-1, "rejected"), (1e12, "applied")])
+def test_existing_floor_sentinels_and_finite_future_remain_compatible(tmp_path, floor, expected):
+    store = Ledger(str(tmp_path / "synthetic.db"))
+    try:
+        store.ensure_patient(1)
+        with store.db:
+            store.db.execute("UPDATE patients SET history_floor=? WHERE project_id=1", (floor,))
+        result = mcs_requests.apply_command(store, _command("ops.scan", days=14, pages=5))
+        assert result["outcome"] == expected
+        if floor == -1:
+            assert result["error"] == "already_floored"
+    finally:
+        store.close()

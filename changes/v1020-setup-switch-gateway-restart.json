@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "standalone から Hermes へ戻すときの gateway 再起動が失われる問題を修正",
+  "summary": "standalone から Hermes 方式へ戻す services で cron の登録が一部失敗すると、次の services では切替済みと判断され、standalone 中に起動した gateway が再起動されず /mcs やカード処理が止まったままになる問題を修正しました。再起動が済むまで「再起動待ち」を記録し、次の services で必ず再起動します。あわせて、通知フラグ（data/flags）の公開失敗を services の出力と終了コードに表示し、公開できなかった場合は切替時の gateway 再起動を見送ります。",
+  "upgrade": "追加操作は不要です。services が「notify flags publish failed」や「gateway restart deferred」を表示した場合は、原因（書込み権限・空き容量など）を直して services を再実行してください。",
+  "details": [
+    "cmd_services は切替時の再起動が完了しなかった場合に service_manifest.json へ gateway_restart_pending=true を保存し、次回はそれを切替中として扱う。",
+    "notify_cards.publish_flags の例外を握りつぶさず、失敗時は services を終了コード 1 にする。確認済みの cron を記録する manifest の保存は止めない。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "tests/ops/test_mcs_setup_standalone.py"
+  ]
+}

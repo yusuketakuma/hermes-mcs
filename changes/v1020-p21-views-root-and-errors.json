@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "参照統計と閲覧コマンドが MCS_ROOT の設置先を使うように修正",
+  "summary": "MCS_ROOT で設置先を変えている環境（独立実行モードなど）で、参照統計（mcs_refstats）の取得・検証と閲覧コマンド（mcs_view）が、引数を省略すると ~/.mcs 配下のスナップショットや依頼キューを見ていた問題を修正しました。既定の場所は MCS_ROOT の設置先になります。あわせて、統計の1項目で OSError が起きたときは全体を失敗にせず、その項目だけを「取得不可」として返すようにしました。また、患者数の集計で起きたデータベースエラーを「未計測」として隠さず、エラーとして返すようにしました。",
+  "upgrade": "MCS_ROOT を設定していない場合は追加操作は不要です。MCS_ROOT を設定していて、以前に引数を省略して mcs_refstats capture を実行した場合、その保留ファイルは ~/.mcs/data/refstats/pending に残っており、新しい既定の場所からは見えません。必要なら MCS_ROOT 側で capture をやり直してください。--snapshot・--data-dir・--cmd-dir を明示している場合は動作は変わりません。",
+  "details": [
+    "mcs/ops/mcs_refstats.py の --snapshot と --data-dir、mcs/views/mcs_view.py の --snapshot と --cmd-dir の既定値を mcs_util.HOME（MCS_ROOT を反映）から作る。",
+    "mcs/views/mcs_stats.py の run_stats は、各統計の例外処理に OSError を加え、該当統計を unavailable（data_error:OSError）にする。",
+    "mcs/views/read_model.py の _coverage は、すべての例外を握りつぶす代わりに patients 表の有無で判定する。表がない場合は従来どおり patients を null（未計測）にし、0 とは扱わない。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_refstats.py",
+    "mcs/views/mcs_view.py",
+    "mcs/views/mcs_stats.py",
+    "mcs/views/read_model.py",
+    "tests/ops/test_mcs_refstats.py",
+    "tests/views/test_v1020_view_defaults.py"
+  ]
+}

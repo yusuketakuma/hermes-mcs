@@ -142,6 +142,31 @@ def test_observation_excludes_partial_bodies_from_extract_backlog(tmp_path):
         db.close()
 
 
+def test_observation_extract_backlog_excludes_v4_current_messages(tmp_path):
+    """A message with only a current v4 row is not pending for run_pending,
+    so the observed backlog and its age must drain to empty too."""
+    from semantic_projection import PROJECTION_VERSION
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.save_messages([_message(1, body="合成のv4済み本文")])
+        row = db.db.execute("SELECT project_id,content_hash FROM messages "
+                            "WHERE message_id=1").fetchone()
+        with db.db:
+            db.db.execute(
+                "INSERT INTO artifacts(kind,project_id,message_id,content,"
+                "meta,created_at) VALUES('semantic_facts_v4',?,1,'{}',?,?)",
+                (row["project_id"], json.dumps({
+                    "hash": row["content_hash"], "engine_version": 4,
+                    "extract_version": 4,
+                    "projection_version": PROJECTION_VERSION}), time.time()))
+
+        snapshot = semantic_observe.observe(str(tmp_path / "ledger.db"))
+        assert snapshot["extract_llm_left"] == 0
+        assert snapshot["queue_ages_s"]["extract_llm"] is None
+    finally:
+        db.close()
+
+
 def test_observation_reports_invalid_usage_as_unknown(tmp_path):
     db = Ledger(str(tmp_path / "ledger.db"))
     try:

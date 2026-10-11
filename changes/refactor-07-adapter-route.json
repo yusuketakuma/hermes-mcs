@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "通知先ごとの配送可否判定と起動時の照合を共通化",
+  "summary": "Slack・Discord・LINE WORKSのカード配送と操作で個別に書いていた「現在この通知先へ配送してよいか」の判定と、Slack・Discordの起動時の配送状態照合を共通処理にまとめました。各通知先の判定条件と動作は変わりません。",
+  "upgrade": "設定変更・DB移行は不要です。Hermesモードでは他の更新と同様、gateway再起動で反映されます。",
+  "details": [
+    "adapters/common/paths.route_openに判定を集約し、通知先ごとの違い（transport未指定の扱い・route_epoch未設定時の扱い・整数epochの要求）は引数で保持する。",
+    "DeliveryWorker.reload_reconcileにregistry再読込みと照合・統計ログをまとめ、Slack・Discordの起動処理から使う。",
+    "Discord独立接続のコマンド文脈はHermes接続と同じ固定項目を使う。"
+  ],
+  "refs": ["adapters/common/paths.py", "adapters/common/worker.py", "adapters/common/commands.py", "adapters/slack/", "adapters/discord/", "adapters/lineworks/delivery.py"]
+}

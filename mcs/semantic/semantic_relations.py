@@ -16,11 +16,12 @@ COMPLEMENTS > UNRESOLVED.
 from __future__ import annotations
 
 import re
+import time
 from datetime import date, datetime
 from itertools import chain, combinations, product
 
 import semantic_facts as sf
-from mcs_requests import payload_hash
+from mcs_util import payload_hash
 
 
 WORKFLOW_ORDER = (
@@ -209,23 +210,32 @@ def _relation(left: dict, right: dict, rel_type: str, reason: str) -> dict:
 
 
 def reconcile_facts(active_facts: list, new_facts: list,
-                    *, project_id=None) -> dict:
+                    *, project_id=None, deadline: float | None = None) -> dict:
     """Compare new facts against the active set and return candidate
     relations plus the relation-set fingerprint.
 
-    Pure and non-destructive: inputs are read-only, every input fact
-    remains in place, and nothing is deactivated.  A CONTRADICTION is a
-    recorded relation between two surviving facts — never a latest-wins
-    overwrite.
+    Non-destructive: inputs are read-only, every input fact remains in
+    place, and nothing is deactivated.  A CONTRADICTION is a recorded
+    relation between two surviving facts — never a latest-wins
+    overwrite.  The pair scan is quadratic, so past ``deadline``
+    (``time.monotonic()``) it stops and reports ``pairs_skipped``; a
+    caller must treat a non-zero count as an incomplete relation set.
     """
     active = [f for f in (active_facts or []) if isinstance(f, dict)]
     new = [f for f in (new_facts or []) if isinstance(f, dict)]
     relations = {}
     token_cache = {}
+    total = len(active) * len(new) + len(new) * (len(new) - 1) // 2
+    compared = 0
     # New-vs-active is the reconciliation boundary; new-vs-new catches
     # intra-batch contradictions the same way (earlier index is "left").
     pairs = chain(product(active, new), combinations(new, 2))
     for left, right in pairs:
+        # reading the clock every 64 pairs keeps the overrun to a few ms
+        if deadline is not None and compared % 64 == 0 \
+                and time.monotonic() > deadline:
+            break
+        compared += 1
         rel = _classify_pair(left, right, token_cache)
         if rel is not None:
             relations[rel["relation_id"]] = rel
@@ -237,4 +247,5 @@ def reconcile_facts(active_facts: list, new_facts: list,
                    for t in sf.RELATION_TYPES},
         "active_preserved": len(active),
         "new_preserved": len(new),
+        "pairs_skipped": total - compared,
     }

@@ -294,7 +294,9 @@ class LineWorksClient:
         self.timeout, self.max_upload_bytes = float(timeout), max_upload_bytes
         self._lock = threading.Lock()
         self._wire_lock = threading.Lock()
-        self._token, self._expires = "", 0.0
+        # Expiry is tracked on both clocks: monotonic survives wall-clock
+        # steps, wall clock keeps advancing while the host sleeps.
+        self._token, self._expires, self._expires_wall = "", 0.0, 0.0
         self._not_before = 0.0
 
     def _request(self, url, body, content_type, token=None):
@@ -326,13 +328,14 @@ class LineWorksClient:
             if status == 401 and token is not None:
                 with self._lock:
                     if self._token == token:
-                        self._token, self._expires = "", 0.0
+                        self._token, self._expires, self._expires_wall = "", 0.0, 0.0
             raise ClientError("rate_limited" if status == 429 else "http_error", status)
         return status, raw
 
     def _access_token(self):
         with self._lock:
-            if self._token and self.monotonic() < self._expires:
+            if self._token and self.monotonic() < self._expires \
+                    and self.clock() < self._expires_wall:
                 return self._token
             now = int(self.clock())
             cred = self.credentials
@@ -352,9 +355,16 @@ class LineWorksClient:
                 "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
                 "client_id": cred.client_id, "client_secret": cred.client_secret,
                 "scope": "bot.message"}).encode("ascii")
-            started = self.monotonic()
-            _, raw = self._request(AUTH_URL, body, "application/x-www-form-urlencoded")
-            response = _json(raw)
+            started, started_wall = self.monotonic(), self.clock()
+            try:
+                _, raw = self._request(AUTH_URL, body, "application/x-www-form-urlencoded")
+                response = _json(raw)
+            except ClientError as exc:
+                # Only the token endpoint was contacted: no message or file
+                # request has been made, so the caller's post provably
+                # never began (see delivery.failure).
+                exc.pre_send = True
+                raise
             token = response.get("access_token")
             lifetime = response.get("expires_in")
             if isinstance(lifetime, str) and len(lifetime) <= 5 \
@@ -368,6 +378,7 @@ class LineWorksClient:
                 raise ClientError("response_invalid")
             self._token = token
             self._expires = started + lifetime - 30
+            self._expires_wall = started_wall + lifetime - 30
             return token
 
     def send_message(self, content: dict, *, channel_id=None, user_id=None):

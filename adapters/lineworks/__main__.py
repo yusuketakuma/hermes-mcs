@@ -19,7 +19,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     __package__ = "adapters.lineworks"
 
-from adapters.common import paths, registry
+from adapters.common import eventlog, paths, registry
 from mcs_util import HOME
 from .actions import Actions
 from .client import ClientError, Credentials, _sign, _text, valid_filename
@@ -29,9 +29,8 @@ from .delivery import (SENDER_BUSY_TRIES, SENDER_BUSY_WAIT, DeliveryWorker, Send
 from .server import CallbackInbox, callback_result, callback_server
 
 
-def _log(event, **fields):
-    # Callers pass only fixed event/error codes; no content, user IDs or secrets.
-    logging.getLogger("mcs.lineworks").info("%s %s", event, json.dumps(fields))
+# Callers pass only fixed event/error codes; no content, user IDs or secrets.
+_log = eventlog.make_logger("mcs.lineworks")
 
 
 def initialize(root):

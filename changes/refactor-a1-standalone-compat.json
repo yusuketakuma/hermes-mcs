@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "独立モードの旧Python互換入口を削除",
+  "summary": "Slack・Discordの独立モードで旧版から保持していたPythonの互換入口（mcs_standalone.slack_runtime・mcs_standalone.discord_runtime と各接続先の runtime_compat）を削除しました。独立モードの起動コマンド・常駐ジョブ・設定・通知の動作は変わりません。",
+  "upgrade": "設定変更・DB移行は不要です。独自スクリプトで mcs_standalone.slack_runtime・mcs_standalone.discord_runtime を直接importしている場合は、adapters.slack.standalone・adapters.discord.standalone へ書き換えてください。独立モードは常駐プロセスの再起動で反映されます。",
+  "details": [
+    "リポジトリ内に呼出し元がない互換モジュールと、その互換性だけを確かめるテストを削除した。",
+    "ci/gates.py の独立SDK許可は standalone.py の2ファイルだけに縮小した。",
+    "Discord独立接続のコマンド文脈のテストは adapters.discord.standalone を直接検証する形へ移した。"
+  ],
+  "refs": ["mcs_standalone/", "adapters/slack/", "adapters/discord/", "ci/gates.py"]
+}

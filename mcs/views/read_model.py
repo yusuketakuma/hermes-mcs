@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import json
 import math
-from contextlib import suppress
 from semantic_projection import PROJECTION_VERSION
 
 from patient_context import context_items, extract_context, merged_context
@@ -40,6 +39,10 @@ CONTRACT = "mcs-read-model/1"
 SCOPES = ("aggregate", "detail")
 EXTRACTION_KINDS = ("extract_v1", "extract_llm", "canonical_projection",
                     "semantic_facts_v4")
+# legacy rows with no project_id bind through the globally unique message ID
+_LEGACY_UNSCOPED_KINDS = ("extract_v1", "extract_llm")
+_KINDS_IN = ",".join("?" * len(EXTRACTION_KINDS))
+_LEGACY_IN = ",".join("?" * len(_LEGACY_UNSCOPED_KINDS))
 
 # shared eligibility predicate — the same definition extract_llm uses
 # to choose work, so coverage and records can never drift
@@ -170,13 +173,11 @@ def _message_records(db, project_id):
         ph = ",".join("?" * len(mids))
         for a in db.execute(
                 "SELECT a.message_id, a.project_id, a.kind, a.artifact_id,"
-                " a.content, a.meta FROM artifacts a WHERE a.kind IN "
-                "('extract_v1','extract_llm','canonical_projection',"
-                "'semantic_facts_v4') AND a.message_id IN (" + ph + ") "
-                "ORDER BY a.artifact_id DESC", mids):
-            # Legacy rows bind through the globally unique message ID.
+                " a.content, a.meta FROM artifacts a WHERE a.kind IN (" + _KINDS_IN + ")"
+                " AND a.message_id IN (" + ph + ") "
+                "ORDER BY a.artifact_id DESC", (*EXTRACTION_KINDS, *mids)):
             if a["project_id"] != pid_by_mid[a["message_id"]] and not (
-                    a["project_id"] is None and a["kind"] in ("extract_v1", "extract_llm")):
+                    a["project_id"] is None and a["kind"] in _LEGACY_UNSCOPED_KINDS):
                 continue
             arts_by_mid.setdefault(a["message_id"], []).append(a)
         for msg in rows:
@@ -282,10 +283,11 @@ def message_patient_context(db, message, scope="detail", *, by_kind=None, art_ro
     if art_rows is None:
         art_rows = db.execute(
             "SELECT artifact_id,kind,content,meta FROM artifacts "
-            "WHERE (project_id=? OR (project_id IS NULL AND kind IN "
-            "('extract_v1','extract_llm'))) AND message_id=? AND kind IN "
-            "('extract_v1','extract_llm','canonical_projection','semantic_facts_v4') "
-            "ORDER BY artifact_id DESC", (message["project_id"], message["message_id"])).fetchall()
+            "WHERE (project_id=? OR (project_id IS NULL AND kind IN (" + _LEGACY_IN + ")))"
+            " AND message_id=? AND kind IN (" + _KINDS_IN + ") "
+            "ORDER BY artifact_id DESC",
+            (message["project_id"], *_LEGACY_UNSCOPED_KINDS, message["message_id"],
+             *EXTRACTION_KINDS)).fetchall()
     if by_kind is None:
         by_kind = _kind_map(art_rows, message["content_hash"])
     body = message.get("body_text")
@@ -418,7 +420,7 @@ def _coverage(db, records, attachments, project_id=None) -> dict:
             continue
         for kind in EXTRACTION_KINDS:
             extraction[kind][rec["extraction"][kind]["state"]] += 1
-    with suppress(Exception):
+    if _table_exists(db, "patients"):
         if project_id is None:
             collection["patients"] = db.execute(
                 "SELECT COUNT(*) FROM patients").fetchone()[0]

@@ -25,7 +25,10 @@ import subprocess
 import sys
 import tempfile
 
-SEMVER_RE = re.compile(r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)$")
+# Self-contained copy of mcs_requests.RELEASE_TAG_RE (a test pins equality):
+# an explicit --to may name a prerelease; the default target never does.
+SEMVER_RE = re.compile(
+    r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$")
 
 
 def _git(repo: str, *args: str, binary: bool = False):
@@ -44,11 +47,11 @@ def _git(repo: str, *args: str, binary: bool = False):
 
 
 def latest_tag(repo: str) -> str:
-    tags = [t for t in _git(repo, "tag", "--list").split()
-            if SEMVER_RE.fullmatch(t)]
-    if not tags:
+    found = [m for m in map(SEMVER_RE.fullmatch, _git(repo, "tag", "--list").split())
+             if m and m.group(4) is None]
+    if not found:
         raise SystemExit("no release tag found — fetch tags first")
-    return max(tags, key=lambda t: tuple(map(int, SEMVER_RE.fullmatch(t).groups())))
+    return max(found, key=lambda m: tuple(map(int, m.groups()[:3]))).group(0)
 
 
 def extract(repo: str, tag: str, dest: str) -> None:
@@ -97,7 +100,7 @@ def main(argv=None) -> int:
     if args.keep_hermes_checkout and not re.fullmatch(r"[0-9a-f]{40}", args.keep_hermes_checkout):
         raise SystemExit("--keep-hermes-checkout needs the full 40-hex commit")
     tag = args.to or latest_tag(repo)
-    if not SEMVER_RE.fullmatch(tag):
+    if len(tag) > 255 or not SEMVER_RE.fullmatch(tag):
         raise SystemExit(f"bad target tag: {tag}")
     tmp = tempfile.mkdtemp(prefix="mcs_upgrade_")
     try:

@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "ローカルLLMの停止や意味チェックの停滞が健全性に出ない問題を修正",
+  "summary": "ローカルLLMサーバーが止まっていても、処理が延期を繰り返すだけで「停滞」と判定されず、通知カードのAI要約が来ないだけで気付けませんでした。処理待ちの作業がある状態で、ローカルLLMの停止が1時間以上続くと local_llm_down、意味チェックが6時間完了していないと semantic_backlog_stalled を health.json に出します。",
+  "upgrade": "追加操作は不要です。停滞の開始時刻は health.json の stall_marks に引き継がれます。LLMの稼働記録がない環境では、回路遮断器の失敗が処理待ちのまま6時間続いたときに llm_endpoint_down を出します。",
+  "details": [
+    "意味チェックの停滞判定はジョブの updated_at（延期のたびに更新される）に依存しない。",
+    "新しい理由コード（local_llm_down・llm_endpoint_down・backup_deferred_deadline）の日本語表示は health_watch 側の対応が必要。",
+    "従来抽出の待ちは抽出処理自身の未処理条件で判定し、抽出済みや再試行上限に達した投稿だけではローカルLLM停止を通知しない。"
+  ],
+  "refs": [
+    "mcs/ingest/run_check.py",
+    "tests/ingest/test_stab_health_db.py"
+  ]
+}

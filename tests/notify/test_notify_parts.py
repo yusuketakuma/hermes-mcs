@@ -13,22 +13,16 @@ import uuid as _uuid_mod
 
 import pytest
 
-import ledger as _ledger
 import notify_cards
 import notify_render
 import notify_transport
 from notify_testkit import (
     CFG, NOW, SCOPE, _begin, _card, _dispatch, _intent, _latest_render,
     _msg, _receipt, _seed_thread, _uuid)
+from common_testkit import ledger_fixture
 
 
-@pytest.fixture
-def led(tmp_path):
-    db_path = tmp_path / "data" / "ledger.db"
-    (tmp_path / "data").mkdir()
-    led = _ledger.Ledger(str(db_path))
-    yield led
-    led.close()
+led = ledger_fixture(data_dir=True)
 
 
 def _parts(led, delivery_id):
@@ -151,7 +145,7 @@ def test_many_facts_long_thread_parts(led):
 
 
 def test_spec_manifest_validates(led):
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     _seed_thread(led)
     _dispatch(led, _intent(led))
     render = _latest_render(led)
@@ -162,7 +156,7 @@ def test_spec_manifest_validates(led):
 @pytest.mark.parametrize("chunk_count,attachment_count", [(255, 0), (254, 1), (1, 300)])
 def test_combined_part_budget_keeps_spec_deliverable(led, monkeypatch,
                                                    chunk_count, attachment_count):
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     _seed_thread(led)
     monkeypatch.setattr(notify_cards, "_card_body_text",
                         lambda *a, **k: ("合成", "x" * (1900 * chunk_count)))
@@ -178,7 +172,7 @@ def test_combined_part_budget_keeps_spec_deliverable(led, monkeypatch,
 
 
 def test_long_attachment_name_keeps_spec_deliverable(led):
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     _seed_thread(led)
     _attach(led, 100, name="synthetic-" + "a" * 240 + ".txt")
     _dispatch(led, _intent(led))
@@ -204,7 +198,7 @@ def test_attachment_outside_part_budget_uses_existing_followup(led, monkeypatch)
 
 
 def test_spec_rejects_card_content_changed_after_sealing(led):
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     _seed_thread(led)
     _dispatch(led, _intent(led))
     render = _latest_render(led)
@@ -216,7 +210,7 @@ def test_spec_rejects_card_content_changed_after_sealing(led):
 
 
 def test_spec_rejects_manifest_drift(led):
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     _seed_thread(led)
     _dispatch(led, _intent(led))
     render = _latest_render(led)
@@ -1156,3 +1150,40 @@ def test_changed_active_named_body_uses_exact_prior_but_unchanged_and_new_do_not
     assert "edit_only" not in bodies["m:101#1"]
     assert bodies["m:101#1"]["prior_remote_id"] == "original/body:0002"
     assert "edit_only" not in bodies["m:300#1"] and "prior_remote_id" not in bodies["m:300#1"]
+
+
+def test_publish_failure_on_a_later_spec_leaves_no_open_transaction(led, monkeypatch):
+    """A publish error on the 2nd spec must not leave the 1st spec's
+    UPDATE in an open implicit transaction — the next BEGIN IMMEDIATE
+    would fail — and the 1st spec's published flag stays committed."""
+    import sqlite3
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    render = _latest_render(led)
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET spec_published=0 "
+                       "WHERE delivery_id=?", (render["delivery_id"],))
+    real = notify_cards.publish_file
+    calls = []
+
+    def flaky(directory, name, raw):
+        calls.append(name)
+        if len(calls) == 2:
+            raise OSError("synthetic ENOSPC")
+        return real(directory, name, raw)
+
+    monkeypatch.setattr(notify_cards, "publish_file", flaky)
+    first = _spec(render)
+    second = {**first, "delivery_id": _uuid(9001)}
+    root = notify_cards.data_root(led)
+    with pytest.raises(OSError):
+        notify_cards._publish_specs(led.db, notify_cards.notify_dirs(root),
+                                    [first, second], NOW + 1)
+    assert not led.db.in_transaction
+    other = sqlite3.connect(led.db.execute("PRAGMA database_list").fetchone()[2])
+    try:
+        assert other.execute("SELECT spec_published FROM notification_renders "
+                             "WHERE delivery_id=?", (render["delivery_id"],)
+                             ).fetchone()[0] == 1
+    finally:
+        other.close()

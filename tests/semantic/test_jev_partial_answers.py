@@ -62,7 +62,7 @@ class _Post:
 
 def _client(post):
     client = jev.JevClient(api_key="synthetic", max_attempts=1, post_fn=post)
-    guarded, _ = runtime.bind_jev(client, lambda stage: None, None)
+    guarded = runtime.bind_jev(client, lambda stage: None, None)
     return client, guarded
 
 

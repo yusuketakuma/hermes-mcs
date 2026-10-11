@@ -3,12 +3,11 @@ import json
 import time
 from datetime import datetime
 
-from mcs_requests import payload_hash
+from mcs_util import payload_hash
 from mcs_util import loads_dict
 import semantic_jev as jev
+from semantic_policy import KIND_LOOP, KIND_LOOP_EVENT
 
-KIND_LOOP = "loop_candidate"
-KIND_LOOP_EVENT = "loop_event"
 # A pair whose relation answer Jev returned malformed: an INCOMPLETE
 # receipt (fixed code only), never a relation result.
 KIND_LOOP_REJECTED = "loop_relation_rejected"

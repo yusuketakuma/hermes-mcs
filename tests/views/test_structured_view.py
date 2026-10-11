@@ -471,9 +471,10 @@ def test_malformed_vital_flag_key_keeps_valid_summary(db, key):
     assert joined == "合成要約"
 
 
-@pytest.mark.parametrize("plain", [False, True])
-def test_all_layouts_use_the_same_urgency_label(plain):
-    assert structured_view._head_lines({}, {}, "llm", plain=plain) == ["🚨 緊急度高"]
+def test_all_layouts_use_the_same_urgency_label():
+    # one label map serves every layout; there is no per-layout switch left
+    assert structured_view._head_lines({}, {}, "llm") == ["🚨 緊急度高"]
+    assert structured_view._head_lines({}, {}, "rule") == ["🚨"]
 
 
 def test_legacy_held_urgency_keeps_the_reason_without_model_source_label(db):
@@ -482,3 +483,15 @@ def test_legacy_held_urgency_keeps_the_reason_without_model_source_label(db):
     joined = _render(db, {"urgency": "high", "summary": "合成要約"})
     assert "対象人物・時点の根拠を確認。元の判定は高" in joined
     assert "AI判定" not in joined and "AI抽出" not in joined
+
+
+# Plain-surface order ranks the free-text summary by where it was built, not by its words.
+@pytest.mark.parametrize("summary", ["薬剤変更の連絡あり", "依頼内容を合成確認", "区分けして共有",
+                                     "症状は落ち着いている", "合成｜区切りを含む概要"])
+def test_summary_starting_with_a_label_word_stays_in_the_summary_slot(db, summary):
+    db.artifact_add("extract_llm", json.dumps({
+        "summary": summary, "points": ["合成の要点"], "events": ["visit"],
+        "requests": [{"to": "医師", "action": "合成確認"}]}),
+        project_id=1, message_id=1, meta={"hash": "synthetic-hash"})
+    lines = structured_view.structured_lines(db.db, 1, plain=True)
+    assert lines == [summary, "要点: 合成の要点", "依頼: 医師へ合成確認", "区分: 訪問"]

@@ -94,6 +94,11 @@ def local_problems(env):
 
 def plan(source, dest=None):
     """Decide the permanent checkout. Returns (action, dest, notes)."""
+    if "MCS_ROOT" in os.environ:
+        root = os.environ["MCS_ROOT"]
+        if not root or os.path.realpath(os.path.abspath(os.path.expanduser(root))) != \
+                os.path.realpath(os.path.expanduser(RUNTIME_ROOT)):
+            raise Refused("導入先のデータは ~/.mcs 固定です。MCS_ROOT を unset してから再実行してください")
     if not _is_checkout(source):
         raise Refused("このフォルダは git の checkout ではありません。git clone で取得してください")
     source = _git(source, "rev-parse", "--show-toplevel")
@@ -132,9 +137,9 @@ def _judge(source, dest, notes):
     if _is_checkout(dest):
         if os.path.realpath(_git(dest, "rev-parse", "--show-toplevel")) != dest:
             raise Refused(f"{dest} は別の checkout の内側です。checkout の最上位か空のフォルダを指定してください")
-        if not _roots(source) & _roots(dest):
-            raise Refused(f"{dest} は別のプロジェクトの checkout です")
         if _git(dest, "rev-parse", "HEAD") != _git(source, "rev-parse", "HEAD"):
+            if not _roots(source) & _roots(dest):
+                raise Refused(f"{dest} は別のプロジェクトの checkout です")
             notes.append("導入先の checkout は元と別の版です。導入先の版のまま導入し、更新は mcs update で行います")
         return "reuse", dest
     entries = set(os.listdir(dest))
@@ -208,13 +213,14 @@ def main(argv=None, source=None):
     for note in notes:
         print(f"注意: {note}")
     sys.stdout.flush()   # keep this summary ahead of install.sh output
+    child_env = {**os.environ, "MCS_ROOT": os.path.abspath(os.path.expanduser(RUNTIME_ROOT))}
     if args.dry_run:
         if action == "clone":
             # install.sh plans against its own location; the clone does not exist yet.
             print("--dry-run: checkout を作成していないため install.sh の計画は作成後に確認してください")
             return 0
         return subprocess.run(["sh", os.path.join(dest, "install.sh"), "--dry-run", *passthrough],
-                              cwd=dest).returncode
+                              cwd=dest, env=child_env).returncode
     if action == "clone":
         try:
             clone(source, dest)
@@ -224,7 +230,7 @@ def main(argv=None, source=None):
             return 4
         print(f"checkout を作成しました: {dest}", flush=True)
     return subprocess.run(["sh", os.path.join(dest, "install.sh"), *passthrough],
-                          cwd=dest).returncode
+                          cwd=dest, env=child_env).returncode
 
 
 if __name__ == "__main__":

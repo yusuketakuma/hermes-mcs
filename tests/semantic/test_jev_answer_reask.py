@@ -76,8 +76,8 @@ def test_the_real_client_reserves_and_counts_both_sends(monkeypatch):
     reserved = []
     client = jev.JevClient(api_key="synthetic", max_attempts=1,
                            post_fn=lambda body, timeout: (200, {}, bodies.pop(0)))
-    guarded, _ = runtime.bind_jev(client, lambda stage: None,
-                                  lambda body, timeout: reserved.append(1))
+    guarded = runtime.bind_jev(client, lambda stage: None,
+                               lambda body, timeout: reserved.append(1))
     out = jev.evaluate_once_more(guarded, {}, {"q": jev.noul_question("i", "t", "f")},
                                  time.monotonic() + 60)
     assert out["answers"]["q"]["noul"] == 0.5
@@ -98,7 +98,7 @@ def test_a_runtime_guard_on_the_second_send_propagates(monkeypatch):
 
     client = jev.JevClient(api_key="synthetic", max_attempts=1, attempt_timeout=30,
                            post_fn=post)
-    guarded, _ = runtime.bind_jev(client, lambda stage: None, None, cutoff=1050.0)
+    guarded = runtime.bind_jev(client, lambda stage: None, None, cutoff=1050.0)
     with pytest.raises(runtime.RuntimeBudgetShort):
         jev.evaluate_once_more(guarded, {}, {"q": jev.noul_question("i", "t", "f")},
                                1900.0)

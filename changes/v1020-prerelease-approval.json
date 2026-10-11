@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "通知したプレリリース版を承認経路で適用可能に",
+  "summary": "update.include_prerelease を有効にした環境で、更新通知に表示されたプレリリース版（例: v1.3.0-rc.1）の承認が bad_tag で拒否されなくなります。設定を有効にしていない環境では、プレリリース版の承認は受付時に prerelease_not_enabled として拒否します（プレビュー段階では拒否しません）。mcs update の --to にもプレリリース版を明示指定できます。",
+  "upgrade": "追加操作は不要です。プレリリース版を承認で適用するには、従来どおり update.include_prerelease を true にします。自動適用の対象と条件は変わりません。",
+  "details": [
+    "リリースタグの文法を mcs_requests.RELEASE_TAG_RE と release_tag に一本化した。更新検出・通知（mcs_update）、承認の検証（mcs_operations）、mcs update の --to（mcs_cli）が同じ判定を使う。scripts/mcs_upgrade.py はリポジトリを import しない契約のため同じ正規表現の写しを持ち、テストで一致を確認する。",
+    "承認検証が受け付けるタグは、更新側の版順序付け（_ver_key）が扱えるタグと一致する。空のプレリリース識別子（例: v1.0.0-rc..1）や 255 文字を超えるタグは、更新側と同じく拒否する。以前はこうしたタグが更新側で黙って捨てられる可能性があった。",
+    "include_prerelease が無効のときのプレリリース承認は、mode=off の判定と同じ受付トランザクション内で拒否する。--confirm-human、理由、receipt、target_sha と base_sha の固定は変更していない。",
+    "mcs update の --to は ASCII の数字だけを受け付ける。以前は他の文字種の数字を受け付け、後段で別のエラーになっていた。--to を省略したときの移行先は従来どおり最新の正式リリースで、プレリリースは選ばない。--to でのプレリリース指定は操作者による明示操作であり、include_prerelease では制限しない。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_requests.py",
+    "mcs/ops/mcs_operations.py",
+    "mcs/ops/mcs_update.py",
+    "mcs/ops/mcs_cli.py",
+    "scripts/mcs_upgrade.py"
+  ]
+}

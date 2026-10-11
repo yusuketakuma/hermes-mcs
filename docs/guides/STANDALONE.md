@@ -105,6 +105,33 @@ $PY -m mcs_standalone status
 hostは同じdata rootに1つだけ起動できます。本文・秘密値を含まないheartbeatとlive PIDで稼働を判定します。
 ログは`~/.mcs/data/standalone.log`、専用venv/scripts/modelsは`~/.mcs/`に置きます。
 
+### 自己回復と外部監視
+
+- Slack/Discordの接続が切れても（トークン失効・障害・起動時のネット断）、hostは止まりません。
+  接続だけを30秒から倍々（上限30分）の間隔で再接続し、収集・抽出・定期ジョブは続けます。
+  設定・認証情報の変更による終了はすぐ再接続します。hostの全体再起動は設定変更・
+  `services`の再起動要求・停止シグナルのときだけです。
+- 子プロセス（抽出worker・cmd・定期ジョブ）の異常終了も30秒から倍々（上限30分）で再起動し、
+  成功で間隔を戻します。回数は`status`の`exits`に、接続の状態は`connector`に出ます。
+- 独立した監視`local.mcs-health`（Linuxは`mcs-health.timer`）をhostの外に置きます。
+  `services`が配置し、5分ごとに`health.json`と`standalone-status.json`を読んで、
+  hostの停止、同じ子の3回連続失敗、接続の10分超の未回復、2時間超の更新待ち、
+  未読収集の成功が途絶えたことを、コードと回数だけの警報で通知先へ送ります。
+  `doctor`も同じ内容と監視の配置・稼働を確認します。
+- 時刻指定のジョブは、スリープ・再起動・前回実行中で逃した時刻を後で1回だけ実行します
+  （`slot_catchup`、実行中で飛ばした時刻は`slot_skipped_running`をログに記録）。
+  最後に実行した時刻は`data/standalone-schedule.json`に保存します。
+- 再起動待ちは実行中の時刻指定ジョブを最大10分待ち、超えると停止して再起動後に追い付き実行します。
+  更新（`update`）とcmd/cmd_intの処理は中断しません。
+- 更新markerが残っても、更新処理（`update.lock`の保持者）がなく更新記録も空なら、
+  hostは60秒後にmarkerを孤立と判断して消し、処理を再開します（recoveryと同じ判定）。
+  更新記録が残る場合は止めたままにし、復旧（macOSはrepo外watchdog、Linuxは
+  `mcs_update.py recover`）に任せます。
+- hostが強制終了（SIGKILL）された後の再起動では、前回の子プロセスを確認し、
+  抽出workerは停止して起動し直し、定期ジョブ・cmdは終了まで待って二重実行を避けます。
+- 状態ファイルは内容が変わったときと5秒ごとにだけ書き、ディスク満杯でも
+  hostは落ちずにログへ1回記録します。
+
 Linuxでは`$PY -m mcs_standalone service`コマンドがsystemd user serviceの候補を生成します。
 `mcs_setup services`はユーザーsystemdへ配置します。Chrome・ローカルLLMなどの
 既存macOS向け導入は別途必要です。Linux候補の生成・隔離テストと実機検証は区別します。
@@ -122,6 +149,18 @@ $HOME/.mcs/venv/bin/python3 mcs/ops/mcs_setup.py services
 共有Hermes gatewayは停止しません。旧pluginは独立モードのinboxを処理しませんが、
 同じBot認証情報で二重に接続しないようHermes側の該当接続を停止・無効化してください。
 手動crontab、manifest外のworker、単体LINE WORKSサービスは別途確認して停止します。
+
+ローカルLLMのモデル（約5.7 GB）の保存先はモードごとに分かれます（Hermes: `~/.hermes/models`、
+独立: `~/.mcs/models`）。そのまま切り替えると`install.sh`が新しい保存先へ再ダウンロードし、
+元の場所のモデルは自動では削除しません。再ダウンロードを避けるには、`install.sh`の前に移動します。
+
+```bash
+mkdir -p ~/.mcs/models
+mv ~/.hermes/models/Qwen3.5-9B-Q4_K_M.gguf ~/.mcs/models/
+```
+
+`:8080`のLLMを自分で用意する場合は`--no-llm`を付けます。再ダウンロードした場合、
+元の場所のモデルは不要になれば手動で削除できます。Hermesへ戻す場合も同様で、移動の向きが逆になります。
 
 Hermesへ戻す場合は`./install.sh --mode hermes`、HermesのPythonで`init --runtime-mode hermes`と
 `services`を実行します。独立サービスが停止したことを確認してからHermesの該当接続を使います。

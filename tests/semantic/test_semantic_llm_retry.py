@@ -172,6 +172,10 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
 def _held_admission(monkeypatch, calls):
     import local_llm
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: True)
+    # A held admission also yields the plain probe; stubbing it keeps the
+    # test from opening a real broker at the unset ("") admission path.
+    monkeypatch.setattr(local_llm, "admitted_probe_format",
+                        lambda *a, **kw: "plain")
 
     def held(route, prompt, **kw):
         calls.append(route)
@@ -206,10 +210,14 @@ def test_request_never_sent_does_not_consume_attempts(tmp_path, monkeypatch,
         semantic.llm_chat("synthetic prompt")
     db = _seeded(tmp_path)
     try:
+        import mcs_util
         for _ in range(7):
             with db.db:
                 db.db.execute(
                     "UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+            # a refused connection now feeds the shared endpoint breaker;
+            # let each cooldown lapse so every pass reaches the model
+            mcs_util.circuit_state_path(db).unlink(missing_ok=True)
             out = semantic.run_due(
                 db, _cfg("shadow"), {"errors": []}, time.monotonic() + 300,
                 jev_client=_FakeJev(), llm_fn=semantic.llm_chat)
@@ -877,3 +885,59 @@ def test_summarize_rejects_malformed_claims_without_silent_drop(tmp_path, claim)
                                   return_reason=True) == (None, "model")
     finally:
         db.close()
+
+
+def _admitted_env(monkeypatch, tmp_path, replies):
+    """Admission on: the probe and every send go through stubbed permits."""
+    import local_llm
+    monkeypatch.setattr(semantic, "_FMT_MODE", None)
+    monkeypatch.setattr(semantic, "_FMT_TS", 0.0)
+    monkeypatch.setattr(semantic, "_LONG_PATH",
+                        str(tmp_path / "data" / "long.json"))
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: True)
+    probes, calls = [], []
+
+    def probe(route, endpoint, model, schema, **kw):
+        probes.append(route)
+        return "object"
+
+    def admitted(route, prompt, **kw):
+        calls.append(dict(kw, route=route))
+        return replies.pop(0)
+
+    def direct(*a, **kw):
+        raise AssertionError("admission bypassed")
+
+    monkeypatch.setattr(local_llm, "admitted_probe_format", probe)
+    monkeypatch.setattr(local_llm, "probe_format", direct)
+    monkeypatch.setattr(local_llm, "admitted_chat", admitted)
+    monkeypatch.setattr(local_llm, "chat", direct)
+    return probes, calls
+
+
+def test_admitted_llm_chat_keeps_json_object_and_long_ceiling_retry(
+        monkeypatch, tmp_path):
+    """F20: with admission enabled the probe and every send take a
+    permit, the json_object constraint rides along, and a length stop
+    retries once at the long ceiling with a fresh permit."""
+    probes, calls = _admitted_env(monkeypatch, tmp_path, [
+        {"status": 200, "text": '{"facts": [', "finish_reason": "length"},
+        {"status": 200, "text": '{"facts": []}', "finish_reason": "stop"}])
+    assert semantic.llm_chat("抽出 JSON:", timeout=900) == '{"facts": []}'
+    assert probes == ["mcs.semantic"]
+    assert [c["route"] for c in calls] == ["mcs.semantic"] * 2
+    assert all(c["response_format"] == {"type": "json_object"} for c in calls)
+    assert [c["max_tokens"] for c in calls] == [
+        semantic.LLM_MAX_TOKENS, semantic.LLM_LONG_MAX_TOKENS]
+
+
+def test_admitted_long_ceiling_retry_held_is_not_sent(monkeypatch, tmp_path):
+    """A held verdict on the retry's own permit is a free deferral."""
+    _, calls = _admitted_env(monkeypatch, tmp_path, [
+        {"status": 200, "text": '{"facts": [', "finish_reason": "length"},
+        {"text": None, "finish_reason": None, "usage": None,
+         "status": None, "admission": "held"}])
+    with pytest.raises(semantic.runtime.LLMNotSent,
+                       match="llm_admission:held"):
+        semantic.llm_chat("抽出 JSON:", timeout=900)
+    assert len(calls) == 2

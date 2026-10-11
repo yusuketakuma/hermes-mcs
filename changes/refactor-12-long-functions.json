@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "更新・初期設定・LLM抽出の長い関数を段階ごとに整理",
+  "summary": "更新適用・中断復旧・初期設定・プラグイン設定・LLM抽出の長い内部関数を、同じファイル内の段階ごとの関数に分けました。更新・ロールバック・復旧の判定、承認・既読化の安全条件、抽出結果、表示・通知・終了コードは変わりません。",
+  "upgrade": "設定変更・DB移行・追加操作は不要です。",
+  "details": [
+    "mcs_update.py の apply から引数検証・実行環境ゲート・タグ検査・manifest退避・成功記録を、recover_interrupted から鮮度判定・同意保留の記録・done後処理・再開完了の記録を同じファイル内の関数へ分ける。ロック取得順、journal書込み、quiesce・rollback・marker処理の順序は維持する。",
+    "mcs_setup.py の cmd_init から --set 適用・semantic/signals指定・standalone権限・秘密情報保存・独立接続初期化を、_apply_plugin_integration から standalone トークン保存・プラグイン設定計画・Hermes トークン保存を分ける。プラットフォームトークン名の定数は従来どおり _apply_plugin_integration 内に置く。",
+    "extract_llm.py の run_pending から引数検証・古い成果物の掃除・候補選択・ジョブ準備・バッチ呼出し・作業単位の組立て・残件集計を分ける。DBアクセスは呼出しスレッドのみで、claim・commit・lease解放の順序は変わらない。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_update.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/extract/v4/extract_llm.py"
+  ]
+}

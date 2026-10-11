@@ -2,19 +2,23 @@
 
 import asyncio
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-from hermes_plugin.mcs_delivery import paths as shared_paths
-from hermes_plugin.mcs_delivery import registry
-from hermes_plugin.mcs_slack import actions as slack_actions
-from hermes_plugin.mcs_slack.actions import Actions
-from hermes_plugin.mcs_slack.delivery import SlackCardAdapter
-from hermes_plugin.mcs_slack.paths import notify_dirs
+from adapters.common import paths as shared_paths
+from adapters.common import registry
+from adapters.slack import actions as slack_actions
+from adapters.slack.actions import Actions
+from adapters.slack.delivery import SlackCardAdapter
+from adapters.slack.paths import notify_dirs
 from notify_cmds import validate_int
 from mcs_requests import validate as validate_human
 
+ROOT = Path(__file__).resolve().parents[3]
 TOKEN = "b" * 32
 TS = "1790000000.000001"
 SCOPE = {"transport": "slack", "profile": "cco",
@@ -1085,7 +1089,7 @@ def test_ephemeral_chunks_split_by_characters_at_line_boundaries():
 
 
 def test_plain_answers_carry_no_markup():
-    from hermes_plugin.mcs_delivery import text
+    from adapters.common import text
     body = text.view_answer({"outcome": "applied", "action": "body",
                              "title": "合成", "body": "本文"},
                             lambda _p: True, markdown=False)
@@ -1113,4 +1117,133 @@ def test_second_confirm_after_queueing_reads_as_in_progress(tmp_path):
             "この確認は処理中です。結果をお待ちください。"]
         confirm_id = confirm_action["action_id"].split(":")[2]
         assert reg.confirm(confirm_id)["consumed"] is True
+    asyncio.run(scenario())
+
+
+def test_confirm_publish_error_after_the_file_landed_keeps_the_confirm(
+        tmp_path, monkeypatch):
+    """An OSError raised after os.replace (the directory fsync) must not
+    be reported as a send failure: the command is queued, so the confirm
+    stays in flight and the followup still reports the receipt."""
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="request")
+        body, (confirm_action, _) = await _to_confirm(
+            actions, app, dirs, 123)
+
+        real = shared_paths.fsync_dir
+
+        def fail(d):
+            if os.path.samefile(d, dirs["cmd_int"]):
+                raise OSError("synthetic fsync failure")
+            real(d)
+        monkeypatch.setattr(shared_paths, "fsync_dir", fail)
+        await actions._confirm(ack, body, confirm_action)
+        monkeypatch.setattr(shared_paths, "fsync_dir", real)
+        files = list(Path(dirs["cmd_int"]).glob("*.json"))
+        assert len(files) == 2
+        human = next(json.loads(p.read_text()) for p in files
+                     if json.loads(p.read_text()).get("cmd") == "request.create")
+        assert not any("送信に失敗" in m["text"] for m in app.client.messages)
+        assert "受付結果を確認できませんでした" in app.client.messages[-1]["text"]
+        confirm_id = confirm_action["action_id"].split(":")[2]
+        assert reg.confirm(confirm_id).get("in_flight")
+        assert reg.followup(human["command_id"]) is not None
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("project_id,signals", [
+    (None, {"synthetic-key": "not-a-dict"}),     # crashed the click
+    (True, None),                                # bool passed as project 1
+])
+def test_malformed_token_scope_is_denied(tmp_path, project_id, signals):
+    """A token context naming no valid positive int project is refused,
+    as on Discord, instead of raising or passing a bool as project 1."""
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, project_ids=frozenset({1}))
+        context = {"source_message_id": 456, "source_hash": "a" * 64}
+        if signals is not None:
+            context["signals"] = signals
+        reg.put_tokens({TOKEN: {
+            "action": "body", "team_id": SCOPE["team_id"],
+            "channel_id": SCOPE["channel_id"], "message_id": TS,
+            "project_id": project_id, "context": context}})
+        body, action = click()
+        await actions._action(ack, body, action)
+        assert list(Path(dirs["cmd_int"]).glob("*.json")) == []
+    asyncio.run(scenario())
+
+
+# ---------- 📋 task list without _mcs_path, real ephemeral clicks -----------
+
+def test_task_blocks_import_without_flat_mcs_paths():
+    # Hermes loads the Slack worker with only the repo root on sys.path
+    code = ("import sys; sys.path.insert(0, sys.argv[1]);"
+            "from adapters.slack import actions;"
+            "assert '_mcs_path' not in sys.modules;"
+            "b = actions._task_blocks([{'request_id': 1, 'title': 't',"
+            " 'status': 'open', 'due_date': '2000-01-01'}]);"
+            "assert '期限切れ' in str(b)")
+    proc = subprocess.run([sys.executable, "-I", "-c", code, str(ROOT)],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_ephemeral_task_transition_click_uses_container_ts(tmp_path):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="tasks")
+        body, action = click()
+        await actions._action(ack, body, action)
+        env = command(dirs)
+        transition = "d" * 32
+        result(dirs, env["request_id"], request_id=env["request_id"],
+               outcome="applied", action="tasks",
+               tasks=[{"request_id": 7, "title": "合成タスク",
+                       "status": "open", "transitions": {
+                           "done": {"token": transition,
+                                    "label": "✅ 完了"}}}],
+               token_ctx={transition: {
+                   "action": "task_status", "card_key": "k" * 32,
+                   "kind": "thread", "project_id": 123}})
+        await actions.sweep_followups()
+        for file in Path(dirs["cmd_int"]).glob("*.json"):
+            file.unlink()
+        # real Slack shape: no "message", location only in container
+        body2 = {k: v for k, v in body.items() if k != "message"}
+        body2["container"] = {"type": "message", "is_ephemeral": True,
+                              "message_ts": "1790000000.000999",
+                              "channel_id": "C_SYNTHETIC"}
+        await actions._action(
+            ack, body2,
+            {"action_id": "mcs:a:" + transition, "value": transition})
+        assert command(dirs)["token"] == transition
+
+        # a card token clicked from an ephemeral container stays pinned
+        for file in Path(dirs["cmd_int"]).glob("*.json"):
+            file.unlink()
+        await actions._action(ack, body2, action)
+        assert list(Path(dirs["cmd_int"]).glob("*.json")) == []
+    asyncio.run(scenario())
+
+
+# ---------- 確定 after the interactivity kill switch ------------------------
+
+@pytest.mark.parametrize("flags", [
+    {"interactive": False, "transport": "slack"},
+    {"interactive": True, "transport": "discord"},
+    {"interactive": True, "transport": "slack", "restore_pending": True},
+])
+def test_confirm_after_kill_switch_is_denied_but_cancellable(tmp_path, flags):
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind="request")
+        body, (confirm_action, cancel_action) = await _to_confirm(actions, app, dirs, 123)
+        confirm_id = confirm_action["action_id"].split(":")[2]
+        Path(dirs["flags"], "notify.json").write_text(json.dumps(flags), encoding="utf-8")
+        before = len(app.client.messages)
+        await actions._confirm(ack, body, confirm_action)
+        assert [m["text"] for m in app.client.messages[before:]] == ["権限がありません。"]
+        assert not any(json.loads(p.read_text()).get("cmd") == "request.create"
+                       for p in Path(dirs["cmd_int"]).glob("*.json"))
+        await actions._confirm(ack, body, cancel_action)
+        assert app.client.messages[-1]["text"] == "取り消しました。"
+        assert reg.confirm(confirm_id) is None
     asyncio.run(scenario())

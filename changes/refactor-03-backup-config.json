@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "バックアップ設定の検証とHermes実行ファイル探索を共通化",
+  "summary": "10分ごとの収集処理がバックアップ設定を確認するとき、大きな初期設定モジュールを読み込まなくなりました。Hermes実行ファイルの探し方は通知処理と初期設定で1つに揃えています。判定内容と動作は変わりません。",
+  "upgrade": "設定変更・DB移行・追加操作は不要です。",
+  "details": [
+    "バックアップ設定の検証をops/backup_config.pyへ移し、mcs_setupからは同じ名前で使う。",
+    "hermes_binの設定→PATH→~/.local/bin/hermesの探索順をmcs_util.hermes_exeに一本化する。"
+  ],
+  "refs": ["mcs/ops/backup_config.py", "mcs/ingest/run_check.py", "mcs/core/mcs_util.py", "mcs/notify/notify_flush.py", "mcs/ops/mcs_setup.py"]
+}

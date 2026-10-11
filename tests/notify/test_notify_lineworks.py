@@ -11,8 +11,8 @@ import notify_cards as cards
 import notify_cmds as cmds
 import notify_reconcile as reconcile
 import notify_transport as transport
-from hermes_plugin.mcs_delivery import envelopes, registry
-from hermes_plugin.mcs_delivery.spec import validate as validate_v1
+from adapters.common import envelopes, registry
+from adapters.common.spec import validate as validate_v1
 from notify_render import display_text, lineworks_card_split
 from notify_testkit import (
     CFG, NOW, _card, _dispatch, _intent, _latest_render, _seed_thread,

@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "install.sh --mode が config.json のシンボリックリンクを通常ファイルで置き換えないよう修正",
+  "summary": "install.sh で --mode または --recovery-python を指定して実行すると、config.json がシンボリックリンクの場合はリンク先を読み、リンク自体を通常ファイルで置き換えていました。復旧用の確認と同じ読み方（シンボリックリンク・他人の所有・64KB超・JSONオブジェクト以外を拒否）にそろえ、該当する場合は何も書き込まずに停止します。",
+  "upgrade": "通常の構成では追加操作は不要です。config.json をシンボリックリンクにしている場合は、通常ファイルへ置き換えてから install.sh を再実行してください。",
+  "details": [
+    "install.sh の2か所（復旧インタプリタの確認と --mode の書込み）が別々に config.json を読んでいたため、mcs_setup._owner_config に1つにまとめた。",
+    "停止時は「config.json unreadable — repair it before selecting a runtime」のように理由を表示する。"
+  ],
+  "refs": [
+    "install.sh",
+    "mcs/ops/mcs_setup.py",
+    "tests/meta/test_install_sh_standalone.py"
+  ]
+}

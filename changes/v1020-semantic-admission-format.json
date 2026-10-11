@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "LLM 受付制御を有効にすると意味解析の JSON 指定と長文出力の再試行が外れる問題を修正",
+  "summary": "LLM の受付制御（MCS_LLM_ADMISSION、既定は無効）を有効にしたとき、意味解析の呼出しで JSON 形式の指定が付かず、長文の出力が上限で途切れても長い上限で再試行しなかったため、事実の多い投稿の解析が毎回失敗し得た問題を修正しました。受付制御の有無にかかわらず、同じ形式指定と1回だけの長文再試行が働きます。",
+  "upgrade": "追加操作は不要です。受付制御を有効にしていない場合、動作は変わりません。",
+  "details": [
+    "mcs/semantic/semantic.py の llm_chat は、受付制御が有効なときだけ別経路で1回送信し、response_format・長文上限（LLM_LONG_MAX_TOKENS）での再試行・長文記録による早期終了・呼出し期限を使っていなかった。両方の経路を同じ loop にまとめ、送信関数だけを切り替える。",
+    "受付制御が有効なときは、形式の確認（probe）も local_llm.admitted_probe_format を通して受付を受ける。再試行の送信も毎回新しく受付を受け、保留・拒否の判定は送信しなかったものとして LLMNotSent を返す（試行回数を消費しない）。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic.py",
+    "tests/semantic/test_semantic_llm_retry.py"
+  ]
+}

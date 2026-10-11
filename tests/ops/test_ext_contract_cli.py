@@ -208,6 +208,10 @@ def test_manual_receipt_import_reconciles_handoff_without_resend(
         directory = tmp_path / "receipts"
         directory.mkdir()
         path.rename(directory / "one.json")
+        # Finder metadata and symlinks are not receipts and must not void the bundle
+        (directory / ".DS_Store").write_bytes(b"\x00synthetic")
+        (tmp_path / "outside.json").write_text("not a receipt")
+        (directory / "linked.json").symlink_to(tmp_path / "outside.json")
         path = directory
     code, imported = _cli(capsys, [
         "reconcile", "--state", inputs["state"], "--sink", inputs["sink"],
@@ -487,3 +491,25 @@ def test_health_success_reports_terminal_counts_without_any_write(inputs, capsys
     assert sum(report["counts"].values()) == 1
     assert report["reasons"] == []
     assert _tree(tmp_path) == before
+
+
+# An auth_id the withdraw/1 directive cannot carry must never be exported.
+def test_long_auth_id_is_refused_before_export(inputs, capsys):  # noqa: F811
+    path = Path(inputs["auth"])
+    auth = json.loads(path.read_text())
+    auth["auth_id"] = "a" * 257
+    path.write_text(json.dumps(auth))
+    code, result = _cli(capsys, ["deliver", "--sink-kind", "handoff", *_flags(inputs)])
+    assert code != 0 and result["reason"] == "auth_invalid:auth_id"
+    assert not list(Path(inputs["sink"]).rglob("*.json"))
+
+
+def test_stage_withdrawal_removes_copy_even_if_directive_is_refused(tmp_path):
+    sink = ext.HandoffSink(tmp_path / "sink")
+    eid = "86e294983d15ad712e92405e"
+    folder = sink.root / "envelopes"
+    folder.mkdir(mode=0o700)
+    (folder / f"{eid}.json").write_text('{"synthetic": true}')
+    with pytest.raises(ext.ContractError):
+        sink.stage_withdrawal(eid, "a" * 300, "synthetic")
+    assert not (folder / f"{eid}.json").exists()

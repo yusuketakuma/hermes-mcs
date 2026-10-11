@@ -49,11 +49,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401,E402  registers every subdir as import root
 import mcs_runtime  # noqa: E402
-from mcs_requests import parse_command  # noqa: E402
+from mcs_requests import RELEASE_TAG_RE, parse_command, release_tag  # noqa: E402
 
 from mcs_util import (HOME, REPO, UPDATE_MARKER_NAME, acquire_run_lock,  # noqa: E402
                       atomic_write, launchd_bootstrap, load_config)
 from mcs_util import file_sha256 as _file_sha256  # noqa: E402
+from safe_io import fsync_dir  # noqa: E402
 
 
 def _load_gateway_restart():
@@ -98,8 +99,6 @@ WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int", "local.mcs-health")
 # S5: only the labels listed above are touched; install.sh-owned
 # ai.mcs.llamaserver / org.mcs.recovery must never be.
 PROTECTED = ("data/", "config.json", ".env", "chrome-profile/", "venv/", "models/")
-SEMVER_RE = re.compile(
-    r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?$")
 HEX_RE = re.compile(r"^[0-9a-f]{40}$")
 _MENTION_RE = re.compile(r"<@[!&]?\d+>|<#\d+>|@everyone|@here")
 # drainer stray sweep: interpreter argv0 + script path — never matches
@@ -164,7 +163,7 @@ _SERVICES_PYTHON: str | None = None   # rebuilt runtime after a migration
 _HELD_RUN_LOCK_FD: int | None = None  # apply's run.lock, inherited by post-merge
 # bail reasons that mean "we never attempted" — do NOT consume the
 # receipt or poison attempts[]; the next check may legitimately retry
-_TRANSIENT_BAIL = frozenset({"run_lock_timeout", "update_lock_busy"})
+_TRANSIENT_BAIL = frozenset({"run_lock_timeout"})
 
 
 class UpdateError(Exception):
@@ -357,14 +356,10 @@ def remote_tag_sha(tag: str) -> str | None:
 def _ver_key(name: str) -> tuple | None:
     """Semver ordering key: (major, minor, patch, release-flag, pre).
     A prerelease sorts BELOW the same release; None when not semver."""
-    if not isinstance(name, str) or len(name) > 255:
+    if not release_tag(name):
         return None
-    m = SEMVER_RE.fullmatch(name)
-    if not m:
-        return None
+    m = RELEASE_TAG_RE.fullmatch(name)
     pre = m.group(4)
-    if pre and any(not part for part in pre.split(".")):
-        return None
     identifiers = tuple((0, int(part)) if part.isdigit() else (1, part)
                         for part in pre.split(".")) if pre else ()
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)),
@@ -468,14 +463,32 @@ def impact_summary(cur_sha: str, tag: str) -> list[str]:
     if "install.sh" in names:
         notes.append("install.sh に差分 — 依存追加の可能性、"
                      "auto モードでは適用を中止します")
+    cfg = load_config()
     # mcs_standalone/ is loaded only by the standalone connector
-    connector = ("mcs_standalone/",) if mcs_runtime.standalone(load_config()) else ()
-    if any(n.startswith(("hermes_plugin/", "adapters/common/", "adapters/slack/", "adapters/discord/",
-                         *connector)) for n in names):
+    connector = ("mcs_standalone/",) if mcs_runtime.standalone(cfg) else ()
+    if any(n.startswith(tuple(path + "/" for path in mcs_runtime.GATEWAY_SOURCE_DIRS)
+                        + connector) for n in names):
         notes.append("plugin 変更 — 適用後に gateway restart（standalone では ai.mcs.standalone の再起動）が必要です")
-    if any(n.startswith(("adapters/common/", "adapters/lineworks/", "lineworks_adapter/")) for n in names):
+    # same condition as plan()'s lineworks_adapter restart
+    interactive = (cfg.get("notify") or {}).get("interactive") \
+        if isinstance(cfg.get("notify"), dict) else None
+    if interactive == "lineworks" and any(n.startswith((
+            "mcs/", "adapters/common/", "adapters/lineworks/", "lineworks_adapter/")) for n in names):
         notes.append("LINE WORKS 変更 — 適用後に独立アダプターの check と再起動が必要です")
     return notes
+
+
+def _tag_is_newer(tag, sha, cur_sha) -> bool:
+    """Whether the latest tag is ahead of HEAD. HEAD already containing it
+    (a checkout ahead of the tag) is not newer; only an exit-0 ancestry
+    proof suppresses — missing objects (128) or a git failure keep the
+    notice/auto path."""
+    newer = bool(tag and sha and sha != cur_sha)
+    if newer and cur_sha:
+        with suppress(UpdateError):
+            newer = _git(["merge-base", "--is-ancestor", sha, "HEAD"]
+                         ).returncode != 0
+    return newer
 
 
 # -------------------------------------------------------------- gates
@@ -485,8 +498,8 @@ def precheck_local(cfg: dict) -> list[str]:
     errors = []
     if not _tree_clean():
         errors.append("tree_dirty")
+    import mcs_setup
     try:
-        import mcs_setup
         errs, _ = mcs_setup.validate_config(cfg)
         errors.extend("config: " + e for e in errs)
     except Exception as e:
@@ -495,7 +508,6 @@ def precheck_local(cfg: dict) -> list[str]:
         need = os.path.getsize(LEDGER) * 2 + 64 * 1024 * 1024
         if shutil.disk_usage(DATA).free < need:
             errors.append("insufficient_disk")
-    import mcs_setup
     # an owned idle watchdog whose explicit selection drifted is repaired by
     # the post-merge `services`; anything else still blocks before merge
     errors.extend(mcs_setup.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO,
@@ -619,7 +631,8 @@ def _ls_tree_paths(tag: str, subdir: str | None = None
 def precheck_tag(tag: str) -> list[str]:
     """Candidate-tree content gates — all work on fetched objects."""
     errors: list[str] = []
-    if load_config().get("runtime_mode") == "standalone" and not _standalone_target_supported(tag):
+    standalone = mcs_runtime.standalone(load_config())
+    if standalone and not _standalone_target_supported(tag):
         errors.append("standalone_runtime_missing_in_target")
     paths = []
     for mode, otype, _sha, path in _ls_tree_paths(tag):
@@ -742,7 +755,7 @@ def precheck_tag(tag: str) -> list[str]:
             ).returncode != 0:
         errors.append("install_sh_changed")
     # standalone SDK pins live in ~/.mcs/venv, which only install.sh updates
-    if mcs_runtime.standalone(load_config()) and _git(
+    if standalone and _git(
             ["diff", "--quiet", "HEAD", tag, "--",
              "deployment/requirements-standalone.txt"]).returncode != 0:
         errors.append("standalone_requirements_changed")
@@ -752,7 +765,7 @@ def precheck_tag(tag: str) -> list[str]:
 def _plugin_changed(tag: str, cfg: dict) -> bool:
     return bool(_git_out(
         ["diff", "--name-only", "-z", "HEAD", tag, "--",
-         "hermes_plugin", "adapters/common", "adapters/slack", "adapters/discord",
+         *mcs_runtime.GATEWAY_SOURCE_DIRS,
          *(["mcs_standalone"] if mcs_runtime.standalone(cfg) else [])]).strip("\0"))
 
 
@@ -818,7 +831,8 @@ def plan(tag: str) -> dict:
                 "blockers": ["tag_not_fetched"]}
     try:
         return _plan(tag, cfg, state, current, target_sha)
-    except (UpdateError, subprocess.SubprocessError, OSError) as e:
+    except (UpdateError, subprocess.SubprocessError, OSError,
+            ValueError) as e:           # ValueError: invalid runtime_mode
         return {"route": "blocked", "current": current,
                 "target": {"tag": tag, "sha": target_sha},
                 "blockers": [f"plan_failed: {e}"[:200]]}
@@ -932,11 +946,7 @@ def _write_marker() -> None:
         f.write(str(time.time()))
         f.flush()
         os.fsync(f.fileno())
-    dfd = os.open(DATA, os.O_RDONLY)
-    try:
-        os.fsync(dfd)
-    finally:
-        os.close(dfd)
+    fsync_dir(DATA, require_dir=False)
 
 
 def _awaiting_consent_marker() -> dict | None:
@@ -1288,7 +1298,7 @@ def scan_pending_approvals(state: dict
     # superseded and must not fire later
     ordered = sorted(
         by_tag.values(),
-        key=lambda p: _ver_key(p.get("tag")) or (-1, -1, -1, -1, ""),
+        key=lambda p: _ver_key(p["tag"]),   # _scan_receipt kept valid tags only
         reverse=True)
     consumed.extend((p["command_id"], "superseded")
                     for p in ordered[1:])
@@ -1583,25 +1593,22 @@ def _post_merge(state: dict) -> int:
     """Post-merge stages, run as a NEW-code subprocess while the parent
     (old code) holds both locks (--locks-held)."""
     applying = state["applying"]
-    try:
-        _plan_runtime_migration(state)
-        if applying.get("reinstall") and not applying.get("reinstall_done"):
-            _reinstall(applying)
-            journal(state, "reinstall")      # persists reinstall_done
-        if applying.get("runtime_migration"):
-            _use_migrated_runtime(applying["runtime_migration"])
-        _services_reconcile()
-        journal(state, "services")
-        problems = restart_agents()
-        if problems:
-            raise UpdateError("restart_failed: " + ",".join(problems))
-        journal(state, "restart")
-        errors = _postcheck(state, applying["sha"])
-        if errors:
-            raise UpdateError("postcheck_failed: " + ",".join(errors))
-        journal(state, "postcheck")
-    except UpdateError:
-        raise
+    _plan_runtime_migration(state)
+    if applying.get("reinstall") and not applying.get("reinstall_done"):
+        _reinstall(applying)
+        journal(state, "reinstall")      # persists reinstall_done
+    if applying.get("runtime_migration"):
+        _use_migrated_runtime(applying["runtime_migration"])
+    _services_reconcile()
+    journal(state, "services")
+    problems = restart_agents()
+    if problems:
+        raise UpdateError("restart_failed: " + ",".join(problems))
+    journal(state, "restart")
+    errors = _postcheck(state, applying["sha"])
+    if errors:
+        raise UpdateError("postcheck_failed: " + ",".join(errors))
+    journal(state, "postcheck")
     state.setdefault("applied", []).append({
         "tag": applying["tag"], "sha": applying["sha"],
         "prev_sha": applying["prev_sha"],
@@ -1737,19 +1744,11 @@ def _run_post_merge(sha: str) -> None:
                 + (cerr or cout or "").strip()[:300])
 
 
-def apply(tag: str | None, sha: str | None, command_id: str | None,
-          base_sha: str | None = None, reinstall: bool = False,
-          install_args: tuple = ()) -> int:
-    """The staged apply pipeline (④).
-
-    Lock discipline: update.lock is acquired BEFORE the first journal
-    write and held for the whole pipeline, so every mutation of
-    update_state.json is serialized and 'journal exists + lock free'
-    reliably means the writer died. run.lock is taken second (after
-    the long pre-checks) — run.lock holders (drainer ticks) never
-    block on update.lock, so no lock-order inversion exists."""
-    global _HELD_RUN_LOCK_FD
-    if not tag or not SEMVER_RE.fullmatch(tag):
+def _apply_validate_args(tag: str | None, sha: str | None,
+                         command_id: str | None, reinstall: bool,
+                         install_args: tuple) -> int | None:
+    """Reject malformed apply arguments before any state is read."""
+    if not release_tag(tag):
         print("apply: bad tag", tag)
         return 2
     if sha is not None and not HEX_RE.fullmatch(sha):
@@ -1766,7 +1765,12 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             or any(a not in INSTALL_ARGS for a in install_args):
         print("apply: bad reinstall options")
         return 2
-    cfg = load_config()
+    return None
+
+
+def _apply_runtime_gate_errors(cfg: dict, reinstall: bool,
+                               install_args: tuple) -> list:
+    """Return the runtime gate errors that block apply before any mutation."""
     import mcs_setup
     # the old interpreter is allowed here: post-merge migrates it (1.0.18)
     runtime_errors = mcs_setup.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO,
@@ -1776,6 +1780,67 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         # install.sh stops on that drift after merge; services repairs it
         runtime_errors.append("recovery_runtime: selection repair pending — "
                               "add --install-arg=--no-recovery")
+    return runtime_errors
+
+
+def _apply_tag_gate(tag: str, cfg: dict, command_id: str | None,
+                    reinstall: bool) -> tuple[str | None, list]:
+    """Run the tag pre-checks; return (bail reason or None, schema_bump errors)."""
+    errors = precheck_tag(tag)
+    bump = [e for e in errors if e.startswith("schema_bump:")]
+    errors = [e for e in errors if not e.startswith("schema_bump:")
+              and not (reinstall and e in REINSTALL_ERRORS)]
+    if errors:
+        return "tag_checks: " + ",".join(errors), bump
+    if bump and command_id is None \
+            and _update_mode(cfg) == "auto":
+        # schema-bumping updates NEVER auto-apply (R2); a human
+        # receipt is the only way past this gate
+        return "schema_bump_auto_blocked: " + bump[0], bump
+    return None, bump
+
+
+def _read_manifest_snapshot():
+    """Read the pre-update manifest snapshot, or None when unreadable."""
+    snap = None
+    try:
+        with open(MANIFEST_PATH, encoding="utf-8") as f:
+            snap = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        pass
+    return snap
+
+
+def _apply_record_success(tag: str, command_id: str | None) -> dict:
+    """Durably record a successful apply in a fresh state view and return it."""
+    state = load_state()
+    state.setdefault("executed", {})
+    if command_id:
+        state["executed"][command_id] = {"result": "applied",
+                                         "at": time.time()}
+    _record_attempt(state, tag, "applied")
+    state["stages"] = []
+    save_state(state)
+    return state
+
+
+def apply(tag: str | None, sha: str | None, command_id: str | None,
+          base_sha: str | None = None, reinstall: bool = False,
+          install_args: tuple = ()) -> int:
+    """The staged apply pipeline (④).
+
+    Lock discipline: update.lock is acquired BEFORE the first journal
+    write and held for the whole pipeline, so every mutation of
+    update_state.json is serialized and 'journal exists + lock free'
+    reliably means the writer died. run.lock is taken second (after
+    the long pre-checks) — run.lock holders (drainer ticks) never
+    block on update.lock, so no lock-order inversion exists."""
+    global _HELD_RUN_LOCK_FD
+    rc = _apply_validate_args(tag, sha, command_id, reinstall, install_args)
+    if rc is not None:
+        return rc
+    cfg = load_config()
+    runtime_errors = _apply_runtime_gate_errors(cfg, reinstall, install_args)
     if runtime_errors:
         # Even acquiring update.lock or writing local_checks is a mutation.
         # Keep an existing interrupted journal untouched for safe recovery.
@@ -1815,6 +1880,8 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                     command_id or entry.get("command_id"))
                 journal(state, "rollback")
             try:
+                # The post-merge child may have restarted writers before failing.
+                quiesce()
                 _rollback_tree(entry, lambda report: _consent_hold(
                     state, RestoreConsentPending(report), entry["backup_path"]))
                 state.pop("restore_consent", None)
@@ -1848,12 +1915,17 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                     return 2
                 rollback_failed = True
                 reason += f" (rollback failed: {e} — escalate)"
+                if state["applying"].get("rollback"):
+                    # the tree may be on the old code while the DB keeps the
+                    # newer schema: recovery keeps writers stopped until the
+                    # restore completes (no consent report exists to hold on)
+                    state["applying"]["restore_incomplete"] = True
         if not rollback_failed:
             # keep remnants when the rollback itself failed — recovery
             # must still be able to see and escalate the wedged state
             state["applying"] = None
             state["stages"] = []
-        if transient:
+        if transient and not rollback_failed:
             # never attempted: clean journal, leave the receipt
             # pending, no attempt record, no notification — the next
             # check retries
@@ -1866,7 +1938,13 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                 "at": time.time()}
         _record_attempt(state, tag, "failed", reason)
         save_state(state)
-        if quiesced:
+        if rollback_failed and state["applying"].get("restore_incomplete"):
+            # same report-only freeze as recover_interrupted's escalate: an
+            # outbox notice would write the newer-schema DB under the old
+            # code and join the later restore's loss report
+            _report("escalate", reason, writers_stopped=True)
+            return 1
+        if quiesced and not rollback_failed:
             problems = restart_agents()
             _remove_marker()
             if problems:
@@ -1915,17 +1993,9 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             return bail("local_tag_sha_mismatch")
 
         journal(state, "tag_checks")
-        errors = precheck_tag(tag)
-        bump = [e for e in errors if e.startswith("schema_bump:")]
-        errors = [e for e in errors if not e.startswith("schema_bump:")
-                  and not (reinstall and e in REINSTALL_ERRORS)]
-        if errors:
-            return bail("tag_checks: " + ",".join(errors))
-        if bump and command_id is None \
-                and _update_mode(cfg) == "auto":
-            # schema-bumping updates NEVER auto-apply (R2); a human
-            # receipt is the only way past this gate
-            return bail("schema_bump_auto_blocked: " + bump[0])
+        reason, bump = _apply_tag_gate(tag, cfg, command_id, reinstall)
+        if reason:
+            return bail(reason)
 
         journal(state, "backup")
         import maintenance
@@ -1933,12 +2003,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
             bpath = maintenance.preupdate_backup(LEDGER)
         except maintenance.MaintenanceError as e:
             return bail(str(e))
-        snap = None
-        try:
-            with open(MANIFEST_PATH, encoding="utf-8") as f:
-                snap = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            pass
+        snap = _read_manifest_snapshot()
         state["baseline_check"] = _baseline_check(cfg)
         save_state(state)
 
@@ -1995,14 +2060,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         _HELD_RUN_LOCK_FD = run_fd
         _run_post_merge(sha)
 
-        state = load_state()
-        state.setdefault("executed", {})
-        if command_id:
-            state["executed"][command_id] = {"result": "applied",
-                                             "at": time.time()}
-        _record_attempt(state, tag, "applied")
-        state["stages"] = []
-        save_state(state)
+        state = _apply_record_success(tag, command_id)
         quiesced = False
         # gateway restart is fire-and-forget AFTER applied is durable —
         # a synchronous restart would deadlock when this updater is a
@@ -2018,7 +2076,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         return bail(f"unexpected:{type(e).__name__}")
     finally:
         _HELD_RUN_LOCK_FD = None
-        if quiesced and not consent_hold:
+        if quiesced and not consent_hold and not rollback_failed:
             _remove_marker()
         for fd in (run_fd, upd_fd):
             if fd is not None:
@@ -2052,6 +2110,9 @@ def _reconcile_membership(desired: dict) -> list[str]:
     if cfg.get("runtime_mode") == "standalone":
         # One host owns jobs; its restored code reconciles membership on restart.
         return []
+    if cfg.get("runtime_mode", "hermes") != "hermes":
+        # same token as mcs_recover; reported before any cron/agent removal
+        return ["runtime_mode_unverifiable"]
     desired = {} if desired is None else desired
     if not isinstance(desired, dict):
         return ["service_snapshot_invalid"]
@@ -2064,7 +2125,7 @@ def _reconcile_membership(desired: dict) -> list[str]:
             return ["service_snapshot_invalid"]
     hermes = mcs_setup._hermes_exe(cfg)
     desired_cron = {(d.get("script") or ""): d for d in
-                    (desired or {}).get("cron", [])}
+                    desired.get("cron", [])}
     known_scripts = {s for _, _, s in mcs_setup.CRON_JOBS} | {"mcs_offsite.sh"}
     current = {}
     try:
@@ -2081,9 +2142,7 @@ def _reconcile_membership(desired: dict) -> list[str]:
         evidence += current["cron"]
     desired_paths = {os.path.normpath(os.path.join(SCRIPTS_DIR, script))
                      for script in desired_cron if script}
-    if mcs_runtime.standalone(cfg):
-        pass        # launchd agents (below) carry the schedule; no hermes cron
-    elif mcs_setup._hermes_ok(hermes):
+    if mcs_setup._hermes_ok(hermes):
         try:
             # one parser with mcs_setup: ANSI-tolerant, None = unparsable
             entries = mcs_setup._cron_list(hermes)
@@ -2111,7 +2170,7 @@ def _reconcile_membership(desired: dict) -> list[str]:
     else:
         problems.append("cron_list_unverifiable")
     desired_agents = {a.get("label") for a in
-                      (desired or {}).get("agents", [])}
+                      desired.get("agents", [])}
     current = set(mcs_setup._agent_labels(cfg))
     for path in glob.glob(os.path.join(AGENTS_DIR, "*.plist")):
         label = os.path.basename(path)[:-6]
@@ -2239,7 +2298,7 @@ def rollback(command_id: str | None = None) -> int:
             upd_fd = None
             return recover_interrupted()
         applied = state.get("applied") or []
-        entry = applied[-1] if applied else state.get("applying")
+        entry = applied[-1] if applied else None
         if not entry or not entry.get("prev_sha"):
             if command_id:
                 state.setdefault("executed", {})[command_id] = {
@@ -2628,16 +2687,15 @@ def _replace_database(backup_path, expected_sha, before_replace):
                 raise OSError("live_journal_busy")
         finally:
             live.close()
+        # = deployment/recovery/mcs_recover._replace_database: same lexists
+        # sidecar rule, kept as an independent copy (recovery must run
+        # without the repo's modules)
         if any(os.path.lexists(LEDGER + suffix)
                for suffix in ("-wal", "-shm", "-journal")):
             raise OSError("live_sidecars_remaining")
         before_replace()
         os.replace(temporary, LEDGER)
-        dfd = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        fsync_dir(directory, require_dir=False)
     except sqlite3.Error as exc:
         raise OSError("restore_database_unverifiable") from exc
     finally:
@@ -2764,6 +2822,76 @@ def reinstall_done() -> int:
     return recover_interrupted() if applying else 0
 
 
+def _journal_is_fresh(state: dict, applying: dict | None) -> bool:
+    """True when the newest journal timestamp is younger than STALE_S."""
+    last = max(
+        [s.get("at", 0) for s in state.get("stages", [])]
+        + [(applying or {}).get("at", 0)])
+    return bool(last and time.time() - last < STALE_S)
+
+
+def _journal_consent_from_marker(state: dict, applying: dict) -> None:
+    """Journal a restore-consent hold known only from its marker."""
+    marker = _awaiting_consent_marker()
+    if marker is not None:
+        # A hold without its journal record: entered before
+        # holds were journaled (older watchdog) or a crash
+        # between the awaiting_consent marker and
+        # _consent_hold. Record it so this and every later pass
+        # (either tool) keeps the freeze; the head==target pass
+        # rewrites it from a fresh loss report.
+        state["restore_consent"] = {
+            "report_id": marker.get("report_id"),
+            "backup_path": applying["backup_path"],
+            "from_marker": True, "at": time.time()}
+        save_state(state)
+
+
+def _complete_done_bookkeeping(state: dict) -> int:
+    """Finish the parent's bookkeeping after the child journaled 'done'."""
+    applied = state.get("applied") or []
+    cid = (applied[-1] or {}).get("command_id") if applied else None
+    if cid:
+        state.setdefault("executed", {})[cid] = {
+            "result": "applied", "at": time.time()}
+    state["stages"] = []
+    save_state(state)
+    _remove_marker()
+    _report("resumed_done", "completed bookkeeping after crash")
+    _enqueue_notice("[MCS] 中断された更新の後処理を完了しました")
+    _gateway_restart_if_needed(state)
+    return 0
+
+
+def _finish_resumed(state: dict, applying: dict) -> int:
+    """Record a resumed apply or rollback as complete and restart services."""
+    if applying.get("rollback"):
+        applied = state.get("applied") or []
+        if applied and applied[-1].get("sha") == applying.get("prev_sha"):
+            reverted = applied[-1]
+            state["applied"] = applied[:-1]
+            state.setdefault("attempts", {})[reverted.get("tag") or "?"] = {
+                "result": "rolled_back", "at": time.time()}
+        result = "rolled_back"
+    else:
+        state.setdefault("applied", []).append(applying)
+        result = "applied"
+    state["applying"] = None
+    state["stages"] = []
+    state.pop("restore_consent", None)
+    cid = applying.get("command_id")
+    if cid:
+        state.setdefault("executed", {})[cid] = {
+            "result": result, "at": time.time()}
+    save_state(state)
+    _remove_marker()
+    _report("resumed", "post-merge completed after crash")
+    _enqueue_notice(
+        "[MCS] 更新の中断を検出し、post-merge を完了しました")
+    restart_services(load_config(), applying.get("plugin_changed"))
+    return 0
+
+
 def recover_interrupted(if_stale: bool = False) -> int:
     """Journal-driven recovery (⑤). Safe to call any time.
 
@@ -2794,31 +2922,15 @@ def recover_interrupted(if_stale: bool = False) -> int:
         if not applying and not stages:
             _remove_marker()           # orphan marker — writer is dead
             return 0
-        if if_stale:
-            last = max(
-                [s.get("at", 0) for s in state.get("stages", [])]
-                + [(applying or {}).get("at", 0)])
-            if last and time.time() - last < STALE_S:
-                return 0               # fresh journal — leave it alone
+        if if_stale and _journal_is_fresh(state, applying):
+            return 0                   # fresh journal — leave it alone
         removed = _clean_stale_git_locks()
         prev = (applying or {}).get("prev_sha")
         target = (applying or {}).get("sha")
         rollback_shaped = bool(applying and applying.get("rollback")
                                and applying.get("backup_path"))
         if not state.get("restore_consent") and rollback_shaped:
-            marker = _awaiting_consent_marker()
-            if marker is not None:
-                # A hold without its journal record: entered before
-                # holds were journaled (older watchdog) or a crash
-                # between the awaiting_consent marker and
-                # _consent_hold. Record it so this and every later pass
-                # (either tool) keeps the freeze; the head==target pass
-                # rewrites it from a fresh loss report.
-                state["restore_consent"] = {
-                    "report_id": marker.get("report_id"),
-                    "backup_path": applying["backup_path"],
-                    "from_marker": True, "at": time.time()}
-                save_state(state)
+            _journal_consent_from_marker(state, applying)
         prior_drainers = _last_report().get("drainers_key")
         head = None                    # measured below (restart identity)
         tree_reset = False
@@ -2855,7 +2967,9 @@ def recover_interrupted(if_stale: bool = False) -> int:
             loss report's content digest, voiding the consent it
             awaits. An invalid hold record (wrong journal shape) is
             held the same way: only a human can repair it. The journal
-            stays, so the next check / consent respawn retries."""
+            stays, so the next check / consent respawn retries. A schema
+            rollback apply could not finish (applying.restore_incomplete)
+            keeps the same report-only freeze until a pass restores."""
             if held():
                 _report("restore_consent_blocked",
                         detail[:240] + " — hold kept, retried next pass")
@@ -2867,8 +2981,16 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     "at": time.time()}
                 save_state(state)
             key = _alert_key(state, detail)
-            dkey = _drainers_key(state, head)
+            if (applying or {}).get("restore_incomplete"):
+                # apply's schema rollback failed before the DB restore
+                # finished: same freeze as a consent hold (drainers down,
+                # marker kept, report only) — an outbox notice would write
+                # the newer-schema DB under the old code and join the later
+                # restore's loss report
+                _report("escalate", detail, alert_key=key, writers_stopped=True)
+                return 1
             notify, notified_at = _alert_due("escalate", key, time.time())
+            dkey = _drainers_key(state, head)
             _report("escalate", detail, alert_key=key,
                     notified_at=notified_at, drainers_key=dkey)
             problems = drainers(dkey)
@@ -2905,18 +3027,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
         if "done" in stages and not applying:
             # child wrote 'done' then died before the parent finished
             # bookkeeping — complete it
-            applied = state.get("applied") or []
-            cid = (applied[-1] or {}).get("command_id") if applied else None
-            if cid:
-                state.setdefault("executed", {})[cid] = {
-                    "result": "applied", "at": time.time()}
-            state["stages"] = []
-            save_state(state)
-            _remove_marker()
-            _report("resumed_done", "completed bookkeeping after crash")
-            _enqueue_notice("[MCS] 中断された更新の後処理を完了しました")
-            _gateway_restart_if_needed(state)
-            return 0
+            return _complete_done_bookkeeping(state)
         if not applying:
             # pre-'applying' remnant: nothing was ever mutated — safe
             # to clean (previously wedged all updates, F10)
@@ -2947,7 +3058,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 # the DB is at the backup schema and the marker left
                 # awaiting_consent: the hold is over — later failures
                 # escalate normally (drainers up on a consistent DB)
-                if state.pop("restore_consent", None) is not None:
+                held_before = state.pop("restore_consent", None) is not None
+                if applying.pop("restore_incomplete", None) or held_before:
                     save_state(state)
             try:
                 if applying.get("rollback"):
@@ -2975,31 +3087,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 if problems or errors:
                     return escalate("resume postcheck: "
                                     + ",".join(problems + errors))
-                if applying.get("rollback"):
-                    applied = state.get("applied") or []
-                    if applied and applied[-1].get("sha") == applying.get("prev_sha"):
-                        reverted = applied[-1]
-                        state["applied"] = applied[:-1]
-                        state.setdefault("attempts", {})[reverted.get("tag") or "?"] = {
-                            "result": "rolled_back", "at": time.time()}
-                    result = "rolled_back"
-                else:
-                    state.setdefault("applied", []).append(applying)
-                    result = "applied"
-                state["applying"] = None
-                state["stages"] = []
-                state.pop("restore_consent", None)
-                cid = applying.get("command_id")
-                if cid:
-                    state.setdefault("executed", {})[cid] = {
-                        "result": result, "at": time.time()}
-                save_state(state)
-                _remove_marker()
-                _report("resumed", "post-merge completed after crash")
-                _enqueue_notice(
-                    "[MCS] 更新の中断を検出し、post-merge を完了しました")
-                restart_services(load_config(), applying.get("plugin_changed"))
-                return 0
+                return _finish_resumed(state, applying)
             except UpdateError as e:
                 return escalate("resume failed: " + str(e))
         if prev and head == prev:
@@ -3162,6 +3250,8 @@ def _drainers_key(state: dict, head: str | None) -> str:
     return hashlib.sha256(json.dumps(
         [state.get("applying"), state.get("stages"), head or None],
         sort_keys=True, default=str).encode()).hexdigest()[:32]
+
+
 # -------------------------------------------------------------------- CLI
 
 def cmd_check() -> int:
@@ -3188,7 +3278,11 @@ def cmd_check() -> int:
             tag = sha = None            # receipts still get processed
     cur_tag, cur_sha = current_version()
     notes = impact = None
-    if tag and tag != state.get("latest_tag"):
+    newer = _tag_is_newer(tag, sha, cur_sha)
+    # refetch for a deferred notice only while one is still owed — a
+    # checkout ahead of the latest tag never gets it and must not refetch
+    if tag and (tag != state.get("latest_tag")
+                or (newer and state.get("notified_at") != tag)):
         with suppress(UpdateError):
             # fetch objects BEFORE notes/impact — otherwise the summary
             # silently runs against missing objects (dead code, F15)
@@ -3196,16 +3290,9 @@ def cmd_check() -> int:
         notes = fetch_notes(tag)
         try:
             impact = impact_summary(cur_sha, tag) if cur_sha else []
-        except UpdateError:
+        except (UpdateError, ValueError):     # ValueError: invalid runtime_mode
             impact = []
-    # HEAD already containing the newest tag (a checkout ahead of it) is
-    # not "newer"; only an exit-0 ancestry proof suppresses — missing
-    # objects (128) or a git failure keep the notice/auto path
-    newer = bool(tag and sha and sha != cur_sha)
-    if newer and cur_sha:
-        with suppress(UpdateError):
-            newer = _git(["merge-base", "--is-ancestor", sha, "HEAD"]
-                         ).returncode != 0
+        newer = _tag_is_newer(tag, sha, cur_sha)   # objects present now
     # --- serialized state update + decision --------------------------
     picked = auto = None
     held = False
@@ -3285,13 +3372,40 @@ def cmd_status() -> int:
     return 0
 
 
-def main() -> int:
-    # services children reload the launchd job running this updater only
-    # after THIS process ends (mcs_setup._agent_reconcile waits on it)
-    os.environ.setdefault("MCS_JOB_PID", str(os.getpid()))
+def cmd_apply(args) -> int:
+    return apply(args.tag, args.sha, args.command_id,
+                 base_sha=args.base_sha, reinstall=args.reinstall,
+                 install_args=tuple(args.install_arg))
+
+
+def cmd_plan(args) -> int:
+    if not release_tag(args.tag):
+        print("plan: bad tag", args.tag)
+        return 2
+    print(json.dumps(plan(args.tag), ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_post_merge() -> int:
+    state = load_state()
+    applying = state.get("applying") or {}
+    # the post-merge stage is only reachable from the parent apply
+    # — the env token proves we were spawned by it, not invoked
+    # directly against whatever journal happens to exist (L17)
+    if state.get("_corrupt") or not applying \
+            or os.environ.get(_UPDATE_PM_ENV) != applying.get("sha"):
+        return 2
+    return _post_merge(state)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    # handlers are lambdas so a module attribute replaced after import
+    # (tests, callers) is the one dispatched
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--post-merge", action="store_true",
                     help=argparse.SUPPRESS)
+    # no subcommand = check (the cron/launchd default)
+    ap.set_defaults(fn=lambda args: cmd_check())
     sub = ap.add_subparsers(dest="cmd")
     ap_p = sub.add_parser("apply")
     ap_p.add_argument("--tag")
@@ -3302,47 +3416,29 @@ def main() -> int:
                       help="also re-run install.sh on the merged tree")
     ap_p.add_argument("--install-arg", action="append", default=[],
                       choices=sorted(INSTALL_ARGS))
+    ap_p.set_defaults(fn=lambda args: cmd_apply(args))
     pl_p = sub.add_parser("plan", help="read-only upgrade plan (JSON)")
     pl_p.add_argument("--tag", required=True)
-    sub.add_parser("check")
-    sub.add_parser("status")
-    sub.add_parser("rollback")
-    sub.add_parser("recover")
+    pl_p.set_defaults(fn=lambda args: cmd_plan(args))
+    sub.add_parser("check").set_defaults(fn=lambda args: cmd_check())
+    sub.add_parser("status").set_defaults(fn=lambda args: cmd_status())
+    sub.add_parser("rollback").set_defaults(fn=lambda args: rollback())
+    sub.add_parser("recover").set_defaults(
+        fn=lambda args: recover_interrupted())
     sub.add_parser("reinstall-done",
-                   help="after finishing an interrupted install.sh by hand")
-    args = ap.parse_args()
-    if args.post_merge:
-        state = load_state()
-        applying = state.get("applying") or {}
-        # the post-merge stage is only reachable from the parent apply
-        # — the env token proves we were spawned by it, not invoked
-        # directly against whatever journal happens to exist (L17)
-        if state.get("_corrupt") or not applying \
-                or os.environ.get(_UPDATE_PM_ENV) != applying.get("sha"):
-            return 2
-        return _post_merge(state)
-    if args.cmd == "status":
-        return cmd_status()
-    if args.cmd == "check" or args.cmd is None:
-        return cmd_check()
-    if args.cmd == "apply":
-        return apply(args.tag, args.sha, args.command_id,
-                     base_sha=args.base_sha, reinstall=args.reinstall,
-                     install_args=tuple(args.install_arg))
-    if args.cmd == "plan":
-        if not SEMVER_RE.fullmatch(args.tag):
-            print("plan: bad tag", args.tag)
-            return 2
-        print(json.dumps(plan(args.tag), ensure_ascii=False, indent=2))
-        return 0
-    if args.cmd == "rollback":
-        return rollback()
-    if args.cmd == "recover":
-        return recover_interrupted()
-    if args.cmd == "reinstall-done":
-        return reinstall_done()
-    return 2
+                   help="after finishing an interrupted install.sh by hand"
+                   ).set_defaults(fn=lambda args: reinstall_done())
+    return ap
 
+
+def main(argv: list[str] | None = None) -> int:
+    # services children reload the launchd job running this updater only
+    # after THIS process ends (mcs_setup._agent_reconcile waits on it)
+    os.environ.setdefault("MCS_JOB_PID", str(os.getpid()))
+    args = _build_parser().parse_args(argv)
+    if args.post_merge:
+        return cmd_post_merge()
+    return args.fn(args)
 
 if __name__ == "__main__":
     sys.exit(main())

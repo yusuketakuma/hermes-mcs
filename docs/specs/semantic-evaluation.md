@@ -1,6 +1,6 @@
 # Semantic offline evaluation (WP08)
 
-`mcs/semantic/semantic_evaluation.py` evaluates a fixed semantic bundle and a
+`mcs/semantic/eval/semantic_evaluation.py` evaluates a fixed semantic bundle and a
 candidate result against a reviewed label. It is an offline JSONL CLI. It does
 not import the model client, open an attachment, read a bundle path, or send a
 request. Successful runs write one aggregate JSON report and nothing to
@@ -28,7 +28,7 @@ measurements still enter the existing evaluation workflow below; the
 Run it with explicit versions and acceptance criteria:
 
 ```sh
-python mcs/semantic/semantic_evaluation.py \
+python mcs/semantic/eval/semantic_evaluation.py \
   --input cases.jsonl \
   --manifest manifest.json \
   --criteria criteria.json \
@@ -94,7 +94,7 @@ missing observation is never derived from `facts` or another stage, because
 that would certify a stage nobody observed.
 
 The three lists are produced from a ledger snapshot by
-`mcs/semantic/semantic_lifecycle.py` (CLI:
+`mcs/semantic/eval/semantic_lifecycle.py` (CLI:
 `semantic_blind.py --lifecycle-snapshot`, see the candidate-record steps
 below). For a record naming its `semantic_summary` artifact in
 `artifact_ids.final_id`, each stage is read from its own durable record:
@@ -262,7 +262,7 @@ job_metricsの `usage` は、検証済み応答の `input_tokens` / `output_toke
 
 ### 3方式の盲検配布資料
 
-`python3 mcs/semantic/semantic_blind.py --input comparison.jsonl --output-dir new-packet`
+`python3 mcs/semantic/eval/semantic_blind.py --input comparison.jsonl --output-dir new-packet`
 
 各JSONL行は `case_id`, `account_id`, `project_id`, `split`（dev/calibration/test）, `bundle_fingerprint`, `source_text`, `outputs` を持つ。outputsはbaseline/assisted/auditedの3キーで、それぞれ `{"bundle_fingerprint":"同じ固定入力の指紋","text":"比較対象の出力本文"}` を渡す。
 
@@ -276,7 +276,7 @@ job_metricsの `usage` は、検証済み応答の `input_tokens` / `output_toke
 
 ### snapshotからの明示的生成
 
-`python3 mcs/semantic/semantic_blind.py --input selections.jsonl --snapshot evaluation.db --generate-local-baseline --output-dir new-packet`
+`python3 mcs/semantic/eval/semantic_blind.py --input selections.jsonl --snapshot evaluation.db --generate-local-baseline --output-dir new-packet`
 
 このモードの各入力行はcase_id/account_id/project_id/splitと、正の整数bundle_id/candidate_id/final_id（artifactsのID）を指定する。SQLiteはmode=roで開き、1つのread transactionで選択結果を取得して閉じてから生成する。全ケースの来歴・splitを先に検査し、既存ローカルllm_extractだけでbaselineを生成する。Jevは呼ばない。出力先を先に新規作成するため、既存資料への再実行はモデル呼出し前に拒否する。
 
@@ -290,7 +290,7 @@ snapshotモードの評価票source_textは、対象message IDと、親返信関
 
 評価者はworksheet各行のhuman_labelsだけを、A/B/Cをキーとした空でない評価objectへ変更する。例 `{"A":{"notes":"要点欠落あり"},"B":{"notes":"…"},"C":{"notes":"…"}}`。具体的ラベル項目・基準は評価開始前に固定する。
 
-`python3 mcs/semantic/semantic_blind.py --input completed.jsonl --unblind-key coordinator-key.jsonl --output-dir new-reviewed`
+`python3 mcs/semantic/eval/semantic_blind.py --input completed.jsonl --unblind-key coordinator-key.jsonl --output-dir new-reviewed`
 
 reviewed.jsonlに方式別の記入値を保存する。元評価票のhashをhuman_labels=nullとして再検査し、原文/選択肢変更、review IDの重複/欠落、未記入、方式対応表の不正を拒否する。model/DBには接続しない。この段階は対応の復元だけであり、記入者が人である証明、記入内容の妥当性、semantic_evaluationへの品質ラベル変換、合否判断は行わない。
 
@@ -304,7 +304,7 @@ reviewed.jsonlに方式別の記入値を保存する。元評価票のhashをhu
 
 ### 品質評価JSONLへのラベル結合
 
-`python3 mcs/semantic/semantic_blind.py --input completed.jsonl --unblind-key coordinator-key.jsonl --evaluation-records candidate-records.jsonl --manifest manifest.json --method audited --output-dir new-labelled`
+`python3 mcs/semantic/eval/semantic_blind.py --input completed.jsonl --unblind-key coordinator-key.jsonl --evaluation-records candidate-records.jsonl --manifest manifest.json --method audited --output-dir new-labelled`
 
 `evaluation.jsonl`を品質評価器へ渡せる。入力candidate-recordsは既存評価schemaの未ラベルrecordで、bundle.fingerprintを比較資料と一致させ、candidate.claimsのclaim_id/textを表示choiceと同一順序にする。評価票作成時に各outputのevaluation_candidateへcandidate全体を渡しておく必要がある。facts/loops/statusは評価票のpredictionsにも表示し、usage/latency/versionを含む全candidateのhashを管理者キーに保存する。結合時に全体一致を要求し、補作や差し替えを受理しない。本文だけで作った旧評価票やsnapshot比較票は定性比較用で、定量結合には使用できない。
 
@@ -319,18 +319,18 @@ completedの各human_labels[A/B/C]には自由記述だけでなく評価器のl
 4. 残りのコマンドでラベルを結合し、初期基準v1による結果を作る。他の方式も別の出力先と対応candidate-recordsで評価する。
 
 ```sh
-python3 mcs/semantic/semantic_blind.py --input audited-records-draft.jsonl \
+python3 mcs/semantic/eval/semantic_blind.py --input audited-records-draft.jsonl \
   --lifecycle-snapshot evaluation.db --config sent-config.json --output-dir new-lifecycle
 # --config は通知送信時のconfig.json。無いと部分配送の受領は証明できず delivered を付与しない
 # new-lifecycle/candidate-records.jsonl のcandidateをcomparison.jsonlのevaluation_candidateと
 # --evaluation-recordsの入力に使う
-python3 mcs/semantic/semantic_blind.py --input comparison.jsonl --output-dir new-packet
+python3 mcs/semantic/eval/semantic_blind.py --input comparison.jsonl --output-dir new-packet
 # 人手記入後に以下を実行する。completed.jsonlは自動生成しない。
-python3 mcs/semantic/semantic_blind.py --input completed.jsonl \
+python3 mcs/semantic/eval/semantic_blind.py --input completed.jsonl \
   --unblind-key new-packet/coordinator-key.jsonl \
   --evaluation-records audited-records.jsonl --manifest manifest.json \
   --method audited --output-dir new-labelled
-python3 mcs/semantic/semantic_evaluation.py --input new-labelled/evaluation.jsonl \
+python3 mcs/semantic/eval/semantic_evaluation.py --input new-labelled/evaluation.jsonl \
   --manifest manifest.json --criteria evaluation/g6-criteria-v1.json \
   --output audited-report.json
 ```
@@ -373,7 +373,7 @@ Jevの`Choice`は同じ`state`に複数設問を送れるが、現行fact/claim�
 
 v4がPENDING/NEEDS_REVIEW、原文変更中、Jev未評価、旧参照未移行ならその対象の旧成果を上書きせず、旧版と未完了理由を表示する。cohortを繰り返して旧版の現行選択を減らし、残数・最古滞留・失敗理由を可視化する。「全件v4完了」は未処理旧版や未解決例外が残る間は宣言しない。旧生成payloadを既に上書きした対象で問題が出た場合、存在しない旧ファイルへ黙って戻さず、保存済み原文から許可済みの有限再処理または原文+pendingへ移る。原文の長期保存に必要なバックアップ/復元可能性は別の運用検証対象であり、現行のローカル日次backupだけで端末喪失への耐性を保証しない。
 
-**実装上の保留条件（2026-09-27）**: `semantic_v4.run_cohort` は原文・依存閉包を固定し、ジョブと受付receiptを同一transactionで保存する。件数上限はcohort全期間で共有し、再起動で補充しない。cohortはv3抽出器への受付許可を与えない。現在のJev adapterには送信前のtoken上限制御がないため、cohort由来の解析ジョブはモデル呼出し前に `token_budget_not_enforceable` を記録して停止する。通常の新着解析の経路とは別の保留条件であり、総call/token/retry予算の強制を実装済みとは扱わない。`retire_payloads` も、別のcleanup manifestと復旧検証を受け取る実装がない間は `cleanup_manifest_and_recovery_required` として旧payloadを保持する。変換receiptとv4 PASSだけでは物理削除を許可しない。
+**実装上の保留条件（2026-09-27）**: `semantic_v4_cohort.run_cohort` は原文・依存閉包を固定し、ジョブと受付receiptを同一transactionで保存する。件数上限はcohort全期間で共有し、再起動で補充しない。cohortはv3抽出器への受付許可を与えない。現在のJev adapterには送信前のtoken上限制御がないため、cohort由来の解析ジョブはモデル呼出し前に `token_budget_not_enforceable` を記録して停止する。通常の新着解析の経路とは別の保留条件であり、総call/token/retry予算の強制を実装済みとは扱わない。`retire_payloads` も、別のcleanup manifestと復旧検証を受け取る実装がない間は `cleanup_manifest_and_recovery_required` として旧payloadを保持する。変換receiptとv4 PASSだけでは物理削除を許可しない。
 
 ### 実測で選ぶスロット数とバックログ/リアルタイムの厳密な非重複
 

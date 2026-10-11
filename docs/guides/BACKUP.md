@@ -125,7 +125,8 @@ health は `run_check.HOME/data` の記録、描画 wrapper は `DATA` の記録
 用い、既存ディレクトリを黙って chmod して流用しない。
 
 初回だけ、オーナー本人が非共有の対話端末で実行する。
-`ESCROW_REASON` は非機密の操作理由。鍵値を agent・チャット・画面例・
+`ESCROW_REASON` は非機密の操作理由（2000文字以内）で、承認の記録として
+`key_escrow.json` に保存される。鍵値を agent・チャット・画面例・
 共有ログへ渡さず、端末の画面記録と出力保存先も本人が管理する。
 
 ```bash

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MCS LLM extraction — extract_v2 layer via local llama.cpp (Qwen3.5-9B).
+"""MCS LLM extraction — the extract_llm layer via local llama.cpp (Qwen3.5-9B).
 
 Adds what rule extraction (extract_v1) cannot: dose-less medication names,
 negated symptoms ("食欲低下なし"), request targets by profession, and a
@@ -15,6 +15,12 @@ with a time budget each tick so the backlog drains gradually. A row whose
 current artifact Jev QC flagged re-enters pending once for a feedback
 re-extract (meta.qc_fix settles the flag); vitals are anchored to the
 nearest measurement label in the body at validation time.
+
+Naming: comments here call this engine "the v3 pass" (the generation
+it was built as; see the clinical-plan/v3 prompt key). It lives in
+extract/v4/ as the current generation (docs/specs/semantic-evaluation.md),
+EXTRACT_VERSION is an independent schema counter, and semantic_v4 is a
+separate generation-crossing engine.
 """
 import argparse
 import contextlib
@@ -32,7 +38,7 @@ import time
 import unicodedata
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
-# registers every first-level subdir as an import root
+# registers every module dir (any depth) as an import root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
@@ -46,10 +52,12 @@ import local_llm
 import patient_context
 from patient_context import CATEGORIES, DETAIL_KEYS, context_items
 from ledger import Ledger, LedgerReader
-from mcs_queries import (EXTRACT_FEEDBACK_KIND, current_extract_pred,
+from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, V4_PROJECTION_KIND,
+                         current_extract_pred,
                          current_qc_pred,
                          current_v4_id, json_or_null, qc_source_id)
 from mcs_util import (CONF_PATH, HOME, acquire_run_lock, circuit_failure, circuit_open_s,
+                      circuit_streak,
                       circuit_success, disk_floor_mb, disk_free_mb,
                       json_object, load_config, locate_quote_span,
                       text_chunks)  # noqa: F401 — historical helper re-export
@@ -294,8 +302,6 @@ def _batch_prompt(jobs: list) -> str:
             i=i, posted=posted or "不明", body=body)
     return prompt + "JSON:"
 
-# loopback-only opener: no proxy and no redirect may route message bodies.
-
 # Output-contract schema for response_format=json_schema. _validate
 # remains the authority — the schema's job is to make the output
 # PARSEABLE and structurally shaped before validation runs.
@@ -456,7 +462,7 @@ _REPAIR_CLOSE = """
 
 
 def _repair_prompt(posted_at: str | None, issues: list[str],
-                   prior: dict, hints: dict | None) -> str:
+                   prior: dict) -> str:
     """Feedback prompt for the bounded repair retry — ends with the
     OPEN target fence; the caller appends the body then _PROMPT_TAIL.
     `issues` are the concrete validation failures; `prior` is
@@ -465,7 +471,7 @@ def _repair_prompt(posted_at: str | None, issues: list[str],
     prompt = _REPAIR_HEAD + "\n".join(issues) + _REPAIR_MID
     prompt += _sanitize_ctx(json.dumps(prior, ensure_ascii=False))
     prompt += _REPAIR_CLOSE
-    prompt += _TARGET_HEAD.format(posted=posted_at or "不明")
+    prompt += _target_head(posted_at)
     return prompt
 
 
@@ -480,14 +486,20 @@ _PROBE_RETRY_S = 600
 _NEXT_FMT = {"schema": "object", "object": "plain"}
 
 
+def resolved_model(cfg: dict | None) -> str:
+    """Return the extraction model name for `cfg`; a patched MODEL constant wins."""
+    return MODEL if MODEL != _MODEL_PIN else local_llm.resolve(cfg)[1]
+
+
 def _resolved_llm() -> tuple[str, str]:
     """Resolve the configured server for generation and its health/format probes."""
     pinned = getattr(_CALL_NOTES, "target", None)
     if pinned is not None:
         return pinned
-    endpoint, model = local_llm.resolve(load_config())
+    cfg = load_config()
+    endpoint = local_llm.resolve(cfg)[0]
     return (ENDPOINT if ENDPOINT != _ENDPOINT_PIN else endpoint,
-            MODEL if MODEL != _MODEL_PIN else model)
+            resolved_model(cfg))
 
 
 def _probe_format(deadline: float | None = None) -> str | None:
@@ -510,18 +522,13 @@ def _probe_format(deadline: float | None = None) -> str | None:
         _FMT_MODE = local_llm.admitted_probe_format(
             "mcs.extract", endpoint, model, _SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
-            slot=_choose_slot(deadline=deadline),
+            slot=_choose_slot(),
             verify=lambda text: json_object(text) is not None)
     else:
-        slot = _choose_slot(deadline=deadline)
-        if slot is None:
-            # no idle slot in time — keep the current mode (None when
-            # unprobed: _llm_call defers) and re-probe on the next call
-            return _FMT_MODE
         _FMT_MODE = local_llm.probe_format(
             endpoint, model, _SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
-            slot=slot,
+            slot=_choose_slot(),
             verify=lambda text: json_object(text) is not None)
     _FMT_TS = time.monotonic()
     return _FMT_MODE
@@ -805,7 +812,7 @@ def _vitals_guard(body: str | None, vit: dict,
 # Free-text fields (summary/points): the model sometimes parrots JSON
 # fragments or slips into another language's output — structural
 # characters never belong in a Japanese one-liner.
-_RX_BAD_TEXT = re.compile(r'[{}\[\]"\n\r\t]')
+_BAD_TEXT = re.compile(r'[{}\[\]"\n\r\t]')
 
 
 def _cap(v, maxlen: int):
@@ -820,7 +827,7 @@ def _clean_text(v, maxlen: int) -> str | None:
     if not isinstance(v, str):
         return None
     s = v.strip()
-    if not s or _RX_BAD_TEXT.search(s):
+    if not s or _BAD_TEXT.search(s):
         return None
     return s[:maxlen]
 
@@ -1249,7 +1256,7 @@ class _Validator:
                 self.drop_item("requests")
                 continue
             # Ungrounded free text reaches notifications — bound its
-            # length (the prompt asks for 15 chars; a runaway or
+            # length (the prompt asks for 30 chars; a runaway or
             # injected string must not ride through unbounded).
             item = {"to": _cap(r.get("to"), 30),
                     "action": _cap(r.get("action"), 60)}
@@ -1492,20 +1499,27 @@ def _llm_call(prompt: str, deadline: float | None = None,
             if response is not None and response.get("admission"):
                 return _DEFERRED
         else:
-            slot = _choose_slot(deadline=deadline)
-            if slot is None:
-                # both slots stayed busy — pinning one aborts
-                # llama-server; defer without burning an attempt
-                return _DEFERRED
             response = local_llm.chat(
                 prompt, endpoint=endpoint, model=model,
                 max_tokens=max_tokens, timeout=TIMEOUT, deadline=deadline,
                 response_format=rf,
-                extra_payload={"id_slot": slot},
+                extra_payload={"id_slot": _choose_slot()},
                 request_fn=_opener_request, error_out=err_out)
+        # Endpoint health of this call for run_pending's breaker: refused /
+        # not sent and 503 are outages, a pre-deadline transport failure
+        # (timeout, reset) is a slow or stuck server; budget expiry and
+        # answered calls say nothing about the endpoint.
+        expired = deadline is not None and time.monotonic() >= deadline
+        _CALL_NOTES.transport = (
+            "unreachable" if response is None
+            and err_out.get("kind") == "unreachable"
+            else "unavailable" if response is not None
+            and response.get("status") == 503
+            else "transport" if response is None and not expired
+            and err_out.get("kind") == "transport"
+            else None)
         if response is None and (err_out.get("kind") == "unreachable"
-                                 or (deadline is not None
-                                     and time.monotonic() >= deadline)) \
+                                 or expired) \
                 or response is not None and response.get("status") == 503:
             # Connection refused or 503 (still loading the model) — the
             # server is down/starting, so the call did no work and
@@ -1809,8 +1823,8 @@ def llm_extract(body: str, *, context: str | None = None,
     QC findings on the current extraction — unsupported items to drop
     or re-anchor, applied as a one-shot repair steer.
 
-    Bodies longer than _CHUNK_SIZE are covered in full via text_chunks;
-    each chunk's output validates against the WHOLE body so evidence
+    Long bodies are covered in full via plan_chunks; each piece's output
+    validates against the piece first and then the WHOLE body so evidence
     stays anchored to the real source, then merges deterministically.
     Actual output length stops halve the source-bound layout and checkpoint it;
     completed smaller chunks remain reusable across a later interruption.
@@ -1923,7 +1937,7 @@ def llm_extract(body: str, *, context: str | None = None,
                            or time.monotonic() < deadline):
                 repair_start = len(notes)
                 rd = _llm_call(
-                    reference + _repair_prompt(posted_at, issues, d, piece_hints)
+                    reference + _repair_prompt(posted_at, issues, d)
                     + piece + _PROMPT_TAIL,
                     deadline=deadline, need_s=_MIN_REPAIR_S)
                 if meta_out is not None:
@@ -2057,9 +2071,7 @@ def _karte_block(ledger, project_id: int, posted_at: str | None) -> str:
     if any(not isinstance(value, str) for value in values):
         return ""
     try:
-        # Python 3.10 accepts an explicit UTC offset, but not a Z suffix.
-        upd, post = (datetime.fromisoformat(value[:-1] + "+00:00"
-                     if value.endswith("Z") else value) for value in values)
+        upd, post = (datetime.fromisoformat(value) for value in values)
     except (TypeError, ValueError):
         return ""
     # Keep fractional seconds and compare explicit instants across offsets.
@@ -2131,7 +2143,7 @@ def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0):
                                    (r["message_id"], r["content_hash"])).fetchone()
         if source is not None:
             r = {**dict(source), **dict(r)}
-    actual_model = r["_target"][1] if "_target" in r.keys() else MODEL
+    actual_model = _actual_model(r)
     can_bind = all(key in r.keys() for key in ("parent_id", "posted_at", "posted_at_ts"))
     context = (r["_context"] if "_context" in r.keys() else _thread_context(ledger, r)) if can_bind else None
     meta.update(actual_model=actual_model, plan_version=PLAN_VERSION,
@@ -2139,7 +2151,7 @@ def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0):
     if auto_retry:
         meta["auto_retry"] = auto_retry
     ledger.artifact_add_tx(
-        KIND, json.dumps({"_model": MODEL, "_error": True},
+        KIND, json.dumps({"_model": actual_model, "_error": True},
                          ensure_ascii=False),
         project_id=r["project_id"], message_id=r["message_id"],
         model=actual_model, meta=meta)
@@ -2258,8 +2270,15 @@ def _write_lock(enabled: bool):
     The tick caller already holds the lock for the whole run, so it
     passes False. The standalone --all backlog drainer passes True so it
     never holds the lock longer than a single write — holding it across
-    the whole backlog would starve the 5-min tick
-    for days."""
+    the whole backlog would starve the 10-min tick for days.
+
+    Only result writes go through this lock: ``_commit``, ``_fail`` and
+    the QC/thin/human re-mints. The drainer's other writes are lockless
+    on purpose — claim leases (a cross-process fence of their own),
+    rule-only ``extract_v1``/prefilter markers and chunk checkpoints.
+    Each is fenced by content hash and the v4 predicate inside its own
+    SQLite transaction, and taking the lock per row (up to 60 s each)
+    while leases are held would stall the drainer for no proven gain."""
     fd = None
     if enabled:
         for _ in range(60):
@@ -2314,7 +2333,7 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
         if source is None:
             return False                # fence before any missing-row context read
         r = {**dict(source), **dict(r)}
-    actual_model = r["_target"][1] if "_target" in r.keys() else MODEL
+    actual_model = _actual_model(r)
     bound_context = r["_context"] if "_context" in r.keys() else _thread_context(ledger, r)
     meta.update(actual_model=actual_model, plan_version=PLAN_VERSION,
                 context_binding=_chunk_context(r, bound_context))
@@ -2353,8 +2372,8 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
 
 def _rerender_cards(ledger, project_id, message_id) -> None:
     """Queue the current extraction or progress on its existing source-bound card."""
-    from extraction_refresh import refresh_extraction_cards
-    refresh_extraction_cards(ledger, project_id, message_id, cfg=load_config())
+    extraction_refresh.refresh_extraction_cards(ledger, project_id, message_id,
+                                                cfg=load_config())
 
 
 def _thin_pending_sql() -> str:
@@ -2421,23 +2440,41 @@ def _human_flagged_sql(val: str = "h.artifact_id") -> str:
         ORDER BY h.artifact_id DESC LIMIT 1"""
 
 
+def _has_kind(kind: str, alias: str, project: bool = False) -> str:
+    """Index-only (kind, message_id) existence probe — no JSON parsed."""
+    scope = f" AND {alias}.project_id=m.project_id" if project else ""
+    return (f"EXISTS (SELECT 1 FROM artifacts {alias} WHERE {alias}.kind='{kind}'"
+            f" AND {alias}.message_id=m.message_id{scope})")
+
+
 def pending_pred() -> str:
-    """Shared body-current extraction and quality-retry eligibility."""
-    return f"""m.body_text IS NOT NULL AND m.body_text != ''
-        AND (m.body_state IS NULL OR m.body_state='full')
-        AND {current_v4_id()} IS NULL
-        AND ((NOT EXISTS (SELECT 1 FROM artifacts f
-                        WHERE f.kind='{KIND}' AND f.message_id=m.message_id
-                          {current_extract_pred('f')}
-                          AND json_extract({json_or_null('f.meta')},'$.extract_version')={EXTRACT_VERSION}
-                          AND json_extract({json_or_null('f.meta')},'$.qc_fix') IS NOT NULL)
-        AND (NOT EXISTS (SELECT 1 FROM artifacts a
+    """Shared body-current extraction and quality-retry eligibility.
+
+    Evaluated per stored message, so the JSON-heavy subqueries sit behind
+    exact, index-only guards (M5): each guarded subquery itself requires
+    an artifact of the probed kind for the message (or, for thin, the
+    same body-length bound), so a missing guard row already decides it.
+    The qc_fix test runs after the settle test, which is false for most
+    of a mature corpus. Boolean results are identical to the unguarded
+    composition (tests/extract/test_stab_pending_pred.py)."""
+    return f"""{ELIGIBLE_MESSAGE}
+        AND (NOT {_has_kind(V4_PROJECTION_KIND, 'v0', project=True)}
+             OR {current_v4_id()} IS NULL)
+        AND (((NOT EXISTS (SELECT 1 FROM artifacts a
                         WHERE a.kind='{KIND}' AND a.message_id=m.message_id
                           {current_extract_pred()}
                           AND json_extract({json_or_null('a.meta')},'$.extract_version')={EXTRACT_VERSION})
-             OR EXISTS ({_qc_flagged_sql(val="1")})
-             OR EXISTS ({_thin_pending_sql()})))
-             OR EXISTS ({_human_flagged_sql(val="1")}))"""
+             OR ({_has_kind('extract_qc', 'q0')}
+                 AND EXISTS ({_qc_flagged_sql(val="1")}))
+             OR (length(m.body_text) >= {_THIN_BODY_MIN}
+                 AND EXISTS ({_thin_pending_sql()})))
+        AND NOT EXISTS (SELECT 1 FROM artifacts f
+                        WHERE f.kind='{KIND}' AND f.message_id=m.message_id
+                          {current_extract_pred('f')}
+                          AND json_extract({json_or_null('f.meta')},'$.extract_version')={EXTRACT_VERSION}
+                          AND json_extract({json_or_null('f.meta')},'$.qc_fix') IS NOT NULL))
+             OR ({_has_kind(EXTRACT_FEEDBACK_KIND, 'h0')}
+                 AND EXISTS ({_human_flagged_sql(val="1")})))"""
 
 
 # Exactly the verdicts _qc_feedback turns into notes — a looser SQL
@@ -2583,7 +2620,7 @@ def _elastic_hold(gate: dict, now: float) -> bool:
     return now - gate.get("rt_busy_at", float("-inf")) < _ELASTIC_QUIET_S
 
 
-def _choose_slot(deadline: float | None = None) -> int:
+def _choose_slot() -> int:
     """Pin each process to its configured lane; never borrow realtime."""
     if _SLOT_OVERRIDE in local_llm.BACKGROUND_SLOTS \
             and type(_SLOT_OVERRIDE) is int:
@@ -2598,7 +2635,7 @@ def pinned_slot_busy(deadline: float | None = None) -> bool:
     if local_llm.admission_enabled():
         return False
     busy = _slots_busy(deadline)
-    return bool(busy) and busy.get(_choose_slot(deadline)) is True
+    return bool(busy) and busy.get(_choose_slot()) is True
 
 
 _EXTRACT_LEASE_S = 900   # crash → the claim self-expires; a stolen
@@ -2675,11 +2712,16 @@ def _release(ledger, r, lease: float | None):
     ledger.db.commit()
 
 
+def _actual_model(r) -> str:
+    """Return the model that served this row: its pinned target, else the default."""
+    return r["_target"][1] if "_target" in r.keys() else MODEL
+
+
 def _chunk_context(r, context: str | None, *, checkpoint: bool = False) -> str:
     """Bind completed results to their source and checkpoints to the local-hint contract."""
     return hashlib.sha256(json.dumps(
         [r["posted_at"], context,
-         r["_target"][1] if "_target" in r.keys() else MODEL,
+         _actual_model(r),
          _PROMPT_HEAD, _SCHEMA, "clinical-plan/v4" if checkpoint else "clinical-plan/v3", PLAN_VERSION],
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
@@ -2792,7 +2834,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
             meta = {"hash": r["content_hash"], "ver": EXTRACT_VERSION, "chunk": key,
                     "context": _chunk_context(r, context, checkpoint=True), "chunk_size": chunk_size,
                     "piece_sha256": hashlib.sha256(piece.encode()).hexdigest(),
-                    "actual_model": r["_target"][1] if "_target" in r.keys() else MODEL,
+                    "actual_model": _actual_model(r),
                     "plan_version": PLAN_VERSION}
             if split_size is not None:
                 meta["split_size"] = split_size
@@ -2950,32 +2992,77 @@ def _ensure_v1(ledger, r, hints) -> None:
                 (r["message_id"], cur.lastrowid))
 
 
-def run_pending(ledger, limit: int = 20, budget_s: float = 180,
-                admitted_ids: set | None = None,
-                per_write_lock: bool = False, workers: int = 1,
-                shard: tuple[int, int] | None = None,
-                oldest_first: bool = False,
-                batch_k: int = 0,
-                vital_policy: dict | None = None) -> dict:
-    """Extract up to `limit` pending/stale messages within budget_s.
-    Returns {'done': n, 'left': n, 'failed': n}.
+# Per-process pending estimate for full selections, keyed by DB file.
+_LEFT_ESTIMATE: dict = {}
+_LEFT_ESTIMATE_S = 600.0
 
-    `workers` fans out the LLM calls across threads — llama.cpp assigns
-    each unpinned request to a free slot, so workers should not exceed
-    the server's slot count. All DB access stays on the calling thread
-    (a sqlite3 connection is not thread-safe): thread contexts are
-    fetched serially up front and all writes land in the serial commit
-    loop as each message/chunk completes.
 
-    `batch_k` groups context-free single-chunk rows K-to-a-call — the
-    fixed per-call cost (queue wait, spec eval, decode ramp) amortizes
-    across the backlog. Rows with thread context, saved chunk
-    checkpoints, or multi-chunk bodies always run single; items the
-    batch omits or fails per-item validation get an in-run single
-    retry, so a bad group never buries a good row. Off by default —
-    production callers (drainer CLI, the tick's derive stage) pass
-    _BATCH_K, itself 0 since batching measured net negative; --batch K
-    remains for explicit use."""
+def _left_estimate_key(ledger) -> str:
+    try:
+        return ledger.db.execute("PRAGMA database_list").fetchone()[2] or ""
+    except Exception:
+        return ""
+
+
+# Never-extracted messages (no extract_llm row of any version or body)
+# — new arrivals. Index-only on (kind, message_id).
+_FRESH_SQL = ("NOT EXISTS (SELECT 1 FROM artifacts x WHERE x.kind='" + KIND
+              + "' AND x.message_id=m.message_id)")
+
+
+# Current-version, same-body error rows of one message (the retry state).
+_ERROR_ROWS_SQL = """FROM artifacts e WHERE e.message_id=m.message_id AND e.kind=?
+        AND CASE WHEN json_valid(e.meta)
+                 THEN json_extract(e.meta,'$.error')=1
+                  AND COALESCE(json_extract(e.meta,'$.extract_version'),0)=?
+                  AND json_extract(e.meta,'$.hash')=m.content_hash
+                 ELSE 0 END"""
+
+
+def _selection_sql(order: str, adm_sql: str, fresh: bool | None = None) -> str:
+    """run_pending's due-row selection.
+
+    Retry state is read through correlated subqueries instead of a
+    LEFT JOIN + GROUP BY over every eligible message, so rows stream in
+    posted_at order and the LIMIT can stop the walk once an index on
+    messages(posted_at_ts) exists; the cheap shard/claim tests precede
+    the per-message JSON work. The row set equals the former grouped
+    query (attempts: MAX(COALESCE(attempts,0)) or 0 without error rows;
+    due: COALESCE(MAX(next_try),0) <= now); message_id breaks posted_at
+    ties, which were unordered before (M5). ``fresh`` True/False keeps
+    only never-extracted / previously-extracted messages (M12)."""
+    fresh_sql = ("" if fresh is None else
+                 f" AND {_FRESH_SQL}" if fresh else f" AND NOT {_FRESH_SQL}")
+    return f"""
+      SELECT m.message_id, m.project_id, m.body_text, m.content_hash,
+             m.parent_id, m.posted_at, m.posted_at_ts,
+             ({_qc_flagged_sql()}) AS qc_src,
+             ({_thin_pending_sql()}) AS thin_src,
+             ({_human_flagged_sql()}) AS human_src,
+             COALESCE((SELECT MAX(COALESCE(json_extract(e.meta,'$.attempts'),0))
+                       {_ERROR_ROWS_SQL}), 0) AS attempts
+      FROM messages m
+      WHERE {ELIGIBLE_MESSAGE}{adm_sql}{fresh_sql}
+        AND (? IS NULL OR m.message_id % ? = ?)
+        AND NOT EXISTS (SELECT 1 FROM fetch_jobs claim
+                        WHERE claim.kind='extract_claim'
+                          AND claim.project_id=m.project_id
+                          AND claim.message_id=m.message_id
+                          AND claim.next_try > ?)
+        AND NOT EXISTS (SELECT 1 FROM artifacts bad
+                        WHERE bad.kind=? AND bad.message_id=m.message_id
+                          AND NOT json_valid(bad.meta))
+        AND {pending_pred()}
+        AND attempts < 5
+        AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try'))
+                      {_ERROR_ROWS_SQL}), 0) <= ?
+      ORDER BY m.posted_at_ts {order}, m.message_id {order}
+      LIMIT ?
+    """
+
+
+def _validate_run_args(limit, budget_s) -> None:
+    """Reject a non-positive limit or a non-finite budget."""
     if type(limit) is not int or limit < 1:
         raise ValueError("extract_limit_invalid")
     try:
@@ -2984,9 +3071,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         valid_budget = False
     if not valid_budget:
         raise ValueError("extract_budget_invalid")
-    deadline = time.monotonic() + budget_s
-    lock = _write_lock
-    # Any artifact for an older body is stale, including retry state.
+
+
+def _gc_stale_artifacts(ledger, lock, per_write_lock: bool) -> None:
+    """Drop stale-body artifacts and leaked claims at most every _STALE_GC_S."""
     global _stale_gc_at
     with lock(per_write_lock) as held:
         if held and time.time() - _stale_gc_at >= _STALE_GC_S:
@@ -3007,6 +3095,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 " AND next_try < ?", (time.time() - 86400,))
             ledger.db.commit()
             _stale_gc_at = time.time()
+
+
+def _select_pending(ledger, limit: int, admitted_ids: set | None,
+                    shard: tuple[int, int] | None,
+                    oldest_first: bool) -> tuple[list, int | None]:
+    """Select the claimable pending rows for one run_pending pass ->
+    (rows, how many of them are new arrivals; None for oldest_first)."""
     # pending = no current-version artifact, plus retriable CURRENT-
     # version error artifacts whose backoff expired (attempts < 5,
     # next_try <= now). Error rows of older schema versions neither
@@ -3041,61 +3136,38 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # time.time(), so it is compared against the same Python clock —
     # never SQLite's unixepoch(), which can disagree with it.
     now = time.time()
-    rows = ledger.db.execute(f"""
-      SELECT m.message_id, m.project_id, m.body_text, m.content_hash,
-             m.parent_id, m.posted_at, m.posted_at_ts,
-             ({_qc_flagged_sql()}) AS qc_src,
-             ({_thin_pending_sql()}) AS thin_src,
-             ({_human_flagged_sql()}) AS human_src,
-             MAX(COALESCE(json_extract(e.meta,'$.attempts'),0)) AS attempts
-      FROM messages m
-      LEFT JOIN artifacts e ON e.message_id=m.message_id AND e.kind=?
-        AND CASE WHEN json_valid(e.meta)
-                 THEN json_extract(e.meta,'$.error')=1
-                  AND COALESCE(json_extract(e.meta,'$.extract_version'),0)
-                      =?
-                  AND json_extract(e.meta,'$.hash')=m.content_hash
-                 ELSE 0 END
-      WHERE m.body_text IS NOT NULL AND m.body_text != ''
-        AND (m.body_state IS NULL OR m.body_state='full'){adm_sql}
-        AND NOT EXISTS (SELECT 1 FROM fetch_jobs claim
-                        WHERE claim.kind='extract_claim'
-                          AND claim.project_id=m.project_id
-                          AND claim.message_id=m.message_id
-                          AND claim.next_try > ?)
-        AND NOT EXISTS (SELECT 1 FROM artifacts bad
-                        WHERE bad.kind=? AND bad.message_id=m.message_id
-                          AND NOT json_valid(bad.meta))
-        AND {pending_pred()}
-        AND (? IS NULL OR m.message_id % ? = ?)
-      GROUP BY m.message_id
-      HAVING attempts < 5
-         AND COALESCE(MAX(json_extract(e.meta,'$.next_try')),0)
-             <= ?
-      ORDER BY m.posted_at_ts {order}
-      LIMIT ?
-    """, (KIND, EXTRACT_VERSION, *adm_params,
-          now,
-          KIND,
-          shard[1] if shard else None,
-          shard[1] if shard else 1,
-          shard[0] if shard else 0,
-          now,
-          limit or 20)).fetchall()
-    done = failed = deferred = lock_lost = 0
-    done_pids = set()
-    endpoint_down = False
-    # finished results whose per-write lock wait timed out (the tick
-    # holds the run lock for minutes) — written before returning
-    pending_writes: list = []
-    # thread contexts + any durable chunk checkpoints are loaded on the
-    # calling thread — worker threads never touch the sqlite handle
+    def _select(fresh, n):
+        return ledger.db.execute(_selection_sql(order, adm_sql, fresh), (
+            KIND, EXTRACT_VERSION,
+            *adm_params,
+            shard[1] if shard else None,
+            shard[1] if shard else 1,
+            shard[0] if shard else 0,
+            now,
+            KIND,
+            KIND, EXTRACT_VERSION,
+            now,
+            n)).fetchall()
+
+    if oldest_first:
+        rows = _select(None, limit)
+        fresh_selected = None
+    else:
+        # New arrivals first (M12): never-extracted messages outrank
+        # re-extraction (a version bump re-pends the whole corpus, an
+        # error retry, a QC/thin/report re-pend), each newest first. The
+        # two disjoint passes select from exactly the former row set.
+        rows = _select(True, limit)
+        fresh_selected = len(rows)
+        if len(rows) < limit:
+            rows += _select(False, limit - len(rows))
+    return rows, fresh_selected
+
+
+def _prepare_jobs(ledger, rows, target, prefilter: bool) -> tuple[list, int]:
+    """Load contexts/checkpoints on the calling thread; settle prefiltered rows."""
     jobs = []
-    target = _resolved_llm()
     skipped = 0
-    # Manifest-declared conversions (admitted_ids) were explicitly
-    # requested — the prefilter never overrides them.
-    prefilter = _prefilter_enabled() and admitted_ids is None
     for r in rows:
         r = dict(r)
         r["_target"] = target
@@ -3117,6 +3189,176 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         r["_chunk_size"] = _saved_chunk_size(ledger, r, context)
         r["_splits"], saved = _saved_chunk_state(ledger, r, context, chunk_size=r["_chunk_size"])
         jobs.append((r, context, saved, hints, qc))
+    return jobs, skipped
+
+
+def _plan_units(claimed: list, batch_k: int) -> list:
+    """Group claimed rows into ("single", tup) and ("batch", [tup...]) units."""
+    units: list = []
+    group: list = []
+    for tup in claimed:
+        _index, r, ctx, saved, _h, qc, _l = tup
+        # QC-flagged/thin-retry rows take the single lane — their
+        # feedback/repair prompts differ from the shared batch
+        # envelope.
+        if batch_k >= 2 and qc is None and not r["thin_src"] \
+                and ctx is None and not saved \
+                and r["_chunk_size"] == _CHUNK_SIZE \
+                and len(plan_chunks(r["body_text"], _CHUNK_SIZE)) <= 1:
+            group.append(tup)
+            if len(group) >= batch_k:
+                units.append(("batch", group))
+                group = []
+        else:
+            if group:
+                units.append(("batch", group))
+                group = []
+            units.append(("single", tup))
+    if group:
+        units.append(("batch", group))
+    return units
+
+
+def _backlog_report(ledger, selected: int, limit: int,
+                    settled: int) -> tuple:
+    """Return (left, oldest ts, newest ts, estimate) — left is None when
+    the selection was full; estimate is the per-process pending count."""
+    left = age_min = age_max = None
+    estimate_key = _left_estimate_key(ledger)
+    estimate = _LEFT_ESTIMATE.get(estimate_key)
+    if selected < (limit or 20) or estimate is None \
+            or time.monotonic() - estimate["at"] >= _LEFT_ESTIMATE_S:
+        # A short selection means the backlog is nearly drained, so the
+        # full pending scan is cheap enough to report. A full selection
+        # (the resident --all --semantic lane runs limit=1 per job)
+        # reports left=None = unknown instead of an O(backlog) scan per
+        # job, but refreshes a per-process estimate at most every
+        # _LEFT_ESTIMATE_S so a large backlog (a version bump re-pends
+        # the corpus) is still visible in the log (M12).
+        count, age_min, age_max = ledger.db.execute(
+            "SELECT COUNT(*), MIN(m.posted_at_ts), MAX(m.posted_at_ts) "
+            f"FROM messages m WHERE {pending_pred()}").fetchone()
+        estimate = _LEFT_ESTIMATE[estimate_key] = {
+            "at": time.monotonic(), "left": count, "done": 0}
+        if selected < (limit or 20):
+            left = count
+    else:
+        estimate["done"] += settled
+    return left, age_min, age_max, estimate
+
+
+def _run_batch_call(tups, target, deadline: float,
+                    vital_policy: dict | None) -> tuple:
+    """One shared call for context-free single-chunk rows ->
+    (status, {job_index: validated}, call_meta). status "ok" may
+    still omit indices (model skipped a target); "failed" means the
+    envelope itself was unusable; "deferred" means the budget ended
+    before/during the call."""
+    notes = _note_list()
+    notes.clear()   # batch-only runs never enter llm_extract's
+                    # clear — unbounded in a resident worker
+    start = len(notes)
+    with _pin_target(target):
+        d = _llm_call(
+            _batch_prompt([(r["body_text"], r["posted_at"], hints)
+                           for _, r, _c, _s, hints, _q, _l in tups]),
+            deadline=deadline, schema=_SCHEMA_BATCH,
+            max_tokens=_BATCH_MAX_TOKENS,
+            need_s=_batch_need_s(len(tups)))
+    meta = _integrity_summary(notes[start:])
+    meta["batch"] = len(tups)
+    if d is _DEFERRED:
+        return "deferred", {}, meta
+    if not isinstance(d, dict) \
+            or not isinstance(d.get("items"), list):
+        return "failed", {}, meta
+    out = {}
+    seen = set()
+    for item in d["items"]:
+        if not isinstance(item, dict):
+            continue
+        i = item.get("i")
+        # index must route to exactly one claimed row — an
+        # unverifiable or duplicate item is dropped, never guessed
+        if type(i) is not int or not (0 <= i < len(tups)):
+            continue
+        if i in seen:
+            # Conflicting candidates have no authoritative first winner.
+            # Leave this row to the existing single-message retry path.
+            out.pop(tups[i][0], None)
+            continue
+        seen.add(i)
+        index, r = tups[i][0], tups[i][1]
+        drops: dict = {}
+        v = _validate({k: val for k, val in item.items() if k != "i"},
+                      r["body_text"], drops)
+        # an item that validates only with drops joins the residue:
+        # the single lane's repair pass gets one feedback re-ask at
+        # recovering the lost evidence/items — batch items must not
+        # settle for the degraded output a single would have repaired
+        if v is not None and not drops:
+            v.pop("reply", None)   # batch rows are context-free
+            if vital_policy:
+                _apply_vital_policy(v, r["body_text"], vital_policy)
+            out[index] = v
+    return "ok", out, meta
+
+
+def run_pending(ledger, limit: int = 20, budget_s: float = 180,
+                admitted_ids: set | None = None,
+                per_write_lock: bool = False, workers: int = 1,
+                shard: tuple[int, int] | None = None,
+                oldest_first: bool = False,
+                batch_k: int = 0,
+                vital_policy: dict | None = None) -> dict:
+    """Extract up to `limit` pending/stale messages within budget_s.
+    Returns {'done': n, 'left': n, 'failed': n}.
+
+    `workers` fans out the LLM calls across threads — llama.cpp assigns
+    each unpinned request to a free slot, so workers should not exceed
+    the server's slot count. All DB access stays on the calling thread
+    (a sqlite3 connection is not thread-safe): thread contexts are
+    fetched serially up front and all writes land in the serial commit
+    loop as each message/chunk completes.
+
+    `batch_k` groups context-free single-chunk rows K-to-a-call — the
+    fixed per-call cost (queue wait, spec eval, decode ramp) amortizes
+    across the backlog. Rows with thread context, saved chunk
+    checkpoints, or multi-chunk bodies always run single; items the
+    batch omits or fails per-item validation get an in-run single
+    retry, so a bad group never buries a good row. Off by default —
+    production callers (drainer CLI, the tick's derive stage) pass
+    _BATCH_K, itself 0 since batching measured net negative; --batch K
+    remains for explicit use."""
+    _validate_run_args(limit, budget_s)
+    deadline = time.monotonic() + budget_s
+    lock = _write_lock
+    # Any artifact for an older body is stale, including retry state.
+    _gc_stale_artifacts(ledger, lock, per_write_lock)
+    rows, fresh_selected = _select_pending(ledger, limit, admitted_ids,
+                                           shard, oldest_first)
+    done = failed = deferred = lock_lost = 0
+    done_pids = set()
+    endpoint_down = False
+    breaker_fed = False
+    slow_deferred = 0
+
+    def _feed_breaker():
+        """One breaker observation per run, not one per queued row."""
+        nonlocal breaker_fed
+        if not breaker_fed:
+            breaker_fed = True
+            circuit_failure(ledger)
+    # finished results whose per-write lock wait timed out (the tick
+    # holds the run lock for minutes) — written before returning
+    pending_writes: list = []
+    # thread contexts + any durable chunk checkpoints are loaded on the
+    # calling thread — worker threads never touch the sqlite handle
+    target = _resolved_llm()
+    # Manifest-declared conversions (admitted_ids) were explicitly
+    # requested — the prefilter never overrides them.
+    prefilter = _prefilter_enabled() and admitted_ids is None
+    jobs, skipped = _prepare_jobs(ledger, rows, target, prefilter)
     metas = [None] * len(jobs)
     checkpoints = queue.SimpleQueue()
     parallel = workers > 1 and len(jobs) > 1
@@ -3144,8 +3386,18 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         meta = {}
         metas[index] = meta
         chunks_out: dict = {}
+        # last call's endpoint health, read by _handle on the calling
+        # thread after this future resolves (thread-local per worker)
+        _CALL_NOTES.transport = r["_transport"] = None
         if time.monotonic() > deadline:
             return _DEFERRED, chunks_out
+        try:
+            return _extract_call(r, ctx, saved, hints, qc, index,
+                                 meta, chunks_out), chunks_out
+        finally:
+            r["_transport"] = getattr(_CALL_NOTES, "transport", None)
+
+    def _extract_call(r, ctx, saved, hints, qc, index, meta, chunks_out):
         with _pin_target(r["_target"]):
             return llm_extract(r["body_text"], context=ctx, hints=hints,
                            deadline=deadline, meta_out=meta,
@@ -3161,7 +3413,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                            feedback=qc["notes"] if qc else None,
                            on_chunk=(lambda i, v: checkpoints.put((index, i, v)))
                            if parallel else
-                           (lambda i, v: _checkpoint(index, i, v))), chunks_out
+                           (lambda i, v: _checkpoint(index, i, v)))
 
     def _commit(r, d, ctx, integrity, qc):
         """Persist one validated result — the caller holds the lock."""
@@ -3196,14 +3448,22 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         done_pids.add(r["project_id"])
 
     def _handle(r, ctx, d, integrity, lease, chunks_out, qc=None):
-        nonlocal done, failed, deferred, endpoint_down, lock_lost
+        nonlocal done, failed, deferred, endpoint_down, lock_lost, slow_deferred
         keep_lease = False
         try:
             if not _owns_current_source(ledger, r, lease):
                 deferred += 1
                 return
+            transport = r.get("_transport")
             if d is _DEFERRED:
                 deferred += 1
+                if transport in ("unreachable", "unavailable"):
+                    # refused / 503: nothing ran, so no attempt is
+                    # charged, but the outage must still reach the
+                    # breaker (and the health marker the stall alert
+                    # reads) — once per run, like the probe path below
+                    _feed_breaker()
+                    endpoint_down = True
                 return  # budget ran out mid-message — stays pending
             if d is None:
                 failed += 1
@@ -3212,10 +3472,22 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     # on error rows. The failure feeds the breaker so
                     # a sustained outage closes the lane across drains —
                     # counted once per run, not once per queued row.
-                    if not endpoint_down:
-                        circuit_failure(ledger)
+                    _feed_breaker()
                     endpoint_down = True
                     return
+                if transport == "transport":
+                    # /v1/models answers but the call timed out or was
+                    # reset: a slow/stuck server, not this message's
+                    # fault. Consecutive runs feed the breaker; once it
+                    # has tripped (streak > 0) attempts are no longer
+                    # charged, so an outage cannot walk every queued row
+                    # to the permanent-failure ceiling. An answered call
+                    # resets the streak, so a message that times out on
+                    # a healthy server still reaches the ceiling.
+                    _feed_breaker()
+                    if circuit_streak(ledger) > 0:
+                        slow_deferred += 1
+                        return
                 if qc is not None:
                     # A QC-flagged row that failed its feedback re-
                     # extract keeps the audited artifact — re-mint it
@@ -3285,7 +3557,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     prior = None
                 if not _improves(d, prior):
                     d = prior
-            d["_model"] = MODEL
+            d["_model"] = _actual_model(r)
             with lock(per_write_lock) as held:
                 if held:
                     _commit(r, d, ctx, integrity, qc)
@@ -3332,59 +3604,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         raise
 
     def _exec_batch(tups):
-        """One shared call for context-free single-chunk rows ->
-        (status, {job_index: validated}, call_meta). status "ok" may
-        still omit indices (model skipped a target); "failed" means the
-        envelope itself was unusable; "deferred" means the budget ended
-        before/during the call."""
-        notes = _note_list()
-        notes.clear()   # batch-only runs never enter llm_extract's
-                        # clear — unbounded in a resident worker
-        start = len(notes)
-        with _pin_target(target):
-            d = _llm_call(
-                _batch_prompt([(r["body_text"], r["posted_at"], hints)
-                               for _, r, _c, _s, hints, _q, _l in tups]),
-                deadline=deadline, schema=_SCHEMA_BATCH,
-                max_tokens=_BATCH_MAX_TOKENS,
-                need_s=_batch_need_s(len(tups)))
-        meta = _integrity_summary(notes[start:])
-        meta["batch"] = len(tups)
-        if d is _DEFERRED:
-            return "deferred", {}, meta
-        if not isinstance(d, dict) \
-                or not isinstance(d.get("items"), list):
-            return "failed", {}, meta
-        out = {}
-        seen = set()
-        for item in d["items"]:
-            if not isinstance(item, dict):
-                continue
-            i = item.get("i")
-            # index must route to exactly one claimed row — an
-            # unverifiable or duplicate item is dropped, never guessed
-            if type(i) is not int or not (0 <= i < len(tups)):
-                continue
-            if i in seen:
-                # Conflicting candidates have no authoritative first winner.
-                # Leave this row to the existing single-message retry path.
-                out.pop(tups[i][0], None)
-                continue
-            seen.add(i)
-            index, r = tups[i][0], tups[i][1]
-            drops: dict = {}
-            v = _validate({k: val for k, val in item.items() if k != "i"},
-                          r["body_text"], drops)
-            # an item that validates only with drops joins the residue:
-            # the single lane's repair pass gets one feedback re-ask at
-            # recovering the lost evidence/items — batch items must not
-            # settle for the degraded output a single would have repaired
-            if v is not None and not drops:
-                v.pop("reply", None)   # batch rows are context-free
-                if vital_policy:
-                    _apply_vital_policy(v, r["body_text"], vital_policy)
-                out[index] = v
-        return "ok", out, meta
+        return _run_batch_call(tups, target, deadline, vital_policy)
 
     def _handle_batch(status, results, meta, tups):
         """Persist batch outcomes row by row; return the residue —
@@ -3412,28 +3632,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         # chunk, or checkpointed rows run single; context-free single-
         # chunk bodies batch batch_k-to-a-call so queue wait, spec
         # eval and decode overhead amortize across the backlog.
-        units: list = []
-        group: list = []
-        for tup in claimed:
-            _index, r, ctx, saved, _h, qc, _l = tup
-            # QC-flagged/thin-retry rows take the single lane — their
-            # feedback/repair prompts differ from the shared batch
-            # envelope.
-            if batch_k >= 2 and qc is None and not r["thin_src"] \
-                    and ctx is None and not saved \
-                    and r["_chunk_size"] == _CHUNK_SIZE \
-                    and len(plan_chunks(r["body_text"], _CHUNK_SIZE)) <= 1:
-                group.append(tup)
-                if len(group) >= batch_k:
-                    units.append(("batch", group))
-                    group = []
-            else:
-                if group:
-                    units.append(("batch", group))
-                    group = []
-                units.append(("single", tup))
-        if group:
-            units.append(("batch", group))
+        units = _plan_units(claimed, batch_k)
 
         def _single_future(pool, tup):
             index, r, ctx, saved, hints, qc, _lease = tup
@@ -3525,20 +3724,20 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         finally:
             for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
                 _release(ledger, r, lease)
-    left = age_min = age_max = None
-    if len(rows) < (limit or 20):
-        # A short selection means the backlog is nearly drained, so the
-        # full pending scan is cheap enough to report. A full selection
-        # (the resident --all --semantic lane runs limit=1 per job)
-        # reports None = unknown instead of an O(backlog) scan per job.
-        left, age_min, age_max = ledger.db.execute(
-            "SELECT COUNT(*), MIN(m.posted_at_ts), MAX(m.posted_at_ts) "
-            f"FROM messages m WHERE {pending_pred()}").fetchone()
+    left, age_min, age_max, estimate = _backlog_report(
+        ledger, len(rows), limit, done + skipped)
     now_ts = time.time()
     return {"done": done, "failed": failed, "left": left,
+            # pending as of the last full count, minus what this process
+            # settled since; age says how stale the count is
+            "left_estimate": max(0, estimate["left"] - estimate["done"]),
+            "left_estimate_age_s": round(time.monotonic() - estimate["at"]),
+            "fresh_selected": fresh_selected,
             "selected": len(rows), "deferred": deferred,
             "skipped": skipped, "lock_lost": lock_lost,
+            "slow_deferred": slow_deferred,
             "circuit_open_s": round(circuit_s) or None,
+            "disk_low": disk_low,
             "disk_free_mb": round(free_mb) if free_mb is not None
                             else None,
             "pids": sorted(done_pids),
@@ -3778,7 +3977,7 @@ def _main() -> int:
     try:
         if args.all:
             # Backlog drainer: per-write locking only — holding the run
-            # lock across the whole backlog would starve the 5-min tick
+            # lock across the whole backlog would starve the 10-min tick
             stop = (time.monotonic() + args.stop_after
                     if args.stop_after > 0 else None)
 
@@ -3881,8 +4080,14 @@ def _main() -> int:
                     # selected). Stay resident and poll instead of exiting:
                     # under launchd KeepAlive an exit just means a respawn
                     # every 30 s re-running the full scan forever, and the
-                    # poll interval still beats the 5-min tick for picking up newly fetched messages.
+                    # poll interval still beats the 10-min tick for picking up newly fetched messages.
                     pause(120)
+                    continue
+                if r["done"] == 0 and (r.get("circuit_open_s")
+                                       or r.get("disk_low")):
+                    # the LLM lane is gated: re-scanning every few seconds
+                    # cannot claim anything until the breaker/disk clears
+                    pause(min(120, r.get("circuit_open_s") or 120))
                     continue
                 if r["done"] == 0 and r["failed"] == 0:
                     # rows were selected but nothing committed — either
@@ -3896,7 +4101,10 @@ def _main() -> int:
                     # wait for the earliest retry instead of quitting.
                     nt = _next_retry(led)
                     if nt is None:
-                        break
+                        # no retriable error row (e.g. endpoint-down
+                        # failures write none): stay resident and poll
+                        pause(120)
+                        continue
                     pause(min(300.0, max(5.0, nt - time.time())))
                 else:
                     pause(1)  # yield the write window between batches

@@ -2,10 +2,14 @@
 import asyncio
 import base64
 import copy
+import fcntl
 import hashlib
 import hmac
 import io
 import json
+import os
+import threading
+import time
 from datetime import datetime, timezone
 from email.message import Message
 from pathlib import Path
@@ -17,8 +21,8 @@ import notify_cmds
 import pytest
 from adapters.lineworks import __main__ as cli
 from adapters.lineworks import actions, cards, config, delivery, server
-from adapters.lineworks.client import ClientError
-from hermes_plugin.mcs_delivery import envelopes, paths, registry
+from adapters.lineworks.client import ClientError, valid_filename
+from adapters.common import envelopes, paths, registry
 from notify_render import display_text, lineworks_card_split
 from notify_testkit import NOW, _dispatch, _intent, _latest_render, _seed_thread
 from slack_card_testkit import _spec
@@ -810,3 +814,186 @@ def test_more_opens_secondary_actions_in_dm_and_only_they_run_from_dm(tmp_path):
         assert len(commands) == 1 and commands[0]["token"] == by_action["tasks"]
 
     asyncio.run(scenario())
+
+
+# ---------- overflowing card revoke / card-only update ----------------------
+
+def test_revoke_of_overflowing_card_passes_validation():
+    spec, _head, _tails = _display_overflow_spec()
+    spec["op"] = "revoke"
+    spec["delivery"]["message_id"] = cards.logical_message_id(spec)
+    parts = spec["parts"]
+    del parts["manifest"][1:]  # the runner plans only the card part for revoke
+    del parts["thread_body_parts"][:]
+    assert cards.validate(spec) is spec
+
+
+def test_card_only_update_of_overflowing_card_renders_truncated_head():
+    spec, head, _tails = _display_overflow_spec()
+    spec["op"] = "update"
+    spec["delivery"]["message_id"] = cards.logical_message_id(spec)
+    parts = spec["parts"]
+    del parts["manifest"][1:]  # not in thread body: the runner plans the card only
+    del parts["thread_body_parts"][:]
+    assert cards.validate(spec) is spec
+    text = cards.render(spec)["contents"]["body"]["contents"][0]["text"]
+    assert text == head and len(text) <= 1000 and text.endswith("↓ 続き")
+
+
+# ---------- thread parts: api.lock hold, captions, shared 429 cooldown ------
+
+CTX = {"card_message_id": "lw:" + "c" * 32}
+
+
+def test_body_part_waits_out_a_briefly_held_api_lock(tmp_path, monkeypatch):
+    w = world(tmp_path)
+    spec = overflow_spec()
+    part = spec["parts"]["manifest"][1]
+    held, release = threading.Event(), threading.Event()
+
+    def hold():
+        with delivery.api_lock(str(w.data)):
+            held.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    assert held.wait(5)
+
+    async def first_retry_releases(_seconds):
+        release.set()
+        await asyncio.to_thread(holder.join, 5)
+
+    monkeypatch.setattr(delivery.asyncio, "sleep", first_retry_releases)
+    out = asyncio.run(_worker(w)._perform_part({"spec": spec}, part, CTX))
+    assert out["result"] == "delivered"
+    assert len(w.client.calls) == 1
+
+
+def test_unavailable_caption_with_prior_id_is_not_reposted(tmp_path):
+    w = world(tmp_path)
+    gone = {"part_id": "attachment:1", "kind": "attachment_part", "name": "合成.jpg",
+            "unavailable": True, "caption": "📎 合成.jpg — 取得失敗",
+            "prior_remote_id": "lw:" + "f" * 32}
+    assert asyncio.run(_worker(w)._perform_part({"spec": overflow_spec()}, gone, CTX)) == {
+        "result": "delivered", "remote_id": "lw:" + "f" * 32}
+    assert w.client.calls == []
+
+
+def test_body_part_waits_out_the_shared_cooldown(tmp_path):
+    w = world(tmp_path)
+    spec = overflow_spec()
+    with open(os.path.join(w.dirs["state"], "rate-limit.json"), "w") as stream:
+        json.dump({"until": time.time() + 0.2}, stream)
+    out = asyncio.run(_worker(w)._perform_part({"spec": spec}, spec["parts"]["manifest"][1], CTX))
+    assert out["result"] == "delivered"
+    assert len(w.client.calls) == 1
+
+
+def test_body_part_retries_a_wire_429_after_the_cooldown(tmp_path, monkeypatch):
+    w = world(tmp_path)
+    spec = overflow_spec()
+    now = [100.0]
+    monkeypatch.setattr(delivery.time, "time", lambda: now[0])
+
+    async def skip(seconds):
+        now[0] += seconds
+        w.client.error = None
+
+    monkeypatch.setattr(delivery.asyncio, "sleep", skip)
+    w.client.error = ClientError("rate_limited", 429)
+    out = asyncio.run(_worker(w)._perform_part({"spec": spec}, spec["parts"]["manifest"][1], CTX))
+    assert out["result"] == "delivered"
+    assert len(w.client.calls) == 2
+
+
+def test_card_keeps_local_cooldown_as_not_sent(tmp_path):
+    w = world(tmp_path)
+    with open(os.path.join(w.dirs["state"], "rate-limit.json"), "w") as stream:
+        json.dump({"until": time.time() + 30}, stream)
+    out = asyncio.run(w.sender.perform(overflow_spec()))
+    assert out == {"result": "not_sent", "error_code": "rate_limited"} and w.client.calls == []
+
+
+# ---------- card attachment upload name -------------------------------------
+
+def test_attachment_name_is_cleaned_for_upload(tmp_path):
+    w = world(tmp_path)
+    w.sender.attachment(b"synthetic", 'dir/a"b\\c\x01.pdf')
+    name = w.client.calls[0][2]
+    assert name == "a_b_c_.pdf" and valid_filename(name)
+    w.sender.attachment(b"synthetic", "dir/")
+    assert w.client.calls[-2][2] == "file"
+
+
+# ---------- text CLI exits 75 only when provably nothing was accepted -------
+
+def _setup(monkeypatch, tmp_path, error=None):
+    w = world(tmp_path)
+    w.client.error = error
+    (tmp_path / "config.json").write_text(json.dumps(CONFIG))
+    monkeypatch.setattr(cli, "load_credentials", lambda *args: (w.client, SECRET))
+    monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(raw({"text": "合成通知"}))))
+    monkeypatch.setattr(cli, "SENDER_BUSY_WAIT", 0)
+    return w
+
+
+def _send(tmp_path):
+    return cli.main(["send", "--root", str(tmp_path), "--to", "lineworks:" + SCOPE["channel_id"]])
+
+
+def _hold_lock(w):
+    fd = os.open(os.path.join(w.dirs["state"], "api.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def test_held_api_lock_exits_tempfail_without_sending(monkeypatch, tmp_path, capsys):
+    w = _setup(monkeypatch, tmp_path)
+    fd = _hold_lock(w)
+    try:
+        assert _send(tmp_path) == 75
+    finally:
+        os.close(fd)
+    assert w.client.calls == [] and capsys.readouterr().err.strip() == "sender_busy"
+
+
+def test_brief_api_lock_hold_is_waited_out(monkeypatch, tmp_path):
+    w = _setup(monkeypatch, tmp_path)
+    fd = _hold_lock(w)
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: os.close(fd))
+    assert _send(tmp_path) == 0 and len(w.client.calls) == 1
+
+
+def test_cooldown_exits_tempfail_without_sending(monkeypatch, tmp_path):
+    w = _setup(monkeypatch, tmp_path)
+    with open(os.path.join(w.dirs["state"], "rate-limit.json"), "w") as stream:
+        json.dump({"until": time.time() + 60}, stream)
+    assert _send(tmp_path) == 75 and w.client.calls == []
+
+
+@pytest.mark.parametrize("error, code", [(ClientError("http_error", 403), 75),
+                                         (ClientError("rate_limited", 429), 75),
+                                         (ClientError("http_error", 500), 1),
+                                         (ClientError("transport_unknown"), 1)])
+def test_first_post_reject_is_tempfail_but_unknown_stays_one(monkeypatch, tmp_path, error, code):
+    w = _setup(monkeypatch, tmp_path, error)
+    assert _send(tmp_path) == code and len(w.client.calls) == 1
+
+
+def test_failure_after_text_accepted_stays_one(monkeypatch, tmp_path):
+    w = _setup(monkeypatch, tmp_path)
+    attachments = w.data / "attachments"
+    attachments.mkdir()
+    path = attachments / "fixture.txt"
+    path.write_bytes(b"synthetic-sealed")
+    import hashlib
+    payload = {"text": "合成通知", "files": [{"path": str(path), "name": "fixture.txt", "bytes": 16,
+                                          "sha256": hashlib.sha256(b"synthetic-sealed").hexdigest()}]}
+    monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(raw(payload))))
+
+    def reject(blob, name):
+        raise ClientError("http_error", 403)
+
+    w.client.upload_file = reject
+    assert _send(tmp_path) == 1 and len(w.client.calls) == 1

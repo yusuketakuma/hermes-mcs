@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "共通のハッシュ計算を基盤側へ集約",
+  "summary": "解析・台帳・出力処理が使う正規JSON・ハッシュ計算・ID検証を基盤の共通処理へまとめました。計算結果と保存済みハッシュは変わらず、通知・収集・解析の動作も変わりません。",
+  "upgrade": "設定変更・DB移行・追加操作は不要です。",
+  "details": [
+    "canonical・payload_hash・positiveをcore/mcs_utilへ移し、mcs_requestsからは同じ名前で再exportする。",
+    "意味解析・台帳はops層ではなくcoreから読み込む。外部出力の正規JSONも同じ関数を使い、出力バイトは同一。",
+    "意味解析レポートの日本時間表示を共通のJST定義に揃える。"
+  ],
+  "refs": ["mcs/core/mcs_util.py", "mcs/ops/mcs_requests.py", "mcs/ops/ext_contract.py", "mcs/semantic/"]
+}

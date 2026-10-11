@@ -27,6 +27,7 @@ import mcs_backup  # noqa: E402
 from mcs_requests import (  # noqa: E402
     MAX_COMMAND_BYTES, _text, canonical, parse_command, payload_hash, valid_hash, valid_uuid,
 )
+from safe_io import create_exclusive  # noqa: E402
 
 PURPOSE = "ops.backup_restore_resume"
 APPROVAL = "backup_restore_approval.json"
@@ -137,6 +138,7 @@ def _binding(path, fd, source_sha256, *, static=True) -> Binding:
         raise RestoreConsentError("restore_source_sha256_required")
     report, report_hash, report_identity = _read(fd, "restore.json")
     marker, marker_hash, marker_identity = _read(fd, MARKER)
+    # literal on purpose: the consent gate spells out mcs_backup._report's keys
     if (not isinstance(report, dict) or set(report) != {
             "v", "sha256", "plain_sha256", "verified_at", "inventory",
             "restore_pending", "attachment_payloads_included"}
@@ -204,8 +206,7 @@ def _publish(fd, name, value):
     # Fsynced bytes -> exclusive link -> directory fsync. Neither a partial
     # receipt nor an overwrite is visible; use the already pinned directory.
     temporary = ".backup-consent-" + uuid.uuid4().hex
-    opened = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL
-                     | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+    opened = create_exclusive(temporary, 0o600, dir_fd=fd)
     try:
         with os.fdopen(opened, "wb") as stream:
             stream.write(canonical(value))

@@ -14,6 +14,8 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from mcs_util import loads_dict
+
 JST = ZoneInfo("Asia/Tokyo")
 DAY_S = 86400
 
@@ -24,6 +26,12 @@ CHANGE_ACTIONS = ("start", "stop", "change", "increase", "decrease")
 MED_ACTIONS = CHANGE_ACTIONS + ("none",)
 CHANGE_ACTIONS_SQL = ",".join(f"'{a}'" for a in CHANGE_ACTIONS)
 TRANSITION_EVENTS_SQL = "'discharge','transfer'"
+
+# a message (alias m) whose full body is stored and non-empty — the
+# extraction eligibility rule (extract_llm). run_check, read_model,
+# extract (v1) and semantic_observe still inline the same text.
+ELIGIBLE_MESSAGE = ("m.body_text IS NOT NULL AND m.body_text != '' "
+                    "AND (m.body_state IS NULL OR m.body_state='full')")
 
 
 def json_or_null(col: str) -> str:
@@ -80,7 +88,9 @@ def current_extract_pred(art: str = "a", msg: str = "m", *,
 CANONICAL_PROJECTION_KIND = "canonical_projection"
 # T18: the PASS-only v4 read model — a distinct kind the legacy
 # extract_llm `_replace_current` DELETE can never reach. When a
-# current v4 row exists it outranks both older kinds.
+# current v4 row exists it outranks both older kinds. "v4" here is the
+# semantic engine version, unrelated to mcs/extract/v4 (extract_llm);
+# always filter by kind, never by a bare version number.
 V4_PROJECTION_KIND = "semantic_facts_v4"
 # human ⚠ report on one extraction (card button -> ops.extract_feedback)
 EXTRACT_FEEDBACK_KIND = "extract_feedback_v1"
@@ -172,20 +182,6 @@ def current_v4_id(msg: str = "m", *, require_version: bool = True) -> str:
             f" AND v.message_id={msg}.message_id"
             f" AND v.project_id={msg}.project_id"
             f" AND {pred})")
-
-
-def qc_v4_source_id(msg: str = "m") -> str:
-    """The v4 row a QC audit binds to. Deliberately separate from
-    qc_source_id: a bare ``version=4`` on the legacy extract_llm scan
-    can never select this kind — the consumer must opt in."""
-    return (f"(SELECT MAX(v.artifact_id) FROM artifacts v"
-            f" WHERE v.kind='{V4_PROJECTION_KIND}'"
-            f" AND v.message_id={msg}.message_id"
-            f" AND v.project_id={msg}.project_id"
-            f" AND {msg}.body_state IS NOT 'deleted'"
-            f" AND {current_v4_pred('v', f'{msg}.content_hash')}"
-            f" AND json_extract({json_or_null('v.meta')},"
-            "'$.extract_version')=4)")
 
 
 def current_fact_pred(art: str = "a", msg: str = "m", *,
@@ -349,6 +345,29 @@ def transition_cooccurrences(db, *, win_s: int, extra_where: str = "",
     return grouped
 
 
+def latest_artifact(db, kind):
+    """(artifact_id, content dict) of the newest artifact of kind; (None, None) when absent, content None when unreadable."""
+    row = db.execute("SELECT artifact_id, content FROM artifacts WHERE kind=? "
+                     "ORDER BY artifact_id DESC LIMIT 1", (kind,)).fetchone()
+    return (row["artifact_id"], loads_dict(row["content"])) if row else (None, None)
+
+
+SEMANTIC_CONTROL_KIND = "semantic_control"
+
+
+def paused(db, project_id: int) -> bool:
+    """Return the latest semantic control state, failing closed on corruption."""
+    connection = getattr(db, "db", db)
+    row = connection.execute(
+        "SELECT content FROM artifacts WHERE kind=? AND project_id=? "
+        "ORDER BY artifact_id DESC LIMIT 1",
+        (SEMANTIC_CONTROL_KIND, project_id),
+    ).fetchone()
+    if row is None:
+        return False
+    return row["content"] != "running"
+
+
 def staff_directory(db, project_id=None):
     """Name -> facility directory of senders observed in MCS posts.
 
@@ -404,15 +423,20 @@ def extract_feedback(db, project_id=None, limit=100):
         [*params, limit]).fetchall()
 
 
+# Incomplete thread root over alias m: the thread job's criterion (full or
+# tombstoned replies), shared by the view, backup inventory and repair plan;
+# not a claim about what the API's reply_count means.
+REPLY_GAP = """m.parent_id IS NULL AND m.reply_count >
+    (SELECT COUNT(*) FROM messages r WHERE r.project_id=m.project_id
+     AND r.parent_id=m.message_id AND r.body_state IN ('full','deleted'))"""
+
+
 def incomplete_reply_roots(db, project_id) -> int:
     """Thread roots whose reported reply_count exceeds the stored full or
     tombstoned replies — the thread job's criterion, not a completeness claim."""
-    return db.execute("""
-      SELECT count(*) FROM messages m WHERE m.project_id=? AND m.parent_id IS NULL
-        AND m.reply_count > (SELECT count(*) FROM messages r
-          WHERE r.project_id=m.project_id AND r.parent_id=m.message_id
-            AND r.body_state IN ('full','deleted'))
-    """, (project_id,)).fetchone()[0]
+    return db.execute(
+        f"SELECT COUNT(*) FROM messages m WHERE m.project_id=? AND {REPLY_GAP}",
+        (project_id,)).fetchone()[0]
 
 
 def thread_reply_pairs(db, *, since=None, until=None, as_of, project_id=None):

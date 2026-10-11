@@ -18,6 +18,7 @@ patient data. stdout carries one alert line on alert transitions
 machine-readable status, published atomically.
 """
 import argparse
+from datetime import datetime
 import fcntl
 import json
 import math
@@ -31,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 
 import maintenance
+from mcs_queries import JST
 from mcs_util import HOME, load_config
 
 HEALTH_REL = os.path.join("data", "health.json")
@@ -47,8 +49,21 @@ UNKNOWN_HISTORY = 50        # retained uncertain-delivery records
 OVERALL_STATUS = {"ok": "ok", "degraded": "degraded",
                   "failed": "failed"}
 
+# runtime_mode=standalone: the host's own status file (mcs_standalone)
+STANDALONE_STATUS_REL = os.path.join("data", "standalone-status.json")
+STANDALONE_HOST_STALE_S = 180      # heartbeat every 5 s; restart throttle 30 s
+STANDALONE_CHILD_FAILURES = 3      # consecutive failed exits of one job
+STANDALONE_CONNECTOR_DOWN_S = 600
+STANDALONE_UPDATE_STUCK_S = 2 * 3600
+# jobs whose non-zero exit is a real failure (calendar helpers such as
+# the daily LLM restart may exit non-zero by design on some hosts)
+STANDALONE_WATCHED_JOBS = ("extract-0", "extract-2", "lineworks", "cmd",
+                           "cmd_int", "mcs_check", "mcs_deep")
+
 
 def _finite_number(value) -> bool:
+    # mirrors mcs_backup's finite check; the tick_no_ext gate keeps the
+    # watchdog off the manual-only C1 modules that hold the shared copy
     if type(value) not in (int, float):
         return False
     try:
@@ -185,6 +200,101 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     return report
 
 
+def _pid_alive(pid) -> bool:
+    if type(pid) is not int or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:          # gone, or another user's reused pid
+        return False
+
+
+def _read_standalone_status(home: str):
+    try:
+        fd = os.open(os.path.join(home, STANDALONE_STATUS_REL),
+                     os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        with os.fdopen(fd, "rb") as stream:
+            raw = stream.read(1024 * 1024 + 1)
+        if len(raw) > 1024 * 1024:
+            return None
+        value = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def standalone_host_reasons(home: str, now: float, cfg: dict):
+    """runtime_mode=standalone: (severity, reason codes, details) from the
+    host's own standalone-status.json. The host runs every job — this
+    watcher included when it is not installed separately — so its death,
+    crash loops, a lost connection or a wedged update are checked here,
+    from outside it. Details are job codes and numbers only."""
+    status = _read_standalone_status(home)
+    stamp = status.get("updated_at") if status else None
+    if status is None or not _finite_number(stamp) or not _pid_alive(status.get("pid")) \
+            or now - stamp > STANDALONE_HOST_STALE_S:
+        age = now - stamp if _finite_number(stamp) else None
+        return "failed", ["standalone_host_down"], (
+            {"standalone_host_down": f"最終更新 {_hours(age)}前"} if age and age > 0 else {})
+    reasons, details = [], {}
+    exits = status.get("exits") if isinstance(status.get("exits"), dict) else {}
+    failing = []
+    for job in STANDALONE_WATCHED_JOBS:
+        row = exits.get(job)
+        count = row.get("failures") if isinstance(row, dict) else None
+        if _finite_number(count) and count >= STANDALONE_CHILD_FAILURES:
+            failing.append(f"{job} {int(count)}回連続")
+    if failing:
+        reasons.append("standalone_child_failing")
+        details["standalone_child_failing"] = "、".join(failing)
+    connector = status.get("connector") if isinstance(status.get("connector"), dict) else {}
+    since = connector.get("failing_since")
+    if connector.get("state") == "waiting" and _finite_number(since) \
+            and now - since >= STANDALONE_CONNECTOR_DOWN_S:
+        reasons.append("standalone_connector_down")
+        error = connector.get("last_error")
+        details["standalone_connector_down"] = f"{_hours(now - since)}" + (
+            f" {error}" if _is_code(error) else "")
+    marker = status.get("update_marker") if isinstance(status.get("update_marker"), dict) else {}
+    marked = marker.get("since")
+    if status.get("update_in_progress") is True and _finite_number(marked) \
+            and now - marked >= STANDALONE_UPDATE_STUCK_S:
+        reasons.append("standalone_update_stuck")
+        state = marker.get("state")
+        details["standalone_update_stuck"] = f"{_hours(now - marked)}" + (
+            f" {state}" if _is_code(state) else "")
+    check = exits.get("mcs_check") if isinstance(exits.get("mcs_check"), dict) else {}
+    last_ok = check.get("last_ok_at")
+    reference = last_ok if _finite_number(last_ok) else status.get("started_at")
+    if _finite_number(reference) and now - reference > freshness_deadline(cfg):
+        reasons.append("standalone_check_stalled")
+        details["standalone_check_stalled"] = (f"最終成功 {_hours(now - last_ok)}前"
+                                               if _finite_number(last_ok) else "起動後の成功なし")
+    return ("degraded" if reasons else "ok"), reasons, details
+
+
+def _apply_standalone(obs: dict, home: str, now: float, cfg: dict) -> None:
+    """Merge the host's own evidence into the health.json verdict: a
+    stale/missing file gets its current cause, a fresh one its extra
+    reasons; the status only ever becomes more severe."""
+    obs["runtime_mode"] = "standalone"
+    severity, reasons, details = standalone_host_reasons(home, now, cfg)
+    if not reasons:
+        return
+    obs["host_details"] = details
+    rank = {"ok": 0, "degraded": 1, "failed": 2}
+    if obs["status"] in rank:
+        if rank[severity] > rank[obs["status"]]:
+            obs["status"] = severity
+        base = list(obs.get("state_reasons") or [])
+        obs["state_reasons"] = base + [r for r in reasons if r not in base]
+    else:
+        # stale/missing/corrupt: the file's own codes are not current;
+        # the host evidence is, so it names the cause
+        obs["state_reasons"] = list(reasons)
+
+
 def _dedup_stamp(record: dict):
     """Verdict timestamp. Pre-evidence_at files key on health_at."""
     if "evidence_at" in record:
@@ -224,6 +334,8 @@ def evaluate(home: str = HOME, now: float | None = None,
     status_path = os.path.join(home, STATUS_REL)
 
     obs = classify_health(health_path, now, deadline)
+    if isinstance(cfg, dict) and cfg.get("runtime_mode") == "standalone":
+        _apply_standalone(obs, home, now, cfg)
     state = load_config(state_path)
     last = state.get("last")
     last = last if isinstance(last, dict) else {}
@@ -247,9 +359,13 @@ def evaluate(home: str = HOME, now: float | None = None,
     else:
         seen = (set(seen) if isinstance(seen, list)
                 and all(isinstance(r, str) for r in seen) else set())
-    new_reason = (prior_known and not transition
-                  and obs["status"] not in ("ok", "stale")
-                  and not set(reasons) <= seen)
+    # a stale file's own codes are not current, but the standalone
+    # host's evidence merged into it is (a host that died mid-episode)
+    gained = set(reasons) - seen
+    new_reason = bool(prior_known and not transition and gained
+                  and obs["status"] != "ok"
+                  and (obs["status"] != "stale"
+                       or any(r.startswith("standalone_") for r in gained)))
     alerted_at = state.get("detected_at", state.get("alerted_at"))
     invalid_alert_at = not _finite_number(alerted_at) \
         or alerted_at > now
@@ -395,6 +511,9 @@ _STATUS_JA = {"degraded": "一部に異常があります", "failed": "収集が
               "corrupt": "状態の記録が壊れています"}
 _SEVERE = frozenset({"failed", "stale", "missing", "corrupt"})
 _CHECK = "python3 mcs/ops/mcs_setup.py check"
+_STANDALONE_STATUS = "python -m mcs_standalone status"
+_STANDALONE_RESTART = ("hostを再起動（macOS: launchctl kickstart -k gui/$(id -u)/ai.mcs.standalone、"
+                       "Linux: systemctl --user restart mcs-standalone.service）")
 # code -> (what happened, in plain words / what to do next)
 _BACKUP_FAILURE_JA = {
     "backup_retention_capacity": (
@@ -436,6 +555,12 @@ _REASON_JA = {
                                 "llama-server と extract-drainer の稼働を確認（launchctl list | grep mcs）"),
     "semantic_backlog_stalled": ("意味チェックが6時間以上止まっています",
                                  "extract-drainer の稼働と data/extract_drain.log の jev_error を確認"),
+    "local_llm_down": ("ローカルLLMに1時間以上つながらず、要約の抽出が止まっています",
+                       "llama-server の稼働を確認（再起動後は自動で再開します）"),
+    "llm_endpoint_down": ("ローカルLLMの失敗が続き、要約の抽出が6時間以上進んでいません",
+                          "llama-server の稼働と data/extract_drain.log を確認"),
+    "backup_deferred_deadline": ("収集の制限時間内に日次バックアップを取れず、1日以上更新されていません",
+                                 f"DBの大きさと収集の所要時間を確認。続く場合は {_CHECK}"),
     "stall_check_failed": ("停滞の判定処理が失敗しました",
                            f"data/run_check.log の stall_check_failed を確認。続く場合は {_CHECK}"),
     "semantic_jev_payment_required": ("TypeSafe Jev が支払い未了（HTTP 402）を返しています",
@@ -448,8 +573,30 @@ _REASON_JA = {
                                 "TYPESAFE_API_KEY の値と有効期限を確認"),
     "unread_collection_unknown": ("未読収集の状況が記録されていません",
                                   "次回の収集を待ち、続く場合は data/run_check.log を確認"),
+    "standalone_host_down": ("独立接続のhostが動いていません",
+                             f"{_STANDALONE_STATUS} と data/standalone.log を確認し、{_STANDALONE_RESTART}"),
+    "standalone_child_failing": ("hostの子プロセスが異常終了を繰り返しています",
+                                 f"data/<ジョブ名>.log の末尾と {_STANDALONE_STATUS} の exits を確認"),
+    "standalone_connector_down": ("Slack/Discordとの接続が回復していません",
+                                  "data/standalone.log の connector_ended と認証情報・ネットワークを確認"
+                                  "（収集と抽出は継続し、接続は自動で再試行します）"),
+    "standalone_update_stuck": ("更新処理が終わらず、収集と抽出が止まっています",
+                                "data/update.log と python3 mcs/ops/mcs_update.py status を確認し、"
+                                "必要なら python3 mcs/ops/mcs_update.py recover"),
+    "standalone_check_stalled": ("hostの未読収集が成功していません",
+                                 f"data/mcs_check.log と data/run.log を確認。続く場合は {_CHECK}"),
+}
+# runtime_mode=standalone: the host owns the connection and the workers,
+# so the Hermes gateway / per-agent hints do not apply
+_STANDALONE_ACTION = {
+    "notification_failed": "通知先の設定と独立接続のhostの稼働を確認"
+                           f"（{_STANDALONE_STATUS}）",
+    "notification_pending": f"次回の収集で送信されます。長く続く場合は {_STANDALONE_STATUS} を確認",
+    "card_delivery_stalled": _STANDALONE_RESTART,
+    "extract_backlog_stalled": f"llama-server の稼働と {_STANDALONE_STATUS} の extract-0・extract-2 を確認",
 }
 _AREA_JA = (("semantic", "意味チェック（任意機能）"), ("extract_backlog", "要約の抽出"),
+            ("local_llm", "要約の抽出"), ("llm_endpoint", "要約の抽出"),
             ("notification", "通知"), ("card_delivery", "通知"),
             ("collection_incomplete", "一部患者の記録取得"), ("disk_low", "保存"),
             ("ledger", "保存データ"), ("backup", "バックアップ"))
@@ -459,7 +606,7 @@ def _jst(ts) -> str:
     if not _finite_number(ts):
         return "不明"
     try:
-        return time.strftime("%m-%d %H:%M", time.gmtime(ts + 9 * 3600))
+        return datetime.fromtimestamp(ts, JST).strftime("%m-%d %H:%M")
     except (OverflowError, OSError, ValueError):
         return "不明"
 
@@ -493,10 +640,16 @@ def _reason_rows(report: dict, reasons) -> list[str]:
     if not reasons:
         return ["・記録された理由はありません", "　→ 次回の収集を待つ"]
     oldest = report.get("oldest_age_s") or {}
+    standalone = report.get("runtime_mode") == "standalone"
+    host = report.get("host_details") if isinstance(report.get("host_details"), dict) else {}
     rows = []
     for code in reasons:
         base = code.split(":")[0]
         meaning, action = _REASON_JA.get(base, (code, f"{_CHECK} で確認"))
+        if standalone:
+            action = _STANDALONE_ACTION.get(base, action)
+        if isinstance(host.get(base), str) and host[base]:
+            meaning += f"（{host[base]}）"
         if base == "backup_not_verified":
             cause = report.get("backup_failure_code")
             if isinstance(cause, str) and cause in _BACKUP_FAILURE_JA:

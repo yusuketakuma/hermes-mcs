@@ -1,7 +1,6 @@
 """Synthetic regressions for extraction snapshots, evidence and input budgets."""
 
 import json
-from datetime import datetime
 import os
 import sqlite3
 import subprocess
@@ -95,15 +94,8 @@ def test_karte_context_uses_explicit_instants_without_rounding(db, updated, post
     ("2026-10-04T10:00:00.100+09:00", "2026-10-04T01:00:00.100Z"),
     ("2026-10-04T01:00:00.100Z", "2026-10-04T01:00:00.100Z"),
 ])
-def test_karte_utc_suffix_keeps_python310_compatibility(db, monkeypatch, updated, posted):
-    class Python310Datetime:
-        @staticmethod
-        def fromisoformat(value):
-            if isinstance(value, str) and value.endswith("Z"):
-                raise ValueError("Python 3.10 does not parse a Z suffix")
-            return datetime.fromisoformat(value)
-
-    monkeypatch.setattr(extract_llm, "datetime", Python310Datetime)
+def test_karte_utc_suffix_is_an_explicit_instant(db, updated, posted):
+    # the runtime floor is Python 3.14, whose fromisoformat reads "Z"
     db.karte_summary_store(1, 1, {"comment": "架空のUTC参考情報", "updated_at": updated})
     assert "架空のUTC参考情報" in extract_llm._karte_block(db, 1, posted)
 

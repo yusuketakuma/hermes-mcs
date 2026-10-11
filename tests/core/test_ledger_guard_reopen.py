@@ -101,7 +101,14 @@ def test_shadow_reopen_counts_without_writer_lock_until_evidence_changes(tmp_pat
             db.db.execute("INSERT INTO attachments(message_id) VALUES(999)")
     with closing(Ledger(str(path))) as db:
         assert dict((r[0], r[1:]) for r in _guards(db))["attachments"] == ("shadow", 1, 0)
-    # When: unchanged evidence -> read-only recount, no writer lock.
+    # When: unchanged evidence inside the recount window -> the confirmed
+    # count is trusted: no recount, no writer lock.
+    db, counts, immediate = _open_traced(path)
+    with closing(db):
+        assert (counts, immediate) == ([], 0)
+    # When: the window has passed -> read-only recount, still no writer lock.
+    with closing(sqlite3.connect(path)) as raw, raw:
+        raw.execute("UPDATE ledger_relation_recount SET counted_at=0")
     db, counts, immediate = _open_traced(path)
     with closing(db):
         assert counts and immediate == 0

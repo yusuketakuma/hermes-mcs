@@ -60,6 +60,72 @@ def test_run_accepts_frozen_synthetic_corpus_with_injected_pipeline(tmp_path, mo
     assert all(case["facts_complete"] for case in result["results"])
 
 
+@pytest.mark.parametrize("reason", ["deadline", "model"])
+def test_summary_failure_is_deferred_with_extraction_metadata(monkeypatch, reason):
+    case = bench._synthetic_cases()[0]
+    monkeypatch.setattr(bench, "extract_facts", lambda *_a, **_k: ([{}], True, 2, None))
+    monkeypatch.setattr(bench, "summarize", lambda *_a, **_k: (None, reason))
+    monkeypatch.setattr(bench, "audit_code", lambda *_: pytest.fail("missing summary audited"))
+    monkeypatch.setattr(bench, "audit_claims", lambda *_: pytest.fail("missing summary sent"))
+
+    result = bench._run_case(case, None, object())
+
+    assert result["deferred"] is True
+    assert result["summary_reason"] == reason
+    assert result["case_id"] == case["case_id"]
+    assert result["facts_complete"] is True
+    assert result["n_facts"] == 1 and result["facts_dropped"] == 2
+    assert result["n_claims"] == 0 and result["claims"] == result["findings"] == []
+
+
+def test_valid_empty_summary_is_evaluated_not_deferred(monkeypatch):
+    case = bench._synthetic_cases()[0]
+    monkeypatch.setattr(bench, "extract_facts", lambda *_a, **_k: ([], True, 0, None))
+    monkeypatch.setattr(bench, "summarize", lambda *_a, **_k: ({"claims": []}, None))
+    audited = []
+    monkeypatch.setattr(bench, "audit_code", lambda *_: audited.append(True) or [])
+
+    result = bench._run_case(case, None)
+
+    assert audited == [True]
+    assert not result.get("deferred")
+    assert result["summary_reason"] is None and result["n_claims"] == 0
+    assert bench._aggregate([result])["deferred"] == 0
+
+
+def test_aggregate_counts_missing_summaries_among_mixed_results(monkeypatch):
+    case = bench._synthetic_cases()[0]
+    monkeypatch.setattr(bench, "extract_facts", lambda *_a, **_k: ([], True, 0, None))
+    summaries = iter([(None, "deadline"), (None, "model"), ({"claims": []}, None),
+                      ({"claims": [{"text": "合成の主張"}]}, None)])
+    monkeypatch.setattr(bench, "summarize", lambda *_a, **_k: next(summaries))
+    monkeypatch.setattr(bench, "audit_code", lambda _b, _f, summary:
+                        [{"code": "synthetic_finding"}] if summary["claims"] else [])
+
+    aggregate = bench._aggregate([bench._run_case(case, None) for _ in range(4)])
+
+    assert aggregate == {"cases": 4, "deferred": 2,
+                         "deferred_by_reason": {"summary_deadline": 1,
+                                                "summary_model": 1},
+                         "claims": 1,
+                         "findings_total": 1, "findings_per_claim": 1.0,
+                         "finding_codes": {"synthetic_finding": 1}}
+
+
+def test_aggregate_splits_deferred_cases_by_stage_and_reason():
+    results = [
+        {"deferred": True, "facts_complete": False, "extract_reason": "deadline"},
+        {"deferred": True, "facts_complete": True, "summary_reason": "model"},
+        {"deferred": True, "facts_complete": True, "summary_reason": "model"},
+        {"deferred": True, "error": "llm_not_sent"},
+        {"facts_complete": True, "summary_reason": None, "n_claims": 1},
+    ]
+    aggregate = bench._aggregate(results)
+    assert aggregate["deferred"] == 4
+    assert aggregate["deferred_by_reason"] == {
+        "extract_deadline": 1, "summary_model": 2, "llm_not_sent": 1}
+
+
 @pytest.mark.parametrize("count", [-1, 0, True])
 def test_corpus_rejects_invalid_count_without_ledger_or_output(tmp_path, monkeypatch, count):
     monkeypatch.setattr(bench, "LedgerReader", lambda *_: pytest.fail("ledger accessed"))
@@ -184,3 +250,46 @@ def test_report_delta_uses_the_same_reads_as_the_table(tmp_path, monkeypatch, ca
     assert "[second] cases=1 claims=2 findings=1 per-claim=0.5" in output
     assert "synthetic: 2 -> 1" in output
     assert reads == paths
+
+
+# The bench --jev audit must see the same evidence context as the drain.
+QUOTE = "合成薬を投与"
+
+
+class _StubJev:
+    requests_made = 0
+
+    def __init__(self):
+        self.contexts = []
+
+    def evaluate(self, state, questions, deadline):
+        self.contexts.append(state["context"])
+        key = next(iter(questions))
+        return {"answers": {key: {"choice": "supported", "confidence": 0.9}}}
+
+
+def test_run_case_passes_fact_evidence_to_jev(monkeypatch):
+    fact = {"fact_id": "f1", "statement": QUOTE, "evidence_refs": ["e1"],
+            "validation_status": "verified",
+            "_evidence": {"evidence_id": "e1", "message_id": 1, "quote": QUOTE,
+                          "start_codepoint": 0, "end_codepoint": len(QUOTE)}}
+    summary = {"claims": [{"claim_id": "c1", "section": "status", "text": QUOTE,
+                           "claim_kind": "reported_fact", "fact_refs": [0],
+                           "evidence_refs": ["e1"], "status": "execution_reported",
+                           "polarity": "affirmed"}], "limitations": []}
+    monkeypatch.setattr(bench, "extract_facts",
+                        lambda *a, **k: ([fact], True, 0, None))
+    monkeypatch.setattr(bench, "summarize", lambda *a, **k: (summary, None))
+    monkeypatch.setattr(bench, "audit_code", lambda *a: [])
+    member = {"message_id": 1, "project_id": 1, "parent_id": None,
+              "posted_at": "2026-01-01", "sender": {"id": 1, "name": "合成", "type": "staff"},
+              "body_original": QUOTE, "body_state": "full", "revision": "r",
+              "attachments": [], "replies_complete": True, "bundle_role": "target"}
+    case = {"case_id": "synthetic:x", "project_id": 1, "root_id": 1,
+            "target_id": 1, "members": [member]}
+    jev = _StubJev()
+    bench._run_case(case, None, jev)
+    assert jev.contexts
+    quotes = [c["text"] for ctx in jev.contexts for c in ctx
+              if c.get("role") == "evidence_quote"]
+    assert quotes and all(q == QUOTE for q in quotes)

@@ -1,7 +1,8 @@
 """Static guard: mcs_recover parses under Python 3.9 grammar, no PEP 604 annotations.
 
-The watchdog runs under the system /usr/bin/python3 (3.9 on macOS), while
-ruff/CI target newer Pythons. This checks only grammar (incl. match) and
+The managed watchdog runs under the install-verified recovery_python (>= 3.14),
+but a manual run under macOS /usr/bin/python3 (3.9) must still load so its
+version checks fail closed instead of crashing. This checks only grammar (incl. match) and
 eagerly evaluated `X | Y` annotations; it does NOT prove 3.9 runtime
 compatibility (runtime `int | None` in isinstance, zip(strict=), 3.10+ stdlib
 APIs are not detected).

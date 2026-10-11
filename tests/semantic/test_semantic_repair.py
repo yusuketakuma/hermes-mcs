@@ -271,3 +271,111 @@ def test_repair_discards_answer_returned_after_deadline(monkeypatch):
         {doc["facts"][0]["fact_id"]: "synthetic"}, deadline=11.0)
     assert not result["repaired"]
     assert result["doc"] is doc
+
+
+def test_repair_merges_a_repeated_fact_with_extraction_rules():
+    """A repaired chunk that re-reports a kept fact merges it exactly as
+    extraction merges duplicates: an undetermined request detail is
+    filled in, a conflicting one becomes unknown."""
+    request = "架空担当Aから薬剤師へ架空資料Xを確認してください。"
+    body = "合成薬Aを中止します。" + request
+
+    def reply(details, med_status):
+        return json.dumps({"facts": [
+            {"statement": "合成薬A中止", "kind": "medication_event",
+             "action": "stop", "subject_role": "patient",
+             "polarity": "affirmed", "workflow_status": med_status,
+             "importance": "T1", "evidence_quote": "合成薬Aを中止"},
+            {"statement": request, "kind": "request_pending",
+             "evidence_quote": request, "polarity": "affirmed",
+             "workflow_status": "pending", **details}],
+            "category_presence": dict(NO_FACTS, medication="one",
+                                      request_pending="one")},
+            ensure_ascii=False)
+
+    stored = extraction.extract_facts_v2(
+        lambda _p: reply({"request_to": "unknown", "request_from": "架空担当A"},
+                         "performed"), _member(body))["doc"]
+    kept = next(f for f in stored["facts"] if f["kind"] == "request_pending")
+    assert (kept["request_to"], kept["request_from"]) == ("unknown", "架空担当A")
+    rejected = next(f for f in stored["facts"]
+                    if f["kind"] == "medication_event")
+
+    out = extraction.repair_facts_v2(
+        lambda _p: reply({"request_to": "薬剤師", "request_from": "薬剤師"},
+                         "ordered"),
+        _member(body), stored, {rejected["fact_id"]: "audit: synthetic"})
+
+    assert out["repaired"]
+    sf.validate_facts_doc(out["doc"])
+    merged = [f for f in out["doc"]["facts"] if f["fact_id"] == kept["fact_id"]]
+    assert len(merged) == 1
+    assert merged[0]["request_to"] == "薬剤師"
+    assert merged[0]["request_from"] == "unknown"
+    assert kept["fact_id"] not in out["repaired_fact_ids"]
+    assert [f["kind"] for f in out["doc"]["facts"]
+            if f["fact_id"] in out["repaired_fact_ids"]] == ["medication_event"]
+
+
+# Regression: unverifiable extract_v1 hints and repair status upgrades.
+NO = {c: "none" for c in sf.MANDATORY_CATEGORIES}
+
+
+def _hints_member(body):
+    return {"project_id": 1, "message_id": "m1", "revision": "r1",
+            "body_original": body, "body_state": "full",
+            "posted_at": "2026-09-20",
+            "sender": {"id": "s1", "type": "staff", "profession": "dr"}}
+
+
+def _hints_llm(facts, presence):
+    return lambda _p: json.dumps(
+        {"facts": facts, "category_presence": dict(NO, **presence)},
+        ensure_ascii=False)
+
+
+def _fact(statement, kind, quote, **kw):
+    return dict({"statement": statement, "kind": kind,
+                 "subject_role": "patient", "polarity": "affirmed",
+                 "evidence_quote": quote}, **kw)
+
+
+def _assert_complete(result):
+    doc = result["doc"]
+    assert doc["coverage"]["status"] == "complete", doc["coverage"]
+    assert all(f["validation_status"] == "verified" for f in doc["facts"])
+    ids = {f["fact_id"] for f in doc["facts"]}
+    for ob in doc["obligations"]:
+        assert set(ob["fact_ids"]) <= ids
+
+
+def test_repeated_symptom_hint_does_not_block_coverage():
+    body = "昨日から発熱あり。本日も発熱が続いている。"
+    llm = _hints_llm([_fact("発熱が続いている", "symptom_state", "本日も発熱が続いている")],
+               {"symptom_state": "one"})
+    _assert_complete(extraction.extract_facts_v2(llm, _hints_member(body)))
+
+
+def test_fullwidth_vital_hint_does_not_block_coverage():
+    body = "血圧１３０／８０"
+    llm = _hints_llm([_fact("血圧130/80", "vital_lab", body)], {"vital_lab": "one"})
+    _assert_complete(extraction.extract_facts_v2(llm, _hints_member(body)))
+
+
+def test_repair_keeps_ambiguous_obligation_open():
+    body = "アムロジピン5mg内服中。血圧130/80。"
+    med = _fact("アムロジピン5mg内服中", "medication_event", "アムロジピン5mg内服中",
+                action="continue", workflow_status="performed", importance="T1")
+    vit = _fact("血圧130/80", "vital_lab", "血圧130/80",
+                workflow_status="performed", importance="T2")
+    llm = _hints_llm([med, vit], {"medication": "none", "vital_lab": "one"})
+    doc = extraction.extract_facts_v2(llm, _hints_member(body))["doc"]
+    assert doc["coverage"]["status"] == "incomplete"
+    vit_id = next(f["fact_id"] for f in doc["facts"] if "血圧" in f["statement"])
+    out = extraction.repair_facts_v2(llm, _hints_member(body), doc, {vit_id: "x"})
+    assert out["repaired"] is True
+    new = out["doc"]
+    assert new["coverage"]["status"] == "incomplete"
+    med_obs = [o for o in new["obligations"]
+               if o["category"] == "medication" and o["fact_ids"]]
+    assert med_obs and all(o["status"] == "ambiguous" for o in med_obs)

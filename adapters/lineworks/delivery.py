@@ -97,8 +97,15 @@ def failure(exc):
                  "private_key_permissions", "signature_failed", "upload_url_invalid",
                  "rate_state_invalid", "scope_mismatch"}
         rejected = isinstance(exc.status, int) and 400 <= exc.status < 500
-        return {"result": "not_sent" if rejected or exc.error_code in local else "unknown",
-                "error_code": exc.error_code}
+        # pre_send: the access-token request failed before any post was made.
+        pre_send = getattr(exc, "pre_send", False) is True
+        code = exc.error_code
+        # A token endpoint 5xx is an outage, not a verdict: keep it transient.
+        if pre_send and isinstance(exc.status, int) and exc.status >= 500:
+            code = "lineworks_token_unavailable"
+        return {"result": "not_sent" if rejected or pre_send or exc.error_code in local
+                else "unknown",
+                "error_code": code}
     return {"result": "unknown", "error_code": type(exc).__name__.lower()}
 
 
@@ -124,6 +131,10 @@ def chunk_text(spec, name, chunk):
     return f"{first}（{k}/{n}）{sep}{rest}"
 
 
+# the configured route identity every card, token and followup must match
+SCOPE_KEYS = ("transport", "profile", "application_id", "team_id", "channel_id")
+
+
 class Sender:
     def __init__(self, client, settings, root):
         self.client, self.settings, self.root = client, settings, root
@@ -140,13 +151,11 @@ class Sender:
 
     def route_current(self, spec):
         flags = paths.read_flags(self.root)
-        return (flags.get("interactive") is True and flags.get("transport") == "lineworks"
-                and not flags.get("restore_pending")
-                and flags.get("route_epoch") == spec["delivery"]["route_epoch"])
+        return paths.route_open(flags, "lineworks",
+                                spec["delivery"]["route_epoch"])
 
     async def perform(self, spec):
-        if any(spec["delivery"].get(key) != self.settings[key] for key in
-               ("transport", "profile", "application_id", "team_id", "channel_id")) \
+        if any(spec["delivery"].get(key) != self.settings[key] for key in SCOPE_KEYS) \
                 or not self.route_current(spec):
             return {"result": "not_sent", "error_code": "scope_mismatch"}
         try:

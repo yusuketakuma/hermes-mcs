@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "更新通知の再取得と LINE WORKS の影響表示を実際の対象に限定",
+  "summary": "最新タグより先の版を使っている環境で、毎日の更新確認がリリースノートと差分を取り直し続けることがなくなります。LINE WORKS アダプターの再起動が必要という影響表示は、LINE WORKS を対話先に設定している環境だけに表示します。runtime_mode が不正な設定でも、更新計画と更新確認は例外で止まらず、計画は plan_failed として報告します。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "未通知の新版を再取得する条件に、HEAD が最新タグを含まないこと（祖先判定）を加えた。取得後の祖先判定を通知・自動適用の判断に使う。",
+    "LINE WORKS の影響行は notify.interactive が lineworks のときだけ出す。plan の再起動対象と同じ条件。",
+    "plan と check の影響計算で、不正な runtime_mode による ValueError を捕捉する。",
+    "巻戻し・復旧中のサービス整理（_reconcile_membership）は、不正な runtime_mode を cron と agent の削除より前に runtime_mode_unverifiable として返す（独立 watchdog と同じ扱い）。巻戻しは失敗、復旧は escalate として扱い、例外で中断しない。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_update.py"
+  ]
+}

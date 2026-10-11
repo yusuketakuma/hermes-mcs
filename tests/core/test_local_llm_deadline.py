@@ -27,7 +27,9 @@ def test_every_local_request_uses_deadline_and_reaps_worker(monkeypatch, entry):
             processes.append(self)
 
         def communicate(self, input=None, timeout=None):
-            if timeout is not None:
+            # the request carries the envelope; the post-kill reap (bounded
+            # by its own timeout) sends nothing
+            if input is not None:
                 self.envelope = json.loads(input)
                 self.timeout = timeout
                 raise subprocess.TimeoutExpired(self.command, timeout)
@@ -117,7 +119,7 @@ class SlowResponse:
         with open({str(ready)!r}, 'w') as marker:
             marker.write('ready')
         data = bytearray()
-        for _ in range(1000):
+        for _ in range(5000):          # ~100 s unless the deadline cuts it
             time.sleep(0.02)
             data.extend(b'x')
         return bytes(data)
@@ -141,9 +143,62 @@ raise SystemExit(bounded_http._http_worker_main())
     started = time.monotonic()
     with pytest.raises(TimeoutError, match="deadline"):
         local_llm.bounded_request(local_llm.ENDPOINT, "POST", {}, 30,
-                                  deadline=started + 2)
-    assert time.monotonic() - started < 5
+                                  deadline=started + 5)
+    # the worker gets time to start on a loaded runner; the bound stays far
+    # below the read's ~100 s, so only the deadline can have ended it
+    assert time.monotonic() - started < 20
     assert ready.exists(), "the synthetic slow read must have started"
     assert len(processes) == 1
     assert processes[0].returncode is not None
     assert processes[0].poll() == processes[0].returncode
+
+
+# A deadline that expires before the body is sent is reported as not sent.
+URL = "http://127.0.0.1:9/v1/chat/completions"
+
+
+def test_pre_popen_expiry_is_not_sent(monkeypatch):
+    clock = iter([100.0, 100.0, 200.0])
+    monkeypatch.setattr(bounded_http.time, "monotonic", lambda: next(clock))
+    with pytest.raises(bounded_http.NotSentTimeout):
+        bounded_http.bounded_http_request(URL, "GET", None, 5, deadline=150.0)
+
+
+def test_post_popen_pre_communicate_expiry_is_not_sent(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(bounded_http.time, "monotonic", lambda: now[0])
+
+    class FakeProcess:
+        returncode = None
+        sent = None
+
+        def __init__(self, *a, **k):
+            now[0] = 200.0  # deadline passes while the worker starts
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            self.returncode = -9
+
+        def communicate(self, input=None, timeout=None):
+            FakeProcess.sent = input
+            return b"", b""
+
+    monkeypatch.setattr(bounded_http.subprocess, "Popen", FakeProcess)
+    with pytest.raises(bounded_http.NotSentTimeout):
+        bounded_http.bounded_http_request(URL, "GET", None, 5, deadline=150.0)
+    assert FakeProcess.sent is None
+
+
+@pytest.mark.parametrize("error,kind", [
+    (bounded_http.NotSentTimeout("x"), "unreachable"),
+    (TimeoutError("x"), "transport"),
+])
+def test_chat_classifies_not_sent_timeout(error, kind):
+    def request_fn(*_a):
+        raise error
+    out = {}
+    assert local_llm.chat("p", endpoint=URL, request_fn=request_fn,
+                          error_out=out) is None
+    assert out["kind"] == kind

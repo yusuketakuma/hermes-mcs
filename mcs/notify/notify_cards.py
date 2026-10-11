@@ -35,7 +35,6 @@ import hashlib
 import json
 import os
 import secrets
-import tempfile
 import time
 import uuid
 from contextlib import suppress
@@ -45,6 +44,7 @@ from mcs_adapter import project_url
 from mcs_queries import HOLD_PROGRESS_SET, current_fact_pred
 from mcs_requests import canonical, payload_hash, positive, valid_hash
 from mcs_util import loads_dict
+from safe_io import atomic_write
 from notify_render import (
     _anchor_keys, _card_body_text, _card_content, _content_fp,
     _latest_signals, _mmdd, _patient_name, _preview_header, _preview_line, _signal_evidence, _source_fp,
@@ -298,13 +298,14 @@ _LIVE_VIEWS = frozenset({"body", "summary", "request", "dismiss", "report",
                          "mytasks", "unacked", "search", "digest", "tasks",
                          "meds", "drugsearch"})
 
+# mirrored from adapters/common/spec (core never imports adapters);
+# tests/notify/test_card_extras.py pins them equal
 MAX_COMPONENTS = 40           # the worker's per-card component ceiling
-MAX_POST_ACTIONS = 5          # adapters/common/spec.MAX_POST_ACTIONS
+MAX_POST_ACTIONS = 5          # spec.MAX_POST_ACTIONS
 # Card face layout stamped at creation: existing cards keep layout 1 (no
 # fingerprint change, no mass re-render / LINE WORKS re-post); cards
 # created from now on use the current one (owner decision 2026-10-08)
 CARD_LAYOUT = 2
-                              # (hermes_plugin spec.MAX_COMPONENTS)
 TASK_HINT_MAX = 300           # 📝 prefill — the modal field holds 1000
 STAFF_CHOICES = 25            # Discord/Slack select option ceiling
 TASK_VIEW_LIMIT = 12          # ephemeral list rows — 12 tasks x <=2
@@ -518,23 +519,11 @@ def clear_snapshot_dirty(ledger) -> None:
 
 def publish_file(directory: str, name: str, raw: bytes) -> str:
     """mkstemp -> fsync -> os.replace -> dir fsync. Never a partial file."""
-    fd, tmp = tempfile.mkstemp(prefix=".pub-", dir=directory)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(tmp, os.path.join(directory, name))
-        dirfd = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(dirfd)
-        finally:
-            os.close(dirfd)
-    except BaseException:
-        with suppress(OSError):
-            os.unlink(tmp)
-        raise
-    return os.path.join(directory, name)
+    path = os.path.join(directory, name)
+    atomic_write(path, lambda stream: stream.write(raw), binary=True,
+                 tmp_prefix=".pub-", tmp_suffix="", makedirs=False,
+                 require_dir=False)
+    return path
 
 
 def publish_flags(cfg: dict, root: str) -> bool:
@@ -1855,7 +1844,7 @@ def assignee_choices(db, limit=STAFF_CHOICES) -> list:
     in. Empty -> the plugins fall back to free text. This is the single
     swap point for another roster source."""
     from mcs_queries import staff_directory
-    from mcs_signals import _latest_self_profile, latest_station_staff
+    from self_identity import _latest_self_profile, latest_station_staff
     out, seen = [], set()
 
     def add(name, station):
@@ -1902,14 +1891,15 @@ def _publish_specs(db, dirs, specs, now) -> list:
         path = publish_file(dirs[transport + "_render"],
                             spec["delivery_id"] + ".json",
                             canonical(spec))
-        db.execute(
-            "UPDATE notification_renders SET spec_published=1,"
-            "first_published_at=COALESCE(first_published_at,?),"
-            "updated_at=? WHERE delivery_id=?",
-            (now, now, spec["delivery_id"]))
+        # per spec: a later publish error must not leave this UPDATE in
+        # an open implicit transaction (callers' next BEGIN would fail)
+        with db:
+            db.execute(
+                "UPDATE notification_renders SET spec_published=1,"
+                "first_published_at=COALESCE(first_published_at,?),"
+                "updated_at=? WHERE delivery_id=?",
+                (now, now, spec["delivery_id"]))
         published.append(path)
-    if published:
-        db.commit()
     return published
 
 
@@ -2890,6 +2880,10 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
     notify_digest), recomputed per click; stored receipts drop their
     text. The 💊 target post comes from the token's render-time params,
     never from user input."""
+    if inputs.get("projects"):
+        # echo the counting scope: a delayed answer whose scope the
+        # adapter has since narrowed must not deliver these totals
+        base = {**base, "projects": inputs["projects"]}
     if action == "digest":
         if not inputs.get("query"):
             # the click opens the scope modal; its submit carries input
@@ -3364,20 +3358,37 @@ def _plain(text) -> str:
 
 # ---------- sweep / GC / watchdog / health ----------
 
-def revoke_card(db, card_id, now) -> None:
+def revoke_card(db, card_id, now) -> list:
     """Revocation decision: flag the card once, then suppress any still-
     pending coverage — it can never legitimately deliver now, and an
-    intent must not stay pending forever on a revoked card."""
+    intent must not stay pending forever on a revoked card. Returns the
+    (delivery_id, transport) renders whose unsent parts it held; the
+    caller withdraws their spec files after commit."""
     cur = db.execute(
         "UPDATE notification_cards SET delivery_state='revoked',"
         "revoked_at=?,updated_at=? WHERE card_id=? "
         "AND delivery_state!='revoked' AND revoked_at IS NULL",
         (now, now, card_id))
     if not cur.rowcount:
-        return
+        return []
     # a queued-but-unsent render must not linger claimable — a worker
     # picking it up would post a card for an archived/dead unit
     _cancel_open_renders(db, card_id, now)
+    # A delivered card's unsent thread/body/attachment parts would
+    # otherwise resume from the retained spec. 'held' marks them
+    # planned-but-blocked; parts the worker already started keep their
+    # journaled truth for reconcile.
+    withdrawn = db.execute(
+        "SELECT DISTINCT r.delivery_id,r.transport FROM notification_renders r "
+        "JOIN notification_render_parts p ON p.delivery_id=r.delivery_id "
+        "WHERE r.card_id=? AND p.state='pending' AND p.kind!='card'",
+        (card_id,)).fetchall()
+    for r in withdrawn:
+        db.execute(
+            "UPDATE notification_render_parts SET state='held',"
+            "error_code='card_revoked',updated_at=? WHERE delivery_id=? "
+            "AND state='pending' AND kind!='card'", (now, r["delivery_id"]))
+        _update_parts_state(db, r["delivery_id"], now)
     db.execute(
         "UPDATE notification_intent_cards SET state='suppressed' "
         "WHERE card_id=? AND state='pending'", (card_id,))
@@ -3385,6 +3396,7 @@ def revoke_card(db, card_id, now) -> None:
             "SELECT DISTINCT event_id FROM notification_intent_cards "
             "WHERE card_id=?", (card_id,)).fetchall():
         _complete_intent(db, r["event_id"], now)
+    return [(r["delivery_id"], r["transport"]) for r in withdrawn]
 
 
 def sweep(ledger, cfg, limit=100, now=None) -> dict:
@@ -3398,6 +3410,7 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
     dirs = notify_dirs(root)
     ensure_dirs(root)
     specs = []
+    withdrawn = []
     scanned = updated = 0
     with db:
         db.execute("BEGIN IMMEDIATE")
@@ -3416,7 +3429,7 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
             if positive(card["project_id"]) and db.execute(
                     "SELECT 1 FROM patients WHERE project_id=? "
                     "AND is_archived=1", (card["project_id"],)).fetchone():
-                revoke_card(db, card["card_id"], now)
+                withdrawn += revoke_card(db, card["card_id"], now)
             tri = db.execute(
                 "SELECT state,defer_until FROM notification_triage "
                 "WHERE card_id=?", (card["card_id"],)).fetchone()
@@ -3450,6 +3463,12 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
         if specs:
             mark_snapshot_dirty(db)
     _publish_specs(db, dirs, specs, now)
+    # The worker never reads the DB: a withdrawn spec file is what stops
+    # it resuming revoked parts. A crash before this leaves gc to do it.
+    for delivery_id, transport in withdrawn:
+        with suppress(OSError):
+            os.unlink(os.path.join(dirs[transport + "_render"],
+                                   delivery_id + ".json"))
     return {"scanned": scanned, "updated": updated,
             "republished": len(specs)}
 

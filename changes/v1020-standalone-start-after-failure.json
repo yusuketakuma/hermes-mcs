@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "独立モードで子処理の起動に失敗した後、同じ周回で別の処理を起動しないよう修正",
+  "summary": "独立モード（runtime_mode=standalone）のホストは、子処理（抽出worker・コマンド処理・定期ジョブ）の起動に失敗すると安全な再起動を要求します。これまでは同じ周回の残りの処理を起動してしまい、それらの完了まで再起動が遅れていました。起動失敗の時点で新しい起動を止め、すぐに再起動へ進みます。実行中の定期ジョブ（更新など）は従来どおり完了を待ちます。",
+  "upgrade": "追加操作は不要です。更新後のホスト再起動から有効になります。",
+  "details": [
+    "mcs_standalone/runtime.py の Runtime.start は、restarting が立っていれば何も起動しない。tick の外側の確認は周回の最初に1回だけだったため、周回の途中で起動に失敗した後も後続の起動が進んでいた。",
+    "背景workerだけを停止し、実行中の core ジョブは完了を待つ既存の動作は変えていない。"
+  ],
+  "refs": [
+    "mcs_standalone/runtime.py",
+    "tests/adapters/standalone/test_runtime.py"
+  ]
+}

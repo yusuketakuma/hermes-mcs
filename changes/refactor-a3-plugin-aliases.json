@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "Hermesプラグイン内の旧アダプター別名を削除",
+  "summary": "Hermesプラグインのカード送信処理が、接続アダプターの本体（adapters/）を直接読み込むようになりました。プラグイン内に残していた旧い別名の読込口（mcs_slack・mcs_discord・mcs_delivery）は削除しました。Slack・Discordのカード表示と操作は変わりません。",
+  "upgrade": "設定変更・DB移行は不要ですが、Hermes gateway の再起動が必要です。起動中の旧 gateway は、再接続時に削除済みの別名を読み込もうとする場合があるためです。mcs update で更新した場合は再起動が自動で予約されます。git pull などで手動更新した場合は hermes gateway restart を実行してください。旧版へ戻す場合は旧ファイル一式がそのまま戻るため、同じく再起動すれば安全に戻せます。",
+  "details": [
+    "hermes_plugin/card_workers.py は、bridge.py の _ensure_repo_root でリポジトリのルートを sys.path に加えてから adapters.discord.tasks・adapters.slack.tasks・adapters.common.paths を関数内で import する。plugin の import 時には adapters を読み込まない。",
+    "hermes_plugin/mcs_slack/・mcs_discord/・mcs_delivery/ を削除し、テストの import を adapters.* に統一した。Hermes と同じく hermes_plugins.mcs という別名で plugin を読み込んでも、カード worker がリポジトリの adapters を使うことをテストで確認する。"
+  ],
+  "refs": [
+    "hermes_plugin/card_workers.py",
+    "hermes_plugin/bridge.py",
+    "tests/adapters/common/test_adapter_layout.py"
+  ]
+}

@@ -20,6 +20,7 @@ from rollup import PERIOD_CHECK_VERSION
 from test_ledger_audit import _database
 import drug_map
 import rollup
+import mcs_repair
 
 NONCE = "00000000-0000-4000-8000-000000000013"
 OPERATOR = hashlib.sha256(b"synthetic-operator").hexdigest()
@@ -579,3 +580,53 @@ def test_invalid_cli_arguments_never_echo_private_input(capsys):
     # Then.
     assert error.value.code == 2
     assert "SYNTHETIC_PRIVATE" not in capsys.readouterr().err
+
+
+def test_repair_inputs_use_own_size_bound_not_command_queue_cap(tmp_path):
+    big = {"padding": "p" * 20_000, "nested": {"k": 1}}
+    path = tmp_path / "plan.json"
+    path.write_bytes(repair.canonical(big))
+    assert path.stat().st_size > 16384
+    assert repair._read_json(path) == big
+    for raw, code in ((b'{"a":1,"a":2}', "duplicate_key"),
+                      (b'{"a":NaN}', "invalid_number"),
+                      (b"[" * 200_000, "too_deep"),
+                      (b" " * (1_048_576 + 1), "input_too_large")):
+        path.write_bytes(raw)
+        with pytest.raises(ValueError, match=code):
+            repair._read_json(path)
+
+
+# Publication-boundary races preserve complete outputs and clean owned staging.
+def test_concurrent_result_creation_does_not_replace_other_writer(tmp_path, monkeypatch):
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    destination = private / "result.json"
+    link = mcs_repair.os.link
+
+    def concurrent_link(source, target, **kwargs):
+        destination.write_text('{"synthetic":"other writer"}')
+        return link(source, target, **kwargs)
+
+    monkeypatch.setattr(mcs_repair.os, "link", concurrent_link)
+    with pytest.raises(FileExistsError):
+        mcs_repair.save_new(destination, {"synthetic": "this writer"})
+    assert json.loads(destination.read_text()) == {"synthetic": "other writer"}
+    assert sorted(path.name for path in private.iterdir()) == ["result.json"]
+
+
+def test_interruption_after_link_keeps_complete_result_and_removes_staging(tmp_path, monkeypatch):
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    destination = private / "result.json"
+    link = mcs_repair.os.link
+
+    def interrupted_link(source, target, **kwargs):
+        link(source, target, **kwargs)
+        raise KeyboardInterrupt("synthetic after-publication interruption")
+
+    monkeypatch.setattr(mcs_repair.os, "link", interrupted_link)
+    with pytest.raises(KeyboardInterrupt):
+        mcs_repair.save_new(destination, {"synthetic": "complete"})
+    assert json.loads(destination.read_text()) == {"synthetic": "complete"}
+    assert sorted(path.name for path in private.iterdir()) == ["result.json"]

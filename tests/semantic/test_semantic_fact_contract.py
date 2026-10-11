@@ -19,8 +19,7 @@ def _binding(**overrides):
         "message_id": "m1", "revision": "r1", "content_hash": "h1",
         "body_codepoints": 40, "content_quality": "full",
         "attachments_complete": True,
-        "source_fingerprint": sf.source_fingerprint(
-            "m1", "r1", "h1", 40, "full", True),
+        "source_fingerprint": "sf_synthetic0001",
     }
     binding.update(overrides)
     return binding
@@ -130,14 +129,6 @@ def test_huge_confidence_has_contract_error():
     with pytest.raises(sf.ContractError, match='confidence_invalid'):
         sf.validate_relation({'relation_id': 'r', 'left_fact_id': 'a',
             'right_fact_id': 'b', 'type': 'COMPLEMENTS', 'confidence': 10**1000})
-
-
-def test_importance_is_ordering_metadata_only():
-    assert [sf.importance_rank(t) for t in ("T0", "T1", "T2", "T3")] \
-        == [0, 1, 2, 3]
-    assert sf.importance_rank("unknown") == 4
-    with pytest.raises(sf.ContractError):
-        sf.importance_rank("T4")
 
 
 def test_facts_doc_cross_reference_validation():

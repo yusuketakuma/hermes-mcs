@@ -32,7 +32,7 @@ import uuid
 from pathlib import Path
 from contextlib import suppress
 
-from mcs_util import html_to_text, loads_dict, publish_tmp
+from mcs_util import RETRY_LATER_4XX, html_to_text, loads_dict, publish_tmp
 
 
 SCHEMA_VERSION = 9
@@ -64,9 +64,8 @@ def job_reason_class(value: object) -> str:
         return "authentication"
     if code == "waiting_replies":
         return "deferred"
-    # 408/425/429 are retry-later by definition, not a permanent 4xx
-    if code.startswith("http_") and code not in ("http_408", "http_425", "http_429") \
-            and int(code[5:]) < 500:
+    if code.startswith("http_") and int(code[5:]) < 500 \
+            and int(code[5:]) not in RETRY_LATER_4XX:
         return "unavailable"
     return "transient"
 
@@ -183,6 +182,28 @@ _GUARD_RELATIONS = (
      "NOT EXISTS (SELECT 1 FROM messages m "
      "WHERE m.message_id=a.message_id)"),
 )
+# AFTER UPDATE OF ... WHEN: only a real change to an indexed column
+# rewrites the FTS row (see Ledger._install_fts_update_trigger)
+_FTS_AU_MARK = "AFTER UPDATE OF body_text, sender_name ON messages"
+_FTS_AU_SQL = f"""
+  CREATE TRIGGER messages_au
+  {_FTS_AU_MARK}
+  WHEN old.body_text IS NOT new.body_text
+    OR old.sender_name IS NOT new.sender_name
+  BEGIN
+    UPDATE messages_fts SET body_text=new.body_text,
+      sender_name=new.sender_name
+    WHERE rowid=old.message_id;
+    INSERT INTO messages_fts(rowid, body_text, sender_name)
+    SELECT new.message_id, new.body_text, new.sender_name
+    WHERE NOT EXISTS(SELECT 1 FROM messages_fts
+                     WHERE rowid=new.message_id);
+  END"""
+# WAL size a checkpoint truncates back to (bytes)
+JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024
+# a shadow relation's orphan count is health evidence, not a gate: an
+# open within this window of the last confirmed recount trusts it
+RELATION_RECOUNT_S = 3600
 _GUARD_TRIGGERS = frozenset(
     [f"g1_{table}_msg_{suffix}" for table, _, _ in _GUARD_RELATIONS
      for suffix in ("ins", "upd")]
@@ -211,6 +232,9 @@ class Ledger:
                 new_database=not tables, audit=version != SCHEMA_VERSION)
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
+            # a checkpoint truncates the -wal file back to this size; without
+            # it one long reader leaves a WAL at its high-water mark forever
+            self.db.execute(f"PRAGMA journal_size_limit={JOURNAL_SIZE_LIMIT}")
             for side in (path + "-wal", path + "-shm"):
                 if os.path.exists(side):
                     os.chmod(side, 0o600)
@@ -220,19 +244,15 @@ class Ledger:
 
     def _preflight(self, tables: set[str]):
         """Reject ambiguous existing rows before any persistent change."""
-        checks = (("attachments", "attachment_id", "message_id,file_id",
-                   "duplicate attachment keys"),
-                  ("read_marks", "id", "project_id,snapshot_ts",
-                   "duplicate read mark keys"))
-        for table, marker, keys, error in checks:
+        errors = {"attachments": "duplicate attachment keys",
+                  "read_marks": "duplicate read mark keys"}
+        for table in KEY_FENCES:
             if table not in tables:
                 continue
             cols = {r[1] for r in self.db.execute(
-                f"PRAGMA table_info({table})")}
-            if marker in cols and self.db.execute(
-                    f"SELECT 1 FROM {table} GROUP BY {keys} "
-                    "HAVING COUNT(*) > 1 LIMIT 1").fetchone():
-                raise MigrationError(error)
+                f'PRAGMA table_info("{table}")')}
+            if _key_fence_breached(self.db, table, cols):
+                raise MigrationError(errors[table])
 
     def _init(self):
         self.db.executescript("""
@@ -314,6 +334,8 @@ class Ledger:
             ON messages(project_id, posted_at_ts);
           CREATE INDEX IF NOT EXISTS idx_messages_notified
             ON messages(notified_at) WHERE notified_at IS NOT NULL;
+          CREATE INDEX IF NOT EXISTS idx_messages_posted_ts
+            ON messages(posted_at_ts);
           CREATE INDEX IF NOT EXISTS idx_messages_parent
             ON messages(parent_id);
           CREATE INDEX IF NOT EXISTS idx_messages_thread_time
@@ -324,6 +346,8 @@ class Ledger:
             ON requests(source_message_id);
           CREATE INDEX IF NOT EXISTS idx_artifacts_kind_msg
             ON artifacts(kind, message_id);
+          CREATE INDEX IF NOT EXISTS idx_artifacts_kind_created
+            ON artifacts(kind, created_at);
           CREATE INDEX IF NOT EXISTS idx_fetch_jobs_pending_due
             ON fetch_jobs(kind, next_try) WHERE state='pending';
           CREATE INDEX IF NOT EXISTS idx_attachments_pending
@@ -344,19 +368,35 @@ class Ledger:
                 INSERT INTO messages_fts(rowid, body_text, sender_name)
                 VALUES (new.message_id, new.body_text, new.sender_name);
               END;
-              CREATE TRIGGER IF NOT EXISTS messages_au
-              AFTER UPDATE ON messages BEGIN
-                UPDATE messages_fts SET body_text=new.body_text,
-                  sender_name=new.sender_name
-                WHERE rowid=old.message_id;
-                INSERT INTO messages_fts(rowid, body_text, sender_name)
-                SELECT new.message_id, new.body_text, new.sender_name
-                WHERE NOT EXISTS(SELECT 1 FROM messages_fts
-                                 WHERE rowid=new.message_id);
-              END;
             """)
+            self._install_fts_update_trigger()
         self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         self.db.commit()
+
+    def _install_fts_update_trigger(self) -> None:
+        """Keep messages_fts in step with indexed columns only.
+
+        Re-observing a stored post rewrites updated_seen/reply_count on
+        every tick; a column-less AFTER UPDATE trigger rewrote its FTS row
+        each time. The trigger fires only when body_text or sender_name
+        really changed. A DB from before this rule carries the old
+        trigger, which is replaced in one transaction (additive DDL,
+        schema version unchanged; an older writer keeps the new one
+        through its CREATE TRIGGER IF NOT EXISTS)."""
+        row = self.db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' "
+            "AND name='messages_au'").fetchone()
+        if row is not None and _FTS_AU_MARK in (row[0] or ""):
+            return
+        if not self.db.in_transaction:
+            self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.db.execute("DROP TRIGGER IF EXISTS messages_au")
+            self.db.execute(_FTS_AU_SQL)
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
 
     def _relation_guards_current(self) -> bool:
         """True when no recorded guard decision or evidence would change.
@@ -366,8 +406,12 @@ class Ledger:
         ``ledger_relation_audit`` mode still matches: the only paths that can
         orphan an enforced child (a messages DELETE or key UPDATE) clear that
         row through the ``relation_audit_messages_*`` triggers. ``shadow``
-        relations are recounted because ``existing_count`` is health evidence.
+        relations are recounted because ``existing_count`` is health evidence
+        — at most once per RELATION_RECOUNT_S: every process opens the
+        ledger, and a full orphan COUNT on each open grew with the corpus.
+        A recount that confirms the evidence refreshes its timestamp.
         """
+        recounted = False
         self.db.execute("BEGIN")
         try:
             try:
@@ -381,17 +425,65 @@ class Ledger:
                 "SELECT name FROM sqlite_master WHERE type='trigger'")}
             if not _GUARD_TRIGGERS <= triggers:
                 return False
+            fresh = self._relation_recount_fresh(self._relation_marker())
             for table, _columns, condition in _GUARD_RELATIONS:
                 mode, existing = guards.get(table, (None, None))
                 if mode is None or verified.get(table) != mode:
                     return False
-                if mode == "shadow" and self.db.execute(
-                        f"SELECT COUNT(*) FROM {table} a WHERE {condition}"
-                ).fetchone()[0] != existing:
-                    return False
-            return True
+                if mode == "shadow" and not fresh:
+                    recounted = True
+                    if self.db.execute(
+                            f"SELECT COUNT(*) FROM {table} a WHERE {condition}"
+                    ).fetchone()[0] != existing:
+                        return False
         finally:
             self.db.commit()
+        if recounted:
+            self._mark_relation_recount()
+        return True
+
+    def _relation_marker(self) -> str:
+        """Cheap evidence of changes that can move a shadow count without
+        clearing ledger_relation_audit: new shadow observations, and new
+        parent messages at any id (which can resolve an orphan). Child deletions
+        are covered only by the RELATION_RECOUNT_S bound."""
+        shadow = self.db.execute(
+            "SELECT COALESCE(SUM(shadow_count),0) FROM ledger_relation_guards"
+        ).fetchone()[0]
+        # MCS ids are not insertion-ordered: a backfilled parent can land
+        # below MAX(message_id), so the row count moves the marker too
+        newest, total = self.db.execute(
+            "SELECT MAX(message_id), COUNT(*) FROM messages").fetchone()
+        return f"{shadow}:{newest}:{total}"
+
+    def _relation_recount_fresh(self, marker: str) -> bool:
+        """True when shadow evidence was confirmed within RELATION_RECOUNT_S
+        and nothing in ``marker`` moved since."""
+        try:
+            row = self.db.execute(
+                "SELECT counted_at,marker FROM ledger_relation_recount "
+                "WHERE singleton=1").fetchone()
+        except sqlite3.OperationalError:
+            return False
+        if row is None or row[1] != marker:
+            return False
+        at = row[0]
+        return (isinstance(at, int | float) and not isinstance(at, bool)
+                and 0 <= time.time() - at < RELATION_RECOUNT_S)
+
+    def _mark_relation_recount(self) -> None:
+        """Record a confirmed recount (best effort: only skips future work)."""
+        with suppress(sqlite3.Error):
+            with self.db:
+                self.db.execute(
+                    "CREATE TABLE IF NOT EXISTS ledger_relation_recount("
+                    "singleton INTEGER PRIMARY KEY CHECK(singleton=1), "
+                    "counted_at REAL NOT NULL, marker TEXT NOT NULL)")
+                self.db.execute(
+                    "INSERT INTO ledger_relation_recount(singleton,counted_at,marker) "
+                    "VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET "
+                    "counted_at=excluded.counted_at,marker=excluded.marker",
+                    (time.time(), self._relation_marker()))
 
     def _install_relation_guards(self, *, new_database: bool = False,
                                  audit: bool = False) -> None:
@@ -470,6 +562,7 @@ class Ledger:
                     AFTER {event} ON messages WHEN {when}
                     BEGIN DELETE FROM ledger_relation_audit; END
                 """)
+        self._mark_relation_recount()
 
     def _script(self, s: str):
         """Run a ;-separated DDL/DML script inside the caller's transaction
@@ -666,7 +759,7 @@ class Ledger:
             self.db.execute(
                 "ALTER TABLE messages ADD COLUMN notified_at REAL")
         if old_version < 7:
-            from mcs_requests import positive
+            from mcs_util import positive
             # reconstruct the old "stored == notified" boundary precisely:
             # mark read messages (can never notify) plus every message
             # already covered by an outbox intent. Unread messages with no
@@ -1323,7 +1416,8 @@ class Ledger:
                       notify: dict | None = None,
                       semantic: bool = False,
                       notify_max_age_s: float | None = None,
-                      notify_all_new: bool = False) -> list:
+                      notify_all_new: bool = False,
+                      notify_new_after_ts: float | None = None) -> list:
         """Backfill path: upsert messages (+reply attachments) without
         touching patient fetch_state. Optional notify intent lands in the
         same transaction. Returns ids of newly-inserted messages.
@@ -1336,7 +1430,10 @@ class Ledger:
         With notify_max_age_s, newly stored read posts with a known
         recent timestamp also qualify through the shared save gate.
         notify_all_replies on the ledger exempts new replies from the age
-        and unread gates only when this call supplies a notify template."""
+        and unread gates only when this call supplies a notify template.
+        notify_new_after_ts widens eligibility like notify_all_new, but
+        only to new rows posted strictly after it (a page-limited
+        self-post probe's cutoff; older history stays quiet)."""
         new_ids = []
         now = time.time()
         before_semantic = (self._semantic_generation_snapshot(msgs)
@@ -1356,6 +1453,13 @@ class Ledger:
                 if notify_all_new:
                     fresh_unread = list(dict.fromkeys(
                         fresh_unread + new_ids))
+                elif notify_new_after_ts is not None and new_ids:
+                    fresh_unread = list(dict.fromkeys(fresh_unread + [
+                        r[0] for r in self.db.execute(
+                            "SELECT message_id FROM messages WHERE message_id IN ("
+                            + ",".join("?" * len(new_ids))
+                            + ") AND posted_at_ts > ?",
+                            [*new_ids, notify_new_after_ts])]))
                 notify_ids = self._unnotified(fresh_unread) if notify else []
                 self._queue_saved_messages_tx(
                     project_id, new_ids, changed_semantic.get(project_id, []),
@@ -1427,10 +1531,11 @@ class Ledger:
             (m.message_id,)).fetchone()
         if existing is not None and existing["project_id"] != m.project_id:
             raise ValueError("message_project_mismatch")
-        if (existing is not None and existing["content_hash"] is not None
-                and existing["body_state"] in TERMINAL_BODY_STATES
-                and m.body_state in TERMINAL_BODY_STATES
-                and existing["content_hash"] != chash):
+        edited = (existing is not None and existing["content_hash"] is not None
+                  and existing["body_state"] in TERMINAL_BODY_STATES
+                  and m.body_state in TERMINAL_BODY_STATES
+                  and existing["content_hash"] != chash)
+        if edited:
             # seed seq 1 once, then chain off the latest revision inside the
             # INSERT itself: seq and prev_content_hash come from the row
             # read under the write lock, and an edit an overlapping writer
@@ -1511,18 +1616,24 @@ class Ledger:
               m.posted_at, posted_ts, int(bool(m.is_unread)),
               m.body_html, body_text, m.body_state, chash, m.reply_count,
               now, now))
-        self._save_message_metadata(m, source="capture", now=now)
+        self._save_message_metadata(m, source="capture", now=now,
+                                    body_changed=edited)
         return 0 if existing is not None else 1
 
-    def _save_message_metadata(self, m, *, source, now):
+    def _save_message_metadata(self, m, *, source, now, body_changed=False):
         metadata = getattr(m, "metadata", {})
         errors = getattr(m, "metadata_errors", [])
-        if not metadata and not errors and source == "capture":
+        if (not metadata and not errors and source == "capture"
+                and not body_changed):
             return
         row = self.db.execute(
             "SELECT content FROM message_metadata WHERE message_id=? AND source=?",
             (m.message_id, source)).fetchone()
         content = (loads_dict(row["content"]) or {}) if row else {}
+        if body_changed:
+            # a field this capture did not re-observe belongs to the earlier
+            # body; keeping it under the new checked_at would re-bind it
+            content = {k: v for k, v in content.items() if k in metadata}
         # observed_at marks when this value was first seen: unread posts
         # are re-captured every tick, and refreshing an unchanged value
         # would re-render cards and recount digests each time.
@@ -1556,27 +1667,23 @@ class Ledger:
             if publish is True and error is None and not getattr(m, "metadata_errors", []):
                 self._save_message_metadata(m, source="capture", now=now)
 
-    def _reaction_actor_watch_sql(self):
-        """Roots and replies of threads active in the last 7 days in active
-        rooms (第2層 watch set) — stamps are pressed on both."""
-        return ("""SELECT m.message_id FROM messages m
-          JOIN patients p ON p.project_id=m.project_id
-          WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
-            AND m.posted_at_ts<=?
-            AND (SELECT MAX(x.posted_at_ts) FROM messages x
-                 WHERE x.project_id=m.project_id
-                   AND x.body_state IS NOT 'deleted' AND x.posted_at_ts<=?
-                   AND COALESCE(x.parent_id,x.message_id)=COALESCE(m.parent_id,m.message_id))>=?""",
-                None)
-
     def reaction_actor_targets(self, limit=4, *, now=None):
         """Watched posts whose captured reactions changed since the last
         complete actor fetch, or whose complete set expired; failures back off."""
         now = time.time() if now is None else now
-        watch, _ = self._reaction_actor_watch_sql()
-        return self.db.execute(f"""
+        # w: roots and replies of threads active in the last 7 days in
+        # active rooms (第2層 watch set) — stamps are pressed on both.
+        return self.db.execute("""
           SELECT m.message_id,m.project_id FROM messages m
-          JOIN ({watch}) w ON w.message_id=m.message_id
+          JOIN (SELECT m.message_id FROM messages m
+            JOIN patients p ON p.project_id=m.project_id
+            WHERE p.is_archived=0 AND m.body_state IS NOT 'deleted'
+              AND m.posted_at_ts<=?
+              AND (SELECT MAX(x.posted_at_ts) FROM messages x
+                   WHERE x.project_id=m.project_id
+                     AND x.body_state IS NOT 'deleted' AND x.posted_at_ts<=?
+                     AND COALESCE(x.parent_id,x.message_id)=COALESCE(m.parent_id,m.message_id))>=?
+          ) w ON w.message_id=m.message_id
           JOIN message_metadata md ON md.message_id=m.message_id AND md.source=(
             SELECT source FROM message_metadata latest
             WHERE latest.message_id=m.message_id AND latest.last_error IS NULL
@@ -1791,7 +1898,7 @@ class Ledger:
         payload=None is the unregistered form and is stored as
         empty=true/comment=null so 空 (fetched, nothing registered) stays
         distinct from 未取得 (never fetched). An unchanged summary (same
-        sha256) writes no new artifact — only the newest row's
+        sha256 and karte_id) writes no new artifact — only the newest row's
         fetched_at moves. Either way the project's due flag is cleared."""
         p = payload or {}
         user = p.get("user") or {}
@@ -1810,7 +1917,9 @@ class Ledger:
         if row:
             with suppress(ValueError, TypeError, RecursionError):
                 meta = json.loads(row["meta"] or "{}")
-                if isinstance(meta, dict) and meta.get("sha256") == sha:
+                # karte_id too: readers bind the newest row to patients.karte_id
+                if (isinstance(meta, dict) and meta.get("sha256") == sha
+                        and meta.get("karte_id") == karte_id):
                     meta["fetched_at"] = now
                     self.db.execute(
                         "UPDATE artifacts SET meta=? WHERE artifact_id=?",
@@ -1838,12 +1947,6 @@ class Ledger:
             (time.time(), project_id))
         self.db.commit()
 
-    def _karte_summary_due(self, project_id: int, flag: int):
-        self.db.execute(
-            "UPDATE patients SET karte_summary_due=? WHERE project_id=?",
-            (flag, project_id))
-        self.db.commit()
-
     def karte_summary_mark_due(self, project_id: int, due: bool = True):
         """Flag (or unflag) a project for a 連携サマリー GET on the next run.
 
@@ -1853,7 +1956,10 @@ class Ledger:
         stage on a non-retryable failure (the next new message re-arms
         it). The flag persists for a project whose karte_id is still
         unknown and fires once it is."""
-        self._karte_summary_due(project_id, 1 if due else 0)
+        self.db.execute(
+            "UPDATE patients SET karte_summary_due=? WHERE project_id=?",
+            (1 if due else 0, project_id))
+        self.db.commit()
 
     def karte_summary_due(self) -> list:
         """Projects flagged for a summary GET that have a karte_id, newest last_seen first.
@@ -1980,7 +2086,11 @@ class Ledger:
                                payload, next_try,
                                revive_failed=revive_failed)
         self.db.commit()
-        return cur.lastrowid
+        if cur.rowcount < 1:  # kept an in-flight row; lastrowid is stale here
+            return None
+        return self.db.execute(
+            "SELECT job_id FROM fetch_jobs WHERE kind=? AND project_id=?"
+            " AND message_id=?", (kind, project_id, message_id)).fetchone()[0]
 
     def job_set_flag(self, kind: str, project_id: int, message_id: int,
                      key: str) -> None:
@@ -2392,7 +2502,7 @@ class Ledger:
                           retry_in: float = 900, max_attempts: int = 6,
                           semantic: bool = False):
         """Classified failure recording (F11). PERMANENT kinds (4xx other
-        than 408/429, oversize, policy blocks) can never succeed on the
+        than RETRY_LATER_4XX, oversize, policy blocks) can never succeed on the
         same url -> 'failed' now; a fresh signed url on re-save revives
         the row (see _save_attachments). Transient kinds back off to the
         attempt cap as before."""
@@ -2401,7 +2511,7 @@ class Ledger:
             or (kind.startswith("http_")
                 and kind[5:].isdigit()
                 and 400 <= int(kind[5:]) < 500
-                and int(kind[5:]) not in (408, 429)))
+                and int(kind[5:]) not in RETRY_LATER_4XX))
         with self.db:
             source = self.db.execute(
                 "SELECT m.project_id,m.message_id,a.state,"
@@ -2449,7 +2559,7 @@ class Ledger:
     def pending_notify_message_ids(self) -> list[int]:
         """message_ids referenced by unsent notify events — their
         attachments jump the download queue so flush() can attach them."""
-        from mcs_requests import positive
+        from mcs_util import positive
         out = []
         for r in self.db.execute("""
           SELECT payload FROM notify_outbox
@@ -2691,6 +2801,21 @@ class LedgerReader(Ledger):
 
 
 SNAPSHOT_VERIFY_TIMEOUT_S = 30.0
+# quick_check time grows with the file: the verify budget adds one second
+# per SNAPSHOT_VERIFY_RATE_BPS of snapshot, capped, so a ledger that has
+# outgrown the floor is not refused on every publish (H4)
+SNAPSHOT_VERIFY_RATE_BPS = 64 * 1024 * 1024
+SNAPSHOT_VERIFY_EXTRA_MAX_S = 150.0
+
+
+def snapshot_verify_timeout_s(path: str) -> float:
+    """Verify budget for a snapshot candidate of this size."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        size = 0
+    return SNAPSHOT_VERIFY_TIMEOUT_S + min(
+        SNAPSHOT_VERIFY_EXTRA_MAX_S, size / SNAPSHOT_VERIFY_RATE_BPS)
 _SNAPSHOT_VALIDATION_CODE = (
     "import sys; sys.path.insert(0, sys.argv[1]); import _mcs_path; "
     "from ledger import valid_mcs_db; "
@@ -2730,10 +2855,25 @@ def _valid_snapshot_candidate(path: str, *, deadline: float) -> bool:
         return False
 
 
-def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
+class _SnapshotDeadline(Exception):
+    """The copy ran into the caller's hard deadline."""
+
+
+def publish_snapshot(db_path: str, dest_dir: str, *,
+                     deadline: float | None = None) -> str | None:
     """Verified point-in-time copy for read-only consumers.
     backup -> tmp -> quick_check -> atomic rename; consumers never see a
-    half-written snapshot. Returns the published path or None."""
+    half-written snapshot. Returns the published path or None.
+    ``deadline`` (monotonic) is the caller's hard stop, e.g. its armed
+    watchdog: the copy is abandoned and the verify budget capped there,
+    so a large ledger fails this publish instead of getting the process
+    killed mid-copy on every tick."""
+    if deadline is not None and monotonic() >= deadline:
+        return None
+
+    def check_deadline(*_):
+        if deadline is not None and monotonic() >= deadline:
+            raise _SnapshotDeadline
     os.makedirs(dest_dir, mode=0o700, exist_ok=True)
     os.chmod(dest_dir, 0o700)
     dest = os.path.join(dest_dir, "ledger-snapshot.db")
@@ -2745,7 +2885,10 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
         try:
             dst = sqlite3.connect(tmp)
             try:
-                src.backup(dst)
+                try:
+                    src.backup(dst, pages=4096, progress=check_deadline)
+                except _SnapshotDeadline:
+                    return None
                 with dst:
                     dst.execute("INSERT OR REPLACE INTO snapshot_meta("
                                 "singleton,generation_id,generated_at) "
@@ -2756,7 +2899,10 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
                 dst.close()
         finally:
             src.close()
-        if not _valid_snapshot_candidate(tmp, deadline=monotonic() + SNAPSHOT_VERIFY_TIMEOUT_S):
+        verify_by = monotonic() + snapshot_verify_timeout_s(tmp)
+        if deadline is not None:
+            verify_by = min(verify_by, deadline)
+        if not _valid_snapshot_candidate(tmp, deadline=verify_by):
             return None
         publish_tmp(tmp, dest)
         # A reader keeps its old inode or opens the complete new generation.
@@ -2772,7 +2918,7 @@ def reaction_actor_summary(db, message_id, *, now=None) -> dict:
     state: complete | stale (expired or reactions changed since) |
     failed (last walk incomplete; counts are the last complete set) |
     not_fetched. Counts outside 'complete' are past observations only."""
-    from mcs_signals import self_sender_id
+    from self_identity import self_sender_id
     now = time.time() if now is None else now
     out = {"state": "not_fetched", "complete_at": None, "checked_at": None,
            "counts": {}, "self_included": None, "actors": []}
@@ -2818,6 +2964,102 @@ def reaction_actor_summary(db, message_id, *, now=None) -> dict:
     return out
 
 
+# Static recovery-DB contract, one copy for valid_mcs_db, Ledger._preflight,
+# ledger_audit and the bounded backup inventory. Source columns are the ones
+# recovery cannot reconstruct (_migrate_body adds derived columns, not these).
+STATIC_SOURCE_COLUMNS = {
+    "runs": frozenset({"run_id", "started_at", "finished_at",
+                       "snapshot_ts", "status", "error"}),
+    "patients": frozenset({"project_id", "project_type", "patient_name",
+                           "disease", "station_name", "url", "last_seen"}),
+    "messages": frozenset({"message_id", "project_id", "parent_id",
+                           "sender_id", "sender_name", "sender_type",
+                           "profession", "organization", "posted_at",
+                           "body_html", "reply_count", "first_seen"}),
+}
+STATIC_BASE_COLUMNS = {
+    "attachments": frozenset({"attachment_id", "message_id", "file_id",
+                              "name", "url", "local_path", "bytes",
+                              "sha256", "state", "downloaded_at",
+                              "created_at"}),
+    "read_marks": frozenset({"project_id", "snapshot_ts", "marked_at"}),
+    "notify_outbox": frozenset({"event_id", "kind", "project_id", "payload",
+                                "state", "attempts", "next_try",
+                                "accepted_ref", "created_at", "updated_at"}),
+    "artifacts": frozenset({"artifact_id", "kind", "project_id", "message_id",
+                            "content", "model", "meta", "created_at"}),
+    "fetch_jobs": frozenset({"job_id", "kind", "project_id", "message_id",
+                             "parent_id", "payload", "state", "attempts",
+                             "next_try", "created_at", "updated_at"}),
+    "message_metadata": frozenset({"message_id", "source", "content",
+                                   "checked_at", "last_error"}),
+}
+# Pre-attachment_id table layout (no attachment_id column).
+LEGACY_ATTACHMENT_COLUMNS = frozenset({"message_id", "file_id", "name", "url",
+                                       "downloaded_path", "first_seen"})
+# table: (marker column, key) — with the marker, a duplicate key is ambiguous.
+KEY_FENCES = {"attachments": ("attachment_id", "message_id,file_id"),
+              "read_marks": ("id", "project_id,snapshot_ts")}
+
+
+def static_required_tables(version: int) -> set[str]:
+    """Tables a static ledger of this schema version must have.
+
+    Older backups may lack later tables; _init creates them on reopen."""
+    required = set(STATIC_SOURCE_COLUMNS)
+    if version >= 5:
+        required |= {"attachments", "notify_outbox", "read_marks",
+                     "artifacts", "fetch_jobs"}
+    if version >= 8:
+        required.add("message_metadata")
+    return required
+
+
+def static_required_columns(table: str, columns: set[str]) -> frozenset[str]:
+    """Columns a present contract table needs, given the columns it has."""
+    if table == "attachments" and "attachment_id" not in columns:
+        return LEGACY_ATTACHMENT_COLUMNS
+    required = STATIC_SOURCE_COLUMNS.get(table) or STATIC_BASE_COLUMNS[table]
+    if table == "read_marks" and "id" in columns:
+        required |= {"status"}
+    return required
+
+
+def _key_fence_breached(db: sqlite3.Connection, table: str, columns: set[str]) -> bool:
+    """True when a fenced table with its marker column has a duplicate key."""
+    fence = KEY_FENCES.get(table)
+    return bool(fence and fence[0] in columns and db.execute(
+        f'SELECT 1 FROM "{table}" GROUP BY {fence[1]} '
+        "HAVING COUNT(*) > 1 LIMIT 1").fetchone())
+
+
+def static_contract_ok(db: sqlite3.Connection) -> bool:
+    """True when an open static candidate meets the recovery schema contract.
+
+    Checks journal_mode=delete, the supported version, no interrupted
+    migration, the version's required tables, each present table's columns
+    and the ambiguous-key fences. SQLite errors propagate, so each caller
+    keeps its own budget, connection and failure mapping."""
+    if db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
+        return False
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    if not 0 <= version <= SCHEMA_VERSION:
+        return False
+    tables = {r[0] for r in db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if ({"attachments_v1", "read_marks_v1"} & tables
+            or not static_required_tables(version) <= tables):
+        return False
+    for table in (*STATIC_SOURCE_COLUMNS, *STATIC_BASE_COLUMNS):
+        if table not in tables:
+            continue  # _init creates absent tables for older backups.
+        columns = {row[1] for row in db.execute(f'PRAGMA table_info("{table}")')}
+        if (not static_required_columns(table, columns) <= columns
+                or _key_fence_breached(db, table, columns)):
+            return False
+    return True
+
+
 def valid_mcs_db(path: str, *, deadline: float | None = None) -> bool:
     """Validate a static recovery/publication candidate without sidecars."""
     if not os.path.isfile(path) or os.path.getsize(path) == 0:
@@ -2831,76 +3073,8 @@ def valid_mcs_db(path: str, *, deadline: float | None = None) -> bool:
             if deadline is not None:
                 db.set_progress_handler(lambda: int(monotonic() >= deadline), 1000)
             if db.execute("PRAGMA quick_check").fetchone()[0] != "ok" \
-                    or db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
+                    or not static_contract_ok(db):
                 return False
-            version = db.execute("PRAGMA user_version").fetchone()[0]
-            if not 0 <= version <= SCHEMA_VERSION:
-                return False
-            tables = {r[0] for r in db.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'")}
-            if {"attachments_v1", "read_marks_v1"} & tables:
-                return False
-            # _migrate_body adds derived columns, not these source fields.
-            # Older backups may lack tables that _init creates on reopen.
-            core_columns = {
-                "runs": {"run_id", "started_at", "finished_at",
-                         "snapshot_ts", "status", "error"},
-                "patients": {"project_id", "project_type", "patient_name",
-                             "disease", "station_name", "url", "last_seen"},
-                "messages": {"message_id", "project_id", "parent_id",
-                             "sender_id", "sender_name", "sender_type",
-                             "profession", "organization", "posted_at",
-                             "body_html", "reply_count", "first_seen"},
-            }
-            if not core_columns.keys() <= tables:
-                return False
-            if version >= 5 and not {
-                    "attachments", "notify_outbox", "read_marks",
-                    "artifacts", "fetch_jobs"} <= tables:
-                return False
-            if version >= 8 and "message_metadata" not in tables:
-                return False
-            base_columns = {
-                **core_columns,
-                "attachments": {"attachment_id", "message_id", "file_id",
-                                "name", "url", "local_path", "bytes",
-                                "sha256", "state", "downloaded_at",
-                                "created_at"},
-                "read_marks": {"project_id", "snapshot_ts", "marked_at"},
-                "notify_outbox": {"event_id", "kind", "project_id", "payload",
-                                  "state", "attempts", "next_try",
-                                  "accepted_ref", "created_at", "updated_at"},
-                "artifacts": {"artifact_id", "kind", "project_id", "message_id",
-                              "content", "model", "meta", "created_at"},
-                "fetch_jobs": {"job_id", "kind", "project_id", "message_id",
-                               "parent_id", "payload", "state", "attempts",
-                               "next_try", "created_at", "updated_at"},
-            }
-            if "message_metadata" in tables:
-                base_columns["message_metadata"] = {
-                    "message_id", "source", "content", "checked_at", "last_error"}
-            for table, required in base_columns.items():
-                if table not in tables:
-                    continue  # _init creates absent tables for older backups.
-                columns = {row[1] for row in db.execute(
-                    f"PRAGMA table_info({table})")}
-                if table == "attachments" and "attachment_id" not in columns:
-                    required = {"message_id", "file_id", "name", "url",
-                                "downloaded_path", "first_seen"}
-                elif table == "read_marks" and "id" in columns:
-                    required = required | {"status"}
-                if not required <= columns:
-                    return False
-                # Match the ambiguous-key fence in Ledger._preflight before
-                # a recovery candidate can replace the live database.
-                key_check = {
-                    "attachments": ("attachment_id", "message_id,file_id"),
-                    "read_marks": ("id", "project_id,snapshot_ts"),
-                }.get(table)
-                if key_check and key_check[0] in columns and db.execute(
-                        f"SELECT 1 FROM {table} GROUP BY {key_check[1]} "
-                        "HAVING COUNT(*) > 1 LIMIT 1").fetchone():
-                    return False
             return deadline is None or monotonic() < deadline
         finally:
             db.close()

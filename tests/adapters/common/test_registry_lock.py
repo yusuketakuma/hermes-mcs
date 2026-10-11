@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from hermes_plugin.mcs_delivery import paths, registry
+from adapters.common import paths, registry
 
 
 def test_mutation_waits_for_in_progress_save(tmp_path, monkeypatch):

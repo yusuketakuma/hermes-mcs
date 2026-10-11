@@ -13,7 +13,9 @@ from typing import Literal, TypedDict
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
-from ledger import LedgerReader, SCHEMA_VERSION
+from ledger import (LedgerReader, SCHEMA_VERSION, STATIC_BASE_COLUMNS,
+                    STATIC_SOURCE_COLUMNS, static_required_columns,
+                    static_required_tables)
 
 
 class AuditCheck(TypedDict):
@@ -61,23 +63,6 @@ def guard_status(db: sqlite3.Connection) -> GuardReport:
     return {"state": "known", "relations": relations}
 
 
-# Source columns that recovery cannot reconstruct (valid_mcs_db contract).
-_SOURCE = {
-    "runs": "run_id started_at finished_at snapshot_ts status error",
-    "patients": "project_id project_type patient_name disease station_name url last_seen",
-    "messages": "message_id project_id parent_id sender_id sender_name sender_type "
-                "profession organization posted_at body_html reply_count first_seen",
-}
-_BASE = {
-    "attachments": "message_id file_id name url",
-    "read_marks": "project_id snapshot_ts marked_at",
-    "notify_outbox": "event_id kind project_id payload state attempts next_try "
-                     "accepted_ref created_at updated_at",
-    "artifacts": "artifact_id kind project_id message_id content model meta created_at",
-    "fetch_jobs": "job_id kind project_id message_id parent_id payload state attempts "
-                  "next_try created_at updated_at",
-    "message_metadata": "message_id source content checked_at last_error",
-}
 # Dependencies are fixed identifiers, never input or names read from the DB.
 _COUNTS = (
     ("attachment_message_missing", {"attachments": "message_id", "messages": "message_id"},
@@ -167,23 +152,15 @@ def audit_db(path: str | Path, *, max_steps: int = 10_000_000) -> AuditReport:
             record("migration_interrupted", db.execute(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
                 "AND name IN ('attachments_v1','read_marks_v1')").fetchone()[0])
+            # The valid_mcs_db contract; an absent optional table is unknown.
             columns = {}
-            for table in (*_SOURCE, *_BASE):
+            for table in (*STATIC_SOURCE_COLUMNS, *STATIC_BASE_COLUMNS):
                 columns[table] = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
-            for table, fields in {**_SOURCE, **_BASE}.items():
-                required = set(fields.split())
-                mandatory = table in _SOURCE or (
-                    version >= 5 and table != "message_metadata") or (
-                    version >= 8 and table == "message_metadata")
-                if table == "attachments" and columns[table]:
-                    required.update(
-                        "attachment_id local_path bytes sha256 state downloaded_at created_at"
-                        .split() if "attachment_id" in columns[table] else
-                        "downloaded_path first_seen".split())
-                if table == "read_marks" and "id" in columns[table]:
-                    required.add("status")
-                record(f"schema_{table}", 0 if required <= columns[table] else
-                       1 if mandatory or columns[table] else None)
+            mandatory = static_required_tables(version)
+            for table, present in columns.items():
+                record(f"schema_{table}",
+                       0 if static_required_columns(table, present) <= present else
+                       1 if table in mandatory or present else None)
             record("sqlite_foreign_key", db.execute(
                 "SELECT COUNT(*) FROM pragma_foreign_key_check").fetchone()[0])
             for code, dependencies, sql in _COUNTS:

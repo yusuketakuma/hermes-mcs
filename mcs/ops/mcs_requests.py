@@ -1,15 +1,17 @@
 """Human-confirmed local requests; no network or automatic task creation."""
-import hashlib
 import json
 import os
 import re
-import stat
 import tempfile
 import time
 import uuid
 from contextlib import ExitStack, suppress
 from datetime import date
 from pathlib import Path
+
+# canonical/payload_hash/positive live in core; re-exported for callers
+from mcs_util import canonical, payload_hash, positive  # noqa: F401
+from safe_io import fsync_dir, read_regular_nofollow
 
 MAX_COMMAND_BYTES = 16384
 STATUSES = ("open", "in_progress", "done", "cancelled")
@@ -35,15 +37,6 @@ CREATE TABLE IF NOT EXISTS snapshot_meta(
 """
 
 
-def canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"),
-                      ensure_ascii=False, allow_nan=False).encode("utf-8")
-
-
-def payload_hash(value):
-    return hashlib.sha256(canonical(value)).hexdigest()
-
-
 def parse_command(raw):
     def pairs(items):
         result = {}
@@ -66,19 +59,25 @@ def parse_command(raw):
 
 
 def read_command(path):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, "rb") as stream:
-        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-            raise ValueError("regular_command_file_required")
-        return parse_command(stream.read(MAX_COMMAND_BYTES + 1))
-
-
-def positive(value):
-    return type(value) is int and 0 < value < 2**63
+    return parse_command(read_regular_nofollow(
+        path, MAX_COMMAND_BYTES,
+        lambda: ValueError("regular_command_file_required"), check_size=False))
 
 
 def valid_hash(value):
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+# The one release-tag grammar: updater detection/notice, approval and the
+# CLI share it; scripts/mcs_upgrade.py keeps a self-contained copy.
+RELEASE_TAG_RE = re.compile(
+    r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$")
+
+
+def release_tag(value):
+    """Return whether value is a vX.Y.Z[-pre] release tag of at most 255 characters."""
+    return isinstance(value, str) and len(value) <= 255 \
+        and RELEASE_TAG_RE.fullmatch(value) is not None
 
 
 def valid_uuid(value):
@@ -346,12 +345,10 @@ def _apply_request_tx(db, req, pid, now):
                     "INSERT INTO artifacts(kind,project_id,message_id,"
                     "content,model,meta,created_at) VALUES(?,?,?,?,?,?,?)",
                     ("request_loop_link", pid, mid,
-                     json.dumps(link, ensure_ascii=False, sort_keys=True,
-                                separators=(",", ":"), allow_nan=False),
-                     "human", json.dumps({
+                     canonical(link).decode(),
+                     "human", canonical({
                          "command_id": req["command_id"],
-                         "actor": req["actor"]}, ensure_ascii=False,
-                         sort_keys=True, separators=(",", ":")), now),
+                         "actor": req["actor"]}).decode(), now),
                 )
     return error, rid, before, after
 
@@ -375,11 +372,7 @@ def enqueue(req, cmd_dir):
         os.link(temp, temp[:-4] + ".json")  # Atomic publication without clobbering pending input.
         published = True
         os.unlink(temp)
-        directory = os.open(cmd_dir, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        fsync_dir(cmd_dir)
     except OSError:
         if not published:
             raise

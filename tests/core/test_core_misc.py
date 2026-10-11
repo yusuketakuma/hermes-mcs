@@ -442,6 +442,20 @@ def test_env_value_empty_line_is_unconfigured(tmp_path, monkeypatch):
     assert mcs_util.env_value("MY_KEY", paths=(str(empty),)) is None
 
 
+
+def test_env_value_skips_non_utf8_dotenv(tmp_path, monkeypatch):
+    """A non-UTF-8 dotenv reads as unconfigured and the lookup moves on
+    to the next file instead of raising UnicodeDecodeError."""
+    import mcs_util
+    bad = tmp_path / "a.env"
+    real = tmp_path / "b.env"
+    bad.write_bytes(b"OTHER=1\n# \x82\xa0 synthetic\nMY_KEY=v\n")
+    real.write_text("MY_KEY=real\n")
+    monkeypatch.delenv("MY_KEY", raising=False)
+    assert mcs_util.env_value("MY_KEY", paths=(str(bad),)) is None
+    assert mcs_util.env_value(
+        "MY_KEY", paths=(str(bad), str(real))) == "real"
+
 # ---------- init_data re-authentication (FIX-ID1) ----------
 
 

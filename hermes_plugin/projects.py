@@ -13,6 +13,9 @@ import time
 from urllib.parse import quote
 
 _TTL_S = 120.0
+# the runner rejects a longer projects list (mcs/notify/notify_cmds.SCOPE_MAX);
+# the plugin cannot import the runner, so the value is mirrored
+SCOPE_MAX = 1000
 _cache: dict[str, tuple[float, tuple[int, int, int, int], frozenset[int]]] = {}
 
 
@@ -51,7 +54,7 @@ def static_scope(settings: dict) -> list[int] | None:
         return None
     ids = sorted(p for p in settings.get("project_ids") or ()
                  if type(p) is int and p > 0)
-    return ids[:1000] or None
+    return ids[:SCOPE_MAX] or None
 
 
 def summary_scope(settings: dict) -> list[int] | None:
@@ -84,3 +87,26 @@ def project_allowed(settings: dict, project_id) -> bool:
         return False
     snap = _snapshot_projects(settings.get("snapshot") or "")
     return snap is not None and project_id in snap
+
+
+def context_projects(context: dict) -> list[int]:
+    """Every project a button token's context names, or [] when any is malformed."""
+    if context.get("project_id") is not None:
+        values = [context["project_id"]]
+    else:
+        nested = context.get("context")
+        signals = nested.get("signals") if isinstance(nested, dict) else None
+        if not isinstance(signals, dict) or not signals:
+            return []
+        if not all(isinstance(item, dict) for item in signals.values()):
+            return []
+        values = [item.get("project_id") for item in signals.values()]
+    if not all(type(pid) is int and pid > 0 for pid in values):
+        return []
+    return sorted(set(values))
+
+
+def context_allowed(settings: dict, context: dict) -> bool:
+    """True when a button token's context names projects and every one is in scope."""
+    pids = context_projects(context)
+    return bool(pids) and all(project_allowed(settings, pid) for pid in pids)

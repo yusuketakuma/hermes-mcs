@@ -17,9 +17,7 @@ def answer(settings, raw, *, user, channel):
     if channel != settings.get("channel_id"):
         return _deny("chat_not_allowed")
     flags = paths.read_flags(settings["data_root"])
-    if (flags.get("interactive") is not True or flags.get("restore_pending")
-            or flags.get("transport") != transport
-            or flags.get("route_epoch") != settings.get("route_epoch")):
+    if not paths.route_open(flags, transport, settings.get("route_epoch")):
         return _deny("interactive_off")
     identity = {"transport": transport, "user_id": user, "chat_id": channel,
                 "scope_id": settings["team_id"], "profile": settings["profile"],
@@ -27,12 +25,17 @@ def answer(settings, raw, *, user, channel):
                 "route_epoch": settings["route_epoch"]}
     scoped = {**settings, "inbox": settings.get("inbox") or str(Path(settings["data_root"]) / "cmd"),
               "allowed_chat_ids": {channel}}
+    # only a parse error is the caller's; a handler bug is operation_failed,
+    # as in the Hermes /mcs handler
     try:
         data = _parse(raw)
-        if not isinstance(data, dict) or "op" not in data:
-            return _deny("bad_command")
-        return _dispatch(data, scoped, identity)
     except (ValueError, UnicodeError, TypeError):
         return _deny("bad_command")
+    except Exception:
+        return _deny("operation_failed")
+    if not isinstance(data, dict) or "op" not in data:
+        return _deny("bad_command")
+    try:
+        return _dispatch(data, scoped, identity)
     except Exception:
         return _deny("operation_failed")
