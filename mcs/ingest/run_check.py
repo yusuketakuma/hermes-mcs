@@ -224,6 +224,12 @@ def _jev_block_reason(db) -> str | None:
     return kind if kind in _JEV_BLOCK_KINDS else None
 
 
+# extraction-eligible message (alias m); the same predicate extract_llm
+# and read_model spell out — keep them in step
+_ELIGIBLE = ("m.body_text IS NOT NULL AND m.body_text != '' "
+             "AND (m.body_state IS NULL OR m.body_state='full')")
+
+
 def _backlog_stalls(ledger, cfg, now: float) -> list:
     """Degraded reasons for work that silently stopped moving. Each
     check is gated on its feature being enabled and needs BOTH an old
@@ -274,9 +280,7 @@ def _backlog_stalls(ledger, cfg, now: float) -> list:
             "SELECT created_at FROM artifacts WHERE kind='extract_llm' "
             "ORDER BY artifact_id DESC LIMIT 1").fetchone()
         if (newest is None or (newest[0] or 0) < window) and db.execute(
-                "SELECT 1 FROM messages m WHERE m.body_text IS NOT NULL "
-                "AND m.body_text != '' "
-                "AND (m.body_state IS NULL OR m.body_state='full') "
+                f"SELECT 1 FROM messages m WHERE {_ELIGIBLE} "
                 "AND m.first_seen < ? AND NOT EXISTS(SELECT 1 FROM artifacts a "
                 "  WHERE a.kind='extract_llm' AND a.message_id=m.message_id) "
                 f"AND {current_v4_id()} IS NULL LIMIT 1",
@@ -351,19 +355,16 @@ def _health(ledger, result: dict, status: str,
     qc = ledger.db.execute(
         "SELECT COUNT(*) c, MIN(created_at) o FROM fetch_jobs "
         "WHERE kind='extract_qc' AND state='pending'").fetchone()
-    eligible_where = (
-        "m.body_text IS NOT NULL AND m.body_text != '' "
-        "AND (m.body_state IS NULL OR m.body_state='full')")
     poison = ledger.db.execute(
-        f"SELECT COUNT(*) FROM messages m WHERE {eligible_where} "
+        f"SELECT COUNT(*) FROM messages m WHERE {_ELIGIBLE} "
         "AND EXISTS(SELECT 1 FROM artifacts bad "
         "  WHERE bad.kind='extract_llm' AND bad.message_id=m.message_id"
         "    AND NOT json_valid(bad.meta))").fetchone()[0]
     total = ledger.db.execute(
-        f"SELECT COUNT(*) FROM messages m WHERE {eligible_where}"
+        f"SELECT COUNT(*) FROM messages m WHERE {_ELIGIBLE}"
     ).fetchone()[0]
     current = ledger.db.execute(f"""
-      SELECT COUNT(*) FROM messages m WHERE {eligible_where}
+      SELECT COUNT(*) FROM messages m WHERE {_ELIGIBLE}
         AND EXISTS(SELECT 1 FROM artifacts a
           WHERE a.kind='extract_llm' AND a.message_id=m.message_id
             {current_extract_pred('a', 'm')}
