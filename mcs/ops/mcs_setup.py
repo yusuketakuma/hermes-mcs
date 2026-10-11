@@ -67,11 +67,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
+from backup_config import validate_backup_config as _backup_config
 import bounded_http
 import mcs_runtime
 
 from mcs_util import (CONF_PATH, HOME, REPO, atomic_write, env_value,
                       load_config)
+from mcs_util import hermes_exe as _hermes_exe
 
 ENV_PATH = os.path.join(HOME, ".env")
 KEYCHAIN_SERVICE = "mcs-adapter"
@@ -112,35 +114,6 @@ def _dict(v):
 def _drug_map_config(value):
     import drug_map
     return drug_map.config_error(value)
-
-
-def _backup_config(value):
-    keys = {"enabled", "policy", "snapshot", "snapshot_dir", "schedule",
-            "verify_interval_s", "drill_interval_s"}
-    if (not isinstance(value, dict) or set(value) - keys
-            or type(value.get("enabled")) is not bool):
-        return "must contain a boolean enabled and only supported backup keys"
-    if not value["enabled"]:
-        return None
-    sources = [key for key in ("snapshot", "snapshot_dir") if key in value]
-    if len(sources) != 1:
-        return "exactly one of snapshot or snapshot_dir must be explicit"
-    for key in ("policy", *sources):
-        if not isinstance(value.get(key), str) or not os.path.isabs(value[key]):
-            return f"{key} must be an explicit absolute path"
-    for key in ("verify_interval_s", "drill_interval_s"):
-        if type(value.get(key)) is not int or value[key] < 1:
-            return f"{key} must be an explicit positive integer"
-    schedule = value.get("schedule")
-    match = re.fullmatch(
-        r"([0-5]?[0-9])\s+((?:[01]?[0-9]|2[0-3])(?:,(?:[01]?[0-9]|2[0-3])){0,23})"
-        r"\s+\*\s+\*\s+\*", schedule) if isinstance(schedule, str) else None
-    if match is None:
-        return "schedule must have one explicit minute and 1–24 distinct explicit hours"
-    hours = [int(hour) for hour in match[2].split(",")]
-    if len(hours) != len(set(hours)):
-        return "schedule hours must be distinct"
-    return None
 
 
 def _recovery_python_problem(path, update_repo=None):
@@ -532,16 +505,6 @@ def _validate_standalone_scope(cfg: dict) -> list[str]:
     return errors
 
 
-def _hermes_exe(cfg: dict, path: str | None = None) -> str:
-    """config hermes_bin -> PATH (or `path`) -> the standard user-local
-    install."""
-    exe = cfg.get("hermes_bin")
-    if isinstance(exe, str) and exe.strip():
-        return exe.strip()
-    return shutil.which("hermes", os.F_OK | os.X_OK, path) \
-        or os.path.expanduser("~/.local/bin/hermes")
-
-
 def _hermes_ok(exe: str) -> bool:
     return os.path.isfile(exe) and os.access(exe, os.X_OK)
 
@@ -713,9 +676,9 @@ def check_environment(cfg: dict) -> tuple[list[str], list[str]]:
     llm_errors, llm_warnings = _check_llm(cfg)
     errors.extend(llm_errors)
     warnings.extend(llm_warnings)
-    # Delivery is `hermes send` — the binary must resolve the same way
-    # notify_flush._hermes_exe does: config hermes_bin, else PATH, else the
-    # standard user-local install (launchd PATH is minimal).
+    # Delivery is `hermes send` — the binary resolves through the same
+    # mcs_util.hermes_exe notify_flush uses: config hermes_bin, else PATH,
+    # else the standard user-local install (launchd PATH is minimal).
     ntf = cfg.get("notify") or {}
     exe = _hermes_exe(cfg) if cfg.get("runtime_mode") != "standalone" else ""
     lineworks = isinstance(ntf, dict) and ntf.get("interactive") == "lineworks"
