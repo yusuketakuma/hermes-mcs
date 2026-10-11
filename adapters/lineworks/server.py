@@ -20,6 +20,9 @@ from .client import verify_signature
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}\Z")
 MAX_BODY = 65536
 CONNECTION_TIMEOUT_S = 5
+# A content-free "unknown" receipt stays visible to `status` for this long.
+# Replay dedup never needs it: accept() rejects any body issued >600 s ago.
+UNKNOWN_DONE_TTL_S = 30 * 86400
 
 
 def callback_result(path):
@@ -127,7 +130,8 @@ class CallbackInbox:
                     # Crash-fenced input: discard contents, retain a content-free unknown.
                     self.finish(path, "unknown")
                 elif path.suffix == ".done":
-                    if callback_result(path) != "unknown":
+                    if callback_result(path) != "unknown" \
+                            or self.clock() - path.stat().st_mtime > UNKNOWN_DONE_TTL_S:
                         path.unlink()
                 elif path.suffix == ".json":
                     self.finish(path, "unknown")

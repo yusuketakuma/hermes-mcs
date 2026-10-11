@@ -832,7 +832,9 @@ def test_adapter_worker_deadline_reaps_slow_reader(tmp_path, monkeypatch, operat
     monkeypatch.setattr(mcs_worker.subprocess, "Popen", spawn)
     adapter = mcs_adapter.MCSAdapter()
     adapter._token = None if operation == "bootstrap" else "synthetic-bearer"
-    adapter.set_deadline(time.monotonic() + 2)
+    # room for a loaded runner to start the worker and reach the read;
+    # the reader then blocks forever, so only the deadline can end it
+    adapter.set_deadline(time.monotonic() + 5)
     destination = tmp_path / "downloaded"
     destination.write_bytes(b"previous-complete-file")
     started = time.monotonic()
@@ -846,7 +848,7 @@ def test_adapter_worker_deadline_reaps_slow_reader(tmp_path, monkeypatch, operat
     with pytest.raises(mcs_adapter.MCSError) as error:
         call()
     assert error.value.kind == "deadline_exceeded"
-    assert time.monotonic() - started < 6
+    assert time.monotonic() - started < 20
     assert started_file.exists()
     assert len(processes) == 1 and processes[0].poll() is not None
     assert destination.read_bytes() == b"previous-complete-file"

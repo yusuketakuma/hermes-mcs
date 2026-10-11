@@ -1469,6 +1469,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
 
 
 NOT_SENT_BACKOFF_S = 3600
+# LLMNotSent reasons that observe the endpoint itself down (refused
+# connection / 503 while the model loads) — never an admission verdict
+# or the long-output budget gate, which say nothing about its health.
+_LLM_DOWN_REASONS = frozenset({"llm_unreachable", "llm_unavailable"})
 
 
 def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
@@ -1499,7 +1503,8 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
         return status
     except (runtime.RuntimeStale, runtime.RuntimeOff):
         return "stale"
-    except runtime.LLMNotSent:
+    except runtime.LLMNotSent as e:
+        _PASS_REASON["not_sent"] = getattr(e, "stage", None)
         # admission hold / refused connection: the LLM request never
         # left, so no attempt is consumed — but Jev calls this pass
         # already made (e.g. the per-chunk preflight) are real spend:
@@ -1636,6 +1641,52 @@ def _sched_write(ledger, state: dict) -> None:
     ledger.db.commit()
 
 
+_REALTIME_ORDER = ("CASE WHEN next_try<=updated_at THEN updated_at "
+                   "ELSE created_at END DESC, job_id DESC")
+# Free long-output defers (the call needs _LONG_MIN_CALL_S and the pass
+# had less) are tracked per job generation in the sched row: such a job
+# leaves the realtime lane, and after this many free defers of the same
+# generation the next one charges a normal attempt so a budget that can
+# never fit the call ends in a visible failure instead of looping (M6).
+LONG_FREE_DEFER_CAP = 24
+_LONG_DEFERS_MAX = 500
+
+
+def _long_defers(ledger) -> dict:
+    """{str(job_id): {"g": generation, "n": free_defers}} — valid entries."""
+    raw = _sched_state(ledger).get("long_defers")
+    if not isinstance(raw, dict):
+        return {}
+    return {k: v for k, v in raw.items()
+            if isinstance(k, str) and k.isdigit() and isinstance(v, dict)
+            and isinstance(v.get("g"), str) and type(v.get("n")) is int}
+
+
+def _merge_long_defers(ledger, sched: dict, seen: dict) -> None:
+    """Fold this pass's long defers into the persisted map and prune
+    entries whose job left 'pending' or moved to a new generation."""
+    current = _long_defers(ledger)
+    current.update(seen)
+    if not current:
+        sched.pop("long_defers", None)
+        return
+    alive = {}
+    for row in ledger.db.execute(
+            "SELECT job_id,payload FROM fetch_jobs WHERE kind=? "
+            "AND state='pending' AND job_id IN (SELECT value FROM json_each(?))",
+            (JOB_KIND, json.dumps(sorted(int(k) for k in current)))):
+        key = str(row["job_id"])
+        generation = runtime.payload_generation(runtime.parse_payload(row))
+        if current[key]["g"] == generation:
+            alive[key] = current[key]
+    while len(alive) > _LONG_DEFERS_MAX:
+        alive.pop(min(alive, key=int))
+    if alive:
+        sched["long_defers"] = alive
+    else:
+        sched.pop("long_defers", None)
+
+
 def _due_lanes(ledger, kinds: tuple, max_jobs: int) -> tuple[list, list, dict]:
     """Two-lane due selection with a persisted fairness share.
 
@@ -1753,11 +1804,13 @@ def _job_lock(ledger, job_id):
 
 
 def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
-                max_jobs: int) -> tuple:
+                max_jobs: int, long_defers: dict | None = None) -> tuple:
     """Due-job selection for one drain pass.
 
     Returns (due, qc_jobs, arrivals, backfill, sched_mut): the ordered
     candidate list, its per-cohort split, and the fairness turn to persist.
+    ``long_defers`` ({str(job_id): {"g", "n"}}) keeps jobs known to need
+    the long-output budget out of the realtime lane.
     """
     if lane is None:
         qc_rows = []
@@ -1784,11 +1837,31 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
         # Fresh arrivals use realtime. Background workers may also finish
         # older arrival-seeded jobs; a per-job flock excludes double work.
         if lane == "realtime":
+            # Newest SEED first (M6): a seed/re-seed/revival writes
+            # next_try=updated_at, while every defer/retry pushes
+            # next_try past updated_at — so a job that already took a
+            # free defer ranks by its creation time instead of jumping
+            # back to the head on each defer. Jobs known to need the
+            # long-output budget never fit this lane and are left to
+            # the backlog workers.
+            # (same input generation only: a re-seed gets a new try)
             rows = ledger.db.execute(
                 f"SELECT * FROM fetch_jobs WHERE state='pending' AND next_try<=? "
                 f"AND kind=? AND {eligible} "
-                f"ORDER BY updated_at DESC, job_id DESC LIMIT ?",
-                (time.time(), JOB_KIND, max_jobs + 8)).fetchall()
+                "AND NOT EXISTS (SELECT 1 FROM json_each(?) s"
+                " WHERE s.key=CAST(fetch_jobs.job_id AS TEXT)"
+                " AND json_extract(s.value,'$.g')=CASE WHEN json_valid("
+                "fetch_jobs.payload) THEN json_extract(fetch_jobs.payload,"
+                "'$.generation') END) "
+                f"ORDER BY {_REALTIME_ORDER} LIMIT ?",
+                (time.time(), JOB_KIND, json.dumps(long_defers or {}),
+                 max_jobs + 8 + len(long_defers or {}))).fetchall()
+            # a payload from before the generation field: its generation
+            # is the payload digest, which SQL cannot compute
+            rows = [r for r in rows
+                    if (long_defers or {}).get(str(r["job_id"]), {}).get("g")
+                    != runtime.payload_generation(runtime.parse_payload(r))
+                    ][:max_jobs + 8]
         else:
             # Re-extraction re-pends QC rows under their old (low) job_id;
             # one job_id order let them win every pass and no semantic job
@@ -1894,10 +1967,12 @@ def _apply_job_status(ledger, token, limit: int, status: str,
 
 def _persist_drain_accounting(ledger, scfg, out: dict, result: dict,
                               selected: dict, qc_active: bool,
-                              sched_mut: dict) -> None:
+                              sched_mut: dict, long_seen: dict | None = None,
+                              long_defers: dict | None = None) -> None:
     """Persist the fairness counters and the bounded drain-run metrics
     artifact; either failure is recorded in ``result`` and never breaks
-    the drain."""
+    the drain. This pass's long-output defers (``long_seen``) are folded
+    into the persisted map alongside the fairness counters."""
     # persisted fairness accounting — survives restarts, feeds
     # semantic_observe's scheduler section (T14)
     try:
@@ -1914,6 +1989,8 @@ def _persist_drain_accounting(ledger, scfg, out: dict, result: dict,
             sched["qc_last_served_at"] = time.time()
         if sched_mut.get("turn"):
             sched["turn"] = sched_mut["turn"]
+        if long_seen or long_defers:
+            _merge_long_defers(ledger, sched, long_seen or {})
         _sched_write(ledger, sched)
     except Exception:
         # accounting must never break the drain itself
@@ -2072,9 +2149,30 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 transport[f"{kind}_transport_s"] += ended - started
                 transport[f"{kind}_reacquire_s"] += time.monotonic() - ended
 
+    # Endpoint health shared with the extract lane's breaker: a refused
+    # connection / 503 never consumes an attempt here (LLMNotSent -> free
+    # defer, which also refreshes updated_at), so without this feed an
+    # outage of any length stayed invisible to the breaker and the stall
+    # alert. Counted once per pass; an answered call resets the streak.
+    llm_health = {"down": False, "fed": False}
+    marks_unsaved0 = semantic.long_mark_failures()
+    long_defers = _long_defers(ledger)
+    long_seen: dict = {}
+
     @wraps(original_llm)
     def unlocked_llm(*args, **kwargs):
-        return _unlocked("llm", original_llm, *args, **kwargs)
+        try:
+            text = _unlocked("llm", original_llm, *args, **kwargs)
+        except runtime.LLMNotSent as e:
+            if getattr(e, "stage", "") in _LLM_DOWN_REASONS:
+                if not llm_health["fed"]:
+                    mcs_util.circuit_failure(ledger)
+                llm_health["down"] = llm_health["fed"] = True
+            raise
+        if isinstance(text, str):
+            mcs_util.circuit_success(ledger)
+            llm_health["down"] = False
+        return text
 
     llm_fn = unlocked_llm
     original_http = None
@@ -2116,7 +2214,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         # QC falls back to the persisted cohort alternation inside the
         # non-eligible lane.
         due, qc_jobs, arrivals, backfill, sched_mut = _select_due(
-            ledger, lane, kinds, qc_active, max_jobs)
+            ledger, lane, kinds, qc_active, max_jobs, long_defers)
         cohort_of = {id(job): "qc" for job in qc_jobs}
         cohort_of.update({id(job): "arrival" for job in arrivals})
         cohort_of.update({id(job): "backfill" for job in backfill})
@@ -2127,6 +2225,11 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         for job in due:
             if sum(selected.values()) >= max_jobs:
                 break
+            if llm_health["down"] and job["kind"] == JOB_KIND:
+                # the endpoint refused this pass: the remaining model jobs
+                # would each only re-defer (and rewrite updated_at); they
+                # stay due for the next pass. QC rows need no model.
+                continue
             with _job_lock(ledger, job["job_id"]) as held:
                 if not held:
                     out["lock_skipped"][job["kind"]] = \
@@ -2240,6 +2343,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 _PASS_REASON["code"] = None
                 _PASS_REASON["summary_validation_error"] = None
                 _PASS_REASON["loops_rejected"] = None
+                _PASS_REASON["not_sent"] = None
                 try:
                     if job["kind"] == QC_JOB_KIND:
                         status = _process_qc_job(
@@ -2282,6 +2386,22 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     # forever (and re-spend Jev every minute) — charge a bounded
                     # attempt like any other overrun
                     status = "retry"
+                if status in ("deferred", "deferred_backoff") \
+                        and _PASS_REASON.get("not_sent") == "long_output_needs_budget":
+                    key = str(job["job_id"])
+                    prior = long_seen.get(key) or long_defers.get(key)
+                    n = (prior["n"] if prior and prior["g"] == token.generation
+                         else 0) + 1
+                    long_seen[key] = {"g": token.generation, "n": n}
+                    if n > LONG_FREE_DEFER_CAP:
+                        # this generation keeps meeting passes too short for
+                        # its long-output call — stop the free loop: charge
+                        # the attempt (ends 'failed' at the ceiling, where
+                        # revive_failed and the operator can see it)
+                        _why("long_output_defer_capped")
+                        out["long_output_capped"] = \
+                            out.get("long_output_capped", 0) + 1
+                        status = "retry"
                 # durable per-attempt request delta — the daily budget ledger
                 # (jev_usage_today) is exact and covers claim-audit and loop
                 # calls, not just the primary assessment
@@ -2325,6 +2445,16 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     result["errors"].append("semantic: jev_payment_required")
                     out["jev_blocked"] = "payment_required"
                     break
+        if llm_health["fed"]:
+            out["llm_down"] = True
+        unsaved = {cause: n - marks_unsaved0.get(cause, 0)
+                   for cause, n in semantic.long_mark_failures().items()
+                   if n > marks_unsaved0.get(cause, 0)}
+        if unsaved:
+            # long-output marks this pass could not persist (T8): the
+            # suppression still holds in-process, but a restart repeats
+            # the base-ceiling call — surfaced instead of swallowed
+            out["long_mark_unsaved"] = unsaved
         if scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce":
             try:
                 out["degraded_notices"] = _emit_degraded(ledger, scfg)
@@ -2338,7 +2468,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         out["elapsed_s"] = time.perf_counter() - drain_started
         if due:
             _persist_drain_accounting(ledger, scfg, out, result, selected,
-                                      qc_active, sched_mut)
+                                      qc_active, sched_mut, long_seen,
+                                      long_defers)
         return out
     finally:
         _SHADOW_V2["pass"] = None

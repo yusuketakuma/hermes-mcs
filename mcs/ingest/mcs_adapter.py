@@ -49,7 +49,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from project_metadata import MetadataFetch
 
-from mcs_util import atomic_write, env_value, load_config, no_proxy_opener
+from mcs_util import HOME, atomic_write, env_value, load_config, no_proxy_opener
 from mcs_worker import WorkerError, bounded_call
 
 BASE = "https://www.medical-care.net"
@@ -77,6 +77,15 @@ _MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 # 連携サマリー is a 150-char field on the MCS side; 600 bounds a misbehaving
 # response without ever truncating a legitimate one
 KARTE_SUMMARY_MAX_CHARS = 600
+# H5: a login form submitted with the stored credential that never
+# validated is not retried with the SAME credential until this backoff
+# (1h, 2h, 4h ... capped at 24h) passes — a changed password must not be
+# re-sent ~430 times a day towards an account lock. A changed credential
+# (its Keychain item or .env changed since) is tried at once. Form-free
+# session recovery is never gated. No function of the password is stored.
+LOGIN_STATE_NAME = "login_state.json"
+LOGIN_BACKOFF_BASE_S = 3600
+LOGIN_BACKOFF_MAX_S = 86400
 
 
 class MCSError(Exception):
@@ -752,6 +761,11 @@ class MCSAdapter:
         self._worker = bounded_call if worker is None else worker
         # per-attempt browser repair facts, journaled by run_check
         self.healed_tabs, self.chrome_restarted = 0, False
+        # submitted-but-rejected login outcomes persist across runs next to
+        # the token cache (outside the sandbox-mounted data/)
+        self._login_state = (os.path.join(os.path.dirname(
+            os.path.abspath(token_cache)), LOGIN_STATE_NAME)
+            if token_cache else None)
 
     def set_deadline(self, monotonic_deadline: float | None):
         """Absolute run budget enforced by reaped I/O workers (F13)."""
@@ -1222,8 +1236,10 @@ class MCSAdapter:
             locked = False
         except KeychainLocked:
             pw, locked = None, True
+        self._pw_source = "keychain" if pw else None
         if not pw:
             pw = env_value("MCS_PASSWORD")
+            self._pw_source = "env" if pw else None
         return pw, locked
 
     def _config(self) -> dict:
@@ -1246,8 +1262,118 @@ class MCSAdapter:
                 return True
         return False
 
+    def _read_login_state(self) -> dict:
+        if not self._login_state:
+            return {}
+        try:
+            with open(self._login_state, encoding="utf-8") as f:
+                state = json.load(f)
+        except (OSError, ValueError, RecursionError):
+            return {}
+        return state if isinstance(state, dict) else {}
+
+    def _write_login_state(self, state: dict | None) -> None:
+        """Persist (or clear, with None) the login outcome; best effort."""
+        if not self._login_state:
+            return
+        with suppress(OSError):
+            if state is None:
+                os.unlink(self._login_state)
+                return
+            text = json.dumps(state)
+            atomic_write(self._login_state, lambda f: f.write(text), mode=0o600)
+
+    def _keychain_revision(self, service: str = "mcs-adapter") -> str | None:
+        """The Keychain item's modification date ("mdat"), read without
+        the secret (no -w): it moves when the stored password is
+        replaced. None when the item or the tool is unavailable."""
+        import subprocess
+        try:
+            r = subprocess.run(
+                ["security", "find-generic-password", "-s", service],
+                capture_output=True, text=True,
+                timeout=self._remaining_timeout(15))
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if r.returncode != 0:
+            return None
+        for line in (r.stdout or "").splitlines():
+            if '"mdat"' in line:
+                return line.strip()[:120]
+        return None
+
+    @staticmethod
+    def _env_revision() -> str:
+        """Where MCS_PASSWORD comes from and when those files last changed.
+
+        A value only the process environment holds has no file to stamp;
+        it can change only when the supervisor that passes it restarts,
+        so the parent process identifies that revision."""
+        env = os.environ.get("MCS_PASSWORD")
+        if not env:
+            stamps = ["-"]
+        elif env == env_value("MCS_PASSWORD", check_env=False):
+            stamps = ["environ"]           # mirrored from a stamped file
+        else:
+            stamps = [f"environ:{os.getppid()}"]
+        for path in (os.path.join(HOME, ".env"),
+                     os.path.expanduser("~/.hermes/.env")):
+            try:
+                stamps.append(str(os.stat(path).st_mtime_ns))
+            except OSError:
+                stamps.append("-")
+        return ":".join(stamps)
+
+    def _credential_fp(self, login_id, source: str | None) -> str:
+        """Identifies the credential by where it is stored and when that
+        store last changed — never by the password, so the record gives
+        nothing to test a guessed password against."""
+        if source == "keychain":
+            revision = self._keychain_revision() or "unknown"
+        elif source == "env":
+            revision = self._env_revision()
+        else:
+            revision = "browser"   # the browser filled the password itself
+        msg = json.dumps([login_id, source, revision], ensure_ascii=False)
+        return hashlib.sha256(msg.encode()).hexdigest()[:16]
+
+    def _login_blocked(self, login_id, source: str | None) -> tuple[bool, dict]:
+        """(blocked, state) — blocked while the last submit of THIS
+        credential was rejected less than the backoff ago."""
+        state = self._read_login_state()
+        fp = self._credential_fp(login_id, source)
+        failures, at = state.get("failures"), state.get("last_failed_at")
+        if (state.get("credential") != fp or type(failures) is not int
+                or failures < 1 or type(at) not in (int, float)):
+            return False, {"credential": fp}
+        backoff = min(LOGIN_BACKOFF_MAX_S,
+                      LOGIN_BACKOFF_BASE_S * 2 ** min(failures - 1, 16))
+        return 0 <= time.time() - at < backoff, state
+
+    def _login_rejected(self, state: dict) -> None:
+        """Record one submitted login that never produced a session."""
+        failures = state.get("failures")
+        state = dict(state, failures=(failures + 1 if type(failures) is int
+                                      and failures >= 0 else 1),
+                     last_failed_at=time.time())
+        self._write_login_state(state)
+
     def auto_login(self, profile_dir: str = "", chrome_bin: str = "",
                    wait_s: int = 45) -> str:
+        """Recover the session, filling the login form only when needed.
+
+        Same states as _auto_login, plus 'manual_required:backoff' when
+        the form was not sent because this credential was rejected less
+        than the backoff ago (the manual-login alert still goes out). A
+        successful login of any kind clears the rejection record."""
+        state = self._auto_login(profile_dir, chrome_bin, wait_s)
+        if state == "ok":
+            # any working session ends a rejected-login episode
+            self._write_login_state(None)
+        return state
+
+    def _auto_login(self, profile_dir: str = "", chrome_bin: str = "",
+                    wait_s: int = 45) -> str:
         """Re-login by filling the form from macOS Keychain and clicking
         submit. Native Chrome autofill can't be driven via DOM, so the
         credential lives in Keychain (service 'mcs-adapter'); the adapter
@@ -1293,17 +1419,26 @@ class MCSAdapter:
                 if self._recover_session():
                     return "ok"
                 return "manual_required:no_form"
-            if state != "ready":
+            login_id = self._config().get("mcs_login_id", "")
+            if state == "ready":
+                # browser-filled password: only the login id is known
+                blocked, login = self._login_blocked(login_id, "browser")
+                if blocked:
+                    return "manual_required:backoff"
+            else:
                 pw, locked = self._login_password()
                 if not pw:
                     return "keychain_locked" if locked else \
                         "manual_required"
+                blocked, login = self._login_blocked(
+                    login_id, getattr(self, "_pw_source", None))
+                if blocked:
+                    return "manual_required:backoff"
                 # shortcut: the listener is checked, then the fill opens its
                 # own socket; a profile Chrome dying in that gap re-opens
                 # the race — a pinned connection would close it
                 if not self._cdp_peer_owned(ws, profile_dir, chrome_bin):
                     return "failed"
-                login_id = self._config().get("mcs_login_id", "")
                 fill = self._cdp_eval(ws, f"""(() => {{
                   if (location.origin !== 'https://www.medical-care.net')
                     return 'bad_origin';
@@ -1353,6 +1488,9 @@ class MCSAdapter:
                     self._write_cache(tok)
                     return "ok"
                 # token present but not yet valid, or MFA page — keep waiting
+        # submitted and never validated: this credential waits out the
+        # backoff before the form is sent again (H5)
+        self._login_rejected(login)
         return "manual_required"
 
     # ---------- http ----------

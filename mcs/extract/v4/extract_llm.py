@@ -52,10 +52,12 @@ import local_llm
 import patient_context
 from patient_context import CATEGORIES, DETAIL_KEYS, context_items
 from ledger import Ledger, LedgerReader
-from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, current_extract_pred,
+from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, V4_PROJECTION_KIND,
+                         current_extract_pred,
                          current_qc_pred,
                          current_v4_id, json_or_null, qc_source_id)
 from mcs_util import (CONF_PATH, HOME, acquire_run_lock, circuit_failure, circuit_open_s,
+                      circuit_streak,
                       circuit_success, disk_floor_mb, disk_free_mb,
                       json_object, load_config, locate_quote_span,
                       text_chunks)  # noqa: F401 — historical helper re-export
@@ -1503,9 +1505,21 @@ def _llm_call(prompt: str, deadline: float | None = None,
                 response_format=rf,
                 extra_payload={"id_slot": _choose_slot()},
                 request_fn=_opener_request, error_out=err_out)
+        # Endpoint health of this call for run_pending's breaker: refused /
+        # not sent and 503 are outages, a pre-deadline transport failure
+        # (timeout, reset) is a slow or stuck server; budget expiry and
+        # answered calls say nothing about the endpoint.
+        expired = deadline is not None and time.monotonic() >= deadline
+        _CALL_NOTES.transport = (
+            "unreachable" if response is None
+            and err_out.get("kind") == "unreachable"
+            else "unavailable" if response is not None
+            and response.get("status") == 503
+            else "transport" if response is None and not expired
+            and err_out.get("kind") == "transport"
+            else None)
         if response is None and (err_out.get("kind") == "unreachable"
-                                 or (deadline is not None
-                                     and time.monotonic() >= deadline)) \
+                                 or expired) \
                 or response is not None and response.get("status") == 503:
             # Connection refused or 503 (still loading the model) — the
             # server is down/starting, so the call did no work and
@@ -2426,22 +2440,41 @@ def _human_flagged_sql(val: str = "h.artifact_id") -> str:
         ORDER BY h.artifact_id DESC LIMIT 1"""
 
 
+def _has_kind(kind: str, alias: str, project: bool = False) -> str:
+    """Index-only (kind, message_id) existence probe — no JSON parsed."""
+    scope = f" AND {alias}.project_id=m.project_id" if project else ""
+    return (f"EXISTS (SELECT 1 FROM artifacts {alias} WHERE {alias}.kind='{kind}'"
+            f" AND {alias}.message_id=m.message_id{scope})")
+
+
 def pending_pred() -> str:
-    """Shared body-current extraction and quality-retry eligibility."""
+    """Shared body-current extraction and quality-retry eligibility.
+
+    Evaluated per stored message, so the JSON-heavy subqueries sit behind
+    exact, index-only guards (M5): each guarded subquery itself requires
+    an artifact of the probed kind for the message (or, for thin, the
+    same body-length bound), so a missing guard row already decides it.
+    The qc_fix test runs after the settle test, which is false for most
+    of a mature corpus. Boolean results are identical to the unguarded
+    composition (tests/extract/test_stab_pending_pred.py)."""
     return f"""{ELIGIBLE_MESSAGE}
-        AND {current_v4_id()} IS NULL
-        AND ((NOT EXISTS (SELECT 1 FROM artifacts f
-                        WHERE f.kind='{KIND}' AND f.message_id=m.message_id
-                          {current_extract_pred('f')}
-                          AND json_extract({json_or_null('f.meta')},'$.extract_version')={EXTRACT_VERSION}
-                          AND json_extract({json_or_null('f.meta')},'$.qc_fix') IS NOT NULL)
-        AND (NOT EXISTS (SELECT 1 FROM artifacts a
+        AND (NOT {_has_kind(V4_PROJECTION_KIND, 'v0', project=True)}
+             OR {current_v4_id()} IS NULL)
+        AND (((NOT EXISTS (SELECT 1 FROM artifacts a
                         WHERE a.kind='{KIND}' AND a.message_id=m.message_id
                           {current_extract_pred()}
                           AND json_extract({json_or_null('a.meta')},'$.extract_version')={EXTRACT_VERSION})
-             OR EXISTS ({_qc_flagged_sql(val="1")})
-             OR EXISTS ({_thin_pending_sql()})))
-             OR EXISTS ({_human_flagged_sql(val="1")}))"""
+             OR ({_has_kind('extract_qc', 'q0')}
+                 AND EXISTS ({_qc_flagged_sql(val="1")}))
+             OR (length(m.body_text) >= {_THIN_BODY_MIN}
+                 AND EXISTS ({_thin_pending_sql()})))
+        AND NOT EXISTS (SELECT 1 FROM artifacts f
+                        WHERE f.kind='{KIND}' AND f.message_id=m.message_id
+                          {current_extract_pred('f')}
+                          AND json_extract({json_or_null('f.meta')},'$.extract_version')={EXTRACT_VERSION}
+                          AND json_extract({json_or_null('f.meta')},'$.qc_fix') IS NOT NULL))
+             OR ({_has_kind(EXTRACT_FEEDBACK_KIND, 'h0')}
+                 AND EXISTS ({_human_flagged_sql(val="1")})))"""
 
 
 # Exactly the verdicts _qc_feedback turns into notes — a looser SQL
@@ -2959,6 +2992,75 @@ def _ensure_v1(ledger, r, hints) -> None:
                 (r["message_id"], cur.lastrowid))
 
 
+# Per-process pending estimate for full selections, keyed by DB file.
+_LEFT_ESTIMATE: dict = {}
+_LEFT_ESTIMATE_S = 600.0
+
+
+def _left_estimate_key(ledger) -> str:
+    try:
+        return ledger.db.execute("PRAGMA database_list").fetchone()[2] or ""
+    except Exception:
+        return ""
+
+
+# Never-extracted messages (no extract_llm row of any version or body)
+# — new arrivals. Index-only on (kind, message_id).
+_FRESH_SQL = ("NOT EXISTS (SELECT 1 FROM artifacts x WHERE x.kind='" + KIND
+              + "' AND x.message_id=m.message_id)")
+
+
+# Current-version, same-body error rows of one message (the retry state).
+_ERROR_ROWS_SQL = """FROM artifacts e WHERE e.message_id=m.message_id AND e.kind=?
+        AND CASE WHEN json_valid(e.meta)
+                 THEN json_extract(e.meta,'$.error')=1
+                  AND COALESCE(json_extract(e.meta,'$.extract_version'),0)=?
+                  AND json_extract(e.meta,'$.hash')=m.content_hash
+                 ELSE 0 END"""
+
+
+def _selection_sql(order: str, adm_sql: str, fresh: bool | None = None) -> str:
+    """run_pending's due-row selection.
+
+    Retry state is read through correlated subqueries instead of a
+    LEFT JOIN + GROUP BY over every eligible message, so rows stream in
+    posted_at order and the LIMIT can stop the walk once an index on
+    messages(posted_at_ts) exists; the cheap shard/claim tests precede
+    the per-message JSON work. The row set equals the former grouped
+    query (attempts: MAX(COALESCE(attempts,0)) or 0 without error rows;
+    due: COALESCE(MAX(next_try),0) <= now); message_id breaks posted_at
+    ties, which were unordered before (M5). ``fresh`` True/False keeps
+    only never-extracted / previously-extracted messages (M12)."""
+    fresh_sql = ("" if fresh is None else
+                 f" AND {_FRESH_SQL}" if fresh else f" AND NOT {_FRESH_SQL}")
+    return f"""
+      SELECT m.message_id, m.project_id, m.body_text, m.content_hash,
+             m.parent_id, m.posted_at, m.posted_at_ts,
+             ({_qc_flagged_sql()}) AS qc_src,
+             ({_thin_pending_sql()}) AS thin_src,
+             ({_human_flagged_sql()}) AS human_src,
+             COALESCE((SELECT MAX(COALESCE(json_extract(e.meta,'$.attempts'),0))
+                       {_ERROR_ROWS_SQL}), 0) AS attempts
+      FROM messages m
+      WHERE {ELIGIBLE_MESSAGE}{adm_sql}{fresh_sql}
+        AND (? IS NULL OR m.message_id % ? = ?)
+        AND NOT EXISTS (SELECT 1 FROM fetch_jobs claim
+                        WHERE claim.kind='extract_claim'
+                          AND claim.project_id=m.project_id
+                          AND claim.message_id=m.message_id
+                          AND claim.next_try > ?)
+        AND NOT EXISTS (SELECT 1 FROM artifacts bad
+                        WHERE bad.kind=? AND bad.message_id=m.message_id
+                          AND NOT json_valid(bad.meta))
+        AND {pending_pred()}
+        AND attempts < 5
+        AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try'))
+                      {_ERROR_ROWS_SQL}), 0) <= ?
+      ORDER BY m.posted_at_ts {order}, m.message_id {order}
+      LIMIT ?
+    """
+
+
 def _validate_run_args(limit, budget_s) -> None:
     """Reject a non-positive limit or a non-finite budget."""
     if type(limit) is not int or limit < 1:
@@ -2996,8 +3098,10 @@ def _gc_stale_artifacts(ledger, lock, per_write_lock: bool) -> None:
 
 
 def _select_pending(ledger, limit: int, admitted_ids: set | None,
-                    shard: tuple[int, int] | None, oldest_first: bool) -> list:
-    """Select the claimable pending rows for one run_pending pass."""
+                    shard: tuple[int, int] | None,
+                    oldest_first: bool) -> tuple[list, int | None]:
+    """Select the claimable pending rows for one run_pending pass ->
+    (rows, how many of them are new arrivals; None for oldest_first)."""
     # pending = no current-version artifact, plus retriable CURRENT-
     # version error artifacts whose backoff expired (attempts < 5,
     # next_try <= now). Error rows of older schema versions neither
@@ -3032,46 +3136,32 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
     # time.time(), so it is compared against the same Python clock —
     # never SQLite's unixepoch(), which can disagree with it.
     now = time.time()
-    return ledger.db.execute(f"""
-      SELECT m.message_id, m.project_id, m.body_text, m.content_hash,
-             m.parent_id, m.posted_at, m.posted_at_ts,
-             ({_qc_flagged_sql()}) AS qc_src,
-             ({_thin_pending_sql()}) AS thin_src,
-             ({_human_flagged_sql()}) AS human_src,
-             MAX(COALESCE(json_extract(e.meta,'$.attempts'),0)) AS attempts
-      FROM messages m
-      LEFT JOIN artifacts e ON e.message_id=m.message_id AND e.kind=?
-        AND CASE WHEN json_valid(e.meta)
-                 THEN json_extract(e.meta,'$.error')=1
-                  AND COALESCE(json_extract(e.meta,'$.extract_version'),0)
-                      =?
-                  AND json_extract(e.meta,'$.hash')=m.content_hash
-                 ELSE 0 END
-      WHERE {ELIGIBLE_MESSAGE}{adm_sql}
-        AND NOT EXISTS (SELECT 1 FROM fetch_jobs claim
-                        WHERE claim.kind='extract_claim'
-                          AND claim.project_id=m.project_id
-                          AND claim.message_id=m.message_id
-                          AND claim.next_try > ?)
-        AND NOT EXISTS (SELECT 1 FROM artifacts bad
-                        WHERE bad.kind=? AND bad.message_id=m.message_id
-                          AND NOT json_valid(bad.meta))
-        AND {pending_pred()}
-        AND (? IS NULL OR m.message_id % ? = ?)
-      GROUP BY m.message_id
-      HAVING attempts < 5
-         AND COALESCE(MAX(json_extract(e.meta,'$.next_try')),0)
-             <= ?
-      ORDER BY m.posted_at_ts {order}
-      LIMIT ?
-    """, (KIND, EXTRACT_VERSION, *adm_params,
-          now,
-          KIND,
-          shard[1] if shard else None,
-          shard[1] if shard else 1,
-          shard[0] if shard else 0,
-          now,
-          limit or 20)).fetchall()
+    def _select(fresh, n):
+        return ledger.db.execute(_selection_sql(order, adm_sql, fresh), (
+            KIND, EXTRACT_VERSION,
+            *adm_params,
+            shard[1] if shard else None,
+            shard[1] if shard else 1,
+            shard[0] if shard else 0,
+            now,
+            KIND,
+            KIND, EXTRACT_VERSION,
+            now,
+            n)).fetchall()
+
+    if oldest_first:
+        rows = _select(None, limit)
+        fresh_selected = None
+    else:
+        # New arrivals first (M12): never-extracted messages outrank
+        # re-extraction (a version bump re-pends the whole corpus, an
+        # error retry, a QC/thin/report re-pend), each newest first. The
+        # two disjoint passes select from exactly the former row set.
+        rows = _select(True, limit)
+        fresh_selected = len(rows)
+        if len(rows) < limit:
+            rows += _select(False, limit - len(rows))
+    return rows, fresh_selected
 
 
 def _prepare_jobs(ledger, rows, target, prefilter: bool) -> tuple[list, int]:
@@ -3129,18 +3219,32 @@ def _plan_units(claimed: list, batch_k: int) -> list:
     return units
 
 
-def _backlog_report(ledger, selected: int, limit: int) -> tuple:
-    """Return (left, oldest ts, newest ts) — None when the selection was full."""
+def _backlog_report(ledger, selected: int, limit: int,
+                    settled: int) -> tuple:
+    """Return (left, oldest ts, newest ts, estimate) — left is None when
+    the selection was full; estimate is the per-process pending count."""
     left = age_min = age_max = None
-    if selected < (limit or 20):
+    estimate_key = _left_estimate_key(ledger)
+    estimate = _LEFT_ESTIMATE.get(estimate_key)
+    if selected < (limit or 20) or estimate is None \
+            or time.monotonic() - estimate["at"] >= _LEFT_ESTIMATE_S:
         # A short selection means the backlog is nearly drained, so the
         # full pending scan is cheap enough to report. A full selection
         # (the resident --all --semantic lane runs limit=1 per job)
-        # reports None = unknown instead of an O(backlog) scan per job.
-        left, age_min, age_max = ledger.db.execute(
+        # reports left=None = unknown instead of an O(backlog) scan per
+        # job, but refreshes a per-process estimate at most every
+        # _LEFT_ESTIMATE_S so a large backlog (a version bump re-pends
+        # the corpus) is still visible in the log (M12).
+        count, age_min, age_max = ledger.db.execute(
             "SELECT COUNT(*), MIN(m.posted_at_ts), MAX(m.posted_at_ts) "
             f"FROM messages m WHERE {pending_pred()}").fetchone()
-    return left, age_min, age_max
+        estimate = _LEFT_ESTIMATE[estimate_key] = {
+            "at": time.monotonic(), "left": count, "done": 0}
+        if selected < (limit or 20):
+            left = count
+    else:
+        estimate["done"] += settled
+    return left, age_min, age_max, estimate
 
 
 def _run_batch_call(tups, target, deadline: float,
@@ -3231,10 +3335,20 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     lock = _write_lock
     # Any artifact for an older body is stale, including retry state.
     _gc_stale_artifacts(ledger, lock, per_write_lock)
-    rows = _select_pending(ledger, limit, admitted_ids, shard, oldest_first)
+    rows, fresh_selected = _select_pending(ledger, limit, admitted_ids,
+                                           shard, oldest_first)
     done = failed = deferred = lock_lost = 0
     done_pids = set()
     endpoint_down = False
+    breaker_fed = False
+    slow_deferred = 0
+
+    def _feed_breaker():
+        """One breaker observation per run, not one per queued row."""
+        nonlocal breaker_fed
+        if not breaker_fed:
+            breaker_fed = True
+            circuit_failure(ledger)
     # finished results whose per-write lock wait timed out (the tick
     # holds the run lock for minutes) — written before returning
     pending_writes: list = []
@@ -3272,8 +3386,18 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         meta = {}
         metas[index] = meta
         chunks_out: dict = {}
+        # last call's endpoint health, read by _handle on the calling
+        # thread after this future resolves (thread-local per worker)
+        _CALL_NOTES.transport = r["_transport"] = None
         if time.monotonic() > deadline:
             return _DEFERRED, chunks_out
+        try:
+            return _extract_call(r, ctx, saved, hints, qc, index,
+                                 meta, chunks_out), chunks_out
+        finally:
+            r["_transport"] = getattr(_CALL_NOTES, "transport", None)
+
+    def _extract_call(r, ctx, saved, hints, qc, index, meta, chunks_out):
         with _pin_target(r["_target"]):
             return llm_extract(r["body_text"], context=ctx, hints=hints,
                            deadline=deadline, meta_out=meta,
@@ -3289,7 +3413,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                            feedback=qc["notes"] if qc else None,
                            on_chunk=(lambda i, v: checkpoints.put((index, i, v)))
                            if parallel else
-                           (lambda i, v: _checkpoint(index, i, v))), chunks_out
+                           (lambda i, v: _checkpoint(index, i, v)))
 
     def _commit(r, d, ctx, integrity, qc):
         """Persist one validated result — the caller holds the lock."""
@@ -3324,14 +3448,22 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         done_pids.add(r["project_id"])
 
     def _handle(r, ctx, d, integrity, lease, chunks_out, qc=None):
-        nonlocal done, failed, deferred, endpoint_down, lock_lost
+        nonlocal done, failed, deferred, endpoint_down, lock_lost, slow_deferred
         keep_lease = False
         try:
             if not _owns_current_source(ledger, r, lease):
                 deferred += 1
                 return
+            transport = r.get("_transport")
             if d is _DEFERRED:
                 deferred += 1
+                if transport in ("unreachable", "unavailable"):
+                    # refused / 503: nothing ran, so no attempt is
+                    # charged, but the outage must still reach the
+                    # breaker (and the health marker the stall alert
+                    # reads) — once per run, like the probe path below
+                    _feed_breaker()
+                    endpoint_down = True
                 return  # budget ran out mid-message — stays pending
             if d is None:
                 failed += 1
@@ -3340,10 +3472,22 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     # on error rows. The failure feeds the breaker so
                     # a sustained outage closes the lane across drains —
                     # counted once per run, not once per queued row.
-                    if not endpoint_down:
-                        circuit_failure(ledger)
+                    _feed_breaker()
                     endpoint_down = True
                     return
+                if transport == "transport":
+                    # /v1/models answers but the call timed out or was
+                    # reset: a slow/stuck server, not this message's
+                    # fault. Consecutive runs feed the breaker; once it
+                    # has tripped (streak > 0) attempts are no longer
+                    # charged, so an outage cannot walk every queued row
+                    # to the permanent-failure ceiling. An answered call
+                    # resets the streak, so a message that times out on
+                    # a healthy server still reaches the ceiling.
+                    _feed_breaker()
+                    if circuit_streak(ledger) > 0:
+                        slow_deferred += 1
+                        return
                 if qc is not None:
                     # A QC-flagged row that failed its feedback re-
                     # extract keeps the audited artifact — re-mint it
@@ -3580,11 +3724,18 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         finally:
             for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
                 _release(ledger, r, lease)
-    left, age_min, age_max = _backlog_report(ledger, len(rows), limit)
+    left, age_min, age_max, estimate = _backlog_report(
+        ledger, len(rows), limit, done + skipped)
     now_ts = time.time()
     return {"done": done, "failed": failed, "left": left,
+            # pending as of the last full count, minus what this process
+            # settled since; age says how stale the count is
+            "left_estimate": max(0, estimate["left"] - estimate["done"]),
+            "left_estimate_age_s": round(time.monotonic() - estimate["at"]),
+            "fresh_selected": fresh_selected,
             "selected": len(rows), "deferred": deferred,
             "skipped": skipped, "lock_lost": lock_lost,
+            "slow_deferred": slow_deferred,
             "circuit_open_s": round(circuit_s) or None,
             "disk_low": disk_low,
             "disk_free_mb": round(free_mb) if free_mb is not None

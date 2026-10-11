@@ -12,7 +12,16 @@ from mcs_standalone.host import Host
 def test_connector_failure_removes_handlers_and_releases_runtime_lock(tmp_path, monkeypatch, failure):
     cfg = {"runtime_mode": "standalone"}
     monkeypatch.setattr(runtime.config, "load", lambda root: cfg)
-    monkeypatch.setattr(runtime.Runtime, "tick", lambda self, **kwargs: self.restarting)
+    ticks = []
+
+    def tick(self, **kwargs):
+        # The connector failure alone never stops the host: a signal does.
+        ticks.append(self.connector["state"])
+        if len(ticks) == 5:
+            self.restarting = True
+        return self.restarting
+
+    monkeypatch.setattr(runtime.Runtime, "tick", tick)
     original_sleep = asyncio.sleep
 
     async def yield_once(*args):
@@ -20,8 +29,10 @@ def test_connector_failure_removes_handlers_and_releases_runtime_lock(tmp_path, 
 
     monkeypatch.setattr(runtime.asyncio, "sleep", yield_once)
     handlers = {}
+    calls = []
 
     async def connector(root, stopping):
+        calls.append(True)
         raise failure("synthetic connector ended")
 
     async def scenario():
@@ -30,9 +41,10 @@ def test_connector_failure_removes_handlers_and_releases_runtime_lock(tmp_path, 
                             lambda sig, *args: handlers.__setitem__(sig, args))
         monkeypatch.setattr(loop, "remove_signal_handler",
                             lambda sig: handlers.pop(sig, None))
-        with pytest.raises(failure):
-            await runtime.serve(tmp_path, cfg, connector)
+        assert await runtime.serve(tmp_path, cfg, connector) == 0
         assert handlers == {}
+        # one attempt, then the backoff holds the next one
+        assert calls == [True] and ticks[-1] == "waiting"
 
     asyncio.run(scenario())
     with (tmp_path / "data/standalone.lock").open("ab") as lock:

@@ -182,6 +182,28 @@ _GUARD_RELATIONS = (
      "NOT EXISTS (SELECT 1 FROM messages m "
      "WHERE m.message_id=a.message_id)"),
 )
+# AFTER UPDATE OF ... WHEN: only a real change to an indexed column
+# rewrites the FTS row (see Ledger._install_fts_update_trigger)
+_FTS_AU_MARK = "AFTER UPDATE OF body_text, sender_name ON messages"
+_FTS_AU_SQL = f"""
+  CREATE TRIGGER messages_au
+  {_FTS_AU_MARK}
+  WHEN old.body_text IS NOT new.body_text
+    OR old.sender_name IS NOT new.sender_name
+  BEGIN
+    UPDATE messages_fts SET body_text=new.body_text,
+      sender_name=new.sender_name
+    WHERE rowid=old.message_id;
+    INSERT INTO messages_fts(rowid, body_text, sender_name)
+    SELECT new.message_id, new.body_text, new.sender_name
+    WHERE NOT EXISTS(SELECT 1 FROM messages_fts
+                     WHERE rowid=new.message_id);
+  END"""
+# WAL size a checkpoint truncates back to (bytes)
+JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024
+# a shadow relation's orphan count is health evidence, not a gate: an
+# open within this window of the last confirmed recount trusts it
+RELATION_RECOUNT_S = 3600
 _GUARD_TRIGGERS = frozenset(
     [f"g1_{table}_msg_{suffix}" for table, _, _ in _GUARD_RELATIONS
      for suffix in ("ins", "upd")]
@@ -210,6 +232,9 @@ class Ledger:
                 new_database=not tables, audit=version != SCHEMA_VERSION)
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
+            # a checkpoint truncates the -wal file back to this size; without
+            # it one long reader leaves a WAL at its high-water mark forever
+            self.db.execute(f"PRAGMA journal_size_limit={JOURNAL_SIZE_LIMIT}")
             for side in (path + "-wal", path + "-shm"):
                 if os.path.exists(side):
                     os.chmod(side, 0o600)
@@ -309,6 +334,8 @@ class Ledger:
             ON messages(project_id, posted_at_ts);
           CREATE INDEX IF NOT EXISTS idx_messages_notified
             ON messages(notified_at) WHERE notified_at IS NOT NULL;
+          CREATE INDEX IF NOT EXISTS idx_messages_posted_ts
+            ON messages(posted_at_ts);
           CREATE INDEX IF NOT EXISTS idx_messages_parent
             ON messages(parent_id);
           CREATE INDEX IF NOT EXISTS idx_messages_thread_time
@@ -319,6 +346,8 @@ class Ledger:
             ON requests(source_message_id);
           CREATE INDEX IF NOT EXISTS idx_artifacts_kind_msg
             ON artifacts(kind, message_id);
+          CREATE INDEX IF NOT EXISTS idx_artifacts_kind_created
+            ON artifacts(kind, created_at);
           CREATE INDEX IF NOT EXISTS idx_fetch_jobs_pending_due
             ON fetch_jobs(kind, next_try) WHERE state='pending';
           CREATE INDEX IF NOT EXISTS idx_attachments_pending
@@ -339,19 +368,35 @@ class Ledger:
                 INSERT INTO messages_fts(rowid, body_text, sender_name)
                 VALUES (new.message_id, new.body_text, new.sender_name);
               END;
-              CREATE TRIGGER IF NOT EXISTS messages_au
-              AFTER UPDATE ON messages BEGIN
-                UPDATE messages_fts SET body_text=new.body_text,
-                  sender_name=new.sender_name
-                WHERE rowid=old.message_id;
-                INSERT INTO messages_fts(rowid, body_text, sender_name)
-                SELECT new.message_id, new.body_text, new.sender_name
-                WHERE NOT EXISTS(SELECT 1 FROM messages_fts
-                                 WHERE rowid=new.message_id);
-              END;
             """)
+            self._install_fts_update_trigger()
         self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         self.db.commit()
+
+    def _install_fts_update_trigger(self) -> None:
+        """Keep messages_fts in step with indexed columns only.
+
+        Re-observing a stored post rewrites updated_seen/reply_count on
+        every tick; a column-less AFTER UPDATE trigger rewrote its FTS row
+        each time. The trigger fires only when body_text or sender_name
+        really changed. A DB from before this rule carries the old
+        trigger, which is replaced in one transaction (additive DDL,
+        schema version unchanged; an older writer keeps the new one
+        through its CREATE TRIGGER IF NOT EXISTS)."""
+        row = self.db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' "
+            "AND name='messages_au'").fetchone()
+        if row is not None and _FTS_AU_MARK in (row[0] or ""):
+            return
+        if not self.db.in_transaction:
+            self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.db.execute("DROP TRIGGER IF EXISTS messages_au")
+            self.db.execute(_FTS_AU_SQL)
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
 
     def _relation_guards_current(self) -> bool:
         """True when no recorded guard decision or evidence would change.
@@ -361,8 +406,12 @@ class Ledger:
         ``ledger_relation_audit`` mode still matches: the only paths that can
         orphan an enforced child (a messages DELETE or key UPDATE) clear that
         row through the ``relation_audit_messages_*`` triggers. ``shadow``
-        relations are recounted because ``existing_count`` is health evidence.
+        relations are recounted because ``existing_count`` is health evidence
+        — at most once per RELATION_RECOUNT_S: every process opens the
+        ledger, and a full orphan COUNT on each open grew with the corpus.
+        A recount that confirms the evidence refreshes its timestamp.
         """
+        recounted = False
         self.db.execute("BEGIN")
         try:
             try:
@@ -376,17 +425,65 @@ class Ledger:
                 "SELECT name FROM sqlite_master WHERE type='trigger'")}
             if not _GUARD_TRIGGERS <= triggers:
                 return False
+            fresh = self._relation_recount_fresh(self._relation_marker())
             for table, _columns, condition in _GUARD_RELATIONS:
                 mode, existing = guards.get(table, (None, None))
                 if mode is None or verified.get(table) != mode:
                     return False
-                if mode == "shadow" and self.db.execute(
-                        f"SELECT COUNT(*) FROM {table} a WHERE {condition}"
-                ).fetchone()[0] != existing:
-                    return False
-            return True
+                if mode == "shadow" and not fresh:
+                    recounted = True
+                    if self.db.execute(
+                            f"SELECT COUNT(*) FROM {table} a WHERE {condition}"
+                    ).fetchone()[0] != existing:
+                        return False
         finally:
             self.db.commit()
+        if recounted:
+            self._mark_relation_recount()
+        return True
+
+    def _relation_marker(self) -> str:
+        """Cheap evidence of changes that can move a shadow count without
+        clearing ledger_relation_audit: new shadow observations, and new
+        parent messages at any id (which can resolve an orphan). Child deletions
+        are covered only by the RELATION_RECOUNT_S bound."""
+        shadow = self.db.execute(
+            "SELECT COALESCE(SUM(shadow_count),0) FROM ledger_relation_guards"
+        ).fetchone()[0]
+        # MCS ids are not insertion-ordered: a backfilled parent can land
+        # below MAX(message_id), so the row count moves the marker too
+        newest, total = self.db.execute(
+            "SELECT MAX(message_id), COUNT(*) FROM messages").fetchone()
+        return f"{shadow}:{newest}:{total}"
+
+    def _relation_recount_fresh(self, marker: str) -> bool:
+        """True when shadow evidence was confirmed within RELATION_RECOUNT_S
+        and nothing in ``marker`` moved since."""
+        try:
+            row = self.db.execute(
+                "SELECT counted_at,marker FROM ledger_relation_recount "
+                "WHERE singleton=1").fetchone()
+        except sqlite3.OperationalError:
+            return False
+        if row is None or row[1] != marker:
+            return False
+        at = row[0]
+        return (isinstance(at, int | float) and not isinstance(at, bool)
+                and 0 <= time.time() - at < RELATION_RECOUNT_S)
+
+    def _mark_relation_recount(self) -> None:
+        """Record a confirmed recount (best effort: only skips future work)."""
+        with suppress(sqlite3.Error):
+            with self.db:
+                self.db.execute(
+                    "CREATE TABLE IF NOT EXISTS ledger_relation_recount("
+                    "singleton INTEGER PRIMARY KEY CHECK(singleton=1), "
+                    "counted_at REAL NOT NULL, marker TEXT NOT NULL)")
+                self.db.execute(
+                    "INSERT INTO ledger_relation_recount(singleton,counted_at,marker) "
+                    "VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET "
+                    "counted_at=excluded.counted_at,marker=excluded.marker",
+                    (time.time(), self._relation_marker()))
 
     def _install_relation_guards(self, *, new_database: bool = False,
                                  audit: bool = False) -> None:
@@ -465,6 +562,7 @@ class Ledger:
                     AFTER {event} ON messages WHEN {when}
                     BEGIN DELETE FROM ledger_relation_audit; END
                 """)
+        self._mark_relation_recount()
 
     def _script(self, s: str):
         """Run a ;-separated DDL/DML script inside the caller's transaction
@@ -2703,6 +2801,21 @@ class LedgerReader(Ledger):
 
 
 SNAPSHOT_VERIFY_TIMEOUT_S = 30.0
+# quick_check time grows with the file: the verify budget adds one second
+# per SNAPSHOT_VERIFY_RATE_BPS of snapshot, capped, so a ledger that has
+# outgrown the floor is not refused on every publish (H4)
+SNAPSHOT_VERIFY_RATE_BPS = 64 * 1024 * 1024
+SNAPSHOT_VERIFY_EXTRA_MAX_S = 150.0
+
+
+def snapshot_verify_timeout_s(path: str) -> float:
+    """Verify budget for a snapshot candidate of this size."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        size = 0
+    return SNAPSHOT_VERIFY_TIMEOUT_S + min(
+        SNAPSHOT_VERIFY_EXTRA_MAX_S, size / SNAPSHOT_VERIFY_RATE_BPS)
 _SNAPSHOT_VALIDATION_CODE = (
     "import sys; sys.path.insert(0, sys.argv[1]); import _mcs_path; "
     "from ledger import valid_mcs_db; "
@@ -2742,10 +2855,25 @@ def _valid_snapshot_candidate(path: str, *, deadline: float) -> bool:
         return False
 
 
-def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
+class _SnapshotDeadline(Exception):
+    """The copy ran into the caller's hard deadline."""
+
+
+def publish_snapshot(db_path: str, dest_dir: str, *,
+                     deadline: float | None = None) -> str | None:
     """Verified point-in-time copy for read-only consumers.
     backup -> tmp -> quick_check -> atomic rename; consumers never see a
-    half-written snapshot. Returns the published path or None."""
+    half-written snapshot. Returns the published path or None.
+    ``deadline`` (monotonic) is the caller's hard stop, e.g. its armed
+    watchdog: the copy is abandoned and the verify budget capped there,
+    so a large ledger fails this publish instead of getting the process
+    killed mid-copy on every tick."""
+    if deadline is not None and monotonic() >= deadline:
+        return None
+
+    def check_deadline(*_):
+        if deadline is not None and monotonic() >= deadline:
+            raise _SnapshotDeadline
     os.makedirs(dest_dir, mode=0o700, exist_ok=True)
     os.chmod(dest_dir, 0o700)
     dest = os.path.join(dest_dir, "ledger-snapshot.db")
@@ -2757,7 +2885,10 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
         try:
             dst = sqlite3.connect(tmp)
             try:
-                src.backup(dst)
+                try:
+                    src.backup(dst, pages=4096, progress=check_deadline)
+                except _SnapshotDeadline:
+                    return None
                 with dst:
                     dst.execute("INSERT OR REPLACE INTO snapshot_meta("
                                 "singleton,generation_id,generated_at) "
@@ -2768,7 +2899,10 @@ def publish_snapshot(db_path: str, dest_dir: str) -> str | None:
                 dst.close()
         finally:
             src.close()
-        if not _valid_snapshot_candidate(tmp, deadline=monotonic() + SNAPSHOT_VERIFY_TIMEOUT_S):
+        verify_by = monotonic() + snapshot_verify_timeout_s(tmp)
+        if deadline is not None:
+            verify_by = min(verify_by, deadline)
+        if not _valid_snapshot_candidate(tmp, deadline=verify_by):
             return None
         publish_tmp(tmp, dest)
         # A reader keeps its old inode or opens the complete new generation.

@@ -12,7 +12,9 @@
   </array>
   <key>WorkingDirectory</key><string>__REPO__</string>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>KeepAlive</key><true/>
+  <key>ExitTimeOut</key><integer>3660</integer>
+  <key>AbandonProcessGroup</key><true/>
   <key>ThrottleInterval</key><integer>30</integer>
   <key>StandardOutPath</key><string>__DATA__/standalone.log</string>
   <key>StandardErrorPath</key><string>__DATA__/standalone.log</string>

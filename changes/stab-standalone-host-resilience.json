@@ -1,0 +1,18 @@
+{
+  "category": "fixed",
+  "title": "独立モードのhost強制終了後の子プロセス残存と、状態ファイルの書込みを改善",
+  "summary": "独立モードのhostが強制終了された後に再起動すると、前回の子プロセスを確認し、抽出workerは止めて起動し直し、定期ジョブ・cmdは終了を待って二重実行を防ぎます。状態ファイルは内容が変わったときと5秒ごとにだけ書くようにし、ディスク満杯でもhostが落ちずに動き続けます。手動導入用のLaunchAgentテンプレートも計画再起動後に起動し直すよう修正しました。",
+  "upgrade": "独立モードでは更新後に mcs_setup.py services を1回実行してください。deployment/launchagents/ai.mcs.standalone.plist を手動で配置している場合は配置し直してください。Hermesモードでは操作は不要です。",
+  "details": [
+    "前回の standalone-status.json に記録されたPIDのうち、親が現hostでなく、コマンドラインが同じジョブと一致するものだけを対象にする（PID再利用は ps で再確認する）。終了コードは不明として失敗回数に数えない。",
+    "状態ファイルは毎秒の fsync をやめ、変更時と5秒ごとの heartbeat に減らした（status・recovery の15秒の鮮度判定は維持）。書込み失敗は種類ごとに1回だけログに記録する。",
+    "手動テンプレートの KeepAlive を SuccessfulExit=false から常時に変え、ExitTimeOut・AbandonProcessGroup を生成plistと揃えた。",
+    "runtime_mode が standalone でない場合の終了は、services が撤去するまでサービスが30秒ごとに起動し直す動作であることをコメントで明示した。"
+  ],
+  "refs": [
+    "mcs_standalone/runtime.py",
+    "mcs_standalone/__main__.py",
+    "deployment/launchagents/ai.mcs.standalone.plist",
+    "tests/adapters/standalone/test_stab_runtime_supervision.py"
+  ]
+}

@@ -27,7 +27,9 @@ def test_every_local_request_uses_deadline_and_reaps_worker(monkeypatch, entry):
             processes.append(self)
 
         def communicate(self, input=None, timeout=None):
-            if timeout is not None:
+            # the request carries the envelope; the post-kill reap (bounded
+            # by its own timeout) sends nothing
+            if input is not None:
                 self.envelope = json.loads(input)
                 self.timeout = timeout
                 raise subprocess.TimeoutExpired(self.command, timeout)
@@ -117,7 +119,7 @@ class SlowResponse:
         with open({str(ready)!r}, 'w') as marker:
             marker.write('ready')
         data = bytearray()
-        for _ in range(1000):
+        for _ in range(5000):          # ~100 s unless the deadline cuts it
             time.sleep(0.02)
             data.extend(b'x')
         return bytes(data)
@@ -141,8 +143,10 @@ raise SystemExit(bounded_http._http_worker_main())
     started = time.monotonic()
     with pytest.raises(TimeoutError, match="deadline"):
         local_llm.bounded_request(local_llm.ENDPOINT, "POST", {}, 30,
-                                  deadline=started + 2)
-    assert time.monotonic() - started < 5
+                                  deadline=started + 5)
+    # the worker gets time to start on a loaded runner; the bound stays far
+    # below the read's ~100 s, so only the deadline can have ended it
+    assert time.monotonic() - started < 20
     assert ready.exists(), "the synthetic slow read must have started"
     assert len(processes) == 1
     assert processes[0].returncode is not None

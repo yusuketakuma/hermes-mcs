@@ -296,7 +296,7 @@ def test_config_change_before_post_is_not_sent(monkeypatch, tmp_path):
         return SimpleNamespace(chat_postMessage=post), SimpleNamespace(close=close)
 
     async def identity(client, s):
-        return True
+        return None
 
     monkeypatch.setattr(st, "_client", fake_client)
     monkeypatch.setattr(st, "_identity", identity)

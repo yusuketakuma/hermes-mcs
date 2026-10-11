@@ -49,6 +49,8 @@ EXPIRE_EVERY_S = 300.0         # registry TTL sweep cadence (TTLs are
 STARTUP_RETRY_MAX_S = 300.0    # cap on the supervisor start-up retry backoff
 RESTORE_MARGIN_S = 86400.0     # journal rows this much older than the oldest
                                # restorable backup are no longer restore evidence
+NO_BACKUP_HORIZON_S = 90 * 86400.0  # with no local backup set, settled rows
+                               # older than this are not restore evidence either
 
 # HTTP statuses that prove the send was rejected outright — never
 # committed server-side. Timeouts/cancellations are unknown instead.
@@ -235,12 +237,19 @@ class DeliveryWorker:
     def _restore_horizon(self) -> float | None:
         """mtime of the oldest backup a restore could rewind to — journal
         rows newer than that are the post-restore reconcile's only
-        witness. No readable backup set means no pruning at all."""
+        witness. With no backup set at all (absent directory or no .db)
+        the horizon falls back to NO_BACKUP_HORIZON_S ago so the journal
+        cannot grow forever; an unreadable backup set prunes nothing."""
         backups = os.path.join(self._root, "backups")
         try:
             names = [n for n in os.listdir(backups) if n.endswith(".db")]
-            if not names:
-                return None
+        except FileNotFoundError:
+            names = []
+        except OSError:
+            return None
+        if not names:
+            return time.time() - NO_BACKUP_HORIZON_S
+        try:
             return min(os.stat(os.path.join(backups, n)).st_mtime
                        for n in names)
         except OSError:

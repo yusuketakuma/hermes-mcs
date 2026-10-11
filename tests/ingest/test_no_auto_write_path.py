@@ -4,7 +4,7 @@ POSTを呼べないことをテストで固定する").
 
 Today the whole MCS surface is read-only: every API call is a GET, read
 state clears only as a side effect of the snapshot-gated message GET, and
-the only DOM interaction is the login form in ``auto_login``. These tests
+the only DOM interaction is the login form in ``_auto_login`` (behind ``auto_login``). These tests
 pin that, so a future human-approved write (1.1.x) has to arrive as a
 deliberate, reviewed change to this file rather than slipping in through
 a scheduled job, a card button, or a delivery adapter.
@@ -278,10 +278,11 @@ def test_injected_scripts_use_no_browser_networking():
 
 
 def test_dom_clicks_exist_only_in_the_login_form():
-    """The one scripted click is the login submit inside auto_login, and
+    """The one scripted click is the login submit inside _auto_login (the
+    body auto_login wraps with the login backoff), and
     the only dispatched events are the two credential input events; no
     other injected script presses, submits or dispatches anything — not
-    even another action added inside auto_login itself."""
+    even another action added inside _auto_login itself."""
     actions = []
     for rel in _production_files():
         tree = _parse(rel)
@@ -292,11 +293,11 @@ def test_dom_clicks_exist_only_in_the_login_form():
                     actions.append((rel, fn.name if fn else None,
                                     " ".join(line.split())))
     assert sorted(actions) == sorted([
-        (ADAPTER, "auto_login",
+        (ADAPTER, "_auto_login",
          "idEl.dispatchEvent(new Event('input', {bubbles:true}));"),
-        (ADAPTER, "auto_login",
+        (ADAPTER, "_auto_login",
          "pwEl.dispatchEvent(new Event('input', {bubbles:true}));"),
-        (ADAPTER, "auto_login", "btn.click();"),
+        (ADAPTER, "_auto_login", "btn.click();"),
     ]), actions
     # The click target is the login form's submit button on the MCS origin.
     click_script = next(text for _n, text in _string_constants(_parse(ADAPTER))

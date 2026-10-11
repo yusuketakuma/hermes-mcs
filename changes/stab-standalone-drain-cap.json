@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "独立モードの再起動待ちに10分の上限を設定",
+  "summary": "hostの再起動時、実行中の時刻指定ジョブ（収集・保守など）を最大10分待ち、超えた場合は停止して再起動します。停止したジョブの時刻は再起動後に1回追い付き実行されます。これまでは長いジョブの間、最大1時間スケジュールが止まっていました。",
+  "upgrade": "独立モードでは更新後に mcs_setup.py services を1回実行してください。Hermesモードでは操作は不要です。",
+  "details": [
+    "停止は SIGTERM、10秒後に SIGKILL。収集処理は run.lock と未完了行の後処理により安全に中断できる。",
+    "更新処理（update）と cmd/cmd_int（人承認操作を含む）は中断せず、従来どおり終了を待つ。",
+    "上限の到達は drain_cap_reached としてログに記録する。"
+  ],
+  "refs": [
+    "mcs_standalone/runtime.py",
+    "tests/adapters/standalone/test_stab_runtime_supervision.py"
+  ]
+}

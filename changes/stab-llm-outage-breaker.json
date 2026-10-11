@@ -1,0 +1,20 @@
+{
+  "category": "fixed",
+  "title": "ローカルLLMが停止・応答不能のとき、抽出と意味評価を自動で止め、停止を記録するように修正",
+  "summary": "ローカルLLMサーバーが接続を拒否したり、モデル読込中(503)を返し続けたりしても、これまでは抽出と意味評価が毎回同じ呼び出しを試みるだけで、停止が記録されませんでした。到達不能・503を抽出と意味評価で共通の遮断器に数えるようにしたため、停止が続くとLLMの処理を一定時間止め、停止の開始時刻と最後に応答した時刻を記録します。また、/v1/models には応えるのに生成が毎回タイムアウトする状態でも、遮断器が一度作動した後はメッセージの試行回数を消費しないため、全件が恒久失敗になることはありません。",
+  "upgrade": "追加操作は不要です。停止と応答の時刻はデータフォルダの llm_health.json に保存されます。停止を通知する仕組みは別の変更で追加されます。",
+  "details": [
+    "extract_llm の _llm_call が呼び出しごとの結果(unreachable / unavailable(503) / transport)をスレッド単位で記録し、run_pending の _handle が実行あたり1回だけ circuit_failure を呼ぶ。到達不能・503は従来どおり試行回数を消費しない。",
+    "/v1/models が応答し生成が transport 失敗(タイムアウト等)のときも circuit_failure を数える。遮断器の streak が1以上の間は error 行を書かない(slow_deferred)。応答のあった呼び出しで streak は0に戻るため、健全なサーバーで毎回失敗するメッセージは従来どおり試行回数の上限で止まる。",
+    "semantic_drain.run_due は LLMNotSent の llm_unreachable / llm_unavailable を同じ遮断器に1パス1回だけ数え、そのパスでは残りの semantic ジョブを呼ばない(out.llm_down)。応答のあった呼び出しは circuit_success で遮断器を解除する。受付制御の保留や long_output の予算不足は停止として数えない。",
+    "mcs_util の circuit_failure / circuit_success を flock で直列化し、並行する抽出・意味評価・tick の更新で回数が失われないようにした。llm_health()・llm_last_success()・llm_down_since()・llm_down_for_s()・circuit_streak() を追加した。"
+  ],
+  "refs": [
+    "mcs/core/mcs_util.py",
+    "mcs/extract/v4/extract_llm.py",
+    "mcs/semantic/semantic_drain.py",
+    "tests/extract/test_stab_llm_breaker.py",
+    "tests/core/test_stab_circuit_lock.py",
+    "tests/semantic/test_stab_semantic_lanes.py"
+  ]
+}

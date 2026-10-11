@@ -1477,7 +1477,7 @@ def test_standalone_services_owns_one_host_and_no_hermes_jobs(monkeypatch, tmp_p
     assert manifest["runtime_mode"] == "standalone"
     assert manifest["python"] == str(tmp_path / "venv/bin/python3")
     assert manifest["cron"] == [] and manifest["scheduler"] == "standalone"
-    assert [row["label"] for row in manifest["agents"]] == ["ai.mcs.standalone"]
+    assert [row["label"] for row in manifest["agents"]] == ["ai.mcs.standalone", "local.mcs-health"]
     assert not any("cron" in call or "gateway" in call for call in calls)
     calls.clear()
     assert mcs_setup.cmd_services(args) == 0

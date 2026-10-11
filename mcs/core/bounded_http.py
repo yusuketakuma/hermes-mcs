@@ -137,6 +137,27 @@ def _http_worker_main() -> int:
     return 0
 
 
+REAP_TIMEOUT_S = 5.0
+
+
+def _reap(process) -> None:
+    """Collect a killed worker without trusting its pipes to close.
+
+    communicate() after kill waits for EOF, which never comes while
+    something else still holds the pipe (a stuck descendant, an
+    uninterruptible wait) — the caller's deadline would stop holding.
+    Drain for a bounded time, then close our pipe ends and leave."""
+    try:
+        process.communicate(timeout=REAP_TIMEOUT_S)
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                with suppress(OSError):
+                    stream.close()
+        with suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=0.1)
+
+
 def _worker_environment() -> dict:
     """Pass only runtime essentials; credentials remain stdin-only."""
     allowed = {"PATH", "PYTHONPATH", "PYTHONHOME", "SYSTEMROOT",
@@ -209,13 +230,13 @@ def bounded_http_request(endpoint: str, method: str, body,
         try:
             process.kill()
         finally:
-            process.communicate()
+            _reap(process)
         raise TimeoutError("http worker deadline exceeded") from error
     except BaseException:
         if process.poll() is None:
             process.kill()
         with suppress(Exception):
-            process.communicate()
+            _reap(process)
         raise
     if time.monotonic() >= operation_deadline:
         raise TimeoutError("http worker deadline exceeded")

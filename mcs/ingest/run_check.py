@@ -76,6 +76,10 @@ ATTACH_DISK_MARGIN_MB = 2048
 KARTE_SUMMARY_TICK_CAP = 12   # 連携サマリー GETs per run; the rest carry over
 KARTE_SUMMARY_FILL = 10       # missing/stale summaries filled per deep run
 KARTE_SUMMARY_MARGIN_S = 60   # keep the tail of the deadline for semantic/finish
+# the armed watchdog's exit time (monotonic); backup and DB upkeep start
+# only when they fit before it, less this margin for the tail stages
+_WATCHDOG_EXIT_AT: float | None = None
+HARD_DEADLINE_MARGIN_S = 10
 
 
 def _err_str(e: Exception) -> str:
@@ -206,6 +210,9 @@ def _backup_health(cfg: dict, now: float) -> dict:
 
 CARD_STALL_S = 1800        # a queued render this old on the live transport
 BACKLOG_STALL_S = 6 * 3600  # untouched due work AND no progress this long
+DUE_SLACK_S = 900           # next_try this close counts as due (defer cycles)
+LOCAL_LLM_DOWN_S = 3600     # llm_down_for_s at or past this, with due work, alerts
+COVERAGE_COUNT_S = 3600     # full extraction-coverage COUNTs at most this often
 
 
 _JEV_BLOCK_KINDS = ("payment_required", "no_api_key", "budget_exceeded",
@@ -230,15 +237,44 @@ _ELIGIBLE = ("m.body_text IS NOT NULL AND m.body_text != '' "
              "AND (m.body_state IS NULL OR m.body_state='full')")
 
 
-def _backlog_stalls(ledger, cfg, now: float) -> list:
+def _carried_since(key: str, active: bool, now: float) -> float | None:
+    """Start of a condition observed on every health write since: the
+    previous health block's mark while it held, else now; None when the
+    condition is absent (the episode ends)."""
+    if not active:
+        return None
+    marks = _prev_health().get("stall_marks")
+    at = marks.get(key) if isinstance(marks, dict) else None
+    return at if _finite_number(at) and 0 <= at <= now else now
+
+
+def _llm_failing(ledger) -> bool:
+    """The local LLM circuit breaker is open or holds unreset failures
+    (the state file disappears on the first answered call). Read-only."""
+    from mcs_util import circuit_open_s, circuit_state_path
+    try:
+        return circuit_open_s(ledger) > 0 or circuit_state_path(ledger).exists()
+    except (OSError, sqlite3.Error, IndexError, TypeError, ValueError):
+        return False
+
+
+def _backlog_stalls(ledger, cfg, now: float, *, marks: dict | None = None) -> list:
     """Degraded reasons for work that silently stopped moving. Each
-    check is gated on its feature being enabled and needs BOTH an old
-    untouched item and no completion inside the window, so a large but
+    check is gated on its feature being enabled and needs BOTH old
+    waiting work and no completion inside the window, so a large but
     draining backlog (or an idle system) never trips it.
     - card_delivery_stalled: a queued render on the active interactive
       transport not picked up for CARD_STALL_S (worker down/denied).
-    - semantic_backlog_stalled: semantic mode on, a due pending job
-      untouched for BACKLOG_STALL_S and no semantic job done since.
+    - local_llm_down / llm_endpoint_down: local-model work (semantic jobs
+      or pending legacy extraction) has been due while the local
+      LLM circuit breaker kept failing for BACKLOG_STALL_S (the server
+      is down; deferred jobs never fail, so nothing else would say so).
+    - semantic_backlog_stalled: semantic mode on, no semantic job done
+      for BACKLOG_STALL_S while due jobs existed throughout that window
+      (tracked across health writes, independent of updated_at: a
+      drainer that only defers keeps refreshing updated_at), or a due
+      pending job untouched for BACKLOG_STALL_S.
+    ``marks`` receives the episode start times carried in health.json.
     - extract_backlog_stalled: legacy extraction admitting (fact_source
       legacy), an eligible message without a v4 result stored
       BACKLOG_STALL_S ago with no extract_llm artifact at all, and no
@@ -257,23 +293,78 @@ def _backlog_stalls(ledger, cfg, now: float) -> list:
             (notify_cards.active_transport(cfg),)).fetchone()[0]
         if oldest is not None and now - oldest > CARD_STALL_S:
             reasons.append("card_delivery_stalled")
+    marks = {} if marks is None else marks
+    window = now - BACKLOG_STALL_S
     scfg, errors = semantic_policy.semantic_config(cfg)
+
+    def llm_due() -> bool:
+        """Work that needs the local model is waiting: due semantic jobs
+        (semantic mode on) or legacy extraction pending (fact_source not
+        canonical — the default semantic-off install has no fetch_jobs
+        for it). extract_qc is Jev-only and never counts. Evaluated
+        lazily: the legacy probe walks eligible messages."""
+        # due "now or within the slack": a deferring drainer keeps pushing
+        # next_try a minute ahead, which must still read as waiting work
+        if not errors and scfg["mode"] != "off" and db.execute(
+                "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "
+                "AND state='pending' AND next_try<=? LIMIT 1",
+                (now + DUE_SLACK_S,)).fetchone() is not None:
+            return True
+        if errors or scfg["fact_source"] == "canonical":
+            return False
+        # extract_llm's own pending predicate, minus exhausted rows
+        import extract_llm
+        return db.execute(
+            f"SELECT 1 FROM messages m WHERE {extract_llm.pending_pred()} "
+            "AND COALESCE((SELECT MAX(COALESCE(json_extract(e.meta,"
+            f"'$.attempts'),0)) {extract_llm._ERROR_ROWS_SQL}), 0) < 5 "
+            "LIMIT 1", (extract_llm.KIND, extract_llm.EXTRACT_VERSION)
+        ).fetchone() is not None
+
+    import mcs_util
+    down_for = getattr(mcs_util, "llm_down_for_s", None)
+    if callable(down_for):
+        # the LLM lane's own health record (llm_health.json): None means
+        # unknown or healthy and never alerts
+        try:
+            seconds = down_for(ledger, now=now)
+        except Exception:
+            seconds = None
+        marks["llm_down_since"] = None
+        if (_finite_number(seconds) and seconds >= LOCAL_LLM_DOWN_S
+                and llm_due()):
+            reasons.append("local_llm_down")
+    else:
+        # fallback without that record: breaker failing while work waits
+        down = _carried_since("llm_down_since",
+                              _llm_failing(ledger) and llm_due(), now)
+        marks["llm_down_since"] = down
+        if down is not None and now - down > BACKLOG_STALL_S:
+            reasons.append("llm_endpoint_down")
     if errors:
         return reasons   # reported as stage errors; admission is closed
-    window = now - BACKLOG_STALL_S
     blocked = _jev_block_reason(db) if scfg["mode"] != "off" else None
     if blocked:
         # the cause is known and external — name it. A live drainer keeps
         # touching due jobs while it waits, so the generic stall below
         # still only fires when the drainer itself stopped.
         reasons.append(f"semantic_jev_{blocked}")
-    if scfg["mode"] != "off" and db.execute(
-            "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "
-            "AND state='pending' AND next_try<=? AND updated_at<? LIMIT 1",
-            (now, window)).fetchone() and not db.execute(
+    sem_on = scfg["mode"] != "off"
+    due = sem_on and db.execute(
+        "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "
+        "AND state='pending' AND next_try<=? LIMIT 1",
+        (now + DUE_SLACK_S,)).fetchone() is not None
+    due_since = _carried_since("semantic_due_since", due, now)
+    marks["semantic_due_since"] = due_since
+    if due and not db.execute(
             "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "
             "AND state='done' AND updated_at>=? LIMIT 1",
-            (window,)).fetchone():
+            (window,)).fetchone() and (
+            (due_since is not None and due_since < window)
+            or db.execute(
+                "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "
+                "AND state='pending' AND next_try<=? AND updated_at<? LIMIT 1",
+                (now, window)).fetchone()):
         reasons.append("semantic_backlog_stalled")
     if scfg["fact_source"] != "canonical":
         newest = db.execute(
@@ -347,29 +438,43 @@ def _health(ledger, result: dict, status: str,
         else:
             held_reasons[row["reason"]] = row["count"]
     held = sum(held_reasons.values())
+    # held sends keep their posts' attachments past retention; old ones
+    # are counted so files kept for them never sit on disk unnoticed
+    held_pins = {"count": 0, "bytes": 0}
     if held:
         notify_state = "incomplete"
+        with suppress(sqlite3.Error):
+            held_pins = maintenance.held_pinned_attachments(ledger.db, now)
     sem = ledger.db.execute(
         "SELECT COUNT(*) c, MIN(created_at) o FROM fetch_jobs "
         "WHERE kind='semantic' AND state='pending'").fetchone()
     qc = ledger.db.execute(
         "SELECT COUNT(*) c, MIN(created_at) o FROM fetch_jobs "
         "WHERE kind='extract_qc' AND state='pending'").fetchone()
-    poison = ledger.db.execute(
-        f"SELECT COUNT(*) FROM messages m WHERE {_ELIGIBLE} "
-        "AND EXISTS(SELECT 1 FROM artifacts bad "
-        "  WHERE bad.kind='extract_llm' AND bad.message_id=m.message_id"
-        "    AND NOT json_valid(bad.meta))").fetchone()[0]
-    total = ledger.db.execute(
-        f"SELECT COUNT(*) FROM messages m WHERE {_ELIGIBLE}"
-    ).fetchone()[0]
-    current = ledger.db.execute(f"""
-      SELECT COUNT(*) FROM messages m WHERE {_ELIGIBLE}
-        AND EXISTS(SELECT 1 FROM artifacts a
-          WHERE a.kind='extract_llm' AND a.message_id=m.message_id
-            {current_extract_pred('a', 'm')}
-            AND json_extract({json_or_null('a.meta')},'$.extract_version')=?)
-    """, (extract_llm.EXTRACT_VERSION,)).fetchone()[0]
+    source = _ledger_key(ledger)
+    coverage = _cached_coverage(extract_llm.EXTRACT_VERSION, now, source)
+    if coverage is None:
+        poison = ledger.db.execute(
+            f"SELECT COUNT(*) FROM messages m WHERE {_ELIGIBLE} "
+            "AND EXISTS(SELECT 1 FROM artifacts bad "
+            "  WHERE bad.kind='extract_llm' AND bad.message_id=m.message_id"
+            "    AND NOT json_valid(bad.meta))").fetchone()[0]
+        total = ledger.db.execute(
+            f"SELECT COUNT(*) FROM messages m WHERE {_ELIGIBLE}"
+        ).fetchone()[0]
+        current = ledger.db.execute(f"""
+          SELECT COUNT(*) FROM messages m WHERE {_ELIGIBLE}
+            AND EXISTS(SELECT 1 FROM artifacts a
+              WHERE a.kind='extract_llm' AND a.message_id=m.message_id
+                {current_extract_pred('a', 'm')}
+                AND json_extract({json_or_null('a.meta')},'$.extract_version')=?)
+        """, (extract_llm.EXTRACT_VERSION,)).fetchone()[0]
+        coverage = {
+            "extract_version": extract_llm.EXTRACT_VERSION,
+            "current": current, "eligible": total,
+            "poison_gated": poison,
+            "ratio": round(current / total, 4) if total else None,
+            "counted_at": now, "source": source}
     coll = _collection(result)
     free_mb = _free_mb()
     cards_health = notify_cards.health_cards(ledger, cfg)
@@ -405,10 +510,13 @@ def _health(ledger, result: dict, status: str,
             "attempts": cards_health["attempts_unsettled"],
             "oldest_age_s": cards_health["oldest_unsettled_age_s"]},
     }
+    checked = isinstance(cfg, dict) and cfg is not CONFIG_NOT_LOADED
+    # an unchecked run (no config) carries the episode marks forward
+    prev_marks = _prev_health().get("stall_marks") if not checked else None
+    stall_marks: dict = dict(prev_marks) if isinstance(prev_marks, dict) else {}
     try:
-        stalls = (_backlog_stalls(ledger, cfg, now)
-                  if isinstance(cfg, dict) and cfg is not CONFIG_NOT_LOADED
-                  else [])
+        stalls = (_backlog_stalls(ledger, cfg, now, marks=stall_marks)
+                  if checked else [])
     except Exception as e:
         # a plain reason code: health_watch validates codes as snake_case
         # and would otherwise drop every reason in the list
@@ -444,7 +552,14 @@ def _health(ledger, result: dict, status: str,
     backup = (_backup_health(cfg or {}, now) if cfg is not CONFIG_NOT_LOADED
               else {"state": "unknown", "reasons": ["config_not_loaded"]})
     backup_bad = backup["state"] not in ("ok", "disabled")
-    if (run_overdue or guard_violations or backup_bad) and overall == "ok":
+    skipped = result.get("backup_skipped")
+    disk_low = _disk_low(free_mb) or skipped == "disk_low"
+    # M7: a backup skipped for lack of time is news only once the newest
+    # daily copy is older than a day — one late tick is not an incident
+    age = maintenance.newest_backup_age_s() if skipped == "deadline" else 0
+    backup_deferred = skipped == "deadline" and (age is None or age > 86400)
+    if (run_overdue or guard_violations or backup_bad
+            or backup_deferred) and overall == "ok":
         overall = "degraded"
     previous = _prev_health()
     last_ok_at = (now if overall == "ok" else previous.get(
@@ -468,7 +583,8 @@ def _health(ledger, result: dict, status: str,
             ("notification_parked", bool(notify_res.get("parked"))),
             ("notification_held", bool(held)),
             ("notification_pending", bool(outbox["c"])),
-            ("disk_low", _disk_low(free_mb) or bool(result.get("backup_skipped"))),
+            ("disk_low", disk_low),
+            ("backup_deferred_deadline", backup_deferred),
         ) if present] + stalls
     return {
         "overall": overall, "run_status": status,
@@ -482,12 +598,13 @@ def _health(ledger, result: dict, status: str,
         "unread_at": _unread_at(result, status, now),
         **coll,
         "disk_free_mb": round(free_mb) if free_mb is not None else None,
-        "disk_low": _disk_low(free_mb) or bool(result.get("backup_skipped")),
+        "disk_low": disk_low,
         "notify": {"state": notify_state,
                    "pending": outbox["c"],
                    "held": held,
                    "held_reasons": held_reasons,
                    "retired_held": retired_held,
+                   "held_pinned_attachments": held_pins,
                    "oldest_age_s": (round(now - outbox["o"], 1)
                                     if outbox["o"] else 0)},
         "semantic_jobs": {"pending": sem["c"],
@@ -497,16 +614,41 @@ def _health(ledger, result: dict, status: str,
                             "oldest_age_s": (round(now - qc["o"], 1)
                                              if qc["o"] else 0)},
         # key kept for health.json consumers; the value is the current version
-        "extract_v2_coverage": {
-            "extract_version": extract_llm.EXTRACT_VERSION,
-            "current": current, "eligible": total,
-            "poison_gated": poison,
-            "ratio": round(current / total, 4) if total else None},
+        "extract_v2_coverage": coverage,
         "cards": cards_health,
         "metadata_shadow": shadow_health,
         "attention": attention,
+        "stall_marks": stall_marks,
         "errors": list(result.get("errors") or []),
     }
+
+
+def _ledger_key(ledger) -> str:
+    """Short opaque identity of the ledger file (no path in health)."""
+    import hashlib
+    try:
+        path = ledger.db.execute("PRAGMA database_list").fetchone()[2] or ""
+    except (sqlite3.Error, IndexError, TypeError):
+        path = ""
+    return hashlib.sha256(os.path.realpath(path).encode()).hexdigest()[:12]
+
+
+def _cached_coverage(version, now: float, source: str) -> dict | None:
+    """The previous health block's extraction coverage while it is
+    younger than COVERAGE_COUNT_S, for the same extract version and the
+    same ledger — three full COUNTs over every eligible message ran on
+    every tick and every deep run. None means count now."""
+    cov = _prev_health().get("extract_v2_coverage")
+    if (not isinstance(cov, dict) or cov.get("extract_version") != version
+            or cov.get("source") != source):
+        return None
+    at = cov.get("counted_at")
+    if not _finite_number(at) or not 0 <= now - at < COVERAGE_COUNT_S:
+        return None
+    if not all(type(cov.get(k)) is int and cov[k] >= 0
+               for k in ("current", "eligible", "poison_gated")):
+        return None
+    return cov
 
 
 def _write_health(ledger, result: dict, status: str,
@@ -1627,7 +1769,8 @@ def _commands_only(lock_fd, deadline) -> int:
         notify_cards.publish_flags(cfg, root)
         notify_cards.gc(ledger, cfg)
         if notify_cards.snapshot_dirty(ledger):
-            result["snapshot"] = maintenance.publish_snapshot(DB)
+            result["snapshot"] = maintenance.publish_snapshot(
+                DB, deadline=_hard_deadline())
             if result["snapshot"]:
                 notify_cards.clear_snapshot_dirty(ledger)
             else:
@@ -1928,16 +2071,39 @@ def _run_semantic(ledger, args, cfg, result, deadline, sem_on,
         raise RunLockLost(held=lost == "held")
 
 
+def _hard_deadline() -> float | None:
+    """When this process is killed (monotonic): the armed watchdog's
+    exit time less a margin, or None when no watchdog is armed."""
+    if _WATCHDOG_EXIT_AT is None:
+        return None
+    return _WATCHDOG_EXIT_AT - HARD_DEADLINE_MARGIN_S
+
+
 def _housekeeping(result):
-    """Daily backup, log rotation and attachment pruning — each failure
-    lands in errors without failing the run."""
+    """Daily backup, log rotation, attachment pruning and the daily
+    database upkeep — each failure lands in errors without failing the
+    run. Backup and upkeep start only when the watchdog leaves them time
+    (M7); a skipped backup is recorded, not silently dropped."""
+    hard = _hard_deadline()
     try:
-        if maintenance.daily_backup(DB) == "skipped_disk_low":
+        skipped = (maintenance.daily_backup(DB) if hard is None
+                   else maintenance.daily_backup(DB, deadline=hard))
+        if skipped == "skipped_disk_low":
             result["backup_skipped"] = "disk_low"
+        elif skipped == "skipped_deadline":
+            result["backup_skipped"] = "deadline"
     except maintenance.MaintenanceError as e:
         result["errors"].append(f"backup: {e}")
     except Exception as e:
         result["errors"].append(f"backup: {type(e).__name__}")
+    try:
+        upkeep = maintenance.db_maintenance(DB, deadline=hard)
+        if upkeep:
+            result["db_maintenance"] = upkeep
+    except maintenance.MaintenanceError as e:
+        result["errors"].append(f"db_maintenance: {e}")
+    except Exception as e:
+        result["errors"].append(f"db_maintenance: {type(e).__name__}")
     try:
         maintenance.rotate_log()
     except Exception as e:
@@ -1991,11 +2157,17 @@ def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
     ledger.finish_run(run_id, status,
                       "; ".join(result["errors"][:8]))
     try:
-        result["snapshot"] = maintenance.publish_snapshot(DB)
-        if result["snapshot"]:
-            notify_cards.clear_snapshot_dirty(ledger)
-        else:
+        # H4: a full copy + quick_check only when the ledger changed, the
+        # notification flag asks for it, or the copy is an hour old
+        dirty = notify_cards.snapshot_dirty(ledger)
+        state = maintenance.refresh_snapshot(DB, force=dirty,
+                                             deadline=_hard_deadline())
+        result["snapshot"] = state is not None
+        result["snapshot_state"] = state
+        if state is None:
             raise RuntimeError("snapshot_verify_failed")
+        if state == "published":
+            notify_cards.clear_snapshot_dirty(ledger)
     except Exception as e:
         result["errors"].append(f"snapshot: {type(e).__name__}")
         ledger.finish_run(run_id, "partial",
@@ -2032,8 +2204,17 @@ def _fail_run(ledger, args, result, run_id, status, detail,
 def _arm_watchdog(deadline: float, grace_s: int) -> None:
     """Exit a wedged tick after its deadline and explicit operator grace."""
     import faulthandler
-    faulthandler.dump_traceback_later(
-        max(0.001, deadline - time.monotonic() + grace_s), exit=True)
+    global _WATCHDOG_EXIT_AT
+    delay = max(0.001, deadline - time.monotonic() + grace_s)
+    _WATCHDOG_EXIT_AT = time.monotonic() + delay
+    faulthandler.dump_traceback_later(delay, exit=True)
+
+
+def _disarm_watchdog() -> None:
+    import faulthandler
+    global _WATCHDOG_EXIT_AT
+    faulthandler.cancel_dump_traceback_later()
+    _WATCHDOG_EXIT_AT = None
 
 
 def _run_stage(result, name, deadline, function, *args, required=False, **kwargs):
@@ -2072,7 +2253,6 @@ def main() -> int:
 
 
 def _main() -> int:
-    import faulthandler
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--mark-read", action="store_true",
@@ -2129,7 +2309,7 @@ def _main() -> int:
                                     and _config().get("notify_all_replies") is True))
     except Exception:
         if watchdog_armed:
-            faulthandler.cancel_dump_traceback_later()
+            _disarm_watchdog()
         os.close(lock_fd)
         print(json.dumps({"ok": False, "error": "ledger_init_failed"}))
         return 1
@@ -2245,7 +2425,7 @@ def _main() -> int:
         return 1
     finally:
         if watchdog_armed:
-            faulthandler.cancel_dump_traceback_later()
+            _disarm_watchdog()
         try:
             ledger.close()
         finally:

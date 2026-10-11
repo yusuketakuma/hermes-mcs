@@ -1,7 +1,9 @@
 """runtime_mode=standalone: config grants, launchd schedules and services
 without Hermes; Hermes mode keeps its existing surface."""
 import json
+import os
 import plistlib
+import time
 from types import SimpleNamespace
 import shlex
 import subprocess
@@ -14,6 +16,37 @@ import mcs_setup
 import mcs_util
 from test_mcs_setup import _services_env
 from mcs_standalone import runtime, service
+
+
+def _process_gone(pid, wait=10.0):
+    """Poll until ``pid`` no longer runs. A zombie (state Z in /proc) counts
+    as gone: a container's pid 1 may never reap an orphan. Without /proc
+    (macOS) signal 0 is the probe."""
+    deadline = time.monotonic() + wait
+    while True:
+        if os.path.isdir("/proc/self"):
+            try:
+                with open(f"/proc/{pid}/stat") as handle:
+                    gone = handle.read().rsplit(")", 1)[1].split()[0] == "Z"
+            except FileNotFoundError:
+                gone = True
+        else:
+            gone = not _signal0(pid)
+        if gone:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def _signal0(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def config(interactive="discord"):
@@ -48,7 +81,8 @@ def test_agent_labels_and_ownership_follow_the_runtime():
     assert mcs_setup._agent_labels({}) == mcs_setup.AGENT_LABELS
     labels = mcs_setup._agent_labels(config())
     cron = [mcs_setup._cron_label(s) for _, _, s in mcs_setup.CRON_JOBS]
-    assert labels == [mcs_setup.STANDALONE_LABEL]
+    # the health watch stays outside the host it watches
+    assert labels == [mcs_setup.STANDALONE_LABEL, mcs_setup.HEALTH_LABEL]
     # The same host owns collection even without a card connection.
     assert mcs_setup._agent_labels(config("off")) == labels
     for label in cron + [mcs_setup.STANDALONE_LABEL, "local.mcs-cmd"]:
@@ -104,7 +138,11 @@ def test_standalone_services_use_launchd_not_hermes(monkeypatch, tmp_path):
     assert len(host.schedules) == 6
     assert not any(a[0] == "/x/hermes" for a in calls)
     manifest = json.loads((tmp_path / "data" / "service_manifest.json").read_text())
-    assert manifest["cron"] == [] and len(manifest["agents"]) == 1
+    assert manifest["cron"] == [] and [row["label"] for row in manifest["agents"]] == [
+        mcs_setup.STANDALONE_LABEL, mcs_setup.HEALTH_LABEL]
+    health = plistlib.loads((tmp_path / "agents" / "local.mcs-health.plist").read_bytes())
+    assert health["ProgramArguments"][0] == venv and health["StartInterval"] == 300
+    assert health["EnvironmentVariables"] == {"MCS_ROOT": str(tmp_path)}
 
 
 @pytest.mark.parametrize("state,expected", [(3, 0), (0, 1), (1, 1)])
@@ -262,7 +300,6 @@ def test_services_never_reloads_the_job_it_runs_inside(monkeypatch, tmp_path):
 
 def test_cron_timeout_wrapper_kills_the_whole_job(tmp_path):
     import subprocess
-    import time
     marker = tmp_path / "child.pid"
     script = tmp_path / "job.sh"
     # the job's own child must die too (it would hold run.lock otherwise)
@@ -272,8 +309,7 @@ def test_cron_timeout_wrapper_kills_the_whole_job(tmp_path):
                            "/bin/bash", str(script)], timeout=60)
     assert proc.returncode == 124 and time.monotonic() - started < 30
     child = int(marker.read_text())
-    time.sleep(0.5)
-    assert subprocess.run(["kill", "-0", str(child)], capture_output=True).returncode != 0
+    assert _process_gone(child)
     ok = subprocess.run(["/usr/bin/perl", "-e", mcs_setup._TIMEOUT_PL, "30",
                          "/bin/sh", "-c", "exit 3"], timeout=60)
     assert ok.returncode == 3                     # normal exits pass through
@@ -335,21 +371,19 @@ def test_self_reload_waits_for_the_updater_not_for_services(monkeypatch, tmp_pat
 def test_cron_timeout_wrapper_forwards_sigterm(tmp_path):
     import signal
     import subprocess
-    import time
     marker = tmp_path / "child.pid"
     script = tmp_path / "job.sh"
     script.write_text(f"sleep 300 & echo $! > {marker}; wait\n")
     proc = subprocess.Popen(["/usr/bin/perl", "-e", mcs_setup._TIMEOUT_PL, "3600",
                              "/bin/bash", str(script)])
-    for _ in range(100):
-        if marker.exists() and marker.read_text().strip():
-            break
+    deadline = time.monotonic() + 30
+    while not (marker.exists() and marker.read_text().strip()):
+        assert time.monotonic() < deadline, "job never started its child"
         time.sleep(0.05)
     proc.send_signal(signal.SIGTERM)          # what launchd does on bootout
     assert proc.wait(timeout=30) == 143
-    time.sleep(0.5)
     child = int(marker.read_text())
-    assert subprocess.run(["kill", "-0", str(child)], capture_output=True).returncode != 0
+    assert _process_gone(child)
 
 
 def test_retire_previous_hermes_removes_plists_so_login_does_not_reload(monkeypatch, tmp_path):
