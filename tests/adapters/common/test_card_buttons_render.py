@@ -69,6 +69,23 @@ def test_validator_rejects_bad_link_or_mentions(mutate, error):
         spec_mod.validate(spec)
 
 
+@pytest.mark.parametrize("rows", ["missing", None])
+def test_drug_view_navigation_without_action_rows_is_a_validation_error(rows):
+    """A manifest-less spec flagging drug_view_navigation with no action
+    rows is rejected with ValueError — the only exception _scan_specs
+    skips — instead of KeyError/TypeError aborting the worker tick."""
+    spec = _spec()
+    parts = spec["parts"]
+    del parts["manifest"]
+    if rows == "missing":
+        del parts["action_rows"]
+    else:
+        parts["action_rows"] = rows
+    parts["drug_view_navigation"] = True
+    with pytest.raises(ValueError, match="bad_drug_view_navigation"):
+        spec_mod.validate(spec)
+
+
 def test_outdated_worker_key_set_refuses_new_specs(monkeypatch):
     """A worker that predates these keys rejects the spec (held) rather
     than sending live mentions or a broken link button."""
