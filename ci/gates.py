@@ -451,14 +451,14 @@ _CHANNEL_LITERAL = re.compile(r"discord:\d{10,}|\b\d{17,20}\b")
 # A whole string constant naming a Slack conversation (optionally a thread).
 # Anchoring to the entire constant leaves help-text placeholders such as
 # "e.g. slack:C0CHANNELID" and the built '"slack:" + channel_id' alone.
-_SLACK_TARGET = re.compile(r"slack:[CDGU][A-Z0-9]{8,}(?:[:/]\S+)?")
+_SLACK_TARGET = re.compile(r"slack:[CDGUW][A-Z0-9]{8,}(?:[:/]\S+)?")
 
 
 def gate_notify_fail_closed() -> list[str]:
     """No hardcoded delivery destination: a missing notify_target must
     skip, never fall back to a baked-in channel (patient-content risk)."""
     bad = []
-    for path in _py_files(MCS, PLUGIN, ADAPTERS):
+    for path in _py_files(MCS, PLUGIN, ADAPTERS, STANDALONE, ROOT / "lineworks_adapter"):
         if "test" in path.name:
             continue
         text = path.read_text(encoding="utf-8")
