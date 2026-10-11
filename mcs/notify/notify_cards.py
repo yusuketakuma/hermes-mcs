@@ -3364,20 +3364,37 @@ def _plain(text) -> str:
 
 # ---------- sweep / GC / watchdog / health ----------
 
-def revoke_card(db, card_id, now) -> None:
+def revoke_card(db, card_id, now) -> list:
     """Revocation decision: flag the card once, then suppress any still-
     pending coverage — it can never legitimately deliver now, and an
-    intent must not stay pending forever on a revoked card."""
+    intent must not stay pending forever on a revoked card. Returns the
+    (delivery_id, transport) renders whose unsent parts it held; the
+    caller withdraws their spec files after commit."""
     cur = db.execute(
         "UPDATE notification_cards SET delivery_state='revoked',"
         "revoked_at=?,updated_at=? WHERE card_id=? "
         "AND delivery_state!='revoked' AND revoked_at IS NULL",
         (now, now, card_id))
     if not cur.rowcount:
-        return
+        return []
     # a queued-but-unsent render must not linger claimable — a worker
     # picking it up would post a card for an archived/dead unit
     _cancel_open_renders(db, card_id, now)
+    # A delivered card's unsent thread/body/attachment parts would
+    # otherwise resume from the retained spec. 'held' marks them
+    # planned-but-blocked; parts the worker already started keep their
+    # journaled truth for reconcile.
+    withdrawn = db.execute(
+        "SELECT DISTINCT r.delivery_id,r.transport FROM notification_renders r "
+        "JOIN notification_render_parts p ON p.delivery_id=r.delivery_id "
+        "WHERE r.card_id=? AND p.state='pending' AND p.kind!='card'",
+        (card_id,)).fetchall()
+    for r in withdrawn:
+        db.execute(
+            "UPDATE notification_render_parts SET state='held',"
+            "error_code='card_revoked',updated_at=? WHERE delivery_id=? "
+            "AND state='pending' AND kind!='card'", (now, r["delivery_id"]))
+        _update_parts_state(db, r["delivery_id"], now)
     db.execute(
         "UPDATE notification_intent_cards SET state='suppressed' "
         "WHERE card_id=? AND state='pending'", (card_id,))
@@ -3385,6 +3402,7 @@ def revoke_card(db, card_id, now) -> None:
             "SELECT DISTINCT event_id FROM notification_intent_cards "
             "WHERE card_id=?", (card_id,)).fetchall():
         _complete_intent(db, r["event_id"], now)
+    return [(r["delivery_id"], r["transport"]) for r in withdrawn]
 
 
 def sweep(ledger, cfg, limit=100, now=None) -> dict:
@@ -3398,6 +3416,7 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
     dirs = notify_dirs(root)
     ensure_dirs(root)
     specs = []
+    withdrawn = []
     scanned = updated = 0
     with db:
         db.execute("BEGIN IMMEDIATE")
@@ -3416,7 +3435,7 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
             if positive(card["project_id"]) and db.execute(
                     "SELECT 1 FROM patients WHERE project_id=? "
                     "AND is_archived=1", (card["project_id"],)).fetchone():
-                revoke_card(db, card["card_id"], now)
+                withdrawn += revoke_card(db, card["card_id"], now)
             tri = db.execute(
                 "SELECT state,defer_until FROM notification_triage "
                 "WHERE card_id=?", (card["card_id"],)).fetchone()
@@ -3450,6 +3469,12 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
         if specs:
             mark_snapshot_dirty(db)
     _publish_specs(db, dirs, specs, now)
+    # The worker never reads the DB: a withdrawn spec file is what stops
+    # it resuming revoked parts. A crash before this leaves gc to do it.
+    for delivery_id, transport in withdrawn:
+        with suppress(OSError):
+            os.unlink(os.path.join(dirs[transport + "_render"],
+                                   delivery_id + ".json"))
     return {"scanned": scanned, "updated": updated,
             "republished": len(specs)}
 
