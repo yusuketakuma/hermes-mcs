@@ -6,6 +6,7 @@ import pytest
 
 import semantic_audit
 import semantic_extraction as extraction
+import semantic_jev as jev
 from semantic_runtime import RuntimeGuardError
 from semantic_testkit import BODY, _FakeJev, _ledger, _llm, _message, _seeded, _cfg
 
@@ -146,6 +147,23 @@ def test_source_fact_coverage_reports_findings_and_unknown_technical_state(tmp_p
     with pytest.raises(RuntimeGuardError):
         semantic_audit.evaluate_source_fact_coverage(
             GuardJev(), source, facts, time.monotonic() + 5)
+
+    class DownJev:
+        def __init__(self, error):
+            self.error = error
+
+        def evaluate(self, _state, _questions, _deadline):
+            raise self.error
+
+    # stored reason matches the drain's scheduling class (a retried
+    # transport failure is not a free 'resource' wait)
+    for error, reason in ((jev.JevError("transport", "OSError", retryable=True), "retry"),
+                          (jev.JevError("budget_exceeded", "cap"), "resource"),
+                          (jev.JevError("protocol_error", "q:choice_invalid"), "retry"),
+                          (jev.JevError("protocol_error", "bad_envelope"), "model")):
+        down = semantic_audit.evaluate_source_fact_coverage(
+            DownJev(error), source, facts, time.monotonic() + 5)
+        assert down["failure_reason"] == reason, error.kind
 
     unknown = semantic_audit.evaluate_source_fact_coverage(
         None, source, facts, time.monotonic() + 5)
