@@ -1856,7 +1856,7 @@ def assignee_choices(db, limit=STAFF_CHOICES) -> list:
     in. Empty -> the plugins fall back to free text. This is the single
     swap point for another roster source."""
     from mcs_queries import staff_directory
-    from mcs_signals import _latest_self_profile, latest_station_staff
+    from self_identity import _latest_self_profile, latest_station_staff
     out, seen = [], set()
 
     def add(name, station):

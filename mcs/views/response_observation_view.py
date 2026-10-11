@@ -6,7 +6,7 @@ import json
 import math
 from typing import TypedDict
 
-import mcs_signals
+import self_identity
 from mcs_requests import canonical, payload_hash, positive, valid_hash
 from message_metadata import (
     REACTION_LABELS, _timestamp, get_message_metadata, mentions_self,
@@ -123,7 +123,7 @@ def get_response_observation_list(
             raise ValueError("cursor_scope_or_generation_changed") from None
     if scope == []:
         return result
-    self_id = mcs_signals.self_sender_id(db)
+    self_id = self_identity.self_sender_id(db)
     if self_id is None:
         result.update(state="unknown", reason="self_identity_unknown")
         return result

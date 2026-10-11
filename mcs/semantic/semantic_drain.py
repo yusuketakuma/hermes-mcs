@@ -1878,7 +1878,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 if runtime.circuit_open(ledger):
                     out["circuit_open"] = True
                     break
-                from mcs_operations import paused
+                from mcs_queries import paused
                 if paused(ledger.db, job["project_id"]):
                     runtime.transition(ledger, token, "defer", retry_in=300)
                     out["deferred"] += 1

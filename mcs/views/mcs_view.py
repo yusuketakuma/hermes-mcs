@@ -19,7 +19,7 @@ from ledger import LedgerReader, reaction_actor_summary
 from project_metadata_view import physician_viewed_status
 from mcs_adapter import project_url
 from mcs_queries import incomplete_reply_roots
-from mcs_signals import is_own_station_message
+from self_identity import is_own_station_message
 from mcs_util import HOME, loads_dict, register_search_fold, search_fold
 from read_model import _snapshot_meta, message_patient_context
 from message_metadata import (
@@ -226,7 +226,7 @@ class View:
         for row in page["items"]:
             pid = row["project_id"]
             row["fetch_reason"] = _reason(row["fetch_reason"])
-            from mcs_operations import paused
+            from mcs_queries import paused
             row["semantic_paused"] = paused(self.db, pid)
             floor = row["history_floor"]
             row["history_record"] = "natural_end_recorded" if floor == -1 else \
@@ -315,7 +315,7 @@ class View:
                 empty if isinstance(empty, bool) else None)
 
     def _operations(self, pid, limit, cursor):
-        from mcs_operations import paused
+        from mcs_queries import paused
         from semantic_runtime import attempt_limit
         page = self._page(
             "SELECT j.job_id AS _key,j.job_id,j.kind,j.state,j.attempts,j.next_try,j.payload "

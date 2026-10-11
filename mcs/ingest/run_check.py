@@ -1801,12 +1801,12 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
     # profile rarely changes: refresh it on deep (--jobs-only) runs, and
     # on a tick only until the first artifact exists.
     try:
-        import mcs_signals
+        import self_identity
         if args.jobs_only \
-                or not mcs_signals._latest_self_profile(ledger.db):
+                or not self_identity._latest_self_profile(ledger.db):
             prof = adapter.self_profile()
             with ledger.db:
-                if mcs_signals.record_self_profile(ledger.db, prof):
+                if self_identity.record_self_profile(ledger.db, prof):
                     result["self_profile"] = "updated"
             _refresh_station_staff(adapter, ledger, prof, result)
     except Exception as e:
@@ -1818,12 +1818,12 @@ def _refresh_station_staff(adapter, ledger, prof, result):
     profile's cadence. Optional data: a failure keeps the stored roster
     and is reported as ``result["station_staff"]`` — never in
     ``errors``, so it cannot degrade health on every jobs-only run."""
-    import mcs_signals
+    import self_identity
     try:
         staff = adapter.station_staffs(prof.get("stations") or [])
         if staff:
             with ledger.db:
-                if mcs_signals.record_station_staff(ledger.db, staff):
+                if self_identity.record_station_staff(ledger.db, staff):
                     result["station_staff"] = "updated"
     except Exception as e:
         result["station_staff"] = f"failed: {type(e).__name__}"

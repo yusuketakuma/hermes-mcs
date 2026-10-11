@@ -595,7 +595,7 @@ def guard(ledger, token: JobToken, *, deadline: float,
     """Re-read all mutable execution identity immediately before a side effect."""
     if time.monotonic() >= deadline:
         raise RuntimeBudget(stage)
-    from mcs_operations import paused
+    from mcs_queries import paused
     if paused(ledger.db, token.project_id):
         raise RuntimeOff(stage)
     if cfg_path is not None and load_cfg is not None and parse_cfg is not None:

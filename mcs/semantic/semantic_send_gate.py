@@ -99,7 +99,7 @@ def enforce_block_reason(ledger, scfg: dict, project_id) -> str | None:
         return "semantic_not_enforce"
     if type(project_id) is not int or project_id <= 0:
         return "payload_invalid"
-    from mcs_operations import paused
+    from mcs_queries import paused
     if paused(ledger.db, project_id):
         return "semantic_paused"
     if scfg["project_ids"] is not None and project_id not in scfg["project_ids"]:

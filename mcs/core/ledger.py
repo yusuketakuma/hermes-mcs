@@ -2784,7 +2784,7 @@ def reaction_actor_summary(db, message_id, *, now=None) -> dict:
     state: complete | stale (expired or reactions changed since) |
     failed (last walk incomplete; counts are the last complete set) |
     not_fetched. Counts outside 'complete' are past observations only."""
-    from mcs_signals import self_sender_id
+    from self_identity import self_sender_id
     now = time.time() if now is None else now
     out = {"state": "not_fetched", "complete_at": None, "checked_at": None,
            "counts": {}, "self_included": None, "actors": []}
