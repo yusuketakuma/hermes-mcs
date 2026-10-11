@@ -38,7 +38,8 @@ import semantic_send_gate
 import structured_view
 from mcs_util import CONF_PATH, html_to_text, load_config
 from mcs_requests import positive
-from notify_render import SECTION_RULE, _extraction_failed, _signal_evidence
+from notify_render import (SECTION_RULE, _extraction_failed, _signal_evidence,
+                           thread_stamp_row)
 # Re-exported send-gate verdicts — the canonical definitions live in
 # semantic_send_gate (the send-time semantic policy layer); the legacy
 # private names stay so existing tests and flush() catches are stable.
@@ -424,7 +425,6 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
              skipped: dict, *, stamps=True, summary_suffix="") -> str:
     s_lines = structured_view.structured_lines(
         ledger.db, r["message_id"], plain=True)
-    urg = structured_view.message_urgency(ledger.db, r["message_id"])
     body = html_to_text(r["body_html"])
     cap = 500 if s_lines else 600
     if len(body) > cap:
@@ -433,9 +433,9 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
     meta = " / ".join(x for x in (r["profession"], r["organization"]) if x)
     parent = " (返信)" if r["parent_id"] and not indent else ""
     state = "" if r["body_state"] == "full" else f" [{r['body_state']}]"
-    warn = " ⚠️" if urg else ""
+    # urgency stays on the summary's own 🚨 line (one spelling, owner 2026-10-09)
     head = (f"{indent}**{r['patient_name'] or ev['project_id']}**"
-            f"{parent}{state}{warn}\n"
+            f"{parent}{state}\n"
             f"{indent}{who}{f' ({meta})' if meta else ''} — "
             f"{(r['posted_at'] or '?')[:16]}")
     atts = att_map.get(r["message_id"], [])
@@ -454,12 +454,9 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
     empty = "作成失敗" if not s_lines and _extraction_failed(ledger.db, r["message_id"]) else "処理待ち"
     summary = ([f"{indent}📋 要約"] + [f"{indent}・" + ln.replace("\n", f"\n{indent}") for ln in s_lines]
                if s_lines else [f"{indent}📋 要約 {empty}"])
-    if stamps:
-        from ledger import reaction_actor_summary
-        from message_metadata import get_message_metadata, is_self_sender, thread_stamp_line
-        metadata = get_message_metadata(ledger.db, r["message_id"])
-        metadata["own_post"] = is_self_sender(ledger.db, r["sender_id"])
-        summary.append(indent + thread_stamp_line(metadata, reaction_actor_summary(ledger.db, r["message_id"])))
+    line = thread_stamp_row(ledger.db, r["message_id"], r["sender_id"]) if stamps else ""
+    if line:            # an observed zero needs no row (as on the card)
+        summary.append(indent + line)
     return (head + "\n" + "\n".join(summary) + summary_suffix + "\n"
             + indent + SECTION_RULE + "\n" + indent + "📄 本文\n"
             + indent + (body or "(本文なし)") + att_line)
