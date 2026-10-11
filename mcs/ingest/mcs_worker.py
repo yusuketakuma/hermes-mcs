@@ -168,6 +168,7 @@ def _execute(envelope: dict) -> dict:
 def worker_main() -> int:
     # No exception text, request URL, response body, or credential reaches stderr.
     import mcs_adapter as adapter_module
+    from mcs_util import RETRY_LATER_4XX
     try:
         envelope = json.loads(sys.stdin.buffer.read())
         result = {"ok": True, "value": _execute(envelope)}
@@ -176,7 +177,8 @@ def worker_main() -> int:
                   "retryable": error.retryable}
     except urllib.error.HTTPError as error:
         result = {"ok": False, "kind": "http_error", "status": error.code,
-                  "retryable": error.code in (408, 429) or error.code >= 500}
+                  "retryable": error.code in RETRY_LATER_4XX
+                  or error.code >= 500}
         error.close()
     except Exception:
         result = {"ok": False, "kind": "network_error", "retryable": True}
