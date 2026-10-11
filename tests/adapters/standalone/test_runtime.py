@@ -92,6 +92,57 @@ def test_failed_child_start_requests_a_safe_restart(tmp_path, monkeypatch):
     assert host.restarting and host.children["update"]["process"] is running
 
 
+def test_failed_start_stops_further_starts_in_the_same_tick(tmp_path, monkeypatch):
+    """A start failure mid-tick requests a restart; later jobs of the same tick
+    must not start (they would delay that restart until they finish)."""
+    data = tmp_path / "data"
+    data.mkdir()
+    for name in runtime.COMMANDS:
+        (data / name).mkdir()
+        (data / name / "synthetic.json").write_text("{}")
+    popens = []
+
+    class Child:
+        pid = 1001
+
+        def __init__(self, argv, **kwargs):
+            popens.append(argv)
+
+        def poll(self):
+            return None
+
+    real_open = runtime.os.open
+
+    def open_log(path, *args, **kwargs):
+        if str(path).endswith("extract-0.log"):
+            raise PermissionError("synthetic log failure")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(runtime.subprocess, "Popen", Child)
+    monkeypatch.setattr(runtime.os, "open", open_log)
+    host = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
+    # 05:10 UTC matches the scheduled core jobs, so every kind would start.
+    now = datetime(2026, 10, 2, 5, 10, tzinfo=timezone.utc).timestamp()
+    assert host.tick(now) is True
+    assert host.restarting and popens == [] and host.children == {}
+
+
+def test_restart_keeps_waiting_for_a_running_core_job(tmp_path, monkeypatch):
+    (tmp_path / "data").mkdir()
+    host = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
+    signals = []
+    running = SimpleNamespace(pid=1001, poll=lambda: None,
+                              terminate=lambda: signals.append("term"),
+                              kill=lambda: signals.append("kill"))
+    host.children["update"] = {"process": running, "kind": "core", "stopping_at": None}
+    host.restarting = True
+    popens = []
+    monkeypatch.setattr(runtime.subprocess, "Popen", lambda *a, **k: popens.append(a))
+    now = datetime(2026, 10, 2, 5, 10, tzinfo=timezone.utc).timestamp()
+    assert host.tick(now) is False
+    assert host.children["update"]["process"] is running and signals == [] and popens == []
+
+
 def test_log_and_status_failures_still_drain_children_and_close_connector(tmp_path, monkeypatch):
     import asyncio
     import pytest

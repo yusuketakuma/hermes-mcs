@@ -61,7 +61,8 @@ class Runtime:
             self.schedules.append((job, _calendar(schedule)))
 
     def start(self, job, kind, now, pending=None):
-        if job in self.children or now < self.retry_at.get(job, 0):
+        # A failed start earlier in this tick requested a restart: start nothing more.
+        if self.restarting or job in self.children or now < self.retry_at.get(job, 0):
             return
         path = self.data / (job + ".log")
         try:
