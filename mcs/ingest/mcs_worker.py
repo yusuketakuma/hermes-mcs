@@ -23,6 +23,31 @@ class WorkerError(Exception):
         self.retryable = retryable
 
 
+REAP_TIMEOUT_S = 5.0
+
+
+def _reap(process) -> None:
+    """Collect a killed worker without trusting its pipes to close.
+
+    A plain communicate() after kill waits for EOF, which never comes
+    while anything else (a stuck grandchild, an uninterruptible wait)
+    still holds the pipe — the deadline would stop bounding the caller.
+    Drain for a bounded time, then close our pipe ends and leave."""
+    try:
+        process.communicate(timeout=REAP_TIMEOUT_S)
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+        try:
+            process.wait(timeout=0.1)
+        except subprocess.TimeoutExpired:
+            pass
+
+
 def _worker_command():
     return [sys.executable, os.path.abspath(__file__)]
 
@@ -62,12 +87,12 @@ def bounded_call(payload: dict, *, timeout: float, deadline=None) -> dict:
         stdout, _ = process.communicate(input=raw, timeout=remaining)
     except subprocess.TimeoutExpired:
         process.kill()
-        process.communicate()
+        _reap(process)
         raise TimeoutError("mcs worker deadline exceeded") from None
     except BaseException:
         if process.poll() is None:
             process.kill()
-        process.communicate()
+        _reap(process)
         raise
     if time.monotonic() >= end:
         raise TimeoutError("mcs worker deadline exceeded")
