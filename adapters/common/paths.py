@@ -118,6 +118,25 @@ def read_flags(root: str) -> dict:
     return data
 
 
+def route_open(flags: dict, transport: str, epoch=None, *,
+               check_epoch: bool = True, int_epoch: bool = False,
+               default_transport: str | None = None) -> bool:
+    """Whether effective flags still route interactive cards to transport.
+
+    The transports differ only in the options: Discord treats a missing
+    transport as its own, Slack/Discord actions skip the epoch check when
+    no route_epoch is configured, and the delivery worker also requires an
+    int epoch on the flags.
+    """
+    flag_epoch = flags.get("route_epoch")
+    return (flags.get("interactive") is True
+            and flags.get("transport", default_transport) == transport
+            and not flags.get("restore_pending")
+            and (not check_epoch
+                 or ((not int_epoch or type(flag_epoch) is int)
+                     and flag_epoch == epoch)))
+
+
 def restore_marker_present(root: str) -> bool:
     """True when ``restore_pending.json`` exists or cannot be ruled out
     (fail closed: any lstat error other than absence counts as present)."""

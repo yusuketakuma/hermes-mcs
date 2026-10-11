@@ -104,11 +104,7 @@ class Supervisor:
                     lambda: self._stopping or _bot_closed(self._bot)):
                 return
             async def reconcile():
-                self._reg.reload()
-                with self._reg.batch():
-                    stats = await self._worker.reconcile()
-                if any(stats.values()):
-                    self._log("reconciled", **stats)
+                await self._worker.reload_reconcile()
                 return True
 
             if not await retry_startup(
