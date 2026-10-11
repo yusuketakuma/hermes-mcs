@@ -239,7 +239,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
             stage=stage)
 
     req0 = jev_client.requests_made
-    client, _cleanup = runtime.bind_jev(jev_client, guard, reserve_fn)
+    client = runtime.bind_jev(jev_client, guard, reserve_fn)
     try:
         out = (_eval_chunked(client, state, questions, deadline,
                              scfg["max_questions_per_request"])

@@ -79,7 +79,7 @@ def test_usage_reservation_survives_unknown_post_failure(tmp_path):
     reserve = runtime.usage_reserver(
         db, token, kind="semantic_usage", model=jev.JEV_MODEL,
         project_id=1, message_id=1)
-    guarded, _ = runtime.bind_jev(client, lambda stage: None, reserve)
+    guarded = runtime.bind_jev(client, lambda stage: None, reserve)
     with pytest.raises(jev.JevError) as error:
         guarded.evaluate({}, {"q": jev.noul_question("i", "t", "f")},
                          time.monotonic() + 10)

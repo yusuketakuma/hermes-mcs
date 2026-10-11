@@ -172,8 +172,8 @@ def test_a_jev_answer_arriving_after_the_cutoff_is_kept_and_no_new_send_starts(
 
     client = jev.JevClient(api_key="synthetic", post_fn=post, max_attempts=1,
                            attempt_timeout=30)
-    guarded, _ = runtime.bind_jev(client, lambda stage: None, None,
-                                  cutoff=1000.0 + 300.0)
+    guarded = runtime.bind_jev(client, lambda stage: None, None,
+                               cutoff=1000.0 + 300.0)
     question = {"q": jev.noul_question("synthetic", "t", "f")}
     out = guarded.evaluate({}, question, 1000.0 + 900.0)
     assert out["answers"]["q"]["noul"] == 0.5 and len(posts) == 1
@@ -188,8 +188,8 @@ def test_a_jev_send_that_could_outlast_the_cutoff_is_not_started(monkeypatch):
     monkeypatch.setattr(jev.time, "monotonic", lambda: clock[0])
     client = jev.JevClient(api_key="synthetic", max_attempts=1, attempt_timeout=30,
                            post_fn=lambda body, timeout: (200, {}, _answer_body()))
-    guarded, _ = runtime.bind_jev(client, lambda stage: None, None,
-                                  cutoff=1000.0 + 20.0)    # < attempt_timeout away
+    guarded = runtime.bind_jev(client, lambda stage: None, None,
+                               cutoff=1000.0 + 20.0)    # < attempt_timeout away
     with pytest.raises(runtime.RuntimeBudgetShort):
         guarded.evaluate({}, {"q": jev.noul_question("synthetic", "t", "f")},
                          1000.0 + 900.0)
