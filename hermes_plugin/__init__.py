@@ -86,6 +86,10 @@ _CONTROL_FIELDS = {
 # user/chat allowlist only (project check would always deny them).
 _PROJECTLESS_OPS = frozenset({"ops.update_apply", "ops.update_rollback",
                               "ops.restore_approve"})
+# Project ops whose payload names a stored record (signal, extraction,
+# refstat) that _control_reference re-checks at preview and confirm.
+_REFERENCE_OPS = frozenset({"ops.signal_dismiss", "ops.extract_feedback",
+                            "ops.signal_policy", "ops.refstat_approve"})
 _CONFIRM_FIELDS = frozenset({"op", "phase", "payload", "payload_hash", "origin"})
 _ORIGIN_KEYS = ("user_id", "chat_id", "scope_id", "profile")
 
@@ -138,10 +142,6 @@ def _validate_context(
         if value is None:
             return None, "native_context_invalid"
         identity[key] = value
-    if (identity["profile"] is not None
-            and (not isinstance(identity["profile"], str)
-                 or not identity["profile"].strip())):
-        return None, "native_context_invalid"
     return identity, None
 
 
@@ -511,8 +511,7 @@ def _new_control(
                     "backup_sha256", "backup_schema"):
             if key in fields:
                 payload[key] = fields[key]
-    elif command.removeprefix("ops.") in {
-            "signal_dismiss", "extract_feedback", "signal_policy", "refstat_approve"}:
+    elif command in _REFERENCE_OPS:
         action = command.removeprefix("ops.")
         payload.update({k: fields[k] for k in _CONTROL_FIELDS[action] - _CONTROL_COMMON_FIELDS
                         if k in fields})
@@ -720,7 +719,7 @@ def _build_control_preview(data: dict, settings: dict[str, Any],
         if error or requests.validate(payload):
             return _deny(error or "invalid_command")
         return _preview(requests, identity, "control", payload)
-    if action in ("update_apply", "update_rollback", "restore_approve"):
+    if f"ops.{action}" in _PROJECTLESS_OPS:
         # Projectless lifecycle ops — user/chat allowlist only; no view
         # needed (there is no project scope to resolve against).
         error = _authorize_system(settings, identity)
@@ -802,7 +801,7 @@ def _build_control_preview(data: dict, settings: dict[str, Any],
             payload = _new_control(
                 requests, identity, data, project_id,
                 "ops.adopt_summary", comparison=comparison)
-        elif action in {"signal_dismiss", "extract_feedback", "signal_policy", "refstat_approve"}:
+        elif f"ops.{action}" in _REFERENCE_OPS:
             error = _reason_error(data)
             if error:
                 return _deny(error)
@@ -923,15 +922,13 @@ def _confirm(data: dict, settings: dict[str, Any],
             error = _card_resolution(view, settings, identity, payload)
             if error:
                 return _deny(error)
-        elif command in {"ops.signal_dismiss", "ops.extract_feedback", "ops.signal_policy", "ops.refstat_approve"}:
+        elif command in _REFERENCE_OPS:
             if command == "ops.signal_dismiss" and not payload.get("expected_signal_artifact_id"):
                 return _deny("signal_changed")
             error = _control_reference(view, payload)
             if error:
                 return _deny(error)
-        elif command not in {"ops.pause", "ops.resume",
-                             "ops.update_apply", "ops.update_rollback",
-                             "ops.restore_approve"}:
+        elif command not in _PROJECTLESS_OPS | {"ops.pause", "ops.resume"}:
             return _deny("invalid_command")
     finally:
         if view is not None:

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 
-# Twin of adapters.discord.cards.escape_md (mcs/ never imports adapters;
+# Twin of adapters.common.text.escape_md (mcs/ never imports adapters;
 # tests pin the two equal): same-length look-alikes for Discord markup.
 _MD_KEEP = re.compile(r"(<@[!&]?\w+>|https?://\S+)")
 _MD_INLINE = str.maketrans("*_~|`[]<\\", "＊＿～｜｀［］＜＼")

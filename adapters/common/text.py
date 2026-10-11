@@ -6,6 +6,29 @@ hands these results to its own ephemeral-reply path.
 """
 from __future__ import annotations
 
+import re
+
+# kept verbatim: runner footer mentions (pings stay off via
+# allowed_mentions) and URLs (a substitution would break the link)
+_MD_KEEP = re.compile(r"(<@[!&]?\w+>|https?://\S+)")
+# same-length look-alikes, so escaping never moves a text budget
+_MD_INLINE = str.maketrans("*_~|`[]<\\", "＊＿～｜｀［］＜＼")
+_MD_LINE = re.compile(r"^([ \t]*)(?:(\d+)\.|([#>+-]))", re.M)
+_MD_LEAD = str.maketrans("#>+-", "＃＞＋－")
+
+
+def escape_md(text: str) -> str:
+    """User-authored text as literal Discord text with the same length:
+    inline markup (``* _ ~ | ` [ ] < \\`` — no masked link, no tag)
+    and the block markers at a line start (``#``/``-#`` headings, ``>``
+    quote, ``-``/``+``/``1.`` lists) become fullwidth look-alikes."""
+    text = "".join(part if i % 2 else part.translate(_MD_INLINE)
+                   for i, part in enumerate(_MD_KEEP.split(text)))
+    return _MD_LINE.sub(
+        lambda m: m.group(1) + (f"{m.group(2)}．" if m.group(2)
+                                else m.group(3).translate(_MD_LEAD)), text)
+
+
 ERR_JA = {
     "unknown_token": "この操作は無効化されました（カードが更新された可能性があります）。",
     "token_expired": "操作の有効期限が切れています。最新のカードでやり直してください。",
@@ -125,11 +148,7 @@ def _literal(value: str, plain: bool) -> str:
     """Source text in the Discord dialect (``plain`` false) as literal
     text — no masked link, heading or spoiler. ``escape_md`` keeps the
     length, so no chunk budget moves."""
-    if plain:
-        return value
-    # lazy: cards imports this module at load time
-    from adapters.discord.cards import escape_md
-    return escape_md(value)
+    return value if plain else escape_md(value)
 
 
 def body_messages(result: dict, *, plain: bool = False) -> list:
@@ -335,15 +354,16 @@ def list_messages(result: dict, allowed, markdown: bool = True, *,
     projects outside this deployment's scope (``allowed(pid)`` false)
     are dropped before counting; the rest is capped with 「他N件」 (the
     runner's own overflow ``more`` is counted in, unfiltered). The title
-    is bold in Discord markdown, in Slack mrkdwn (``*``) when
-    ``markdown`` is false, and unmarked when ``plain``."""
+    is bold in Discord markdown; ``markdown=False`` callers (Slack
+    plain_text, LINE WORKS) get unmarked plain text, as with ``plain``."""
+    plain = plain or not markdown
     view = result.get("list") or {}
     items = [i for i in view.get("items") or []
              if isinstance(i, dict) and allowed(i.get("project_id"))]
-    bold = "" if plain else "**" if markdown else "*"
+    bold = "" if plain else "**"
 
     def lit(value) -> str:
-        return _literal(str(value), not markdown or plain)
+        return _literal(str(value), plain)
 
     lines = [f"{bold}{lit(view.get('title') or '一覧')}{bold}"]
     lines += [lit(x) for x in view.get("head") or []]

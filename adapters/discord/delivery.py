@@ -16,8 +16,18 @@ from functools import partial
 from adapters.common import paths, registry, worker
 from . import cards
 
-# Discord delete of an already-gone message achieves the revoke goal.
+# An already-gone message: a delete achieved the revoke goal, and an
+# owned edit target needs no edit.
 REVOKE_GONE_STATUS = frozenset({404, 410})
+
+
+def _thread_parent_guild(thread) -> tuple[str, str]:
+    """(parent channel id, guild id) of a fetched thread as text — compared
+    against the sealed delivery so a post never lands in another scope."""
+    parent = getattr(thread, "parent_id", getattr(getattr(thread, "parent", None), "id", None))
+    guild = getattr(getattr(thread, "guild", None), "id", None)
+    return str(parent), str(guild)
+
 
 # Only an authorization-class answer judges the scope's thread
 # capability; other 4xx verdicts are per-message, never per-scope.
@@ -87,10 +97,9 @@ class DeliveryWorker(worker.DeliveryWorker):
                 source_thread = spec["parts"].get("source_thread") is True
                 channel = await self._channel(delivery["thread_id"] if source_thread else delivery["channel_id"])
                 if source_thread:
-                    parent = getattr(channel, "parent_id", getattr(getattr(channel, "parent", None), "id", None))
-                    guild = getattr(getattr(channel, "guild", None), "id", None)
-                    if (str(channel.id) != delivery["thread_id"] or str(parent) != delivery["channel_id"]
-                            or str(guild) != delivery.get("guild_id")):
+                    parent, guild = _thread_parent_guild(channel)
+                    if (str(channel.id) != delivery["thread_id"] or parent != delivery["channel_id"]
+                            or guild != delivery.get("guild_id")):
                         return {"result": "not_sent", "error_code": "thread_scope_mismatch"}
                 msg = await _read(channel.fetch_message(int(mid)))
                 await msg.delete()
@@ -106,13 +115,12 @@ class DeliveryWorker(worker.DeliveryWorker):
             if notice and op != "notice":
                 return {"result": "not_sent", "error_code": "thread_scope_mismatch"}
             thread = await self._channel(delivery["thread_id"])
-            parent = getattr(thread, "parent_id", getattr(getattr(thread, "parent", None), "id", None))
-            guild = getattr(getattr(thread, "guild", None), "id", None)
+            parent, guild = _thread_parent_guild(thread)
             # an auto-archived thread reopens on send (Discord unarchives
             # it); only a locked one refuses the post
             if (str(thread.id) != delivery["thread_id"]
                     or (notice and str(thread.id) != delivery.get("message_id"))
-                    or str(parent) != delivery["channel_id"] or str(guild) != delivery.get("guild_id")
+                    or parent != delivery["channel_id"] or guild != delivery.get("guild_id")
                     or getattr(thread, "locked", False)):
                 return {"result": "not_sent", "error_code": "thread_scope_mismatch"}
             channel = thread
@@ -320,10 +328,9 @@ class DeliveryWorker(worker.DeliveryWorker):
         """Edit only the exact owned thread post; uncertain ownership or edits never POST."""
         prior = part.get("prior_remote_id")
         delivery = spec["delivery"]
-        parent = getattr(thread, "parent_id", getattr(getattr(thread, "parent", None), "id", None))
-        guild = getattr(getattr(thread, "guild", None), "id", None)
+        parent, guild = _thread_parent_guild(thread)
         if (spec.get("op") != "update" or str(thread.id) != delivery.get("thread_id") or str(thread.id) != str(ctx.get("thread_id"))
-                or str(parent) != delivery.get("channel_id") or str(guild) != delivery.get("guild_id")):
+                or parent != delivery.get("channel_id") or guild != delivery.get("guild_id")):
             return {"result": "unknown", "error_code": "edit_thread_unverified"}
         try:
             pid = int(prior)
@@ -351,7 +358,7 @@ class DeliveryWorker(worker.DeliveryWorker):
                         or (channel is not None and str(channel.id) != str(thread.id))):
                     return {"result": "unknown", "error_code": "edit_response_unverified"}
         except Exception as exc:
-            if getattr(exc, "status", None) in (404, 410):
+            if getattr(exc, "status", None) in REVOKE_GONE_STATUS:     # already gone
                 return {"result": "delivered", "remote_id": str(prior)}
             if verified and worker.is_definitive_reject(exc):
                 return {"result": "not_sent", "error_code": f"http_{exc.status}"}
