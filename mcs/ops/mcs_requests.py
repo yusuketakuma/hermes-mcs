@@ -12,6 +12,7 @@ from pathlib import Path
 
 # canonical/payload_hash/positive live in core; re-exported for callers
 from mcs_util import canonical, payload_hash, positive  # noqa: F401
+from safe_io import fsync_dir
 
 MAX_COMMAND_BYTES = 16384
 STATUSES = ("open", "in_progress", "done", "cancelled")
@@ -374,11 +375,7 @@ def enqueue(req, cmd_dir):
         os.link(temp, temp[:-4] + ".json")  # Atomic publication without clobbering pending input.
         published = True
         os.unlink(temp)
-        directory = os.open(cmd_dir, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        fsync_dir(cmd_dir)
     except OSError:
         if not published:
             raise
