@@ -24,7 +24,7 @@ from contextlib import suppress
 import mcs_requests
 import notify_cards
 import notify_transport
-from mcs_requests import canonical, positive, valid_hash, valid_uuid
+from mcs_requests import _text, canonical, positive, valid_hash, valid_uuid
 
 _RECEIPT_OPS = ("transport_receipt", "thread_receipt", "part_receipt")
 TRANSPORT_OPS = ("transport_begin",) + _RECEIPT_OPS
@@ -40,12 +40,8 @@ _WORKER_ID = re.compile(r"^[0-9a-f]{16}$")
 _CORRELATION = re.compile(r"^[0-9a-f]{32}$")
 
 
-def _text(v, n) -> bool:
-    return isinstance(v, str) and 0 < len(v.strip()) <= n
-
-
 def _opt_text(v, n) -> bool:
-    return v is None or _text(v, n)
+    return _text(v, n, nullable=True)
 
 
 def _id_str(v, n=64) -> bool:
