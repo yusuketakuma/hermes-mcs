@@ -1,5 +1,7 @@
 """Deterministic claim quantity guards stay independent of model support."""
 
+import pytest
+
 from semantic_quantities import claim_quantity_findings, extract_quantities
 
 
@@ -117,3 +119,45 @@ def test_unit_must_end_at_a_boundary():
                for q in extract_quantities("カロナール300mgを1日3回"))
     assert any(q.get("unit") == "g/日" and q.get("value") == "1"
                for q in extract_quantities("1g/日で開始"))
+
+
+# Signed or letter-glued percent values must not bypass the quantity guard.
+@pytest.mark.parametrize("claim,quote", [
+    ("体重が前回比-5%", "体重が前回比-3%"),
+    ("+10%増量", "+5%増量"),
+    ("HbA1c8.0%", "HbA1c7.0%"),
+    ("HbA1c8%", "HbA1c7%"),
+])
+def test_changed_percent_is_not_clean(claim, quote):
+    assert extract_quantities(claim)
+    findings = claim_quantity_findings(
+        {"claim_id": 1, "text": claim, "fact_refs": [0]},
+        [{"_evidence": {"quote": quote}}])
+    assert any(f["code"] == "claim_quantity_unverified" for f in findings)
+
+
+def test_plain_percent_still_recognized_once():
+    assert extract_quantities("濃度3%") == [
+        {"kind": "amount", "value": "3", "unit": "%", "raw": "3%"}]
+
+
+# Frequency followed by a kanji verb must not become an unknown amount.
+def _findings(text):
+    return claim_quantity_findings({"claim_id": 1, "text": text, "fact_refs": [0]},
+                                   [{"_evidence": {"quote": text}}])
+
+
+def test_frequency_with_kanji_suffix_is_not_held():
+    for text in ("1日3回内服", "アムロジピン5mg 1日1回服用", "7日分処方"):
+        assert _findings(text) == [], text
+
+
+def test_frequency_with_kanji_suffix_is_single_frequency():
+    assert extract_quantities("1日3回内服") == [
+        {"kind": "frequency", "value": "3", "unit": "per_day",
+         "raw": "1日3回", "period_days": "1"}]
+
+
+def test_other_kanji_units_still_held():
+    assert any(item.get("unit") == "unknown:錠"
+               for item in extract_quantities("3錠内服") + extract_quantities("3錠"))
