@@ -30,8 +30,8 @@ import ledger as _ledger
 import notify_cards
 import notify_cmds
 
-from hermes_plugin.mcs_delivery import envelopes, registry
-from hermes_plugin.mcs_discord import delivery
+from adapters.common import envelopes, registry
+from adapters.discord import delivery
 from notify_testkit import NOW, SETTINGS
 
 CFG = {"notify": {"interactive": "discord", "route_epoch": 1,

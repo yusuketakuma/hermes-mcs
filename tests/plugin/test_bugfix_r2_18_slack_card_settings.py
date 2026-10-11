@@ -45,7 +45,7 @@ def test_factory_settings_pass_the_command_epoch_gate(tmp_path, monkeypatch):
         def start(self):
             pass
 
-    from hermes_plugin.mcs_slack import tasks
+    from adapters.slack import tasks
     monkeypatch.setattr(tasks, "Supervisor", FakeSupervisor)
     assert card_workers.make_slack_factory(_Ctx(_config(tmp_path)))(
         object(), None) is not None

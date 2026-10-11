@@ -12,11 +12,11 @@ import types
 
 import pytest
 
-from hermes_plugin.mcs_delivery import worker as worker_mod
-from hermes_plugin.mcs_delivery.registry import Registry
-from hermes_plugin.mcs_delivery import paths
-from hermes_plugin.mcs_discord import cards
-from hermes_plugin.mcs_discord.delivery import DeliveryWorker
+from adapters.common import worker as worker_mod
+from adapters.common.registry import Registry
+from adapters.common import paths
+from adapters.discord import cards
+from adapters.discord.delivery import DeliveryWorker
 from discord_delivery_testkit import (BOT_USER, SETTINGS, FakeHTTP,
                                       FakeHTTPClient, _chunks, _claim,
                                       _sent_parts, _spec, _state)

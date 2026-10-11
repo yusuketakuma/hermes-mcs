@@ -133,7 +133,7 @@ def test_signal_card_rejects_foreign_artifact_and_context(led):
 
 
 def test_long_thread_title_keeps_spec_deliverable(led):
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     _patient(led, 1, name="合成患者名" * 40)
     _msg(led, 100)
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))

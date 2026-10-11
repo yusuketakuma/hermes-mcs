@@ -502,8 +502,8 @@ def _run_narrative(tmp_path):
         # the runner-published flag names the live transport — the
         # discord adapter claims its spec only when ITS transport is up
         notify_cards.publish_flags(TD.CFG, str(ddata))
-        from hermes_plugin.mcs_delivery import registry as _reg_mod
-        from hermes_plugin.mcs_discord import delivery as _discord_delivery
+        from adapters.common import registry as _reg_mod
+        from adapters.discord import delivery as _discord_delivery
         reg = _reg_mod.Registry(str(ddata / "discord_state"))
         bot = TD.FakeBot()
         worker = _discord_delivery.DeliveryWorker(

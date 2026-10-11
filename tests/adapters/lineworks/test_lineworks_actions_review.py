@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from hermes_plugin.mcs_delivery import envelopes, paths
+from adapters.common import envelopes, paths
 from test_lineworks_adapter import SCOPE, TOKEN, command_files, event, world
 
 

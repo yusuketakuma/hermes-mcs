@@ -151,7 +151,7 @@ def test_many_facts_long_thread_parts(led):
 
 
 def test_spec_manifest_validates(led):
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     _seed_thread(led)
     _dispatch(led, _intent(led))
     render = _latest_render(led)
@@ -162,7 +162,7 @@ def test_spec_manifest_validates(led):
 @pytest.mark.parametrize("chunk_count,attachment_count", [(255, 0), (254, 1), (1, 300)])
 def test_combined_part_budget_keeps_spec_deliverable(led, monkeypatch,
                                                    chunk_count, attachment_count):
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     _seed_thread(led)
     monkeypatch.setattr(notify_cards, "_card_body_text",
                         lambda *a, **k: ("合成", "x" * (1900 * chunk_count)))
@@ -178,7 +178,7 @@ def test_combined_part_budget_keeps_spec_deliverable(led, monkeypatch,
 
 
 def test_long_attachment_name_keeps_spec_deliverable(led):
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     _seed_thread(led)
     _attach(led, 100, name="synthetic-" + "a" * 240 + ".txt")
     _dispatch(led, _intent(led))
@@ -204,7 +204,7 @@ def test_attachment_outside_part_budget_uses_existing_followup(led, monkeypatch)
 
 
 def test_spec_rejects_card_content_changed_after_sealing(led):
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     _seed_thread(led)
     _dispatch(led, _intent(led))
     render = _latest_render(led)
@@ -216,7 +216,7 @@ def test_spec_rejects_card_content_changed_after_sealing(led):
 
 
 def test_spec_rejects_manifest_drift(led):
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     _seed_thread(led)
     _dispatch(led, _intent(led))
     render = _latest_render(led)

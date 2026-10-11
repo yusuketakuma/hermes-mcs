@@ -10,9 +10,9 @@ import types
 
 import pytest
 
-from hermes_plugin.mcs_delivery import envelopes, journal, paths
-from hermes_plugin.mcs_delivery.registry import Registry, scope_key
-from hermes_plugin.mcs_discord.delivery import DeliveryWorker
+from adapters.common import envelopes, journal, paths
+from adapters.common.registry import Registry, scope_key
+from adapters.discord.delivery import DeliveryWorker
 from discord_delivery_testkit import (
     BOT_USER, DELIVERY_ID, SETTINGS, FakeHTTP, FakeHTTPClient, _chunks,
     _claim, _receipts, _sent_parts, _spec, _state,
@@ -280,7 +280,7 @@ def test_crash_after_result_before_receipt_republishes(tmp_path):
             raise OSError("simulated crash")
         return publish(d, env)
 
-    import hermes_plugin.mcs_delivery.worker as wm
+    import adapters.common.worker as wm
     old = wm.envelopes.publish_command
     wm.envelopes.publish_command = crashy
     try:
@@ -818,7 +818,7 @@ def test_unknown_prior_lookup_never_uploads_a_second_copy(tmp_path):
 
 
 def test_attachment_part_may_name_its_prior_post(tmp_path):
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     _, _, update = _attach_update(tmp_path, "6100")
     spec = _spec([])
     att = dict(update["parts"]["manifest"][-1],
@@ -850,7 +850,7 @@ def test_attachment_part_hash_mismatch_not_sent(tmp_path):
 
 def test_attachment_upload_uses_the_bytes_that_were_verified(tmp_path, monkeypatch):
     from pathlib import Path
-    from hermes_plugin.mcs_discord import cards
+    from adapters.discord import cards
     blob = b"sealed-synthetic"
     (tmp_path / "attachments").mkdir(exist_ok=True)
     path = tmp_path / "attachments" / "attachment.bin"
@@ -992,7 +992,7 @@ def test_dead_tombstone_outlives_ttl_while_spec_is_published(
         tmp_path, monkeypatch):
     """An expired tombstone for a still-published spec would re-claim it
     daily; one whose spec is gone expires with its part progress."""
-    from hermes_plugin.mcs_delivery import registry as registry_mod
+    from adapters.common import registry as registry_mod
     w, reg, _ = _mkworker(tmp_path)
     spec = _sealed(_spec(_chunks(2)))
     _publish_spec(tmp_path, spec)
@@ -1027,7 +1027,7 @@ def test_new_journal_segment_is_owner_only(tmp_path):
 def test_registry_expire_runs_once_per_interval(tmp_path, monkeypatch):
     """The O(registry) TTL sweep runs on the first tick, then at most
     once per EXPIRE_EVERY_S — not on every 2s poll."""
-    from hermes_plugin.mcs_delivery import worker as worker_mod
+    from adapters.common import worker as worker_mod
     clock = [1000.0]
     monkeypatch.setattr(worker_mod, "time", types.SimpleNamespace(
         time=lambda: clock[0], monotonic=lambda: clock[0]))
@@ -1134,7 +1134,7 @@ def test_journal_compaction_pauses_while_a_restore_is_pending(tmp_path):
 def test_live_segment_rotates_and_closed_segment_is_compacted(
         tmp_path, monkeypatch):
     import time as _time
-    from hermes_plugin.mcs_delivery import worker as worker_mod
+    from adapters.common import worker as worker_mod
     w, reg, _ = _mkworker(tmp_path)
     state = _state(tmp_path)
     old = _time.time() - 5 * 86400
@@ -1171,7 +1171,7 @@ def test_outdated_worker_holds_spec_with_unknown_feature(tmp_path, mutate,
     send the card and silently drop a feature it does not understand —
     the spec is rejected whole, nothing is claimed or sent, and the
     rejection is logged once instead of every tick."""
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     logs = []
     w, reg, bot = _mkworker(tmp_path)
     w._log = lambda event, **f: logs.append((event, f))
@@ -1203,7 +1203,7 @@ def test_outdated_worker_holds_spec_with_unknown_feature(tmp_path, mutate,
 ])
 def test_prior_remote_id_is_valid_only_as_a_body_chunk_post_id(part_id,
                                                                prior):
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     spec_mod.validate(_sealed(_spec(_chunks(2),
                                     prior={"body:0002": "6001"})))
     bad = _sealed(_spec(_chunks(2)))
@@ -1267,8 +1267,8 @@ def test_signal_notify_off_stays_claimable_and_revoked_stays_dead(
     claims the same spec; the grant then records a real send. A
     non-transient denial (denied_card_revoked) still tombstones.
     """
-    from hermes_plugin.mcs_discord import cards as cards_mod
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.discord import cards as cards_mod
+    from adapters.common import spec as spec_mod
 
     monkeypatch.setattr(cards_mod, "message_payload", lambda spec, **kw: {"view": object(), "content": "card"})
     w, reg, bot = _mkworker(tmp_path)
@@ -1357,7 +1357,7 @@ def _begins(tmp_path, delivery_id=DELIVERY_ID):
 
 
 def _clock(monkeypatch, start=1_000_000.0):
-    from hermes_plugin.mcs_delivery import worker as worker_mod
+    from adapters.common import worker as worker_mod
     now = [start]
     monkeypatch.setattr(worker_mod, "time",
                         types.SimpleNamespace(time=lambda: now[0]))
@@ -1367,8 +1367,8 @@ def _clock(monkeypatch, start=1_000_000.0):
 def test_signal_notify_off_backs_off_before_rebegin(tmp_path, monkeypatch):
     """A signal_notify_off denial holds the spec for SIGNAL_OFF_RETRY_S —
     no re-claim churn (attempt row + result file + journal per tick)."""
-    from hermes_plugin.mcs_delivery import worker as worker_mod
-    from hermes_plugin.mcs_discord import cards as cards_mod
+    from adapters.common import worker as worker_mod
+    from adapters.discord import cards as cards_mod
 
     monkeypatch.setattr(cards_mod, "message_payload", lambda spec, **kw: {"view": object(), "content": "card"})
     now = _clock(monkeypatch)
@@ -1411,7 +1411,7 @@ def test_restart_reconcile_keeps_begin_sent_signal_claimable(
     the real reconcile(): the pre-HTTP attempt is reported not_sent but
     never tombstoned, a second restart does not tombstone it either, and
     after ON the same delivery_id is sent exactly once."""
-    from hermes_plugin.mcs_discord import cards as cards_mod
+    from adapters.discord import cards as cards_mod
 
     monkeypatch.setattr(cards_mod, "message_payload", lambda spec, **kw: {"view": object(), "content": "card"})
     _clock(monkeypatch)
@@ -1567,7 +1567,7 @@ def test_part_dedupe_view_matches_full_scan_through_crash_and_compaction(
     compaction. Exactly-once holds: no part attempt is ever started
     twice and the unknown part stays unsent."""
     import time as _time
-    from hermes_plugin.mcs_delivery import worker as worker_mod
+    from adapters.common import worker as worker_mod
     state = _state(tmp_path)
     w, reg, bot = _mkworker(tmp_path)
     shadow = journal.ScanCache(str(state))
@@ -1685,7 +1685,7 @@ def test_tick_journal_reads_match_full_scan_across_rotation(
     peer's appends, a torn tail, compaction behind the cache's back,
     in-worker rotation + compaction and a deleted segment."""
     import time as _time
-    from hermes_plugin.mcs_delivery import worker as worker_mod
+    from adapters.common import worker as worker_mod
     state = _state(tmp_path)
     w, reg, _bot = _mkworker(tmp_path)
     monkeypatch.setattr(worker_mod, "JOURNAL_SEGMENT_BYTES", 2048)
@@ -1876,8 +1876,8 @@ def _token_world(tmp_path, monkeypatch):
     """An update spec whose claim-time tokens (t=2000) follow the old
     render's (t=1000) for the same card, beside another card's token
     and a result-issued task_status token."""
-    from hermes_plugin.mcs_delivery import registry as registry_mod
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import registry as registry_mod
+    from adapters.common import spec as spec_mod
     clock = [1000.0]
     monkeypatch.setattr(registry_mod, "time", types.SimpleNamespace(
         time=lambda: clock[0]))
@@ -1929,7 +1929,7 @@ def test_newer_render_tokens_survive_an_older_update_prune(
         tmp_path, monkeypatch):
     """A later render's tokens, put after this one's, are never pruned
     by this render's delivered receipt."""
-    from hermes_plugin.mcs_delivery import spec as spec_mod
+    from adapters.common import spec as spec_mod
     w, reg, spec, clock, update = _token_world(tmp_path, monkeypatch)
     clock[0] = 3000.0
     reg.put_tokens(spec_mod.token_map(
@@ -1956,7 +1956,7 @@ def test_thread_body_is_posted_as_literal_text(tmp_path):
 
 
 def test_attachment_caption_rides_with_the_file(tmp_path, monkeypatch):
-    from hermes_plugin.mcs_discord import cards
+    from adapters.discord import cards
     blob = b"sealed-synthetic"
     (tmp_path / "attachments").mkdir(exist_ok=True)
     path = tmp_path / "attachments" / "a.bin"
@@ -2099,7 +2099,7 @@ def test_same_text_drug_view_edit_unknown_never_posts_duplicate(tmp_path, monkey
 def test_parent_card_drug_actions_only_appear_in_companion_thread(tmp_path, monkeypatch,
                                                                 components_v2):
     from discord_testkit import _fake_discord
-    from hermes_plugin.mcs_discord import cards
+    from adapters.discord import cards
     monkeypatch.setitem(sys.modules, "discord", _fake_discord())
     spec = _spec(["synthetic first"])
     spec["parts"]["action_rows"] = [[

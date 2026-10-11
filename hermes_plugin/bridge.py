@@ -23,12 +23,21 @@ def _deny(error: str) -> str:
     return _json({"ok": False, "error": error})
 
 
+def _ensure_repo_root() -> None:
+    """Put the checkout root on sys.path so `adapters.*` resolves to it."""
+    # Hermes loads this plugin by file location (a symlink under its own
+    # package name) without the repo root on sys.path.
+    root = str(_ADAPTER_DIR.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+
 def _adapter_modules():
-    # Hermes loads this plugin by file location without the repo root on
-    # sys.path; `adapters.common` (op=summary) needs it, as the shims do.
-    for root in (_ADAPTER_DIR.parent, _ADAPTER_DIR):
-        if str(root) not in sys.path:
-            sys.path.insert(0, str(root))
+    # `adapters.common` (op=summary) needs the repo root; MCS modules
+    # need mcs/ ahead of it.
+    _ensure_repo_root()
+    if str(_ADAPTER_DIR) not in sys.path:
+        sys.path.insert(0, str(_ADAPTER_DIR))
     import _mcs_path  # noqa: F401  registers every subdir as import root
     import mcs_requests
     import mcs_view

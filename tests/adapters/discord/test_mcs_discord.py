@@ -28,11 +28,11 @@ import notify_cards
 import notify_transport
 import notify_cmds
 
-from hermes_plugin.mcs_delivery import (envelopes, journal, paths,
+from adapters.common import (envelopes, journal, paths,
                                         registry, text)
-from hermes_plugin.mcs_delivery import spec as spec_mod
-from hermes_plugin.mcs_delivery import worker as worker_mod
-from hermes_plugin.mcs_discord import (actions as actions_mod, cards,
+from adapters.common import spec as spec_mod
+from adapters.common import worker as worker_mod
+from adapters.discord import (actions as actions_mod, cards,
                                        delivery, tasks)
 from notify_testkit import _add_request, _llm_extract
 from discord_testkit import (

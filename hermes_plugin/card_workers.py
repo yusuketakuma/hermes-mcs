@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 from .access import _config_ids, _id_text, _settings
+from .bridge import _ensure_repo_root
 
 
 def _interactive_settings(ctx, native=None) -> dict[str, Any] | None:
@@ -90,7 +91,8 @@ def make_discord_factory(ctx):
                                           reason="config_incomplete")
         if settings is None or _standalone_owned(settings["data_root"]):
             return None
-        from .mcs_discord.tasks import Supervisor
+        _ensure_repo_root()
+        from adapters.discord.tasks import Supervisor
         supervisor = Supervisor(ctx=ctx, bot=native, settings=settings,
                                 log=_event_logger("mcs_discord"))
         supervisor.start()
@@ -149,7 +151,8 @@ def make_slack_factory(ctx):
                 _event_logger("mcs_slack")("worker_disabled",
                                             reason="config_incomplete")
             return None
-        from .mcs_delivery import paths
+        _ensure_repo_root()
+        from adapters.common import paths
         flags = paths.read_flags(settings["data_root"])
         if flags.get("interactive") is not True \
                 or flags.get("transport") != "slack" \
@@ -157,7 +160,7 @@ def make_slack_factory(ctx):
             return None
         # /mcs commands gate on the published route epoch
         settings["route_epoch"] = flags.get("route_epoch")
-        from .mcs_slack.tasks import Supervisor
+        from adapters.slack.tasks import Supervisor
         supervisor = Supervisor(ctx=ctx, app=native, adapter=adapter,
                                 settings=settings,
                                 log=_event_logger("mcs_slack"))

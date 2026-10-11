@@ -619,8 +619,8 @@ def test_worst_case_footer_stays_under_the_text_budget(led, tmp_path,
     Discord face and both stay under MAX_TOTAL_TEXT."""
     import sys
     from discord_testkit import _fake_discord
-    from hermes_plugin.mcs_delivery import spec as spec_mod
-    from hermes_plugin.mcs_discord import cards as discord_cards
+    from adapters.common import spec as spec_mod
+    from adapters.discord import cards as discord_cards
     mids = tuple(range(100, 112))
     _patient(led, 1, name="患" * 60)
     for m in mids:

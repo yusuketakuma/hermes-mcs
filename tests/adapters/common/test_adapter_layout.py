@@ -1,8 +1,5 @@
-"""Canonical adapter packages and legacy entry points share runtime state."""
-import asyncio
-import importlib
+"""Adapter packages resolve to the checkout however the host names the plugin."""
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -17,108 +14,6 @@ def test_lineworks_compatibility_entry_uses_canonical_classes_and_cli_wrapper():
     assert lineworks_adapter.LineWorksClient is lineworks.LineWorksClient
     assert Path(importlib.util.find_spec("lineworks_adapter.__main__").origin) == (
         Path(__file__).resolve().parents[3] / "lineworks_adapter" / "__main__.py")
-
-
-@pytest.mark.parametrize("transport,module", [
-    ("slack", "cards"), ("slack", "actions"), ("slack", "delivery"),
-    ("slack", "tasks"), ("slack", "paths"), ("discord", "cards"),
-    ("discord", "actions"), ("discord", "delivery"), ("discord", "tasks"),
-])
-def test_canonical_and_legacy_adapter_imports_share_instance(transport, module):
-    canonical = importlib.import_module(f"adapters.{transport}.{module}")
-    legacy = importlib.import_module(f"hermes_plugin.mcs_{transport}.{module}")
-    expected = Path(__file__).resolve().parents[3] / "adapters" / transport / (module + ".py")
-    assert Path(canonical.__file__).resolve() == expected
-    assert Path(legacy.__file__).resolve() == expected
-    assert canonical is legacy
-
-
-@pytest.mark.parametrize("module", [
-    "envelopes", "journal", "paths", "registry", "spec", "text", "worker",
-])
-def test_canonical_and_legacy_delivery_imports_share_instance(module):
-    canonical = importlib.import_module(f"adapters.common.{module}")
-    legacy = importlib.import_module(f"hermes_plugin.mcs_delivery.{module}")
-    expected = Path(__file__).resolve().parents[3] / "adapters" / "common" / (module + ".py")
-    assert Path(canonical.__file__).resolve() == expected
-    assert Path(legacy.__file__).resolve() == expected
-    assert canonical is legacy
-
-
-@pytest.mark.parametrize("transport", ["slack", "discord", "common"])
-@pytest.mark.parametrize("legacy_first", [False, True])
-def test_adapter_aliases_work_in_either_import_order_without_sdks(tmp_path, transport,
-                                                               legacy_first):
-    import subprocess
-    import sys
-
-    code = """
-import importlib
-import sys
-sys.path.insert(0, sys.argv[1])
-for sdk in ('discord', 'slack_sdk', 'slack_bolt'):
-    sys.modules[sdk] = None
-transport = sys.argv[2]
-legacy = ('hermes_plugin.mcs_delivery' if transport == 'common'
-          else 'hermes_plugin.mcs_' + transport)
-prefixes = ['adapters.' + transport, legacy]
-if sys.argv[3] == 'True':
-    prefixes.reverse()
-names = (('envelopes', 'journal', 'paths', 'registry', 'spec', 'text', 'worker')
-         if transport == 'common' else
-         ('cards', 'actions', 'delivery', 'tasks') + (('paths',) if transport == 'slack' else ()))
-for name in names:
-    first = importlib.import_module(prefixes[0] + '.' + name)
-    second = importlib.import_module(prefixes[1] + '.' + name)
-    assert first is second
-"""
-    result = subprocess.run(
-        [sys.executable, "-I", "-c", code, str(Path(__file__).resolve().parents[3]),
-         transport, str(legacy_first)],
-        cwd=tmp_path, capture_output=True, text=True, timeout=10)
-    assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.parametrize("legacy_guard", [False, True])
-@pytest.mark.parametrize("fault", [500, ConnectionResetError(54, "synthetic reset")])
-def test_mixed_discord_imports_keep_retry_suppression(legacy_guard, fault):
-    from adapters.discord import cards as canonical
-    from hermes_plugin.mcs_discord import cards as legacy
-    from test_mcs_discord_single_post import WireBot
-
-    installer, sender = (legacy, canonical) if legacy_guard else (canonical, legacy)
-    bot = WireBot(faults=[fault])
-    assert installer.single_post_ready(bot)
-    with pytest.raises(sender.DiscordRetrySuppressed):
-        asyncio.run(sender.single_post(
-            bot, lambda: bot.http.request("POST", "/synthetic/messages")))
-    assert len(bot.wire.posts()) == 1 and bot.wire.committed == 1
-
-
-def test_slack_reconnect_hands_off_across_import_names(monkeypatch):
-    from adapters.slack import tasks as canonical
-    from hermes_plugin.mcs_delivery import registry
-    from hermes_plugin.mcs_slack import tasks as legacy
-
-    settings = {"transport": "slack", "team_id": "T_SYNTHETIC",
-                "profile": "default", "application_id": "A_SYNTHETIC",
-                "channel_id": "C_SYNTHETIC"}
-    stopped = []
-    monkeypatch.setattr(canonical, "_LIVE", {
-        registry.scope_key(settings): SimpleNamespace(unload=lambda: stopped.append(True)),
-    })
-
-    def spawn(coro, **kwargs):
-        coro.close()
-        return SimpleNamespace(done=lambda: False)
-
-    successor = object.__new__(legacy.Supervisor)
-    successor._settings = settings
-    successor._worker_id = "synthetic"
-    successor._ctx = SimpleNamespace(spawn_task=spawn, on_unload=lambda fn: None)
-    assert successor.start()
-    assert stopped == [True]
-    assert canonical._LIVE[registry.scope_key(settings)] is successor
 
 
 @pytest.mark.parametrize("relative,source,expected", [
@@ -156,34 +51,76 @@ def test_canonical_adapter_keeps_sdk_and_network_boundaries(tmp_path, monkeypatc
     assert bool(violations) is expected
 
 
-@pytest.mark.parametrize("transport", ["slack", "discord", "common"])
-def test_legacy_adapter_bootstraps_when_host_loads_another_namespace(tmp_path, transport):
+def test_plugin_under_host_package_name_binds_checkout_adapters(tmp_path):
+    """Hermes discovers the symlinked plugin as `hermes_plugins.mcs`, with
+    no checkout on sys.path. The card factories must still bind the
+    repo's `adapters.*` modules (no plugin-local alias packages)."""
     import subprocess
     import sys
 
-    package = "mcs_delivery" if transport == "common" else "mcs_" + transport
-    shim = Path(__file__).resolve().parents[3] / "hermes_plugin" / package / "__init__.py"
-    # -I removes checkout/PYTHONPATH/user site paths. The host may discover
-    # a symlinked plugin under its own package name rather than hermes_plugin.
+    repo = Path(__file__).resolve().parents[3]
     code = """
-import importlib
-import importlib.util
-import sys
+import importlib, importlib.util, json, sys, types
 from pathlib import Path
-shim = Path(sys.argv[1])
-spec = importlib.util.spec_from_file_location('synthetic_host_adapter', shim,
-                                            submodule_search_locations=[str(shim.parent)])
-package = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = package
-spec.loader.exec_module(package)
-names = (('envelopes', 'journal', 'paths', 'registry', 'spec', 'text', 'worker')
-         if sys.argv[2] == 'common' else
-         ('cards', 'actions', 'delivery', 'tasks') + (('paths',) if sys.argv[2] == 'slack' else ()))
-for name in names:
-    module = importlib.import_module(spec.name + '.' + name)
-    assert Path(module.__file__).resolve().parent == shim.parents[2] / 'adapters' / sys.argv[2]
-    assert module is importlib.import_module('adapters.' + sys.argv[2] + '.' + name)
+repo, data_root = Path(sys.argv[1]), Path(sys.argv[2])
+for sdk in ('discord', 'slack_sdk', 'slack_bolt'):
+    sys.modules[sdk] = None
+try:
+    import adapters  # noqa: F401
+except ModuleNotFoundError:
+    pass
+else:
+    raise AssertionError('checkout leaked onto sys.path')
+plugin = repo / 'hermes_plugin' / '__init__.py'
+sys.modules['hermes_plugins'] = types.ModuleType('hermes_plugins')
+spec = importlib.util.spec_from_file_location(
+    'hermes_plugins.mcs', plugin, submodule_search_locations=[str(plugin.parent)])
+mod = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = mod
+spec.loader.exec_module(mod)
+workers = importlib.import_module('hermes_plugins.mcs.card_workers')
+assert 'adapters' not in sys.modules, 'plugin import must stay lazy'
+
+class Ctx:
+    profile_name = 'default'
+    def __init__(self, config):
+        self.config = config
+    def get_config(self, key, default=None):
+        return self.config.get(key, default)
+
+flags = data_root / 'flags' / 'notify.json'
+flags.parent.mkdir(parents=True)
+flags.write_text(json.dumps({'interactive': False}))
+base = {'data_root': str(data_root), 'snapshot': 'synthetic-snapshot',
+        'inbox': 'synthetic-inbox', 'allowed_user_ids': ['111'],
+        'allowed_chat_ids': ['222'], 'project_ids': [1]}
+slack = Ctx({**base, 'slack_adapter_enabled': True, 'slack_team_id': 'T_SYNTHETIC',
+             'slack_application_id': 'A_SYNTHETIC', 'slack_channel_id': 'C_SYNTHETIC',
+             'slack_allowed_user_ids': ['111']})
+# flags say not interactive: the factory bootstraps and reads them, binds nothing
+assert workers.make_slack_factory(slack)(object(), None) is None
+paths = sys.modules['adapters.common.paths']
+assert Path(paths.__file__).resolve() == repo / 'adapters' / 'common' / 'paths.py'
+
+bound = []
+class Fake:
+    def __init__(self, **kwargs):
+        bound.append(kwargs)
+    def start(self):
+        return True
+for transport in ('slack', 'discord'):
+    tasks = importlib.import_module('adapters.%s.tasks' % transport)
+    assert Path(tasks.__file__).resolve() == repo / 'adapters' / transport / 'tasks.py'
+    tasks.Supervisor = Fake
+flags.write_text(json.dumps({'interactive': True, 'transport': 'slack'}))
+assert isinstance(workers.make_slack_factory(slack)(object(), None), Fake)
+discord = Ctx({**base, 'interactive': True, 'application_id': '333', 'channel_id': '444'})
+assert isinstance(workers.make_discord_factory(discord)(object(), None), Fake)
+assert len(bound) == 2
+assert not [name for name in sys.modules if name.startswith('hermes_plugins.mcs.mcs_')]
 """
-    result = subprocess.run([sys.executable, "-I", "-c", code, str(shim), transport],
-                            cwd=tmp_path, capture_output=True, text=True, timeout=10)
+    data_root = tmp_path / "data"
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", code, str(repo), str(data_root)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
