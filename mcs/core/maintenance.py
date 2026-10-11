@@ -220,12 +220,19 @@ def rotate_log(paths=None):
                           os.path.join(HOME, "data", "update.log"),
                           os.path.join(HOME, "data", "recovery.log"),
                           os.path.join(HOME, "data", "cmd_int.log"),
-                          # ai.mcs.llamaserver plist (__HERMES_HOME__/logs)
+                          # ai.mcs.llamaserver plist (__HERMES_HOME__/logs):
+                          # Hermes mode ~/.hermes, standalone ~/.mcs
                           os.path.join(os.path.expanduser("~/.hermes"),
-                                       "logs", "llamacpp.log")):
+                                       "logs", "llamacpp.log"),
+                          os.path.join(HOME, "logs", "llamacpp.log")):
         with suppress(OSError):
             if os.path.getsize(path) > LOG_MAX:
-                shutil.copyfile(path, path + ".1")
+                # owner-only regardless of umask, also for an older loose .1
+                fd = os.open(path + ".1", os.O_WRONLY | os.O_CREAT
+                             | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                with open(fd, "wb") as dst, open(path, "rb") as src:
+                    os.fchmod(fd, 0o600)
+                    shutil.copyfileobj(src, dst)
                 with open(path, "w"):
                     pass
 
@@ -354,14 +361,17 @@ def _unlink_attachment(path: str, root: Path) -> bool:
 
 def prune_leftovers() -> int:
     """Delete day-old download temp files (a hard kill skips the
-    adapter's own cleanup) and quarantined cmd/ and cmd_int/
-    *.json.invalid files. ctime: a quarantine rename keeps the original
+    adapter's own cleanup), quarantined cmd/ and cmd_int/
+    *.json.invalid files and the backup/snapshot staging copies (PHI)
+    a hard kill strands. ctime: a quarantine rename keeps the original
     mtime."""
     cutoff = time.time() - LEFTOVER_KEEP_S
     removed = 0
     for pattern in (os.path.join(HOME, "data", "attachments", ".download-*.part"),
                     os.path.join(HOME, "data", "cmd", "*.json.invalid"),
-                    os.path.join(HOME, "data", "cmd_int", "*.json.invalid")):
+                    os.path.join(HOME, "data", "cmd_int", "*.json.invalid"),
+                    os.path.join(BACKUP_DIR, "*.db.tmp"),
+                    os.path.join(SNAPSHOT_DIR, ".snapshot.*.tmp")):
         for path in glob.glob(pattern):
             with suppress(OSError):
                 if os.stat(path).st_ctime < cutoff:
