@@ -66,3 +66,19 @@ def test_level_is_configurable(caplog):
     caplog.set_level(logging.DEBUG, logger="mcs.test.level")
     eventlog.make_logger("mcs.test.level", logging.WARNING)("ev")
     assert [r.levelno for r in caplog.records] == [logging.WARNING]
+
+
+def test_standalone_runtime_diagnostics_survive(caplog):
+    """mcs_standalone logs through this filter: the fields that locate a
+    failed state write, a held update marker or a backoff stay readable."""
+    caplog.set_level(logging.INFO, logger="mcs.test.eventlog")
+    cases = [
+        ("state_write_failed", {"file": "standalone-status.json", "code": "ENOSPC"}),
+        ("update_marker_held", {"state": "held", "age_s": 42}),
+        ("child_ended", {"job": "cmd_int", "code": 1, "failures": 2, "retry_in": 60}),
+        ("child_ended", {"job": "tick", "adopted": True}),
+        ("slot_catchup", {"job": "tick", "slot": 1760000000}),
+        ("connector_ended", {"code": "timeout", "stopping": True}),
+    ]
+    for event, fields in cases:
+        assert json.loads(_line(caplog, event, **fields)) == {"event": event, **fields}

@@ -15,6 +15,8 @@ ALLOWED_FIELDS = frozenset({
     "error", "reason", "action", "outcome", "result", "command_id",
     "delivery_id", "rows", "receipt_republished", "not_sent", "unknown",
     "job", "code", "failures",
+    # standalone runtime supervision: fixed codes and counts, no content
+    "file", "retry_in", "state", "age_s", "slot", "stopping", "adopted",
 })
 _CODE = re.compile(r"[A-Za-z0-9_.:-]{1,80}")
 REDACTED = "redacted"
