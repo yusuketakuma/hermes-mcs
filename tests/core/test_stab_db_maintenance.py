@@ -195,6 +195,51 @@ def test_snapshot_verify_budget_grows_with_size(tmp_path, monkeypatch):
 
 # ---------- M7: backup respects the hard deadline ----------
 
+def test_backup_copy_stops_at_the_deadline(tmp_path, monkeypatch):
+    """An underestimated copy is abandoned at the deadline mid-copy — it
+    never runs on to verify past the watchdog — and leaves no backup."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(i, body="x" * 2000) for i in range(1, 200)])
+    db.close()
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(maintenance, "BACKUP_STEP_PAGES", 1)
+    monkeypatch.setattr(maintenance, "backup_time_needed_s", lambda _p: 0)
+    clock = iter([0.0])   # the pre-copy budget check sees time left
+    monkeypatch.setattr(maintenance, "monotonic", lambda: next(clock, 100.0))
+    verified, valid = [], maintenance._valid
+    monkeypatch.setattr(maintenance, "_valid",
+                        lambda p, d: verified.append(p) or valid(p, None))
+    with pytest.raises(maintenance.MaintenanceError,
+                       match="backup_deadline_exceeded"):
+        maintenance.daily_backup(str(tmp_path / "ledger.db"), deadline=50.0)
+    assert not any(p.endswith(".db.tmp") for p in verified)
+    assert not list(backups.glob("ledger-*"))
+
+
+def test_broken_backup_check_leaves_time_to_replace_it(tmp_path, monkeypatch):
+    """Checking an unmarked same-day backup is bounded so the replacement
+    still fits; a broken file is then replaced, not kept forever."""
+    _ledger(tmp_path).close()
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(maintenance, "backup_time_needed_s", lambda _p: 10.0)
+    dest = backups / f"ledger-{time.strftime('%Y%m%d')}.db"
+    dest.write_bytes(b"not a database")
+    checked, valid = {}, maintenance._valid
+
+    def record(path, deadline):
+        checked.setdefault(path, deadline)
+        return valid(path, deadline)
+    monkeypatch.setattr(maintenance, "_valid", record)
+    deadline = time.monotonic() + 600
+    assert maintenance.daily_backup(str(tmp_path / "ledger.db"),
+                                    deadline=deadline) is None
+    assert checked[str(dest)] == pytest.approx(deadline - 10.0)
+    assert maintenance.valid_mcs_db(str(dest))
+
+
 def test_backup_skips_when_time_left_cannot_cover_the_ledger(tmp_path, monkeypatch):
     _ledger(tmp_path).close()
     backups = tmp_path / "backups"

@@ -38,6 +38,7 @@ PREUPDATE_GRACE_S = 86400
 # recorded reason instead of being killed by the watchdog every tick.
 BACKUP_RATE_BPS = 32 * 1024 * 1024
 BACKUP_MARGIN_S = 5.0
+BACKUP_STEP_PAGES = 4096   # copy granularity the deadline is checked at
 # H4: the read-only snapshot is republished only when the ledger changed
 # (cheap marker, see _content_signature) or the published copy is this old
 SNAPSHOT_MAX_AGE_S = 3600
@@ -107,12 +108,21 @@ def _valid(path: str, deadline: float | None) -> bool:
 
 def _publish_backup(db_path: str, tmp: str, dest: str,
                     deadline: float | None = None) -> None:
-    """Copy, verify and publish a backup while owning its staging file."""
+    """Copy, verify and publish a backup while owning its staging file.
+    The copy is stepped so ``deadline`` abandons it mid-way instead of
+    running past the watchdog."""
+    def check_deadline(*_):
+        if deadline is not None and monotonic() >= deadline:
+            raise MaintenanceError("backup_deadline_exceeded")
     try:
         with closing(sqlite3.connect(
                 Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as src:
             with closing(sqlite3.connect(tmp)) as dst:
-                src.backup(dst)
+                # one read snapshot across the steps: a write by another
+                # connection would otherwise restart the copy every step
+                src.execute("BEGIN")
+                src.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
+                src.backup(dst, pages=BACKUP_STEP_PAGES, progress=check_deadline)
                 dst.execute("PRAGMA journal_mode=DELETE")
         if not _valid(tmp, deadline):
             if deadline is not None and monotonic() >= deadline:
@@ -166,7 +176,11 @@ def daily_backup(db_path: str, *, deadline: float | None = None):
     # missing marker falls back to validation (B24)
     if _verified_unchanged(dest):
         return
-    if _valid(dest, deadline):
+    # checking today's file must leave room to replace it: a broken copy
+    # whose check eats the whole budget would otherwise never be replaced
+    check_by = None if deadline is None \
+        else deadline - backup_time_needed_s(db_path)
+    if _valid(dest, check_by):
         # re-arm the fast path, or every later tick today re-runs the
         # full quick_check (a same-day backup made before the marker)
         _write_ok_marker(dest)
