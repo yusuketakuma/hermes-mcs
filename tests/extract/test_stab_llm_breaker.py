@@ -155,3 +155,25 @@ def test_answered_unparseable_call_clears_outage(tmp_path, monkeypatch):
         assert health["last_success"] == pytest.approx(time.time(), abs=60)
     finally:
         db.close()
+
+
+def test_answer_after_same_run_outage_clears_marker(tmp_path, monkeypatch):
+    """A 503 then a 200 that fails to parse in one run: the answer proves
+    recovery, so the outage marker clears and the failure is charged."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in (1, 2)])
+        monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+        replies = iter([{"text": None, "finish_reason": None, "usage": None,
+                         "status": 503},
+                        {"text": "not-json", "finish_reason": "stop",
+                         "usage": None, "status": 200}])
+        monkeypatch.setattr(local_llm, "chat", lambda prompt, **kw: next(replies))
+        res = extract_llm.run_pending(db, limit=2, budget_s=900, workers=1)
+        assert res["deferred"] == 1 and res["failed"] == 1
+        health = mcs_util.llm_health(db)
+        assert health["down_since"] is None
+        assert health["last_success"] == pytest.approx(time.time(), abs=60)
+        assert _attempt_rows(db) == 1
+    finally:
+        db.close()

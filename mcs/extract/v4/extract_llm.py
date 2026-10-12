@@ -3468,7 +3468,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 return  # budget ran out mid-message — stays pending
             if d is None:
                 failed += 1
-                if endpoint_down or not _llm_up(deadline=deadline):
+                if transport == "answered":
+                    # the endpoint answered; only this message's output
+                    # failed — an earlier outage in this run is over
+                    circuit_success(ledger)
+                    endpoint_down = False
+                elif endpoint_down or not _llm_up(deadline=deadline):
                     # Endpoint unreachable — don't burn budget/attempts
                     # on error rows. The failure feeds the breaker so
                     # a sustained outage closes the lane across drains —
@@ -3476,10 +3481,6 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     _feed_breaker()
                     endpoint_down = True
                     return
-                if transport == "answered":
-                    # the endpoint answered; only this message's output
-                    # failed — clear the outage marker like a success
-                    circuit_success(ledger)
                 if transport == "transport":
                     # /v1/models answers but the call timed out or was
                     # reset: a slow/stuck server, not this message's
@@ -3551,6 +3552,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _fail(ledger, r, r["attempts"])
                 return
             circuit_success(ledger)   # an answered call = endpoint alive
+            endpoint_down = False
             if r["thin_src"] and qc is None and not r["human_src"]:
                 content = _thin_retry_content(ledger, r)
                 if content is None:
