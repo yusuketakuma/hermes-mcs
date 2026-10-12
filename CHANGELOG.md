@@ -556,9 +556,9 @@
 
 #### 日次バックアップが時間切れの後もコピーを続ける問題を修正
 
-- _publish_backup は BACKUP_STEP_PAGES（4096ページ）ずつ複製し、期限を過ぎたら backup_deadline_exceeded で中断して一時ファイルを消す。
+- _publish_backup は BACKUP_STEP_PAGES（256ページ）ずつ複製し、期限を過ぎたら backup_deadline_exceeded で中断して一時ファイルを消す。
 - 複製のあいだ読取りトランザクションを保持し、他プロセスの書込みでコピーが最初からやり直しになるのを防ぐ。
-- 当日分の既存バックアップの検査は、作り直しに必要な時間（backup_time_needed_s）を残した時刻で打ち切る。壊れたファイルの検査が毎回期限を使い切り、置き換えが進まない状態を防ぐ。
+- 当日分の既存バックアップの検査は、作り直しに必要な時間（backup_time_needed_s）にさらに余裕（BACKUP_CHECK_SLACK_S、5秒）を残した時刻で打ち切る。検査がその時刻を少し過ぎても、作り直しが見送られない。壊れたファイルの検査が毎回期限を使い切り、置き換えが進まない状態を防ぐ。
 - 期限の確認はコピーの区切りで行う。1回のディスクI/O自体を強制停止する保証ではなく、実機の遅延は未測定。
 - 根拠: mcs/core/maintenance.py、tests/core/test_stab_db_maintenance.py
 
@@ -675,6 +675,7 @@
 - 抽出の呼出しで2xx応答（または本文が使えない200応答）を受けたことを記録し、本文の解析に失敗した場合や、応答後に修復の時間が足りず延期した場合も circuit_success で down_since と遮断状態を解除する。
 - 同じ実行の中で先に503などの停止を観測していても、後の呼出しが応答すればその時点で停止の扱いを解除し、解析失敗は通常どおり失敗として数える。
 - 停止の記録は従来「1回の実行で1回」だったが、応答で停止が解除された後に再び停止した場合は、新しい停止として1回記録する（連続した停止区間ごとに1回）。
+- 各呼出しの完了時刻を記録し、並列処理で完了順と処理順が入れ替わっても、より新しい観測を古い応答で上書きしない。複数件をまとめた呼出しの応答も同じ扱いにし、抽出結果が使えても最後の修復呼出しが停止だった場合は停止として記録する。
 - 接続拒否・503・タイムアウトなど応答のない失敗は従来どおり停止として数える。
 - 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_stab_llm_breaker.py
 
@@ -814,8 +815,9 @@
 #### カード取り消し直後に、同じ送信処理で残りの本文が送られる問題を修正
 
 - adapters/common/worker.py の _drive_parts は、各部品の送信前に spec ファイル（取り消し時に sweep が取り下げる）がまだ公開されているかを確認する。メモリ上の manifest だけでは送らない。
+- 取り消しでは、新しい通知データの保存より先に旧データ（spec ファイル）を取り下げる。ディスク満杯や旧specの取下げに成功していれば、新specの公開が権限エラーで失敗しても取消状態を維持し、残りの本文・添付は送らない。
 - すでに通信を開始した部品はこれまでどおり journal の started/result に従って扱い、結果不明を送信済みや未送信に書き換えない。
-- 根拠: adapters/common/worker.py、tests/adapters/lineworks/test_same_pass_revoke.py、tests/adapters/discord/discord_delivery_testkit.py
+- 根拠: adapters/common/worker.py、mcs/notify/notify_cards.py、tests/adapters/lineworks/test_same_pass_revoke.py、tests/adapters/discord/discord_delivery_testkit.py
 
 #### 患者要約の読取りと規則抽出が長い投稿で遅くなる問題を修正
 

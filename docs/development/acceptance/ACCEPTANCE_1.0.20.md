@@ -105,3 +105,13 @@ PR47/48/49/50/51はGitHubのCodeRabbitレビューで各現在SHAがAPPROVEDで�
 PR50の実Slack SDK CIで、テストがspecを発行せず部品送信を直接呼んでいた失敗をpeerが確認。`b09e5228`でspecの発行前提をそろえるテストのみの追補を候補へ取り込み、製品コード・期待する本文/アップロードは変更していない。当該ファイルRuffと生成同期/diffcheck成功。候補の実pinned SDK実行は未実施で、PR50の再CI結果と最終RC受入で確認する。
 
 相方がユーザー指示に基づきPR45/47–51をCI全pass後に順次mainへmergeする担当。rootは同じmergeを実行せず、live mainのpull/再起動もしない。
+
+### 公開工程の追加確認
+
+ユーザーが2026-10-12に本番適用とリリース公開を明示承認。公開直前の公式master照合は11:17 JST、同梱20260930版とZIP/CSV/member/全19272行一致。追加sourceの有限監査と導入・更新1455合成ケースを確認した。
+
+全20版・30経路を15のDDL/schema/runtime同等群へ対応づけ、clean Hermes/standaloneと合わせ17ケースで同一DBの実Ledger移行→run_check.main→合成Adapter取り込み→実rule抽出→snapshot→View表示を確認。旧データの原本列・再tick重複防止を保持。実SDK/OSサービスは最終SHA CIと本番受入へ分ける。
+
+Codex指摘の追加3修正63866231/e714b9d2/bbd5eb58を候補へ取り込み、関連69ケース成功・有限独立レビュー受入。取消は旧spec取下げ後の新spec公開順序、backupは256pageと検査余裕5秒、抽出healthは同一run内の呼出し完了時刻順を使う。旧spec unlink失敗、単一diskI/O強制停止、複数processの全体完了順までは保証しない。
+
+v1.0.19本番確認済み25f434fから4513f1b3のCodeRabbit CLIは626files/300上限で解析前に拒否。指摘ゼロ・レビュー成功とは扱わない。現在main eef6af95の本番反映は相方のユーザー指示で追加Codex指摘を優先するため保留、receiptなし。正式な前回本番SHAは推測で更新せず、後続レビュー方法と最終RC/CI受入を確定してから公開へ進む。

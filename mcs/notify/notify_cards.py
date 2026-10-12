@@ -3501,13 +3501,15 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
             if r["spec_json"])
         if specs:
             mark_snapshot_dirty(db)
-    _publish_specs(db, dirs, specs, now)
     # The worker never reads the DB: a withdrawn spec file is what stops
-    # it resuming revoked parts. A crash before this leaves gc to do it.
+    # it sending revoked parts. Withdraw before publishing, so a failed
+    # publish (disk full, permissions) cannot leave it in place; a crash
+    # before this leaves gc to do it.
     for delivery_id, transport in withdrawn:
         with suppress(OSError):
             os.unlink(os.path.join(dirs[transport + "_render"],
                                    delivery_id + ".json"))
+    _publish_specs(db, dirs, specs, now)
     return {"scanned": scanned, "updated": updated,
             "republished": len(specs)}
 

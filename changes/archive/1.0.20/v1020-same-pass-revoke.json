@@ -5,10 +5,12 @@
   "upgrade": "追加操作は不要です。",
   "details": [
     "adapters/common/worker.py の _drive_parts は、各部品の送信前に spec ファイル（取り消し時に sweep が取り下げる）がまだ公開されているかを確認する。メモリ上の manifest だけでは送らない。",
+    "取り消しでは、新しい通知データの保存より先に旧データ（spec ファイル）を取り下げる。ディスク満杯や旧specの取下げに成功していれば、新specの公開が権限エラーで失敗しても取消状態を維持し、残りの本文・添付は送らない。",
     "すでに通信を開始した部品はこれまでどおり journal の started/result に従って扱い、結果不明を送信済みや未送信に書き換えない。"
   ],
   "refs": [
     "adapters/common/worker.py",
+    "mcs/notify/notify_cards.py",
     "tests/adapters/lineworks/test_same_pass_revoke.py",
     "tests/adapters/discord/discord_delivery_testkit.py"
   ]

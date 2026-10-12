@@ -38,7 +38,8 @@ PREUPDATE_GRACE_S = 86400
 # recorded reason instead of being killed by the watchdog every tick.
 BACKUP_RATE_BPS = 32 * 1024 * 1024
 BACKUP_MARGIN_S = 5.0
-BACKUP_STEP_PAGES = 4096   # copy granularity the deadline is checked at
+BACKUP_STEP_PAGES = 256    # copy granularity the deadline is checked at
+BACKUP_CHECK_SLACK_S = 5.0  # overrun of the same-day check before a replacement
 # H4: the read-only snapshot is republished only when the ledger changed
 # (cheap marker, see _content_signature) or the published copy is this old
 SNAPSHOT_MAX_AGE_S = 3600
@@ -179,7 +180,7 @@ def daily_backup(db_path: str, *, deadline: float | None = None):
     # checking today's file must leave room to replace it: a broken copy
     # whose check eats the whole budget would otherwise never be replaced
     check_by = None if deadline is None \
-        else deadline - backup_time_needed_s(db_path)
+        else deadline - backup_time_needed_s(db_path) - BACKUP_CHECK_SLACK_S
     if _valid(dest, check_by):
         # re-arm the fast path, or every later tick today re-runs the
         # full quick_check (a same-day backup made before the marker)

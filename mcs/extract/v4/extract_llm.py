@@ -1521,6 +1521,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
             else "answered" if type(status) is int and 200 <= status < 300
             or response is None and err_out.get("kind") == "protocol"
             else None)
+        _CALL_NOTES.transport_at = time.monotonic()
         if response is None and (err_out.get("kind") == "unreachable"
                                  or expired) \
                 or response is not None and response.get("status") == 503:
@@ -3351,6 +3352,27 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if not breaker_fed:
             breaker_fed = True
             circuit_failure(ledger)
+
+    last_seen = [float("-inf")]
+
+    def _observe(kind, at):
+        """Apply one call's endpoint observation. Parallel futures finish
+        out of order, so a call that completed before the newest applied
+        observation never overrides it."""
+        nonlocal endpoint_down, breaker_fed
+        at = time.monotonic() if at is None else at
+        if at < last_seen[0]:
+            return
+        last_seen[0] = at
+        if kind == "answered":
+            circuit_success(ledger)
+            # a later outage in this run is a new streak to feed
+            endpoint_down = breaker_fed = False
+        elif kind in ("unreachable", "unavailable"):
+            _feed_breaker()
+            endpoint_down = True
+        elif kind == "transport":
+            _feed_breaker()
     # finished results whose per-write lock wait timed out (the tick
     # holds the run lock for minutes) — written before returning
     pending_writes: list = []
@@ -3391,6 +3413,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         # last call's endpoint health, read by _handle on the calling
         # thread after this future resolves (thread-local per worker)
         _CALL_NOTES.transport = r["_transport"] = None
+        _CALL_NOTES.transport_at = r["_transport_at"] = None
         if time.monotonic() > deadline:
             return _DEFERRED, chunks_out
         try:
@@ -3398,6 +3421,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                  meta, chunks_out), chunks_out
         finally:
             r["_transport"] = getattr(_CALL_NOTES, "transport", None)
+            r["_transport_at"] = getattr(_CALL_NOTES, "transport_at", None)
 
     def _extract_call(r, ctx, saved, hints, qc, index, meta, chunks_out):
         with _pin_target(r["_target"]):
@@ -3458,29 +3482,22 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 deferred += 1
                 return
             transport = r.get("_transport")
+            at = r.get("_transport_at")
             if d is _DEFERRED:
                 deferred += 1
-                if transport == "answered":
-                    # answered, then deferred (e.g. no time left to repair
-                    # the output): the endpoint is alive all the same
-                    circuit_success(ledger)
-                    endpoint_down = breaker_fed = False
-                if transport in ("unreachable", "unavailable"):
-                    # refused / 503: nothing ran, so no attempt is
-                    # charged, but the outage must still reach the
-                    # breaker (and the health marker the stall alert
-                    # reads) — once per outage, like the probe path below
-                    _feed_breaker()
-                    endpoint_down = True
+                # answered then deferred (no time left to repair) is still
+                # a live endpoint; refused / 503 ran nothing, so no attempt
+                # is charged, but the outage must reach the breaker and
+                # the health marker the stall alert reads
+                if transport in ("answered", "unreachable", "unavailable"):
+                    _observe(transport, at)
                 return  # budget ran out mid-message — stays pending
             if d is None:
                 failed += 1
                 if transport == "answered":
                     # the endpoint answered; only this message's output
                     # failed — an earlier outage in this run is over
-                    circuit_success(ledger)
-                    # a later outage in this run is a new streak to feed
-                    endpoint_down = breaker_fed = False
+                    _observe(transport, at)
                 elif endpoint_down or not _llm_up(deadline=deadline):
                     # Endpoint unreachable — don't burn budget/attempts
                     # on error rows. The failure feeds the breaker so
@@ -3498,7 +3515,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     # to the permanent-failure ceiling. An answered call
                     # resets the streak, so a message that times out on
                     # a healthy server still reaches the ceiling.
-                    _feed_breaker()
+                    _observe(transport, at)
                     if circuit_streak(ledger) > 0:
                         slow_deferred += 1
                         return
@@ -3559,8 +3576,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         # keeps the REVIVE_PER_INPUT cap
                         _fail(ledger, r, r["attempts"])
                 return
-            circuit_success(ledger)   # an answered call = endpoint alive
-            endpoint_down = breaker_fed = False
+            # a usable result whose last call (an optional repair) failed
+            # still saw an outage; no call note at all means an answer
+            _observe(transport or "answered", at)
             if r["thin_src"] and qc is None and not r["human_src"]:
                 content = _thin_retry_content(ledger, r)
                 if content is None:
@@ -3619,17 +3637,25 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         raise
 
     def _exec_batch(tups):
-        return _run_batch_call(tups, target, deadline, vital_policy)
+        _CALL_NOTES.transport = _CALL_NOTES.transport_at = None
+        out = _run_batch_call(tups, target, deadline, vital_policy)
+        return (*out, getattr(_CALL_NOTES, "transport", None),
+                getattr(_CALL_NOTES, "transport_at", None))
 
-    def _handle_batch(status, results, meta, tups):
+    def _handle_batch(status, results, meta, tups, transport=None, at=None):
         """Persist batch outcomes row by row; return the residue —
         rows whose item was omitted/invalid or whose whole call
         failed — for an in-run single retry (with repair). A deferred
         batch's rows take the same lane — the per-call floor keeps it
         free when the remainder fits nothing."""
+        if transport is not None:
+            # residue retries reset each row's note, so the batch call's
+            # own observation is applied here, before any of them run
+            _observe(transport, at)
         residue = []
         for tup in tups:
             index, r, ctx, saved, hints, qc, lease = tup
+            r["_transport"], r["_transport_at"] = transport, at
             if status == "ok" and index in results:
                 metas[index] = meta
                 _handle(r, ctx, results[index], meta, lease, {}, qc)
@@ -3700,9 +3726,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             _handle(r, ctx, d, metas[index], lease,
                                     chunks_out, qc)
                         else:
-                            status, results, meta = res
-                            for tup in _handle_batch(status, results,
-                                                     meta, tups):
+                            for tup in _handle_batch(*res[:3], tups,
+                                                     *res[3:]):
                                 nfut = _single_future(pool, tup)
                                 futs[nfut] = ("single", [tup])
                                 pending.add(nfut)
@@ -3715,9 +3740,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     _handle(r, ctx, d, metas[index], lease, chunks_out,
                             qc)
                 else:
-                    status, results, meta = _exec_batch(payload)
-                    for tup in _handle_batch(status, results, meta,
-                                             payload):
+                    res = _exec_batch(payload)
+                    for tup in _handle_batch(*res[:3], payload,
+                                             *res[3:]):
                         index, r, ctx, saved, hints, qc, lease = tup
                         d, chunks_out = _extract(
                             (index, (r, ctx, saved, hints, qc)))
