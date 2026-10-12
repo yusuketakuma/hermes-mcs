@@ -7,5 +7,8 @@
     "declare_cohort・run_cohort・mark_item_done・retire_payloadsをsemantic_v4_cohort.pyへ移す。",
     "hold_unbounded_job・active_legacy_admissionsとcohort読取り・item receiptはsemantic_v4に残す。"
   ],
-  "refs": ["mcs/semantic/semantic_v4.py", "mcs/semantic/semantic_v4_cohort.py"]
+  "refs": [
+    "mcs/semantic/semantic_v4.py",
+    "mcs/semantic/eval/semantic_v4_cohort.py"
+  ]
 }

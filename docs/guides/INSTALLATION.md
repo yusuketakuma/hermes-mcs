@@ -1,7 +1,7 @@
 # インストールガイド
 
-このガイドはv1.0.19仕様のinstall/update/setup/doctorと復旧手順に対応する。
-現行版の検証と制約は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.19.md)、過去の実機受入計画は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)で追跡する。
+このガイドはv1.0.20候補のinstall/update/setup/doctorと復旧手順に対応する。公開前の未受入事項は受入票で確認する。
+現行版の検証と制約は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.20.md)、過去の実機受入計画は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)で追跡する。
 
 ### 2026-10-04追記: 現在のローカル入口
 
@@ -609,7 +609,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `launchd gui/<uid> unreachable from this session`（警告） | ssh 等 GUI セッション外で実行している — ログイン中の端末で再実行して確認 |
 | `hermes CLI not resolvable` | hermes 未導入（Hermesモードのエラー。独立モードならSTANDALONE.mdを確認。Path Aなら `install.sh` 再実行か `hermes_bin` 設定） |
 | `hermes gateway is not supervised` | `services` を実行（`hermes gateway install`+`start` で常駐化） |
-| `hermes_plugin/ is newer than the running gateway`（警告） | `hermes gateway restart`（§A-6） |
+| `gateway-loaded sources (...) are newer than the running gateway`（警告） | `hermes gateway restart`（§A-6） |
 | `TYPESAFE_API_KEY is not resolvable` | semantic 有効時に必須 — `~/.mcs/.env` に登録 |
 
 ### 7-3. その他の症状

@@ -7,5 +7,9 @@
     "wilson_intervalをcore/stats_math.pyへ移し、semantic_evaluationからは同じ名前で再exportする。",
     "統計表示（mcs_stats）は評価用モジュールを読み込まなくなる。"
   ],
-  "refs": ["mcs/core/stats_math.py", "mcs/semantic/semantic_evaluation.py", "mcs/views/mcs_stats.py"]
+  "refs": [
+    "mcs/core/stats_math.py",
+    "mcs/semantic/eval/semantic_evaluation.py",
+    "mcs/views/mcs_stats.py"
+  ]
 }

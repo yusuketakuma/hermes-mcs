@@ -1,17 +1,24 @@
 # MCS 更新実行手順書（AIエージェント用）
 
-このガイドはv1.0.19仕様のinstall/update/setup/doctorと復旧手順に対応する。
-1.0.19の合成検証・公開・実機反映の状況は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.19.md)で追跡する。
+このガイドはv1.0.20候補のinstall/update/setup/doctorと復旧手順に対応する。公開前の未受入事項は受入票で確認する。
+1.0.20候補の合成検証・公開・実機反映の状況は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.20.md)で追跡する。
 過去の1.0.13実機受入計画は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)に残す。
+
+### 1.0.20で追加された更新時の確認
+
+- 独立実行では、更新後に選択したPythonで `mcs/ops/mcs_setup.py services` を1回実行し、監視と本人だけが読み書きできるサービス定義を反映します。hostは再起動し、処理中のLLM抽出は中断されます。既存の `data/standalone.log` の権限は変わらないため、運用者が `chmod 600` を実行してください。サービス定義を手動配置している場合は対応テンプレートも更新します。
+- Hermes gatewayとLINE WORKSの独立アダプターは、新しいコードを読み込むため更新手順に従って再起動します。セットアップが停止確認・通知フラグの公開に失敗した場合は、原因を解消して `services` を再実行します。
+- 更新前から保留中の通知、自分の投稿の確認で通知されずに保存された履歴、失敗済みの意味解析は自動で再送・再処理しません。必要な対象だけを既存の人承認手順で扱います。
+- モデルを新規取得するときは固定revisionとSHAを照合します。導入済みモデルは今回の更新で再取得・再照合しません。公式医薬品masterの同梱と、私有辞書の承認・有効化は引き続き別操作です。
 
 ### 1.0.17以前から1.0.18以降への更新で確認すること
 
-- 1.0.18から1.0.19への更新は実行環境の移行がなく、下記の通常の手順で行えます。以下は1.0.17以前から更新する場合の確認事項です。
+- 1.0.18以降から1.0.20への更新は実行環境の移行がなく、下記の通常の手順で行えます。以下は1.0.17以前から更新する場合の確認事項です。
 - 1.0.18はPython 3.14以上が必要です。更新は必ず更新ツール（`scripts/mcs_upgrade.py`、下記の手順）で行います。更新ツールは定期処理とworkerを止めた状態のまま、3.14未満の実行環境（venv）を`<venv>.pre-python314`へ退避して3.14で作り直し、Hermesのcheckoutが過去の固定commitにあれば新しい固定commitへ進めます。更新ツールの実行中に失敗した場合は、その場で旧版のコード・旧環境・checkoutへ戻します。電源断や強制終了でinstall.shの途中に止まった場合は、独立の復旧watchdogが自動では再実行も復元もせず`reinstall_incomplete`として管理者へ通知して止まります。このときは`/opt/homebrew/bin/python3.14 "$REPO/mcs/ops/mcs_update.py" recover`（Python 3.10以上の任意のPython）を実行すると、旧版のコード・旧環境・checkoutへ戻してworkerを再開し、更新ツールでの再更新を通知します。退避した旧環境は削除しません。
 - 1.0.17以前の自動更新（`update.mode=auto`）は実行環境を移行できないため、1.0.18の適用を取り消して元の版に戻り、更新ツールの利用を通知します。通知を受けたら下記の手順で更新ツールを実行してください。
 - Hermesのcheckoutが過去の固定commit・新しい固定commit以外、ブランチ上、またはローカル変更ありの場合は、`plan`の事前確認で`runtime_migration: hermes_checkout_*`として止まり、何も変更しません。checkoutを固定commitへ揃えてから再実行します。1.0.19以降、Python 3.14対応を宣言している独自のcheckout（変更なし）を使い続ける場合は、`plan`と`apply`に`--keep-hermes-checkout <そのcheckoutの40桁のcommit>`を付けると、checkoutを動かさずに実行環境だけを作り直します（commit不一致・変更あり・3.14非対応は`runtime_migration: keep_hermes_checkout_*`などで止まります）。
 - 復旧watchdogのPythonもPython 3.14以上とSQLiteのWAL-reset修正が必要です。既存の選択が`/usr/bin/python3`（3.9系）などの場合、事前確認で`recovery_runtime: runtime Python version unsupported`として止まります。`brew install python@3.14`の後、`mcs_setup.py init --yes --recovery-python /opt/homebrew/bin/python3.14`（実在する絶対パス）で選び直してから更新します。
-- Hermesでは抽出worker2本とgateway、独立実行ではhostを更新・再起動します。新しいヘルス監視`local.mcs-health`は更新が実行する`mcs_setup.py services`で配置され、独立実行では配置しません。
+- Hermesでは抽出worker2本とgateway、独立実行ではhostを更新・再起動します。ヘルス監視は更新が実行する`mcs_setup.py services`で両モードに配置します（macOS: `local.mcs-health`、Linux: `mcs-health.timer`）。
 - 必須の設定変更はありません。ルール20へ更新し、旧ルール結果を通常処理で順次再生成します。更新後の最初の定期処理は患者集計の署名の初回更新で一時的に長くなります。DB schemaは9のままです。
 - 試行上限で失敗済みの意味解析ジョブは自動で戻らず、既存の人承認による再試行を使います。サービス再設定の失敗は固定の理由と終了コードで記録されるため、詳細は`mcs_setup.py services`を手動で実行して確認します。
 - 同梱医薬品masterの辞書は自動では作成・有効化されません。使う場合は[利用ガイド](USER_GUIDE.md#同梱マスターを辞書として使う)の`mcs drug install-bundled`を運用者が実行します。

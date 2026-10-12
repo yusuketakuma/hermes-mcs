@@ -2,7 +2,7 @@
   "category": "changed",
   "title": "患者要約の処方期間を「候補」と表示し、未更新投稿の名称を実態に合わせて変更",
   "summary": "患者の記録まとめの「処方期間」を「処方期間の候補」に改めました。投稿から規則で抽出した日付範囲で、どの薬の期間かは特定していないためです。brain_export の患者ページも見出しを「med period candidate（規則抽出・未確認）」に、未更新投稿の注記を「unrefreshed_message_ids（削除の証拠ではない）」に変えました。保存キーは med_period_candidate / unrefreshed_message_ids になります。",
-  "upgrade": "追加操作は不要です。更新後最初の定期処理で全患者の患者要約（patient_rollup）を1回ずつ再構築するため、その回の処理時間がいつもより長くなります。再構築が終わるまでの間も、旧キーの要約は新しい名称として読み取られます。",
+  "upgrade": "追加操作は不要です。更新後は全患者の患者要約を定期処理の時間枠内で順次再構築し、終わらなかった分は次回以降に続けます。処理中も旧キーの要約は新しい名称として読み取られます。",
   "details": [
     "mcs/extract/rollup.py の PERIOD_CHECK_VERSION を 8 → 9 に上げ、dirty_projects が旧版の要約をすべて再構築する。current_cached_refs は再構築前の旧キー（current_med_period / possibly_deleted）を新キーへ読み替える。",
     "更新確認されていない投稿の判定（他の投稿が更新確認されているのに21日以上更新確認されていない先頭20件）を _unrefreshed_ids に一本化し、要約の内容と再構築判定の署名で同じ実装を使う。判定条件は変えていない。削除済み（tombstone）の件数は read model の coverage.collection.deleted が正本。",

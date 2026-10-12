@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "再ログイン後の再実行で、再観測できない失敗記録が消える問題を修正",
+  "summary": "収集の途中でセッションが切れて自動再ログインで回復した場合、中断した試行で記録された「履歴取得の停滞（coverage_stalled）」や、既読化後の確認で見つかった取り込み漏れ（post_ack_gap）・既読化の失敗、既読化済み患者のメッセージ件数が再実行で消え、収集が正常（ok）と表示されることがありました。再実行で再び観測できない記録は残すようにしました。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "mcs/ingest/run_check.py の _with_relogin は、unread の再実行で一覧に再び現れない患者（中断した試行で既読化済み、または応答失敗の前にサーバー側で既読化済み）の errors・incomplete・messages を残す。",
+    "backfill の再実行では、中断した試行の job_add が失敗した history_head を再開させるため停滞を再観測できない。中断した試行の coverage_stalled と対応する errors を、再実行が同じ患者の停滞を記録しない限り残す。",
+    "再実行で再観測される患者の記録は従来どおり取り除き、二重計上はしない。"
+  ],
+  "refs": [
+    "mcs/ingest/run_check.py",
+    "tests/ingest/test_relogin_replay_lists.py"
+  ]
+}

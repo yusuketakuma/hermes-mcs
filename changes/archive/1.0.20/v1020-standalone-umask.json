@@ -9,6 +9,6 @@
   ],
   "refs": [
     "mcs_standalone/service.py",
-    "tests/ops/test_bugfix_r3_16_standalone_systemd_unit.py"
+    "tests/ops/test_mcs_setup_standalone.py"
   ]
 }

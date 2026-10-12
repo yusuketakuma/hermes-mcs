@@ -3,6 +3,7 @@
 Adopted from the Codex proof (SAME-PASS REVOKE, synthetic): the manifest
 already in memory must not outrun a revocation that withdrew the spec."""
 import asyncio
+import errno
 
 import ledger
 import notify_cards
@@ -16,8 +17,9 @@ from test_lineworks_adapter import CONFIG, world
 MARK = "SYNTHETIC-SAME-PASS-"
 
 
-@pytest.mark.parametrize("archive", [True, False])
-def test_revoke_after_thread_part_stops_same_pass_bodies(tmp_path, monkeypatch, archive):
+@pytest.mark.parametrize("mode", ["archive", "archive_publish_fails", "control"])
+def test_revoke_after_thread_part_stops_same_pass_bodies(tmp_path, monkeypatch, mode):
+    archive = mode != "control"
     monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
     data = tmp_path / "data"
     data.mkdir()
@@ -40,7 +42,18 @@ def test_revoke_after_thread_part_stops_same_pass_bodies(tmp_path, monkeypatch, 
                 if archive:
                     led.db.execute("UPDATE patients SET is_archived=1")
                     led.db.commit()
-                    notify_cards.sweep(led, CONFIG, now=NOW + 1)
+                    if mode == "archive_publish_fails":
+                        # the replacement spec cannot be written (disk full);
+                        # the revocation must still withdraw the old spec
+                        def full(*a, **kw):
+                            raise OSError(errno.ENOSPC, "synthetic disk full")
+                        monkeypatch.setattr(notify_cards, "_publish_specs", full)
+                        with pytest.raises(OSError):
+                            notify_cards.sweep(led, CONFIG, now=NOW + 1)
+                        monkeypatch.undo()
+                        monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
+                    else:
+                        notify_cards.sweep(led, CONFIG, now=NOW + 1)
                 at_cancel.append(len(w.client.calls))
             return result
 

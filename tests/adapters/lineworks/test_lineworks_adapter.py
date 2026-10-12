@@ -961,8 +961,19 @@ def test_held_api_lock_exits_tempfail_without_sending(monkeypatch, tmp_path, cap
 def test_brief_api_lock_hold_is_waited_out(monkeypatch, tmp_path):
     w = _setup(monkeypatch, tmp_path)
     fd = _hold_lock(w)
-    monkeypatch.setattr(cli.time, "sleep", lambda _s: os.close(fd))
-    assert _send(tmp_path) == 0 and len(w.client.calls) == 1
+    closed = False
+
+    def release(_s):
+        nonlocal closed
+        if not closed:
+            os.close(fd)
+            closed = True
+
+    monkeypatch.setattr(cli.time, "sleep", release)
+    try:
+        assert _send(tmp_path) == 0 and len(w.client.calls) == 1
+    finally:
+        release(0)
 
 
 def test_cooldown_exits_tempfail_without_sending(monkeypatch, tmp_path):

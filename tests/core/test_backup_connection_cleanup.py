@@ -16,11 +16,17 @@ def test_backup_failure_always_closes_source(tmp_path, monkeypatch, operation, f
     monkeypatch.setattr(maintenance, 'valid_mcs_db', lambda path: False)
     monkeypatch.setattr(maintenance, '_verified_unchanged', lambda path: False)
     monkeypatch.setattr(maintenance, 'disk_floor_mb', lambda: 0)
-    closed = []
+    closed, copied = [], []
 
     class Source:
-        def backup(self, destination):
-            pass
+        def execute(self, sql):
+            return self
+
+        def fetchall(self):
+            return []
+
+        def backup(self, destination, **_):
+            copied.append(True)
 
         def close(self):
             closed.append('source')
@@ -44,6 +50,8 @@ def test_backup_failure_always_closes_source(tmp_path, monkeypatch, operation, f
     with pytest.raises(OSError):
         getattr(maintenance, operation)(str(source))
     assert closed == ['source']
+    # the close failure must come after a copy, not mask an earlier error
+    assert copied == ([True] if failure == 'destination_close' else [])
     assert list(backup_dir.glob('*.tmp')) == []
 
 

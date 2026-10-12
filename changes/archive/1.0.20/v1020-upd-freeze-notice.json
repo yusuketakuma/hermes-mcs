@@ -9,6 +9,6 @@
   ],
   "refs": [
     "mcs/ops/mcs_update.py",
-    "tests/ops/test_bugfix_r3_11_bail_schema_rollback.py"
+    "tests/ops/test_mcs_update.py"
   ]
 }

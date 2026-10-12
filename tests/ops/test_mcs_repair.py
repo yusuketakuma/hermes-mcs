@@ -582,7 +582,8 @@ def test_invalid_cli_arguments_never_echo_private_input(capsys):
     assert "SYNTHETIC_PRIVATE" not in capsys.readouterr().err
 
 
-def test_repair_inputs_use_own_size_bound_not_command_queue_cap(tmp_path):
+def test_repair_inputs_use_own_size_bound_not_command_queue_cap(
+        tmp_path, recursion_limited_json):
     big = {"padding": "p" * 20_000, "nested": {"k": 1}}
     path = tmp_path / "plan.json"
     path.write_bytes(repair.canonical(big))
@@ -595,6 +596,7 @@ def test_repair_inputs_use_own_size_bound_not_command_queue_cap(tmp_path):
         path.write_bytes(raw)
         with pytest.raises(ValueError, match=code):
             repair._read_json(path)
+    assert recursion_limited_json == [200_000]
 
 
 # Publication-boundary races preserve complete outputs and clean owned staging.

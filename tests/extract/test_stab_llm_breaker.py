@@ -40,6 +40,38 @@ def _attempt_rows(db):
         "SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm'").fetchone()[0]
 
 
+@pytest.mark.parametrize("batch_k,budget_s", [(0, 90), (2, 400)])
+def test_sent_timeout_at_deadline_charges_attempts_without_outage(
+        tmp_path, monkeypatch, batch_k, budget_s):
+    db = _ledger(tmp_path)
+    now = [1000.0]
+    calls = []
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: pytest.fail(
+        "an expired caller budget must not probe endpoint health"))
+
+    def timeout(prompt, error_out, deadline, **kw):
+        calls.append(prompt)
+        error_out["kind"] = "transport"
+        now[0] = deadline + 1
+        return None
+
+    monkeypatch.setattr(local_llm, "chat", timeout)
+    try:
+        db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in (1, 2)])
+        out = extract_llm.run_pending(db, limit=2, budget_s=budget_s, batch_k=batch_k)
+        assert len(calls) == 1
+        expected = 2 if batch_k else 1
+        assert out["failed"] == expected
+        rows = db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm'").fetchall()
+        assert len(rows) == expected
+        assert all(json.loads(row["meta"])["attempts"] == 1 for row in rows)
+        assert not mcs_util.circuit_state_path(db).exists()
+        assert mcs_util.llm_down_since(db) is None
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("kind, status", [("unreachable", None), (None, 503)])
 def test_refused_or_loading_endpoint_feeds_breaker_without_attempts(
         tmp_path, monkeypatch, kind, status):
@@ -229,5 +261,71 @@ def test_answer_then_deferral_still_clears_outage(tmp_path, monkeypatch):
         res = extract_llm.run_pending(db, limit=1, budget_s=900)
         assert res["deferred"] == 1 and _attempt_rows(db) == 0
         assert mcs_util.llm_down_since(db) is None
+    finally:
+        db.close()
+
+
+def _noted(kind, at, result):
+    """An llm_extract stand-in that records its call's endpoint note."""
+    def call(body, **kw):
+        extract_llm._CALL_NOTES.transport = kind
+        extract_llm._CALL_NOTES.transport_at = at
+        return result
+    return call
+
+
+def test_older_answer_does_not_clear_a_newer_outage(tmp_path, monkeypatch):
+    """Futures finish out of order: a 2xx that completed before a 503 but is
+    handled after it must not erase the newer outage."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in (1, 2)])
+        monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+        calls = iter([("unavailable", 2.0, extract_llm._DEFERRED),
+                      ("answered", 1.0, None)])
+
+        def call(body, **kw):
+            kind, at, result = next(calls)
+            return _noted(kind, at, result)(body)
+        monkeypatch.setattr(extract_llm, "llm_extract", call)
+        extract_llm.run_pending(db, limit=2, budget_s=900, workers=1)
+        assert mcs_util.llm_down_since(db) is not None
+    finally:
+        db.close()
+
+
+def test_answered_batch_then_deferred_residue_clears_outage(tmp_path, monkeypatch):
+    """A batch call answered with an unusable envelope and its rows then
+    deferred: the batch's answer still records the recovery."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in (1, 2)])
+        mcs_util.circuit_failure(db)
+
+        def batch(tups, *a, **kw):
+            extract_llm._CALL_NOTES.transport = "answered"
+            extract_llm._CALL_NOTES.transport_at = time.monotonic()
+            return "failed", {}, {"batch": len(tups)}
+        monkeypatch.setattr(extract_llm, "_run_batch_call", batch)
+        monkeypatch.setattr(extract_llm, "llm_extract",
+                            _noted(None, None, extract_llm._DEFERRED))
+        res = extract_llm.run_pending(db, limit=2, budget_s=900, batch_k=2)
+        assert res["deferred"] == 2
+        assert mcs_util.llm_down_since(db) is None
+    finally:
+        db.close()
+
+
+def test_failed_repair_keeps_the_outage(tmp_path, monkeypatch):
+    """A usable first answer whose repair call then got a 503: the row is
+    saved, but the endpoint's latest observation is an outage."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=1, body="体温38度")])
+        monkeypatch.setattr(extract_llm, "llm_extract",
+                            _noted("unavailable", time.monotonic(), {"summary": "ok"}))
+        res = extract_llm.run_pending(db, limit=1, budget_s=900)
+        assert res["done"] == 1
+        assert mcs_util.llm_down_since(db) is not None
     finally:
         db.close()

@@ -19,6 +19,7 @@ from semantic_testkit import _FakeJev, _cfg, _ledger, _patient, _seeded
 
 @pytest.fixture(autouse=True)
 def _isolated_marks(monkeypatch, tmp_path):
+    monkeypatch.setattr(semantic_drain, "_PASS_REASON", dict(semantic_drain._PASS_REASON))
     monkeypatch.setattr(semantic, "_FMT_PATH", str(tmp_path / "format.json"))
     monkeypatch.setattr(semantic, "_LONG_PATH", str(tmp_path / "long.json"))
     monkeypatch.setattr(semantic, "_LONG_UNSAVED", {})

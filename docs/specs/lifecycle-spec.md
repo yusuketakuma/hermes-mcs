@@ -106,7 +106,7 @@ pip install・モデル DL の `.part`）は続きから収束する。
 | brew | git/python@3.14/uv/llama.cpp/Chrome(cask) | 停止（brew 不在・導入失敗） |
 | hermes | pin commit clone + venv（`hermes` が PATH にあっても作成）+ `~/.local/bin/hermes` shim | 停止 |
 | plugin | `~/.hermes/plugins/` symlink + `plugins enable` | 停止 |
-| LLM | `:8080` 応答済 or hermes管理 plist 既存なら skip（hermes 管理 agent が未ロードなら warn で bootstrap 案内）。else モデル DL（再開可・任意 `MCS_MODEL_SHA256` 照合）+ `ai.mcs.llamaserver` bootstrap。plist 変更時は応答中なら warn で再読込を保留 | 停止 |
+| LLM | `:8080` 応答済 or hermes管理 plist 既存なら skip（hermes 管理 agent が未ロードなら warn で bootstrap 案内）。else 固定revisionのモデル DL（再開可・既定SHA256照合。`MCS_MODEL_SHA256` 指定時は指定値で照合）+ `ai.mcs.llamaserver` bootstrap。plist 変更時は応答中なら warn で再読込を保留 | 停止 |
 | services | `~/.mcs/data{,/cmd,/cmd_int}` 作成 + `mcs_setup.py services` へ委譲 | 停止 |
 | recovery📋 | `mcs_recover.py` → `~/.mcs-recovery/`（旧版は `.prev`）+ `repo_path` に checkout を記録 + `org.mcs.recovery` launchd watchdog bootstrap（変更時・未ロード時のみ） | 停止 |
 

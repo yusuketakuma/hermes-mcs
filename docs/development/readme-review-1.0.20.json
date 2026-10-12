@@ -1,0 +1,96 @@
+{
+  "version": "1.0.20",
+  "sections": {
+    "features": {
+      "notes": "2026-10-12、112変更記録をsourceへ照合。独立host外部監視/再接続、日次保守、新着優先、期限までの完了分保存、取消/リマインド送信直前確認を確認。処方期間は候補と表記。待ち枠と503→200→503復旧状態の修正を局所独立受入。schema9、人承認と送信先条件は保持。",
+      "sources": [
+        "README.md",
+        "mcs/extract/rollup.py",
+        "mcs/ops/mcs_signals.py",
+        "mcs/notify/notify_views.py",
+        "mcs/notify/notify_digest.py",
+        "mcs/core/maintenance.py",
+        "mcs/core/local_llm.py",
+        "mcs/ingest/run_check.py",
+        "docs/guides/STANDALONE.md",
+        "adapters/common/worker.py",
+        "mcs/notify/notify_flush.py"
+      ]
+    },
+    "demos": {
+      "notes": "2026-10-12、Slack8画面を先頭とし、Discord/LINEWORKS説明図を表示/本人向け回答/人承認条件へ照合。概要順・患者本人の根拠・観測0件省略は現例と矛盾せず再描画不要。8組SVG/PNG/hash検査成功。実画面と区別し、実接続検証は未実施。",
+      "sources": [
+        "README.md",
+        "docs/screenshots/slack-gallery/README.md",
+        "docs/screenshots/lineworks-gallery/README.md",
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/07-patient-summary.svg",
+        "docs/screenshots/lineworks-gallery/02-task-confirm.svg",
+        "mcs/views/structured_view.py",
+        "mcs/notify/notify_render.py",
+        "mcs/notify/alert_view.py",
+        "mcs/notify/notify_views.py",
+        "adapters/slack/actions.py",
+        "adapters/common/confirm.py",
+        "adapters/discord/actions.py",
+        "adapters/lineworks/actions.py",
+        "hermes_plugin/projects.py"
+      ]
+    },
+    "quickstart": {
+      "notes": "2026-10-12、導入/更新入口とPython3.14、旧環境移行条件を照合。全20版30更新経路を準備、関連310合成ケース成功。更新ガイドの独立health監視説明、servicesで監視/Umask反映、既存ログchmod600、gateway/LINEWORKS再起動、人承認による保留通知回復を記載。最終RCの新規導入/実SDK受入は未完。",
+      "sources": [
+        "README.md",
+        "install.sh",
+        "scripts/install_local.py",
+        "scripts/mcs_upgrade.py",
+        "mcs/ops/mcs_update.py",
+        "mcs/ops/mcs_setup.py",
+        "mcs_standalone/service.py",
+        "mcs_standalone/runtime.py",
+        "docs/guides/INSTALLATION.md",
+        "docs/guides/UPGRADE_AGENT.md",
+        "docs/guides/STANDALONE.md",
+        "tests/fixtures/schema_upgrade/update-paths.json"
+      ]
+    },
+    "safety": {
+      "notes": "2026-10-12、ボタン許可範囲、no-redirect/no-proxy、snapshot timestamp付き既読化、人承認reason/receiptを保持。取消は開始済み通信の即時停止保証ではなく、backup期限も単一diskI/Oの強制停止保証ではない。新規modelは固定revision/hash、既存modelは再取得しない。公式master全行/hash照合済、辞書承認/有効化は別操作。CodeRabbit全releaseレビューは未実施。 個別PR47–51のCodeRabbit承認を現在SHAで確認し、PR48のprotocol/応答後延期追補とPR51のログ記載を反映。個別レビューと全リリースレビューは区別。",
+      "sources": [
+        "README.md",
+        "SECURITY.md",
+        "hermes_plugin/projects.py",
+        "adapters/slack/actions.py",
+        "adapters/discord/actions.py",
+        "adapters/lineworks/actions.py",
+        "mcs/ingest/mcs_adapter.py",
+        "mcs/views/structured_view.py",
+        "mcs/notify/notify_render.py",
+        "mcs/notify/notify_digest.py",
+        "mcs/ops/mcs_update.py",
+        "mcs_standalone/service.py",
+        "resources/drug-master/20260930/manifest.json",
+        "scripts/development/check_drug_master_bundle.py",
+        "docs/specs/lifecycle-spec.md"
+      ]
+    },
+    "docs": {
+      "notes": "2026-10-12、候補受入票とINSTALLATION/UPGRADE_AGENTへの導線、rollup再構築の次回継続、既定model hashの説明を同期。未リリース参照11件の旧パスを修正。今回112記録はgeneratorでarchive1.0.20へ移動し、旧公開版ノート/archiveを保持。最終全体検証、公開、本番適用は未実施。",
+      "sources": [
+        "README.md",
+        "docs/development/README_MAINTENANCE.md",
+        "docs/guides/USER_GUIDE.md",
+        "docs/guides/INSTALLATION.md",
+        "docs/guides/UPGRADE_AGENT.md",
+        "docs/guides/STANDALONE.md",
+        "scripts/development/readme_release.py",
+        "scripts/development/release_notes.py",
+        "mcs/semantic/eval/semantic_evaluation.py",
+        "mcs/semantic/eval/semantic_bench.py",
+        "mcs/semantic/eval/semantic_v4_cohort.py",
+        "mcs/ops/semantic_observe.py",
+        "docs/development/acceptance/ACCEPTANCE_1.0.20.md"
+      ]
+    }
+  }
+}

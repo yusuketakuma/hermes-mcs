@@ -8,7 +8,7 @@
     "semantic ジョブの件数集計は種別の文字列を直接書かず、JOB_KIND をパラメータとして渡す。"
   ],
   "refs": [
-    "mcs/semantic/semantic_observe.py",
+    "mcs/ops/semantic_observe.py",
     "tests/semantic/test_semantic_observe.py"
   ]
 }

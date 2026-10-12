@@ -1,61 +1,95 @@
 {
-  "version": "1.0.19",
+  "version": "1.0.20",
   "sections": {
     "features": {
-      "notes": "2026-10-11、v1.0.18以降の変更記録1件（v1019-compatible-checkout）をsourceと照合。追加は更新ツールの--keep-hermes-checkout（Python移行中に運用者が確認したcommitのHermes checkoutを保持）だけで、通知・解析・取得10分・既読化・人承認・モデル・Jev既定offは不変。README機能表は導入・更新の統一入口がUPGRADE_AGENTへ案内しており、機能説明の変更は不要。最新更新の要約はCHANGELOG 1.0.19から生成。",
+      "notes": "2026-10-12、113変更記録をsourceへ照合。送信後の時間切れ会計、ログイン/Discord設定条件の追補も確認。未生成種別は既存仕様どおり不明へ分類する。独立host外部監視/再接続、日次保守、新着優先、期限までの完了分保存、取消/リマインド送信直前確認を確認。処方期間は候補と表記。待ち枠と503→200→503復旧状態の修正を局所独立受入。schema9、人承認と送信先条件は保持。",
       "sources": [
         "README.md",
-        "CHANGELOG.md",
-        "scripts/mcs_upgrade.py",
-        "mcs/ops/mcs_update.py",
-        "mcs/ops/requires_python_admits.py",
-        "install.sh"
+        "mcs/extract/rollup.py",
+        "mcs/ops/mcs_signals.py",
+        "mcs/notify/notify_views.py",
+        "mcs/notify/notify_digest.py",
+        "mcs/core/maintenance.py",
+        "mcs/core/local_llm.py",
+        "mcs/ingest/run_check.py",
+        "docs/guides/STANDALONE.md",
+        "adapters/common/worker.py",
+        "mcs/notify/notify_flush.py"
       ]
     },
     "demos": {
-      "notes": "2026-10-11、この版は画面・ボタン・カード構成・表示条件を変更しない（変更は更新ツール・install.sh・判定スクリプトと更新経路fixture）。Slack8画面とLINE WORKS説明図の生成元（adapters/*/cards.py・notify_views・mcs_view）にv1.0.18からの差分がないことを確認し、画像・hashは再生成しない。",
+      "notes": "2026-10-12、Slack8画面を先頭とし、Discord/LINEWORKS説明図を表示/本人向け回答/人承認条件へ照合。概要順・患者本人の根拠・観測0件省略は現例と矛盾せず再描画不要。8組SVG/PNG/hash検査成功。実画面と区別し、実接続検証は未実施。",
       "sources": [
         "README.md",
         "docs/screenshots/slack-gallery/README.md",
         "docs/screenshots/lineworks-gallery/README.md",
-        "adapters/slack/cards.py",
-        "adapters/lineworks/cards.py",
+        "scripts/development/generate_slack_gallery.py",
+        "docs/screenshots/slack-gallery/07-patient-summary.svg",
+        "docs/screenshots/lineworks-gallery/02-task-confirm.svg",
+        "mcs/views/structured_view.py",
+        "mcs/notify/notify_render.py",
+        "mcs/notify/alert_view.py",
         "mcs/notify/notify_views.py",
-        "mcs/views/mcs_view.py"
+        "adapters/slack/actions.py",
+        "adapters/common/confirm.py",
+        "adapters/discord/actions.py",
+        "adapters/lineworks/actions.py",
+        "hermes_plugin/projects.py"
       ]
     },
     "quickstart": {
-      "notes": "2026-10-11、install.sh・mcs CLI・setup/doctorの入口は不変。既存環境の更新はREADMEからUPGRADE_AGENTへ案内しており、同ガイドへ--keep-hermes-checkoutの使い方と、1.0.18からの更新は実行環境の移行を伴わないことを追記。対象版と受入票リンクをINSTALLATION・UPGRADE_AGENTとも1.0.19へ更新。更新元manifestへv1.0.18（shape-10とDDL同一）を追加し全19公開版・Hermes19+standalone9経路、target v1.0.19。実brew・実MCS・実機更新は検証範囲外。",
+      "notes": "2026-10-12、導入/更新入口とPython3.14、旧環境移行条件を照合。全20版30更新経路を準備、関連310合成ケース成功。更新ガイドの独立health監視説明、servicesで監視/Umask反映、既存ログchmod600、gateway/LINEWORKS再起動、人承認による保留通知回復を記載。最終RCの新規導入/実SDK受入は未完。",
       "sources": [
         "README.md",
         "install.sh",
+        "scripts/install_local.py",
         "scripts/mcs_upgrade.py",
         "mcs/ops/mcs_update.py",
-        "docs/guides/UPGRADE_AGENT.md",
+        "mcs/ops/mcs_setup.py",
+        "mcs_standalone/service.py",
+        "mcs_standalone/runtime.py",
         "docs/guides/INSTALLATION.md",
-        "tests/fixtures/schema_upgrade/origins.json",
+        "docs/guides/UPGRADE_AGENT.md",
+        "docs/guides/STANDALONE.md",
         "tests/fixtures/schema_upgrade/update-paths.json"
       ]
     },
     "safety": {
-      "notes": "2026-10-11、外部送信先・権限・既読化・人承認・no-redirect/no-proxyは不変。保持経路は運用者が明示した40桁commitとの一致・追跡ファイルの変更なし・[project].requires-pythonが実行Pythonの完全なバージョンを許すことを全て満たす場合だけで、評価できない書式は非対応とみなす。実行ロックの継承と退避先の検証は従来どおり必須で、指定なし・不一致の場合は何も変更せず止まる。失敗時の復元はcheckoutを動かさず旧環境を戻す。",
+      "notes": "2026-10-12、ボタン許可範囲、no-redirect/no-proxy、snapshot timestamp付き既読化、人承認reason/receiptを保持。取消は開始済み通信の即時停止保証ではなく、backup期限も単一diskI/Oの強制停止保証ではない。新規modelは固定revision/hash、既存modelは再取得しない。公式master全行/hash照合済、辞書承認/有効化は別操作。CodeRabbit全releaseレビューは未実施。 個別PR47–51のCodeRabbit承認を現在SHAで確認し、PR48のprotocol/応答後延期追補とPR51のログ記載を反映。個別レビューと全リリースレビューは区別。",
       "sources": [
         "README.md",
         "SECURITY.md",
-        "install.sh",
+        "hermes_plugin/projects.py",
+        "adapters/slack/actions.py",
+        "adapters/discord/actions.py",
+        "adapters/lineworks/actions.py",
+        "mcs/ingest/mcs_adapter.py",
+        "mcs/views/structured_view.py",
+        "mcs/notify/notify_render.py",
+        "mcs/notify/notify_digest.py",
         "mcs/ops/mcs_update.py",
-        "mcs/ops/requires_python_admits.py",
-        "scripts/mcs_upgrade.py"
+        "mcs_standalone/service.py",
+        "resources/drug-master/20260930/manifest.json",
+        "scripts/development/check_drug_master_bundle.py",
+        "docs/specs/lifecycle-spec.md"
       ]
     },
     "docs": {
-      "notes": "2026-10-11、最新更新の生成要約をCHANGELOG 1.0.19から同期。READMEの更新・復旧行の受入票リンクを1.0.17から1.0.19へ修正（1.0.18で未更新だった）。ACCEPTANCE_1.0.19を追加し、INSTALLATION・UPGRADE_AGENTの対象版・受入票リンクを更新。旧版ノート・archive・ライセンスは保持。",
+      "notes": "2026-10-12、候補受入票とINSTALLATION/UPGRADE_AGENTへの導線、rollup再構築の次回継続、既定model hashの説明を同期。未リリース参照11件の旧パスを修正。今回113記録はgeneratorでarchive1.0.20へ移動し、旧公開版ノート/archiveを保持。最終全体検証、公開、本番適用は未実施。",
       "sources": [
         "README.md",
-        "CHANGELOG.md",
+        "docs/development/README_MAINTENANCE.md",
+        "docs/guides/USER_GUIDE.md",
         "docs/guides/INSTALLATION.md",
         "docs/guides/UPGRADE_AGENT.md",
-        "docs/development/acceptance/ACCEPTANCE_1.0.19.md"
+        "docs/guides/STANDALONE.md",
+        "scripts/development/readme_release.py",
+        "scripts/development/release_notes.py",
+        "mcs/semantic/eval/semantic_evaluation.py",
+        "mcs/semantic/eval/semantic_bench.py",
+        "mcs/semantic/eval/semantic_v4_cohort.py",
+        "mcs/ops/semantic_observe.py",
+        "docs/development/acceptance/ACCEPTANCE_1.0.20.md"
       ]
     }
   }

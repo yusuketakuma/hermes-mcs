@@ -8,6 +8,6 @@
   ],
   "refs": [
     "adapters/common/commands.py",
-    "tests/plugin/test_bugfix_r2_18_slack_card_settings.py"
+    "tests/plugin/test_hermes_plugin_mcs.py"
   ]
 }

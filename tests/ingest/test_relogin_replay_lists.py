@@ -75,3 +75,128 @@ def test_self_probe_replay_lists_each_fetched_patient_once(tmp_path):
     assert expired == [1]
     assert result["self_probe_fetched"] == [90, 91]
     db.close()
+
+
+def test_unread_replay_keeps_records_of_patients_acked_before_expiry(tmp_path):
+    """--mark-read: a patient acknowledged by the aborted attempt is no
+    longer unread on replay, so its post_ack_gap and message count stay."""
+    from types import SimpleNamespace
+    db = _ledger(tmp_path)
+    db.upsert_patient_info(_unread_patient(1))
+    db.save_messages([_message(mid=5, unread=True,
+                               posted_at="2026-09-01T00:00:00+09:00")],
+                     project_id=1)
+    db.set_history_floor(1, 0)
+    db.set_coverage(1, db.high_watermark(1))
+    marked, expired = set(), []
+    latest = iter([5, 8])         # gate sees 5 stored; 8 lands before re-probe
+
+    def fetch(pid, ts):
+        if pid == 1:              # capped: plain-list acknowledgement
+            return mcs_adapter.MessageBatch(messages=[], error=mcs_adapter.MCSError(
+                "http_error", "GET", status=400))
+        return mcs_adapter.MessageBatch(
+            messages=[_message(mid=pid * 100, project_id=pid, unread=True)],
+            reached=True)
+
+    def replies(m):
+        if m.project_id == 2 and not expired:
+            expired.append(1)
+            raise mcs_adapter.SessionExpired(status=403)
+        return mcs_adapter.ReplyBatch([], [])
+    adapter = SimpleNamespace(
+        auto_login=lambda **kw: "ok",
+        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+            timestamp=123, patients=[_unread_patient(p) for p in (3, 1, 2)
+                                     if p not in marked]),
+        fetch_unread_messages=fetch, fetch_unread_replies=replies,
+        oldest_unread_id=lambda pid: 5,
+        fetch_latest=lambda pid: {"message_id": next(latest),
+                                  "is_self_only": False},
+        mark_patient_read=lambda pid, *a, **k: marked.add(pid))
+    result = {"errors": [], "incomplete": [], "messages": 0,
+              "new_messages": 0, "marked_read": [], "run_id": 7}
+    run_check._with_relogin(
+        adapter, db, result, "unread", run_check.stage_unread, adapter, db,
+        SimpleNamespace(mark_read=True), result, time.monotonic() + 30,
+        db.begin_run(None))
+    assert expired == [1]
+    assert result["errors"] == ["mark 1: post_ack_gap"]
+    assert result["marked_read"] == [3, 1, 2]
+    assert result["messages"] == result["new_messages"] == 2
+    assert "_unread_counted" not in result
+    db.close()
+
+
+def test_unread_replay_keeps_a_mark_failure_of_a_patient_no_longer_unread(tmp_path):
+    """A mark whose response failed after the server applied it: the
+    replay no longer lists the patient, so the failure must stay."""
+    from types import SimpleNamespace
+    db = _ledger(tmp_path)
+    read_on_server, expired = set(), []
+
+    def mark(pid, *a, **k):
+        read_on_server.add(pid)
+        if pid == 1:
+            raise mcs_adapter.MCSError("network_error", retryable=True)
+
+    def replies(m):
+        if m.project_id == 2 and not expired:
+            expired.append(1)
+            raise mcs_adapter.SessionExpired(status=403)
+        return mcs_adapter.ReplyBatch([], [])
+    adapter = SimpleNamespace(
+        auto_login=lambda **kw: "ok",
+        list_unread=lambda: mcs_adapter.UnreadSnapshot(
+            timestamp=123, patients=[_unread_patient(p) for p in (1, 2)
+                                     if p not in read_on_server]),
+        fetch_unread_messages=lambda pid, ts: mcs_adapter.MessageBatch(
+            messages=[_message(mid=pid, project_id=pid, unread=True)],
+            reached=True),
+        fetch_unread_replies=replies, mark_patient_read=mark)
+    result = {"errors": [], "incomplete": [], "messages": 0,
+              "new_messages": 0, "marked_read": [], "run_id": 7}
+    run_check._with_relogin(
+        adapter, db, result, "unread", run_check.stage_unread, adapter, db,
+        SimpleNamespace(mark_read=True), result, time.monotonic() + 30,
+        db.begin_run(None))
+    assert expired == [1]
+    assert result["errors"] == ["mark 1: network_error"]
+    assert result["messages"] == 2 and result["marked_read"] == [2]
+    db.close()
+
+
+def test_backfill_replay_keeps_a_stalled_head_walk(tmp_path):
+    """The aborted attempt's job_add revives the failed history_head, so
+    the replay cannot see the stall again — it must stay recorded."""
+    db = _ledger(tmp_path)
+    now = int(time.time())
+    for pid in (1, 2):
+        db.ensure_patient(pid)
+        db.save_messages([_msg_at(pid * 100, pid, _iso(0))], project_id=pid)
+        db.set_history_floor(pid, 0)
+        db.set_coverage(pid, now - 7200)        # lagging behind the head
+    db.job_fail(db.job_add("history_head", 1, payload={"since": 0}),
+                reason_code="window_stalled")
+    expired = []
+
+    class Adapter:
+        def fetch_history(self, pid, since, max_pages=10, start_page=1):
+            if pid == 2 and not expired:
+                expired.append(1)
+                raise mcs_adapter.SessionExpired(status=403)
+            return mcs_adapter.MessageBatch([], pages=1, reached=False)
+
+        def auto_login(self, **kw):
+            return "ok"
+
+    adapter = Adapter()
+    result = {"errors": [], "backfilled": 0, "incomplete": [], "run_id": 1}
+    run_check._with_relogin(adapter, db, result, "backfill",
+                            run_check.stage_backfill, adapter, db, result,
+                            time.monotonic() + 300, 1)
+    assert expired == [1]
+    assert result["errors"] == ["backfill 1: coverage_stalled_failed"]
+    assert [g["pid"] for g in result["coverage_stalled"]] == [1]
+    assert run_check._collection(result)["collection"] != "ok"
+    db.close()

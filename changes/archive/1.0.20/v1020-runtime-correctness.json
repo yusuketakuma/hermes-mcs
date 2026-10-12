@@ -13,6 +13,6 @@
     "mcs/ops/mcs_setup.py",
     "scripts/install_local.py",
     "scripts/development/release_notes.py",
-    "mcs/semantic/semantic_bench.py"
+    "mcs/semantic/eval/semantic_bench.py"
   ]
 }

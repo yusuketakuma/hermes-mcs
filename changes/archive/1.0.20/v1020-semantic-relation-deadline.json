@@ -13,7 +13,7 @@
     "mcs/semantic/semantic_relations.py",
     "mcs/semantic/semantic_extraction.py",
     "mcs/semantic/semantic_drain.py",
-    "mcs/semantic/semantic_evaluation.py",
+    "mcs/semantic/eval/semantic_evaluation.py",
     "tests/semantic/test_semantic_relation_bound.py"
   ]
 }
