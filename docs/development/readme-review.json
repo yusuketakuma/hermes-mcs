@@ -2,7 +2,7 @@
   "version": "1.0.20",
   "sections": {
     "features": {
-      "notes": "2026-10-12、112変更記録をsourceへ照合。独立host外部監視/再接続、日次保守、新着優先、期限までの完了分保存、取消/リマインド送信直前確認を確認。処方期間は候補と表記。待ち枠と503→200→503復旧状態の修正を局所独立受入。schema9、人承認と送信先条件は保持。",
+      "notes": "2026-10-12、114変更記録をsourceへ照合。送信後の時間切れ会計、旧薬剤フォロー却下集計、ログイン/Discord設定条件の追補も確認。独立host外部監視/再接続、日次保守、新着優先、期限までの完了分保存、取消/リマインド送信直前確認を確認。処方期間は候補と表記。待ち枠と503→200→503復旧状態の修正を局所独立受入。schema9、人承認と送信先条件は保持。",
       "sources": [
         "README.md",
         "mcs/extract/rollup.py",
@@ -75,7 +75,7 @@
       ]
     },
     "docs": {
-      "notes": "2026-10-12、候補受入票とINSTALLATION/UPGRADE_AGENTへの導線、rollup再構築の次回継続、既定model hashの説明を同期。未リリース参照11件の旧パスを修正。今回112記録はgeneratorでarchive1.0.20へ移動し、旧公開版ノート/archiveを保持。最終全体検証、公開、本番適用は未実施。",
+      "notes": "2026-10-12、候補受入票とINSTALLATION/UPGRADE_AGENTへの導線、rollup再構築の次回継続、既定model hashの説明を同期。未リリース参照11件の旧パスを修正。今回114記録はgeneratorでarchive1.0.20へ移動し、旧公開版ノート/archiveを保持。最終全体検証、公開、本番適用は未実施。",
       "sources": [
         "README.md",
         "docs/development/README_MAINTENANCE.md",

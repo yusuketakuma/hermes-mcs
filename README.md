@@ -375,7 +375,7 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 - 停滞の開始時刻は health.json の stall_marks に引き継がれます。LLMの稼働記録がない環境では、回路遮断器の失敗が処理待ちのまま6時間続いたときに llm_endpoint_down を出します。
 
-- 待機中も手動ログインを求める通知（session_expired）は従来どおり送られ、詳細は auto_login=manual_required:backoff と表示されます。ブラウザに残ったセッションでの復旧（フォームを使わない処理）は毎回続けます。ログインに成功すると記録は消えます。
+- 待機中も手動ログインを求める通知（session_expired）は従来どおり送られ、詳細は auto_login=manual_required:backoff と表示されます。ブラウザに残ったセッションでの復旧（フォームを使わない処理）は毎回続けます。ログインに成功すると記録は消えます。 ブラウザ保存パスワードの変更は検出できないため、待機中は手動でログインしてください。
 
 - 読取り側（閲覧・集計）が見るスナップショットは、新着の保存や通知状態の変化があれば従来どおり同じ実行で更新され、それ以外の変化（既存行の更新のみ）も最長1時間で反映されます。検査の上限時間は30秒を基準に、ファイルの大きさに応じて最大150秒まで延びます。
 
@@ -391,11 +391,7 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 - 更新前にこの理由で保留になった通知は自動では再送されないため、必要なら従来どおり保留解除の手順で再送してください。
 
-- 独立モードでは更新後に mcs_setup.py services を1回実行してください。deployment/launchagents/ai.mcs.standalone.plist を手動で配置している場合は配置し直してください。Hermesモードでは操作は不要です。
-
-- 独立モードでは更新後に mcs_setup.py services を1回実行してください。初回起動時は過去の時刻をさかのぼって実行しません。Hermesモードでは操作は不要です。
-
-- 独立モードでは更新後に mcs_setup.py services を1回実行してください。Linuxで更新記録が残って止まった場合は警報に従い mcs_update.py recover を実行してください。Hermesモードでは操作は不要です。
+- 独立モードでは更新後に mcs_setup.py services を1回実行してください。deployment/launchagents/ai.mcs.standalone.plist を手動で配置している場合は配置し直してください。初回起動時は過去の時刻をさかのぼって実行しません。Linuxで更新記録が残って止まった場合は警報に従い mcs_update.py recover を実行してください。Hermesモードでは操作は不要です。
 
 - 同梱の抽出処理は待ち時間0を渡すため、通常の運用で動作は変わりません。
 

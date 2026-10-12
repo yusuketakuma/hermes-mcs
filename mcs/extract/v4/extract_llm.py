@@ -1518,10 +1518,14 @@ def _llm_call(prompt: str, deadline: float | None = None,
             else "unavailable" if status == 503
             else "transport" if response is None and not expired
             and err_out.get("kind") == "transport"
+            else "expired" if response is None and expired
+            and err_out.get("kind") == "transport"
             else "answered" if type(status) is int and 200 <= status < 300
             or response is None and err_out.get("kind") == "protocol"
             else None)
         _CALL_NOTES.transport_at = time.monotonic()
+        if _CALL_NOTES.transport == "expired":
+            return None  # a sent timeout consumes an attempt, not endpoint health
         if response is None and (err_out.get("kind") == "unreachable"
                                  or expired) \
                 or response is not None and response.get("status") == 503:
@@ -3498,7 +3502,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     # the endpoint answered; only this message's output
                     # failed — an earlier outage in this run is over
                     _observe(transport, at)
-                elif endpoint_down or not _llm_up(deadline=deadline):
+                elif transport != "expired" and (
+                        endpoint_down or not _llm_up(deadline=deadline)):
                     # Endpoint unreachable — don't burn budget/attempts
                     # on error rows. The failure feeds the breaker so
                     # a sustained outage closes the lane across drains —
@@ -3659,6 +3664,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             if status == "ok" and index in results:
                 metas[index] = meta
                 _handle(r, ctx, results[index], meta, lease, {}, qc)
+            elif transport == "expired":
+                # Every row was sent in the batch; a residue retry would
+                # lose its failure at the now-expired preflight floor.
+                metas[index] = meta
+                _handle(r, ctx, None, meta, lease, {}, qc)
             else:
                 # a deferred batch's rows also fall through: the single
                 # lane's preflight floor re-defers them for free when

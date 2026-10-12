@@ -40,6 +40,38 @@ def _attempt_rows(db):
         "SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm'").fetchone()[0]
 
 
+@pytest.mark.parametrize("batch_k,budget_s", [(0, 90), (2, 400)])
+def test_sent_timeout_at_deadline_charges_attempts_without_outage(
+        tmp_path, monkeypatch, batch_k, budget_s):
+    db = _ledger(tmp_path)
+    now = [1000.0]
+    calls = []
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: pytest.fail(
+        "an expired caller budget must not probe endpoint health"))
+
+    def timeout(prompt, error_out, deadline, **kw):
+        calls.append(prompt)
+        error_out["kind"] = "transport"
+        now[0] = deadline + 1
+        return None
+
+    monkeypatch.setattr(local_llm, "chat", timeout)
+    try:
+        db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in (1, 2)])
+        out = extract_llm.run_pending(db, limit=2, budget_s=budget_s, batch_k=batch_k)
+        assert len(calls) == 1
+        expected = 2 if batch_k else 1
+        assert out["failed"] == expected
+        rows = db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm'").fetchall()
+        assert len(rows) == expected
+        assert all(json.loads(row["meta"])["attempts"] == 1 for row in rows)
+        assert not mcs_util.circuit_state_path(db).exists()
+        assert mcs_util.llm_down_since(db) is None
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("kind, status", [("unreachable", None), (None, 503)])
 def test_refused_or_loading_endpoint_feeds_breaker_without_attempts(
         tmp_path, monkeypatch, kind, status):

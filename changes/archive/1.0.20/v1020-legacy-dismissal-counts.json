@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "過去の薬剤フォロー候補の却下理由を元の種別で集計",
+  "summary": "保存済みの旧種別 med_followup の却下記録が、不明な種別として集計される問題を修正しました。記録を変更せず、従来の種別と却下理由で件数を表示します。",
+  "upgrade": "追加操作・DB移行は不要です。保存済み記録の集計に反映されます。",
+  "details": ["dismiss_reason_counts の既知種別へ旧称 med_followup を残す。未知の種別は従来どおり unknown とし、任意の保存文字列を表示しない。"],
+  "refs": ["mcs/ops/mcs_signals.py", "tests/ops/test_ops_aggregate_stability.py"]
+}

@@ -38,3 +38,17 @@ def test_dismissal_counts_never_echo_unknown_record_type(type_value):
     assert set(report) == {"unknown", "request_overdue"}
     assert sum(sum(row.values()) for row in report.values()) == 2
     assert "synthetic-private-canary" not in json.dumps(report)
+
+
+def test_legacy_med_followup_dismissal_keeps_its_saved_type():
+    db = sqlite3.connect(":memory:")
+    db.execute("CREATE TABLE artifacts(kind TEXT,project_id INTEGER,content TEXT)")
+    db.execute("INSERT INTO artifacts VALUES('signal_v1',1,?)", (json.dumps({
+        "state": "dismissed", "type": "med_followup",
+        "dismiss_reason_code": "false_positive",
+    }),))
+    try:
+        assert mcs_signals.dismiss_reason_counts(db, project_id=1) == {
+            "med_followup": {"false_positive": 1}}
+    finally:
+        db.close()
