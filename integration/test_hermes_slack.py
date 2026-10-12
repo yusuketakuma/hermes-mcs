@@ -385,6 +385,10 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
              "worker_id": worker._worker_id,
              "payload_hash": envelopes.payload_hash(spec),
              "spec_path": None, "phase": "settled"}
+    # the runner sends parts only while the spec is published (revocation
+    # withdraws the file), so stand in for that publication
+    (Path(worker._dirs["render"]) / (spec["delivery_id"] + ".json")).write_text(
+        json.dumps(spec))
 
     async def drive():
         assert await adapter.bind()
