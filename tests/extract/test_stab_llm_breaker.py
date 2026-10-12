@@ -133,3 +133,25 @@ def test_answered_call_resets_breaker_and_marks_success(tmp_path, monkeypatch):
         assert health["last_success"] == pytest.approx(time.time(), abs=60)
     finally:
         db.close()
+
+
+def test_answered_unparseable_call_clears_outage(tmp_path, monkeypatch):
+    """A 200 whose text fails to parse charges the message but proves the
+    endpoint alive — the outage marker must not outlive the recovery."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=1, body="体温38度")])
+        mcs_util.circuit_failure(db)
+        assert mcs_util.llm_down_since(db) is not None
+        monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+        monkeypatch.setattr(local_llm, "chat", lambda prompt, **kw: {
+            "text": "not-json", "finish_reason": "stop", "usage": None,
+            "status": 200})
+        res = extract_llm.run_pending(db, limit=1, budget_s=900)
+        assert res["failed"] == 1 and res["done"] == 0
+        assert not mcs_util.circuit_state_path(db).exists()
+        health = mcs_util.llm_health(db)
+        assert health["down_since"] is None
+        assert health["last_success"] == pytest.approx(time.time(), abs=60)
+    finally:
+        db.close()

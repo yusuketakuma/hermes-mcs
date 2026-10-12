@@ -1507,16 +1507,18 @@ def _llm_call(prompt: str, deadline: float | None = None,
                 request_fn=_opener_request, error_out=err_out)
         # Endpoint health of this call for run_pending's breaker: refused /
         # not sent and 503 are outages, a pre-deadline transport failure
-        # (timeout, reset) is a slow or stuck server; budget expiry and
-        # answered calls say nothing about the endpoint.
+        # (timeout, reset) is a slow or stuck server, a 2xx answer proves
+        # the endpoint alive even when its text later fails to parse;
+        # budget expiry says nothing about the endpoint.
         expired = deadline is not None and time.monotonic() >= deadline
+        status = response.get("status") if response else None
         _CALL_NOTES.transport = (
             "unreachable" if response is None
             and err_out.get("kind") == "unreachable"
-            else "unavailable" if response is not None
-            and response.get("status") == 503
+            else "unavailable" if status == 503
             else "transport" if response is None and not expired
             and err_out.get("kind") == "transport"
+            else "answered" if type(status) is int and 200 <= status < 300
             else None)
         if response is None and (err_out.get("kind") == "unreachable"
                                  or expired) \
@@ -1527,7 +1529,6 @@ def _llm_call(prompt: str, deadline: float | None = None,
             # burning a retry attempt on every selected message (a llama
             # restart or reboot used to stampede attempts on whole batches).
             return _DEFERRED
-        status = response.get("status") if response else None
         # 4xx rejects THE REQUEST — walk down one rung and retry; the
         # ladder ends at "plain" (no format to blame), and a plain-mode
         # rejection is the message's own failure.
@@ -3475,6 +3476,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     _feed_breaker()
                     endpoint_down = True
                     return
+                if transport == "answered":
+                    # the endpoint answered; only this message's output
+                    # failed — clear the outage marker like a success
+                    circuit_success(ledger)
                 if transport == "transport":
                     # /v1/models answers but the call timed out or was
                     # reset: a slow/stuck server, not this message's
