@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "ローカルLLMの待ち時間に不正な値を渡すと後続の解析が止まる問題を修正",
+  "summary": "対話用のLLM呼出しで待ち時間に数値以外や無限大などが渡されると、待機中の印が残ったままになり、先行の解析が終わっても後続のバックログ解析が始まらない状態になっていました。不正な待ち時間は呼出しの前に拒否し、待機の印を残さないようにしました。",
+  "upgrade": "追加操作は不要です。同梱の抽出処理は待ち時間0を渡すため、通常の運用で動作は変わりません。",
+  "details": [
+    "admitted_chat は wait_s が有限の0以上の数値でなければ permit 取得前に ValueError(wait_s_invalid) を返す。",
+    "これまで None や文字列は待機登録後の比較で TypeError になり rt_waiting が残った。無限大は呼出し側の期限がなければ待ち続けた。"
+  ],
+  "refs": [
+    "mcs/core/local_llm.py",
+    "tests/core/test_llm_admission.py"
+  ]
+}
