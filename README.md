@@ -407,7 +407,7 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 - ロールで許可している利用者は、遅れた結果を届ける直前に1回だけ Discord 側でメンバー情報を取得し直します（結果を待っている間は確認しません）。
 
-- Hermes のカード worker 設定（plugin settings）で guild_id を省略している場合は、runner 側 notify.discord.guild_id と同じ値を設定してください。省略すると、待機後に届ける結果は認可できずに破棄されます。
+- Hermes のカード worker 設定（plugin settings）で guild_id を省略しているか、異なる値を設定している場合は、runner 側 notify.discord.guild_id と同じ値を設定してください。省略または不一致の場合、待機後に届ける結果は認可できずに破棄されます。
 
 - 更新後に抽出の常駐処理が再起動されると反映されます。
 

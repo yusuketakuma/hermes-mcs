@@ -115,7 +115,7 @@
 
 - ロールで許可している利用者は、遅れた結果を届ける直前に1回だけ Discord 側でメンバー情報を取得し直します（結果を待っている間は確認しません）。
 
-- Hermes のカード worker 設定（plugin settings）で guild_id を省略している場合は、runner 側 notify.discord.guild_id と同じ値を設定してください。省略すると、待機後に届ける結果は認可できずに破棄されます。
+- Hermes のカード worker 設定（plugin settings）で guild_id を省略しているか、異なる値を設定している場合は、runner 側 notify.discord.guild_id と同じ値を設定してください。省略または不一致の場合、待機後に届ける結果は認可できずに破棄されます。
 
 - 更新後に抽出の常駐処理が再起動されると反映されます。
 
@@ -665,7 +665,7 @@
 #### Discord の待機中の結果を認可できずに破棄したとき記録を残すよう修正
 
 - 変更内容: Discord でボタン操作の結果を後から届ける際、設定と一致せず認可できなかった結果は、記録を残さずに破棄されていました。破棄したときに followup_dropped（reason=unauthorized）をログに残すため、結果が届かなかった理由を確認できます。あわせて、カード worker の設定で guild_id が必須であることを説明に明記しました。
-- 適用条件: guild_id が設定済みの場合は追加操作は不要です。Hermes のカード worker 設定（plugin settings）で guild_id を省略している場合は、runner 側 notify.discord.guild_id と同じ値を設定してください。省略すると、待機後に届ける結果は認可できずに破棄されます。
+- 適用条件: runner 側 notify.discord.guild_id と同じ guild_id が設定済みの場合は追加操作は不要です。Hermes のカード worker 設定（plugin settings）で guild_id を省略しているか、異なる値を設定している場合は、runner 側 notify.discord.guild_id と同じ値を設定してください。省略または不一致の場合、待機後に届ける結果は認可できずに破棄されます。
 - adapters/discord/actions.py の sweep_followups は、_followup_authorized が偽の followup を破棄するとき followup_dropped（reason=unauthorized）を記録する。認可条件は変えていない。
 - hermes_plugin/README.md の設定例で、guild_id を「scope が guild を pin する場合」から必須に改めた。mcs_setup は notify.discord.guild_id を必須とし、plugin 設定にも書き込む。
 - 根拠: adapters/discord/actions.py、hermes_plugin/README.md、tests/adapters/discord/test_followup_current_role.py
