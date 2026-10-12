@@ -1179,6 +1179,14 @@
 - 家族の急変と患者本人の症状を含む完全合成の投稿で、表示される根拠が患者本人の記述になることを回帰テストで確認する。
 - 根拠: mcs/views/structured_view.py、tests/extract/test_alert_subject_guard.py
 
+#### 送信済みLLM処理の時間切れを試行として記録
+
+- 変更内容: LLMへの送信後に処理期限を超えると、同じ投稿が試行回数を増やさず繰り返し選ばれる場合がありました。送信後の通信時間切れは既存の失敗回数と再試行間隔へ反映し、ほかの投稿を進められるようにします。
+- 適用条件: 追加操作・DB移行は不要です。送信前の予算不足、受付待ち、接続拒否・503による延期は従来どおり試行回数を増やしません。
+- transport timeoutがcaller deadlineへ到達した場合だけexpiredとして記録。endpointのprobeや障害breakerへ送らず既存の失敗会計を行う。
+- batch内で実送信した全行にも失敗を反映する。期限後の単独再試行に回して無料延期へ戻さない。
+- 根拠: mcs/extract/v4/extract_llm.py、tests/extract/test_stab_llm_breaker.py
+
 </details>
 
 ## [1.0.19] — 2026-10-11
