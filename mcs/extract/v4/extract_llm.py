@@ -3450,6 +3450,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
 
     def _handle(r, ctx, d, integrity, lease, chunks_out, qc=None):
         nonlocal done, failed, deferred, endpoint_down, lock_lost, slow_deferred
+        nonlocal breaker_fed
         keep_lease = False
         try:
             if not _owns_current_source(ledger, r, lease):
@@ -3472,7 +3473,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     # the endpoint answered; only this message's output
                     # failed — an earlier outage in this run is over
                     circuit_success(ledger)
-                    endpoint_down = False
+                    # a later outage in this run is a new streak to feed
+                    endpoint_down = breaker_fed = False
                 elif endpoint_down or not _llm_up(deadline=deadline):
                     # Endpoint unreachable — don't burn budget/attempts
                     # on error rows. The failure feeds the breaker so
@@ -3552,7 +3554,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _fail(ledger, r, r["attempts"])
                 return
             circuit_success(ledger)   # an answered call = endpoint alive
-            endpoint_down = False
+            endpoint_down = breaker_fed = False
             if r["thin_src"] and qc is None and not r["human_src"]:
                 content = _thin_retry_content(ledger, r)
                 if content is None:

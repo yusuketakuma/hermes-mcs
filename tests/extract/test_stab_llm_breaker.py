@@ -177,3 +177,22 @@ def test_answer_after_same_run_outage_clears_marker(tmp_path, monkeypatch):
         assert _attempt_rows(db) == 1
     finally:
         db.close()
+
+
+def test_outage_after_same_run_recovery_is_recorded(tmp_path, monkeypatch):
+    """503, a 200 that fails to parse, then 503 again in one run: the
+    answer ends the first outage and the last 503 starts a new one, so the
+    marker reflects the endpoint's latest state."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in (1, 2, 3)])
+        monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+        down = {"text": None, "finish_reason": None, "usage": None, "status": 503}
+        replies = iter([down, {"text": "not-json", "finish_reason": "stop",
+                               "usage": None, "status": 200}, down])
+        monkeypatch.setattr(local_llm, "chat", lambda prompt, **kw: next(replies))
+        res = extract_llm.run_pending(db, limit=3, budget_s=900, workers=1)
+        assert res["deferred"] == 2 and res["failed"] == 1
+        assert mcs_util.llm_down_since(db) is not None
+    finally:
+        db.close()
