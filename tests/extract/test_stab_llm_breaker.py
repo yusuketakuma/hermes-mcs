@@ -196,3 +196,38 @@ def test_outage_after_same_run_recovery_is_recorded(tmp_path, monkeypatch):
         assert mcs_util.llm_down_since(db) is not None
     finally:
         db.close()
+
+
+def test_unusable_200_body_clears_outage(tmp_path, monkeypatch):
+    """chat returns None with kind=protocol for a 200 whose body cannot be
+    used: the endpoint still answered, so the outage marker clears."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=1, body="体温38度")])
+        mcs_util.circuit_failure(db)
+        monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+        _transport(monkeypatch, "protocol")
+        res = extract_llm.run_pending(db, limit=1, budget_s=900)
+        assert res["failed"] == 1
+        assert mcs_util.llm_down_since(db) is None
+    finally:
+        db.close()
+
+
+def test_answer_then_deferral_still_clears_outage(tmp_path, monkeypatch):
+    """An answered call whose message is then deferred (no time left to
+    repair its output) still records the recovery."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=1, body="体温38度")])
+        mcs_util.circuit_failure(db)
+
+        def answered_then_deferred(body, **kw):
+            extract_llm._CALL_NOTES.transport = "answered"
+            return extract_llm._DEFERRED
+        monkeypatch.setattr(extract_llm, "llm_extract", answered_then_deferred)
+        res = extract_llm.run_pending(db, limit=1, budget_s=900)
+        assert res["deferred"] == 1 and _attempt_rows(db) == 0
+        assert mcs_util.llm_down_since(db) is None
+    finally:
+        db.close()

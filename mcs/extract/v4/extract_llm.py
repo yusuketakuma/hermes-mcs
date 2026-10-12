@@ -1507,8 +1507,8 @@ def _llm_call(prompt: str, deadline: float | None = None,
                 request_fn=_opener_request, error_out=err_out)
         # Endpoint health of this call for run_pending's breaker: refused /
         # not sent and 503 are outages, a pre-deadline transport failure
-        # (timeout, reset) is a slow or stuck server, a 2xx answer proves
-        # the endpoint alive even when its text later fails to parse;
+        # (timeout, reset) is a slow or stuck server, a 2xx answer (or a 200
+        # whose body is unusable) proves the endpoint alive;
         # budget expiry says nothing about the endpoint.
         expired = deadline is not None and time.monotonic() >= deadline
         status = response.get("status") if response else None
@@ -1519,6 +1519,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
             else "transport" if response is None and not expired
             and err_out.get("kind") == "transport"
             else "answered" if type(status) is int and 200 <= status < 300
+            or response is None and err_out.get("kind") == "protocol"
             else None)
         if response is None and (err_out.get("kind") == "unreachable"
                                  or expired) \
@@ -3459,6 +3460,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             transport = r.get("_transport")
             if d is _DEFERRED:
                 deferred += 1
+                if transport == "answered":
+                    # answered, then deferred (e.g. no time left to repair
+                    # the output): the endpoint is alive all the same
+                    circuit_success(ledger)
+                    endpoint_down = breaker_fed = False
                 if transport in ("unreachable", "unavailable"):
                     # refused / 503: nothing ran, so no attempt is
                     # charged, but the outage must still reach the
