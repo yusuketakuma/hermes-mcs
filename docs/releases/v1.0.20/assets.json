@@ -1,0 +1,13 @@
+{
+  "alt": "独立hostを外から監視し、停止・未回復を通知先へ警報する説明図",
+  "files": {
+    "standalone-health.svg": {
+      "sha256": "1dacf3d5bf469b11b62f38f93ed9532cf0359ce210bc8dcb387cde1c2f381e29",
+      "bytes": 2165
+    },
+    "standalone-health.png": {
+      "sha256": "f944c2297a1c7b10ca01a67c1c4c3e7c7b8fa6d790d8ab0a27e13c02ce234779",
+      "bytes": 120462
+    }
+  }
+}
