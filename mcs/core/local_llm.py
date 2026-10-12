@@ -240,6 +240,9 @@ def admitted_chat(client_route: str, prompt: str, *,
     _validate_chat_args(prompt, kw.get("endpoint", ENDPOINT),
                         kw.get("timeout", TIMEOUT),
                         kw.get("max_tokens", MAX_TOKENS), deadline)
+    if isinstance(wait_s, bool) or not isinstance(wait_s, int | float) \
+            or not math.isfinite(wait_s) or wait_s < 0:
+        raise ValueError("wait_s_invalid")
     acq = broker.acquire(client_route, cls)
     if not acq.get("admitted") \
             and acq.get("reason") in ("class_full", "rt_pending") \

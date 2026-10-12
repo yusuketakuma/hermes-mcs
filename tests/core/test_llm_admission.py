@@ -578,6 +578,21 @@ def test_admitted_chat_invalid_args_hold_no_permit(admitted_env):
     b = _live_broker(admitted_env)
     assert b.db.execute("SELECT COUNT(*) FROM permits").fetchone()[0] == 0
 
+@pytest.mark.parametrize("wait_s", [None, "1", True, -1, float("nan"), float("inf")],
+                         ids=["none", "string", "bool", "negative", "nan", "infinity"])
+def test_invalid_wait_s_rejected_before_admission(admitted_env, wait_s):
+    """An unusable wait budget fails before a waiting RT permit exists, so
+    it cannot leave rt_waiting set and hold BACKLOG shut."""
+    import local_llm
+    b = _live_broker(admitted_env)
+    bg = b.acquire("mcs.extract", "BACKLOG")
+    assert bg["admitted"] and b.sent(bg["permit_id"])["sent"]
+    with pytest.raises(ValueError, match="wait_s_invalid"):
+        local_llm.admitted_chat("gbrain.query", "p", wait_s=wait_s)
+    assert b.status()["rt_waiting"] == 0
+    b.terminal(bg["permit_id"], "done")
+    assert b.acquire("mcs.extract", "BACKLOG")["admitted"]
+
 # ---------- extract_llm wiring under admission ----------
 
 def test_llm_call_defers_on_admission_verdict(admitted_env, monkeypatch):
