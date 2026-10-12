@@ -188,6 +188,29 @@ def test_backup_copy_stops_at_the_deadline(tmp_path, monkeypatch):
     assert not list(backups.glob("ledger-*"))
 
 
+def test_broken_backup_check_leaves_time_to_replace_it(tmp_path, monkeypatch):
+    """Checking an unmarked same-day backup is bounded so the replacement
+    still fits; a broken file is then replaced, not kept forever."""
+    _ledger(tmp_path).close()
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(maintenance, "backup_time_needed_s", lambda _p: 10.0)
+    dest = backups / f"ledger-{time.strftime('%Y%m%d')}.db"
+    dest.write_bytes(b"not a database")
+    checked, valid = {}, maintenance._valid
+
+    def record(path, deadline):
+        checked.setdefault(path, deadline)
+        return valid(path, deadline)
+    monkeypatch.setattr(maintenance, "_valid", record)
+    deadline = time.monotonic() + 600
+    assert maintenance.daily_backup(str(tmp_path / "ledger.db"),
+                                    deadline=deadline) is None
+    assert checked[str(dest)] == pytest.approx(deadline - 10.0)
+    assert maintenance.valid_mcs_db(str(dest))
+
+
 def test_backup_skips_when_time_left_cannot_cover_the_ledger(tmp_path, monkeypatch):
     _ledger(tmp_path).close()
     backups = tmp_path / "backups"

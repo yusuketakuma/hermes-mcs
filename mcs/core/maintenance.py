@@ -176,7 +176,11 @@ def daily_backup(db_path: str, *, deadline: float | None = None):
     # missing marker falls back to validation (B24)
     if _verified_unchanged(dest):
         return
-    if _valid(dest, deadline):
+    # checking today's file must leave room to replace it: a broken copy
+    # whose check eats the whole budget would otherwise never be replaced
+    check_by = None if deadline is None \
+        else deadline - backup_time_needed_s(db_path)
+    if _valid(dest, check_by):
         # re-arm the fast path, or every later tick today re-runs the
         # full quick_check (a same-day backup made before the marker)
         _write_ok_marker(dest)
