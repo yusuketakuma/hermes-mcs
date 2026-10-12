@@ -9,6 +9,6 @@
   ],
   "refs": [
     "mcs/views/mcs_stats.py",
-    "tests/views/test_v1020_stats_notes.py"
+    "tests/views/test_mcs_stats.py"
   ]
 }

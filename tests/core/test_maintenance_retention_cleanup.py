@@ -298,7 +298,10 @@ def test_failed_backup_removes_tmp(tmp_path, monkeypatch, fn):
         def __init__(self, conn):
             self.conn = conn
 
-        def backup(self, dst):
+        def execute(self, *a):
+            return self.conn.execute(*a)
+
+        def backup(self, dst, **_):
             raise sqlite3.OperationalError("database or disk is full")
 
         def close(self):

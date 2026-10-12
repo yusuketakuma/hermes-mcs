@@ -2885,6 +2885,10 @@ def publish_snapshot(db_path: str, dest_dir: str, *,
         try:
             dst = sqlite3.connect(tmp)
             try:
+                # one read snapshot across the steps: a write by another
+                # connection would otherwise restart the copy every step
+                src.execute("BEGIN")
+                src.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
                 try:
                     src.backup(dst, pages=4096, progress=check_deadline)
                 except _SnapshotDeadline:

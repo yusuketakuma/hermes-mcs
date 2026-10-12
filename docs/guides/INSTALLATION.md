@@ -1,7 +1,7 @@
 # インストールガイド
 
-このガイドはv1.0.19仕様のinstall/update/setup/doctorと復旧手順に対応する。
-現行版の検証と制約は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.19.md)、過去の実機受入計画は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)で追跡する。
+このガイドはv1.0.20候補のinstall/update/setup/doctorと復旧手順に対応する。公開前の未受入事項は受入票で確認する。
+現行版の検証と制約は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.20.md)、過去の実機受入計画は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)で追跡する。
 
 ### 2026-10-04追記: 現在のローカル入口
 

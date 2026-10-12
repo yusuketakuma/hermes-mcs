@@ -517,7 +517,14 @@ def _at(day, hour):
         tzinfo=JST).timestamp()
 
 
-def test_due_and_overdue_reminders_fire_once(led):
+def _send_time(monkeypatch, at):
+    """Formatting a reminder rechecks it at send time — against this
+    clock and the active config, not the pinned fixture clock."""
+    monkeypatch.setattr(notify_cards.time, "time", lambda: at)
+    monkeypatch.setattr(notify_flush, "_config", lambda: CFG)
+
+
+def test_due_and_overdue_reminders_fire_once(led, monkeypatch):
     _delivered_card(led)
     # activation baseline before any task exists
     assert notify_cards.task_reminders(
@@ -537,6 +544,7 @@ def test_due_and_overdue_reminders_fire_once(led):
     events = led.db.execute(
         "SELECT * FROM notify_outbox WHERE kind='task_reminder' "
         "ORDER BY event_id").fetchall()
+    _send_time(monkeypatch, morning)
     texts = [notify_flush._format_event(led, e)[0] for e in events]
     assert texts == [
         "患者A: ＜＠1＞ 昨日の件 — ⚠ 期限切れ（期限 2026-09-30） / 職員（合成所属） / 09-24 08:41 — 担当 未設定",
@@ -557,7 +565,7 @@ def test_due_and_overdue_reminders_fire_once(led):
 
 
 
-def test_long_reminder_title_keeps_source_five_fields_in_outgoing_text(led):
+def test_long_reminder_title_keeps_source_five_fields_in_outgoing_text(led, monkeypatch):
     _delivered_card(led)
     assert notify_cards.task_reminders(led, CFG, now=_at("2026-09-20", 9)) == 0
     _add_request(led, src_mid=101, title="承認済みの主内容" + "要" * 400, due="2026-10-01")
@@ -566,6 +574,7 @@ def test_long_reminder_title_keeps_source_five_fields_in_outgoing_text(led):
         led.db.execute("UPDATE messages SET sender_name=?,organization=?,posted_at='2026-10-06T08:30:00+09:00' WHERE message_id=101", ("発" * 24, "所" * 24))
     assert notify_cards.task_reminders(led, CFG, now=_at("2026-10-01", 9)) == 1
     event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='task_reminder' ORDER BY event_id DESC LIMIT 1").fetchone()
+    _send_time(monkeypatch, _at("2026-10-01", 9))
     text = notify_flush._format_event(led, event)[0]
     assert "患" * 30 in text and "承認済みの主内容" in text[:50]
     assert "発" * 24 in text and "所" * 24 in text and "10-06 08:30" in text

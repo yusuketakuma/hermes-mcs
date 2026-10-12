@@ -133,3 +133,101 @@ def test_answered_call_resets_breaker_and_marks_success(tmp_path, monkeypatch):
         assert health["last_success"] == pytest.approx(time.time(), abs=60)
     finally:
         db.close()
+
+
+def test_answered_unparseable_call_clears_outage(tmp_path, monkeypatch):
+    """A 200 whose text fails to parse charges the message but proves the
+    endpoint alive — the outage marker must not outlive the recovery."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=1, body="体温38度")])
+        mcs_util.circuit_failure(db)
+        assert mcs_util.llm_down_since(db) is not None
+        monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+        monkeypatch.setattr(local_llm, "chat", lambda prompt, **kw: {
+            "text": "not-json", "finish_reason": "stop", "usage": None,
+            "status": 200})
+        res = extract_llm.run_pending(db, limit=1, budget_s=900)
+        assert res["failed"] == 1 and res["done"] == 0
+        assert not mcs_util.circuit_state_path(db).exists()
+        health = mcs_util.llm_health(db)
+        assert health["down_since"] is None
+        assert health["last_success"] == pytest.approx(time.time(), abs=60)
+    finally:
+        db.close()
+
+
+def test_answer_after_same_run_outage_clears_marker(tmp_path, monkeypatch):
+    """A 503 then a 200 that fails to parse in one run: the answer proves
+    recovery, so the outage marker clears and the failure is charged."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in (1, 2)])
+        monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+        replies = iter([{"text": None, "finish_reason": None, "usage": None,
+                         "status": 503},
+                        {"text": "not-json", "finish_reason": "stop",
+                         "usage": None, "status": 200}])
+        monkeypatch.setattr(local_llm, "chat", lambda prompt, **kw: next(replies))
+        res = extract_llm.run_pending(db, limit=2, budget_s=900, workers=1)
+        assert res["deferred"] == 1 and res["failed"] == 1
+        health = mcs_util.llm_health(db)
+        assert health["down_since"] is None
+        assert health["last_success"] == pytest.approx(time.time(), abs=60)
+        assert _attempt_rows(db) == 1
+    finally:
+        db.close()
+
+
+def test_outage_after_same_run_recovery_is_recorded(tmp_path, monkeypatch):
+    """503, a 200 that fails to parse, then 503 again in one run: the
+    answer ends the first outage and the last 503 starts a new one, so the
+    marker reflects the endpoint's latest state."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in (1, 2, 3)])
+        monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+        down = {"text": None, "finish_reason": None, "usage": None, "status": 503}
+        replies = iter([down, {"text": "not-json", "finish_reason": "stop",
+                               "usage": None, "status": 200}, down])
+        monkeypatch.setattr(local_llm, "chat", lambda prompt, **kw: next(replies))
+        res = extract_llm.run_pending(db, limit=3, budget_s=900, workers=1)
+        assert res["deferred"] == 2 and res["failed"] == 1
+        assert mcs_util.llm_down_since(db) is not None
+    finally:
+        db.close()
+
+
+def test_unusable_200_body_clears_outage(tmp_path, monkeypatch):
+    """chat returns None with kind=protocol for a 200 whose body cannot be
+    used: the endpoint still answered, so the outage marker clears."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=1, body="体温38度")])
+        mcs_util.circuit_failure(db)
+        monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+        _transport(monkeypatch, "protocol")
+        res = extract_llm.run_pending(db, limit=1, budget_s=900)
+        assert res["failed"] == 1
+        assert mcs_util.llm_down_since(db) is None
+    finally:
+        db.close()
+
+
+def test_answer_then_deferral_still_clears_outage(tmp_path, monkeypatch):
+    """An answered call whose message is then deferred (no time left to
+    repair its output) still records the recovery."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=1, body="体温38度")])
+        mcs_util.circuit_failure(db)
+
+        def answered_then_deferred(body, **kw):
+            extract_llm._CALL_NOTES.transport = "answered"
+            return extract_llm._DEFERRED
+        monkeypatch.setattr(extract_llm, "llm_extract", answered_then_deferred)
+        res = extract_llm.run_pending(db, limit=1, budget_s=900)
+        assert res["deferred"] == 1 and _attempt_rows(db) == 0
+        assert mcs_util.llm_down_since(db) is None
+    finally:
+        db.close()

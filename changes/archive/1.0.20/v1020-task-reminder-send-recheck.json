@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "完了・取消・期限変更後に古い期限リマインドが送られる問題を修正",
+  "summary": "期限リマインドが送信待ちの間にタスクを完了・取消にした場合、期限を延ばした場合、通知カードが取り消された場合、またはカード機能をオフにした場合でも、作成時点の「本日」「期限切れ」の文面がそのまま送られていました。送信の直前にタスクの状態・期限・カードの有効性・設定を確認し、当てはまらなくなったリマインドは送らずに取り下げます。8〜21時の範囲外になったリマインドは時間内まで待ち、日付が変わって「本日」が正しくなくなった場合は送らず、期限切れの通知に引き継ぎます。すでに送信を始めていたものは、これまでどおり送信結果不明として保留します。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "mcs/notify/notify_cards.py に task_reminder_stale を追加。notification_task_reminders の event_id 記録、requests の status/due_date、有効な thread カード、interactive 設定、JST 8〜21時の範囲を送信時点で照合する。",
+    "mcs/notify/notify_flush.py の _format_event は task_reminder を既存の StaleSend（取り下げ）または DeferredSend（時間外の待機）で扱う。送信開始済み（progress.sending）の保留は従来どおり書式化より前に行う。"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_flush.py",
+    "tests/notify/test_task_reminder_send_gate.py",
+    "tests/notify/test_card_buttons.py"
+  ]
+}

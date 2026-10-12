@@ -9,6 +9,6 @@
   ],
   "refs": [
     "mcs/views/structured_view.py",
-    "tests/views/test_v1020_summary_order.py"
+    "tests/views/test_structured_view.py"
   ]
 }

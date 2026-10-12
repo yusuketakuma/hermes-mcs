@@ -1507,16 +1507,19 @@ def _llm_call(prompt: str, deadline: float | None = None,
                 request_fn=_opener_request, error_out=err_out)
         # Endpoint health of this call for run_pending's breaker: refused /
         # not sent and 503 are outages, a pre-deadline transport failure
-        # (timeout, reset) is a slow or stuck server; budget expiry and
-        # answered calls say nothing about the endpoint.
+        # (timeout, reset) is a slow or stuck server, a 2xx answer (or a 200
+        # whose body is unusable) proves the endpoint alive;
+        # budget expiry says nothing about the endpoint.
         expired = deadline is not None and time.monotonic() >= deadline
+        status = response.get("status") if response else None
         _CALL_NOTES.transport = (
             "unreachable" if response is None
             and err_out.get("kind") == "unreachable"
-            else "unavailable" if response is not None
-            and response.get("status") == 503
+            else "unavailable" if status == 503
             else "transport" if response is None and not expired
             and err_out.get("kind") == "transport"
+            else "answered" if type(status) is int and 200 <= status < 300
+            or response is None and err_out.get("kind") == "protocol"
             else None)
         if response is None and (err_out.get("kind") == "unreachable"
                                  or expired) \
@@ -1527,7 +1530,6 @@ def _llm_call(prompt: str, deadline: float | None = None,
             # burning a retry attempt on every selected message (a llama
             # restart or reboot used to stampede attempts on whole batches).
             return _DEFERRED
-        status = response.get("status") if response else None
         # 4xx rejects THE REQUEST — walk down one rung and retry; the
         # ladder ends at "plain" (no format to blame), and a plain-mode
         # rejection is the message's own failure.
@@ -3344,7 +3346,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     slow_deferred = 0
 
     def _feed_breaker():
-        """One breaker observation per run, not one per queued row."""
+        """One breaker observation per contiguous outage, not per queued row."""
         nonlocal breaker_fed
         if not breaker_fed:
             breaker_fed = True
@@ -3449,6 +3451,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
 
     def _handle(r, ctx, d, integrity, lease, chunks_out, qc=None):
         nonlocal done, failed, deferred, endpoint_down, lock_lost, slow_deferred
+        nonlocal breaker_fed
         keep_lease = False
         try:
             if not _owns_current_source(ledger, r, lease):
@@ -3457,21 +3460,32 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             transport = r.get("_transport")
             if d is _DEFERRED:
                 deferred += 1
+                if transport == "answered":
+                    # answered, then deferred (e.g. no time left to repair
+                    # the output): the endpoint is alive all the same
+                    circuit_success(ledger)
+                    endpoint_down = breaker_fed = False
                 if transport in ("unreachable", "unavailable"):
                     # refused / 503: nothing ran, so no attempt is
                     # charged, but the outage must still reach the
                     # breaker (and the health marker the stall alert
-                    # reads) — once per run, like the probe path below
+                    # reads) — once per outage, like the probe path below
                     _feed_breaker()
                     endpoint_down = True
                 return  # budget ran out mid-message — stays pending
             if d is None:
                 failed += 1
-                if endpoint_down or not _llm_up(deadline=deadline):
+                if transport == "answered":
+                    # the endpoint answered; only this message's output
+                    # failed — an earlier outage in this run is over
+                    circuit_success(ledger)
+                    # a later outage in this run is a new streak to feed
+                    endpoint_down = breaker_fed = False
+                elif endpoint_down or not _llm_up(deadline=deadline):
                     # Endpoint unreachable — don't burn budget/attempts
                     # on error rows. The failure feeds the breaker so
                     # a sustained outage closes the lane across drains —
-                    # counted once per run, not once per queued row.
+                    # counted once per outage, not once per queued row.
                     _feed_breaker()
                     endpoint_down = True
                     return
@@ -3546,6 +3560,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _fail(ledger, r, r["attempts"])
                 return
             circuit_success(ledger)   # an answered call = endpoint alive
+            endpoint_down = breaker_fed = False
             if r["thin_src"] and qc is None and not r["human_src"]:
                 content = _thin_retry_content(ledger, r)
                 if content is None:
