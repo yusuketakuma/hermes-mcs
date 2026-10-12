@@ -236,7 +236,33 @@ def test_broken_backup_check_leaves_time_to_replace_it(tmp_path, monkeypatch):
     deadline = time.monotonic() + 600
     assert maintenance.daily_backup(str(tmp_path / "ledger.db"),
                                     deadline=deadline) is None
-    assert checked[str(dest)] == pytest.approx(deadline - 10.0)
+    assert checked[str(dest)] == pytest.approx(
+        deadline - 10.0 - maintenance.BACKUP_CHECK_SLACK_S)
+    assert maintenance.valid_mcs_db(str(dest))
+
+
+def test_overrunning_check_still_leaves_time_to_replace(tmp_path, monkeypatch):
+    """A same-day check that runs a little past its cut-off (the progress
+    handler fires between VM steps) still leaves the replacement budget."""
+    _ledger(tmp_path).close()
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(maintenance, "backup_time_needed_s", lambda _p: 10.0)
+    dest = backups / f"ledger-{time.strftime('%Y%m%d')}.db"
+    dest.write_bytes(b"not a database")
+    clock = [0.0]
+    monkeypatch.setattr(maintenance, "monotonic", lambda: clock[0])
+    valid = maintenance._valid
+
+    def check(path, deadline):
+        if path == str(dest):
+            clock[0] = deadline + 1.0     # overran its cut-off by 1s
+            return False
+        return valid(path, None)
+    monkeypatch.setattr(maintenance, "_valid", check)
+    assert maintenance.daily_backup(str(tmp_path / "ledger.db"),
+                                    deadline=100.0) is None
     assert maintenance.valid_mcs_db(str(dest))
 
 
