@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "カード worker の設定不足を記録するときの読込みエラーを修正",
+  "summary": "Hermes でカード worker を有効にしたまま設定が足りない場合、本来は worker_disabled（reason=config_incomplete）を記録するところで「No module named 'adapters'」の ERROR が出ていました。設定不足を正しく記録するようになり、ERROR は出なくなります。",
+  "upgrade": "反映には Hermes gateway の再起動が必要です。worker_disabled が記録された場合は、カード worker の plugin settings（Slack では slack_allowed_user_ids など）を確認してください。",
+  "details": [
+    "hermes_plugin/card_workers.py の _event_logger は、adapters を import する前に repo root を sys.path に加える。Hermes は repo root を sys.path に入れずに plugin を読み込むため、設定不足の経路だけ import に失敗していた。"
+  ],
+  "refs": [
+    "hermes_plugin/card_workers.py",
+    "tests/plugin/test_card_worker_config_log.py"
+  ]
+}

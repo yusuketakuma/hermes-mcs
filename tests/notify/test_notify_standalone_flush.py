@@ -12,7 +12,7 @@ import pytest
 
 import notify_flush
 from ledger import Ledger
-from test_notify_lineworks_flush import stored_attachment
+from notify_testkit import stored_attachment
 
 
 def test_custom_root_never_reads_the_default_notification_destination(tmp_path):

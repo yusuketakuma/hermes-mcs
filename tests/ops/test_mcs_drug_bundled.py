@@ -1,4 +1,5 @@
 """Bundled-master install/status contracts over a fictional bundle; no network or live DB."""
+from datetime import date, timedelta
 import hashlib
 import io
 import json
@@ -166,3 +167,84 @@ def test_printed_setup_command_is_one_shell_argument(capsys):
     assert argv[:4] == ["python3", "mcs/ops/mcs_setup.py", "init", "--set"] and len(argv) == 5
     key, value = argv[4].split("=", 1)
     assert key == "drug_map" and json.loads(value) == {"path": path, "sha256": "a" * 64}
+
+
+def _future_rows():
+    # a row whose listing starts after today and a current row that ends later
+    today = date.today()
+    start = (today + timedelta(days=30)).strftime("%Y%m%d")
+    end = (today + timedelta(days=60)).strftime("%Y%m%d")
+    upcoming = _row("900000004", "架空ムラサキ錠５ｍｇ", "GEN000000004", "【般】架空ムラサキ５ｍｇ錠", "ｶｸｳﾑﾗｻｷ")
+    upcoming[29] = start
+    ending = _row("900000005", "架空チャ錠５ｍｇ", "GEN000000005", "【般】架空チャ５ｍｇ錠", "ｶｸｳﾁｬ")
+    ending[30] = end
+    return [_row(), upcoming, ending], date.fromisoformat(f"{start[:4]}-{start[4:6]}-{start[6:]}")
+
+
+def test_install_reports_later_starts_and_when_to_rebuild(tmp_path, monkeypatch, capsys):
+    rows, boundary = _future_rows()
+    bundle = _bundle(tmp_path, rows)
+    code, report, _ = _main(tmp_path, monkeypatch, bundle, ["install-bundled", *NAMES], capsys)
+    assert code == 0 and report["entries"] == 2       # the later-listed row is not a candidate yet
+    assert report["as_of"] == date.today().isoformat()
+    assert report["next_boundary_on"] == boundary.isoformat()
+    assert report["future_starts"] == {boundary.isoformat(): 1}
+    assert sum(report["future_ends"].values()) == 1
+    monkeypatch.setattr(mcs_drug, "load_config", lambda: {})
+    assert mcs_drug.main(["install-bundled", *NAMES]) == 0
+    text = capsys.readouterr().out
+    assert f"1行は {boundary.isoformat()} から候補になります" in text
+    assert f"次の見直し日 {boundary.isoformat()} 以降に install-bundled で作り直してください" in text
+
+
+def test_status_asks_for_a_rebuild_once_a_boundary_has_passed(tmp_path, monkeypatch, capsys):
+    rows, boundary = _future_rows()
+    bundle = _bundle(tmp_path, rows)
+    _, made, _ = _main(tmp_path, monkeypatch, bundle, ["install-bundled", *NAMES], capsys)
+    config = {"drug_map": {"path": made["path"], "sha256": made["sha256"]}}
+    before = mcs_drug.bundled_status(config, directory=bundle)
+    assert before["state"] == "bundled_reference_only"
+    assert before["configured"]["next_boundary_on"] == boundary.isoformat()
+    after = mcs_drug.bundled_status(config, directory=bundle, today=boundary)
+    assert after["state"] == "rebuild_due" and "install-bundled" in after["explanation"]
+
+
+def _rewrite(path, home, edit):
+    document = json.loads(Path(path).read_text())
+    edit(document["source"])
+    raw = json.dumps(document, ensure_ascii=False).encode()
+    out = home / "data" / "drug-map" / "edited.json"
+    out.write_bytes(raw)
+    out.chmod(0o600)
+    return {"drug_map": {"path": str(out), "sha256": hashlib.sha256(raw).hexdigest()}}
+
+
+@pytest.mark.parametrize("edit", [
+    lambda s: (s.pop("as_of"), s.pop("next_boundary_on")),   # dictionary built before 1.0.21
+    lambda s: s.update(as_of=(date.today() + timedelta(days=3)).isoformat(),
+                       next_boundary_on=None),                 # dated after today
+], ids=["no_build_date", "future_build_date"])
+def test_unknown_or_future_build_dates_are_never_reported_as_current(tmp_path, monkeypatch, capsys, edit):
+    bundle = _bundle(tmp_path)
+    _, made, home = _main(tmp_path, monkeypatch, bundle, ["install-bundled", *NAMES], capsys)
+    config = _rewrite(made["path"], home, edit)
+    report = mcs_drug.bundled_status(config, directory=bundle)
+    assert report["state"] == "build_date_unknown", report
+    assert report["configured"]["id"] == report["bundled"]["dict_id"]
+
+
+@pytest.mark.parametrize("edit, line", [
+    (lambda s: (s.pop("as_of"), s.pop("next_boundary_on")),
+     "作成基準日: 記録なし / 次の見直し日: 未確認"),
+    (lambda s: s.update(as_of=(date.today() + timedelta(days=3)).isoformat(), next_boundary_on=None),
+     f"作成基準日: {(date.today() + timedelta(days=3)).isoformat()} / 次の見直し日: 未確認"),
+    (lambda s: s.update(next_boundary_on=None),
+     f"作成基準日: {date.today().isoformat()} / 次の見直し日: なし"),
+], ids=["legacy", "future_build_date", "verified_no_boundary"])
+def test_status_text_separates_an_unknown_boundary_from_none(tmp_path, monkeypatch, capsys, edit, line):
+    bundle = _bundle(tmp_path)
+    _, made, home = _main(tmp_path, monkeypatch, bundle, ["install-bundled", *NAMES], capsys)
+    config = _rewrite(made["path"], home, edit)
+    monkeypatch.setattr(mcs_drug, "load_config", lambda: config)
+    assert mcs_drug.main(["status"]) == 0
+    assert line in capsys.readouterr().out

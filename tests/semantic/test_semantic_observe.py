@@ -1,5 +1,6 @@
 """Current audit coverage excludes history, stale generations and orphan results."""
 import json
+import sqlite3
 import time
 
 import pytest
@@ -7,23 +8,7 @@ import pytest
 from ledger import Ledger
 import semantic
 import semantic_observe
-from semantic_testkit import _cfg, _message
-
-
-def _pair(db, mid, cfg, status="PASS"):
-    row = db.db.execute("SELECT project_id,parent_id FROM messages WHERE message_id=?",
-                        (mid,)).fetchone()
-    bundle = semantic.thread_bundle(db, row["project_id"], row["parent_id"] or mid)
-    scfg, errors = semantic.semantic_config(cfg)
-    assert not errors
-    result = {"summary": {"target_message_id": mid, "claims": [],
-                          "audit_status": status},
-              "findings": [], "repaired": False}
-    with db.db:
-        semantic._write_result(
-            db, row["project_id"], mid, result, bundle["source_fingerprint"],
-            {member["message_id"]: member for member in bundle["members"]},
-            status, semantic.policy_fingerprint(scfg), scfg["summary_mode"])
+from semantic_testkit import _cfg, _message, _audit_pair as _pair
 
 
 def test_observation_and_status_share_current_denominator_not_history(tmp_path):
@@ -260,3 +245,154 @@ def test_main_rejects_bad_days_with_usage(monkeypatch, capsys, argv):
     monkeypatch.setattr(semantic_observe.sys, "argv", ["semantic_observe.py"] + argv)
     assert semantic_observe.main() == 2
     assert "usage" in capsys.readouterr().err
+
+
+def test_observer_components_share_a_read_view_during_writes(tmp_path, monkeypatch):
+    path = tmp_path / "synthetic.db"
+    writer = sqlite3.connect(path)
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("CREATE TABLE witness (value INTEGER)")
+    writer.execute("INSERT INTO witness VALUES (1)")
+    writer.commit()
+    readers = []
+
+    def components(c, cfg, days, *, now, checkpoint, payload_checkpoint):
+        readers.append(c)
+        assert c.in_transaction
+        before = c.execute("SELECT COUNT(*) FROM witness").fetchone()[0]
+        writer.execute("INSERT INTO witness VALUES (2)")
+        writer.commit()
+        after = c.execute("SELECT COUNT(*) FROM witness").fetchone()[0]
+        with pytest.raises(sqlite3.OperationalError):
+            c.execute("DELETE FROM witness")
+        return {"before": before, "after": after}
+
+    monkeypatch.setattr(semantic_observe, "_observe", components)
+    try:
+        out = semantic_observe.observe(str(path))
+        assert out["before"] == out["after"] == 1
+        assert writer.execute("SELECT COUNT(*) FROM witness").fetchone()[0] == 2
+        assert out["observation"]["consistency"] == "single_read_transaction"
+        with pytest.raises(sqlite3.ProgrammingError):
+            readers[0].execute("SELECT 1")
+    finally:
+        writer.close()
+
+
+def test_observer_interrupts_expensive_sql_and_closes_connection(tmp_path, monkeypatch):
+    path = tmp_path / "synthetic.db"
+    sqlite3.connect(path).close()
+    ticks = iter(range(10000))
+    monkeypatch.setattr(semantic_observe.time, "monotonic", lambda: next(ticks))
+    readers = []
+
+    def expensive(c, cfg, days, *, now, checkpoint, payload_checkpoint):
+        readers.append(c)
+        c.execute("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL "
+                  "SELECT x+1 FROM n WHERE x<100000000) SELECT SUM(x) FROM n").fetchone()
+        pytest.fail("query was not interrupted")
+
+    monkeypatch.setattr(semantic_observe, "_observe", expensive)
+    out = semantic_observe.observe(str(path), budget_s=3)
+    assert out["status"] == "unavailable"
+    assert out["reason"] == "observation_deadline_exceeded"
+    assert "jobs" not in out
+    with pytest.raises(sqlite3.ProgrammingError):
+        readers[0].execute("SELECT 1")
+
+
+def test_missing_observation_database_is_not_created_or_exposed(tmp_path):
+    path = tmp_path / "synthetic-private-location.db"
+    out = semantic_observe.observe(str(path))
+    assert out["status"] == "unavailable"
+    assert not path.exists()
+    assert str(tmp_path) not in json.dumps(out)
+
+
+@pytest.mark.parametrize("failure", ["binding", "interface"])
+def test_sqlite_error_without_errorcode_stays_unavailable_and_closes_reader(
+        tmp_path, monkeypatch, failure):
+    path = tmp_path / "synthetic.db"
+    sqlite3.connect(path).close()
+    readers = []
+
+    def invalid(c, cfg, days, *, now, checkpoint, payload_checkpoint):
+        readers.append(c)
+        if failure == "binding":
+            c.execute("SELECT ?", ({"synthetic": "unsupported binding"},))
+        raise sqlite3.InterfaceError("synthetic-private-error")
+
+    monkeypatch.setattr(semantic_observe, "_observe", invalid)
+    out = semantic_observe.observe(str(path))
+    assert out["status"] == "unavailable"
+    assert out["reason"] == "observation_database_unavailable"
+    assert "jobs" not in out
+    assert "private" not in json.dumps(out)
+    with pytest.raises(sqlite3.ProgrammingError):
+        readers[0].execute("SELECT 1")
+
+
+def test_deadline_interrupts_python_metric_loop_before_all_items(tmp_path, monkeypatch):
+    path = str(tmp_path / "synthetic.db")
+    db = Ledger(path)
+    try:
+        db.artifact_add("semantic_drain_run", json.dumps({
+            "done": 2000, "job_metrics": [{"llm_s": 1, "usage": {
+                "input_tokens": 1, "output_tokens": 1,
+                "unreported_requests": 0}}] * 2000}))
+    finally:
+        db.close()
+    clock = [0]
+    calls = [0]
+    original = semantic_observe._nonnegative
+
+    def advance_clock(value, **kw):
+        calls[0] += 1
+        if calls[0] == 50:
+            clock[0] = 2
+        return original(value, **kw)
+
+    monkeypatch.setattr(semantic_observe.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(semantic_observe, "_nonnegative", advance_clock)
+    out = semantic_observe.observe(path, budget_s=1)
+    assert out["reason"] == "observation_deadline_exceeded"
+    assert "recent_drain" not in out
+    assert 50 <= calls[0] < 100
+
+
+@pytest.mark.parametrize("size", [semantic_observe.OBSERVE_MAX_CELL + 1,
+                                 semantic_observe.OBSERVE_MAX_CELL * 3])
+def test_large_stored_json_is_rejected_before_python_parsing(tmp_path, size):
+    path = str(tmp_path / "synthetic.db")
+    db = Ledger(path)
+    try:
+        db.artifact_add("semantic_drain_run", json.dumps({"padding": "x" * size}))
+    finally:
+        db.close()
+    out = semantic_observe.observe(path)
+    assert out["status"] == "unavailable"
+    assert out["reason"] == "observation_size_exceeded"
+    assert "padding" not in json.dumps(out)
+
+
+def test_observation_item_limit_never_returns_a_partial_total(tmp_path, monkeypatch):
+    path = str(tmp_path / "synthetic.db")
+    db = Ledger(path)
+    try:
+        db.artifact_add("semantic_drain_run", json.dumps({
+            "done": 2000, "job_metrics": [{"llm_s": 1}] * 2000}))
+    finally:
+        db.close()
+    monkeypatch.setattr(semantic_observe, "OBSERVE_MAX_ITEMS", 50)
+    out = semantic_observe.observe(path)
+    assert out["reason"] == "observation_size_exceeded"
+    assert "recent_drain" not in out
+
+
+@pytest.mark.parametrize("argv", [["--json"], []])
+def test_observation_failure_is_not_a_successful_empty_report(monkeypatch, capsys, argv):
+    monkeypatch.setattr(semantic_observe.sys, "argv", ["semantic_observe.py", *argv])
+    monkeypatch.setattr(semantic_observe, "observe", lambda **kw: {
+        "status": "unavailable", "reason": "observation_database_unavailable"})
+    assert semantic_observe.main() == 2
+    assert "unavailable" in capsys.readouterr().out

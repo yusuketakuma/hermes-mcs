@@ -3,7 +3,7 @@ from pathlib import Path
 
 import notify_cards
 from notify_testkit import CFG, NOW, _begin, _dispatch, _intent, _latest_render, _receipt, _seed_thread
-from test_notify_parts import _part_receipt, led as led
+from notify_testkit import _part_receipt, led as led
 
 
 def test_incomplete_render_keeps_spec_until_all_pending_parts_settle(led):

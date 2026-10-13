@@ -13,15 +13,13 @@ import notify_cmds
 from adapters.common import envelopes, registry, worker
 from notify_testkit import (
     CFG, NOW, ORIGIN, SCOPE, _begin, _delivered_card, _dispatch, _intent,
-    _latest_render, _seed_thread, _uuid, led,
+    _latest_render, _seed_thread, _uuid, led, pinned_clock,
 )
 
-__all__ = ["led"]
+__all__ = ["led", "pinned_clock"]
 
 
-@pytest.fixture(autouse=True)
-def pin_clock(monkeypatch):
-    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
+pytestmark = pytest.mark.usefixtures("pinned_clock")
 
 
 def _queued_render(led):
@@ -57,7 +55,6 @@ def _put(queue, name, req):
 
 def test_recovery_receipt_does_not_orphan_a_begin_outside_the_512_name_window(
         led, tmp_path, monkeypatch):
-    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
     root = str(tmp_path / "data")
     notify_cards.ensure_dirs(root)
     notify_cards.publish_flags(CFG, root)

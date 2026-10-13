@@ -1124,7 +1124,7 @@ def _feedback_suppression(db, scope, types):
                 and last < scope["since"]):
             continue
         if (not isinstance(last, (int, float)) or isinstance(last, bool)
-                or last < at or last > scope["as_of"]
+                or not at <= last <= scope["as_of"]
                 or (scope["since"] is not None and at < scope["since"] <= last)
                 or (scope["until"] is not None and last >= scope["until"])):
             straddled[c["type"]] = straddled.get(c["type"], 0) + 1

@@ -578,6 +578,17 @@ def test_admitted_chat_invalid_args_hold_no_permit(admitted_env):
     b = _live_broker(admitted_env)
     assert b.db.execute("SELECT COUNT(*) FROM permits").fetchone()[0] == 0
 
+
+@pytest.mark.parametrize("payload", [1, [1], [("key",)]])
+def test_admitted_chat_invalid_extra_payload_holds_no_permit(admitted_env, payload):
+    import local_llm
+
+    with pytest.raises((TypeError, ValueError)):
+        local_llm.admitted_chat("mcs.extract", "synthetic", extra_payload=payload)
+    b = _live_broker(admitted_env)
+    assert b.db.execute("SELECT COUNT(*) FROM permits").fetchone()[0] == 0
+
+
 @pytest.mark.parametrize("wait_s", [None, "1", True, -1, float("nan"), float("inf")],
                          ids=["none", "string", "bool", "negative", "nan", "infinity"])
 def test_invalid_wait_s_rejected_before_admission(admitted_env, wait_s):

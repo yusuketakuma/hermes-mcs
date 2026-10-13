@@ -365,3 +365,95 @@ def test_observe_corrupt_records_are_visible_without_read_writes(tmp_path):
         assert db.db.total_changes == before
     finally:
         db.close()
+
+
+def test_drain_run_records_its_wall_clock_observation(tmp_path):
+    db = _world(tmp_path, [10])
+    _job(db, 10, eligible=True)
+    before = time.time()
+    _due(db, max_jobs=1)
+    run = json.loads(db.db.execute(
+        "SELECT content FROM artifacts WHERE kind='semantic_drain_run'").fetchone()["content"])
+    obs, metric = run["observation"], run["job_metrics"][0]
+    assert obs["version"] == 1 and obs["complete"] is True and obs["lane"] is None
+    assert obs["config_generation"] == semantic_drain.runtime.config_generation(_cfg("shadow", budget=100000))
+    assert before <= obs["started_at"] <= metric["completed_at"] <= obs["finished_at"] <= time.time()
+    assert run["done"] == 1                       # the existing payload is unchanged
+    db.close()
+
+
+def test_single_job_unbound_lane_records_qc_cohort(tmp_path):
+    from extract_testkit import _hash, _v2_artifact
+    from operational_progress import pipeline_progress
+
+    db = _world(tmp_path, [10])
+    cfg = _cfg("shadow", budget=100000, extract_qc="annotate")
+    try:
+        _v2_artifact(db, 10, _hash(db, 10))
+        out = semantic.run_due(db, cfg, {"errors": []}, time.monotonic() + 60,
+                               jev_client=_FakeJev(), llm_fn=_llm, max_jobs=1)
+        assert out["done_by_kind"].get("extract_qc") == 1
+        assert out["job_metrics"][0]["cohort"] == "qc"
+        observed = pipeline_progress(db.db, cfg, now=time.time())
+        assert observed["queues"]["qc"]["throughput"]["completed"] == 1
+        assert observed["queues"]["backfill"]["throughput"]["completed"] == 0
+    finally:
+        db.close()
+
+
+def _m(**kw):
+    return {"status": "done", **kw}
+
+
+@pytest.mark.parametrize("metrics, finished, complete", [
+    ([_m(completed_at=5.0), {"status": "retry"}], 9.0, True),
+    ([], 9.0, True),
+    ([_m(completed_at=5.0)] * 65, 9.0, False),    # truncated to 64
+    ([], 0.5, False),                             # finished before started
+    ([_m(completed_at=0.5)], 9.0, False),         # completion before start
+    ([_m(completed_at=6.0), _m(completed_at=5.0)], 9.0, False),  # reversal
+    ([_m(completed_at=float("nan"))], 9.0, False),
+])
+def test_observation_is_complete_only_for_a_forward_untruncated_pass(metrics, finished, complete):
+    obs = semantic_drain._observation(1.0, finished, "g", "backlog", metrics)
+    assert obs["complete"] is complete and obs["lane"] == "backlog"
+
+
+def test_a_job_that_is_not_done_carries_no_completion(tmp_path):
+    db = _world(tmp_path, [10])
+    _job(db, 10, eligible=True)
+    out = _due(db, llm_fn=lambda prompt: 1 / 0, max_jobs=1)
+    assert out["done"] == 0 and out["job_metrics"]
+    assert all("completed_at" not in m for m in out["job_metrics"])
+    db.close()
+
+
+def test_config_changes_and_reverts_within_a_pass_do_not_mix_rates(tmp_path, monkeypatch):
+    db = _world(tmp_path, [10, 11, 12])
+    cfg = _cfg("shadow", budget=100000)
+    cfg_path = tmp_path / "synthetic-config.json"
+    cfg_path.write_text(json.dumps(cfg))
+    for mid in (10, 11, 12):
+        _job(db, mid, eligible=True)
+    original = semantic._process_job
+    completed = 0
+
+    def change_after_completion(*args, **kwargs):
+        nonlocal completed
+        status = original(*args, **kwargs)
+        assert status == "done"
+        completed += 1
+        cfg_path.write_text(json.dumps(_cfg("shadow", budget=99999 if completed == 1 else 100000)))
+        return status
+
+    monkeypatch.setattr(semantic, "_process_job", change_after_completion)
+    try:
+        out = _due(db, cfg_path=str(cfg_path), max_jobs=3)
+        assert out["done"] == completed == 3
+        run = json.loads(db.db.execute(
+            "SELECT content FROM artifacts WHERE kind='semantic_drain_run'").fetchone()[0])
+        assert run["observation"]["config_generation"] == semantic_drain.runtime.config_generation(cfg)
+        assert run["observation"]["complete"] is False
+        assert len(run["job_metrics"]) == 3
+    finally:
+        db.close()

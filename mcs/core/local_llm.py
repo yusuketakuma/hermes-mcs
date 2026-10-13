@@ -243,6 +243,10 @@ def admitted_chat(client_route: str, prompt: str, *,
     if isinstance(wait_s, bool) or not isinstance(wait_s, int | float) \
             or not math.isfinite(wait_s) or wait_s < 0:
         raise ValueError("wait_s_invalid")
+    # Building caller input can fail before transport. Do it before a
+    # permit exists so a malformed mapping cannot strand a sent slot.
+    extra = dict(kw.pop("extra_payload", None) or {})
+    extra.setdefault("id_slot", request_slot())
     acq = broker.acquire(client_route, cls)
     if not acq.get("admitted") \
             and acq.get("reason") in ("class_full", "rt_pending") \
@@ -308,9 +312,7 @@ def admitted_chat(client_route: str, prompt: str, *,
         return {"text": None, "finish_reason": None, "usage": None,
                 "status": None, "admission": "deadline",
                 "permit_id": pid}
-    extra = dict(kw.pop("extra_payload", None) or {})
     extra["admission_token"] = sent["token"]
-    extra.setdefault("id_slot", request_slot())
     # the caller's error_out still receives unreachable/transport so
     # its deferral policy survives the gate
     err_out = error_out if error_out is not None else {}
