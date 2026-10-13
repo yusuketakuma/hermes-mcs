@@ -180,4 +180,3 @@ def test_real_local_backup_observation_reaches_monitor_and_doctor(stored, monkey
     assert monitor["backup_local"]["state"] == expected
     doctor = operational_status.stored_status(path.parent.parent, {}, now=NOW + 1)
     assert doctor["backup"]["local"]["state"] == expected
-

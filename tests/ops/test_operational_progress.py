@@ -337,4 +337,3 @@ def test_unhashable_legacy_generation_cannot_verify_completion(led):
     record(led, [metric, {**metric, "job_id": 10**400}])
     rate = snapshot(led)["queues"]["backfill"]["throughput"]
     assert rate["completed"] == 0 and rate["excluded_obsolete_or_out_of_scope"] == 2
-

@@ -102,4 +102,3 @@ def test_rule_cli_preserves_project_and_eligibility_filters(
             "SELECT message_id FROM artifacts WHERE kind=?", (extract.KIND,))} == expected
     finally:
         with_reader.close()
-
