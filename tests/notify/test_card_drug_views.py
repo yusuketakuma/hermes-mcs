@@ -310,3 +310,18 @@ def test_unverified_medication_says_unverified_without_a_source_label(led):
     view = _drug_click(led, _spec(led), "meds")["list"]
     firsts = [item["text"].split("\n", 1)[0] for item in view["items"]]
     assert firsts == ["・ソラノ 1錠（未確認）"]
+
+
+def test_identical_search_input_from_another_member_is_not_a_replay(led, tmp_path):
+    _seed_thread(led)
+    cfg = _dictionary(tmp_path, led)
+    _dispatch(led, _intent(led))
+    _deliver(led)
+    spec = _spec(led)
+    hits = _drug_click(led, spec, "drugsearch", {"query": "ｷﾗﾅ"}, cfg=cfg)
+    assert hits["list"]["items"]
+    # another member sending the same input is its own command, not a replay
+    # of the first member's stored receipt
+    other = _drug_click(led, spec, "drugsearch", {"query": "ｷﾗﾅ"}, cfg=cfg, actor="discord:2002")
+    assert other["command_id"] != hits["command_id"]
+    assert other["actor"] == "discord:2002" and hits["actor"] == CLICKER

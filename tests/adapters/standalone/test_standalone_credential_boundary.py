@@ -67,14 +67,34 @@ def test_unsafe_json_credentials_fail_closed_without_env_fallback(tmp_path, monk
 
 
 PROXY_KEYS = ("HTTP_PROXY", "https_proxy", "ALL_PROXY", "ws_proxy", "WSS_PROXY")
+PROXY_NAMES = {key.lower() for key in PROXY_KEYS}
+
+
+def _track_existing_proxies(monkeypatch):
+    """Register every proxy variable already in the environment (any case)
+    with monkeypatch, so the strip under test is undone after the test."""
+    for key in [k for k in os.environ if k.lower() in PROXY_NAMES]:
+        monkeypatch.setenv(key, os.environ[key])
 
 
 def test_startup_strips_proxy_variables_before_anything_else(monkeypatch):
+    _track_existing_proxies(monkeypatch)
     for key in PROXY_KEYS:
         monkeypatch.setenv(key, "http://proxy.invalid:3128")
     monkeypatch.setenv("MCS_SYNTHETIC_UNRELATED", "kept")
     with pytest.raises(SystemExit):         # no subcommand: argparse exits after the strip
         cli.main([])
-    assert not [key for key in os.environ
-                if key.lower() in {k.lower() for k in PROXY_KEYS}]
+    assert not [key for key in os.environ if key.lower() in PROXY_NAMES]
     assert os.environ["MCS_SYNTHETIC_UNRELATED"] == "kept"
+
+
+def test_a_pre_existing_proxy_variable_is_restored_after_the_strip(monkeypatch):
+    # the outer monkeypatch owns the synthetic "pre-existing" value and restores
+    # whatever the real environment held; the inner context is the code under test
+    monkeypatch.setenv("Http_Proxy", "http://pre-existing.invalid:3128")
+    with pytest.MonkeyPatch.context() as patch:
+        _track_existing_proxies(patch)
+        with pytest.raises(SystemExit):
+            cli.main([])
+        assert "Http_Proxy" not in os.environ
+    assert os.environ["Http_Proxy"] == "http://pre-existing.invalid:3128"

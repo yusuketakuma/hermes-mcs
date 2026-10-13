@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import suppress
 from datetime import date
 import json
 import os
@@ -14,7 +15,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 import drug_map  # noqa: E402
-from mcs_util import HOME, load_config, loads_dict  # noqa: E402
+from mcs_util import HOME, fsync_dir, load_config, loads_dict  # noqa: E402
 
 SNAPSHOT = Path(HOME) / "data" / "snapshots" / "ledger-snapshot.db"
 BUNDLE = Path(__file__).resolve().parents[2] / "resources" / "drug-master"
@@ -177,7 +178,21 @@ def install_bundled(args, *, directory: Path = BUNDLE, home: str = HOME) -> dict
         return out
     folder = Path(home).resolve() / "data" / "drug-map"
     if not folder.exists():
-        folder.mkdir(mode=0o700, parents=True)
+        missing = []
+        new_dir = folder
+        while not new_dir.exists():
+            missing.append(new_dir)
+            new_dir = new_dir.parent
+        for new_dir in reversed(missing):
+            new_dir.mkdir(mode=0o700)
+            try:
+                fsync_dir(new_dir.parent)
+            except OSError:
+                # No dictionary has been published. Remove this empty entry
+                # so a retry must create and sync it again.
+                with suppress(OSError):
+                    new_dir.rmdir()
+                raise
         os.chmod(folder, 0o700)   # umask-independent: write_private requires 0700
     sha = report["output_sha256"]
     path = folder / f"mhlw-y-{importer.EDITION}-{sha[:12]}.json"

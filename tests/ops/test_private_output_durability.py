@@ -3,6 +3,7 @@ import errno
 import json
 import os
 import stat
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +11,7 @@ import import_drug_master as importer
 import mcs_drug
 import mcs_repair
 from test_import_drug_master import _input
+from test_mcs_drug_bundled import _bundle
 
 
 @pytest.mark.parametrize("writer", ["master", "repair"])
@@ -80,3 +82,50 @@ def test_bundled_cli_retains_written_state_after_publication_failure(monkeypatch
                           "--confirmed-by", "synthetic", "--json"]) == 1
     assert json.loads(capsys.readouterr().out) == {
         "status": "refused", "reason": "output_published_sync_unconfirmed", "written": True}
+
+
+@pytest.mark.parametrize("existing_depth", [0, 1, 2, 3])
+def test_bundled_install_persists_each_new_directory_entry(tmp_path, monkeypatch, existing_depth):
+    home = tmp_path / "home"
+    chain = [home, home / "data", home / "data" / "drug-map"]
+    for directory in chain[:existing_depth]:
+        directory.mkdir(mode=0o700)
+    synced = []
+    from safe_io import fsync_dir
+
+    def sync(directory):
+        synced.append(directory)
+        return fsync_dir(directory)
+
+    monkeypatch.setattr(mcs_drug, "fsync_dir", sync)
+    args = SimpleNamespace(terms_checked_on=importer.EDITION_DATE.isoformat(),
+                           terms_record=None, confirmed_by="synthetic", approved_by=None)
+    result = mcs_drug.install_bundled(args, directory=_bundle(tmp_path), home=str(home))
+    assert result["state"] == "written"
+    assert synced == [directory.parent for directory in chain[existing_depth:]]
+
+
+@pytest.mark.parametrize("failed_level", [0, 1, 2])
+def test_bundled_directory_creation_sync_failure_is_retryable(
+        tmp_path, monkeypatch, capsys, failed_level):
+    home = tmp_path / "home"
+    chain = [home, home / "data", home / "data" / "drug-map"]
+    from safe_io import fsync_dir
+
+    def sync(directory):
+        if directory == chain[failed_level].parent:
+            raise OSError(errno.EIO, "synthetic new directory sync failure")
+        return fsync_dir(directory)
+
+    monkeypatch.setattr(mcs_drug, "fsync_dir", sync)
+    monkeypatch.setattr(mcs_drug, "HOME", str(home))
+    monkeypatch.setattr(mcs_drug, "BUNDLE", _bundle(tmp_path))
+    argv = ["install-bundled", "--terms-checked-on", importer.EDITION_DATE.isoformat(),
+            "--confirmed-by", "synthetic", "--json"]
+    assert mcs_drug.main(argv) == 1
+    assert json.loads(capsys.readouterr().out)["written"] is False
+    assert not chain[failed_level].exists()
+    assert not list(home.rglob("*.json"))
+    monkeypatch.setattr(mcs_drug, "fsync_dir", fsync_dir)
+    assert mcs_drug.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["state"] == "written"

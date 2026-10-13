@@ -377,7 +377,7 @@ def _drug_card(led, meds=(MED,), mid=101):
 
 
 def _drug_click(led, spec, action, inputs=None, cfg=CFG, origin=None, token=None, actor=CLICKER):
-    """A click whose command_id is a content hash (actor or inputs), unlike
+    """A click whose command_id is a content hash (actor, plus inputs), unlike
     ``_click``'s sequence — a repeated identical click replays."""
     tok = token or _token_for(spec, action)
     req = {"version": 1, "op": "notification",
@@ -385,6 +385,9 @@ def _drug_click(led, spec, action, inputs=None, cfg=CFG, origin=None, token=None
            "token": tok, "origin": origin or dict(ORIGIN, message_id="m-9")}
     if inputs:
         req["input"] = inputs
-        req["command_id"] = f"{tok}:{hashlib.sha256(json.dumps(inputs).encode()).hexdigest()[:16]}"
+        # the actor is part of the key: another member's identical input is
+        # a new command, never a replay of this member's receipt
+        key = json.dumps({"actor": actor, "input": inputs}, sort_keys=True, ensure_ascii=False)
+        req["command_id"] = f"{tok}:{hashlib.sha256(key.encode()).hexdigest()[:16]}"
     assert notify_cmds.validate_int(req) is None
     return notify_cards.apply_notification(led, req, cfg, now=NOW)

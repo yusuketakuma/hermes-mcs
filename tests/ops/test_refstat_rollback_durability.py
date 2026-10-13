@@ -50,9 +50,11 @@ def test_rollback_sync_failure_preserves_both_inputs(tmp_path, monkeypatch, newe
     digest = hashlib.sha256(pending.read_bytes()).hexdigest()
     original = mcs_operations.fsync_dir
     approved_syncs = 0
+    synced = []
 
     def sync(path, **kwargs):
         nonlocal approved_syncs
+        synced.append(str(path))
         if str(path) == str(approved_dir):
             approved_syncs += 1
             if approved_syncs == 2:
@@ -66,6 +68,7 @@ def test_rollback_sync_failure_preserves_both_inputs(tmp_path, monkeypatch, newe
                 pending.write_bytes(b"synthetic newer capture")
             raise RuntimeError("synthetic receipt commit failure")
     assert approved.read_bytes() == b"synthetic previous approval"
+    assert synced == [str(approved_dir), str(approved_dir), str(pending_dir)]
     if newer_pending:
         assert pending.read_bytes() == b"synthetic newer capture"
         recovered = list(pending_dir.glob(".refstat-*.pending"))
