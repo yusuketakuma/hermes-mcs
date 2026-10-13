@@ -1,8 +1,8 @@
 # システム版と一緒に配布する公式医薬品マスター
 
-`20260930/y_20260930.zip` は、[厚生労働省・診療報酬情報提供サービス](https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/)の令和8年度医薬品マスターの公開ZIPです。2026-10-06に、現在の公開版が20260930版・19,272行であることを確認しました。ZIP内の行やバイト列は加工せず、同梱用のファイル名だけ変更しています。出典：厚生労働省 診療報酬情報提供サービス（同ページ）。manifestと検証ツールはhermes-mcsが作成しました。
+`20261013/y_20261013.zip` は、[厚生労働省・診療報酬情報提供サービス](https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/)の令和8年度医薬品マスターの公開ZIPです。2026-10-13に、現在の公開版が20261013版・19,286行であることを確認しました。ZIP内の行やバイト列は加工せず、同梱用のファイル名だけ変更しています。出典：厚生労働省 診療報酬情報提供サービス（同ページ）。manifestと検証ツールはhermes-mcsが作成しました。
 
-2026-10-09のv1.0.17準備でも公式menu・ZIP・仕様書・利用条件を再確認し、ZIPとCSVのSHAが同一であることを照合しました。20260930版を継続同梱し、私有辞書の承認・有効化は変更しません。
+`20260930/` は1.0.16〜1.0.20で同梱した旧版の原本とmanifestで、履歴として残しています。検証ツールと `mcs drug install-bundled` が使うのは、converterが固定する版（現在は20261013）のフォルダだけです。旧版から作った私有辞書は、`mcs drug status` で同梱版と異なると表示されます。作り直すかどうかは運用者が判断します。
 
 この公開配布資産はテストfixtureではありません。テストは完全合成の別ZIPを使います。患者データ・実投稿・認証情報・操作者情報は含めません。
 
@@ -26,7 +26,7 @@ python3 scripts/development/check_drug_master_bundle.py
 
 明示する場合は `--manifest /absolute/path/to/manifest.json` を指定できます。検証は読取り専用です。容量・SHA・安全なZIP member・CSV hash・全行の既知形式・出典を照合し、件数と固定の状態だけを出力します。公式行を表示せず、接続・私有pin作成・承認・辞書作成・設定変更は行いません。
 
-既存converterも、承認・status policyを渡さず全19,272行の入力形式を検証します。結果の `conversion_held=terms_unconfirmed` は意図した保留です。候補生成の有効化や臨床精度の検証を意味しません。現在の入力・状態仕様は[R08rec3・222–223頁](https://shinryohoshu.mhlw.go.jp/shinryohoshu/file/spec/R08rec3.pdf)と[R08rec1](https://shinryohoshu.mhlw.go.jp/shinryohoshu/file/spec/R08rec1.pdf)を参照します。
+既存converterも、承認・status policyを渡さず全19,286行の入力形式を検証します。結果の `conversion_held=terms_unconfirmed` は意図した保留です。候補生成の有効化や臨床精度の検証を意味しません。現在の入力・状態仕様は[R08rec3・222–223頁](https://shinryohoshu.mhlw.go.jp/shinryohoshu/file/spec/R08rec3.pdf)と[R08rec1](https://shinryohoshu.mhlw.go.jp/shinryohoshu/file/spec/R08rec1.pdf)を参照します。
 
 ## 毎回のリリース準備
 

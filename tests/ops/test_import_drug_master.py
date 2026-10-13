@@ -49,8 +49,8 @@ def _input(tmp_path, rows=None, *, zipped=True, raw=None, members=None):
     path.write_bytes(data)
     pin = {"schema": importer.PIN_SCHEMA, "layout": importer.LAYOUT,
            "edition": importer.EDITION, "member": f"y_{importer.EDITION}.csv",
-           "as_of": "2026-10-04", "sha256": hashlib.sha256(data).hexdigest(),
-           "terms_checked_on": "2026-10-04", "terms_record": "fictional-test-receipt",
+           "as_of": importer.EDITION_DATE.isoformat(), "sha256": hashlib.sha256(data).hexdigest(),
+           "terms_checked_on": importer.EDITION_DATE.isoformat(), "terms_record": "fictional-test-receipt",
            "status_policy": {"candidate_change_values": ["0", "1", "2"],
                              "absent_date_values": ["0", "99999999"],
                              "confirmed_by": "fictional-test-only"}}
@@ -149,14 +149,14 @@ def test_pin_layout_types_and_metadata_fail_before_any_output(tmp_path, damage):
     elif damage == "pin_schema":
         pin["schema"] = "future/2"
     elif damage == "member":
-        pin["member"] = "../y_20260930.csv"
+        pin["member"] = f"../y_{importer.EDITION}.csv"
     elif damage == "selection":
         pin["medicine_codes"] = ["900000099"]
     elif damage == "approval":
         pin["approved_by"] = "fictional"
         del pin["terms_checked_on"]
     elif damage == "terms":
-        pin["terms_checked_on"] = "2026-10-05"
+        pin["terms_checked_on"] = date.fromordinal(importer.EDITION_DATE.toordinal() + 1).isoformat()
     before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
     # When / Then
     with pytest.raises(importer.MasterError):
@@ -175,8 +175,8 @@ def test_pin_as_of_floor_follows_the_edition(tmp_path):
 
 
 @pytest.mark.parametrize("members", [
-    [("../y_20260930.csv", b"synthetic")],
-    [("y_20260930.csv", b"synthetic"), ("extra.txt", b"synthetic")],
+    [(f"../y_{importer.EDITION}.csv", b"synthetic")],
+    [(f"y_{importer.EDITION}.csv", b"synthetic"), ("extra.txt", b"synthetic")],
 ])
 def test_zip_members_are_bounded_and_never_extracted(tmp_path, members):
     # Given / When / Then

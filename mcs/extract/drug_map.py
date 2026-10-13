@@ -22,7 +22,8 @@ SCHEMA = "mcs-drug-map/1"
 SOURCE_SCHEMA = "mcs-drug-map/2"
 RESOLVER_VERSION = "mcs-drug-ref/1"
 KIND = "med_ref"
-# 20260930 whole master: 19,272 rows, 12,792 identities, ~5.43 MiB JSON.
+# 20261013 whole master: 19,286 rows, 12,195 entries, ~5.14 MB JSON
+# (20260930: 19,272 rows, 12,792 identities, ~5.43 MiB).
 MAX_BYTES = 8 * 1024 * 1024
 MAX_ENTRIES = 20000
 PROGRESS_KIND = "med_ref_progress"

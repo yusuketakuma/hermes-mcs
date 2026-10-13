@@ -23,12 +23,12 @@ def _bundle(tmp_path):
     data = _csv([_row()])
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zipped:
-        zipped.writestr("y_20260930.csv", data)
+        zipped.writestr(f"y_{checker.importer.EDITION}.csv", data)
     raw = archive.getvalue()
-    (tmp_path / "y_20260930.zip").write_bytes(raw)
+    (tmp_path / f"y_{checker.importer.EDITION}.zip").write_bytes(raw)
     manifest = {
-        "schema": checker.SCHEMA, "edition": "20260930", "layout": checker.importer.LAYOUT,
-        "archive": "y_20260930.zip", "member": "y_20260930.csv",
+        "schema": checker.SCHEMA, "edition": checker.importer.EDITION, "layout": checker.importer.LAYOUT,
+        "archive": f"y_{checker.importer.EDITION}.zip", "member": f"y_{checker.importer.EDITION}.csv",
         "archive_bytes": len(raw), "archive_sha256": hashlib.sha256(raw).hexdigest(),
         "csv_bytes": len(data), "csv_sha256": hashlib.sha256(data).hexdigest(), "rows": 1,
         "source": {"name": "fictional public-source fixture", "url": checker.importer.SOURCE_URL,
@@ -36,7 +36,7 @@ def _bundle(tmp_path):
             "status_spec": checker.importer.SPEC_URL.replace("R08rec3.pdf", "R08rec1.pdf")},
         "attribution": "fictional attribution", "packaging": {"original_bytes": True,
             "notice": "fictional unchanged ZIP", "introduced_version": "1.0.16"},
-        "terms": {"url": checker.TERMS_URL, "reference_checked_on": "2026-10-06",
+        "terms": {"url": checker.TERMS_URL, "reference_checked_on": checker.importer.EDITION_DATE.isoformat(),
             "license_reference": "fictional reference only", "operator_review_required": True},
         "activation": False, "operator_approval_required": True}
     path = tmp_path / "manifest.json"
@@ -73,9 +73,9 @@ def test_bundle_damage_unknown_edition_and_unsafe_paths_are_refused(tmp_path, da
     elif damage == "layout":
         damaged["layout"] = "future-43"
     elif damage == "member":
-        damaged["member"] = "../y_20260930.csv"
+        damaged["member"] = f"../y_{checker.importer.EDITION}.csv"
     elif damage == "traversal":
-        damaged["archive"] = "../y_20260930.zip"
+        damaged["archive"] = f"../y_{checker.importer.EDITION}.zip"
     elif damage == "source":
         damaged["source"]["url"] = "https://example.invalid/master"
     else:
@@ -90,7 +90,7 @@ def test_bundle_damage_unknown_edition_and_unsafe_paths_are_refused(tmp_path, da
 @pytest.mark.parametrize("target", ["manifest", "archive"])
 def test_bundle_symlinks_never_followed(tmp_path, target):
     path, _ = _bundle(tmp_path)
-    source = path if target == "manifest" else tmp_path / "y_20260930.zip"
+    source = path if target == "manifest" else tmp_path / f"y_{checker.importer.EDITION}.zip"
     renamed = source.with_name(source.name + ".saved")
     source.rename(renamed)
     source.symlink_to(renamed)

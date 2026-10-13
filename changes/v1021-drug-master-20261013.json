@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "同梱の公式医薬品マスターを20261013版に更新",
+  "summary": "システム版に同梱する厚生労働省の医薬品マスターを、20260930版（19,272件）から最新の20261013版（19,286件）に更新しました。同梱するだけで、薬剤辞書の作成・承認・有効化は自動では行いません。",
+  "upgrade": "同梱マスターから薬剤辞書を作っている場合は、`mcs drug status` で同梱版との違いを確認し、必要なら `mcs drug install-bundled` で作り直して、従来どおり `mcs_setup.py init --set 'drug_map=...'` で切り替えてください。旧版で作った辞書はそのまま使えますが、20260930版用の私有pinでは新しい変換を行えません。",
+  "details": [
+    "resources/drug-master/20261013/ に公開ZIPを無加工で同梱し、manifest に出典・版・SHA・件数・利用条件参照を記録した。旧20260930版の原本とmanifestは残している。",
+    "import_drug_master.EDITION を20261013に更新した。layout・変更区分・日付番兵の検査は変更していない。",
+    "公式取得物のSHAは2回の独立取得で一致した。R08rec3は前回と同一で、改版されたR08rec1の医薬品節の定義も変わっていないことを確認した。",
+    "全19,286行をconverterで変換でき、既存のstatus policyで12,195件・約5.1MBと上限内だった。"
+  ],
+  "refs": [
+    "resources/drug-master/20261013/manifest.json",
+    "mcs/ops/import_drug_master.py",
+    "docs/specs/official-drug-master.md"
+  ]
+}
