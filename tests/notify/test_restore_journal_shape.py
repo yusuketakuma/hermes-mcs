@@ -5,7 +5,7 @@ import pytest
 
 import notify_cards
 import notify_reconcile
-from test_notify_reconcile import CFG, NOW, _journal_claim, world as world
+from notify_reconcile_testkit import CFG, NOW, _journal_claim, world as world
 from adapters.common import journal
 
 

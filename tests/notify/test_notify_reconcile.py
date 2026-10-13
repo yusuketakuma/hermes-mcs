@@ -12,121 +12,21 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import ledger as _ledger
 import notify_cards
 import notify_reconcile
 import notify_transport
 
 from adapters.common import envelopes, journal, registry
+from notify_reconcile_testkit import CFG, NOW, _journal_claim, _journal_result, world
+from notify_testkit import pinned_clock
 
-NOW = 1_790_000_000.0
-CFG = {"notify": {"interactive": "discord", "route_epoch": 1,
-                  "operator": "op-user", "card_thread": True,
-                  "discord": {"profile": "mcs", "application_id": "1",
-                              "guild_id": "7", "channel_id": "42"}},
-       "signals": {"notify": True}}
-
-
-@pytest.fixture(autouse=True)
-def _pin_wall_clock(monkeypatch):
-    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
-
-
-@pytest.fixture
-def world(tmp_path):
-    data = tmp_path / "data"
-    data.mkdir()
-    notify_cards.ensure_dirs(str(data))
-    led = _ledger.Ledger(str(data / "ledger.db"))
-
-    def _seed(pid=1):
-        led.db.execute(
-            "INSERT INTO patients(project_id,patient_name,is_archived)"
-            " VALUES(?,?,0)", (pid, "患者A"))
-        for m in (100, 101):
-            led.db.execute(
-                "INSERT INTO messages(message_id,project_id,sender_name,"
-                "posted_at,posted_at_ts,body_text,content_hash,"
-                "body_state,parent_id) VALUES(?,?,?,?,?,?,?,?,?)",
-                (m, pid, "職員", f"2026-09-24T08:{m % 60:02d}",
-                 int(NOW) + m, "本文", f"{m:064x}", "full", None))
-        led.db.commit()
-
-    def _dispatch(pid=1):
-        eid = led.outbox_add(
-            "new_messages", pid, {"message_ids": [100, 101]})
-        ev = dict(led.db.execute(
-            "SELECT * FROM notify_outbox WHERE event_id=?",
-            (eid,)).fetchone())
-        notify_cards.dispatch_intent(led, ev, CFG, now=NOW)
-        return eid
-
-    def _render():
-        return dict(led.db.execute(
-            "SELECT * FROM notification_renders "
-            "ORDER BY render_rev DESC LIMIT 1").fetchone())
-
-    def _card(card_id=1):
-        return dict(led.db.execute(
-            "SELECT * FROM notification_cards WHERE card_id=?",
-            (card_id,)).fetchone())
-
-    def _attempt(aid):
-        r = led.db.execute(
-            "SELECT * FROM notification_delivery_attempts "
-            "WHERE attempt_id=?", (aid,)).fetchone()
-        return dict(r) if r else None
-
-    def _spec(delivery_id):
-        p = data / "discord_render" / (delivery_id + ".json")
-        return json.loads(p.read_text()) if p.exists() else None
-
-    def _holds():
-        return [dict(r) for r in led.db.execute(
-            "SELECT * FROM notification_restore_holds").fetchall()]
-
-    yield SimpleNamespace(
-        led=led, data=data, seed=_seed, dispatch=_dispatch,
-        render=_render, card=_card, attempt=_attempt, spec=_spec,
-        holds=_holds)
-    led.close()
-
-
-def _journal_claim(state_dir, worker_id, spec):
-    """Journal the phases a real worker records for a claim."""
-    aid = registry.new_attempt_id()
-    claim = {"attempt_id": aid, "worker_id": worker_id,
-             "spec": spec,
-             "payload_hash": envelopes.payload_hash(spec)}
-    journal.append(state_dir, worker_id, {
-        "phase": "claimed", "attempt_id": aid,
-        "delivery_id": spec["delivery_id"],
-        "render_rev": spec["render_rev"], "op": spec["op"]})
-    journal.append(state_dir, worker_id, {
-        "phase": "begin", "attempt_id": aid,
-        "delivery_id": spec["delivery_id"],
-        "begin_envelope": envelopes.transport_begin(claim),
-        "receipt_envelope": envelopes.transport_receipt(claim, "unknown")})
-    return aid
-
-
-def _journal_result(state_dir, worker_id, aid, delivery_id,
-                    result, message_id=None, error_code=None,
-                    started=True):
-    if started:
-        journal.append(state_dir, worker_id, {
-            "phase": "started", "attempt_id": aid,
-            "delivery_id": delivery_id})
-    journal.append(state_dir, worker_id, {
-        "phase": "result", "attempt_id": aid,
-        "delivery_id": delivery_id, "result": result,
-        "message_id": message_id, "error_code": error_code})
+__all__ = ["CFG", "pinned_clock", "world"]
+pytestmark = pytest.mark.usefixtures("pinned_clock")
 
 
 def _attempt_row(led, aid, delivery_id, state="granted"):
@@ -544,6 +444,52 @@ def test_rebind_rejects_corrupt_scope_with_a_durable_receipt(world, scope_json, 
     assert world.card(render["card_id"])["message_id"] is None
 
 
+@pytest.mark.parametrize("events_json", [
+    'synthetic-deep', '[0]', '[-1]', '[1.5]', '[true]', '["1"]', '"x"', '{}',
+    'null', '{broken',
+], ids=["deep", "zero", "negative", "float", "bool", "text-id", "string",
+        "object", "null", "malformed"])
+def test_rebind_rejects_corrupt_hold_events_with_a_durable_receipt(
+        world, events_json, recursion_limited_json):
+    # runner-side twin of the plugin's hold_events_corrupt gate: a hold
+    # whose quarantined event list is not exactly positive ids is never
+    # partly honoured — rejected, receipted, and the hold stays
+    if events_json == 'synthetic-deep':
+        depth = 10000  # Python 3.13's C decoder has a separate stack limit.
+        events_json = '[' * depth + '1' + ']' * depth
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    aid = _journal_claim(str(world.data / "discord_state"), "w1",
+                         world.spec(render["delivery_id"]))
+    _journal_result(str(world.data / "discord_state"), "w1", aid,
+                    render["delivery_id"], "unknown")
+    notify_cards.mark_restored(str(world.data))
+    notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert world.holds()
+    with world.led.db:
+        world.led.db.execute(
+            "UPDATE notification_restore_holds SET events_json=? "
+            "WHERE delivery_id=?", (events_json, render["delivery_id"]))
+    req = {"version": 1, "cmd": "ops.card_resolve",
+           "command_id": str(__import__("uuid").uuid4()),
+           "actor": "op-user", "human_confirmed": True,
+           "reason": "合成の破損した復旧イベント確認",
+           "delivery_id": render["delivery_id"], "attempt_id": aid,
+           "result": "mark_delivered", **CFG["notify"]["discord"],
+           "message_id": "synthetic-known-message",
+           "evidence": {"method": "synthetic", "ref": "synthetic-card"}}
+    receipt = notify_transport.apply_card_resolve(world.led, req, CFG)
+    assert (receipt["outcome"], receipt["error"]) == ("rejected", "hold_events_corrupt")
+    stored = world.led.db.execute(
+        "SELECT receipt_json FROM command_receipts WHERE command_id=?",
+        (req["command_id"],)).fetchone()
+    assert json.loads(stored[0]) == receipt
+    assert notify_transport.apply_card_resolve(world.led, req, CFG) == receipt
+    assert all(h["released_at"] is None for h in world.holds())
+    assert world.card(render["card_id"])["message_id"] is None
+
+
 def test_lost_not_sent_attempt_resumes(world):
     """Journal proves the send never committed — the pending intent may
     redispatch without a hold."""
@@ -756,7 +702,7 @@ def test_scope_mismatch_receipt_is_held(world):
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     verdict = {v["attempt_id"]: v for v in rep["verdicts"]}[aid]
     assert verdict["verdict"] == "held"
-    assert "scope" in verdict["detail"] or "mismatch" in verdict["detail"]
+    assert verdict["detail"] == "receipt_rejected:scope_mismatch"
 
 
 def test_held_card_blocks_reissue(world):

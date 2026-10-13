@@ -124,8 +124,8 @@ def test_thread_body_and_attachment_caption_keep_source_without_duplicate_summar
     import hashlib
     from notify_testkit import CFG, _latest_render
     from slack_testkit import SLACK
-    from test_notify_lineworks import LINEWORKS
-    from test_notify_parts import _attach
+    from notify_lineworks_testkit import LINEWORKS
+    from notify_testkit import _attach
     _seed_thread(led, mids=(100,))
     raw = "原文の要約という単語を削除しません。"
     with led.db:

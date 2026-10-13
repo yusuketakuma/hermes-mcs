@@ -2046,6 +2046,11 @@ def test_overdue_tick_defers_later_stages_but_records_run_and_health(
         "jobs", "derive", "deliver", "karte_summary", "semantic",
         "metadata_shadow", "housekeeping"]
     health = json.loads((data / "health.json").read_text())
+    # New read-only interruption evidence is separate from this run's timing.
+    interruption = health["run"].pop("last_interrupt")
+    assert interruption["status"] == "recorded"
+    assert interruption["count_24h"] == 0
+    assert interruption["detected_at"] is None
     assert health["run"] == {
         "elapsed_s": 481, "overshoot_s": 1, "slowest_stage": "fetch",
         "deferred_stages": result["deferred_stages"]}
@@ -2086,11 +2091,15 @@ def test_crash_before_config_load_reports_backup_unknown(
         return {}
 
     monkeypatch.setattr(run_check, "_config", config)
+    local = {"state": "missing", "newest_age_s": None}
+    monkeypatch.setattr(run_check.maintenance, "local_backup_status",
+                        lambda **_: local)
     monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
     assert run_check._main() == 1
     capsys.readouterr()
     health = json.loads((data / "health.json").read_text())
-    assert health["backup"] == {"state": "unknown", "reasons": ["config_not_loaded"]}
+    assert health["backup"] == {"state": "unknown", "reasons": ["config_not_loaded"],
+                                "local": local}
     assert "backup_not_verified" in health["state_reasons"]
 
 

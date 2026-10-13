@@ -343,7 +343,8 @@ class View:
         least one item or could not run. With --message-id: the full
         per-item verdicts for that message."""
         import extract_llm
-        from mcs_queries import current_qc_pred, json_or_null, qc_source_id
+        from mcs_queries import (JSON_OBJECT_SQL, current_qc_pred,
+                                 json_or_null, qc_source_id)
         from semantic_qc import QC_REALTIME_MAX_AGE_S, qc_scope_sql
         version = extract_llm.EXTRACT_VERSION
         if mid is not None:
@@ -387,7 +388,7 @@ class View:
             " COALESCE(SUM(json_extract(a.content,'$.coverage.unchecked')),0)"
             "   unchecked_items " + base, (pid,)).fetchone())
         for r in self.db.execute(
-                "SELECT COALESCE(json_extract(je.value,'$.verdict'),'?') v,"
+                f"SELECT COALESCE(json_extract({JSON_OBJECT_SQL},'$.verdict'),'?') v,"
                 " COUNT(*) c FROM artifacts a"
                 " JOIN messages m ON m.message_id=a.message_id,"
                 f" json_each({content},'$.items') je WHERE " + cur +
@@ -419,7 +420,7 @@ class View:
             f" AND (json_extract({content},'$.qc')='unevaluated'"
             f"  OR json_extract({content},'$.coverage.unchecked')>0"
             f"  OR EXISTS(SELECT 1 FROM json_each({content},'$.items') je"
-            "            WHERE json_extract(je.value,'$.verdict')"
+            f"            WHERE json_extract({JSON_OBJECT_SQL},'$.verdict')"
             "                  IS NOT 'MATCH')"
             f"  OR (json_extract({content},'$.urgency.jev') IS NOT NULL"
             f"      AND json_extract({content},'$.urgency.jev')"
@@ -434,8 +435,11 @@ class View:
                 content = {}
             row["qc_state"] = content.get("qc")
             row["coverage"] = content.get("coverage")
+            items = content.get("items")
+            if not isinstance(items, list):
+                items = []
             row["flagged_items"] = [
-                it for it in (content.get("items") or [])
+                it for it in items
                 if isinstance(it, dict) and it.get("verdict") != "MATCH"]
             urg = content.get("urgency")
             if isinstance(urg, dict) and urg.get("jev") is not None \

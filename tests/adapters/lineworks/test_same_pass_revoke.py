@@ -12,7 +12,7 @@ import pytest
 from adapters.lineworks import delivery
 from adapters.common import registry
 from notify_testkit import NOW, _dispatch, _intent, _seed_thread
-from test_lineworks_adapter import CONFIG, world
+from lineworks_testkit import CONFIG, world
 
 MARK = "SYNTHETIC-SAME-PASS-"
 

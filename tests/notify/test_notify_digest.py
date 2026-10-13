@@ -3,26 +3,19 @@ coverage always disclosed. Synthetic temp ledger only."""
 from __future__ import annotations
 
 import json
-from datetime import datetime
 import sqlite3
 
 import pytest
 
 import notify_digest
 import notify_flush
-from mcs_queries import JST
-from notify_testkit import _msg, _patient, _signal_row, led
+from notify_testkit import _at, _msg, _patient, _signal_row, led
 from semantic_send_gate import StaleSend
 
 __all__ = ["led"]
 
 ON = {"notify_target": "discord:1", "daily_digest": {"enabled": True,
                                                      "hour_jst": 8}}
-
-
-def _at(day, hour, minute=0):
-    return datetime.fromisoformat(
-        f"{day}T{hour:02d}:{minute:02d}:00").replace(tzinfo=JST).timestamp()
 
 
 T = _at("2026-10-01", 8, 5)

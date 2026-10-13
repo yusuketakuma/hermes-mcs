@@ -4,7 +4,7 @@ import asyncio
 import notify_cards
 from notify_testkit import NOW, _card, _dispatch, _intent, _msg, _seed_thread
 from slack_testkit import SLACK, _granted_card, _mkworld
-from test_mcs_slack import isolated_slack_ledger as led
+from slack_testkit import isolated_slack_ledger as led
 
 __all__ = ["led"]
 

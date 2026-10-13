@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from adapters.lineworks import __main__ as cli
-from test_lineworks_adapter import SECRET, world
+from lineworks_testkit import SECRET, world
 
 
 @pytest.mark.parametrize("failure", ["signal", "start", "shutdown", "close", "join"])

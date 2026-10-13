@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "マスター更新時の圧縮破損と最終使用日の扱いを修正",
+  "summary": "更新用マスターのZIP情報とハッシュがそろっていても、内部の圧縮データが壊れている場合は、安全なエラー表示で処理を終了します。辞書は作成せず、既存の辞書や設定を保持します。 また、公式仕様の最終使用日は当日を含め、翌日から候補を除外するよう修正しました。",
+  "upgrade": "辞書の作成・承認・有効化は、引き続き運用者が明示して行います。破損が疑われる場合は公式原本と対応する版・ハッシュを確認し、検証を省略して再実行しないでください。 最終使用日に1日早く除外していた既存辞書の内容は自動で書き換えません。必要に応じて再作成・比較・明示切替を行ってください。",
+  "details": [
+    "ZIPの展開で発生するzlib.error/EOFErrorを固定理由zip_invalidへ変換する。raw exception・私有パス・入力本文をCLIへ出さない。",
+    "完全合成ZIPのDEFLATE圧縮部分を破損させ、更新したSHAでもconverter/bundle checkerが拒否し、出力ファイル・設定を変更しないことを確認する。",
+    "R08rec1の医薬品欄31/34を照合し、終了側の日付は最終日より後のas_ofで除外する。次の見直し日は最終日翌日、date.maxは翌日計算を行わない。開始/最終日同日と最終日の前後を完全合成で検証。"
+  ],
+  "refs": [
+    "mcs/ops/import_drug_master.py",
+    "scripts/development/check_drug_master_bundle.py",
+    "tests/ops/test_import_drug_master.py",
+    "tests/meta/test_drug_master_bundle.py"
+  ]
+}

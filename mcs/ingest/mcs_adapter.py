@@ -98,6 +98,10 @@ class MCSError(Exception):
         self.detail = detail
         self.status = status
         self.retryable = retryable
+        # read_thread attaches IDs from validated read responses before a
+        # later failure; callers must persist their acquisition intent even
+        # when this exception (including SessionExpired) aborts the walk.
+        self.observed_reply_ids: frozenset[int] = frozenset()
 
 
 class SessionExpired(MCSError):
@@ -2171,20 +2175,27 @@ class MCSAdapter:
         # on 2026-10-06. New replies can also be acknowledged; callers queue
         # any newly observed ids for durable acquisition.
         seen: set[int] = set()
-        for page in range(1, max_pages + 1):
-            r = self._get(
-                f"/projects/{project_id}/messages/{parent_id}/messages",
-                {"page": page})
-            seen.update(m.message_id for m in _norm_threads(
-                r.get("messages"), project_id, parent_id))
-            if "paginate" not in r:
-                return seen
-            pag = r["paginate"]
-            if not isinstance(pag, dict):
-                raise SchemaError("thread: paginate invalid")
-            if not _has_next(pag, "thread"):
-                return seen
-        raise MCSError("thread_incomplete", retryable=True)
+        try:
+            for page in range(1, max_pages + 1):
+                r = self._get(
+                    f"/projects/{project_id}/messages/{parent_id}/messages",
+                    {"page": page})
+                seen.update(m.message_id for m in _norm_threads(
+                    r.get("messages"), project_id, parent_id))
+                if "paginate" not in r:
+                    return seen
+                pag = r["paginate"]
+                if not isinstance(pag, dict):
+                    raise SchemaError("thread: paginate invalid")
+                if not _has_next(pag, "thread"):
+                    return seen
+            raise MCSError("thread_incomplete", retryable=True)
+        except MCSError as error:
+            # Successful pages have already changed server read state.
+            # Preserve their IDs without certifying the failed walk, and
+            # keep the original exception's type and diagnostic fields.
+            error.observed_reply_ids = frozenset(seen)
+            raise
 
     def mark_patient_read(self, project_id: int, snapshot_ts: int,
                           fallback_plain: bool = False) -> dict:

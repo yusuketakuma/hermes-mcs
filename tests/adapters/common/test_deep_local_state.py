@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from adapters.common import registry, summary
-from test_lineworks_adapter import SCOPE, overflow_spec, world
+from lineworks_testkit import SCOPE, overflow_spec, world
 
 DEEP = b"[" * 20000 + b"]" * 20000
 
