@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import secrets
 import time
@@ -2081,36 +2082,50 @@ def _pending_reason(progress_raw, updated_at, delivery_unknown: bool) -> str:
     wait = progress.get("wait")
     if wait is None:
         return "unrecorded"
-    if not isinstance(wait, dict) or wait.get("reason") not in RESEAT_REASONS:
+    reason = wait.get("reason") if isinstance(wait, dict) else None
+    if not isinstance(reason, str) or reason not in RESEAT_REASONS:
         return "unknown"
-    at = wait.get("at")
-    if (isinstance(at, bool) or not isinstance(at, (int, float))
-            or not isinstance(updated_at, (int, float))
-            # json renders the double with 15 significant digits
-            or abs(at - updated_at) >= 1e-3):
-        return "stale"
-    return wait["reason"]
+    at, row_at = _finite(wait.get("at")), _finite(updated_at)
+    if at is None or row_at is None:
+        return "unknown"
+    # json renders the double with 15 significant digits
+    return reason if abs(at - row_at) < 1e-3 else "stale"
+
+
+def _finite(value) -> float | None:
+    """A real, finite timestamp as float, else None (bool, NaN, inf and
+    integers too large for a double are not timestamps)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if math.isfinite(number) else None
 
 
 def pending_breakdown(db, now: float) -> dict:
     """Pending deliveries in health's population, by why each waits.
     ``total`` always equals the population count; every row lands in
     exactly one reason, so the reasons add up to it."""
+    # one statement: the population and each row's unknown-delivery flag
+    # come from the same read, streamed rather than loaded whole
     rows = db.execute(
-        "SELECT event_id,created_at,updated_at,progress FROM notify_outbox "
-        f"WHERE {OUTBOX_PENDING_WHERE}", (now,)).fetchall()
-    unknown_delivery = {r[0] for r in db.execute(
-        "SELECT ic.event_id FROM notification_intent_cards ic "
-        "JOIN notification_cards c ON c.card_id=ic.card_id "
-        "WHERE ic.state='pending' AND c.delivery_state='delivery_unknown'")}
+        "SELECT o.created_at,o.updated_at,o.progress,EXISTS("
+        "  SELECT 1 FROM notification_intent_cards ic "
+        "  JOIN notification_cards c ON c.card_id=ic.card_id "
+        "  WHERE ic.event_id=o.event_id AND ic.state='pending' "
+        "    AND c.delivery_state='delivery_unknown') "
+        f"FROM notify_outbox o WHERE {OUTBOX_PENDING_WHERE}", (now,))
+    total = 0
     by_reason: dict = {}
     oldest = None
     attention = 0
-    for event_id, created_at, updated_at, progress in rows:
-        reason = _pending_reason(progress, updated_at,
-                                 event_id in unknown_delivery)
-        age = (max(0.0, now - created_at)
-               if isinstance(created_at, (int, float)) else None)
+    for created_at, updated_at, progress, delivery_unknown in rows:
+        total += 1
+        reason = _pending_reason(progress, updated_at, bool(delivery_unknown))
+        created = _finite(created_at)
+        age = max(0.0, now - created) if created is not None else None
         slot = by_reason.setdefault(reason, {"count": 0, "oldest_age_s": None})
         slot["count"] += 1
         if age is not None:
@@ -2119,7 +2134,7 @@ def pending_breakdown(db, now: float) -> dict:
         if (reason in _ATTENTION_REASONS or reason.startswith("hold_reason:")
                 or (age is not None and age >= PENDING_ATTENTION_S)):
             attention += 1
-    return {"total": len(rows), "oldest_age_s": oldest,
+    return {"total": total, "oldest_age_s": oldest,
             "by_reason": by_reason, "attention": attention}
 
 

@@ -15,7 +15,7 @@ def _health(tmp_path, **extra):
             "state_reasons": ["notification_pending", "backup_not_verified"],
             "notify": {"pending": 2, "oldest_age_s": 7200.0}, **extra}
     p = Path(tmp_path) / "health.json"
-    p.write_text(json.dumps(body))
+    p.write_text(json.dumps(body, allow_nan=True))
     return health_watch.classify_health(str(p), now=1000.0, deadline_s=900)
 
 
@@ -38,7 +38,7 @@ def test_blocks_are_read_and_rendered(tmp_path):
     assert report["last_interrupt"] == {"reason": "unknown", "detected_at": 880.0}
     text = "\n".join(health_watch._alert_lines({**report, "alert": True, "disk_alert": False}))
     assert "内訳: 送信を保留 1件、カードの配信結果が不明 1件、要確認 1件" in text
-    assert "日次ローカルバックアップは 1.5時間前に検証済み" in text
+    assert "日次ローカルバックアップ: 1.5時間前の保存ファイルと検証記録が一致" in text
     assert "直近の中断: 原因を特定できません" in text
 
 
@@ -49,6 +49,17 @@ def test_blocks_are_read_and_rendered(tmp_path):
     {"backup": {"state": "disabled", "local": {"state": "fine"}}},
     {"run": {"last_interrupt": {"reason": "../etc", "detected_at": 950.0}}},
     {"run": "not a dict", "backup": [], "notify": None},
+    {"backup": {"state": "disabled", "local": {"state": ["verified"]}}},
+    {"backup": {"state": "disabled", "local": {"state": {"x": 1}}}},
+    {"notify": {"pending": 2, "pending_by_reason": {"total": 2, "attention": 0,
+                "by_reason": {"unrecorded": {"count": 2.0}}}}},
+    {"notify": {"pending": 2, "pending_by_reason": {"total": 3, "attention": 0,
+                "by_reason": {"unrecorded": {"count": 2}}}}},
+    {"notify": {"pending": 2, "pending_by_reason": {"total": 2, "attention": 3,
+                "by_reason": {"unrecorded": {"count": 2}}}}},
+    {"notify": {"pending": 2, "pending_by_reason": {"total": True, "attention": 0,
+                "by_reason": {}}}},
+    {"run": {"last_interrupt": {"reason": "unknown", "detected_at": float("nan")}}},
 ])
 def test_absent_or_malformed_blocks_are_ignored(tmp_path, extra):
     report = _health(tmp_path, **extra)
@@ -77,3 +88,25 @@ def test_unverified_local_backup_states(tmp_path, state, expected):
     report = _health(tmp_path, backup={"state": "disabled", "local": {"state": state, "newest_age_s": None}})
     text = "\n".join(health_watch._alert_lines({**report, "alert": True, "disk_alert": False}))
     assert expected in text
+
+
+def test_a_stale_file_shows_its_observations_as_recorded(tmp_path):
+    body = {"overall": "degraded", "at": 100.0,
+            "state_reasons": ["notification_pending", "backup_not_verified"],
+            "notify": GOOD["notify"], "backup": GOOD["backup"],
+            "run": {"last_interrupt": {"reason": "unknown", "detected_at": 90.0}}}
+    p = Path(tmp_path) / "health.json"
+    p.write_text(json.dumps(body))
+    report = health_watch.classify_health(str(p), now=100000.0, deadline_s=900)
+    assert report["status"] == "stale" and report["observations_recorded"]
+    text = "\n".join(health_watch._alert_lines({**report, "alert": True, "disk_alert": False}))
+    assert "（内訳:" not in text
+    assert "保存ファイルと検証記録が一致" not in text
+    assert "直近の中断" not in text
+
+
+def test_every_wait_code_has_a_label():
+    import notify_cards
+    for code in notify_cards.RESEAT_REASONS | {"intent_card_delivery_unknown", "unknown",
+                                               "stale", "unrecorded"}:
+        assert code in health_watch._WAIT_JA

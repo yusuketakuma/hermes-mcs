@@ -127,3 +127,25 @@ def test_a_long_wait_needs_attention_even_by_design(led):
 def test_empty_population(led):
     assert notify_cards.pending_breakdown(led.db, NOW) == {
         "total": 0, "oldest_age_s": None, "by_reason": {}, "attention": 0}
+
+
+@pytest.mark.parametrize("progress, updated_at", [
+    (json.dumps({"wait": {"reason": ["intent_cards_issued"], "at": NOW}}), NOW),
+    (json.dumps({"wait": {"reason": "intent_cards_issued", "at": float("nan")}}), NOW),
+    (json.dumps({"wait": {"reason": "intent_cards_issued", "at": 10 ** 400}}), NOW),
+    (json.dumps({"wait": {"reason": "intent_cards_issued", "at": True}}), NOW),
+    (json.dumps({"wait": {"reason": "not_a_code", "at": NOW}}), NOW),
+    (json.dumps({"wait": "x"}), NOW),
+])
+def test_malformed_wait_records_are_unknown(led, progress, updated_at):
+    _pending(led, progress=progress, updated_at=updated_at)
+    breakdown = notify_cards.pending_breakdown(led.db, NOW + 1)
+    assert {k: v["count"] for k, v in breakdown["by_reason"].items()} == {"unknown": 1}
+
+
+def test_non_numeric_row_timestamps_do_not_raise(led):
+    eid = _pending(led, progress=json.dumps({"wait": {"reason": "intent_cards_issued", "at": NOW}}))
+    led.db.execute("UPDATE notify_outbox SET updated_at='x', created_at=NULL WHERE event_id=?", (eid,))
+    breakdown = notify_cards.pending_breakdown(led.db, NOW + 1)
+    assert breakdown["total"] == 1 and breakdown["by_reason"] == {
+        "unknown": {"count": 1, "oldest_age_s": None}}
