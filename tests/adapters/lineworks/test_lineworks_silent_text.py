@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-from test_lineworks_client import TOKEN, Wire, client
+from lineworks_client_testkit import TOKEN, Wire, client
 
 
 @pytest.mark.parametrize("kind,field,limit", [("text", "text", 2000),

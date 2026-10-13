@@ -2,7 +2,7 @@
 import asyncio
 import copy
 import pytest
-from test_mcs_slack import isolated_slack_ledger as led, _rewrite_world, _updates, ROOT_TS
+from slack_testkit import isolated_slack_ledger as led, _rewrite_world, _updates, ROOT_TS
 
 __all__ = ["led"]
 

@@ -4,7 +4,7 @@ rewrites, re-posts of an uneditable reply, later chunks, captions and
 remote-matched retries stay thread-only. Synthetic world only."""
 import asyncio
 
-from test_mcs_slack import isolated_slack_ledger as led, _rewrite_world, ROOT_TS
+from slack_testkit import isolated_slack_ledger as led, _rewrite_world, ROOT_TS
 
 __all__ = ["led"]
 

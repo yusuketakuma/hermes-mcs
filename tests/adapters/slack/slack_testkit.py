@@ -2,7 +2,9 @@
 runner scope/config, a neutral v2 card spec, and the fake native client
 plus worker wiring.  Not a test module (no ``test_`` prefix); sibling
 files import it via the tests/ sys.path bootstrap."""
+import asyncio
 import hashlib
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +16,8 @@ import notify_cmds as runner_cmds
 from adapters.common import registry
 from adapters.slack import paths as slack_paths
 from adapters.slack.delivery import DeliveryWorker, SlackCardAdapter
+from common_testkit import ledger_fixture
+from notify_testkit import _dispatch, _intent, _latest_render, _seed_thread
 
 SCOPE = {"transport": "slack", "profile": "synthetic-slack",
          "application_id": "A_SYNTHETIC", "team_id": "T_SYNTHETIC",
@@ -157,3 +161,43 @@ async def _granted_card(w, led, root):
             led, {"errors": []}, SLACK, str(root))
     finally:
         w.release_scope_lock()
+
+
+# isolated ledger fixture ``led`` (data dir included) for the Slack family
+isolated_slack_ledger = ledger_fixture(data_dir=True)
+
+
+ROOT_TS = "1790000000.000001"
+
+
+def _rewrite_world(led):
+    """A delivered thread card holding its first body reply, plus the
+    update spec a later render carries for that thread."""
+    _seed_thread(led)
+    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    w = _mkworld(led)
+    asyncio.run(_granted_card(w.worker, led, w.root))
+    spec = {**json.loads(_latest_render(led)["spec_json"]), "op": "update"}
+    return w, spec, w.client.replies[ROOT_TS]
+
+
+def _updates(w):
+    return [kw for kind, kw in w.client.calls if kind == "update"]
+
+
+def _attach(led, tmp_path, mid=100, name="syn.bin",
+            blob=b"synthetic-bytes", state="downloaded"):
+    """Seed a real on-disk file as a downloaded attachment on a shown
+    message — the part manifest then seals path+sha256+bytes."""
+    (tmp_path / "data" / "attachments").mkdir(parents=True, exist_ok=True)
+    f = tmp_path / "data" / "attachments" / name
+    f.write_bytes(blob)
+    cur = led.db.execute(
+        "INSERT INTO attachments(message_id,file_id,name,local_path,"
+        "state) VALUES(?,?,?,?,?)",
+        (mid, f"file-{name}", name, str(f), state))
+    aid = cur.lastrowid
+    if state == "downloaded":
+        led.attachment_saved(aid, str(f), len(blob),
+                             hashlib.sha256(blob).hexdigest())
+    return aid, f, blob

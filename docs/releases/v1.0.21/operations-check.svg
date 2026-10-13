@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="700" viewBox="0 0 390 700" font-family="Hiragino Sans, sans-serif">
+  <title>記録の鮮度と待っている工程を確認する説明図</title>
+  <desc>MCS 1.0.21の確認手順。まずdoctorで保存済み記録の鮮度、通知待ち件数、前回の未完了検出、日次バックアップの検証記録を見る。通知の待機理由は監視の警告に表示される。必要なときにsemantic_observeで工程ごとの待ち、失敗、再試行時刻待ち、実測速度と条件付きの見通しを確認する。工程の件数は合算せず、観測不能を0件と扱わない。実画面ではない。</desc>
+  <rect width="390" height="700" fill="#f5f7fa"/>
+  <text x="24" y="32" font-size="14" font-weight="600" fill="#46616e">MCS 1.0.21 · 確認手順の説明図</text>
+  <text x="24" y="69" font-size="26" font-weight="bold" fill="#172a3a">記録の鮮度と</text>
+  <text x="24" y="103" font-size="26" font-weight="bold" fill="#172a3a">待っている工程を確認</text>
+
+  <rect x="20" y="127" width="350" height="220" rx="14" fill="#ffffff" stroke="#b7c8d2"/>
+  <circle cx="47" cy="155" r="15" fill="#235c80"/>
+  <text x="47" y="161" text-anchor="middle" font-size="17" font-weight="bold" fill="#ffffff">1</text>
+  <text x="72" y="162" font-size="19" font-weight="bold" fill="#172a3a">まず保存済み状態を確認</text>
+  <rect x="36" y="176" width="86" height="26" rx="5" fill="#e4eef5"/>
+  <text x="48" y="194" font-family="Menlo, monospace" font-size="15" fill="#234a66">doctor</text>
+  <g fill="#235c80">
+    <circle cx="40" cy="226" r="3"/><circle cx="40" cy="253" r="3"/><circle cx="40" cy="280" r="3"/>
+  </g>
+  <g font-size="16" fill="#243d4b">
+    <text x="52" y="232">記録の鮮度と通知待ち件数</text>
+    <text x="52" y="259">前回の未完了検出</text>
+    <text x="52" y="286">日次バックアップの検証記録</text>
+  </g>
+  <path d="M36 302 H354" stroke="#dce5ea"/>
+  <text x="36" y="328" font-size="15" fill="#46616e">通知の待機理由は監視の警告に表示</text>
+
+  <path d="M195 357 V381 M189 375 L195 381 L201 375" fill="none" stroke="#567c78" stroke-width="2"/>
+  <rect x="215" y="355" width="139" height="28" rx="14" fill="#e2f0eb"/>
+  <text x="284" y="375" text-anchor="middle" font-size="15" font-weight="600" fill="#285e52">必要なときだけ</text>
+
+  <rect x="20" y="393" width="350" height="184" rx="14" fill="#ffffff" stroke="#8eb9ac"/>
+  <circle cx="47" cy="421" r="15" fill="#2e7561"/>
+  <text x="47" y="427" text-anchor="middle" font-size="17" font-weight="bold" fill="#ffffff">2</text>
+  <text x="72" y="428" font-size="19" font-weight="bold" fill="#172a3a">工程ごとの進み方を確認</text>
+  <rect x="36" y="442" width="177" height="26" rx="5" fill="#e2f0eb"/>
+  <text x="48" y="460" font-family="Menlo, monospace" font-size="15" fill="#285e52">semantic_observe</text>
+  <g font-size="16" fill="#243d4b">
+    <text x="36" y="497">新着 ／ 履歴 ／ 抽出品質チェック</text>
+    <text x="36" y="525">待ち・失敗・再試行時刻待ち</text>
+    <text x="36" y="553">実測速度と、条件付きの見通し</text>
+  </g>
+
+  <g font-size="14" fill="#405763">
+    <text x="24" y="609">工程の件数は足し合わせません。</text>
+    <text x="24" y="632">観測できない値は「0」ではありません。</text>
+    <text x="24" y="655">見通しは仕事が増えず、条件が続く場合のみ。</text>
+  </g>
+  <text x="24" y="685" font-size="13" fill="#526b77">実画面・本番稼働の証明ではありません。</text>
+</svg>

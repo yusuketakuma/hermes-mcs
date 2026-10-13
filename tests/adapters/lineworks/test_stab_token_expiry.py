@@ -8,8 +8,8 @@ from adapters.lineworks import __main__ as cli
 from adapters.lineworks import client as module
 from adapters.lineworks.client import ClientError
 from adapters.lineworks.delivery import failure
-from test_lineworks_adapter import CONFIG, SCOPE, SECRET, raw, world
-from test_lineworks_client import TOKEN, Wire, client
+from lineworks_testkit import CONFIG, SCOPE, SECRET, raw, world
+from lineworks_client_testkit import TOKEN, Wire, client
 
 
 def test_wall_clock_expiry_refreshes_when_monotonic_stalled_in_sleep():

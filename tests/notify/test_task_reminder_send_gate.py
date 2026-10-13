@@ -4,22 +4,15 @@ Adopted from the Codex proof (TASK-REMINDER-STALE-SEND): synthetic temp
 ledger, a normal request.update receipt, only ``_send`` stubbed."""
 from __future__ import annotations
 
-from datetime import datetime
 
 import pytest
 
 import mcs_requests
 import notify_cards
 import notify_flush
-from mcs_queries import JST
-from notify_testkit import CFG, _add_request, _delivered_card, _uuid, led
+from notify_testkit import CFG, _add_request, _at, _delivered_card, _uuid, led
 
 __all__ = ["led"]
-
-
-def _at(day, hour=9, minute=0):
-    return datetime.fromisoformat(
-        f"{day}T{hour:02d}:{minute:02d}:00").replace(tzinfo=JST).timestamp()
 
 
 def _queued(led):

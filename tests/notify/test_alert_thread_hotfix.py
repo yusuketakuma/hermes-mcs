@@ -6,23 +6,11 @@ import pytest
 import notify_cards
 import notify_flush
 import notify_transport
-import notify_urgent
 from adapters.common import spec as display_spec
 from notify_testkit import _begin, _uuid
-from test_notify_urgent import _base, _events, _fact, led, world
+from notify_urgent_testkit import _alert, _events, led, world
 
 __all__ = ["led", "world"]
-
-
-def _alert(world, *, ready=True):
-    store, cfg, _, _ = world
-    base = _base(store, interactive=True)
-    with store.db:
-        store.db.execute("UPDATE notification_cards SET thread_id='synthetic-thread',thread_state=?",
-                         ("created" if ready else "none",))
-    _fact(store)
-    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
-    return store, cfg, _events(store)[0], base
 
 
 def test_alert_seals_only_delivered_original_thread_and_receipt_is_idempotent(world):
@@ -40,8 +28,11 @@ def test_alert_seals_only_delivered_original_thread_and_receipt_is_idempotent(wo
            "render_rev": render["render_rev"], "payload_hash": render["payload_hash"],
            "route_epoch": 1, "correlation": render["correlation"],
            **notify_cards.delivery_scope(cfg), "result": "delivered", "message_id": "alert-reply"}
-    assert notify_transport.apply_transport_receipt(store, req, cfg)["applied"]
-    assert notify_transport.apply_transport_receipt(store, req, cfg)
+    first = notify_transport.apply_transport_receipt(store, req, cfg)
+    assert first["applied"]
+    replay = notify_transport.apply_transport_receipt(store, req, cfg)
+    assert (replay["applied"], replay["conflict"], replay["attempt_state"]) == (True, False, "delivered")
+    assert {k: replay[k] for k in first} == first
     assert _events(store)[0]["state"] == "accepted"
     assert notify_cards.dispatch_intent(store, dict(event), cfg)["skipped"]
     assert len(notify_cards._notice_renders(store.db, event["event_id"])) == 1

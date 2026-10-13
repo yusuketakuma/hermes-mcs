@@ -4,7 +4,7 @@ import asyncio
 import pytest
 
 from adapters.common import text
-from test_lineworks_adapter import SCOPE, world
+from lineworks_testkit import SCOPE, world
 
 
 @pytest.mark.parametrize("action", ["body", "tasks", "list"])

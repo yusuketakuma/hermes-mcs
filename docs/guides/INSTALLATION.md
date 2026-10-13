@@ -1,7 +1,10 @@
 # インストールガイド
 
-このガイドはv1.0.20候補のinstall/update/setup/doctorと復旧手順に対応する。公開前の未受入事項は受入票で確認する。
-現行版の検証と制約は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.20.md)、過去の実機受入計画は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)で追跡する。
+1.0.21候補の推奨Hermes agentは **[公式v0.21.7](https://github.com/NousResearch/hermes-agent/releases/tag/v0.21.7)をベースにしたMCS companion** です。導入とCIは同じcommit `f36c1da0016ce14c9c531cb9514ab4b0b667240d` に固定します。公式v0.21.7単体にはMCSが必要とする本人確認コンテキストと標準入力による認証設定がないため、MCS用機能を維持した版を使います。既存のHermes checkoutは自動では動かさず、現在の保持・診断・更新手順に従います。候補companionの公開・配布経路の検証は未完了です。
+
+
+このガイドはv1.0.21候補のinstall/update/setup/doctorと復旧手順に対応する。公開前の未受入事項は受入票で確認する。
+現行版の検証と制約は[リリース受入票](../development/acceptance/ACCEPTANCE_1.0.21.md)、過去の実機受入計画は[開発・受入計画](../development/plans/RELEASE_1.0.13.md)で追跡する。
 
 ### 2026-10-04追記: 現在のローカル入口
 

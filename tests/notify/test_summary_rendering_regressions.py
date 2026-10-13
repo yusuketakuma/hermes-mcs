@@ -17,23 +17,14 @@ from discord_testkit import _fake_discord
 from ledger import publish_snapshot
 from mcs_signals import record_station_staff
 from notify_testkit import (
-    CFG, NOW, _add_request, _card, _click, _deliver, _dispatch as _raw_dispatch, _extract, _intent,
+    CFG, CLINICAL_BODY, NOW, _add_request, _card, _click, _deliver, _dispatch_with_source, _extract, _intent,
     _latest_render, _msg, _patient, _seed_thread, _signal_row, _spec, led, pinned_clock,
 )
 from test_summary_review import _setup
 
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")
-CLINICAL_BODY = "本人が急変し至急確認が必要です。"
 CLINICAL_HIGH = {"urgency": "high", "urgency_evidence": [CLINICAL_BODY]}
-
-
-def _dispatch(led, event, cfg=CFG, now=NOW):
-    if event["kind"] == "signal":
-        from test_signal_thread_hotfix import delivered_source
-        _raw_dispatch(led, event, cfg, now)
-        delivered_source(led, card_id=2, mids=(100,), cfg=cfg)
-    return _raw_dispatch(led, event, cfg, now)
 
 
 def _render(parts, transport, monkeypatch) -> str:
@@ -163,7 +154,7 @@ def test_late_urgency_updates_delivered_card_without_new_intent(led, kind):
         event = _intent(led, "signal", payload={"signal_keys": ["s"], "project_id": 1})
     else:
         event = _intent(led, payload={"message_ids": [100]})
-    _dispatch(led, event)
+    _dispatch_with_source(led, event)
     _deliver(led)
     before = _latest_render(led)
     count = led.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0]
@@ -195,7 +186,7 @@ def test_signal_card_and_message_notice_follow_same_current_urgency_source(
     event = _intent(led, "signal", payload={"signal_keys": ["s"], "project_id": 1})
     monkeypatch.setattr(notify_flush, "_config", lambda: CFG)
     # When: both actual notification surfaces render the same evidence.
-    _dispatch(led, event)
+    _dispatch_with_source(led, event)
     face = notify_render.display_text(notify_render._card_content(led.db, _card(led)))
     text, _ = notify_flush._format_event(
         led, _intent(led, payload={"message_ids": [100]}))
@@ -251,7 +242,7 @@ def test_page_confirmation_does_not_confirm_hidden_items_or_complete_requests(le
     mids = list(range(100, 112))
     _seed_thread(led, mids=mids)
     _add_request(led, "synthetic request")
-    _dispatch(led, _intent(led, payload={"message_ids": mids}))
+    _dispatch_with_source(led, _intent(led, payload={"message_ids": mids}))
     _deliver(led)
     current = _spec(led)
     shown = json.loads(led.db.execute(
@@ -289,7 +280,7 @@ def test_long_signal_explanation_cannot_hide_current_urgency_badge(led, source):
         led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
                        (json.dumps(content), row["artifact_id"]))
     # When: dispatching through actual page packing and sealed notice rendering.
-    _dispatch(led, _intent(led, "signal", payload={"signal_keys": ["s"], "project_id": 1}))
+    _dispatch_with_source(led, _intent(led, "signal", payload={"signal_keys": ["s"], "project_id": 1}))
     spec = _spec(led)
     # Then: source-labeled urgency stays visible even after physical truncation.
     face = notify_render.display_text(spec["parts"])

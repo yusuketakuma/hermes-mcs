@@ -23,16 +23,14 @@ from notify_testkit import (
     NOW, _dispatch, _intent, _latest_render, _llm_extract, _seed_thread,
 )
 from slack_card_testkit import _spec
-from slack_testkit import SCOPE, SLACK, FakeClient, _granted_card, _mkworld
-from common_testkit import ledger_fixture
+from slack_testkit import (ROOT_TS, SCOPE, SLACK, FakeClient, _attach, _granted_card, _mkworld,
+                           _rewrite_world, _updates)
+from slack_testkit import isolated_slack_ledger  # noqa: F401  (registers fixture ``led``)
 
 
 @pytest.fixture(autouse=True)
 def _pin_wall_clock(monkeypatch):
     monkeypatch.setattr(runner_cards.time, "time", lambda: NOW)
-
-
-isolated_slack_ledger = ledger_fixture(data_dir=True)
 
 
 def _adapter(client):
@@ -895,29 +893,11 @@ def test_slack_update_binds_own_reply_foreign_never_binds(led):
 
 # ---------- in-place rewrite of a changed chunk ------------------------------
 
-ROOT_TS = "1790000000.000001"
-
-
-def _rewrite_world(led):
-    """A delivered thread card holding its first body reply, plus the
-    update spec a later render carries for that thread."""
-    _seed_thread(led)
-    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
-    w = _mkworld(led)
-    asyncio.run(_granted_card(w.worker, led, w.root))
-    spec = {**json.loads(_latest_render(led)["spec_json"]), "op": "update"}
-    return w, spec, w.client.replies[ROOT_TS]
-
-
 def _rewrite(w, spec, text, prior, part_id="body:0001", ctx=None):
     ctx = ctx or {"thread_id": ROOT_TS, "history": None, "consumed": set()}
     part = {"part_id": part_id, "kind": "body_part",
             "prior_remote_id": prior}
     return asyncio.run(w.worker._body_part(spec, text, ctx, part))
-
-
-def _updates(w):
-    return [kw for kind, kw in w.client.calls if kind == "update"]
 
 
 @pytest.mark.parametrize("kind", ["body_part", "attachment_part"])
@@ -1109,24 +1089,6 @@ def test_slack_rewrite_survives_a_crash_between_update_and_result(led):
     assert first == again == {"result": "delivered", "remote_id": our_ts}
     assert len(_updates(w)) == 1
     assert len(w.client.thread_posts) == posted
-
-
-def _attach(led, tmp_path, mid=100, name="syn.bin",
-            blob=b"synthetic-bytes", state="downloaded"):
-    """Seed a real on-disk file as a downloaded attachment on a shown
-    message — the part manifest then seals path+sha256+bytes."""
-    (tmp_path / "data" / "attachments").mkdir(parents=True, exist_ok=True)
-    f = tmp_path / "data" / "attachments" / name
-    f.write_bytes(blob)
-    cur = led.db.execute(
-        "INSERT INTO attachments(message_id,file_id,name,local_path,"
-        "state) VALUES(?,?,?,?,?)",
-        (mid, f"file-{name}", name, str(f), state))
-    aid = cur.lastrowid
-    if state == "downloaded":
-        led.attachment_saved(aid, str(f), len(blob),
-                             hashlib.sha256(blob).hexdigest())
-    return aid, f, blob
 
 
 def _parts(led, did):

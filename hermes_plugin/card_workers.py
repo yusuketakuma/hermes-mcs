@@ -67,6 +67,8 @@ def _standalone_owned(data_root) -> bool:
 
 def _event_logger(name: str):
     """The worker's structured log sink: one allowlisted JSON line per event."""
+    # The config_incomplete path logs before any other _ensure_repo_root call.
+    _ensure_repo_root()
     from adapters.common import eventlog
     return eventlog.make_logger(f"hermes.plugin.{name}")
 

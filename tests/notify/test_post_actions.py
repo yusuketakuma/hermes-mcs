@@ -9,9 +9,9 @@ import pytest
 from adapters.common import spec as spec_mod
 import json
 
-from notify_testkit import (CFG, NOW, _dispatch, _intent, _llm_extract,  # noqa: F401
-                            _seed_thread, _spec, _token_for, led, pinned_clock)
-from test_card_drug_views import MED, _card, _click
+from notify_testkit import (CFG, MED, NOW, _dispatch, _drug_card, _drug_click,  # noqa: F401
+                            _intent, _llm_extract, _seed_thread, _spec, _token_for, led,
+                            pinned_clock)
 
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")
@@ -31,7 +31,7 @@ def _thread_card(led, mids=(100, 101), meds_on=(101,), cfg=NO_THREAD):
 def test_discord_thread_body_keeps_drug_buttons_off_the_card_face(led):
     # card_thread on: the thread body carries 💊 (answers stay in the
     # thread); the card face gets no per-post buttons
-    spec = _card(led)
+    spec = _drug_card(led)
     assert "post_actions" not in (spec["parts"].get("discord") or {})
     assert spec["parts"].get("thread_drug_actions") is True
 
@@ -47,7 +47,7 @@ def test_discord_without_thread_puts_meds_beside_the_post(led):
     spec_mod.validate(spec)
     from notify_testkit import _deliver
     _deliver(led)
-    got = _click(led, spec, "meds", token=button["token"], cfg=NO_THREAD)
+    got = _drug_click(led, spec, "meds", token=button["token"], cfg=NO_THREAD)
     assert (got["outcome"], got["action"]) == ("applied", "list")
     assert got["list"]["title"].startswith("💊 ")
 
@@ -115,7 +115,7 @@ def test_discord_urgent_card_gets_red_accent(led, monkeypatch):
     from discord_testkit import _fake_discord
     monkeypatch.setitem(sys.modules, "discord", _fake_discord())
     from adapters.discord.cards import build_view
-    spec = copy.deepcopy(_card(led))
+    spec = copy.deepcopy(_drug_card(led))
     spec["parts"].setdefault("discord", {})["accent"] = "urgent"
     spec_mod.validate(spec)
     assert build_view(spec).items[0].accent_color == 0xED4245

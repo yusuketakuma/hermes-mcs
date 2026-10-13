@@ -3,7 +3,7 @@
   "synthetic": true,
   "origins": "origins.json",
   "target": {
-    "version": "v1.0.20",
+    "version": "v1.0.21",
     "code": "current workspace updater",
     "schema": "ledger.SCHEMA_VERSION"
   },
@@ -13,7 +13,7 @@
     "original_runner": "upgrade_routes.py",
     "original_log": "upgrade-routes-2.log",
     "artifact_location": "unversioned isolated temporary task directory; absolute path not recorded",
-    "tag_checks": "2026-10-04 local git rev-parse, cat-file -e and diff --quiet: commits agree with origins.json; updater absent through v1.0.2; standalone starts at v1.0.10; install.sh differs through v1.0.9 but is identical across v1.0.10-v1.0.12",
+    "tag_checks": "2026-10-04 local git rev-parse, cat-file -e and diff --quiet: commits agree with origins.json; updater absent through v1.0.2; standalone starts at v1.0.10; install.sh differs through v1.0.9 but is identical across v1.0.10-v1.0.12; 2026-10-13 local v1.0.20 tag dereferences to bbca0e09484f9115e88660ba764a7a79071d88e3; git cat-file -e confirms mcs/ops/mcs_update.py, mcs_standalone/__main__.py and mcs/core/mcs_runtime.py exist at that exact commit.",
     "claim": "Historical success is a recorded result, not a rerun of historical updater binaries. Current contract tests use stored synthetic objects and original DDL, without repository Git history."
   },
   "source_features": [
@@ -114,6 +114,11 @@
     },
     {
       "release": "v1.0.19",
+      "updater": true,
+      "standalone": true
+    },
+    {
+      "release": "v1.0.20",
       "updater": true,
       "standalone": true
     }
@@ -456,6 +461,18 @@
       "runtime": "standalone",
       "entry": "host",
       "external_plan": "standalone_external_apply"
+    },
+    {
+      "source": "v1.0.20",
+      "runtime": "hermes",
+      "entry": "target_bootstrap",
+      "external_plan": null
+    },
+    {
+      "source": "v1.0.20",
+      "runtime": "standalone",
+      "entry": "host",
+      "external_plan": "standalone_external_apply"
     }
   ],
   "checks": {
@@ -479,5 +496,5 @@
     "Original schema 0-4 and 6 DDL provenance remains unavailable as documented by origins.json; no invented fixtures are added.",
     "Actual Git fast-forward/reset behavior, installed host cooperation, SDK installation side effects and machine deployment remain outside the isolated stubbed matrix."
   ],
-  "command": "scripts/run_tests.sh tests/ops/test_supported_update_paths.py tests/core/test_supported_schema_upgrade.py -o addopts= -q"
+  "command": "scripts/run_tests.sh tests/ops/test_supported_update_paths.py tests/core/test_supported_schema_upgrade.py tests/ops/test_release_origin_tick.py -o addopts= -q"
 }

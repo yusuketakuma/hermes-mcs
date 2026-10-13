@@ -10,18 +10,7 @@ import pytest
 
 import notify_flush
 from ledger import Ledger
-from ingest_testkit import _message
-
-
-def stored_attachment(led, path):
-    led.ensure_patient(1)
-    led.save_messages([_message(mid=1)])
-    led.db.execute(
-        "INSERT INTO attachments(attachment_id,message_id,file_id,name,"
-        "url,local_path,bytes,sha256,state,created_at)"
-        " VALUES(1,1,'f1','fixture.txt','https://synthetic.invalid',?,?,?,'downloaded',0)",
-        (str(path), 9, hashlib.sha256(b"synthetic").hexdigest()))
-    led.db.commit()
+from notify_testkit import stored_attachment
 
 
 @pytest.mark.parametrize("outcome", ["delivered", "timeout", "partial_failure"])

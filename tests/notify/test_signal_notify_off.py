@@ -45,7 +45,7 @@ def test_disabled_signal_suppresses_unsealed_intent(led, tmp_path):
 def test_disabled_signal_refuses_grant_but_allows_chat(led):
     event = _signal(led)
     assert _dispatch(led, event, ON, now=NOW)["dispatched"]
-    from test_signal_thread_hotfix import delivered_source
+    from notify_testkit import delivered_source
     delivered_source(led, card_id=2, mids=(100,))
     _dispatch(led, event, ON, now=NOW)
     render = _latest_render(led)

@@ -5,8 +5,8 @@ import shutil
 
 import pytest
 from adapters.common import registry
-from test_lineworks_adapter import TOKEN, overflow_spec, world
-from test_lineworks_adapter import _worker as lw_worker
+from lineworks_testkit import TOKEN, overflow_spec, world
+from lineworks_testkit import _worker as lw_worker
 
 
 def _count_rewrites(monkeypatch, reg):

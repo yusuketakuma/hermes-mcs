@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "送信待ちの数え漏れと、待ちの理由の取り違えを修正",
+  "summary": "送信予定時刻が先の通常のシグナル通知が、送信待ちの件数から漏れていたのを修正し、件数と内訳に含めるようにしました。待ちの理由は、カードの配信結果が不明なものを、過去のスレッド保留の記録より先に「要確認」として表示します。",
+  "upgrade": "追加操作は不要です。予定時刻が先のシグナル通知があると、送信待ちの件数が従来より増え、送信待ちの警告が出ることがあります。ダイジェストとしてまとめて送る予定のシグナルは、従来どおり件数に含めません。",
+  "details": [
+    "notify_cards.OUTBOX_PENDING_WHERE は、payload に digest:1 が明示された予定前のシグナルだけを除外する。digest が無い・null・false・壊れた payload では NOT(NULL) で行が落ちていたため、CASE と IS で真偽を二値に保つ。health の件数・内訳と、内訳を取れないときの従来件数は同じ条件を使う。",
+    "_pending_reason は、カードの配信結果不明と部品の送信結果不明を、hold_reason・thread_hold より先に判定する。スレッド保留は現在の wait の存在から復旧を推測せず、実際に配送先が確定して処理が進む時点で thread_hold だけを取り除く。他の progress キーと updated_at、読めない progress は保持する。",
+    "初回signalの同時刻 hold と reseat、source thread復旧、unknown receipt、部品確定後の次renderと完了を合成で検証。既存行の古い thread_hold は次のdispatchで取り除かれる。receipt と再送条件は変更しない。"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "tests/notify/test_pending_wait_reasons.py"
+  ]
+}

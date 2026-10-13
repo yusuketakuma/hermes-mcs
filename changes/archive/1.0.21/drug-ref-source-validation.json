@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "破損した薬剤名への辞書候補表示を抑止",
+  "summary": "保存済み抽出の薬剤名が空欄や不正な型になった場合、その項目に結び付く辞書候補を表示しません。候補の作成と読み出しで同じ名称検証を使い、元の投稿や正常な候補は保持します。",
+  "upgrade": "追加操作は不要です。私有辞書の承認・有効化条件は変わりません。",
+  "details": ["current_refs の薬剤名取得を、derive・impact が既に使っている _source_meds に統一。"],
+  "refs": ["mcs/extract/drug_map.py", "tests/extract/test_drug_map.py"]
+}

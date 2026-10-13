@@ -89,6 +89,7 @@ done
 # Ask only on a fresh interactive install. Existing JSON is parsed below
 # without grep, so malformed or unsupported modes cannot silently fall back.
 if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ ! -e "$HOME/.mcs/config.json" ] \
+        && [ ! -L "$HOME/.mcs/config.json" ] \
         && [ "$MODE" = install ] && [ -t 0 ] && [ -t 1 ]; then
     printf '%s\n' "How should MCS connect to Slack/Discord?" \
         "  1) hermes      — through Hermes Agent" \
@@ -170,10 +171,18 @@ if [ -e "$HOME/.mcs/config.json" ] || [ -L "$HOME/.mcs/config.json" ]; then
     [ -n "$MODE_PY" ] || die "existing config requires Python to select its runtime mode; pass --mode explicitly"
     RUNTIME_MODE="$("$MODE_PY" - "$HOME/.mcs/config.json" "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" <<'PYMODE'
 import json
+import os
+import stat
 import sys
 try:
-    with open(sys.argv[1], encoding="utf-8") as stream:
-        cfg = json.load(stream)
+    fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError
+        with os.fdopen(fd, encoding="utf-8", closefd=False) as stream:
+            cfg = json.load(stream)
+    finally:
+        os.close(fd)
     if not isinstance(cfg, dict):
         raise ValueError
     mode = sys.argv[3] if sys.argv[2] == "1" else cfg.get("runtime_mode", "hermes")
@@ -183,7 +192,7 @@ try:
 except (OSError, ValueError, AttributeError, TypeError, RecursionError):
     raise SystemExit(1) from None
 PYMODE
-)" || die "cannot select runtime from existing config; repair unreadable config (use --mode only to override a readable object's runtime)"
+)" || die "config.json unreadable: cannot select runtime from existing config; repair it (use --mode only to override a readable object's runtime)"
     case "$RUNTIME_MODE" in hermes|standalone) ;; *) die "runtime mode could not be read; pass --mode explicitly" ;; esac
 fi
 DEFAULT_HERMES_HOME="$(abspath "$HOME")/.hermes"
@@ -205,12 +214,12 @@ fi
 
 HERMES_DIR="$HERMES_HOME/hermes-agent"
 HERMES_REPO="https://github.com/yusuketakuma/hermes-agent.git"
-# Pinned: public MCS companion plus upstream v0.21.6-era release code.
+# Pinned: MCS companion based on upstream v0.21.7.
 # Native context/attestation and async pre-dispatch contracts remain required.
-HERMES_PIN="6f35b1ed84536f7e7fd2f605f7779dd051cce05f"
-# Pins validated by earlier releases (all Python <3.14); only these move to
+HERMES_PIN="f36c1da0016ce14c9c531cb9514ab4b0b667240d"
+# Pins validated by earlier MCS releases; only these move to
 # HERMES_PIN, and only during an updater-proven runtime migration.
-HERMES_PREVIOUS_PINS="fd50a275e2616118c48fe07e7e1c878782b15ccd 1e8fbfe6b41399a46e232f6cde5618cfdfa2729a 16390dc80d248b7b49554c0cde52caf22e1fc3d8"
+HERMES_PREVIOUS_PINS="6f35b1ed84536f7e7fd2f605f7779dd051cce05f fd50a275e2616118c48fe07e7e1c878782b15ccd 1e8fbfe6b41399a46e232f6cde5618cfdfa2729a 16390dc80d248b7b49554c0cde52caf22e1fc3d8"
 CLONE_MARK="$HERMES_HOME/.hermes-agent.install-in-progress"
 VENV="$HERMES_DIR/venv"
 if [ "$RUNTIME_MODE" = standalone ]; then VENV="$RUNTIME_HOME/venv"; fi
@@ -767,8 +776,13 @@ if [ -f "$CLONE_MARK" ] || [ ! -e "$HERMES_DIR" ]; then
         git clone "$HERMES_REPO" "$HERMES_DIR" \
             || die "git clone of $HERMES_REPO failed — check network access to github.com, then re-run install.sh"
     fi
-    git -C "$HERMES_DIR" checkout -q --detach "$HERMES_PIN" \
-        || die "checkout of the pinned commit $HERMES_PIN failed — re-run install.sh (the interrupted clone is redone)"
+    if ! git -C "$HERMES_DIR" checkout -q --detach "$HERMES_PIN"; then
+        # Full clones may omit commits reachable only through non-branch refs.
+        if ! git -C "$HERMES_DIR" fetch -q origin "$HERMES_PIN" \
+            || ! git -C "$HERMES_DIR" checkout -q --detach "$HERMES_PIN"; then
+            die "cannot retrieve pinned commit $HERMES_PIN from $HERMES_REPO — verify network access and publication of this companion commit before retrying; venv setup has not started"
+        fi
+    fi
 fi
 [ -e "$HERMES_DIR/.git" ] \
     || die "$HERMES_DIR exists but is not a git checkout — move it aside (mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")), then re-run install.sh"

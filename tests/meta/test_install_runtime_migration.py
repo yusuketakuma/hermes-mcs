@@ -35,8 +35,9 @@ def _held(lock):
     return fd
 
 
-def test_previous_pin_moves_to_the_current_pin_then_venv_is_rebuilt(tmp_path):
-    home, hermes_home, checkout, venv, lock, env = _established(tmp_path, PREVIOUS)
+@pytest.mark.parametrize("previous", [PREVIOUS, "6f35b1ed84536f7e7fd2f605f7779dd051cce05f"])
+def test_previous_pin_moves_to_the_current_pin_then_venv_is_rebuilt(tmp_path, previous):
+    home, hermes_home, checkout, venv, lock, env = _established(tmp_path, previous)
     fd = _held(lock)
     try:
         env.update(MCS_UPDATE_RUN_LOCK_FD=str(fd),

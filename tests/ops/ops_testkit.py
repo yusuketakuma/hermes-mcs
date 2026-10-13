@@ -9,6 +9,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 import time
 import uuid
 from contextlib import suppress
@@ -179,3 +180,26 @@ def _load():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def bounded_python(tmp_path, program, *args):
+    """Run one synthetic assertion with test guards and a bounded, reaped child."""
+    root = Path(__file__).resolve().parents[2]
+    ready = tmp_path / "bounded-child-ready"
+    bootstrap = """
+import pathlib, runpy, sys
+runpy.run_path(sys.argv[1])
+pathlib.Path(sys.argv[2]).write_text('ready')
+sys.argv = [sys.argv[0], *sys.argv[3:]]
+"""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", bootstrap + program,
+             str(root / "tests/conftest.py"), str(ready), *map(str, args)],
+            env={**os.environ, "MCS_ROOT": str(tmp_path)},
+            capture_output=True, text=True, timeout=5)
+    except subprocess.TimeoutExpired as error:
+        assert ready.is_file(), "synthetic child never reached the checked operation"
+        raise AssertionError("synthetic operation exceeded its 5-second deadline") from error
+    assert result.returncode == 0, result.stderr
+    return result
