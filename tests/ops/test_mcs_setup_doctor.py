@@ -1,11 +1,13 @@
 """Doctor is local by default and shares only bounded diagnostic facts."""
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
 
 import local_llm
 import mcs_setup
+from ops_testkit import bounded_python
 
 
 @pytest.fixture
@@ -185,3 +187,35 @@ def test_doctor_dirty_comes_from_a_refreshing_status(monkeypatch, rc, out, expec
     monkeypatch.setattr(mcs_setup.subprocess, "run", git)
     assert mcs_setup._doctor_source({}, probe=False)["disk"]["dirty"] is expected
     assert not any("diff-index" in argv for argv in seen)
+
+
+@pytest.mark.parametrize("kind", ["symlink", "fifo", "directory", "oversized"])
+def test_doctor_restart_receipt_refuses_unsafe_file(tmp_path, monkeypatch, kind):
+    monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    (tmp_path / "data").mkdir()
+    target = tmp_path / "outside.json"
+    target.write_text(json.dumps({"status": "failed", "at": mcs_setup.time.time()}))
+    receipt = tmp_path / "data" / "gateway_restart.json"
+    if kind == "symlink":
+        receipt.symlink_to(target)
+    elif kind == "fifo":
+        os.mkfifo(receipt)
+        bounded_python(tmp_path, """
+from types import SimpleNamespace
+import mcs_setup
+mcs_setup.HOME = sys.argv[1]
+mcs_setup.subprocess.run = lambda *a, **k: SimpleNamespace(returncode=1, stdout='')
+mcs_setup._gateway_sources_mtime = lambda: None
+source = mcs_setup._doctor_source({'runtime_mode': 'standalone'}, probe=True)
+assert source['restart_request'] == {'status': 'unknown'}
+""", tmp_path)
+        return
+    elif kind == "directory":
+        receipt.mkdir()
+    else:
+        receipt.write_bytes(b" " * 8193)
+    monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k:
+                        SimpleNamespace(returncode=1, stdout=""))
+    monkeypatch.setattr(mcs_setup, "_gateway_sources_mtime", lambda: None)
+    source = mcs_setup._doctor_source({"runtime_mode": "standalone"}, probe=True)
+    assert source["restart_request"] == {"status": "unknown"}

@@ -4,8 +4,9 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from discord_testkit import SETTINGS
-from test_mcs_discord import CFG, FakeInteraction, _deliver, actions_mod, world  # noqa: F401
+from adapters.discord import actions as actions_mod
+from discord_testkit import CFG, SETTINGS, FakeInteraction, _deliver
+from discord_testkit import discord_world  # noqa: F401  (registers fixture ``world``)
 
 
 class Guild:
@@ -32,7 +33,7 @@ class Guild:
     ([], False, True, False),           # removed, uncached member
     (["555"], True, False, False),      # guild unknown: fail closed
 ])
-def test_delayed_followup_checks_current_role(world, monkeypatch, current, cached,  # noqa: F811
+def test_delayed_followup_checks_current_role(world, monkeypatch, current, cached,
                                               guild_known, delivered):
     world.seed()
     world.dispatch(cfg={"notify": {**CFG["notify"], "card_thread": False}})
@@ -66,7 +67,7 @@ def test_delayed_followup_checks_current_role(world, monkeypatch, current, cache
         assert ("followup_dropped", {"reason": "role_check"}) in logs
 
 
-def test_unauthorized_followup_drop_is_logged(world, monkeypatch):  # noqa: F811
+def test_unauthorized_followup_drop_is_logged(world, monkeypatch):
     """A followup the sweep can no longer authorize (here: card settings
     without the required guild_id) is dropped with a log, never silently."""
     world.seed()

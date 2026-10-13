@@ -34,10 +34,12 @@ import _mcs_path  # noqa: F401
 import maintenance
 from mcs_queries import JST
 from mcs_util import HOME, load_config
+from safe_io import read_regular_nofollow
 
 HEALTH_REL = os.path.join("data", "health.json")
 STATE_REL = os.path.join("data", "health_watch.json")
 STATUS_REL = os.path.join("data", "health_watch_status.json")
+STATUS_MAX_BYTES = 1024 * 1024
 
 DEFAULT_TICK_S = 600        # deployed cron cadence: */10 * * * *
 DEFAULT_MAX_MISSED = 2      # miss two whole ticks before 'stale'
@@ -152,19 +154,22 @@ def _optional_blocks(h: dict) -> dict:
             "last_interrupt": interrupt}
 
 
+def _read_status_json(path: str):
+    """Read one complete bounded status document without links or FIFO waits."""
+    raw = read_regular_nofollow(path, STATUS_MAX_BYTES, ValueError)
+    if len(raw) > STATUS_MAX_BYTES:
+        raise ValueError("status_too_large")
+    return json.loads(raw.decode("utf-8"))
+
+
 def classify_health(path: str, now: float, deadline_s: int) -> dict:
     """File evidence -> status. Staleness is checked BEFORE the recorded
     payload: a dead producer leaves a fresh-looking 'ok' forever."""
     try:
-        with open(path, encoding="utf-8") as f:
-            raw = f.read()
-    except OSError:
-        return {"status": "missing"}
-    except UnicodeError:
-        return {"status": "corrupt"}
-    try:
-        h = json.loads(raw)
-    except (ValueError, RecursionError):
+        h = _read_status_json(path)
+    except FileNotFoundError:
+        return {"status": "corrupt" if os.path.lexists(path) else "missing"}
+    except (OSError, ValueError, RecursionError):
         return {"status": "corrupt"}
     if not isinstance(h, dict) or not _finite_number(h.get("at")):
         return {"status": "corrupt"}
@@ -266,14 +271,8 @@ def _pid_alive(pid) -> bool:
 
 def _read_standalone_status(home: str):
     try:
-        fd = os.open(os.path.join(home, STANDALONE_STATUS_REL),
-                     os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-        with os.fdopen(fd, "rb") as stream:
-            raw = stream.read(1024 * 1024 + 1)
-        if len(raw) > 1024 * 1024:
-            return None
-        value = json.loads(raw.decode("utf-8"))
-    except (OSError, ValueError, UnicodeError, RecursionError):
+        value = _read_status_json(os.path.join(home, STANDALONE_STATUS_REL))
+    except (OSError, ValueError, RecursionError):
         return None
     return value if isinstance(value, dict) else None
 

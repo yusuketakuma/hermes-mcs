@@ -89,6 +89,7 @@ done
 # Ask only on a fresh interactive install. Existing JSON is parsed below
 # without grep, so malformed or unsupported modes cannot silently fall back.
 if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ ! -e "$HOME/.mcs/config.json" ] \
+        && [ ! -L "$HOME/.mcs/config.json" ] \
         && [ "$MODE" = install ] && [ -t 0 ] && [ -t 1 ]; then
     printf '%s\n' "How should MCS connect to Slack/Discord?" \
         "  1) hermes      — through Hermes Agent" \
@@ -170,10 +171,18 @@ if [ -e "$HOME/.mcs/config.json" ] || [ -L "$HOME/.mcs/config.json" ]; then
     [ -n "$MODE_PY" ] || die "existing config requires Python to select its runtime mode; pass --mode explicitly"
     RUNTIME_MODE="$("$MODE_PY" - "$HOME/.mcs/config.json" "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" <<'PYMODE'
 import json
+import os
+import stat
 import sys
 try:
-    with open(sys.argv[1], encoding="utf-8") as stream:
-        cfg = json.load(stream)
+    fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError
+        with os.fdopen(fd, encoding="utf-8", closefd=False) as stream:
+            cfg = json.load(stream)
+    finally:
+        os.close(fd)
     if not isinstance(cfg, dict):
         raise ValueError
     mode = sys.argv[3] if sys.argv[2] == "1" else cfg.get("runtime_mode", "hermes")
@@ -183,7 +192,7 @@ try:
 except (OSError, ValueError, AttributeError, TypeError, RecursionError):
     raise SystemExit(1) from None
 PYMODE
-)" || die "cannot select runtime from existing config; repair unreadable config (use --mode only to override a readable object's runtime)"
+)" || die "config.json unreadable: cannot select runtime from existing config; repair it (use --mode only to override a readable object's runtime)"
     case "$RUNTIME_MODE" in hermes|standalone) ;; *) die "runtime mode could not be read; pass --mode explicitly" ;; esac
 fi
 DEFAULT_HERMES_HOME="$(abspath "$HOME")/.hermes"

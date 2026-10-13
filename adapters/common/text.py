@@ -423,7 +423,7 @@ def view_answer(result: dict | None, allowed,
     if action == "list":
         return [(m, None) for m in list_messages(result, allowed, markdown, plain=plain)]
     if action == "task_status":
-        return [(task_done_text(result), None)]
+        return [(task_done_text(result, plain=plain), None)]
     return None
 
 
@@ -490,9 +490,11 @@ def task_list_text(items: list, *, plain: bool = False) -> str:
     return "\n".join(lines)
 
 
-def task_done_text(result: dict) -> str:
+def task_done_text(result: dict, *, plain: bool = False) -> str:
     status = "完了" if result.get("status") == "done" else "対応中"
-    title = result.get("title") or f"#{result.get('request_id')}"
+    # the title is user-authored, as in task_list_text; the #id fallback is not
+    title = (_literal(str(result["title"]), plain) if result.get("title")
+             else f"#{result.get('request_id')}")
     if result.get("absorbed"):
         return f"タスク「{title}」は既に「{status}」です。"
     return f"タスク「{title}」を「{status}」にしました。"

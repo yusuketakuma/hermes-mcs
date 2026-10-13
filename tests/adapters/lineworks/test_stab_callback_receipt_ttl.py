@@ -5,7 +5,7 @@ from pathlib import Path
 
 from adapters.lineworks import server
 from notify_testkit import NOW
-from test_lineworks_adapter import SCOPE, SECRET, event, raw, signature, world
+from lineworks_testkit import SCOPE, SECRET, event, raw, signature, world
 
 
 def _box(tmp_path, now):

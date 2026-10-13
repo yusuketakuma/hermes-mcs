@@ -327,7 +327,8 @@ def main(argv=None) -> int:
             code = error.code if isinstance(error, importer.MasterError) else (
                 str(error) if isinstance(error, ValueError) else type(error).__name__)
             if args.json:
-                print(json.dumps({"status": "refused", "reason": code, "written": False}))
+                print(json.dumps({"status": "refused", "reason": code,
+                                  "written": isinstance(error, importer.MasterError) and error.written}))
             else:
                 print(f"drug: 同梱マスターを処理できません（{_line(code)}）", file=sys.stderr)
             return 1

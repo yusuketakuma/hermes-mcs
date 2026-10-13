@@ -9,16 +9,11 @@ import pytest
 
 import notify_cards
 from notify_testkit import (CFG, NOW, _begin, _dispatch, _intent, _latest_render, _msg, _patient,
-                            _receipt, _seed_thread, _settle_bodies, _signal_row, led,
+                            _receipt, _row, _seed_thread, _settle_bodies, _signal, _signal_row,
+                            delivered_source, led,
                             pinned_clock)
-from test_signal_thread_hotfix import _signal, delivered_source
 
 __all__ = ["led", "pinned_clock"]
-
-
-def _row(led, event_id):
-    return led.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
-                          (event_id,)).fetchone()
 
 
 def _wait(led, event_id):
@@ -265,3 +260,40 @@ def test_only_a_scheduled_digest_leaves_the_pending_population(led, payload, cou
     expected = 1 if counted else 0
     assert _population_count(led, NOW) == expected
     assert notify_cards.pending_breakdown(led.db, NOW)["total"] == expected
+
+
+class _RecordingDb:
+    """The real connection, logging each statement next to checkpoints."""
+
+    def __init__(self, db, log):
+        self._db, self._log = db, log
+
+    def execute(self, *args):
+        self._log.append("query")
+        return self._db.execute(*args)
+
+
+def test_breakdown_checkpoints_before_the_query_per_row_and_at_the_end(led):
+    for _ in range(3):
+        _pending(led)
+    log = []
+    breakdown = notify_cards.pending_breakdown(
+        _RecordingDb(led.db, log), NOW, checkpoint=lambda: log.append("check"))
+    assert breakdown["total"] == 3
+    assert log == ["check", "query", "check", "check", "check", "check"]
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 4], ids=["before-query", "first-row", "end"])
+def test_breakdown_checkpoint_error_propagates_without_a_partial_result(led, fail_at):
+    for _ in range(2):
+        _pending(led)
+    calls = []
+
+    def checkpoint():
+        calls.append(1)
+        if len(calls) == fail_at:
+            raise TimeoutError("synthetic budget spent")
+
+    with pytest.raises(TimeoutError):
+        notify_cards.pending_breakdown(led.db, NOW, checkpoint=checkpoint)
+    assert len(calls) == fail_at

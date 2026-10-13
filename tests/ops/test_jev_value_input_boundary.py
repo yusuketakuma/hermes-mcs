@@ -1,6 +1,7 @@
 """Jev value evaluation dispatches only checked-in synthetic cases."""
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 import mcs_setup
 import semantic_evaluation
 import semantic_jev
+from ops_testkit import bounded_python
 
 
 def _case(name="extract_cases.json"):
@@ -88,3 +90,44 @@ def test_missing_synthetic_asset_refuses_before_credentials(tmp_path, monkeypatc
     monkeypatch.setattr(Path, "read_text", missing)
     assert mcs_setup.main(["jev-value", "--cases", str(source), "--out", str(out)]) == 1
     assert calls == [] and not out.exists()
+
+
+def test_valid_json_prefix_of_oversized_cases_is_not_evaluated(tmp_path, monkeypatch):
+    source, out = tmp_path / "cases.json", tmp_path / "report.json"
+    raw = json.dumps({"cases": [_case()]}).encode()
+    source.write_bytes(raw + b" " * (8 * 1024 * 1024 + 1 - len(raw)))
+    calls = _isolate(monkeypatch)
+    assert mcs_setup.main(["jev-value", "--cases", str(source), "--out", str(out)]) == 1
+    assert calls == [] and not out.exists()
+
+
+@pytest.mark.parametrize("kind", ["fifo", "symlink"])
+def test_nonregular_cases_are_refused_before_credentials(tmp_path, monkeypatch, kind):
+    source, out = tmp_path / "cases.json", tmp_path / "report.json"
+    if kind == "fifo":
+        os.mkfifo(source)
+        bounded_python(tmp_path, """
+from pathlib import Path
+import mcs_setup
+def forbidden(*args, **kwargs):
+    raise AssertionError('unsafe cases reached config or credentials')
+mcs_setup.load_config = forbidden
+mcs_setup.env_value = forbidden
+assert mcs_setup.main(['jev-value', '--cases', sys.argv[1], '--out', sys.argv[2]]) == 1
+assert not Path(sys.argv[2]).exists()
+""", source, out)
+        return
+    else:
+        target = tmp_path / "target.json"
+        target.write_text(json.dumps({"cases": [_case()]}))
+        source.symlink_to(target)
+    calls = _isolate(monkeypatch)
+    assert mcs_setup.main(["jev-value", "--cases", str(source), "--out", str(out)]) == 1
+    assert calls == [] and not out.exists()
+
+
+def test_evaluation_input_rejects_growth_after_stat(monkeypatch):
+    monkeypatch.setattr(mcs_setup, "EVALUATION_INPUT_BYTES", 64)
+    monkeypatch.setattr(mcs_setup, "read_regular_nofollow", lambda *a: b" " * 65)
+    with pytest.raises(ValueError, match="evaluation_input_too_large"):
+        mcs_setup._evaluation_input("synthetic-path")

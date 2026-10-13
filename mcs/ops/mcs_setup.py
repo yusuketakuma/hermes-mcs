@@ -74,10 +74,22 @@ import mcs_runtime
 from mcs_util import (CONF_PATH, HOME, REPO, atomic_write, env_value,
                       load_config)
 from mcs_util import hermes_exe as _hermes_exe
+from safe_io import read_regular_nofollow
 
 ENV_PATH = os.path.join(HOME, ".env")
 KEYCHAIN_SERVICE = "mcs-adapter"
 CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+EVALUATION_INPUT_BYTES = 8 * 1024 * 1024
+
+
+def _evaluation_input(path) -> bytes:
+    """Read one complete bounded evaluation file without following links or FIFOs."""
+    raw = read_regular_nofollow(path, EVALUATION_INPUT_BYTES, ValueError)
+    if len(raw) > EVALUATION_INPUT_BYTES:
+        raise ValueError("evaluation_input_too_large")
+    return raw
+
 
 # ---- typesafe config rules ------------------------------------------
 # name -> (required, check) — check(v) -> error string | None
@@ -1924,8 +1936,7 @@ def cmd_fact_source(args) -> int:
                   "human-labelled gate)")
             return 1
         try:
-            with open(args.gate_evidence, "rb") as stream:
-                raw = stream.read(8 * 1024 * 1024)
+            raw = _evaluation_input(args.gate_evidence)
             report = json.loads(raw)
         except (OSError, ValueError, RecursionError) as e:
             print(f"fact_source: gate evidence unreadable ({e})")
@@ -2003,8 +2014,7 @@ def cmd_jev_value(args) -> int:
         print("jev-value: deadline must be finite and positive")
         return 1
     try:
-        with open(args.cases, "rb") as stream:
-            raw = stream.read(8 * 1024 * 1024)
+        raw = _evaluation_input(args.cases)
         payload = json.loads(raw)
     except (OSError, ValueError, RecursionError):
         print("jev-value: cases unreadable")
@@ -2554,8 +2564,8 @@ def _doctor_source(cfg: dict, *, probe: bool) -> dict:
     restart = {"status": "not_checked" if not probe else "unknown"}
     if probe:
         try:
-            with open(os.path.join(HOME, "data", "gateway_restart.json"), "rb") as stream:
-                raw = stream.read(8193)
+            raw = read_regular_nofollow(
+                os.path.join(HOME, "data", "gateway_restart.json"), 8192, ValueError)
             value = json.loads(raw) if len(raw) <= 8192 else None
             statuses = {"requested", "supervisor_restart_verified", "failed", "unknown"}
             if isinstance(value, dict) and value.get("status") in statuses \

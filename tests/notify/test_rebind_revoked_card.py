@@ -9,7 +9,7 @@ import pytest
 import notify_cards
 import notify_reconcile
 import notify_transport
-from test_notify_reconcile import CFG, NOW, _journal_claim, _journal_result, world
+from notify_reconcile_testkit import CFG, NOW, _journal_claim, _journal_result, world
 
 __all__ = ["world"]
 

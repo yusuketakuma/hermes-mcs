@@ -629,3 +629,21 @@ def test_deadline_cut_scan_reports_partial(store, tmp_path, monkeypatch):
     monkeypatch.setattr(drug_map.time, "monotonic", lambda: 10.0)
     assert drug_map.derive(store, _dictionary(tmp_path), deadline=5.0) == {
         "status": "partial", "done": 0, "pids": []}
+
+
+@pytest.mark.parametrize("invalid_name", [None, "", "  ", 3, {"name": "キラナ"}, "薬" * 513])
+def test_current_refs_rejects_names_the_deriver_cannot_resolve(store, tmp_path, invalid_name):
+    source_id = _seed(store)
+    drug_map.derive(store, _dictionary(tmp_path))
+    annotation = store.artifacts(drug_map.KIND)[0]
+    content, meta = json.loads(annotation["content"]), json.loads(annotation["meta"])
+    source = json.dumps({"meds": [{"name": invalid_name}]})
+    content["refs"][0]["name"] = invalid_name
+    meta["source_sha256"] = hashlib.sha256(source.encode()).hexdigest()
+    store.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (source, source_id))
+    store.db.execute("UPDATE artifacts SET content=?,meta=? WHERE kind=?",
+                     (json.dumps(content), json.dumps(meta), drug_map.KIND))
+    store.db.commit()
+    before = tuple(store.db.iterdump())
+    assert drug_map.current_refs(store.db, 1) == []
+    assert tuple(store.db.iterdump()) == before

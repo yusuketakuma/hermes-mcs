@@ -492,18 +492,16 @@ def current_refs(db: sqlite3.Connection, mid: int) -> list[Annotation]:
             or not isinstance(content.get("refs"), list)):
         return []
     try:
-        meds = json.loads(source[2]).get(
-            "medications" if source[1] == "extract_v1" else "meds", [])
-    except (ValueError, TypeError, RecursionError):
-        return []
-    if not isinstance(meds, list):
+        # Readers and derivation share the same source-name contract. A
+        # matching corrupt annotation must not bypass the derivation checks.
+        meds = dict(_source_meds(source))
+    except ValueError:
         return []
     refs = []
     for ref in content["refs"]:
         if (not isinstance(ref, dict) or type(ref.get("i")) is not int
-                or not 0 <= ref["i"] < len(meds)
-                or not isinstance(meds[ref["i"]], dict)
-                or ref.get("name") != meds[ref["i"]].get("name")
+                or ref["i"] not in meds
+                or ref.get("name") != meds[ref["i"]]
                 or ref.get("status") not in
                 ("resolved", "ambiguous", "unresolved", "generic")
                 or not isinstance(ref.get("cands"), list)):

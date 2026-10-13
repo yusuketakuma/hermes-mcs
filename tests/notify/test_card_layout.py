@@ -10,8 +10,8 @@ from notify_testkit import (
     _latest_render, _msg, _patient, _seed_thread, _signal_row, _spec,
     led as led,
 )
-from test_notify_lineworks import LINEWORKS, _deliver as _lw_deliver, _render as _lw_render
-from test_signal_thread_hotfix import delivered_source
+from notify_lineworks_testkit import LINEWORKS, _deliver as _lw_deliver, _render as _lw_render
+from notify_testkit import delivered_source
 
 
 def _texts(spec):

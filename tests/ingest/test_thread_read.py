@@ -1,6 +1,7 @@
 """Per-thread read acknowledgement (owner report 2026-10-06): stored
 replies stayed unread on MCS because a reply's unread state lives on
 its thread. Synthetic stubs only — no real MCS."""
+import json
 import time
 from types import SimpleNamespace
 
@@ -166,6 +167,71 @@ def test_failed_clear_keeps_durable_unknown_intent(tmp_path):
     assert result["threads_marked_read"] == []
     assert result["errors"]
     assert db.db.execute("SELECT status FROM thread_read_marks").fetchone()[0] == "unknown"
+
+
+def _partial_read_failure(failure):
+    error = (mcs_adapter.SessionExpired("synthetic expiry", status=401)
+             if failure == "session" else
+             mcs_adapter.MCSError("network_error", "synthetic failure", retryable=True))
+
+    def routes(path, params):
+        page = params["page"]
+        if page > 1 and failure in ("network", "session"):
+            raise error
+        ids = [11, 13] if page == 1 else [11]
+        messages = [{"id": mid, "comment": "synthetic reply"} for mid in ids]
+        if page > 1 and failure == "schema":
+            # A partially valid but malformed page must not contribute IDs.
+            messages = [{"id": 14, "comment": "synthetic reply"}, {"id": "invalid"}]
+        return {"messages": messages, "paginate": {"has_next": True}}
+
+    return _Wire(routes), error
+
+
+@pytest.mark.parametrize("failure", ["network", "session", "schema", "page_cap"])
+def test_partial_thread_read_preserves_only_validated_page_ids(failure):
+    wire, original = _partial_read_failure(failure)
+    with pytest.raises(mcs_adapter.MCSError) as caught:
+        wire.read_thread(1, 10, max_pages=2)
+    error = caught.value
+    assert error.observed_reply_ids == frozenset({11, 13})
+    if failure in ("network", "session"):
+        assert error is original
+        expected = (("synthetic expiry", 401, False) if failure == "session"
+                    else ("synthetic failure", None, True))
+        assert (error.detail, error.status, error.retryable) == expected
+    else:
+        assert error.kind == ("schema_error" if failure == "schema" else "thread_incomplete")
+    assert all("keep_read_status" not in params for _, params in wire.calls)
+
+
+@pytest.mark.parametrize("failure", ["network", "session", "schema", "page_cap"])
+def test_failed_thread_read_keeps_racing_reply_job_and_unread_evidence(tmp_path, failure):
+    db = _ledger(tmp_path)
+    _store(db, 11, parent=10)
+    wire, original = _partial_read_failure(failure)
+    wire.thread_unread = lambda pid, parent: True
+    wire.fetch_thread = lambda pid, parent: [SimpleNamespace(message_id=11)]
+    result = _result()
+    if failure == "session":
+        with pytest.raises(mcs_adapter.SessionExpired) as caught:
+            run_check.stage_thread_read(wire, db, result, time.monotonic() + 120)
+        assert caught.value is original
+    else:
+        run_check.stage_thread_read(wire, db, result, time.monotonic() + 120)
+        assert result["errors"]
+    assert result["threads_marked_read"] == []
+    assert db.db.execute("SELECT status FROM thread_read_marks").fetchone()[0] == "unknown"
+    jobs = [dict(row) for row in db.db.execute(
+        "SELECT kind,message_id,parent_id,payload FROM fetch_jobs")]
+    assert len(jobs) == 1
+    assert (jobs[0]["kind"], jobs[0]["message_id"], jobs[0]["parent_id"]) == ("reply", 13, 10)
+    assert json.loads(jobs[0]["payload"]) == {"unread": True}
+    # Once the server reports read, the following tick must keep the job.
+    run_check.stage_thread_read(_adapter([False], server=[11]), db, _result(),
+                                time.monotonic() + 120)
+    assert db.job_pending("reply", 1, 13) is not None
+    assert db.db.execute("SELECT count(*) FROM fetch_jobs").fetchone()[0] == 1
 
 
 def test_old_replies_and_mcs_errors_stay_bounded(tmp_path):

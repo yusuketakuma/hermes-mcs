@@ -69,7 +69,7 @@ python3 scripts/development/release_notes.py build \
 # README本文の5項目をソースと照合し、docs/development/readme-review.jsonを新versionへ更新する
 python3 scripts/development/update_readme.py
 python3 scripts/development/readme_release.py --check
-python3 -m unittest discover -s tests/release -v
+scripts/run_tests.sh tests/release/
 python3 scripts/development/release_notes.py export --version X.Y.Z \
   --output /tmp/release-notes.md --title-output /tmp/release-title.txt
 ```

@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "統計基準の承認失敗時に復旧内容を確実に保存",
+  "summary": "統計基準の承認が失敗したときは、以前の承認済みファイルと承認待ちファイルを戻した後、保存先の同期まで確認します。復旧直後の停止でも元の基準を失う危険を減らします。",
+  "upgrade": "追加操作は不要です。承認条件と既存の履歴・受領記録は変わりません。",
+  "details": ["refstat promotionのrollback側にもdirectory fsyncを追加する。"],
+  "refs": ["mcs/ops/mcs_operations.py"]
+}

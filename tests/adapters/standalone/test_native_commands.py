@@ -251,8 +251,6 @@ def test_request_pipeline_source_change_and_confirmation_origin(route):
 
 
 def test_native_flags_and_confirmation_cross_transport_fail_closed(route):
-    if route.transport == "discord":
-        return  # Discord's host/scope lifecycle is covered by native SDK tests.
     preview = route.call({"op": "control", "phase": "preview", "action": "pause",
                           "project_id": 1, "feature": "semantic"})
     assert preview["ok"]

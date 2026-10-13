@@ -50,7 +50,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 from mcs_adapter import (MCSAdapter, MCSError, SessionExpired)
 from ledger import Ledger, METADATA_SHADOW_BACKOFF_S
-from health_watch import HEALTH_REL, _finite_number
+from health_watch import HEALTH_REL, _finite_number, _read_status_json
 from mcs_queries import ELIGIBLE_MESSAGE
 from mcs_util import (CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB,
                       HOME, RUN_LOCK, UPDATE_MARKER_NAME, RunLockLost,
@@ -107,8 +107,7 @@ def _config() -> dict:
 def _prev_health() -> dict:
     """The previously published health block ({} when unreadable)."""
     try:
-        with open(HEALTH_FILE, encoding="utf-8") as f:
-            prev = json.load(f)
+        prev = _read_status_json(HEALTH_FILE)
     except (OSError, ValueError, RecursionError):
         return {}
     return prev if isinstance(prev, dict) else {}
@@ -1237,14 +1236,21 @@ def stage_thread_read(adapter, ledger, result, deadline):
                     result["errors"].append("thread_read: reply_failed")
                 continue
             ledger.mark_thread_read(pid, parent, last, "unknown")
-            seen = adapter.read_thread(pid, parent)
-            for rid in sorted(seen - server):
-                # arrived between fetch and read: now read on MCS, so
-                # the job carries the unread evidence for notification
-                ledger.job_add("reply", pid, rid, parent_id=parent,
-                               payload={"unread": True},
-                               revive_failed=False)
-                ledger.job_set_flag("reply", pid, rid, "unread")
+            seen = set()
+            try:
+                seen = adapter.read_thread(pid, parent)
+            except MCSError as error:
+                seen = set(error.observed_reply_ids)
+                raise
+            finally:
+                # Successful pages may already have cleared replies even
+                # when a later page failed. Keep their observed IDs durable;
+                # the thread mark remains unknown until the whole read succeeds.
+                for rid in sorted(seen - server):
+                    ledger.job_add("reply", pid, rid, parent_id=parent,
+                                   payload={"unread": True},
+                                   revive_failed=False)
+                    ledger.job_set_flag("reply", pid, rid, "unread")
             if not adapter.thread_unread(pid, parent):
                 ledger.mark_thread_read(pid, parent, last, "confirmed")
                 done.append(parent)

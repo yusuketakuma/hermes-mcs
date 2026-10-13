@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "配送記録の書き込み失敗時にファイルを閉じ忘れる問題を修正",
+  "summary": "カード配送の記録（journal）を書く前の確認で読み取りエラーが起きたとき、開いたファイルを閉じずに残していたのを修正しました。障害が繰り返されると開けるファイル数の上限に達し、配送を続けられなくなるおそれがありました。",
+  "upgrade": "追加操作は不要です。記録の形式・書き込み順序・途中で切れた行の扱いは変わりません。Hermes 接続では gateway の再起動後に反映されます。",
+  "details": [
+    "adapters/common/journal.append は os.open 直後にストリームへ所有を移し、末尾確認の fstat/pread と書き込みをその with 内で行う。fdopen 自体の失敗時も明示的に close する。",
+    "合成の EIO 注入（fstat・pread・fdopen）を20回繰り返しても開いている FD 数が増えず、記録ファイルに何も書かれないことを確認する回帰を追加した。"
+  ],
+  "refs": [
+    "adapters/common/journal.py",
+    "tests/adapters/common/test_journal_append_cleanup.py"
+  ]
+}

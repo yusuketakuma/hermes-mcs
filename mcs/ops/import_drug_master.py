@@ -22,7 +22,7 @@ import zlib
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 import drug_map  # noqa: E402
-from safe_io import read_regular_nofollow  # noqa: E402
+from safe_io import fsync_dir, read_regular_nofollow  # noqa: E402
 
 JSON: TypeAlias = None | bool | int | float | str | list["JSON"] | dict[str, "JSON"]
 MENU_URL = "https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/"
@@ -45,8 +45,9 @@ TEXT_COLUMNS = {1, 4, 6, 9, 28, 31, 34, 36, 37, 38, 39}
 class MasterError(ValueError):
     """Refusal code without a row, alias, private path or upstream contents."""
 
-    def __init__(self, code: str):
+    def __init__(self, code: str, *, written: bool = False):
         self.code = code
+        self.written = written
         super().__init__(code)
 
 
@@ -333,6 +334,7 @@ def write_private(result: Conversion, destination: Path) -> None:
             or parent.st_mode & 0o077):
         raise MasterError("private_output_directory")
     fd, temporary = tempfile.mkstemp(prefix=".drug-master-", dir=destination.parent)
+    published = False
     try:
         with os.fdopen(fd, "wb") as stream:
             os.fchmod(stream.fileno(), 0o600)
@@ -343,8 +345,16 @@ def write_private(result: Conversion, destination: Path) -> None:
         if drug_map.load(temporary, expected_sha256=digest) is None:
             raise MasterError("dictionary_unavailable")
         os.link(temporary, destination, follow_symlinks=False)
+        published = True
     finally:
-        os.unlink(temporary)
+        try:
+            os.unlink(temporary)
+            if published:
+                fsync_dir(destination.parent)
+        except OSError:
+            if published:
+                raise MasterError("output_published_sync_unconfirmed", written=True) from None
+            raise
 
 
 def main(argv=None) -> int:
@@ -367,7 +377,8 @@ def main(argv=None) -> int:
     except (MasterError, ValueError, OSError, TypeError, RecursionError) as error:
         code = error.code if isinstance(error, MasterError) else (
             "output_exists" if isinstance(error, FileExistsError) else "input_or_dictionary_invalid")
-        print(json.dumps({"status": "refused", "reason": code, "written": False}))
+        print(json.dumps({"status": "refused", "reason": code,
+                          "written": isinstance(error, MasterError) and error.written}))
         return 1
 
 

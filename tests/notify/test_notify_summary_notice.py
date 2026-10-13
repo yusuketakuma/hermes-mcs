@@ -185,7 +185,7 @@ def test_answer_reads_the_snapshot_within_the_caller_scope(led, tmp_path):
     path = _snapshot(led, tmp_path)
     got = summary.answer(path, "all", allowed=[2], dialect="discord", now=NOW)
     assert got["text"].startswith("## 📊 MCS サマリー")
-    assert "患者B" in got["text"] or "1人" in got["text"]
+    assert "対象: 全患者 1人" in got["text"]
     assert "患者A" not in got["text"]
     assert "error" in summary.answer(path, "all", allowed=[], now=NOW)
     assert "名前" in summary.answer(path, "mine", now=NOW)["error"]

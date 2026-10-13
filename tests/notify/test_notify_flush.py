@@ -179,7 +179,10 @@ def test_missing_exe_does_not_starve_interactive(tmp_path, monkeypatch):
         ).fetchone()["c"] == 1
         # a second flush re-enters the sealed intent idempotently
         res2 = notify_flush.flush(db)
-        assert res2.get("dispatched", 0) <= 1
+        assert res2.get("dispatched", 0) == 0
+        assert db.db.execute(
+            "SELECT COUNT(*) c FROM notification_renders"
+        ).fetchone()["c"] == 1
     finally:
         db.close()
 

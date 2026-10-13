@@ -15,14 +15,11 @@ import pytest
 
 import notify_cards
 import notify_render
-import notify_transport
 from notify_testkit import (
-    CFG, NOW, SCOPE, _begin, _card, _dispatch, _intent, _latest_render,
-    _msg, _receipt, _seed_thread, _uuid)
-from common_testkit import ledger_fixture
+    CFG, NOW, SCOPE, _attach, _begin, _card, _dispatch, _intent,
+    _latest_render, _msg, _part_receipt, _receipt, _seed_thread, _uuid, led)
 
-
-led = ledger_fixture(data_dir=True)
+__all__ = ["led"]
 
 
 def _parts(led, delivery_id):
@@ -36,25 +33,6 @@ def _part(led, delivery_id, part_id):
         "SELECT * FROM notification_render_parts WHERE delivery_id=? "
         "AND part_id=?", (delivery_id, part_id)).fetchone()
     return dict(r) if r else None
-
-
-def _part_receipt(led, render, part_id, result="delivered",
-                  remote_id="r-1", error_code=None, aid=None, n=50,
-                  mutate=None):
-    req = {"version": 1, "op": "part_receipt", "command_id": _uuid(n),
-           "attempt_id": aid or f"p:{render['delivery_id'].replace('-', '')}:{part_id}",
-           "delivery_id": render["delivery_id"],
-           "render_rev": render["render_rev"],
-           "payload_hash": render["payload_hash"], "route_epoch": 1,
-           "correlation": render["correlation"], **SCOPE,
-           "part_id": part_id, "result": result}
-    if remote_id is not None:
-        req["remote_id"] = remote_id
-    if error_code is not None:
-        req["error_code"] = error_code
-    if mutate:
-        mutate(req)
-    return notify_transport.apply_part_receipt(led, req, CFG, now=NOW)
 
 
 def _spec(render):
@@ -464,21 +442,6 @@ def test_part_receipt_needs_remote_or_error(led):
 
 
 # ---------- attachments in the part manifest -------------------------------
-
-def _attach(led, mid, aid=None, state="downloaded",
-            local_path="/tmp/fake.txt", sha256="ab" * 32, name="f.txt",
-            nbytes=10):
-    led.db.execute(
-        "INSERT INTO attachments(message_id,file_id,name,local_path,"
-        "bytes,sha256,state,downloaded_at,created_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?)",
-        (mid, f"file-{mid}", name, local_path, nbytes, sha256,
-         state, NOW, NOW))
-    led.db.commit()
-    return aid or led.db.execute(
-        "SELECT attachment_id FROM attachments WHERE message_id=?",
-        (mid,)).fetchone()["attachment_id"]
-
 
 def test_downloaded_attachment_is_a_part(led, tmp_path):
     _seed_thread(led)

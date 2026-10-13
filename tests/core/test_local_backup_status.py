@@ -132,6 +132,7 @@ def test_a_hostile_marker_is_unverified_without_blocking(backups, tmp_path, kind
     else:
         marker.mkdir()
     assert _status()["state"] == "unverified"
+    assert maintenance._verified_unchanged(str(path)) is False
 
 
 def test_a_symlinked_backup_is_not_a_backup(backups, tmp_path):

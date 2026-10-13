@@ -187,6 +187,10 @@ def _queue_stats(c, oldest_msg, *, now=None):
         return c.execute(sql, p).fetchall()
 
     now = time.time() if now is None else now
+
+    def age(value):
+        return max(0.0, now - value) if _nonnegative(value) else None
+
     queue_ages = {}
     for name, kinds in (("semantic", (JOB_KIND,)),
                         ("extract_qc", (QC_JOB_KIND,))):
@@ -194,10 +198,8 @@ def _queue_stats(c, oldest_msg, *, now=None):
             "SELECT MIN(created_at) FROM fetch_jobs "
             "WHERE state='pending' AND kind=?",
             kinds)[0][0]
-        queue_ages[name] = (max(0.0, now - oldest)
-                            if oldest is not None else None)
-    queue_ages["extract_llm"] = (max(0.0, now - oldest_msg)
-                                 if oldest_msg is not None else None)
+        queue_ages[name] = age(oldest)
+    queue_ages["extract_llm"] = age(oldest_msg)
     cohorts = {"arrival": 0, "backfill": 0}
     cohorts.update(q(
         "SELECT CASE WHEN json_valid(payload) "

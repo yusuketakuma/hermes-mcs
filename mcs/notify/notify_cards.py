@@ -3086,12 +3086,13 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
         mid, page = params.get("message_id"), params.get("page", 0)
         if not positive(mid) or type(page) is not int or page < 0:
             return {**base, "outcome": "rejected", "error": "action_not_applicable"}
-        posts = list(_meds_messages(db, card, _render_context(db, card)))
+        context = _render_context(db, card)
+        posts = list(_meds_messages(db, card, context))
         if mid not in posts:
             return {**base, "outcome": "rejected", "error": "action_not_applicable"}
         selected = posts.index(mid)
         # the ⚠ hint only when ⚠ pins this very post (it may pin another)
-        ref = _render_context(db, card).get("extract_ref") or {}
+        ref = context.get("extract_ref") or {}
         view = meds_view(db, card["project_id"], mid,
                          can_report=ref.get("message_id") == mid,
                          can_search=drug_search_available(db), page=page)

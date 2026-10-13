@@ -94,11 +94,7 @@ def _verified_unchanged(dest: str) -> bool:
     """True when ``dest`` still matches the signature recorded right
     after it was verified and published — lets a run skip re-running
     quick_check over an unchanged same-day backup."""
-    try:
-        with open(dest + ".ok", encoding="utf-8") as f:
-            marker = f.read().strip()
-    except (OSError, ValueError):
-        return False
+    marker = _read_ok_marker(dest)
     return bool(marker) and marker == _stat_sig(dest)
 
 
@@ -225,6 +221,17 @@ class _MarkerUnreadable(Exception):
     pass
 
 
+def _read_ok_marker(dest: str) -> str | None:
+    """Read the bounded verification marker shared by backup and health."""
+    try:
+        marker = read_regular_nofollow(dest + ".ok", OK_MARKER_MAX, _MarkerUnreadable)
+        if len(marker) <= OK_MARKER_MAX:
+            return marker.decode("ascii").strip()
+    except (OSError, ValueError, _MarkerUnreadable):
+        pass
+    return None
+
+
 def local_backup_status(*, now: float) -> dict:
     """Read-only state of the newest daily backup for health: a bounded
     scan, lstat, and a bounded no-follow read of the .ok marker — no DB
@@ -258,12 +265,7 @@ def local_backup_status(*, now: float) -> dict:
     age = now - st.st_mtime
     if not (math.isfinite(age) and age >= 0):
         return out("unknown")
-    try:
-        marker = read_regular_nofollow(path + ".ok", OK_MARKER_MAX, _MarkerUnreadable)
-        verified = (len(marker) <= OK_MARKER_MAX
-                    and marker.decode("ascii").strip() == f"{st.st_size} {st.st_mtime_ns}")
-    except (OSError, ValueError, _MarkerUnreadable):
-        verified = False
+    verified = _read_ok_marker(path) == f"{st.st_size} {st.st_mtime_ns}"
     return out("verified" if verified else "unverified", age)
 
 

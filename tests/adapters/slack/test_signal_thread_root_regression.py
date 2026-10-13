@@ -10,8 +10,8 @@ from adapters.common.spec import token_map
 from adapters.slack.delivery import DeliveryWorker
 from notify_testkit import _dispatch, _intent, _latest_render, _seed_thread, _signal_row
 from slack_testkit import SLACK, SCOPE, _granted_card, _mkworld
-from test_mcs_slack import _attach, isolated_slack_ledger as led
-from test_mcs_slack_actions import TOKEN, TS, fixture, result
+from slack_testkit import _attach, isolated_slack_ledger as led
+from slack_actions_testkit import TOKEN, TS, fixture, result
 
 __all__ = ["led"]
 
