@@ -11,11 +11,12 @@ def _object(raw) -> dict:
     return loads_dict(raw) or {}
 
 
-def audit_history(ledger) -> dict:
+def audit_history(ledger, *, checkpoint=lambda: None) -> dict:
     """Count artifact history; repeated attempts and obsolete sources remain."""
     statuses, repairs, findings = {}, {}, {}
     for row in ledger.db.execute(
             "SELECT content,meta FROM artifacts WHERE kind=?", (KIND_AUDIT,)):
+        checkpoint()
         meta, content = _object(row["meta"]), _object(row["content"])
         status = meta.get("audit_status")
         status = status if isinstance(status, str) and status else "unparsed"
@@ -25,6 +26,7 @@ def audit_history(ledger) -> dict:
             repairs[repair_status] = repairs.get(repair_status, 0) + 1
         recorded_findings = content.get("findings")
         for finding in recorded_findings if isinstance(recorded_findings, list) else []:
+            checkpoint()
             code = finding.get("code") if isinstance(finding, dict) else None
             if isinstance(code, str) and code:
                 findings[code] = findings.get(code, 0) + 1
@@ -32,7 +34,7 @@ def audit_history(ledger) -> dict:
             "finding_codes": findings}
 
 
-def current_quality(ledger, cfg: dict | None) -> dict:
+def current_quality(ledger, cfg: dict | None, *, checkpoint=lambda: None) -> dict:
     """Count one current terminal summary/audit pair per scoped message.
 
     Configuration is supplied by the caller; a snapshot reader never opens
@@ -45,22 +47,22 @@ def current_quality(ledger, cfg: dict | None) -> dict:
     if errors:
         return {"available": False, "reason": "config_invalid"}
     project_ids = scfg["project_ids"]
-    rows = ledger.db.execute(
-        "SELECT project_id,message_id,COALESCE(parent_id,message_id) root_id "
-        "FROM messages ORDER BY project_id,root_id,message_id").fetchall()
-    total = len(rows)
-    rows = [row for row in rows if project_ids is None
-            or row["project_id"] in project_ids]
     out = {"available": True, "scope": "stored_messages_in_configured_projects",
            "completion_basis": "terminal_summary_audit_pair",
            "mode": scfg["mode"], "summary_mode": scfg["summary_mode"],
            "policy_fingerprint": policy_fingerprint(scfg),
-           "total_messages": total, "scoped_messages": len(rows),
-           "excluded_messages": total - len(rows),
-           "denominator": len(rows), "complete": 0, "incomplete": len(rows),
+           "total_messages": 0, "scoped_messages": 0, "excluded_messages": 0,
+           "denominator": 0, "complete": 0, "incomplete": 0,
            "audit_statuses": {}, "incomplete_reasons": {},
            "completion_rate": None, "pass_rate": None}
     if scfg["mode"] == "off" or scfg["summary_mode"] == "off":
+        for pid, count in ledger.db.execute(
+                "SELECT project_id,COUNT(*) FROM messages GROUP BY project_id"):
+            checkpoint()
+            out["total_messages"] += count
+            out["scoped_messages" if project_ids is None or pid in project_ids
+                else "excluded_messages"] += count
+        out["denominator"] = out["scoped_messages"]
         out.update(available=False, reason="summary_disabled")
         # Disabled coverage is not a processing backlog.
         out.update(complete=None, incomplete=None)
@@ -70,10 +72,23 @@ def current_quality(ledger, cfg: dict | None) -> dict:
     import semantic
     local_model = semantic.llm_model(cfg)
     last_key, bundle, members = None, None, {}
+    rows = ledger.db.execute(
+        "SELECT project_id,message_id,COALESCE(parent_id,message_id) root_id "
+        "FROM messages ORDER BY project_id,root_id,message_id")
     for row in rows:
+        checkpoint()
+        # Derive counts and members from this one stream, including when
+        # callers do not wrap the whole report in a read transaction.
+        out["total_messages"] += 1
+        if project_ids is not None and row["project_id"] not in project_ids:
+            out["excluded_messages"] += 1
+            continue
+        out["scoped_messages"] += 1
+        out["denominator"] += 1
         key = row["project_id"], row["root_id"]
         if key != last_key:
             bundle = thread_bundle(ledger, *key, local_model=local_model)
+            checkpoint()
             members = ({m["message_id"]: m for m in bundle["members"]}
                        if bundle else {})
             last_key = key

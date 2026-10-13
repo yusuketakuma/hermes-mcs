@@ -155,8 +155,9 @@ MIGRATION_INSTALL_ARGS = ("--no-llm", "--no-plugin")
 KEEP_CHECKOUT_ENV = "MCS_UPDATE_KEEP_HERMES_CHECKOUT"
 # mirror install.sh: a migration accepts the current pin as is and moves only
 # the previous pins (HERMES_PIN / HERMES_PREVIOUS_PINS)
-HERMES_PIN = "6f35b1ed84536f7e7fd2f605f7779dd051cce05f"
-HERMES_PREVIOUS_PINS = frozenset({"fd50a275e2616118c48fe07e7e1c878782b15ccd",
+HERMES_PIN = "f36c1da0016ce14c9c531cb9514ab4b0b667240d"
+HERMES_PREVIOUS_PINS = frozenset({"6f35b1ed84536f7e7fd2f605f7779dd051cce05f",
+                                  "fd50a275e2616118c48fe07e7e1c878782b15ccd",
                                   "1e8fbfe6b41399a46e232f6cde5618cfdfa2729a",
                                   "16390dc80d248b7b49554c0cde52caf22e1fc3d8"})
 _SERVICES_PYTHON: str | None = None   # rebuilt runtime after a migration
@@ -213,15 +214,23 @@ def _valid_state(state):
                for row in state.get("stages", []))
 
 
+def _read_control_json(path):
+    """Read a regular local control file without following links or waiting on FIFOs."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise ValueError("control_file_not_regular")
+        return json.load(handle)
+
+
 def load_state() -> dict:
     """Lock-free read — writers publish atomically so a torn read never
     happens. Unparsable state is 'corrupt': callers must escalate and
     touch nothing (S17/S24)."""
     try:
-        with open(STATE_PATH, encoding="utf-8") as f:
-            state = json.load(f)
+        state = _read_control_json(STATE_PATH)
     except FileNotFoundError:
-        return _default_state()
+        return {"_corrupt": True} if os.path.lexists(STATE_PATH) else _default_state()
     except (OSError, ValueError, RecursionError):
         return {"_corrupt": True}
     if not _valid_state(state):
@@ -957,8 +966,7 @@ def _awaiting_consent_marker() -> dict | None:
     unreadable/unknown, holds."""
     path = os.path.join(DATA, "restore_pending.json")
     try:
-        with open(path, "rb") as handle:
-            data = json.loads(handle.read().decode("utf-8"))
+        data = _read_control_json(path)
     except FileNotFoundError:
         return {"unreadable": True} if os.path.lexists(path) else None
     except (OSError, ValueError, RecursionError):
@@ -1073,6 +1081,21 @@ def _bootstrap_agent(label: str, plist: str) -> bool:
     return launchd_bootstrap(label, plist, _run) is None
 
 
+def _restart_runtime_mode():
+    """Keep an absent config's legacy default distinct from an unreadable config."""
+    path = Path(DATA).parent / "config.json"
+    try:
+        cfg = _read_control_json(path)
+    except FileNotFoundError:
+        return None if os.path.lexists(path) else "hermes"
+    except (OSError, ValueError, RecursionError):
+        return None
+    if not isinstance(cfg, dict):
+        return None
+    mode = cfg.get("runtime_mode", "hermes")
+    return mode if mode in ("hermes", "standalone") else None
+
+
 def restart_agents(bounce: bool = True) -> list[str]:
     """Re-bootstrap resident drainers and verify a NEW pid; watchers are
     verified loaded only (R20). Returns list of verify failures. Labels
@@ -1085,7 +1108,10 @@ def restart_agents(bounce: bool = True) -> list[str]:
     not loaded or unverifiable (hung print — fail closed) is started:
     bootstrap unless loaded, then `kickstart` without -k, which starts
     a stopped job and never kills a running one."""
-    if load_config().get("runtime_mode") == "standalone":
+    mode = _restart_runtime_mode()
+    if mode is None:
+        return ["runtime_mode_unverifiable"]
+    if mode == "standalone":
         _remove_marker()
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
@@ -1804,9 +1830,8 @@ def _read_manifest_snapshot():
     """Read the pre-update manifest snapshot, or None when unreadable."""
     snap = None
     try:
-        with open(MANIFEST_PATH, encoding="utf-8") as f:
-            snap = json.load(f)
-    except (OSError, json.JSONDecodeError):
+        snap = _read_control_json(MANIFEST_PATH)
+    except (OSError, ValueError, RecursionError):
         pass
     return snap
 
@@ -3234,8 +3259,7 @@ def _alert_due(result: str, key: str, now: float) -> tuple[bool, float]:
 def _last_report() -> dict:
     """recovery_report.json as a dict — {} when missing or unreadable."""
     try:
-        with open(REPORT_PATH, encoding="utf-8") as f:
-            last = json.load(f)
+        last = _read_control_json(REPORT_PATH)
     except (OSError, ValueError, RecursionError):
         return {}
     return last if isinstance(last, dict) else {}

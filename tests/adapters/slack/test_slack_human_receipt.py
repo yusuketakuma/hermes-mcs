@@ -6,8 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from test_mcs_slack_actions import (TOKEN, _to_confirm, ack, command,  # noqa: F401
-                                    fixture, result, _no_modal_wait)
+from slack_actions_testkit import TOKEN, _to_confirm, ack, command, fixture, result  # noqa: F401
+from slack_actions_testkit import _no_modal_wait  # noqa: F401  (used via usefixtures)
+
+pytestmark = pytest.mark.usefixtures("_no_modal_wait")
 
 
 def _flags(dirs, **extra):

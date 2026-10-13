@@ -3,13 +3,17 @@ import hashlib
 import json
 from types import MappingProxyType
 
+import pytest
+
 import drug_map
 import extract
 import mcs_setup
 import mcs_signals
+import notify_views
 import rollup
 import run_check
 from ingest_testkit import _ledger, _message
+from test_drug_map import _dictionary, _fail_dictionary_io, _seed, store as store
 
 
 def test_dictionary_candidates_are_derived_before_rollup_and_retired_when_disabled(
@@ -69,6 +73,34 @@ def test_invalid_dictionary_setting_retires_candidates_and_returns_safe_reason(t
         assert "PRIVATE_CANARY" not in json.dumps(result)
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("failure", ["fstat", "read"])
+def test_dictionary_io_failure_retires_old_candidates_and_recovers(store, tmp_path, monkeypatch, failure):
+    _seed(store)
+    dictionary = _dictionary(tmp_path)
+    path = tmp_path / "fictional-drug-map.json"
+    config = {"drug_map": {"path": str(path), "sha256": dictionary.sha256}}
+    drug_map.derive(store, dictionary)
+    rollup.rebuild(store, 1)
+    assert "架空成分甲" in notify_views.patient_summary_text(store.db, 1)[1]
+    monkeypatch.setattr(run_check.time, "monotonic", lambda: 1)
+    monkeypatch.setattr(extract, "run_pending", lambda *args, **kwargs: {"done": 0, "pids": []})
+    monkeypatch.setattr(mcs_signals, "evaluate", lambda *args, **kwargs: {})
+    with monkeypatch.context() as scoped:
+        _fail_dictionary_io(scoped, path, failure)
+        result = {"errors": []}
+        run_check.stage_derive(store, result, 100, config, llm_budget_cap=0)
+    assert result["errors"] == ["drug_map: invalid_dictionary"]
+    assert result["drug_map"]["status"] == "invalid"
+    assert str(path) not in json.dumps(result)
+    assert drug_map.current_refs(store.db, 1) == []
+    body = notify_views.patient_summary_text(store.db, 1)[1]
+    assert "架空成分甲" not in body and "キラナ" in body
+    recovered = {"errors": []}
+    run_check.stage_derive(store, recovered, 100, config, llm_budget_cap=0)
+    assert recovered["errors"] == [] and recovered["drug_map"]["status"] == "ok"
+    assert "架空成分甲" in notify_views.patient_summary_text(store.db, 1)[1]
 
 
 def test_deep_dictionary_returns_safe_tick_diagnostic_without_db_writes(tmp_path, monkeypatch):

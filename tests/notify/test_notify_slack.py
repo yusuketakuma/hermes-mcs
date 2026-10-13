@@ -13,10 +13,9 @@ from adapters.slack import cards as slack_cards
 from mcs_requests import canonical
 from notify_testkit import (
     CFG, NOW, _begin, _card, _dispatch as _raw_dispatch, _intent, _latest_render,
-    _seed_thread, _signal_row, _token_for, _uuid,
+    _seed_thread, _signal_row, _token_for, _uuid, led, pinned_clock,
 )
 from slack_testkit import SCOPE, SLACK
-from common_testkit import ledger_fixture
 
 # flag-off variant — the ephemeral body-button contract survives as the
 # escape hatch for deployments without card threads
@@ -29,18 +28,14 @@ ACTOR = "slack:T_SYNTHETIC:U_SYNTHETIC"
 
 def _dispatch(led, ev, cfg=CFG, now=NOW):
     if ev["kind"] == "signal" and not json.loads(ev["payload"]).get("digest"):
-        from test_signal_thread_hotfix import delivered_source
+        from notify_testkit import delivered_source
         _raw_dispatch(led, ev, cfg, now)
         delivered_source(led, card_id=led.db.execute("SELECT COALESCE(MAX(card_id),0)+1 FROM notification_cards").fetchone()[0], cfg={**cfg, "notify": {**cfg["notify"], "card_thread": True}})
     return _raw_dispatch(led, ev, cfg, now)
 
 
-@pytest.fixture(autouse=True)
-def _pin_wall_clock(monkeypatch):
-    monkeypatch.setattr(cards.time, "time", lambda: NOW)
-
-
-slack_ledger = ledger_fixture(data_dir=True)
+__all__ = ["led", "pinned_clock"]
+pytestmark = pytest.mark.usefixtures("pinned_clock")
 
 
 def _command(render, op="transport_begin", **overrides):

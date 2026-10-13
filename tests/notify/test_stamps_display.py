@@ -444,7 +444,7 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
     from discord_testkit import _fake_discord
     from notify_testkit import _latest_render
     from slack_testkit import SLACK
-    from test_notify_lineworks import LINEWORKS
+    from notify_lineworks_testkit import LINEWORKS
 
     monkeypatch.setattr(ledger.time, "time", lambda: NOW)
     monkeypatch.setitem(sys.modules, "discord", _fake_discord())

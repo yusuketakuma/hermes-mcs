@@ -5,12 +5,8 @@ import sys
 import pytest
 
 from adapters.common import envelopes, text
-from discord_testkit import MISSING
-from test_mcs_discord import (
-    FakeFollowup, FakeInteraction, _deliver, _pin_wall_clock, _request, world,
-)
-
-__all__ = ["world", "_pin_wall_clock"]
+from discord_testkit import MISSING, FakeFollowup, FakeInteraction, _deliver, _request
+from discord_testkit import discord_world  # noqa: F401  (registers fixture ``world``)
 
 
 def _prepare(world, monkeypatch):

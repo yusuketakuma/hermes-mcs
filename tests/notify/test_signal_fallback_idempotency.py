@@ -8,9 +8,8 @@ import notify_cards
 import notify_transport
 from adapters.common.spec import validate
 from adapters.slack.cards import validate as validate_slack
-from notify_testkit import CFG, NOW, _dispatch, _intent, _latest_render, _seed_thread, _signal_row, _uuid, led
+from notify_testkit import CFG, NOW, _card, _dispatch, _intent, _latest_render, _seed_thread, _signal_row, _uuid, delivered_source, led
 from slack_testkit import SLACK
-from test_signal_thread_hotfix import delivered_source
 
 __all__ = ["led"]
 LATE = NOW + notify_cards.SIGNAL_SOURCE_HOLD_MAX_S + 60
@@ -70,10 +69,6 @@ def _fallback(store, cfg):
     assert _latest_render(store) is None
     assert _dispatch(store, event, cfg, now=LATE)["dispatched"]
     return _latest_render(store)
-
-
-def _card(store, card_id=1):
-    return dict(store.db.execute("SELECT * FROM notification_cards WHERE card_id=?", (card_id,)).fetchone())
 
 
 @pytest.mark.parametrize("cfg", [CFG, SLACK], ids=["discord", "slack"])

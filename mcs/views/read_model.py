@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import math
+from mcs_queries import ELIGIBLE_MESSAGE
 from semantic_projection import PROJECTION_VERSION
 
 from patient_context import context_items, extract_context, merged_context
@@ -43,11 +44,6 @@ EXTRACTION_KINDS = ("extract_v1", "extract_llm", "canonical_projection",
 _LEGACY_UNSCOPED_KINDS = ("extract_v1", "extract_llm")
 _KINDS_IN = ",".join("?" * len(EXTRACTION_KINDS))
 _LEGACY_IN = ",".join("?" * len(_LEGACY_UNSCOPED_KINDS))
-
-# shared eligibility predicate — the same definition extract_llm uses
-# to choose work, so coverage and records can never drift
-_ELIGIBLE = ("m.body_text IS NOT NULL AND m.body_text != '' "
-             "AND (m.body_state IS NULL OR m.body_state='full')")
 
 
 def _table_exists(db, name: str) -> bool:
@@ -160,7 +156,7 @@ def _message_records(db, project_id):
     sql = f"""
       SELECT m.message_id, m.project_id, m.parent_id, m.posted_at_ts,
              m.body_state, m.content_hash,
-             CASE WHEN {_ELIGIBLE} THEN 1 ELSE 0 END AS eligible
+             CASE WHEN {ELIGIBLE_MESSAGE} THEN 1 ELSE 0 END AS eligible
       FROM messages m {where} ORDER BY m.message_id
     """
     cursor = db.execute(sql, params)

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
 
 import pytest
 
@@ -17,9 +16,9 @@ import notify_flush
 import notify_render
 import notify_views
 from semantic_projection import PROJECTION_VERSION
-from mcs_queries import JST, extract_feedback
+from mcs_queries import extract_feedback
 from notify_testkit import (
-    CFG, NOW, ORIGIN, _add_request, _click, _deliver, _delivered_card, _dispatch,
+    CFG, NOW, ORIGIN, _add_request, _at, _click, _deliver, _delivered_card, _dispatch,
     _intent, _latest_render, _llm_extract, _msg, _patient, _seed_thread,
     _signal_row, _spec, led, pinned_clock)
 
@@ -511,11 +510,6 @@ def test_report_command_validation(led, tmp_path):
 
 
 # ---------- ⏰ reminders ---------------------------------------------------
-
-def _at(day, hour):
-    return datetime.fromisoformat(f"{day}T{hour:02d}:00:00").replace(
-        tzinfo=JST).timestamp()
-
 
 def _send_time(monkeypatch, at):
     """Formatting a reminder rechecks it at send time — against this

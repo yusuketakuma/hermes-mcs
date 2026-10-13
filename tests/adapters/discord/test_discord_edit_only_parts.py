@@ -2,8 +2,8 @@
 import asyncio
 from types import SimpleNamespace
 import pytest
-from test_mcs_discord_delivery import _mkworker, FakeThread, _HistMsg, _discord
-from discord_delivery_testkit import _spec, _claim, FakeHTTP, _sent_parts, _state
+from discord_delivery_testkit import (FakeHTTP, FakeThread, _claim, _discord, _HistMsg, _mkworker,
+                                      _sent_parts, _spec, _state)
 
 
 @pytest.fixture

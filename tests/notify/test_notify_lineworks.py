@@ -14,54 +14,17 @@ import notify_transport as transport
 from adapters.common import envelopes, registry
 from adapters.common.spec import validate as validate_v1
 from notify_render import display_text, lineworks_card_split
+from notify_lineworks_testkit import (
+    LINEWORKS, MID, SCOPE, _apply, _claim, _deliver, _render,
+)
 from notify_testkit import (
     CFG, NOW, _card, _dispatch, _intent, _latest_render, _seed_thread,
-    _token_for, led as led,
+    _token_for, led as led, pinned_clock,
 )
 
-SCOPE = {"transport": "lineworks", "profile": "mcs",
-         "application_id": "2000001", "team_id": "40029600",
-         "channel_id": "12345678-1234-4321-abcd-123456789abc"}
-LINEWORKS = {"notify": {"interactive": "lineworks", "route_epoch": 1,
-                        "card_thread": False,
-                        "lineworks": {k: v for k, v in SCOPE.items()
-                                      if k != "transport"}},
-             "signals": {"notify": True}}
+__all__ = ["led", "pinned_clock"]
+pytestmark = pytest.mark.usefixtures("pinned_clock")
 ACTOR = "lineworks:40029600:c72af563-0f21-4736-11e4-045237113344"
-MID = "lw:" + "c" * 32
-
-
-@pytest.fixture(autouse=True)
-def pinned_clock(monkeypatch):
-    monkeypatch.setattr(cards.time, "time", lambda: NOW)
-
-
-def _render(led):
-    _seed_thread(led)
-    assert _dispatch(led, _intent(led), LINEWORKS)["dispatched"]
-    return _latest_render(led)
-
-
-def _claim(render, attempt="a" * 16):
-    return {"spec": json.loads(render["spec_json"]),
-            "attempt_id": attempt, "worker_id": "b" * 16,
-            "payload_hash": render["payload_hash"]}
-
-
-def _apply(led, req, cfg=LINEWORKS):
-    assert cmds.validate_int(req) is None
-    return cmds.dispatch(led, req, cfg, cards.data_root(led), now=NOW)
-
-
-def _deliver(led, render):
-    claim = _claim(render)
-    assert _apply(led, envelopes.transport_begin(claim))["granted"]
-    assert _apply(led, envelopes.transport_receipt(
-        claim, "delivered", message_id=MID))["applied"]
-    for part in claim["spec"]["parts"]["manifest"][1:]:
-        assert _apply(led, envelopes.part_receipt(
-            claim, part, "delivered", remote_id="lw:part:" + part["part_id"]))["applied"]
-    return claim["spec"]
 
 
 def test_lineworks_render_full_body_and_durable_scope_without_thread_api(led, tmp_path):

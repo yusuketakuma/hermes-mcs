@@ -184,15 +184,34 @@ def _valid_state(state):
 
 def _load_state():
     try:
-        with open(STATE_PATH, encoding="utf-8") as f:
-            s = json.load(f)
+        s = _read_local_json(STATE_PATH)
         if not _valid_state(s):
             return {"_corrupt": True}
         return s
     except FileNotFoundError:
+        if os.path.lexists(STATE_PATH):
+            return {"_corrupt": True}
         return {"v": 1, "stages": [], "applied": [], "applying": None}
     except (OSError, ValueError, RecursionError):
         return {"_corrupt": True}
+
+
+def _read_local_json(path, maximum=None, private=False):
+    """Read a regular, non-symlink file; preserve each caller's size policy."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    try:
+        metadata = os.fstat(fd)
+        if (not stat.S_ISREG(metadata.st_mode)
+                or private and metadata.st_mode & 0o077
+                or maximum is not None and metadata.st_size > maximum):
+            raise ValueError("local_state_file_invalid")
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            raw = stream.read() if maximum is None else stream.read(maximum + 1)
+        if maximum is not None and len(raw) > maximum:
+            raise ValueError("local_state_file_too_large")
+        return json.loads(raw.decode("utf-8"))
+    finally:
+        os.close(fd)
 
 
 def _atomic_json(path, value, prefix, suffix=".tmp", **dump_kw):
@@ -252,8 +271,7 @@ def _alert_due(result, key, now):
 
 def _last_report():
     try:
-        with open(REPORT_PATH, encoding="utf-8") as f:
-            last = json.load(f)
+        last = _read_local_json(REPORT_PATH)
     except (OSError, ValueError, RecursionError):
         return {}
     return last if isinstance(last, dict) else {}
@@ -274,8 +292,7 @@ def _awaiting_consent():
     which holds too (fail closed). None otherwise."""
     path = os.path.join(DATA, "restore_pending.json")
     try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+        data = _read_local_json(path)
     except FileNotFoundError:
         return {"unreadable": True} if os.path.lexists(path) else None
     except (OSError, ValueError, RecursionError):
@@ -329,12 +346,10 @@ def _runtime_config():
     """Read only mode and destinations from local config; never infer credentials."""
     path = Path(DATA).parent / "config.json"
     try:
-        if not path.exists():
-            return {}
-        if path.is_symlink() or path.stat().st_size > 262144:
-            return {"runtime_mode": "invalid"}
-        cfg = json.loads(path.read_text(encoding="utf-8"))
+        cfg = _read_local_json(path, 262144)
         return cfg if isinstance(cfg, dict) else {"runtime_mode": "invalid"}
+    except FileNotFoundError:
+        return {"runtime_mode": "invalid"} if os.path.lexists(path) else {}
     except (OSError, ValueError, RecursionError):
         return {"runtime_mode": "invalid"}
 
@@ -354,9 +369,7 @@ def _standalone_target_supported(ref):
 def _standalone_status():
     path = Path(DATA, "standalone-status.json")
     try:
-        if path.is_symlink() or path.stat().st_mode & 0o077 or path.stat().st_size > 65536:
-            return None
-        status = json.loads(path.read_text(encoding="utf-8"))
+        status = _read_local_json(path, 65536, private=True)
         if not isinstance(status, dict):
             return None
         pid, stamp, children = status.get("pid"), status.get("updated_at"), status.get("children")
@@ -427,7 +440,10 @@ def _restart_drainers(bounce=True):
     running drainer alone; start one not running, not loaded or
     unverifiable (hung print — fail closed) via bootstrap unless loaded,
     then `kickstart` without -k (never kills a running job)."""
-    if _runtime_mode() == "standalone":
+    mode = _runtime_mode()
+    if mode not in ("hermes", "standalone"):
+        return ["runtime_mode_unverifiable"]
+    if mode == "standalone":
         _remove_marker()
         if _standalone_status() is None:
             if sys.platform == "darwin":
@@ -626,8 +642,7 @@ def _gateway_restart_run(data, agents, uid):
         # marker contents hold too; only an explicit restored marker permits it.
         marker = Path(data, "restore_pending.json")
         if os.path.lexists(marker):
-            with marker.open(encoding="utf-8") as stream:
-                restore = json.load(stream)
+            restore = _read_local_json(marker)
             if not isinstance(restore, dict) or not (restore.get("phase") == "restored"
                     or ("phase" not in restore and "restored_at" in restore)):
                 raise ValueError("gateway_restart_restore_hold")
@@ -658,8 +673,9 @@ def _gateway_restart_run(data, agents, uid):
 # Freeze the independent implementation before an updater changes checkout.
 # No repo imports are needed after the parent exits or rolls the tree back.
 _GATEWAY_RESTART_PROGRAM = (
-    "import os,sys,json,re,tempfile,time,subprocess\nfrom pathlib import Path\n"
-    "from contextlib import suppress\n" + inspect.getsource(_atomic_json)
+    "import os,sys,json,re,stat,tempfile,time,subprocess\nfrom pathlib import Path\n"
+    "from contextlib import suppress\n" + inspect.getsource(_read_local_json)
+    + "\n" + inspect.getsource(_atomic_json)
     + "\n" + inspect.getsource(_gateway_restart_report)
     + "\n" + inspect.getsource(_gateway_restart_run)
     + "\nsys.exit(_gateway_restart_run(*sys.argv[1:]))\n")
@@ -795,12 +811,7 @@ def _reconcile_membership(snapshot):
     if _runtime_mode() not in ("hermes", "standalone"):
         return ["runtime_mode_unverifiable"]
     try:
-        manifest_path = Path(MANIFEST_PATH)
-        if manifest_path.is_symlink() or manifest_path.stat().st_size > 262144:
-            manifest = {}
-        else:
-            with open(manifest_path, encoding="utf-8") as f:
-                manifest = json.load(f)
+        manifest = _read_local_json(MANIFEST_PATH, 262144)
     except (OSError, ValueError, RecursionError):
         manifest = {}
     evidence = []
@@ -1294,8 +1305,7 @@ def _restore_db(backup_path, on_hold=None):
     report claims success)."""
     marker = os.path.join(DATA, "restore_pending.json")
     try:
-        with open(marker, encoding="utf-8") as stream:
-            current = json.load(stream)
+        current = _read_local_json(marker)
     except FileNotFoundError:
         if os.path.lexists(marker):
             return "restore_marker_unreadable"

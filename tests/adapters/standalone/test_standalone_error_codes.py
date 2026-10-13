@@ -1,7 +1,7 @@
 """init/check print the fixed error code instead of `failed <Type>`."""
 from mcs_standalone import __main__ as cli
 
-from tests.adapters.standalone.test_standalone_runtime import write_root
+from standalone_testkit import write_root
 
 
 def test_invalid_getpass_token_prints_its_code(tmp_path, monkeypatch, capsys):
