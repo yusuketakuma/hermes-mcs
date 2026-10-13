@@ -1046,25 +1046,24 @@ def card_reactions(db, card, shown=None) -> list:
         if shown is not None:
             selected = " AND message_id IN (" + ",".join("?" for _ in shown) + ")"
             params.extend(shown)
-        mids = [r[0] for r in db.execute(
-            "SELECT message_id FROM messages WHERE project_id=? "
+        posts = [(r[0], r[1]) for r in db.execute(
+            "SELECT message_id,sender_id FROM messages WHERE project_id=? "
             "AND (message_id=? OR parent_id=?) AND body_state IS NOT 'deleted' "
             + selected + " ORDER BY posted_at_ts,message_id", params)]
     else:
         keys = shown if shown is not None else _anchor_keys(card)
         sigs = _latest_signals(db, keys, card["project_id"])
-        mids = []
+        posts, seen = [], set()
         for signal in sigs.values():
             mid, message = _signal_evidence(db, signal["content"])
-            if message and message["body_state"] != "deleted" and mid not in mids:
-                mids.append(mid)
+            if message and message["body_state"] != "deleted" and mid not in seen:
+                seen.add(mid)
+                posts.append((mid, message["sender_id"]))
     out = []
-    for mid in mids:
+    for mid, sender_id in posts:
         meta = get_message_metadata(db, mid)
-        sender = db.execute("SELECT sender_id FROM messages WHERE message_id=?",
-                            (mid,)).fetchone()
         # 送信者IDで判定する（同名別人を自分にしない）
-        meta["own_post"] = bool(sender) and is_self_sender(db, sender[0])
+        meta["own_post"] = is_self_sender(db, sender_id)
         out.append((mid, meta))
     return out
 

@@ -8,7 +8,7 @@ import notify_cmds
 from adapters.lineworks import delivery
 from adapters.common import registry
 from notify_testkit import NOW, _dispatch, _intent, _llm_extract, _seed_thread
-from test_lineworks_adapter import (
+from lineworks_testkit import (
     CONFIG, SCOPE, TOKEN, command_files, event, inbox, raw, signature, world)
 
 

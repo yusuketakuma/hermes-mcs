@@ -15,13 +15,16 @@ LABELS = {
     "care_services": ("利用サービス", "サービス", "訪問看護事業所", "訪問介護事業所", "訪問看護", "訪問介護", "デイサービス"),
     "care_team": ("担当", "担当者", "ケアマネ", "医療機関", "主治医"),
     "contacts": ("キーパーソン", "緊急連絡先", "連絡先"),
-    "allergies": ("アレルギー", "アレルギー歴", "副作用歴", "薬剤アレルギー"),
+    "allergies": ("アレルギー", "アレルギー歴", "薬剤アレルギー"),
     "devices": ("医療処置", "医療機器", "在宅酸素", "カテーテル", "胃ろう", "ストーマ"),
     "preferences": ("療養方針", "治療方針", "本人の意向", "家族の意向", "意向", "希望", "方針", "ACP"),
-    "medication_management": ("服薬管理", "薬剤管理", "内服薬", "処方薬", "処方", "服薬"),
+    "medication_management": ("服薬管理", "薬剤管理", "内服薬", "処方薬", "処方", "服薬",
+                              "他院処方", "市販薬", "OTC", "サプリメント", "サプリ", "残薬", "飲み忘れ", "処方元",
+                              "実服用量", "実服用頻度", "服薬自己管理", "服薬支援者", "服薬支援", "一包化"),
     "nutrition": ("食事", "栄養", "嚥下", "水分摂取"),
     "cognition": ("認知機能", "認知", "意思疎通"),
-    "adverse_events": ("薬物有害事象", "副作用", "被疑薬", "副作用症状", "副作用発生日", "副作用への対応", "副作用転帰"),
+    "adverse_events": ("薬物有害事象", "副作用", "被疑薬", "副作用症状", "副作用発生日", "副作用への対応", "副作用転帰",
+                       "副作用歴"),
     "observations": ("検査・観測値", "検査値", "観測値", "体重", "身長", "Cr", "eGFR", "AST", "ALT", "血糖"),
     "followup": ("変更後の経過", "退院後の経過", "退院時処方", "支援後の変化", "次回確認事項", "次回確認", "確認期限"),
 }
@@ -56,10 +59,8 @@ DETAIL_LABELS = {
 }
 DETAIL_KEYS = frozenset(DETAIL_LABELS)
 _DETAIL_ALIAS = {label: key for key, labels in DETAIL_LABELS.items() for label in labels}
-LABELS["medication_management"] += ("他院処方", "市販薬", "OTC", "サプリメント", "サプリ", "残薬", "飲み忘れ", "処方元", "実服用量", "実服用頻度", "服薬自己管理", "服薬支援者", "服薬支援", "一包化")
 CATEGORIES = frozenset(LABELS)
 _CATEGORY = {label: key for key, labels in LABELS.items() for label in labels}
-_CATEGORY["副作用歴"] = "adverse_events"
 for label, key in _DETAIL_ALIAS.items():
     _CATEGORY.setdefault(label, "observations" if key in (
         "observation_name", "value", "unit", "measured_on", "condition", "observed_on") else

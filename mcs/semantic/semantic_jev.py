@@ -82,6 +82,14 @@ class JevError(Exception):
         self.status = status
 
 
+def _decode_response(raw: bytes, *, retryable: bool = False):
+    """Decode a bounded wire body into JSON without exposing decoder failures."""
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        raise JevError("protocol_error", "not_json", retryable=retryable) from None
+
+
 def _finite(value) -> float | None:
     if type(value) is bool or not isinstance(value, int | float):
         return None
@@ -420,10 +428,9 @@ class JevClient:
                                     status=status)
                 else:
                     try:
-                        parsed = json.loads(raw.decode("utf-8"))
-                    except (ValueError, UnicodeDecodeError):
-                        last = JevError("protocol_error", "not_json",
-                                        retryable=True)
+                        parsed = _decode_response(raw, retryable=True)
+                    except JevError as error:
+                        last = error
                     else:
                         try:
                             result = validate_answers(parsed, questions,
@@ -471,10 +478,7 @@ class JevClient:
             raise JevError(kind, type(e).__name__, retryable=True) from e
         if status != 200:
             raise JevError("protocol_error", f"http_{status}", status=status)
-        try:
-            d = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            raise JevError("protocol_error", "not_json") from None
+        d = _decode_response(raw)
         if not isinstance(d, dict):
             raise JevError("protocol_error", "models_shape")
         items = d.get("data") or d.get("models")

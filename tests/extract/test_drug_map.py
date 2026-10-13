@@ -3,8 +3,10 @@
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
 from difflib import SequenceMatcher
+import errno
 import hashlib
 import json
+import os
 from operator import setitem
 from typing import TypedDict
 
@@ -143,6 +145,102 @@ def test_load_missing_pin_private_path_and_symlink(tmp_path):
     link.symlink_to(path)
     with pytest.raises(ValueError, match="drug_map_file"):
         drug_map.load(link, expected_sha256=dictionary.sha256)
+
+
+def _fail_dictionary_io(monkeypatch, path, failure):
+    """Inject a synthetic failure only into this dictionary's acquired FD."""
+    opened = []
+    real_open, real_fdopen, real_fstat = os.open, os.fdopen, os.fstat
+
+    def fail(*args, **kwargs):
+        raise OSError(errno.EIO, "synthetic dictionary I/O failure")
+
+    def tracked_open(name, *args, **kwargs):
+        fd = real_open(name, *args, **kwargs)
+        if os.fspath(name) == os.fspath(path):
+            opened.append(fd)
+        return fd
+
+    def wrapped_fdopen(fd, *args, **kwargs):
+        if fd in opened and failure == "fdopen":
+            fail()
+        stream = real_fdopen(fd, *args, **kwargs)
+        if fd in opened and failure == "read":
+            monkeypatch.setattr(stream, "read", fail)
+        return stream
+
+    def checked_fstat(fd):
+        if fd in opened and failure == "fstat":
+            fail()
+        return real_fstat(fd)
+
+    monkeypatch.setattr(os, "open", tracked_open)
+    monkeypatch.setattr(os, "fdopen", wrapped_fdopen)
+    monkeypatch.setattr(os, "fstat", checked_fstat)
+    return opened, real_fstat
+
+
+@pytest.mark.parametrize("failure", ["fdopen", "fstat", "read"])
+def test_dictionary_io_failure_is_safe_and_closes_acquired_fd(tmp_path, monkeypatch, failure):
+    dictionary = _dictionary(tmp_path)
+    path = tmp_path / "fictional-drug-map.json"
+    opened, real_fstat = _fail_dictionary_io(monkeypatch, path, failure)
+    with pytest.raises(ValueError, match="^drug_map_file$"):
+        drug_map.load(path, expected_sha256=dictionary.sha256)
+    assert len(opened) == 1
+    with pytest.raises(OSError) as error:
+        real_fstat(opened[0])
+    assert error.value.errno == errno.EBADF
+
+
+@pytest.mark.parametrize("next_boundary", [None, "2026-10-06"])
+def test_verified_source_dates_are_retained_without_expiry_or_approval(tmp_path, next_boundary):
+    document = json.loads(json.dumps(DOCUMENT))
+    document["source"].pop("approved_by")
+    document["source"].update(as_of="2026-10-05", next_boundary_on=next_boundary)
+    dictionary = _dictionary(tmp_path, document)
+    assert dictionary.source.as_of == "2026-10-05"
+    assert dictionary.source.next_boundary_on == next_boundary
+    assert dictionary.approved is False  # a boundary is information, not approval
+
+
+@pytest.mark.parametrize("dates", [
+    {"as_of": "2026-10-05"},
+    {"next_boundary_on": None},
+    {"as_of": None, "next_boundary_on": None},
+    {"as_of": True, "next_boundary_on": None},
+    {"as_of": 20261005, "next_boundary_on": None},
+    {"as_of": "20261005", "next_boundary_on": None},
+    {"as_of": "2026-10-05T00:00:00", "next_boundary_on": None},
+    {"as_of": "2026-02-30", "next_boundary_on": None},
+    {"as_of": "2026-10-03", "next_boundary_on": None},
+    {"as_of": "2026-10-05", "next_boundary_on": True},
+    {"as_of": "2026-10-05", "next_boundary_on": 20261006},
+    {"as_of": "2026-10-05", "next_boundary_on": "20261006"},
+    {"as_of": "2026-10-05", "next_boundary_on": "2026-10-06T00:00:00"},
+    {"as_of": "2026-10-05", "next_boundary_on": "invalid"},
+    {"as_of": "2026-10-05", "next_boundary_on": "2026-10-04"},
+    {"as_of": "2026-10-05", "next_boundary_on": "2026-10-05"},
+])
+def test_source_dates_reject_partial_or_invalid_provenance(tmp_path, dates):
+    document = json.loads(json.dumps(DOCUMENT))
+    document["source"].update(dates)
+    with pytest.raises(ValueError, match="^drug_map_source_dates$"):
+        _dictionary(tmp_path, document)
+
+
+def test_source_dates_are_bound_into_annotation_and_legacy_shape_is_preserved(store, tmp_path):
+    _seed(store)
+    legacy = _dictionary(tmp_path)
+    assert legacy.source.as_of is legacy.source.next_boundary_on is None
+    drug_map.derive(store, legacy)
+    assert json.loads(store.artifacts(drug_map.KIND)[0]["meta"])["source"] == DOCUMENT["source"]
+    document = json.loads(json.dumps(DOCUMENT))
+    document["source"].update(as_of="2026-10-04", next_boundary_on="2026-10-06")
+    dictionary = _dictionary(tmp_path, document)
+    drug_map.derive(store, dictionary)
+    assert json.loads(store.artifacts(drug_map.KIND)[0]["meta"])["source"] == document["source"]
+    assert drug_map.current_refs(store.db, 1)[0]["dict_sha256"] == dictionary.sha256
 
 
 def test_deep_dictionary_json_uses_safe_validation_error(tmp_path, recursion_limited_json):
@@ -531,3 +629,21 @@ def test_deadline_cut_scan_reports_partial(store, tmp_path, monkeypatch):
     monkeypatch.setattr(drug_map.time, "monotonic", lambda: 10.0)
     assert drug_map.derive(store, _dictionary(tmp_path), deadline=5.0) == {
         "status": "partial", "done": 0, "pids": []}
+
+
+@pytest.mark.parametrize("invalid_name", [None, "", "  ", 3, {"name": "キラナ"}, "薬" * 513])
+def test_current_refs_rejects_names_the_deriver_cannot_resolve(store, tmp_path, invalid_name):
+    source_id = _seed(store)
+    drug_map.derive(store, _dictionary(tmp_path))
+    annotation = store.artifacts(drug_map.KIND)[0]
+    content, meta = json.loads(annotation["content"]), json.loads(annotation["meta"])
+    source = json.dumps({"meds": [{"name": invalid_name}]})
+    content["refs"][0]["name"] = invalid_name
+    meta["source_sha256"] = hashlib.sha256(source.encode()).hexdigest()
+    store.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (source, source_id))
+    store.db.execute("UPDATE artifacts SET content=?,meta=? WHERE kind=?",
+                     (json.dumps(content), json.dumps(meta), drug_map.KIND))
+    store.db.commit()
+    before = tuple(store.db.iterdump())
+    assert drug_map.current_refs(store.db, 1) == []
+    assert tuple(store.db.iterdump()) == before

@@ -18,8 +18,7 @@ import pytest
 from adapters.common import envelopes, paths, registry
 from adapters.discord import actions as A
 from adapters.discord import actions as actions_mod
-from discord_testkit import MISSING, SETTINGS, _fake_discord
-from test_mcs_discord import FakeInteraction
+from discord_testkit import MISSING, SETTINGS, FakeInteraction, _fake_discord
 
 DONE = "反映しました。"
 CID = "c" * 16

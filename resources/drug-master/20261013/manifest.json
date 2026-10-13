@@ -1,0 +1,33 @@
+{
+  "schema": "mcs-official-drug-bundle/1",
+  "edition": "20261013",
+  "layout": "R08rec3-medicine-42",
+  "archive": "y_20261013.zip",
+  "member": "y_20261013.csv",
+  "archive_bytes": 1158682,
+  "archive_sha256": "c3efc8aa772b9bf54cfa992e8df3bc82480f86f35bbeb52522d0997144140fb5",
+  "csv_bytes": 6083884,
+  "csv_sha256": "6fa8f08ca4341ac530e5f4081d3fd3bbebbfcdd278c0d0ec0f172a0c1af018d1",
+  "rows": 19286,
+  "source": {
+    "name": "厚生労働省 診療報酬情報提供サービス 医薬品マスター",
+    "url": "https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/yFile",
+    "menu": "https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/",
+    "spec": "https://shinryohoshu.mhlw.go.jp/shinryohoshu/file/spec/R08rec3.pdf",
+    "status_spec": "https://shinryohoshu.mhlw.go.jp/shinryohoshu/file/spec/R08rec1.pdf"
+  },
+  "attribution": "出典：厚生労働省 診療報酬情報提供サービス（https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/）",
+  "packaging": {
+    "original_bytes": true,
+    "notice": "公開ZIPの内容を変更せず、同梱用のファイル名のみ変更。manifestと検証ツールはhermes-mcsが作成。",
+    "introduced_version": "1.0.21"
+  },
+  "terms": {
+    "url": "https://www.mhlw.go.jp/chosakuken/index.html",
+    "reference_checked_on": "2026-10-13",
+    "license_reference": "公共データ利用規約 第1.0版（PDL1.0）。個別の利用条件・第三者権利等の例外は利用者が確認する。",
+    "operator_review_required": true
+  },
+  "activation": false,
+  "operator_approval_required": true
+}

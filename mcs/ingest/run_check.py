@@ -50,7 +50,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 from mcs_adapter import (MCSAdapter, MCSError, SessionExpired)
 from ledger import Ledger, METADATA_SHADOW_BACKOFF_S
-from health_watch import HEALTH_REL, _finite_number
+from health_watch import HEALTH_REL, _finite_number, _read_status_json
+from mcs_queries import ELIGIBLE_MESSAGE
 from mcs_util import (CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB,
                       HOME, RUN_LOCK, UPDATE_MARKER_NAME, RunLockLost,
                       acquire_run_lock, code_stamp as _code_stamp,
@@ -106,8 +107,7 @@ def _config() -> dict:
 def _prev_health() -> dict:
     """The previously published health block ({} when unreadable)."""
     try:
-        with open(HEALTH_FILE, encoding="utf-8") as f:
-            prev = json.load(f)
+        prev = _read_status_json(HEALTH_FILE)
     except (OSError, ValueError, RecursionError):
         return {}
     return prev if isinstance(prev, dict) else {}
@@ -230,12 +230,6 @@ def _jev_block_reason(db) -> str | None:
         "ORDER BY artifact_id DESC LIMIT 1").fetchone()
     kind = row[0] if row else None
     return kind if kind in _JEV_BLOCK_KINDS else None
-
-
-# extraction-eligible message (alias m); the same predicate extract_llm
-# and read_model spell out — keep them in step
-_ELIGIBLE = ("m.body_text IS NOT NULL AND m.body_text != '' "
-             "AND (m.body_state IS NULL OR m.body_state='full')")
 
 
 def _carried_since(key: str, active: bool, now: float) -> float | None:
@@ -372,7 +366,7 @@ def _backlog_stalls(ledger, cfg, now: float, *, marks: dict | None = None) -> li
             "SELECT created_at FROM artifacts WHERE kind='extract_llm' "
             "ORDER BY artifact_id DESC LIMIT 1").fetchone()
         if (newest is None or (newest[0] or 0) < window) and db.execute(
-                f"SELECT 1 FROM messages m WHERE {_ELIGIBLE} "
+                f"SELECT 1 FROM messages m WHERE {ELIGIBLE_MESSAGE} "
                 "AND m.first_seen < ? AND NOT EXISTS(SELECT 1 FROM artifacts a "
                 "  WHERE a.kind='extract_llm' AND a.message_id=m.message_id) "
                 f"AND {current_v4_id()} IS NULL LIMIT 1",
@@ -381,11 +375,75 @@ def _backlog_stalls(ledger, cfg, now: float, *, marks: dict | None = None) -> li
     return reasons
 
 
+HEALTH_OBSERVATION_S = 0.25
+HEALTH_OBSERVATION_ITEMS = 10002  # 10,000 rows plus the two boundary checks
+HEALTH_OBSERVATION_ROW_BYTES = 2 * 1024 * 1024
+
+
+def _bounded_health_read(db, read):
+    """Bound additive reads on the tick-owned connection; preserve its transaction."""
+    deadline = time.monotonic() + HEALTH_OBSERVATION_S
+    items = 0
+
+    def checkpoint():
+        nonlocal items
+        items += 1
+        if time.monotonic() >= deadline or items > HEALTH_OBSERVATION_ITEMS:
+            raise RuntimeError("observation_limit")
+
+    # This connection has no long-lived progress handler. Backup and detailed
+    # observer handlers belong to their own connections, not the tick ledger.
+    previous_limit = db.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
+    previous_wait = db.execute("PRAGMA busy_timeout").fetchone()[0]
+    savepoint = False
+    try:
+        db.execute(f"PRAGMA busy_timeout={min(previous_wait, int(HEALTH_OBSERVATION_S * 1000))}")
+        db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH,
+                    min(previous_limit, HEALTH_OBSERVATION_ROW_BYTES))
+        db.execute("SAVEPOINT mcs_health_observation")
+        savepoint = True
+        db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+        value = read(checkpoint)
+        if time.monotonic() >= deadline:
+            raise RuntimeError("observation_limit")
+        return value
+    finally:
+        db.set_progress_handler(None, 0)
+        db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, previous_limit)
+        if savepoint:
+            db.execute("RELEASE mcs_health_observation")
+        db.execute(f"PRAGMA busy_timeout={previous_wait}")
+
+
+def _pending_health(db, now):
+    """Use the same streamed population for counts and reasons, or keep the old count."""
+    import notify_cards
+    try:
+        breakdown = _bounded_health_read(
+            db, lambda check: notify_cards.pending_breakdown(db, now, checkpoint=check))
+    except Exception:
+        # Optional diagnostics must not hide a real count failure: the original
+        # count still propagates SQLite errors through the existing health path.
+        row = db.execute(
+            "SELECT COUNT(*) c,MIN(created_at) o FROM notify_outbox WHERE "
+            + notify_cards.OUTBOX_PENDING_WHERE, (now,)).fetchone()
+        return {"pending": row["c"],
+                "oldest_age_s": round(now - row["o"], 1) if row["o"] else 0,
+                "pending_by_reason": {"status": "unavailable", "observed_at": now,
+                                      "reason": "observation_unavailable"}}
+    return {"pending": breakdown["total"],
+            "oldest_age_s": (round(breakdown["oldest_age_s"], 1)
+                             if breakdown["oldest_age_s"] is not None else
+                             0 if breakdown["total"] == 0 else None),
+            "pending_by_reason": {**breakdown, "status": "recorded", "observed_at": now}}
+
+
 def _health(ledger, result: dict, status: str,
             run_id: int | None = None, *, cfg: dict | None = None) -> dict:
     """Per-subsystem machine-readable state: collection completeness,
     notification completion, extract/QC backlog lag, and current
-    extraction-generation coverage. Every query is a count — never bodies.
+    extraction-generation coverage. New observations expose only counts,
+    fixed reasons and timestamps; message bodies are never queried here.
     `run_id` binds this evidence to the source run that produced it."""
     import extract_llm
     import notify_cards
@@ -398,12 +456,7 @@ def _health(ledger, result: dict, status: str,
     # a signal digest scheduled interval_h ahead and never attempted is
     # waiting by design, not pending delivery — everything else counts
     # from its creation, including retries with a future next_try
-    outbox = ledger.db.execute(
-        "SELECT COUNT(*) c, MIN(created_at) o FROM notify_outbox "
-        "WHERE state IN ('pending','failed') AND next_try IS NOT NULL "
-        "AND NOT (kind='signal' AND attempts=0 AND next_try>? "
-        "         AND json_valid(payload) AND json_extract(payload,'$.digest')=1)",
-        (now,)).fetchone()
+    outbox = _pending_health(ledger.db, now)
     retired = notify_cards.retired_transports(cfg)
     marks = ",".join("?" * len(retired))
     # Preserve retired receipts while excluding only events whose sealed
@@ -456,15 +509,15 @@ def _health(ledger, result: dict, status: str,
     coverage = _cached_coverage(extract_llm.EXTRACT_VERSION, now, source)
     if coverage is None:
         poison = ledger.db.execute(
-            f"SELECT COUNT(*) FROM messages m WHERE {_ELIGIBLE} "
+            f"SELECT COUNT(*) FROM messages m WHERE {ELIGIBLE_MESSAGE} "
             "AND EXISTS(SELECT 1 FROM artifacts bad "
             "  WHERE bad.kind='extract_llm' AND bad.message_id=m.message_id"
             "    AND NOT json_valid(bad.meta))").fetchone()[0]
         total = ledger.db.execute(
-            f"SELECT COUNT(*) FROM messages m WHERE {_ELIGIBLE}"
+            f"SELECT COUNT(*) FROM messages m WHERE {ELIGIBLE_MESSAGE}"
         ).fetchone()[0]
         current = ledger.db.execute(f"""
-          SELECT COUNT(*) FROM messages m WHERE {_ELIGIBLE}
+          SELECT COUNT(*) FROM messages m WHERE {ELIGIBLE_MESSAGE}
             AND EXISTS(SELECT 1 FROM artifacts a
               WHERE a.kind='extract_llm' AND a.message_id=m.message_id
                 {current_extract_pred('a', 'm')}
@@ -541,6 +594,13 @@ def _health(ledger, result: dict, status: str,
         "interval_s", "backoff_s", "deferred_reasons") if key in shadow}
     shadow_health["error_count"] = len(shadow.get("errors") or [])
     run = dict(result.get("run") or {})
+    from operational_status import interrupted_runs
+    try:
+        run["last_interrupt"] = _bounded_health_read(
+            ledger.db, lambda _check: interrupted_runs(ledger.db, now=now))
+    except Exception:
+        run["last_interrupt"] = {"status": "unavailable", "observed_at": now,
+                                 "reason": "observation_unavailable"}
     if result.get("deferred_stages"):
         run["deferred_stages"] = list(result["deferred_stages"])
     run_overdue = run.get("overshoot_s", 0) > 0
@@ -552,6 +612,11 @@ def _health(ledger, result: dict, status: str,
     # no loaded config is no backup evidence — never report it 'disabled'
     backup = (_backup_health(cfg or {}, now) if cfg is not CONFIG_NOT_LOADED
               else {"state": "unknown", "reasons": ["config_not_loaded"]})
+    try:
+        backup["local"] = maintenance.local_backup_status(now=now)
+    except Exception:
+        backup["local"] = {"state": "unknown", "newest_age_s": None,
+                           "observed_at": now}
     backup_bad = backup["state"] not in ("ok", "disabled")
     skipped = result.get("backup_skipped")
     disk_low = _disk_low(free_mb) or skipped == "disk_low"
@@ -583,7 +648,7 @@ def _health(ledger, result: dict, status: str,
             ("notification_deferred", bool(notify_res.get("skipped"))),
             ("notification_parked", bool(notify_res.get("parked"))),
             ("notification_held", bool(held)),
-            ("notification_pending", bool(outbox["c"])),
+            ("notification_pending", bool(outbox["pending"])),
             ("disk_low", disk_low),
             ("backup_deferred_deadline", backup_deferred),
         ) if present] + stalls
@@ -601,13 +666,11 @@ def _health(ledger, result: dict, status: str,
         "disk_free_mb": round(free_mb) if free_mb is not None else None,
         "disk_low": disk_low,
         "notify": {"state": notify_state,
-                   "pending": outbox["c"],
+                   **outbox,
                    "held": held,
                    "held_reasons": held_reasons,
                    "retired_held": retired_held,
-                   "held_pinned_attachments": held_pins,
-                   "oldest_age_s": (round(now - outbox["o"], 1)
-                                    if outbox["o"] else 0)},
+                   "held_pinned_attachments": held_pins},
         "semantic_jobs": {"pending": sem["c"],
                           "oldest_age_s": (round(now - sem["o"], 1)
                                            if sem["o"] else 0)},
@@ -1173,14 +1236,21 @@ def stage_thread_read(adapter, ledger, result, deadline):
                     result["errors"].append("thread_read: reply_failed")
                 continue
             ledger.mark_thread_read(pid, parent, last, "unknown")
-            seen = adapter.read_thread(pid, parent)
-            for rid in sorted(seen - server):
-                # arrived between fetch and read: now read on MCS, so
-                # the job carries the unread evidence for notification
-                ledger.job_add("reply", pid, rid, parent_id=parent,
-                               payload={"unread": True},
-                               revive_failed=False)
-                ledger.job_set_flag("reply", pid, rid, "unread")
+            seen = set()
+            try:
+                seen = adapter.read_thread(pid, parent)
+            except MCSError as error:
+                seen = set(error.observed_reply_ids)
+                raise
+            finally:
+                # Successful pages may already have cleared replies even
+                # when a later page failed. Keep their observed IDs durable;
+                # the thread mark remains unknown until the whole read succeeds.
+                for rid in sorted(seen - server):
+                    ledger.job_add("reply", pid, rid, parent_id=parent,
+                                   payload={"unread": True},
+                                   revive_failed=False)
+                    ledger.job_set_flag("reply", pid, rid, "unread")
             if not adapter.thread_unread(pid, parent):
                 ledger.mark_thread_read(pid, parent, last, "confirmed")
                 done.append(parent)

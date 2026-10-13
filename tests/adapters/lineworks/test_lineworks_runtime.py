@@ -11,7 +11,7 @@ import pytest
 from adapters.lineworks import __main__ as cli
 from adapters.lineworks import server
 from adapters.lineworks.client import ClientError
-from test_lineworks_adapter import NOW, SECRET, event, raw, signature, world
+from lineworks_testkit import NOW, SECRET, event, raw, signature, world
 
 
 def run_once(monkeypatch, tmp_path, w, box, *, invalid_scope=False):

@@ -6,8 +6,7 @@ import pytest
 
 from adapters.discord import cards
 from adapters.common.worker import _outcome_of
-from test_mcs_discord_delivery import _mkworker, FakeBot, FakeThread, synthetic_discord_sdk
-from discord_delivery_testkit import _spec
+from discord_delivery_testkit import FakeBot, FakeThread, _mkworker, _spec, synthetic_discord_sdk
 
 __all__ = ["synthetic_discord_sdk"]
 
@@ -42,7 +41,7 @@ def test_native_alert_only_posts_in_bound_source_thread(tmp_path, monkeypatch, f
 
 @pytest.mark.parametrize("fault", [None, "archived", "locked", "thread_gone", "message_gone", "wrong_parent", "wrong_guild", "forbidden"])
 def test_signal_revoke_targets_sealed_reply_even_when_source_thread_unavailable(tmp_path, monkeypatch, fault):
-    from test_mcs_discord_delivery import FakeHTTP, FakeMessage
+    from discord_delivery_testkit import FakeHTTP, FakeMessage
     bot = FakeBot()
     worker, _, _ = _mkworker(tmp_path, bot=bot)
     thread = FakeThread(123456)
