@@ -20,6 +20,7 @@ from time import monotonic
 
 from ledger import publish_snapshot as _publish_snapshot, valid_mcs_db
 from mcs_util import HOME, atomic_write, disk_floor_mb, publish_tmp
+from safe_io import read_regular_nofollow
 
 BACKUP_DIR = os.path.join(HOME, "data", "backups")
 SNAPSHOT_DIR = os.path.join(HOME, "data", "snapshots")
@@ -215,29 +216,55 @@ def newest_backup_age_s() -> float | None:
     return time.time() - max(stamps) if stamps else None
 
 
+LOCAL_STATUS_SCAN_MAX = 256      # directory entries one health read examines
+LOCAL_STATUS_SCAN_S = 0.5
+OK_MARKER_MAX = 256
+
+
+class _MarkerUnreadable(Exception):
+    pass
+
+
 def local_backup_status(*, now: float) -> dict:
-    """Read-only state of the newest daily backup for health: stat and
-    the .ok marker only — no DB open, no quick_check, no path or error text."""
-    try:
-        newest = None
-        for path in glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db")):
-            try:
-                st = os.stat(path)
-            except FileNotFoundError:
-                continue              # rotated away mid-scan
-            if newest is None or st.st_mtime > newest[1]:
-                newest = (path, st.st_mtime)
-        if newest is None:
-            return {"state": "missing", "newest_age_s": None, "observed_at": now}
-        age = now - newest[1]
-        if not (math.isfinite(age) and age >= 0):
-            return {"state": "unknown", "newest_age_s": None, "observed_at": now}
-        state = "verified" if _verified_unchanged(newest[0]) else "unverified"
+    """Read-only state of the newest daily backup for health: a bounded
+    scan, lstat, and a bounded no-follow read of the .ok marker — no DB
+    open, no quick_check, no path or error text."""
+    def out(state, age=None):
         return {"state": state, "newest_age_s": age, "observed_at": now}
+    try:
+        stop = monotonic() + LOCAL_STATUS_SCAN_S
+        newest = None
+        with os.scandir(BACKUP_DIR) as entries:
+            for n, entry in enumerate(entries):
+                if n >= LOCAL_STATUS_SCAN_MAX or monotonic() > stop:
+                    return out("unknown")      # cannot know which is newest
+                if not (entry.name.startswith("ledger-") and entry.name.endswith(".db")):
+                    continue
+                try:
+                    st = entry.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    continue                   # rotated away mid-scan
+                if stat.S_ISREG(st.st_mode) and (newest is None or st.st_mtime > newest[1].st_mtime):
+                    newest = (entry.path, st)
+    except FileNotFoundError:
+        return out("missing")
     except OSError:
-        return {"state": "unreadable", "newest_age_s": None, "observed_at": now}
+        return out("unreadable")
     except Exception:
-        return {"state": "unknown", "newest_age_s": None, "observed_at": now}
+        return out("unknown")
+    if newest is None:
+        return out("missing")
+    path, st = newest
+    age = now - st.st_mtime
+    if not (math.isfinite(age) and age >= 0):
+        return out("unknown")
+    try:
+        marker = read_regular_nofollow(path + ".ok", OK_MARKER_MAX, _MarkerUnreadable)
+        verified = (len(marker) <= OK_MARKER_MAX
+                    and marker.decode("ascii").strip() == f"{st.st_size} {st.st_mtime_ns}")
+    except (OSError, ValueError, _MarkerUnreadable):
+        verified = False
+    return out("verified" if verified else "unverified", age)
 
 
 def backup_overdue() -> bool:
