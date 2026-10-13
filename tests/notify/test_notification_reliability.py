@@ -9,6 +9,7 @@ import notify_cards
 import notify_flush
 import notify_reconcile
 from ledger import Ledger
+from notify_testkit import _row
 
 
 @pytest.fixture
@@ -40,11 +41,6 @@ def text_world(tmp_path, monkeypatch):
     monkeypatch.setattr(notify_flush.subprocess, "run", child)
     yield SimpleNamespace(led=led, path=path, data=data, clock=clock, calls=calls)
     led.close()
-
-
-def _row(led, eid):
-    return led.db.execute(
-        "SELECT * FROM notify_outbox WHERE event_id=?", (eid,)).fetchone()
 
 
 @pytest.mark.parametrize("remaining", [-1, 0, 29.999, 30, 181])

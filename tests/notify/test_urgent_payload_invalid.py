@@ -10,8 +10,7 @@ import pytest
 import notify_cards
 import notify_urgent
 from notify_testkit import NOW, _begin
-from test_alert_thread_hotfix import _alert
-from test_notify_urgent import led, world
+from notify_urgent_testkit import _alert, led, world
 
 __all__ = ["led", "world"]
 
@@ -105,7 +104,7 @@ def test_a_corrupted_history_row_in_the_room_holds_another_notice_without_raisin
 
 
 def _candidate(world, **policy):
-    from test_notify_urgent import _base, _fact
+    from notify_urgent_testkit import _base, _fact
     store, cfg, _, _ = world
     cfg["urgency_escalation"].update(policy)
     _base(store)

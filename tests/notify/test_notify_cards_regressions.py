@@ -1,4 +1,4 @@
-"""notify_cards regressions kept apart from test_notify_cards.py (whose autouse
+"""notify_cards regressions kept apart from test_notify_cards.py (whose module-wide
 wall-clock pin must not reach them): revoked reuse, LINE WORKS thread overflow,
 blank body chunks, Slack scope under the kill switch, legacy defer footer in
 JST, root-first thread plan and the card-resolve config path. Synthetic temp
@@ -33,13 +33,13 @@ from notify_testkit import (
     _latest_render,
 )
 from slack_testkit import SLACK
-from test_notify_lineworks import (
+from adapters.common import envelopes
+from notify_lineworks_testkit import (
     LINEWORKS,
     MID,
     _apply,
     _claim,
     _render,
-    envelopes,
 )
 
 __all__ = ["led"]

@@ -4,9 +4,8 @@ worded urgency as every other surface — no AI/source qualifier (owner
 import pytest
 
 import notify_render
-from notify_testkit import (_card, _extract, _intent, _msg, _patient, _signal_row,
-                            led, pinned_clock)
-from test_summary_rendering_regressions import CLINICAL_BODY, _dispatch
+from notify_testkit import (CLINICAL_BODY, _card, _dispatch_with_source, _extract, _intent,
+                            _msg, _patient, _signal_row, led, pinned_clock)
 
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")
@@ -21,7 +20,7 @@ def _layout1_face(led, kind, level, source):
         event = _intent(led, "signal", payload={"signal_keys": ["s"], "project_id": 1})
     else:
         event = _intent(led, payload={"message_ids": [100]})
-    _dispatch(led, event)
+    _dispatch_with_source(led, event)
     with led.db:
         led.db.execute("UPDATE notification_cards SET layout=1")
     return notify_render.display_text(notify_render._card_content(led.db, _card(led)))
