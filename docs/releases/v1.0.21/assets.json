@@ -1,0 +1,88 @@
+{
+  "alt": "記録の鮮度と待っている工程を、doctor・監視警告・詳細診断で確認する説明図",
+  "kind": "explanatory_diagram_not_screenshot",
+  "release": "1.0.21",
+  "comparison_base": "bbca0e09484f9115e88660ba764a7a79071d88e3",
+  "candidate": {
+    "commit": null,
+    "state": "local_uncommitted_candidate",
+    "public_url": null
+  },
+  "files": {
+    "operations-check.svg": {
+      "sha256": "1357511da9d9ba36d9898849e99296b77ca2b8034933d150e1060623967df8b4",
+      "bytes": 3656
+    },
+    "operations-check.png": {
+      "sha256": "5645c2d432e5f2181b339edc4e57f56d1c65ab70835492b82014ca040c0a0351",
+      "bytes": 128889
+    }
+  },
+  "source_refs": {
+    "mcs/ops/mcs_setup.py": {
+      "sha256": "800ea6af25aeb39162062f3e0a2a2569714ed587473a8c33e80a1c78ff6c0dfb",
+      "bytes": 182537
+    },
+    "mcs/ops/operational_status.py": {
+      "sha256": "94251ac46a5952fcb2639762b3a985bbf8e650351fb2537263466f9bbcc97bc3",
+      "bytes": 9120
+    },
+    "mcs/ingest/run_check.py": {
+      "sha256": "14bcc33fb9c7572089b6ce058445d5c8a0ca120b71c29d3c4eeb2fda48173084",
+      "bytes": 121123
+    },
+    "mcs/ingest/health_watch.py": {
+      "sha256": "908cf375f78f2dd08c93e0f22ad3888562cfc2d6388d660b49b28a859f838650",
+      "bytes": 46461
+    },
+    "mcs/notify/notify_cards.py": {
+      "sha256": "ee3e2d11621cdbc589115d0187cd78755bfdee22bc030ede1cda4197b6986e86",
+      "bytes": 190391
+    },
+    "mcs/ops/semantic_observe.py": {
+      "sha256": "4d3e1315d66c8215a1236c13f6bf1ab9c6a240ee5c63f69f9d46b8f19d7bf84a",
+      "bytes": 17741
+    },
+    "mcs/ops/operational_progress.py": {
+      "sha256": "04497c41e331ecae78eb19fc6ca3680ba8a703e7dcc9c6e246ea1274e1bcaa55",
+      "bytes": 14070
+    },
+    "mcs/core/maintenance.py": {
+      "sha256": "5e841b745ba2b8729026d45611f68f09f3c6970132c32aac589e33a204300332",
+      "bytes": 37595
+    }
+  },
+  "render": {
+    "method": "macOS qlmanage -t -s 800 through temporary 700x700 SVG wrapper, then sips centered 800x446 crop",
+    "svg_dimensions": [
+      390,
+      700
+    ],
+    "png_dimensions": [
+      446,
+      800
+    ],
+    "display_check_width_px": 390
+  },
+  "verification": {
+    "svg_xml": "parsed",
+    "png_full": "visually_checked_by_author",
+    "png_390px": "visually_checked_by_author",
+    "parent_acceptance": "accepted_at_local_candidate",
+    "published_url": "not_verified",
+    "release_rendering": "not_verified",
+    "production_status": "not_verified"
+  },
+  "parent_acceptance": {
+    "status": "accepted",
+    "date": "2026-10-13",
+    "checks": [
+      "PNG全体の文字・余白・下端注記を表示確認",
+      "390px幅の子による確認とSVG/PNG/hashの証跡を確認",
+      "doctorと監視警告の表示経路をsource照合",
+      "P3互換修正・大量job集計修正後も図の表示先/意味を再照合。図の文字と画像bytesは変更不要",
+      "通知件数の数え漏れ/hold復旧追補後もdoctorと監視警告の表示先を保持。図は具体件数・理由の優先順位を表示しないため画像変更不要"
+    ],
+    "publication": "not_performed"
+  }
+}

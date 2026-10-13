@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "解析の実行記録に、処理時間帯と完了時刻を追加",
+  "summary": "解析の1回分の実行記録に、開始・終了の時刻、設定の世代、担当レーン、記録が全件そろっているかを追加しました。完了したジョブには完了時刻も残すため、処理速度を後から実時間で比べられます。解析の内容・順序・回数は変わりません。",
+  "upgrade": "追加操作は不要です。既存の記録項目と保存形式は変わらず、更新前の実行記録には新しい項目がありません。",
+  "details": [
+    "KIND_DRAIN_RUN の記録に observation（version、started_at、finished_at、config_generation、complete、lane）を追加する。",
+    "job_metrics の completed_at は、世代を確認したうえで完了に遷移したジョブ（status=done）にだけ付ける。",
+    "complete は、記録の上限64件を超えて切り詰めたとき、時計が逆行したとき、時刻が有限値でないときに false になる。実行全体が例外やロック喪失で中断した場合は、従来どおり実行記録そのものを書かない。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_drain.py",
+    "tests/semantic/test_semantic_fairness.py"
+  ]
+}

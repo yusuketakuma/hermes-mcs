@@ -6,6 +6,149 @@
 
 ## [Unreleased]
 
+## [1.0.21] — 2026-10-13
+
+**処理の待ち状態と復旧状況を確認しやすく**
+
+保存済みの状態と詳細診断から、工程別の残数・速度・通知待ちの理由を確認できます。公式医薬品マスターを更新し、辞書の再作成時期・設定切替・障害復旧の確認を強化しました。辞書の承認と有効化は引き続き運用者が行います。
+
+| 変更 | 以前 | 今回 | 利用者への効果 |
+|---|---|---|---|
+| 運用状況の確認 | 件数と記録の鮮度を複数箇所で確認 | doctorと詳細診断に工程・時刻・不明理由を表示 | 待っている工程を調べやすい |
+| 通知の待機 | 件数だけでは待っている理由が分かりにくい | 配送完了待ちと結果不明などを監視警告で区別 | 確認が必要な待機を見分けやすい |
+| 医薬品辞書の更新 | 同じ原本でも再作成が必要な日を表示しない | 作成基準日と次の見直し日を表示 | 日付が変わった後の作り直しを判断できる |
+
+### 新機能
+
+- **工程別の待ち状態と、条件付きの見通しを確認**
+  doctorは保存済み記録から件数・鮮度・中断・バックアップ状態を表示し、詳細診断は読取り専用で新着・履歴・抽出品質チェックの残数を集計します。速度は現在の設定と世代に一致する実績だけで求め、5分以上・3件以上などの条件がそろった場合に限り、新しい仕事が増えない前提の見通しを示します。古い記録や未確認値を0件と扱わず、工程間の件数も合算しません。
+
+- **通知待ちと復旧状況を監視警告で確認**
+  通知が進まない理由を記録し、カード作成待ち、配送完了待ち、配送結果不明、設定による保留を区別します。過去24時間に検出した処理中断と日次ローカルバックアップも確認でき、長時間の待機や結果不明は要確認として示します。警報のしきい値・抑止・再送条件は維持します。送信待ちの数え漏れは修正します。
+
+### 改善
+
+- **医薬品マスターを更新し、辞書の見直し日を案内**
+  同梱する公式原本を20260930版の19,272件から20261013版の19,286件へ更新しました。辞書作成時に基準日と将来の開始・終了予定を示し、同じ原本でも再作成が必要になった日や、旧辞書の基準日が未確認の状態を区別します。同梱・作成だけでは承認や有効化を自動で行いません。
+
+- **推奨Hermes agentをv0.21.7ベースに固定**
+  新規導入で使う推奨版と検証対象を、v0.21.7を取り込んだMCS companionの同じコミットへそろえます。本人確認付き操作と標準入力による認証設定を維持します。
+
+- **処理実績と内部の集計を整理**
+  開始・終了・完了時刻と設定の世代を記録し、同じ条件の処理速度を確認できるようにしました。大量の完了履歴は集約して数え、抽出対象の条件と分類定義・テストの共通部分も整理しています。解析内容・順序・回数は変えません。
+
+### 不具合修正
+
+- **医薬品辞書の更新失敗から既存設定と表示を保護**
+  壊れた圧縮データは辞書を作らずに拒否し、設定切替前には辞書の実体とSHAを検証します。読取り途中の障害では古い照合候補を表示から外し、原文の薬剤名を保持して、復旧後の処理で照合し直します。公式仕様の最終使用日は当日を含み、翌日から候補を除外するよう修正しました。
+
+- **送信待ちの数え漏れと理由の取り違えを修正**
+  送信予定時刻が先の通常シグナルも待ち件数と内訳に含めます。現在の配送結果が不明な場合は、過去のスレッド保留より優先して要確認と表示します。
+
+- **カード作成機能の設定不足を正しく記録**
+  Hermesでカード作成機能を有効にしたまま必要な設定が欠けている場合に、記録処理自体が読込みエラーになる問題を修正しました。設定不足として記録するので、原因を確認できます。
+
+### 更新時の注意
+
+- 追加設定は不要です。新しい運用記録は更新後の処理から蓄積され、旧記録・欠測は未確認となります。稼働モードに合った[更新手順](docs/guides/UPGRADE_AGENT.md)に従って反映し、Hermes pluginではgatewayを再起動してください。カード作成機能が無効として記録された場合は、通知先のplugin設定も確認します。
+
+- 予定時刻が先の通常シグナルがあると、送信待ち件数が従来より増え、監視警告が出る場合があります。予定前のダイジェストは引き続き除外し、送信時刻や再送条件は変更しません。
+
+- 詳細診断は時間・容量を制限し、上限超過を確認不能として終了します。保持ジョブの本文を含む読取り総量が64MiBを超える場合は再実行しても解消しません。保存済み状態を読むdoctorは別経路です。保持された失敗件数だけで現在も障害が続いているとは判断せず、見通しの計算も保留します。
+
+- 医薬品辞書は `mcs drug status` で版と見直し日を確認し、必要な日に `install-bundled` で再作成、`compare` / `impact` で比較した後、明示設定で切り替えます。最終日の扱いを含め、作成済み辞書は自動で書き換えません。旧辞書とpath/SHAは切戻し用に保持し、旧20260930用pinを新版の変換へ流用しないでください。未承認の参考辞書や旧私有辞書の読取り互換性は維持します。
+
+- 既存のHermes checkoutは自動変更しません。旧固定版も過去版として認識し、Python実行環境の移行が必要な場合だけ従来の確認付き更新経路で固定版へ進めます。稼働Hermesの更新は別途実行します。
+
+### 技術詳細
+
+<details>
+<summary>技術詳細・根拠を表示</summary>
+
+#### 推奨Hermes agentをv0.21.7ベースに固定
+
+- 公式v0.21.7は71d34bad1045610252eda02ee79549436896e784。MCS companion候補はdc42a048bff5fcc545a2f1a1d3982292c13eb098。
+- install.sh・mcs_update.HERMES_PIN・CIのHermes refを一致させ、従来の6f35b1edをHERMES_PREVIOUS_PINSへ追加する。
+- 根拠: install.sh、mcs/ops/mcs_update.py、.github/workflows/ci.yml、tests/meta/test_install_runtime_migration.py、71d34bad1045610252eda02ee79549436896e784、dc42a048bff5fcc545a2f1a1d3982292c13eb098
+
+#### カード worker の設定不足を記録するときの読込みエラーを修正
+
+- hermes_plugin/card_workers.py の _event_logger は、adapters を import する前に repo root を sys.path に加える。Hermes は repo root を sys.path に入れずに plugin を読み込むため、設定不足の経路だけ import に失敗していた。
+- 根拠: hermes_plugin/card_workers.py、tests/plugin/test_card_worker_config_log.py
+
+#### 解析の実行記録に、処理時間帯と完了時刻を追加
+
+- KIND_DRAIN_RUN の記録に observation（version、started_at、finished_at、config_generation、complete、lane）を追加する。
+- job_metrics の completed_at は、世代を確認したうえで完了に遷移したジョブ（status=done）にだけ付ける。
+- complete は、記録の上限64件を超えて切り詰めたとき、時計が逆行したとき、時刻が有限値でないときに false になる。実行全体が例外やロック喪失で中断した場合は、従来どおり実行記録そのものを書かない。
+- 根拠: mcs/semantic/semantic_drain.py、tests/semantic/test_semantic_fairness.py
+
+#### 無効な医薬品辞書への設定切り替えを防止
+
+- 最終的なpathとsha256を既存の辞書loaderで一度検証し、不在と無効を固定理由で通知する。
+- Keychain・.env・設定保存・共有接続設定の書き込みより前に検証し、辞書を指定しない通常の設定読み込みにはファイル検証を追加しない。
+- 根拠: mcs/ops/mcs_setup.py、tests/ops/test_mcs_setup_drug_map.py
+
+#### 薬剤辞書の読み取り障害時に古い候補表示を残さない
+
+- 辞書のファイル記述子取得後に起きたI/Oエラーを安全な検証エラーへ統一し、既存の辞書無効化経路へ渡す。
+- ストリーム作成や読み取りの失敗時も取得済みファイル記述子を閉じる。完全合成の回帰で旧候補の抑制・原薬剤名の保持・次回成功時の復旧を確認した。
+- 根拠: mcs/extract/drug_map.py、tests/ingest/test_drug_map_pipeline.py
+
+#### 同梱の公式医薬品マスターを20261013版に更新
+
+- resources/drug-master/20261013/ に公開ZIPを無加工で同梱し、manifest に出典・版・SHA・件数・利用条件参照を記録した。旧20260930版の原本とmanifestは残している。
+- import_drug_master.EDITION を20261013に更新した。layout・変更区分・日付番兵の検査は変更していない。
+- 公式取得物のSHAは2回の独立取得で一致した。R08rec3は前回と同一で、改版されたR08rec1の医薬品節の定義も変わっていないことを確認した。
+- 全19,286行をconverterで変換でき、既存のstatus policyで12,195件・約5.1MBと上限内だった。
+- 変換reportにas_of・next_boundary_on・日付別future_starts/future_endsを追加。SHA保護されたsourceの日付情報をloaderで検証し、候補集合の次の境界や旧辞書の情報不足をstatusで区別する。最終日包含の修正を除き候補の除外方針を維持し、承認条件は変更しない。
+- 根拠: resources/drug-master/20261013/manifest.json、mcs/ops/import_drug_master.py、docs/specs/official-drug-master.md、mcs/extract/drug_map.py、mcs/ops/mcs_drug.py、tests/ops/test_import_drug_master.py、tests/ops/test_mcs_drug_bundled.py
+
+#### 通知待ちと前回の中断理由を診断記録へ追加
+
+- 通知の総数と理由別内訳は共通の対象条件・同じSQL読取りから算出し、内訳の取得失敗時は従来の件数集計を保持する。
+- 追加DB観測にはSQL/Pythonの時間上限、ロック待ち・単一行容量・通知件数の上限を設定し、接続設定と外側の書込みtransactionを維持する。OSの停止不能なI/Oを即時中断できる保証とはしない。
+- 中断時刻は発生時刻ではなく記録から確認できる検出時刻。本文・患者識別情報・私有パス・生のエラーを新しい診断項目へ出さない。
+- 抽出対象の共通条件をルール抽出・read model・healthで共有し、NULL/空白/本文状態などの既存境界を維持する。
+- 日次backupの確認はディレクトリ走査256件/0.5秒、完了印256バイトを上限にし、リンク・FIFO・大きすぎる完了印を受理しない。DBを開かず、元のbackup・再試行・保持動作を変更しない。
+- 根拠: mcs/ingest/run_check.py、mcs/notify/notify_cards.py、mcs/core/mcs_queries.py、mcs/extract/v1/extract.py、mcs/views/read_model.py、mcs/core/maintenance.py
+
+#### マスター更新時の圧縮破損と最終使用日の扱いを修正
+
+- ZIPの展開で発生するzlib.error/EOFErrorを固定理由zip_invalidへ変換する。raw exception・私有パス・入力本文をCLIへ出さない。
+- 完全合成ZIPのDEFLATE圧縮部分を破損させ、更新したSHAでもconverter/bundle checkerが拒否し、出力ファイル・設定を変更しないことを確認する。
+- R08rec1の医薬品欄31/34を照合し、終了側の日付は最終日より後のas_ofで除外する。次の見直し日は最終日翌日、date.maxは翌日計算を行わない。開始/最終日同日と最終日の前後を完全合成で検証。
+- 根拠: mcs/ops/import_drug_master.py、scripts/development/check_drug_master_bundle.py、tests/ops/test_import_drug_master.py、tests/meta/test_drug_master_bundle.py
+
+#### 送信待ちの通知に、待っている理由を記録して表示
+
+- notify_cards._reseat が、見直しを先送りする8つの経路それぞれで、progress の wait（reason と at）を既存の記録を保ったまま書き込む。
+- notify_cards.pending_breakdown は、監視の送信待ち件数と同じ母集団（OUTBOX_PENDING_WHERE）を理由ごとに数え、合計は常に件数と一致する。最後の更新より古い記録は stale、記録なしは unrecorded、読めない記録は unknown として数え、例外で止まらない。
+- カードの前回の送信で本文・添付がまだ届いていない間は、次の更新を待つため card_parts_pending、送信結果が不明な部品がある場合は照合待ちの card_parts_unknown（要確認）として数える。部品が届けば次の巡回で更新が出て、待っていた通知も完了する。
+- health_watch は送信待ちの内訳・日次ローカルバックアップの状態・直近の中断理由を、欠けていても壊れていても判定を変えずに表示する。
+- 根拠: mcs/notify/notify_cards.py、mcs/ingest/health_watch.py、tests/notify/test_pending_wait_reasons.py、tests/ingest/test_health_watch_wait_reasons.py
+
+#### 処理の待ち状態と条件付きの見通しを確認
+
+- 同一ジョブ・世代の完了を重複計上せず、壁時計の区間で速度を算出する。再試行時刻待ち・保持された失敗・欠測・古い集計を理由付きで区別し、これらがある場合の見通しは保留する。保持された失敗件数を現在の障害と断定しない。本文・患者識別情報・生の例外を出力しない。
+- 完了/失敗を含む保持ジョブはSQLで最大16群へ集計し、直近の有効実績だけ最大64 ID/記録で世代照合する。Python JSONの分類と累計64MiBの共有読取り上限は維持し、上限超過は全体を確認不能にする。
+- 根拠: mcs/ops/operational_progress.py、mcs/ops/semantic_observe.py
+
+#### 診断で処理状況と集計の鮮度を確認
+
+- 読取り容量を制限し、通常ファイルだけを読み取る。出力は許可された件数・状態・時刻に限定する。既存のdoctor終了コードは維持する。
+- 詳細観測は読取専用transactionで時刻・容量・反復回数を制限し、上限到達時の部分集計は確認不能として返す。中断記録のfinished_atは発生時刻と断定せず検出時刻として扱う。
+- 根拠: mcs/ops/operational_status.py、mcs/ops/mcs_setup.py、mcs/ops/semantic_observe.py
+
+#### 送信待ちの数え漏れと、待ちの理由の取り違えを修正
+
+- notify_cards.OUTBOX_PENDING_WHERE は、payload に digest:1 が明示された予定前のシグナルだけを除外する。digest が無い・null・false・壊れた payload では NOT(NULL) で行が落ちていたため、CASE と IS で真偽を二値に保つ。health の件数・内訳と、内訳を取れないときの従来件数は同じ条件を使う。
+- _pending_reason は、カードの配信結果不明と部品の送信結果不明を、hold_reason・thread_hold より先に判定する。スレッド保留は現在の wait の存在から復旧を推測せず、実際に配送先が確定して処理が進む時点で thread_hold だけを取り除く。他の progress キーと updated_at、読めない progress は保持する。
+- 初回signalの同時刻 hold と reseat、source thread復旧、unknown receipt、部品確定後の次renderと完了を合成で検証。既存行の古い thread_hold は次のdispatchで取り除かれる。receipt と再送条件は変更しない。
+- 根拠: mcs/notify/notify_cards.py、tests/notify/test_pending_wait_reasons.py
+
+</details>
+
 ## [1.0.20] — 2026-10-12
 
 **収集・通知・解析と更新の安定性を改善**

@@ -1816,6 +1816,21 @@ def cmd_init(args) -> int:
         for error in errors:
             print("  " + error)
         return 1
+    if any(kv.partition("=")[0].strip().split(".", 1)[0] == "drug_map"
+           for kv in args.set or []):
+        # Validate the final explicit pin before any setup write. Unrelated
+        # init keeps its lightweight config check; reference-only maps remain
+        # valid settings without acquiring production approval here.
+        import drug_map
+        setting = cfg["drug_map"]
+        try:
+            reason = ("missing_dictionary" if drug_map.load(
+                setting["path"], expected_sha256=setting["sha256"]) is None else None)
+        except ValueError:
+            reason = "invalid_dictionary"
+        if reason:
+            print(f"init: drug_map {reason} — nothing written")
+            return 1
     login_id = cfg.get("mcs_login_id")
 
     if _init_store_secrets(args, login_id):
@@ -2623,9 +2638,12 @@ def cmd_doctor(args) -> int:
                 ["desired/deployed recovery selection drift"] if not matches else [], [])
     runtimes: dict[str, RuntimeFacts | None] = {
         "selected": selected, "recovery": recovery, "desired_recovery": desired}
+    from operational_status import stored_status, status_lines
+    operations = stored_status(HOME, cfg)
     report = {"mode": mode, "python": sys.version.split()[0],
               "sqlite": sqlite3.sqlite_version, "checks": checks,
               "runtimes": runtimes,
+              "operations": operations,
               "source": _doctor_source(cfg, probe="services" in probes and not config_errors),
               "recovery_selection": {"explicit": "recovery_python" in cfg,
                                      "matches_deployed": matches}}
@@ -2633,6 +2651,8 @@ def cmd_doctor(args) -> int:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
         print(f"doctor: mode={mode}, Python={report['python']}, SQLite={report['sqlite']}")
+        for line in status_lines(operations):
+            print(line)
         source = report["source"]
         print(f"  disk revision: {source['disk']['revision'] or 'unknown'}, "
               f"dirty={source['disk']['dirty']}")

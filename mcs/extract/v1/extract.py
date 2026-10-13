@@ -3,7 +3,7 @@
 
 Parses each stored message body into a structured JSON artifact
 (kind='extract_v1') designed for reuse: timelines, search, rollups,
-and later LLM passes (which can overwrite/extend with kind='extract_v2').
+and later LLM passes (stored separately with kind='extract_llm').
 
 Fields are grounded in the NCGG home-visit pharmacy guide + observed MCS
 conventions (visit-date headers, med periods "8/17-9/6", SOAP sections,
@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 import _mcs_path  # noqa: F401
 from patient_context import extract_context
 from ledger import Ledger, LedgerReader
+from mcs_queries import ELIGIBLE_MESSAGE
 from mcs_util import HOME, acquire_run_lock, loads_dict, locate_quote_span
 
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -689,8 +690,6 @@ _STALE = """CASE WHEN json_valid(a.meta) THEN
         OR json_extract(a.meta,'$.hash') != m.content_hash
         OR COALESCE(json_extract(a.meta,'$.rule_version'),0) != ?
       ELSE 1 END"""
-_EXTRACTABLE = """m.body_text IS NOT NULL AND m.body_text != ''
-        AND (m.body_state IS NULL OR m.body_state='full')"""
 
 
 def _delete_stale(ledger) -> set:
@@ -702,7 +701,7 @@ def _delete_stale(ledger) -> set:
     rest are returned and kept until _extract_rows replaces them, so a
     deadline cut never leaves a message without extract_v1."""
     stale = ledger.db.execute(f"""
-      SELECT DISTINCT a.message_id, {_EXTRACTABLE} AS ok FROM artifacts a
+      SELECT DISTINCT a.message_id, {ELIGIBLE_MESSAGE} AS ok FROM artifacts a
       JOIN messages m ON m.message_id=a.message_id
       WHERE a.kind=? AND {_STALE}
     """, (KIND, RULE_VERSION)).fetchall()
@@ -727,7 +726,7 @@ def run_pending(ledger, *, deadline: float | None = None) -> dict:
       SELECT m.message_id, m.project_id, m.body_text, m.posted_at,
              m.content_hash
       FROM messages m
-      WHERE {_EXTRACTABLE}
+      WHERE {ELIGIBLE_MESSAGE}
         AND (m.message_id NOT IN (SELECT message_id FROM artifacts
                                   WHERE kind=? AND message_id IS NOT NULL)
              OR EXISTS (SELECT 1 FROM artifacts a
@@ -791,11 +790,9 @@ def main() -> int:
         if lock_fd is not None:
             os.close(lock_fd)
         raise
-    q = """SELECT m.message_id, m.project_id, m.body_text, m.posted_at,
+    q = f"""SELECT m.message_id, m.project_id, m.body_text, m.posted_at,
                   m.content_hash
-           FROM messages m WHERE m.body_text IS NOT NULL
-             AND m.body_text != ''
-             AND (m.body_state IS NULL OR m.body_state='full')"""
+           FROM messages m WHERE {ELIGIBLE_MESSAGE}"""
     params: list = []
     if args.project:
         q += " AND m.project_id=?"

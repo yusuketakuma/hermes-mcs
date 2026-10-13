@@ -167,7 +167,12 @@ def install_bundled(args, *, directory: Path = BUNDLE, home: str = HOME) -> dict
         raise ValueError("bundle_csv_integrity")
     out = {"edition": report["edition"], "rows": report["rows"], "entries": report["entries"],
            "reasons": report["reasons"], "approved": args.approved_by is not None,
-           "held": report.get("held"), "path": None, "sha256": None, "state": "held"}
+           "held": report.get("held"), "path": None, "sha256": None, "state": "held",
+           # the dictionary holds only rows usable on as_of; later starts/ends
+           # need a rebuild on or after next_boundary_on
+           "as_of": report.get("as_of"), "next_boundary_on": report.get("next_boundary_on"),
+           "future_starts": report.get("future_starts") or {},
+           "future_ends": report.get("future_ends") or {}}
     if result.payload is None:
         return out
     folder = Path(home).resolve() / "data" / "drug-map"
@@ -187,8 +192,23 @@ def install_bundled(args, *, directory: Path = BUNDLE, home: str = HOME) -> dict
     return out
 
 
-def bundled_status(cfg, *, directory: Path = BUNDLE) -> dict:
+def _build_dates(source, today: date):
+    """(as_of, next_boundary_on) as dates; as_of None when absent, unreadable
+    or after today — such a dictionary is never reported as current."""
+    try:
+        as_of = date.fromisoformat(source.as_of) if source.as_of else None
+        boundary = (date.fromisoformat(source.next_boundary_on)
+                    if source.next_boundary_on else None)
+    except (TypeError, ValueError):
+        return None, None
+    if as_of is None or as_of > today:
+        return None, boundary
+    return as_of, boundary
+
+
+def bundled_status(cfg, *, directory: Path = BUNDLE, today: date | None = None) -> dict:
     """Compare the bundled master with the config-pinned dictionary, read-only."""
+    today = today or date.today()
     try:
         manifest, _ = _bundle(directory)
         bundled = {"edition": manifest["edition"], "rows": manifest["rows"],
@@ -202,12 +222,17 @@ def bundled_status(cfg, *, directory: Path = BUNDLE) -> dict:
     if dictionary is not None:
         configured = {"id": dictionary.dict_id, "sha256": dictionary.sha256,
                       "approved": dictionary.approved, "source": dictionary.source.name,
-                      "terms_checked_on": dictionary.source.terms_checked_on}
+                      "terms_checked_on": dictionary.source.terms_checked_on,
+                      "as_of": dictionary.source.as_of,
+                      "next_boundary_on": dictionary.source.next_boundary_on}
+        as_of, boundary = _build_dates(dictionary.source, today)
     state = ("bundle_unavailable" if bundled is None
              else "invalid" if error is not None
              else "unconfigured" if setting is None
              else "missing" if dictionary is None
              else "differs_from_bundle" if dictionary.dict_id != bundled["dict_id"]
+             else "build_date_unknown" if as_of is None
+             else "rebuild_due" if boundary is not None and today >= boundary
              else "bundled_approved" if dictionary.approved else "bundled_reference_only")
     return {"state": state, "bundled": bundled, "configured": configured,
             "read_only": True, "explanation": STATUS_EXPLANATIONS[state]}
@@ -219,6 +244,8 @@ STATUS_EXPLANATIONS = {
     "unconfigured": "辞書は未設定です。同梱版から作るには mcs drug install-bundled を実行します。",
     "missing": "設定された辞書ファイルがありません。install-bundled で作り直すか設定を見直してください。",
     "differs_from_bundle": "設定中の辞書は同梱版と異なる原本から作られています。更新する場合は install-bundled 後に compare / impact で差分を確認してから設定を切り替えます。",
+    "build_date_unknown": "設定中の辞書は同梱版と同じ原本から作られていますが、作成基準日を確認できません（作成基準日の記録がない旧形式、または今日より後の日付）。収載日・終了日の反映を確かめるため、install-bundled で作り直し、compare / impact で差分を確認してから設定を切り替えます。",
+    "rebuild_due": "設定中の辞書の作成後に、同梱版で収載開始または終了を迎えた行があります。install-bundled で作り直し、compare / impact で差分を確認してから設定を切り替えます。",
     "bundled_approved": "同梱版から作った承認済み辞書を使用中です。",
     "bundled_reference_only": "同梱版から作った未承認辞書です。照会・参考検索だけに使われ、薬剤候補の注釈には使われません。",
 }
@@ -234,6 +261,10 @@ def _bundled_display(command, report):
         if configured:
             print(f"設定: {_line(configured['id'])}@{configured['sha256'][:12]}"
                   + ("（承認済み）" if configured["approved"] else "（未承認・参考のみ）"))
+            # a missing or untrusted build date leaves the boundary unknown, not absent
+            known = configured["as_of"] and report["state"] != "build_date_unknown"
+            print(f"作成基準日: {_line(configured['as_of'] or '記録なし')}"
+                  f" / 次の見直し日: {_line(configured['next_boundary_on'] or ('なし' if known else '未確認'))}")
         return
     print(f"同梱 {report['edition']}版 {report['rows']}行 → 辞書 {report['entries']}件"
           + ("（承認済み）" if report["approved"] else "（未承認・参考のみ）"))
@@ -242,6 +273,12 @@ def _bundled_display(command, report):
         return
     print(("作成しました: " if report["state"] == "written" else "既に同じ辞書があります: ")
           + _line(report["path"]))
+    for key, verb in (("future_starts", "から候補になります"), ("future_ends", "に候補から外れます")):
+        for day, count in sorted((report.get(key) or {}).items()):
+            print(f"  {count}行は {_line(day)} {verb}")
+    if report.get("next_boundary_on"):
+        print(f"この辞書は作成基準日 {_line(report['as_of'])} 時点の内容です。"
+              f"次の見直し日 {_line(report['next_boundary_on'])} 以降に install-bundled で作り直してください。")
     setting = json.dumps({"path": report["path"], "sha256": report["sha256"]}, ensure_ascii=False)
     print("設定は変更していません。使う場合は内容を確認してから次を実行します:")
     print("  python3 mcs/ops/mcs_setup.py init --set " + shlex.quote("drug_map=" + setting))

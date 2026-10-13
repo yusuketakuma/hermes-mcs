@@ -205,12 +205,12 @@ fi
 
 HERMES_DIR="$HERMES_HOME/hermes-agent"
 HERMES_REPO="https://github.com/yusuketakuma/hermes-agent.git"
-# Pinned: public MCS companion plus upstream v0.21.6-era release code.
+# Pinned: MCS companion based on upstream v0.21.7.
 # Native context/attestation and async pre-dispatch contracts remain required.
-HERMES_PIN="6f35b1ed84536f7e7fd2f605f7779dd051cce05f"
-# Pins validated by earlier releases (all Python <3.14); only these move to
+HERMES_PIN="dc42a048bff5fcc545a2f1a1d3982292c13eb098"
+# Pins validated by earlier MCS releases; only these move to
 # HERMES_PIN, and only during an updater-proven runtime migration.
-HERMES_PREVIOUS_PINS="fd50a275e2616118c48fe07e7e1c878782b15ccd 1e8fbfe6b41399a46e232f6cde5618cfdfa2729a 16390dc80d248b7b49554c0cde52caf22e1fc3d8"
+HERMES_PREVIOUS_PINS="6f35b1ed84536f7e7fd2f605f7779dd051cce05f fd50a275e2616118c48fe07e7e1c878782b15ccd 1e8fbfe6b41399a46e232f6cde5618cfdfa2729a 16390dc80d248b7b49554c0cde52caf22e1fc3d8"
 CLONE_MARK="$HERMES_HOME/.hermes-agent.install-in-progress"
 VENV="$HERMES_DIR/venv"
 if [ "$RUNTIME_MODE" = standalone ]; then VENV="$RUNTIME_HOME/venv"; fi
