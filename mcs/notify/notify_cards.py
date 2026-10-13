@@ -2046,7 +2046,8 @@ RESEAT_REASONS = frozenset({
 # waits an operator should look at; any reason that outlasts
 # PENDING_ATTENTION_S is treated the same way
 _ATTENTION_REASONS = frozenset({
-    "alert_outcome_pending", "intent_card_delivery_unknown", "unknown"})
+    "alert_outcome_pending", "intent_card_delivery_unknown",
+    "card_parts_unknown", "unknown"})
 PENDING_ATTENTION_S = 6 * 3600
 # health's pending-delivery population (one ? = now): a signal digest
 # scheduled ahead and never attempted waits by design and is excluded
@@ -2062,9 +2063,13 @@ def _code(value) -> str | None:
                      and set(value) <= _CODE_CHARS) else None
 
 
-def _pending_reason(progress_raw, updated_at, delivery_unknown: bool) -> str:
+def _pending_reason(progress_raw, updated_at, delivery_unknown: bool,
+                    parts: int = 0) -> str:
     """Why one pending row waits: a structured hold first, then an intent
-    card whose delivery is unknown, then the row's last recorded wait.
+    card whose delivery is unknown, then a card whose delivered render
+    still has body/attachment parts in flight (``parts`` 2 = an unknown
+    part, 1 = pending ones; the next update waits on them, see
+    _parts_in_flight), then the row's last recorded wait.
     A wait written before the row's latest update is stale; no record is
     unrecorded; an unreadable progress is unknown."""
     try:
@@ -2079,6 +2084,8 @@ def _pending_reason(progress_raw, updated_at, delivery_unknown: bool) -> str:
             return f"{key}:{code}" if code else "unknown"
     if delivery_unknown:
         return "intent_card_delivery_unknown"
+    if parts:
+        return "card_parts_unknown" if parts >= 2 else "card_parts_pending"
     wait = progress.get("wait")
     if wait is None:
         return "unrecorded"
@@ -2115,15 +2122,27 @@ def pending_breakdown(db, now: float) -> dict:
         "  SELECT 1 FROM notification_intent_cards ic "
         "  JOIN notification_cards c ON c.card_id=ic.card_id "
         "  WHERE ic.event_id=o.event_id AND ic.state='pending' "
-        "    AND c.delivery_state='delivery_unknown') "
+        "    AND c.delivery_state='delivery_unknown'),"
+        # the parts gate of the card's latest render, as _parts_in_flight
+        " (SELECT MAX(CASE WHEN p.state='unknown' THEN 2 ELSE 1 END) "
+        "  FROM notification_intent_cards ic "
+        "  JOIN notification_renders r ON r.card_id=ic.card_id "
+        "  JOIN notification_render_parts p ON p.delivery_id=r.delivery_id "
+        "  WHERE ic.event_id=o.event_id AND ic.state='pending' "
+        "    AND r.state='delivered' AND r.render_rev=(SELECT MAX(render_rev) "
+        "      FROM notification_renders WHERE card_id=ic.card_id) "
+        "    AND ((p.kind IN ('body_part','attachment_part') "
+        "          AND p.state IN ('pending','unknown')) "
+        "      OR (p.kind='thread' AND p.state='unknown'))) "
         f"FROM notify_outbox o WHERE {OUTBOX_PENDING_WHERE}", (now,))
     total = 0
     by_reason: dict = {}
     oldest = None
     attention = 0
-    for created_at, updated_at, progress, delivery_unknown in rows:
+    for created_at, updated_at, progress, delivery_unknown, parts in rows:
         total += 1
-        reason = _pending_reason(progress, updated_at, bool(delivery_unknown))
+        reason = _pending_reason(progress, updated_at, bool(delivery_unknown),
+                                 parts if isinstance(parts, int) else 0)
         created = _finite(created_at)
         age = max(0.0, now - created) if created is not None else None
         slot = by_reason.setdefault(reason, {"count": 0, "oldest_age_s": None})

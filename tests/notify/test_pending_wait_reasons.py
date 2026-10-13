@@ -8,7 +8,8 @@ import json
 import pytest
 
 import notify_cards
-from notify_testkit import CFG, NOW, _dispatch, _intent, _patient, _seed_thread, _signal_row, led
+from notify_testkit import (CFG, NOW, _begin, _dispatch, _intent, _msg, _patient, _receipt,
+                            _seed_thread, _settle_bodies, _signal_row, led)
 
 __all__ = ["led"]
 
@@ -149,3 +150,44 @@ def test_non_numeric_row_timestamps_do_not_raise(led):
     breakdown = notify_cards.pending_breakdown(led.db, NOW + 1)
     assert breakdown["total"] == 1 and breakdown["by_reason"] == {
         "unknown": {"count": 1, "oldest_age_s": None}}
+
+
+def _second_intent_while_first_card_sends(led):
+    """ev1's create render is on the wire when a reply's ev2 arrives: ev2's
+    card binding waits for the next render, which waits for R1's parts."""
+    _seed_thread(led)
+    ev1 = _intent(led)
+    _dispatch(led, ev1)
+    r1 = led.db.execute("SELECT * FROM notification_renders ORDER BY render_rev DESC LIMIT 1").fetchone()
+    _begin(led, r1, n=1)
+    _msg(led, 102, 1, parent=100, body="SYNTHETIC-LATE-REPLY")
+    ev2 = _intent(led, payload={"message_ids": [102]})
+    _dispatch(led, ev2, now=NOW + 1)
+    _receipt(led, r1, f"{1:016x}", n=9)
+    return ev1, ev2, r1
+
+
+def test_reply_during_create_waits_on_parts_then_completes(led):
+    ev1, ev2, r1 = _second_intent_while_first_card_sends(led)
+    assert _row(led, ev1["event_id"])["state"] == "accepted"
+    later = NOW + notify_cards.RESEAT_S + 5
+    breakdown = notify_cards.pending_breakdown(led.db, later)
+    assert {k: v["count"] for k, v in breakdown["by_reason"].items()} == {"card_parts_pending": 1}
+    # parts settle → the next sweep issues the update that carries the reply
+    _settle_bodies(led, r1)
+    notify_cards.sweep(led, CFG, now=later)
+    r2 = led.db.execute("SELECT * FROM notification_renders ORDER BY render_rev DESC LIMIT 1").fetchone()
+    assert r2["render_rev"] == 2 and "SYNTHETIC-LATE-REPLY" in r2["spec_json"]
+    _begin(led, r2, n=2)
+    _receipt(led, r2, f"{2:016x}", n=10)
+    assert _row(led, ev2["event_id"])["state"] == "accepted"
+    assert notify_cards.pending_breakdown(led.db, later)["total"] == 0
+
+
+def test_an_unknown_part_is_an_attention_wait(led):
+    ev1, ev2, r1 = _second_intent_while_first_card_sends(led)
+    led.db.execute("UPDATE notification_render_parts SET state='unknown' WHERE delivery_id=? "
+                   "AND kind='body_part'", (r1["delivery_id"],))
+    breakdown = notify_cards.pending_breakdown(led.db, NOW + 2)
+    assert {k: v["count"] for k, v in breakdown["by_reason"].items()} == {"card_parts_unknown": 1}
+    assert breakdown["attention"] == 1

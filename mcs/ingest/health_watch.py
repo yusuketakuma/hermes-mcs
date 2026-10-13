@@ -700,6 +700,8 @@ _WAIT_JA = {
     "intent_cards_unsettled": "カードの配信完了待ち",
     "intent_cards_issued": "カードの作成待ち",
     "intent_card_delivery_unknown": "カードの配信結果が不明",
+    "card_parts_pending": "前回の本文・添付の送信完了待ち",
+    "card_parts_unknown": "前回の本文・添付の送信結果が不明（照合待ち）",
     "unknown": "状態を読めない記録",
     "stale": "最後の記録以降に状態が変化",
     "unrecorded": "待ちの理由が未記録",
