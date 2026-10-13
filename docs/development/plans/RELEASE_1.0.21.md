@@ -27,7 +27,7 @@
 | WP5 | local/offsite区別、局所観測、遅延/中断/再試行/旧backup保持の検証 | Claude、Codex統合 | 検証済: 8bcada00統合、FIFO/巨大印/リンク/走査を有限に制限。関連293件と独立14件成功 |
 | WP6 | 軽量doctorとhealth統合、必要な認可済み表示、局所失敗の分離 | Codex/Claude | 検証済: health5群224件・実local helper統合293件成功、既知障害/外側writeを保持。独立受入済 |
 | WP7 | 合成基準、時間/メモリ/DB負荷/新着待ちの比較、必要な改善 | Codex、Claude確認 | 合成検証済: 共通出力15組一致、allocation/SQL/WAL、新着+backfill/任意admission、40回反復を比較。本番性能は対象外 |
-| WP8-H | Hermes v0.21.7 companion固定、導入/更新/SDK | Codex | 条件待ち: install/updater/CI pin一致。2026-10-14に候補pinを`f36c1da0`へ更新（旧`dc42a048`から作業状態12件を配布treeから除外、実装bytes不変）し、固定SHAが取得できないときに1回再試行する導入修正を追加。f36の固定Hermes SDK laneは21件成功（skip 0）。導入・更新350件と最終書式のinstaller81件は成功、追加差分5ファイルのCodeRabbit指摘/漏れ0、独立レビューACCEPT。旧候補dc42では2026-10-14に最終treeで固定Hermes SDK lane 21件成功（pin archive 18,325ファイル一致）。standalone専用laneも最終treeで12件成功（skip 0）。公開取得はHTTP422で未受入、exact CIも未完了 |
+| WP8-H | Hermes v0.21.7 companion固定、導入/更新/SDK | Codex | 条件待ち: install/updater/CI pin一致。2026-10-14に候補pinを`f36c1da0`へ更新（旧`dc42a048`から作業状態12件を配布treeから除外、実装bytes不変）し、固定SHAが取得できないときに1回再試行する導入修正を追加。f36の固定Hermes SDK laneは21件成功（skip 0）。導入・更新350件と最終書式のinstaller81件は成功、追加差分5ファイルのCodeRabbit指摘/漏れ0、独立レビューACCEPT。旧候補dc42では2026-10-14に最終treeで固定Hermes SDK lane 21件成功（pin archive 18,325ファイル一致）。standalone専用laneも最終treeで12件成功（skip 0）。公開取得はHTTP422で未受入、exact CIも未完了。2026-10-14追補: companion f36を公開branchからGit経路で取得しSHA/tree一致、Draft PR #54 `eda24601`のrequired CI成功（後続headは別確認、merge/tag/Release/本番は未受入） |
 | WP8-D | changes/README/画面例/ガイド/受入票の同期 | Codex、2026-10-14最終集約Claude | ローカル準備完了: 全ファイル見直しの16件を加えた全28件を生成器で未公開1.0.21（2026-10-14）へ再集約し、本文13項目・技術詳細28件・README要約・見直し記録・受入票を更新。同日、導入修正の記録を追加し、全29件（本文14項目・技術詳細29件）とした。独立確認は`v1021-final-docs-check-20261014` |
 | R1 | 同値の抽出対象条件を既存定数へ集約 | Codex | 完了: ELIGIBLE_MESSAGE共用、18境界/実呼出を含む194件成功、独立受入済 |
 | R2 | pending総数と内訳の母集団を共通化 | Codex契約、Claude利用 | 完了: 総数/内訳/fallbackは同じpredicate。通常signalのNOT(NULL)による数え漏れを修正し、7 payload境界と実経路を独立確認 |
@@ -36,7 +36,7 @@
 | R5 | 残存する不要コード/命名/旧説明の有限整理 | 各所有者 | 検証済: observe説明、共通predicate、extract旧世代説明を更新。旧P15のrepair_prompt修正は既済、対象外 |
 | R6 | 関連fixtureのtestkit集約、順序独立性 | Codex | 完了: audit pairをsemantic_testkitへ移動、単独13/統合199件成功、Claude独立受入済 |
 | V1 | 関連回帰・必須静的ゲート・相互独立レビュー | 両者 | ローカル検証完了: 各component回帰と相互独立レビュー、全Ruff/gates10/mine/notes/readme/diff成功。全体候補の別ゲートはV2で保持 |
-| V2 | 差分レビュー、RC固定、全体/固定SDK/導入更新検証 | 両者 | ローカル検証完了: 初回CodeRabbit 7分割72ファイル（指摘/取りこぼし0）に加え、全ファイル見直しの差分151ファイルを5分割→指摘7件（4修正・3根拠付き不採用）→修正9ファイルの再レビュー0件の2巡。tested `5c8ddcfc`でtests+integration 11,938件成功・終了0・ソース不変（専用SDK3件skipを区別）。固定Hermes SDK laneは旧候補dc42で2026-10-14に21件成功（新候補f36でも21件成功）。standalone専用SDK laneも2026-10-14に12件成功。公開companion取得（HTTP422）・exact CIは未受入 |
+| V2 | 差分レビュー、RC固定、全体/固定SDK/導入更新検証 | 両者 | ローカル検証完了: 初回CodeRabbit 7分割72ファイル（指摘/取りこぼし0）に加え、全ファイル見直しの差分151ファイルを5分割→指摘7件（4修正・3根拠付き不採用）→修正9ファイルの再レビュー0件の2巡。tested `5c8ddcfc`でtests+integration 11,938件成功・終了0・ソース不変（専用SDK3件skipを区別）。固定Hermes SDK laneは旧候補dc42で2026-10-14に21件成功（新候補f36でも21件成功）。standalone専用SDK laneも2026-10-14に12件成功。公開companion取得（HTTP422）・exact CIは未受入。2026-10-14追補: companion f36を公開branchからGit経路で取得しSHA/tree一致、Draft PR #54 `eda24601`のrequired CI成功（後続headは別確認、merge/tag/Release/本番は未受入） |
 | V3 | 公式医薬品master再照合・配布検証・リリース文書 | Claude統合、Codex確認 | ローカル準備完了: 20261013全19,286行converter成功、PDF/termsと原本hash独立照合。2026-10-14 05:47 JSTの再取得でも同じSHA・bundle checker ok。初回18観点を確認し追加対策を独立受入。承認/有効化は別操作 |
 
 ## 初回医薬品マスター更新の追加範囲

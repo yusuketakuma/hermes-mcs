@@ -301,6 +301,7 @@ def _mkworker(tmp_path, bot=None, wid="w1"):
     ch = bot.channels[42]
     if not any(m.id == 9001 for m in ch.sent):
         ch.sent.append(FakeMessage(9001, ch))
+    ch._next = max(ch._next, 9001)
     w = DeliveryWorker(bot=bot, settings=SETTINGS, root=str(tmp_path),
                        reg=reg, worker_id=wid,
                        log=lambda *_a, **_k: None)

@@ -109,9 +109,9 @@
 
 #### 推奨Hermes agentをv0.21.7ベースに固定
 
-- 公式v0.21.7は71d34bad1045610252eda02ee79549436896e784。MCS companion候補はdc42a048bff5fcc545a2f1a1d3982292c13eb098。
+- 公式v0.21.7は71d34bad1045610252eda02ee79549436896e784。MCS companionはf36c1da0016ce14c9c531cb9514ab4b0b667240d（当初候補dc42a048bff5fcc545a2f1a1d3982292c13eb098から作業用ファイル12件を配布treeから除外したもの）。
 - install.sh・mcs_update.HERMES_PIN・CIのHermes refを一致させ、従来の6f35b1edをHERMES_PREVIOUS_PINSへ追加する。
-- 根拠: install.sh、mcs/ops/mcs_update.py、.github/workflows/ci.yml、tests/meta/test_install_runtime_migration.py、71d34bad1045610252eda02ee79549436896e784、dc42a048bff5fcc545a2f1a1d3982292c13eb098
+- 根拠: install.sh、mcs/ops/mcs_update.py、.github/workflows/ci.yml、tests/meta/test_install_runtime_migration.py、71d34bad1045610252eda02ee79549436896e784、f36c1da0016ce14c9c531cb9514ab4b0b667240d
 
 #### 意味解析の不正な応答を上限付きで処理
 

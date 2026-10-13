@@ -62,7 +62,7 @@
       ]
     },
     "docs": {
-      "notes": "2026-10-14再照合: 全28変更記録を未公開1.0.21（2026-10-14）へ生成器で再集約し、受入票・計画のWP8/V2/V3を現証拠へ更新。README生成ブロックはreadme_release/update_readmeで同期。 / 2026-10-13、運用診断ガイド/INSTALLATION/UPGRADE_AGENT/新受入票へ導線を整合。生成表をPython3.14.7で再生成。12変更記録は1.0.21のCHANGELOGと技術詳細へ対応づけ、旧版archiveは保持する。CodeRabbit 7分割72ファイルの指摘/対象漏れ0と、固定候補の全体テスト終了0を受入票へ反映。専用SDK3件skip、companion公開取得/exactCI/最終公開の未受入を区別し、公開成功と混同しない。",
+      "notes": "2026-10-14追補: 導入修正の記録hermes-companion-supplyを加え、未公開1.0.21は全29変更記録・本文14項目。推奨Hermes記録の現在pinをf36c1da0へ統一し、dc42a048は当初候補として明記。 / 2026-10-14再照合: 全28変更記録を未公開1.0.21（2026-10-14）へ生成器で再集約し、受入票・計画のWP8/V2/V3を現証拠へ更新。README生成ブロックはreadme_release/update_readmeで同期。 / 2026-10-13、運用診断ガイド/INSTALLATION/UPGRADE_AGENT/新受入票へ導線を整合。生成表をPython3.14.7で再生成。12変更記録は1.0.21のCHANGELOGと技術詳細へ対応づけ、旧版archiveは保持する。CodeRabbit 7分割72ファイルの指摘/対象漏れ0と、固定候補の全体テスト終了0を受入票へ反映。専用SDK3件skip、companion公開取得/exactCI/最終公開の未受入を区別し、公開成功と混同しない。",
       "sources": [
         "README.md",
         "docs/guides/USER_GUIDE.md",

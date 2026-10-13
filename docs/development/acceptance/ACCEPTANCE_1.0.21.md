@@ -41,7 +41,7 @@ Python3.14.7・SQLite3.53.1のmacOS環境、`scripts/run_tests.sh`による一�
 | 有限独立レビュー | 観測・health/R1・分類・master・backupを確認。修正前FIFO停止/巨大marker/リンク追跡を再現し、修正後14件成功 |
 | 相互レビュー | Codex/Claudeのcomponent正式requiredレビューを受入。最後の通知追補も独立6件で受入。全体候補の未確認条件は別記 |
 | 固定候補の全体検証 | `scripts/run_tests.sh tests/ integration/ -q -r fEs`が終了0、失敗0、ソース差分なしで完了（12分46秒）。専用SDK条件の3件はスキップであり成功に含めない |
-| 公開取得・exact CI | 未実施。ローカル全体検証の成功を公開取得・固定SDK・最終RC受入に読み替えない |
+| 公開取得・exact CI | 未実施。ローカル全体検証の成功を公開取得・固定SDK・最終RC受入に読み替えない（2026-10-14追補: companion公開取得とPR #54 `eda24601`のrequired CIは成功。詳細は「Hermes固定と導入・更新」） |
 
 生の数値、実行条件、source hash、採用/不採用の根拠は非機密のローカル品質記録`v1.0.21`に保持する。
 
@@ -124,6 +124,8 @@ install・updater・CIの固定値を一致させ、従来の`6f35b1ed`を認識
 リリース経路の監査を受け、新規導入で軽量cloneから通常cloneへ切り替わり固定SHAがブランチに含まれない場合だけ、同じoriginから固定SHAをfetchして1回再試行する修正を追加した。取得できない場合は実行環境の作成前に停止し、接続と公開状況の確認を案内する（変更記録`hermes-companion-supply`）。installerの焦点テスト3件（ローカルbare Gitと外部stubで、通常cloneへの切替後の取得成功・取得不能での停止・再開）は成功した。導入・更新の関連6ファイル350件は成功。ShellCheck対応の同値な条件式整理後、最終書式のinstaller全81件も再確認した。Ruff 0.17.0のCI全範囲、gates 10/10、mine_gates、ShellCheck、shell構文も成功。2026-10-14の追加修正依頼では、固定対象 `0201dcd4`（比較元 `88620eb4`）の5ファイルをCodeRabbit 0.9.0で初回レビューし、`outcome: completed`・指摘0・対象漏れ0・終了0。追加修正はなく再レビュー不要。omoの独立レビューもACCEPT。根拠はローカル品質記録 `v1.0.21/blockers-20261014/`。
 
 新候補`f36c1da0`は2026-10-14 07:06 JSTの公開GitHub APIでもHTTP422（該当commitなし）。公開操作は未承認で、取得の受入条件を満たしていない。新規導入・過去版更新は[origins](../../../tests/fixtures/schema_upgrade/origins.json)と[更新経路](../../../tests/fixtures/schema_upgrade/update-paths.json)で全件追跡する。v1.0.20起点のschema-only抽出で新shape-11（schema9、trigger変更1件/index追加2件）を追加し、全21版・32経路を347件の合成回帰で確認した。既存の旧版fixture・履歴26経路は保持する。最終候補の公開配布・exact SHAの必須CI・サービス受入は別工程。実API/サービス再起動と合成入口の検証は区別する。
+
+2026-10-14 07:39 JST、companion `f36c1da0`はforkの新規branch `mcs-pin/v0.21.7-20261014`で公開済みとなり、認証情報を無効にした公開branchのSHA照合と、SHA指定のfresh fetchでSHA・tree `cce192e4`の一致を確認した。匿名GitHub APIはrate limit（HTTP403）のため、Git経路の取得を証拠とする。MCS候補はDraft PR #54（head `eda24601`、base `7a4e0c60`）で、07:56 JSTにrequired workflow（ci・Japanese release notes）が成功した。これは`eda24601`に対する結果で、後続のheadは別に確認する。main merge・tag・Release・本番適用は未受入。
 
 ## 文書・全体監査の扱い
 

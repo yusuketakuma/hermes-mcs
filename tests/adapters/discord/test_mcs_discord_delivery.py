@@ -37,6 +37,22 @@ def _card_delivered(tmp_path, message_id="9001"):
 
 # ---------- part engine -----------------------------------------------------
 
+def test_seeded_card_and_new_messages_keep_unique_ids_after_worker_restart(tmp_path):
+    _, _, bot = _mkworker(tmp_path)
+    channel = bot.channels[42]
+
+    async def run():
+        card = await channel.fetch_message(9001)
+        first = await channel.send()
+        _mkworker(tmp_path, bot=bot, wid="w2")
+        second = await channel.send()
+        assert len({card.id, first.id, second.id}) == 3
+        for message in (card, first, second):
+            assert await channel.fetch_message(message.id) is message
+
+    asyncio.run(run())
+
+
 def test_all_parts_delivered_with_remote_ids(tmp_path):
     chunks = _chunks(5)
     w, reg, bot = _mkworker(tmp_path)
