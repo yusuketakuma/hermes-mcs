@@ -7,6 +7,7 @@ and must each be independently failure-isolated by the caller.
 import errno
 import glob
 import json
+import math
 import os
 import shutil
 import sqlite3
@@ -212,6 +213,31 @@ def newest_backup_age_s() -> float | None:
         with suppress(OSError):   # rotated away mid-scan
             stamps.append(os.path.getmtime(path))
     return time.time() - max(stamps) if stamps else None
+
+
+def local_backup_status(*, now: float) -> dict:
+    """Read-only state of the newest daily backup for health: stat and
+    the .ok marker only — no DB open, no quick_check, no path or error text."""
+    try:
+        newest = None
+        for path in glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db")):
+            try:
+                st = os.stat(path)
+            except FileNotFoundError:
+                continue              # rotated away mid-scan
+            if newest is None or st.st_mtime > newest[1]:
+                newest = (path, st.st_mtime)
+        if newest is None:
+            return {"state": "missing", "newest_age_s": None, "observed_at": now}
+        age = now - newest[1]
+        if not (math.isfinite(age) and age >= 0):
+            return {"state": "unknown", "newest_age_s": None, "observed_at": now}
+        state = "verified" if _verified_unchanged(newest[0]) else "unverified"
+        return {"state": state, "newest_age_s": age, "observed_at": now}
+    except OSError:
+        return {"state": "unreadable", "newest_age_s": None, "observed_at": now}
+    except Exception:
+        return {"state": "unknown", "newest_age_s": None, "observed_at": now}
 
 
 def backup_overdue() -> bool:
