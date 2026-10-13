@@ -216,7 +216,7 @@ HERMES_DIR="$HERMES_HOME/hermes-agent"
 HERMES_REPO="https://github.com/yusuketakuma/hermes-agent.git"
 # Pinned: MCS companion based on upstream v0.21.7.
 # Native context/attestation and async pre-dispatch contracts remain required.
-HERMES_PIN="dc42a048bff5fcc545a2f1a1d3982292c13eb098"
+HERMES_PIN="f36c1da0016ce14c9c531cb9514ab4b0b667240d"
 # Pins validated by earlier MCS releases; only these move to
 # HERMES_PIN, and only during an updater-proven runtime migration.
 HERMES_PREVIOUS_PINS="6f35b1ed84536f7e7fd2f605f7779dd051cce05f fd50a275e2616118c48fe07e7e1c878782b15ccd 1e8fbfe6b41399a46e232f6cde5618cfdfa2729a 16390dc80d248b7b49554c0cde52caf22e1fc3d8"
@@ -776,8 +776,13 @@ if [ -f "$CLONE_MARK" ] || [ ! -e "$HERMES_DIR" ]; then
         git clone "$HERMES_REPO" "$HERMES_DIR" \
             || die "git clone of $HERMES_REPO failed — check network access to github.com, then re-run install.sh"
     fi
-    git -C "$HERMES_DIR" checkout -q --detach "$HERMES_PIN" \
-        || die "checkout of the pinned commit $HERMES_PIN failed — re-run install.sh (the interrupted clone is redone)"
+    if ! git -C "$HERMES_DIR" checkout -q --detach "$HERMES_PIN"; then
+        # Full clones may omit commits reachable only through non-branch refs.
+        if ! git -C "$HERMES_DIR" fetch -q origin "$HERMES_PIN" \
+            || ! git -C "$HERMES_DIR" checkout -q --detach "$HERMES_PIN"; then
+            die "cannot retrieve pinned commit $HERMES_PIN from $HERMES_REPO — verify network access and publication of this companion commit before retrying; venv setup has not started"
+        fi
+    fi
 fi
 [ -e "$HERMES_DIR/.git" ] \
     || die "$HERMES_DIR exists but is not a git checkout — move it aside (mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")), then re-run install.sh"

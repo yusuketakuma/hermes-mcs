@@ -164,7 +164,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: yusuketakuma/hermes-agent
-          ref: dc42a048bff5fcc545a2f1a1d3982292c13eb098
+          ref: f36c1da0016ce14c9c531cb9514ab4b0b667240d
           path: hermes-agent
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
