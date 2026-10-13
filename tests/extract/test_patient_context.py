@@ -76,3 +76,27 @@ def test_rollup_keeps_memo_separate_and_uses_newest_report_per_category(tmp_path
         assert context["chat"]["allergies"][0]["text"] == "未確認"
     finally:
         led.close()
+
+
+def test_every_category_alias_heads_its_own_category():
+    # one definition per alias: no later override decides where a heading goes
+    from patient_context import LABELS
+    for category, labels in LABELS.items():
+        for label in labels:
+            body = f"{label}：完全合成の記載。"
+            items = context_items({"patient_context": extract_context(body)}, body)
+            assert [i["category"] for i in items] == [category], label
+
+
+def test_category_order_and_display_headings_are_fixed():
+    # notify_views shows categories in this order under labels[0]
+    from patient_context import LABELS
+    assert [(k, v[0]) for k, v in LABELS.items()] == [
+        ("demographics", "基本情報"), ("diagnoses", "主病名"), ("history", "既往歴"),
+        ("course", "現病歴"), ("adl", "ADL"), ("living", "生活環境"), ("care_level", "介護度"),
+        ("care_services", "利用サービス"), ("care_team", "担当"), ("contacts", "キーパーソン"),
+        ("allergies", "アレルギー"), ("devices", "医療処置"), ("preferences", "療養方針"),
+        ("medication_management", "服薬管理"), ("nutrition", "食事"), ("cognition", "認知機能"),
+        ("adverse_events", "薬物有害事象"), ("observations", "検査・観測値"),
+        ("followup", "変更後の経過")]
+    assert "副作用歴" in LABELS["adverse_events"] and "副作用歴" not in LABELS["allergies"]

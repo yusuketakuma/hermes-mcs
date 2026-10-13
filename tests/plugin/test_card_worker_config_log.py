@@ -29,6 +29,42 @@ def test_incomplete_opt_in_logs_worker_disabled(caplog):
          '{"event": "worker_disabled", "reason": "config_incomplete"}')]
 
 
+INCOMPLETE_AS_HERMES_LOADS = r"""
+import importlib.util, logging, sys, types
+root = sys.argv[2]
+sys.modules["hermes_plugins"] = types.ModuleType("hermes_plugins")
+sys.path[:] = [p for p in sys.path if p not in ("", root)]
+spec = importlib.util.spec_from_file_location(
+    "hermes_plugins.mcs", sys.argv[1], submodule_search_locations=[sys.argv[1].rsplit("/", 1)[0]])
+mod = importlib.util.module_from_spec(spec)
+sys.modules["hermes_plugins.mcs"] = mod
+spec.loader.exec_module(mod)
+from hermes_plugins.mcs import card_workers
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(name)s %(message)s")
+class Ctx:
+    def get_config(self, key, default=None):
+        return {"interactive": True, "slack_adapter_enabled": True}.get(key, default)
+assert card_workers.make_discord_factory(Ctx())(None, None) is None
+assert card_workers.make_slack_factory(Ctx())(None, None) is None
+"""
+
+
+# Regression: Hermes loads the plugin without the repo root on sys.path; the
+# config_incomplete log used to raise "No module named 'adapters'" there.
+def test_incomplete_opt_in_logs_when_loaded_as_hermes_does(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+    plugin = Path(card_workers.__file__).resolve().parent / "__init__.py"
+    out = subprocess.run([sys.executable, "-c", INCOMPLETE_AS_HERMES_LOADS, str(plugin),
+                          str(plugin.parents[1])],
+                         capture_output=True, text=True, timeout=60, cwd=str(tmp_path))
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.splitlines() == [
+        'hermes.plugin.mcs_discord {"event": "worker_disabled", "reason": "config_incomplete"}',
+        'hermes.plugin.mcs_slack {"event": "worker_disabled", "reason": "config_incomplete"}']
+
+
 def test_opted_out_stays_silent(caplog):
     caplog.set_level(logging.INFO, logger="hermes.plugin")
     assert card_workers.make_discord_factory(_Ctx({}))(None, None) is None

@@ -25,7 +25,7 @@ from ledger_audit import AuditReport, audit_db
 from mcs_queries import REPLY_GAP
 from mcs_requests import canonical, valid_hash, valid_uuid
 from mcs_util import has_sqlite_sidecars
-from safe_io import read_regular_nofollow
+from safe_io import fsync_dir, read_regular_nofollow
 
 FORMAT = "mcs-repair/1"
 STAGES = ("backup", "audit", "coverage", "reconcile", "supplement", "artifacts", "rollup")
@@ -70,6 +70,11 @@ class RepairParser(argparse.ArgumentParser):
 
     def error(self, message):
         super().error("repair_arguments_invalid")
+
+
+class PublishedOutputError(OSError):
+    """A complete output exists, but directory persistence is unconfirmed."""
+
 
 def _hash_file(path: str | Path) -> str:
     """Hash an explicit regular file, refusing symlinks and live sidecars."""
@@ -344,14 +349,23 @@ def save_new(path: str | Path, value) -> None:
     path = _private_parent(path)
     payload = canonical(value) + b"\n"
     fd, temporary = tempfile.mkstemp(prefix=".repair-", dir=path.parent)
+    published = False
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
         os.link(temporary, path, follow_symlinks=False)
+        published = True
     finally:
-        os.unlink(temporary)
+        try:
+            os.unlink(temporary)
+            if published:
+                fsync_dir(path.parent)
+        except OSError:
+            if published:
+                raise PublishedOutputError("repair_output_sync_unconfirmed") from None
+            raise
 
 
 def _pairs(items):
@@ -546,6 +560,10 @@ def record(value: RepairPlan, snapshot: str | Path, current_snapshot: str | Path
         stream.write(encoded)
         stream.flush()
         os.fsync(stream.fileno())
+        try:
+            fsync_dir(Path(log).absolute().parent)
+        except OSError:
+            raise PublishedOutputError("repair_output_sync_unconfirmed") from None
     return {"stage": stage, "status": status, "entry_digest": entry["entry_digest"],
             "execution_authorized": False}
 
@@ -623,6 +641,9 @@ def main(argv: list[str] | None = None) -> int:
             save_new(out, result)
         print(json.dumps(result, sort_keys=True, allow_nan=False))
         return 0
+    except PublishedOutputError:
+        print(json.dumps({"ok": False, "error": "repair_output_sync_unconfirmed", "written": True}))
+        return 1
     except (OSError, ValueError, TypeError, KeyError, sqlite3.DatabaseError, RecursionError):
         # Input, DB and filesystem error strings can contain private data.
         print(json.dumps({"ok": False, "error": "repair_input_or_evidence_refused"}))

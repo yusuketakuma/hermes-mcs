@@ -11,7 +11,7 @@ import pytest
 from adapters.common import envelopes, journal, registry, worker as common_worker
 from adapters.lineworks import delivery
 from notify_testkit import NOW, _dispatch, _intent, _seed_thread
-from test_lineworks_adapter import CONFIG, overflow_spec, world
+from lineworks_testkit import CONFIG, overflow_spec, world
 
 
 @pytest.mark.parametrize("phase", ["begin_sent", "granted"])

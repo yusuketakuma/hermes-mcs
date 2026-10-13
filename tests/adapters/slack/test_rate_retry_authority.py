@@ -11,7 +11,7 @@ from adapters.common import journal
 from adapters.slack import delivery
 from notify_testkit import NOW, _dispatch, _intent, _seed_thread
 from slack_testkit import SLACK, _mkworld
-from test_mcs_slack_actions import fixture
+from slack_actions_testkit import fixture
 
 BODY = "PRIVATE-SYNTHETIC-MESSAGE"
 

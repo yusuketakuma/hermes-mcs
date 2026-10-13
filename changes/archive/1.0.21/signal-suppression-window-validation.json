@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "観測終了時刻が不正な抑制記録を統計から除外",
+  "summary": "シグナルの日次抑制記録に不正な観測終了時刻が保存されている場合、その記録を抑制率へ算入せず、集計が一部未確認であることを表示します。正常な記録の集計方法は変わりません。",
+  "upgrade": "追加操作は不要です。保存済みの記録は変更しません。",
+  "details": ["last_at=NaNを有効期間として受け入れないよう、開始時刻から観測時刻までの範囲検証へ統一。"],
+  "refs": ["mcs/views/mcs_stats.py", "tests/views/test_mcs_stats_suppression_boundary.py"]
+}

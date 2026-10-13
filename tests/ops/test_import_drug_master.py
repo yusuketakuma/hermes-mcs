@@ -1,7 +1,8 @@
 """Wholly fictional cp932 42-column masters; no real master rows or services."""
 from copy import deepcopy
 import csv
-from datetime import date
+from datetime import date, timedelta
+import errno
 import hashlib
 import io
 import json
@@ -49,8 +50,8 @@ def _input(tmp_path, rows=None, *, zipped=True, raw=None, members=None):
     path.write_bytes(data)
     pin = {"schema": importer.PIN_SCHEMA, "layout": importer.LAYOUT,
            "edition": importer.EDITION, "member": f"y_{importer.EDITION}.csv",
-           "as_of": "2026-10-04", "sha256": hashlib.sha256(data).hexdigest(),
-           "terms_checked_on": "2026-10-04", "terms_record": "fictional-test-receipt",
+           "as_of": importer.EDITION_DATE.isoformat(), "sha256": hashlib.sha256(data).hexdigest(),
+           "terms_checked_on": importer.EDITION_DATE.isoformat(), "terms_record": "fictional-test-receipt",
            "status_policy": {"candidate_change_values": ["0", "1", "2"],
                              "absent_date_values": ["0", "99999999"],
                              "confirmed_by": "fictional-test-only"}}
@@ -143,20 +144,20 @@ def test_pin_layout_types_and_metadata_fail_before_any_output(tmp_path, damage):
     elif damage == "edition_old":
         pin["edition"] = "20250331"
     elif damage == "edition_future":
-        pin["edition"] = "20261001"
+        pin["edition"] = date.fromordinal(importer.EDITION_DATE.toordinal() + 1).strftime("%Y%m%d")
     elif damage == "layout":
         pin["layout"] = "future-43"
     elif damage == "pin_schema":
         pin["schema"] = "future/2"
     elif damage == "member":
-        pin["member"] = "../y_20260930.csv"
+        pin["member"] = f"../y_{importer.EDITION}.csv"
     elif damage == "selection":
         pin["medicine_codes"] = ["900000099"]
     elif damage == "approval":
         pin["approved_by"] = "fictional"
         del pin["terms_checked_on"]
     elif damage == "terms":
-        pin["terms_checked_on"] = "2026-10-05"
+        pin["terms_checked_on"] = date.fromordinal(importer.EDITION_DATE.toordinal() + 1).isoformat()
     before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
     # When / Then
     with pytest.raises(importer.MasterError):
@@ -174,9 +175,99 @@ def test_pin_as_of_floor_follows_the_edition(tmp_path):
         importer.convert(path, pin)
 
 
+def test_dictionary_records_effective_boundaries_and_changes_only_on_rebuild(tmp_path):
+    today = importer.EDITION_DATE
+    d1, d2, d3, d4 = (today + timedelta(days=n) for n in (1, 2, 3, 4))
+    rows = [_row(str(900000001 + n), general="", general_text="") for n in range(4)]
+    # Effective start is the later of the two start columns; end is earlier.
+    rows[1][29], rows[1][35], rows[1][30] = (
+        d1.strftime("%Y%m%d"), d2.strftime("%Y%m%d"), d3.strftime("%Y%m%d"))
+    rows[2][30], rows[2][33] = d1.strftime("%Y%m%d"), d2.strftime("%Y%m%d")
+    # An empty lifetime never enters the candidate dictionary.
+    rows[3][29], rows[3][30] = d2.strftime("%Y%m%d"), d1.strftime("%Y%m%d")
+    path, pin = _input(tmp_path, rows)
+    first = importer.convert(path, pin)
+    document = json.loads(first.payload)
+    assert document["source"]["as_of"] == today.isoformat()
+    assert document["source"]["next_boundary_on"] == d2.isoformat()
+    assert first.report["future_starts"] == {d2.isoformat(): 1}
+    assert first.report["future_ends"] == {d2.isoformat(): 1, d4.isoformat(): 1}
+    assert first.report["entries"] == 2
+    first_bytes = first.payload
+    pin["as_of"] = d1.isoformat()
+    ending = importer.convert(path, pin)
+    assert ending.report["entries"] == 2  # the final day remains included
+    assert ending.report["next_boundary_on"] == d2.isoformat()
+    pin["as_of"] = d2.isoformat()
+    starting = importer.convert(path, pin)
+    assert starting.report["entries"] == 2
+    assert starting.report["future_starts"] == {}
+    assert starting.report["next_boundary_on"] == d4.isoformat()
+    assert json.loads(starting.payload)["dict_id"] == document["dict_id"]
+    assert starting.report["output_sha256"] != first.report["output_sha256"]
+    pin["as_of"] = d3.isoformat()
+    final_day = importer.convert(path, pin)
+    assert final_day.report["entries"] == 2
+    assert final_day.report["next_boundary_on"] == d4.isoformat()
+    pin["as_of"] = d4.isoformat()
+    last = importer.convert(path, pin)
+    assert last.report["entries"] == 1
+    assert last.report["next_boundary_on"] is None
+    assert last.report["future_starts"] == last.report["future_ends"] == {}
+    assert first.payload == first_bytes  # no autonomous rewrite of an old dictionary
+
+
+@pytest.mark.parametrize("end_column", [30, 33])
+def test_final_day_is_inclusive_and_one_day_lifetime_is_not_discarded(tmp_path, end_column):
+    final = importer.EDITION_DATE + timedelta(days=1)
+    rows = [_row("900000001", general="", general_text=""),
+            _row("900000002", general="", general_text="")]
+    rows[1][29] = rows[1][end_column] = final.strftime("%Y%m%d")
+    path, pin = _input(tmp_path, rows)
+    before = importer.convert(path, pin)
+    assert before.report["future_starts"] == {final.isoformat(): 1}
+    assert before.report["future_ends"] == {(final + timedelta(days=1)).isoformat(): 1}
+    pin["as_of"] = final.isoformat()
+    assert importer.convert(path, pin).report["entries"] == 2
+    pin["as_of"] = (final + timedelta(days=1)).isoformat()
+    assert importer.convert(path, pin).report["entries"] == 1
+
+
+def test_maximum_end_date_has_no_overflow_or_fabricated_next_boundary(tmp_path):
+    row = _row()
+    row[30] = row[33] = "99991231"
+    path, pin = _input(tmp_path, [row])
+    pin["as_of"] = date.max.isoformat()
+    result = importer.convert(path, pin)
+    assert result.report["entries"] == 1
+    assert result.report["next_boundary_on"] is None and result.report["future_ends"] == {}
+
+
+@pytest.mark.parametrize("excluded", ["selection", "status", "date", "name"])
+def test_boundary_report_excludes_rows_that_cannot_be_candidates(tmp_path, excluded):
+    rows = [_row("900000001", general="", general_text=""),
+            _row("900000002", general="", general_text="")]
+    rows[1][29] = (importer.EDITION_DATE + timedelta(days=1)).strftime("%Y%m%d")
+    if excluded == "status":
+        rows[1][0] = "9"
+    elif excluded == "date":
+        rows[1][30] = "20260230"
+    elif excluded == "name":
+        rows[1][3], rows[1][4] = "0", ""
+    path, pin = _input(tmp_path, rows)
+    if excluded == "selection":
+        pin["medicine_codes"] = ["900000001"]
+    result = importer.convert(path, pin)
+    assert result.report["entries"] == 1
+    assert result.report["next_boundary_on"] is None
+    assert result.report["future_starts"] == result.report["future_ends"] == {}
+    source = json.loads(result.payload)["source"]
+    assert source["as_of"] == pin["as_of"] and source["next_boundary_on"] is None
+
+
 @pytest.mark.parametrize("members", [
-    [("../y_20260930.csv", b"synthetic")],
-    [("y_20260930.csv", b"synthetic"), ("extra.txt", b"synthetic")],
+    [(f"../y_{importer.EDITION}.csv", b"synthetic")],
+    [(f"y_{importer.EDITION}.csv", b"synthetic"), ("extra.txt", b"synthetic")],
 ])
 def test_zip_members_are_bounded_and_never_extracted(tmp_path, members):
     # Given / When / Then
@@ -184,6 +275,28 @@ def test_zip_members_are_bounded_and_never_extracted(tmp_path, members):
     with pytest.raises(importer.MasterError, match="zip_members"):
         importer.convert(path, pin)
     assert set(p.name for p in tmp_path.iterdir()) == {"synthetic.zip"}
+
+
+def test_corrupt_deflate_is_refused_without_traceback_or_output(tmp_path, capsys):
+    path, pin = _input(tmp_path)
+    raw = bytearray(path.read_bytes())
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        info = archive.infolist()[0]
+    offset = info.header_offset + 30 + len(info.filename.encode()) + len(info.extra)
+    raw[offset] = 7  # DEFLATE BTYPE=3 is reserved: actually invalid compressed bytes.
+    path.write_bytes(raw)
+    pin["sha256"] = hashlib.sha256(raw).hexdigest()
+    pin_path = tmp_path / "operator-pin.json"
+    pin_path.write_text(json.dumps(pin))
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    output = private / "dictionary.json"
+    assert importer.main(["--source", str(path), "--pin", str(pin_path),
+                          "--output", str(output)]) == 1
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"status": "refused", "reason": "zip_invalid", "written": False}
+    assert captured.err == "" and str(tmp_path) not in captured.out
+    assert list(private.iterdir()) == []
 
 
 @pytest.mark.parametrize("bound", ["input", "csv", "rows", "dictionary"])
@@ -259,6 +372,30 @@ def test_private_output_is_owned_0600_new_and_preserves_existing_or_symlink(tmp_
         importer.write_private(result, link)
     assert output.read_bytes() == before and link.is_symlink()
     assert sorted(p.name for p in output.parent.iterdir()) == ["dictionary.json", "linked.json"]
+
+
+@pytest.mark.parametrize("step", ["fsync", "link"])
+def test_failed_private_publication_preserves_old_file_and_removes_staging(
+        tmp_path, monkeypatch, step):
+    path, pin = _input(tmp_path)
+    result = importer.convert(path, pin)
+    old, _ = _write_result(tmp_path, result)
+    old_bytes = old.read_bytes()
+    destination = old.parent / "new-dictionary.json"
+
+    def fail(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "synthetic disk full")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(importer.os, step, fail)
+        with pytest.raises(OSError) as error:
+            importer.write_private(result, destination)
+        assert error.value.errno == errno.ENOSPC
+    assert old.read_bytes() == old_bytes and not destination.exists()
+    assert sorted(p.name for p in old.parent.iterdir()) == [old.name]
+    # A normal retry succeeds without touching the old file or relaxing pins.
+    importer.write_private(result, destination)
+    assert destination.read_bytes() == old_bytes
 
 
 def test_shared_directory_and_unconfirmed_terms_never_receive_output(tmp_path):

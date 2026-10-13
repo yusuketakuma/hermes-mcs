@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "意味解析の不正な応答を上限付きで処理",
+  "summary": "意味解析サービスの応答をJSONとして読み出す際に、階層の深さなどが原因で処理できない場合も、解析エラーとして扱います。評価は既存の回数・時間制限内で再試行し、後続の正常な応答で復旧できます。",
+  "upgrade": "追加操作は不要です。通信先・モデル・再試行上限・課金制御は変わりません。",
+  "details": ["評価応答とモデル一覧応答のJSON読み出しを共通化し、RecursionErrorを本文を含まないprotocol_errorへ正規化。"],
+  "refs": ["mcs/semantic/semantic_jev.py", "tests/semantic/test_jev_json_boundary.py"]
+}

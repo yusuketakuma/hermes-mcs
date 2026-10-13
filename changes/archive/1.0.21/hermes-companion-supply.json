@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "Hermesの新規導入で固定版を確実に取得",
+  "summary": "軽量cloneから通常cloneへ切り替わったときも、固定版がブランチに含まれていなければ直接取得して導入を続けます。取得できない場合は実行環境を作成する前に停止し、接続と公開状況の確認を案内します。",
+  "upgrade": "新規導入時に適用されます。既存のHermes checkoutや稼働サービスは変更しません。",
+  "details": [
+    "固定SHAのcheckoutに失敗した場合だけ、同じoriginから固定SHAをfetchし1回再試行する。",
+    "v0.21.7ベースのcompanion候補をf36c1da0016ce14c9c531cb9514ab4b0b667240dへ更新。session/state/監査ログ12件を配布treeから除外し、元のローカル内容とGit履歴は保持する。"
+  ],
+  "refs": [
+    "install.sh",
+    "mcs/ops/mcs_update.py",
+    ".github/workflows/ci.yml"
+  ]
+}

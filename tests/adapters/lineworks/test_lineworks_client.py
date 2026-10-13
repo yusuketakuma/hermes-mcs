@@ -12,32 +12,9 @@ from urllib.parse import parse_qs
 
 import pytest
 
-from adapters.lineworks import ClientError, Credentials, LineWorksClient, verify_signature
+from adapters.lineworks import ClientError, verify_signature
 from adapters.lineworks import client as module
-
-
-def credentials():
-    return Credentials("client-synthetic", "secret-synthetic", "service@example.invalid",
-                       "/synthetic/private.pem", "2000001")
-
-
-class Wire:
-    def __init__(self, responses):
-        self.responses = list(responses)
-        self.calls = []
-
-    def __call__(self, method, url, headers, body, timeout):
-        self.calls.append((method, url, headers, body, timeout))
-        status, data = self.responses.pop(0)
-        return status, {}, data if isinstance(data, bytes) else json.dumps(data).encode()
-
-
-TOKEN = {"access_token": "token-synthetic", "token_type": "Bearer", "expires_in": "3600"}
-
-
-def client(wire, **kwargs):
-    return LineWorksClient(credentials(), transport=wire,
-                           signer=lambda *args: b"synthetic-signature", **kwargs)
+from lineworks_client_testkit import TOKEN, Wire, client
 
 
 def test_official_jwt_form_and_message_receipt():

@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "推奨Hermes agentをv0.21.7ベースに固定",
+  "summary": "新規導入で利用する推奨Hermes agentとCIの検証対象を、v0.21.7を取り込んだMCS companionの同じコミットに固定します。MCSの本人確認付き操作と標準入力による認証設定を維持します。",
+  "upgrade": "既存のHermes checkoutは自動では動かしません。従来の固定版も過去版として認識し、Python実行環境の移行が必要な場合だけ従来の確認付き更新経路で固定版へ進めます。稼働Hermesの更新・再起動は別途実行します。",
+  "details": [
+    "公式v0.21.7は71d34bad1045610252eda02ee79549436896e784。MCS companionはf36c1da0016ce14c9c531cb9514ab4b0b667240d（当初候補dc42a048bff5fcc545a2f1a1d3982292c13eb098から作業用ファイル12件を配布treeから除外したもの）。",
+    "install.sh・mcs_update.HERMES_PIN・CIのHermes refを一致させ、従来の6f35b1edをHERMES_PREVIOUS_PINSへ追加する。"
+  ],
+  "refs": [
+    "install.sh",
+    "mcs/ops/mcs_update.py",
+    ".github/workflows/ci.yml",
+    "tests/meta/test_install_runtime_migration.py",
+    "71d34bad1045610252eda02ee79549436896e784",
+    "f36c1da0016ce14c9c531cb9514ab4b0b667240d"
+  ]
+}

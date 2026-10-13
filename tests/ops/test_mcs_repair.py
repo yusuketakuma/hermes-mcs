@@ -277,7 +277,7 @@ def test_stage_order_append_only_and_fsync(independent, monkeypatch):
     original = os.fsync
 
     def sync(fd):
-        calls.append(fd)
+        calls.append(stat.S_ISDIR(os.fstat(fd).st_mode))
         original(fd)
 
     monkeypatch.setattr(repair.os, "fsync", sync)
@@ -289,7 +289,7 @@ def test_stage_order_append_only_and_fsync(independent, monkeypatch):
     # Then.
     assert independent["log"].read_bytes().startswith(first)
     assert len(independent["log"].read_bytes().splitlines()) == 2
-    assert len(calls) == 2
+    assert calls == [False, True, False, True]
     assert stat.S_IMODE(independent["log"].stat().st_mode) == 0o600
     assert _hash(independent["snapshot"]) == before
     with pytest.raises(ValueError, match="stage_order"):
@@ -632,3 +632,23 @@ def test_interruption_after_link_keeps_complete_result_and_removes_staging(tmp_p
         mcs_repair.save_new(destination, {"synthetic": "complete"})
     assert json.loads(destination.read_text()) == {"synthetic": "complete"}
     assert sorted(path.name for path in private.iterdir()) == ["result.json"]
+
+
+def test_audit_directory_sync_failure_keeps_complete_record_and_blocks_duplicate(
+        independent, monkeypatch):
+    original = os.fsync
+
+    def sync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError("synthetic directory sync failure")
+        return original(fd)
+
+    monkeypatch.setattr(os, "fsync", sync)
+    with pytest.raises(repair.PublishedOutputError, match="sync_unconfirmed"):
+        _record(independent)
+    first = independent["log"].read_bytes()
+    assert json.loads(first)["stage"] == "backup"
+    monkeypatch.setattr(os, "fsync", original)
+    with pytest.raises(ValueError, match="stage_order_required"):
+        _record(independent)
+    assert independent["log"].read_bytes() == first

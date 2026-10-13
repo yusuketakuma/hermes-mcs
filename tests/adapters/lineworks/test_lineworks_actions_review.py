@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from adapters.common import envelopes, paths
-from test_lineworks_adapter import SCOPE, TOKEN, command_files, event, world
+from lineworks_testkit import SCOPE, TOKEN, command_files, event, world
 
 
 def _result(w, result_id, result):

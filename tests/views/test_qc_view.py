@@ -49,6 +49,45 @@ def test_summary_and_flagged_list(tmp_path):
         db.close()
 
 
+@pytest.mark.parametrize("invalid_item", ["synthetic invalid item", None, True, 7, []])
+def test_qc_view_keeps_malformed_items_unknown(tmp_path, invalid_item):
+    db = _seeded(tmp_path)
+    try:
+        _qc(db, 1, {"qc": "done", "items": [
+            {"section": "meds", "index": 0, "verdict": "MATCH"}, invalid_item]})
+        before = db.db.execute(
+            "SELECT content FROM artifacts WHERE kind='extract_qc'").fetchall()
+        view = _view(db, tmp_path)
+        try:
+            out = view.read("qc", project=1)
+            assert out["summary"]["verdicts"] == {"MATCH": 1, "?": 1}
+            assert [row["message_id"] for row in out["items"]] == [1]
+            assert out["items"][0]["flagged_items"] == []
+        finally:
+            view.close()
+        assert db.db.execute(
+            "SELECT content FROM artifacts WHERE kind='extract_qc'").fetchall() == before
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("invalid_items", ["synthetic invalid list", 7, True, {"x": "invalid"}])
+def test_qc_view_keeps_invalid_item_container_unknown(tmp_path, invalid_items):
+    db = _seeded(tmp_path)
+    try:
+        _qc(db, 1, {"qc": "done", "items": invalid_items})
+        view = _view(db, tmp_path)
+        try:
+            out = view.read("qc", project=1)
+            assert out["summary"]["verdicts"] == {"?": 1}
+            assert [row["message_id"] for row in out["items"]] == [1]
+            assert out["items"][0]["flagged_items"] == []
+        finally:
+            view.close()
+    finally:
+        db.close()
+
+
 def test_qc_view_lists_extraction_reports_without_notes(tmp_path):
     import json
     db = _seeded(tmp_path)

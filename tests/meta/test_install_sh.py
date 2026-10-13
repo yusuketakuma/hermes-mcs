@@ -71,6 +71,9 @@ if [ "$1" = "-C" ]; then
             echo "error: pathspec '$last' did not match" >&2; exit 1
         fi
         echo "$last" > "$2/.git/HEAD"; exit 0 ;;
+      fetch)
+        [ -z "$STUB_FAIL_FETCH" ] || exit 128
+        exit 0 ;;
       symbolic-ref)
         [ -n "$STUB_GIT_BRANCH" ] || exit 1
         echo "refs/heads/$STUB_GIT_BRANCH"; exit 0 ;;
@@ -821,7 +824,7 @@ def test_interrupted_checkout_is_resumed_and_never_called_pinned(tmp_path):
     """F3: clone ok, pinned checkout failed. The re-run redoes the clone
     (marker) instead of accepting the default-branch HEAD."""
     home, hermes_home, stub_root, env = _world(tmp_path)
-    r1 = _run({**env, "STUB_FAIL_CHECKOUT_ONCE": "1"}, hermes_home)
+    r1 = _run({**env, "STUB_FAIL_CHECKOUT_ONCE": "1", "STUB_FAIL_FETCH": "1"}, hermes_home)
     assert r1.returncode == 1
     assert "pinned" not in r1.stdout
     assert (hermes_home / ".hermes-agent.install-in-progress").exists()
@@ -832,6 +835,59 @@ def test_interrupted_checkout_is_resumed_and_never_called_pinned(tmp_path):
     assert "not pinned" not in r2.stderr
     assert not (hermes_home / ".hermes-agent.install-in-progress").exists()
     assert sum(c.startswith("git clone") for c in _calls(stub_root)) == 2
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_full_clone_fetches_unadvertised_pin_or_stops_before_venv(tmp_path, available):
+    """Only a local bare repository is reachable; the pin has no branch or tag."""
+    real_git = shutil.which("git")
+    assert real_git
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    env.update(GIT_ALLOW_PROTOCOL="file", GIT_CONFIG_NOSYSTEM="1",
+               GIT_CONFIG_GLOBAL=os.devnull, GIT_AUTHOR_NAME="Synthetic",
+               GIT_AUTHOR_EMAIL="synthetic@example.invalid",
+               GIT_COMMITTER_NAME="Synthetic",
+               GIT_COMMITTER_EMAIL="synthetic@example.invalid", STUB_REAL_GIT=real_git)
+    remote = tmp_path / "synthetic.git"
+
+    def git(*args, input=None):
+        return subprocess.run([real_git, *args], env=env, input=input, text=True,
+                              capture_output=True, check=True).stdout.strip()
+
+    git("init", "--bare", "-q", str(remote))
+    tree = git("-C", str(remote), "mktree", input="")
+    base = git("-C", str(remote), "commit-tree", tree, "-m", "base")
+    hidden = git("-C", str(remote), "commit-tree", tree, "-p", base, "-m", "pin")
+    git("-C", str(remote), "update-ref", "refs/heads/main", base)
+    git("-C", str(remote), "symbolic-ref", "HEAD", "refs/heads/main")
+    git("-C", str(remote), "update-ref", "refs/pull/1/head", hidden)
+    git("-C", str(remote), "config", "uploadpack.allowAnySHA1InWant", "true")
+    pin = hidden if available else "2" * 40
+    script = tmp_path / "install.sh"
+    script.write_text(INSTALL.read_text().replace(
+        'HERMES_REPO="https://github.com/yusuketakuma/hermes-agent.git"',
+        f'HERMES_REPO="{remote.as_uri()}"').replace(_pin(), pin))
+    (stub_root / "bin/git").write_text('''#!/bin/sh
+echo "git $*" >> "$STUB_LOG"
+case "$*" in "clone --filter="*) exit 128 ;; esac
+exec "$STUB_REAL_GIT" "$@"
+''')
+    result = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin",
+                  "--no-services", "--no-recovery", script=script)
+    checkout = hermes_home / "hermes-agent"
+    calls = _calls(stub_root)
+    assert sum(" fetch -q origin " in c for c in calls) == 1
+    if available:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert git("-C", str(checkout), "rev-parse", "HEAD") == pin
+        assert not (hermes_home / ".hermes-agent.install-in-progress").exists()
+    else:
+        assert result.returncode == 1
+        assert "verify network access and publication" in result.stderr
+        assert git("-C", str(checkout), "rev-parse", "HEAD") == base
+        assert (hermes_home / ".hermes-agent.install-in-progress").exists()
+        assert not (checkout / "venv").exists()
+        assert not any(c.startswith("uv pip install") for c in calls)
 
 
 def test_interrupted_clone_is_redone(tmp_path):
