@@ -365,3 +365,45 @@ def test_observe_corrupt_records_are_visible_without_read_writes(tmp_path):
         assert db.db.total_changes == before
     finally:
         db.close()
+
+
+def test_drain_run_records_its_wall_clock_observation(tmp_path):
+    db = _world(tmp_path, [10])
+    _job(db, 10, eligible=True)
+    before = time.time()
+    _due(db, max_jobs=1)
+    run = json.loads(db.db.execute(
+        "SELECT content FROM artifacts WHERE kind='semantic_drain_run'").fetchone()["content"])
+    obs, metric = run["observation"], run["job_metrics"][0]
+    assert obs["version"] == 1 and obs["complete"] is True and obs["lane"] is None
+    assert obs["config_generation"] == semantic_drain.runtime.config_generation(_cfg("shadow", budget=100000))
+    assert before <= obs["started_at"] <= metric["completed_at"] <= obs["finished_at"] <= time.time()
+    assert run["done"] == 1                       # the existing payload is unchanged
+    db.close()
+
+
+def _m(**kw):
+    return {"status": "done", **kw}
+
+
+@pytest.mark.parametrize("metrics, finished, complete", [
+    ([_m(completed_at=5.0), {"status": "retry"}], 9.0, True),
+    ([], 9.0, True),
+    ([_m(completed_at=5.0)] * 65, 9.0, False),    # truncated to 64
+    ([], 0.5, False),                             # finished before started
+    ([_m(completed_at=0.5)], 9.0, False),         # completion before start
+    ([_m(completed_at=6.0), _m(completed_at=5.0)], 9.0, False),  # reversal
+    ([_m(completed_at=float("nan"))], 9.0, False),
+])
+def test_observation_is_complete_only_for_a_forward_untruncated_pass(metrics, finished, complete):
+    obs = semantic_drain._observation(1.0, finished, "g", "backlog", metrics)
+    assert obs["complete"] is complete and obs["lane"] == "backlog"
+
+
+def test_a_job_that_is_not_done_carries_no_completion(tmp_path):
+    db = _world(tmp_path, [10])
+    _job(db, 10, eligible=True)
+    out = _due(db, llm_fn=lambda prompt: 1 / 0, max_jobs=1)
+    assert out["done"] == 0 and out["job_metrics"]
+    assert all("completed_at" not in m for m in out["job_metrics"])
+    db.close()

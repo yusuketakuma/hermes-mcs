@@ -1965,6 +1965,20 @@ def _apply_job_status(ledger, token, limit: int, status: str,
     return False
 
 
+def _observation(started_at: float, finished_at: float, generation,
+                 lane, metrics: list) -> dict:
+    """The wall-clock window of one drain pass; ``complete`` only when
+    every processed job fits the bounded artifact and the clock ran
+    forward across the pass and each completion."""
+    stamps = [started_at, *(m["completed_at"] for m in metrics
+                            if "completed_at" in m), finished_at]
+    complete = (len(metrics) <= 64
+                and all(math.isfinite(t) for t in stamps)
+                and all(a <= b for a, b in zip(stamps, stamps[1:])))
+    return {"version": 1, "started_at": started_at, "finished_at": finished_at,
+            "config_generation": generation, "complete": complete, "lane": lane}
+
+
 def _persist_drain_accounting(ledger, scfg, out: dict, result: dict,
                               selected: dict, qc_active: bool,
                               sched_mut: dict, long_seen: dict | None = None,
@@ -2010,7 +2024,8 @@ def _persist_drain_accounting(ledger, scfg, out: dict, result: dict,
                 "oldest_pending_age_s":
                     out["oldest_pending_job_age_s"],
                 "lanes": out["lanes"],
-                "job_metrics": out["job_metrics"][:64]},
+                "job_metrics": out["job_metrics"][:64],
+                "observation": out.get("observation")},
                 ensure_ascii=False),
             model="semantic_drain")
     except Exception:
@@ -2029,6 +2044,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     flip mid-run takes effect at the next job boundary (AT-060)."""
     import semantic
     started_at = time.perf_counter()
+    started_wall = time.time()
     if lane not in (None, "realtime", "backlog"):
         raise ValueError("semantic_lane_invalid")
     if type(max_jobs) is not int or not 1 <= max_jobs <= 32:
@@ -2413,10 +2429,15 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 usage["unreported_requests"] = used - usage["reported_requests"]
                 llm_s = llm_acc["s"]
                 jev_s = timed_jev.elapsed_s if timed_jev is not None else 0.0
-                out["job_metrics"].append(_job_metric(
+                metric = _job_metric(
                     job, token, cohort_of.get(id(job), "backfill"), status,
                     job_age, job_elapsed, llm_s, jev_s, used, usage,
-                    jev_client))
+                    jev_client)
+                if status == "done":
+                    # every "done" return has already passed the
+                    # generation-fenced transition
+                    metric["completed_at"] = time.time()
+                out["job_metrics"].append(metric)
                 if status == "done":
                     out["done_by_kind"][job["kind"]] = \
                         out["done_by_kind"].get(job["kind"], 0) + 1
@@ -2466,6 +2487,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             f"SELECT COUNT(*) FROM fetch_jobs WHERE kind IN ({kind_ph}) "
             "AND state='pending' AND next_try<=?", (*kinds, time.time())).fetchone()[0]
         out["elapsed_s"] = time.perf_counter() - drain_started
+        out["observation"] = _observation(
+            started_wall, time.time(), cfg_generation, lane, out["job_metrics"])
         if due:
             _persist_drain_accounting(ledger, scfg, out, result, selected,
                                       qc_active, sched_mut, long_seen,
