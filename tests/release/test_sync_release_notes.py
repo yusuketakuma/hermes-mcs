@@ -106,18 +106,23 @@ class SyncTest(unittest.TestCase):
 
     def test_unknown_version_fails_before_any_write(self):
         def request(endpoint, payload=None):
-            return [self.record, self.record | {"id": 2, "tag_name": "v9.0.0"}]
+            if "?" in endpoint and payload is None:
+                return [copy.deepcopy(self.record),
+                        self.record | {"id": 2, "tag_name": "v9.0.0"}]
+            return self.request(endpoint, payload)
         with self.assertRaises(ValueError):
             sync.synchronize(self.text, request, apply=True)
         self.assertEqual(self.writes, [])
 
     def test_concurrent_edit_is_not_overwritten(self):
         def request(endpoint, payload=None):
-            if "?" in endpoint:
-                return [copy.deepcopy(self.record)]
-            return self.record | {"updated_at": "newer", "body": "edited by another user"}
+            result = self.request(endpoint, payload)
+            if "?" not in endpoint and payload is None:
+                return result | {"updated_at": "newer", "body": "edited by another user"}
+            return result
         with self.assertRaises(ValueError):
             sync.synchronize(self.text, request, apply=True)
+        self.assertEqual(self.writes, [])
 
 
 if __name__ == "__main__":

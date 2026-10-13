@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 import csv
 import hashlib
 import io
@@ -17,11 +17,12 @@ import sys
 import tempfile
 from typing import TypeAlias
 import zipfile
+import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 import drug_map  # noqa: E402
-from safe_io import read_regular_nofollow  # noqa: E402
+from safe_io import fsync_dir, read_regular_nofollow  # noqa: E402
 
 JSON: TypeAlias = None | bool | int | float | str | list["JSON"] | dict[str, "JSON"]
 MENU_URL = "https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/"
@@ -29,7 +30,7 @@ SOURCE_URL = MENU_URL + "yFile"
 SPEC_URL = "https://shinryohoshu.mhlw.go.jp/shinryohoshu/file/spec/R08rec3.pdf"
 PIN_SCHEMA = "mcs-official-drug-master-pin/1"
 LAYOUT = "R08rec3-medicine-42"
-EDITION = "20260930"
+EDITION = "20261013"
 EDITION_DATE = date(int(EDITION[:4]), int(EDITION[4:6]), int(EDITION[6:]))  # pin as_of floor
 MAX_INPUT_BYTES = 32 * 1024 * 1024
 MAX_CSV_BYTES = 32 * 1024 * 1024
@@ -44,8 +45,9 @@ TEXT_COLUMNS = {1, 4, 6, 9, 28, 31, 34, 36, 37, 38, 39}
 class MasterError(ValueError):
     """Refusal code without a row, alias, private path or upstream contents."""
 
-    def __init__(self, code: str):
+    def __init__(self, code: str, *, written: bool = False):
         self.code = code
+        self.written = written
         super().__init__(code)
 
 
@@ -129,7 +131,7 @@ def _master_csv(path: Path, member: str, raw: bytes) -> bytes:
                     raise MasterError("zip_members_or_size")
                 with archive.open(members[0]) as stream:
                     csv_bytes = stream.read(MAX_CSV_BYTES + 1)
-        except (zipfile.BadZipFile, RuntimeError, NotImplementedError):
+        except (zipfile.BadZipFile, zlib.error, EOFError, RuntimeError, NotImplementedError):
             raise MasterError("zip_invalid") from None
     elif path.suffix.lower() != ".csv" or path.name != member:
         raise MasterError("csv_member_invalid")
@@ -185,6 +187,7 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
     except UnicodeDecodeError:
         raise MasterError("csv_encoding_invalid") from None
     reasons, groups, seen, count = Counter(), {}, set(), 0
+    future_starts, future_ends = Counter(), Counter()
     try:
         for row in csv.reader(io.StringIO(text, newline=""), strict=True):
             count += 1
@@ -207,6 +210,24 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
                         dates[column] = date(int(value[:4]), int(value[4:6]), int(value[6:]))
                     except ValueError:
                         unknown_date = True
+            # These are dates for this converter's candidate policy, not a
+            # claim that a medication is clinically valid. Count each row's
+            # effective start/end once; a later start or earlier end wins.
+            if (int(medicine) != 0 and (selected is None or medicine in selected)
+                    and row[0] in changes and not unknown_date
+                    and row[4] and drug_map.fold(row[4])):
+                start = max((dates[c] for c in (29, 35) if dates[c] is not None),
+                            default=None)
+                end = min((dates[c] for c in (30, 33) if dates[c] is not None),
+                          default=None)
+                if ((end is None or end >= as_of)
+                        and (start is None or end is None or start <= end)):
+                    if start is not None and start > as_of:
+                        future_starts[start.isoformat()] += 1
+                    # R08rec1 medicine fields 31/34 include the final day.
+                    # date.max has no representable later day to report.
+                    if end is not None and end < date.max:
+                        future_ends[(end + timedelta(days=1)).isoformat()] += 1
             if int(medicine) == 0:
                 reasons["unknown_medicine_identity"] += 1
             elif selected is not None and medicine not in selected:
@@ -215,7 +236,7 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
                 reasons["unconfirmed_change_value"] += 1
             elif unknown_date:
                 reasons["unconfirmed_date_or_sentinel"] += 1
-            elif any(dates[c] is not None and dates[c] <= as_of for c in (30, 33)):
+            elif any(dates[c] is not None and dates[c] < as_of for c in (30, 33)):
                 reasons["ended_or_end_boundary"] += 1
             elif any(dates[c] is not None and dates[c] > as_of for c in (29, 35)):
                 reasons["future_date"] += 1
@@ -255,10 +276,14 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
     entries = [groups[key] for key in sorted(groups)]
     for entry in entries:
         entry["aliases"] = sorted(set(entry["aliases"]))
+    next_boundary = min(future_starts.keys() | future_ends.keys(), default=None)
     report: dict[str, JSON] = {"schema": "mcs-official-drug-master-report/1", "edition": EDITION,
               "layout": LAYOUT, "source_sha256": source_hash,
               "csv_sha256": hashlib.sha256(csv_bytes).hexdigest(), "rows": count,
               "entries": len(entries), "reasons": dict(sorted(reasons.items())),
+              "as_of": as_of.isoformat(), "next_boundary_on": next_boundary,
+              "future_starts": dict(sorted(future_starts.items())),
+              "future_ends": dict(sorted(future_ends.items())),
               "source": {"url": SOURCE_URL, "spec": SPEC_URL,
                          "terms_checked_on": terms, "approval_recorded": approval is not None,
                          "status_policy_confirmed": bool(changes and absent)},
@@ -281,7 +306,8 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
         source = {"name": "厚生労働省 医薬品マスター " + EDITION, "url": SOURCE_URL,
                   "terms_checked_on": terms, "terms_record": terms_record,
                   "master_sha256": source_hash, "csv_sha256": report["csv_sha256"],
-                  "spec_url": SPEC_URL, "layout": LAYOUT, "status_policy": policy}
+                  "spec_url": SPEC_URL, "layout": LAYOUT, "status_policy": policy,
+                  "as_of": as_of.isoformat(), "next_boundary_on": next_boundary}
         if approval is not None:
             source["approved_by"] = approval
         document = {"schema": drug_map.SOURCE_SCHEMA, "dict_id": "mhlw-y-" + EDITION + "-" + source_hash[:12],
@@ -308,6 +334,7 @@ def write_private(result: Conversion, destination: Path) -> None:
             or parent.st_mode & 0o077):
         raise MasterError("private_output_directory")
     fd, temporary = tempfile.mkstemp(prefix=".drug-master-", dir=destination.parent)
+    published = False
     try:
         with os.fdopen(fd, "wb") as stream:
             os.fchmod(stream.fileno(), 0o600)
@@ -318,8 +345,16 @@ def write_private(result: Conversion, destination: Path) -> None:
         if drug_map.load(temporary, expected_sha256=digest) is None:
             raise MasterError("dictionary_unavailable")
         os.link(temporary, destination, follow_symlinks=False)
+        published = True
     finally:
-        os.unlink(temporary)
+        try:
+            os.unlink(temporary)
+            if published:
+                fsync_dir(destination.parent)
+        except OSError:
+            if published:
+                raise MasterError("output_published_sync_unconfirmed", written=True) from None
+            raise
 
 
 def main(argv=None) -> int:
@@ -342,7 +377,8 @@ def main(argv=None) -> int:
     except (MasterError, ValueError, OSError, TypeError, RecursionError) as error:
         code = error.code if isinstance(error, MasterError) else (
             "output_exists" if isinstance(error, FileExistsError) else "input_or_dictionary_invalid")
-        print(json.dumps({"status": "refused", "reason": code, "written": False}))
+        print(json.dumps({"status": "refused", "reason": code,
+                          "written": isinstance(error, MasterError) and error.written}))
         return 1
 
 
