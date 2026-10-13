@@ -2,7 +2,7 @@
   "version": "1.0.21",
   "sections": {
     "features": {
-      "notes": "2026-10-13、全12変更記録を現候補と照合。doctorの保存記録の鮮度/待ち件数/中断/localbackup、詳細observeの工程別残数/同世代速度/条件付き見通し、監視警告の通知待ち理由を区別した。対象件数の合算・欠測の0扱い・無条件ETAをしない。警報しきい値/抑止/再送/抽出順序/schema9は維持。予定前の通常signal数え漏れを修正するため、待ち件数と警告への影響を案内。",
+      "notes": "2026-10-14再照合: 全ファイル見直しの16件（状態・入力ファイルの境界、壊れた保存データ/応答の継続、返信取得予約の保持、LLM枠、統計基準rollback、journal FD、Discordタスク名表示）は既存機能の堅牢化で、READMEの機能説明・既定値に変更なし。最新変更要約は生成器で28件版へ更新。 / 2026-10-13、全12変更記録を現候補と照合。doctorの保存記録の鮮度/待ち件数/中断/localbackup、詳細observeの工程別残数/同世代速度/条件付き見通し、監視警告の通知待ち理由を区別した。対象件数の合算・欠測の0扱い・無条件ETAをしない。警報しきい値/抑止/再送/抽出順序/schema9は維持。予定前の通常signal数え漏れを修正するため、待ち件数と警告への影響を案内。",
       "sources": [
         "README.md",
         "mcs/ops/operational_status.py",
@@ -15,7 +15,7 @@
       ]
     },
     "demos": {
-      "notes": "2026-10-13、Slackを先頭とした8図はカードUI/本人向け表示/人承認経路に今回変更がなく保持。generate_slack_gallery --checkで8組成功。別途1.0.21運用診断の説明図を作成し、PNG全体と390px幅を視認。doctorは件数、待ち理由は監視警告、と表示先を分けた。実画面/公開URL/Release表示の検証ではない。",
+      "notes": "2026-10-14再照合: Discordタスク状態の返答のタスク名表示は既存画面例の対象外で、Slack8図・説明図の変更不要。 / 2026-10-13、Slackを先頭とした8図はカードUI/本人向け表示/人承認経路に今回変更がなく保持。generate_slack_gallery --checkで8組成功。別途1.0.21運用診断の説明図を作成し、PNG全体と390px幅を視認。doctorは件数、待ち理由は監視警告、と表示先を分けた。実画面/公開URL/Release表示の検証ではない。",
       "sources": [
         "README.md",
         "docs/screenshots/slack-gallery/README.md",
@@ -29,7 +29,7 @@
       ]
     },
     "quickstart": {
-      "notes": "2026-10-13、新規導入/updater/CIのHermes v0.21.7 companion pin一致と既存checkout保持を照合。companion公開取得は未受入。全21版/現32更新経路を追加し347合成ケース成功。doctorの追加項目は外部接続せず、詳細集計は明示CLIで実行。既存の更新/再起動手順へ案内。最終RC/exactCIと本番は未受入。",
+      "notes": "2026-10-14再照合: 導入・更新手順の変更なし。状態記録をリンクで置く場合の通常ファイル化と、実行モード設定を読めない場合の再起動見送りは1.0.21の更新時の注意へ記載。固定Hermes SDK laneは最終treeで21件、standalone専用laneは12件成功。公開取得はHTTP422で未受入。 / 2026-10-13、新規導入/updater/CIのHermes v0.21.7 companion pin一致と既存checkout保持を照合。companion公開取得は未受入。全21版/現32更新経路を追加し347合成ケース成功。doctorの追加項目は外部接続せず、詳細集計は明示CLIで実行。既存の更新/再起動手順へ案内。最終RC/exactCIと本番は未受入。",
       "sources": [
         "README.md",
         "install.sh",
@@ -44,7 +44,7 @@
       ]
     },
     "safety": {
-      "notes": "2026-10-13、診断出力を件数/固定理由/時刻へ制限。health追加集計の上限到達は元のcollection障害を隠さず、backupはDBを開かずbounded/no-followで確認する。marker一致と現在の再検証/端末外復旧を区別。snapshot timestamp/人承認/送信先/no-redirect/no-proxyは変更なし。公式20261013全行検証済だが私有辞書の承認/有効化は未実施。 初回master更新は破損ZIP/FD読取障害/保存前pin照合/作成基準日と最終日包含を追加検証。旧私有辞書・原薬剤名・人承認を保持。",
+      "notes": "2026-10-14再照合: no-follow・容量上限・FIFO拒否の読取り境界、実行モード不明時の再起動見送り、辞書保存先の同期確認を追加。送信先・人承認・snapshot timestamp・no-redirect/no-proxyは不変。公式master再取得（05:47 JST）は同一SHA。 / 2026-10-13、診断出力を件数/固定理由/時刻へ制限。health追加集計の上限到達は元のcollection障害を隠さず、backupはDBを開かずbounded/no-followで確認する。marker一致と現在の再検証/端末外復旧を区別。snapshot timestamp/人承認/送信先/no-redirect/no-proxyは変更なし。公式20261013全行検証済だが私有辞書の承認/有効化は未実施。 初回master更新は破損ZIP/FD読取障害/保存前pin照合/作成基準日と最終日包含を追加検証。旧私有辞書・原薬剤名・人承認を保持。",
       "sources": [
         "README.md",
         "SECURITY.md",
@@ -62,7 +62,7 @@
       ]
     },
     "docs": {
-      "notes": "2026-10-13、運用診断ガイド/INSTALLATION/UPGRADE_AGENT/新受入票へ導線を整合。生成表をPython3.14.7で再生成。12変更記録は1.0.21のCHANGELOGと技術詳細へ対応づけ、旧版archiveは保持する。CodeRabbit 7分割72ファイルの指摘/対象漏れ0と、固定候補の全体テスト終了0を受入票へ反映。専用SDK3件skip、companion公開取得/exactCI/最終公開の未受入を区別し、公開成功と混同しない。",
+      "notes": "2026-10-14再照合: 全28変更記録を未公開1.0.21（2026-10-14）へ生成器で再集約し、受入票・計画のWP8/V2/V3を現証拠へ更新。README生成ブロックはreadme_release/update_readmeで同期。 / 2026-10-13、運用診断ガイド/INSTALLATION/UPGRADE_AGENT/新受入票へ導線を整合。生成表をPython3.14.7で再生成。12変更記録は1.0.21のCHANGELOGと技術詳細へ対応づけ、旧版archiveは保持する。CodeRabbit 7分割72ファイルの指摘/対象漏れ0と、固定候補の全体テスト終了0を受入票へ反映。専用SDK3件skip、companion公開取得/exactCI/最終公開の未受入を区別し、公開成功と混同しない。",
       "sources": [
         "README.md",
         "docs/guides/USER_GUIDE.md",

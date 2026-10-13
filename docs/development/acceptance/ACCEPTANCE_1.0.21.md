@@ -1,6 +1,6 @@
 # 1.0.21 実装・リリース候補受入票
 
-2026-10-13（日本時間）。ローカル候補の確認記録。**最終RC・公開・本番適用は未受入**。
+2026-10-13作成・2026-10-14（日本時間）更新。ローカル候補の確認記録。**最終RC・公開・本番適用は未受入**。
 実装の全範囲は[計画](../plans/RELEASE_1.0.21.md)のWP0–8・R1–6・V1–3で追跡する。
 
 ## 対象と公開条件
@@ -97,6 +97,8 @@ CodeRabbit CLI 0.9.0の初回は追加差分151テキストファイルを5分�
 | 一次仕様 | R08rec3は前回同一。R08rec1の改版と利用条件を取得し、医薬品節の変更区分・日付番兵・期限なし・一般名省略条件を確認 |
 | 実変換 | 全行をruntime converterへ通し、12,195 entries・約5.14MB（作成日metadata追加前の測定）。`terms_unconfirmed`で保留、容量上限内 |
 
+2026-10-14 05:47（JST、`checked_at` 2026-10-13T20:47:48Z）に同じ条件で公式yFileを再取得し、HTTP200・1,158,682 bytes・同じSHA256・member `y_20261013.csv`（6,083,884 bytes）で10/13の受入版と一致した。`check_drug_master_bundle.py`もok（19,286行・`R08rec3-medicine-42`・`activation:false`・人承認必須）。
+
 旧20260930原本は保持。[manifest](../../../resources/drug-master/20261013/manifest.json)の`activation:false`と人承認必須を維持する。
 配布原本の検証であり、私有辞書の採用・承認・有効化・実データ再処理は行わない。公開原本の行をfixtureへ転用しない。
 
@@ -117,10 +119,12 @@ install・updater・CIの固定値を一致させ、従来の`6f35b1ed`を認識
 
 既存pin準備の独立受入と、companion契約19件・固定SDK21件・Hermes関連74件・MCS導入更新228件の成功証拠を対象同一性に応じて再利用する。公式版単体の2件不適合（本人確認context/認証stdin）はcompanionで解消。全Hermes suiteを実施済みとはしない。
 
+2026-10-14 05:47（JST）の公開GitHub APIによる`dc42a048`の取得はHTTP422（No commit found）で、公開供給は引き続き未受入。同時刻以降、最終tree（tested `5c8ddcfc`から実行・テスト・配備・resourceの775パスに差分なし）で`sh scripts/check_pinned_sdks.sh hermes`を実行し、`21 passed, 42 warnings in 27.70s`・終了0。隔離Hermes venv（Python3.14.8）のcheckoutはCI pin `dc42a048`のarchive全18,325ファイルと一致し、秘密envなし・テストのsocket遮断を維持した。これはローカルの固定SDK確認で、公開取得・exact CIの代わりではない。standalone専用SDK laneも最終treeで`sh scripts/check_pinned_sdks.sh standalone`を実行し、`12 passed, 14 warnings in 3.72s`・終了0・skip 0（新規の専用venv、Python3.14.8、`deployment/requirements-standalone.txt`とpytest9.1.1の実distribution一致、完全合成・一時HOME・socket遮断、775パスに差分なし）。警告はSDK内部の非推奨APIで、内容を保持する。
+
 companionの公開取得は未承認・未検証。新規導入・過去版更新は[origins](../../../tests/fixtures/schema_upgrade/origins.json)と[更新経路](../../../tests/fixtures/schema_upgrade/update-paths.json)で全件追跡する。v1.0.20起点のschema-only抽出で新shape-11（schema9、trigger変更1件/index追加2件）を追加し、全21版・32経路を347件の合成回帰で確認した。既存の旧版fixture・履歴26経路は保持する。最終候補の配布・実SDK・サービス受入は別工程。実API/サービス再起動と合成入口の検証は区別する。
 
 ## 文書・全体監査の扱い
 
 前版の全体監査と公開receiptを区別して再利用し、全追跡ファイル群の同一性、今回差分と共有経路を8領域へ対応づけた（final-audit-delta）。追加master修正・通知追補・生成文書のhashと採否を最終差分記録へ対応づけた。未知の依存条件や未確認の配布経路を「問題なし」にしない。
 
-READMEは機能・画面例・導入・安全・導線の5項目を照合済。Slack8画面のカードUIは今回変更せず、運用診断の説明図を別に準備した。画像の外部公開・Release実表示は未実施。全12変更記録を候補archive・CHANGELOG技術詳細へ対応づけ、同じCHANGELOGからRelease本文をexportした。旧版本文は変更していない。
+READMEは機能・画面例・導入・安全・導線の5項目を照合済。Slack8画面のカードUIは今回変更せず、運用診断の説明図を別に準備した。画像の外部公開・Release実表示は未実施。2026-10-14、全ファイル見直しで追加した16件を含む全28変更記録を、生成器（`release_notes.py build`、版1.0.21・日付2026-10-14）で未公開の1.0.21へ集約し直した。既存の12件はarchiveから戻して同じ手順で再生成し、本文は利用者の目的ごとに13項目へまとめ、28件すべての仕様・根拠は技術詳細の折りたたみに残した。README要約は`readme_release.py`で再生成し、同じCHANGELOGからRelease本文をexportした。旧版本文・旧版archiveは変更していない。
