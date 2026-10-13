@@ -479,3 +479,20 @@ def v2_doc(facts, evidence=(), **overrides):
                         "status": "complete"}}
     out.update(overrides)
     return out
+
+
+def _audit_pair(db, mid, cfg, status="PASS"):
+    """Write a synthetic current summary/audit pair for coverage tests."""
+    row = db.db.execute("SELECT project_id,parent_id FROM messages WHERE message_id=?",
+                        (mid,)).fetchone()
+    bundle = semantic.thread_bundle(db, row["project_id"], row["parent_id"] or mid)
+    scfg, errors = semantic.semantic_config(cfg)
+    assert not errors
+    result = {"summary": {"target_message_id": mid, "claims": [],
+                          "audit_status": status},
+              "findings": [], "repaired": False}
+    with db.db:
+        semantic._write_result(
+            db, row["project_id"], mid, result, bundle["source_fingerprint"],
+            {member["message_id"]: member for member in bundle["members"]},
+            status, semantic.policy_fingerprint(scfg), scfg["summary_mode"])

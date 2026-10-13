@@ -481,15 +481,23 @@ def test_db_maintenance_waits_for_time(tmp_path, monkeypatch):
 
 # ---------- low: a killed worker is reaped within a bound ----------
 
-def test_reap_returns_when_a_descendant_keeps_the_pipe(monkeypatch):
+def test_reap_returns_when_a_descendant_keeps_the_pipe(tmp_path, monkeypatch):
     monkeypatch.setattr(bounded_http, "REAP_TIMEOUT_S", 0.5)
+    ready = tmp_path / "descendant-ready"
+    descendant = ("from pathlib import Path; import sys, time; "
+                  "Path(sys.argv[1]).write_text('ready'); time.sleep(30)")
     code = ("import subprocess, sys, time; "
-            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+            f"subprocess.Popen([sys.executable, '-c', {descendant!r}, {str(ready)!r}]); "
             "time.sleep(30)")
     proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, start_new_session=True)
     try:
-        time.sleep(0.5)
+        # Prove that the pipe is inherited before exercising the reap bound.
+        ready_deadline = time.monotonic() + 10
+        while not ready.exists() and time.monotonic() < ready_deadline:
+            assert proc.poll() is None, "synthetic parent exited before readiness"
+            time.sleep(0.01)
+        assert ready.is_file(), "synthetic descendant must have started"
         proc.kill()
         started = time.monotonic()
         bounded_http._reap(proc)
@@ -497,3 +505,6 @@ def test_reap_returns_when_a_descendant_keeps_the_pipe(monkeypatch):
     finally:
         with suppress(OSError):
             os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=5)
+        proc.stdout.close()
+        proc.stderr.close()
