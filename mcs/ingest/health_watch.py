@@ -101,6 +101,49 @@ def _is_code(value) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[a-z0-9_]{1,64}", value) is not None
 
 
+def _wait_code(value) -> bool:
+    """A pending-wait reason: a producer code, optionally `kind:code`."""
+    return isinstance(value, str) and re.fullmatch(
+        r"[a-z0-9_]{1,64}(:[a-z0-9_]{1,64})?", value) is not None
+
+
+_BACKUP_LOCAL_STATES = frozenset({"missing", "unreadable", "unverified", "verified", "unknown"})
+
+
+def _optional_blocks(h: dict) -> dict:
+    """The additive observation blocks, each None unless well-formed — an
+    absent or malformed block never changes the verdict."""
+    notify = h.get("notify") if isinstance(h.get("notify"), dict) else {}
+    waits = notify.get("pending_by_reason")
+    wait = None
+    if (isinstance(waits, dict) and isinstance(waits.get("by_reason"), dict)
+            and _finite_number(waits.get("attention")) and waits["attention"] >= 0):
+        counts = {}
+        for code, slot in waits["by_reason"].items():
+            if not (_wait_code(code) and isinstance(slot, dict)
+                    and _finite_number(slot.get("count")) and slot["count"] >= 0):
+                counts = None
+                break
+            counts[code] = int(slot["count"])
+        if counts is not None:
+            wait = {"attention": int(waits["attention"]), "reasons": counts}
+    backup = h.get("backup") if isinstance(h.get("backup"), dict) else {}
+    local = backup.get("local")
+    backup_local = None
+    if isinstance(local, dict) and local.get("state") in _BACKUP_LOCAL_STATES:
+        age = local.get("newest_age_s")
+        backup_local = {"state": local["state"],
+                        "newest_age_s": age if _finite_number(age) and age >= 0 else None}
+    run = h.get("run") if isinstance(h.get("run"), dict) else {}
+    last = run.get("last_interrupt")
+    interrupt = None
+    if (isinstance(last, dict) and _is_code(last.get("reason"))
+            and _finite_number(last.get("detected_at"))):
+        interrupt = {"reason": last["reason"], "detected_at": last["detected_at"]}
+    return {"notify_wait": wait, "backup_local": backup_local,
+            "last_interrupt": interrupt}
+
+
 def classify_health(path: str, now: float, deadline_s: int) -> dict:
     """File evidence -> status. Staleness is checked BEFORE the recorded
     payload: a dead producer leaves a fresh-looking 'ok' forever."""
@@ -194,6 +237,7 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         for q, block in (("notify", h.get("notify")),
                          ("semantic_jobs", h.get("semantic_jobs")),
                          ("extract_qc_jobs", h.get("extract_qc_jobs")))}
+    report.update(_optional_blocks(h))
     # dedup stamp: unread_at only when that age is what made it stale
     report["evidence_at"] = (binding if report["status"] == "stale"
                              else h["at"])
@@ -633,6 +677,55 @@ def _impact(report: dict, reasons) -> str:
     return "".join(parts) or "収集は動いていますが、確認が必要な状態です。"
 
 
+_WAIT_JA = {
+    "intent_card_delivery_unknown": "カードの配信結果が不明",
+    "alert_outcome_pending": "緊急通知の送達確認待ち",
+    "intent_cards_unsettled": "カードの配信完了待ち",
+    "intent_cards_issued": "カードの作成待ち",
+    "signals_off_sealed": "設定によりシグナル通知を保留",
+    "unknown": "状態を読めない記録",
+    "stale": "最後の記録以降に状態が変化",
+    "unrecorded": "待ちの理由が未記録",
+}
+_INTERRUPT_JA = {
+    "watchdog_exit": "制限時間超過で打ち切り",
+    "update_preempted": "更新処理による中断",
+    "host_restart": "端末の再起動",
+    "unknown": "原因を特定できません",
+}
+_BACKUP_LOCAL_JA = {
+    "missing": "日次ローカルバックアップがありません",
+    "unreadable": "日次ローカルバックアップを読み取れません",
+    "unverified": "日次ローカルバックアップの検証記録が現在のファイルと一致しません",
+    "unknown": "日次ローカルバックアップの状態を確認できません",
+}
+
+
+def _wait_label(code: str) -> str:
+    if code in _WAIT_JA:
+        return _WAIT_JA[code]
+    kind = code.split(":")[0]
+    return {"hold_reason": "送信を保留", "thread_hold": "スレッドの作成待ち"}.get(kind, "待機中")
+
+
+def _wait_summary(wait) -> str:
+    """Largest waits first, at most three, e.g. 「内訳: カードの配信結果が不明 1件」."""
+    if not wait or not wait["reasons"]:
+        return ""
+    top = sorted(wait["reasons"].items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+    text = "、".join(f"{_wait_label(code)} {n}件" for code, n in top)
+    return f"（内訳: {text}" + (f"、要確認 {wait['attention']}件" if wait["attention"] else "") + "）"
+
+
+def _backup_local_text(local) -> str:
+    if not local:
+        return ""
+    if local["state"] == "verified":
+        age = _hours(local["newest_age_s"])
+        return f"（日次ローカルバックアップは {age}前に検証済み）" if age else "（日次ローカルバックアップは検証済み）"
+    return f"（{_BACKUP_LOCAL_JA[local['state']]}）"
+
+
 def _reason_rows(report: dict, reasons) -> list[str]:
     if reasons is None:
         return ["・理由を特定できません（状態の記録に理由がありません）",
@@ -658,7 +751,10 @@ def _reason_rows(report: dict, reasons) -> list[str]:
         if base == "notification_pending":
             n = report.get("notify_pending")
             age = _hours(oldest.get("notify"))
-            extra = (f" {int(n)}件" if _finite_number(n) else "") + (f"（最古 {age}）" if age else "")
+            extra = ((f" {int(n)}件" if _finite_number(n) else "") + (f"（最古 {age}）" if age else "")
+                     + _wait_summary(report.get("notify_wait")))
+        elif base in ("backup_not_verified", "backup_deferred_deadline"):
+            extra = _backup_local_text(report.get("backup_local"))
         elif base == "semantic_backlog_stalled" and _hours(oldest.get("semantic_jobs")):
             extra = f"（最古 {_hours(oldest.get('semantic_jobs'))}）"
         rows += [f"・{meaning}{extra}", f"　→ {action}"]
@@ -678,6 +774,12 @@ def _alert_lines(report: dict) -> list[str]:
         lines.append("影響: " + _impact(report, reasons))
         lines.append("原因と対処:")
         lines.extend(_reason_rows(report, reasons))
+        interrupt = report.get("last_interrupt")
+        at = report.get("health_at")
+        if interrupt and _finite_number(at) and 0 <= at - interrupt["detected_at"] <= 86400:
+            label = _INTERRUPT_JA.get(interrupt["reason"], _INTERRUPT_JA["unknown"])
+            # the run's own end time is not known — only when it was found
+            lines.append(f"直近の中断: {label}（{_jst(interrupt['detected_at'])} に検出）")
         lines.append(f"最終正常 {_jst(report.get('last_ok_at'))}"
                      f" / 最新記録 {_jst(report.get('health_at'))}（JST）")
         lines.append(f"コード: {status} " + (",".join(reasons) if reasons else

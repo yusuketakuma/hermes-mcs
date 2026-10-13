@@ -2026,12 +2026,111 @@ def _thread_root(db, mid, project_id):
     return cur or mid
 
 
-def _reseat(db, event_id, now) -> None:
+# progress.wait records why a pending intent was pushed out; written in
+# the same UPDATE as updated_at so a reader can tell the record is the
+# row's latest (any later writer moves updated_at). Existing receipts are
+# kept, an unparseable one under invalid_progress, as HOLD_PROGRESS_SET.
+_WAIT_PROGRESS_SET = (
+    "progress=json_set(CASE WHEN progress IS NULL OR progress='' THEN '{}' "
+    "WHEN json_valid(progress) AND json_type(progress)='object' "
+    "THEN progress ELSE json_object('invalid_progress',progress) END,"
+    "'$.wait',json_object('reason',?,'at',?))")
+
+
+RESEAT_REASONS = frozenset({
+    "notice_render_live", "notice_interactive_off", "notice_digest_unset",
+    "notice_superseded", "notice_render_issued", "alert_outcome_pending",
+    "alert_render_live", "alert_render_issued", "signals_off_sealed",
+    "intent_cards_unsettled", "intent_cards_issued"})
+# waits an operator should look at; any reason that outlasts
+# PENDING_ATTENTION_S is treated the same way
+_ATTENTION_REASONS = frozenset({
+    "alert_outcome_pending", "intent_card_delivery_unknown", "unknown"})
+PENDING_ATTENTION_S = 6 * 3600
+# health's pending-delivery population (one ? = now): a signal digest
+# scheduled ahead and never attempted waits by design and is excluded
+OUTBOX_PENDING_WHERE = (
+    "state IN ('pending','failed') AND next_try IS NOT NULL "
+    "AND NOT (kind='signal' AND attempts=0 AND next_try>? "
+    "         AND json_valid(payload) AND json_extract(payload,'$.digest')=1)")
+_CODE_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
+
+
+def _code(value) -> str | None:
+    return value if (isinstance(value, str) and 0 < len(value) <= 64
+                     and set(value) <= _CODE_CHARS) else None
+
+
+def _pending_reason(progress_raw, updated_at, delivery_unknown: bool) -> str:
+    """Why one pending row waits: a structured hold first, then an intent
+    card whose delivery is unknown, then the row's last recorded wait.
+    A wait written before the row's latest update is stale; no record is
+    unrecorded; an unreadable progress is unknown."""
+    try:
+        progress = json.loads(progress_raw) if progress_raw else {}
+    except (ValueError, TypeError, RecursionError):
+        return "unknown"
+    if not isinstance(progress, dict) or "invalid_progress" in progress:
+        return "unknown"
+    for key in ("hold_reason", "thread_hold"):
+        if key in progress:
+            code = _code(progress[key])
+            return f"{key}:{code}" if code else "unknown"
+    if delivery_unknown:
+        return "intent_card_delivery_unknown"
+    wait = progress.get("wait")
+    if wait is None:
+        return "unrecorded"
+    if not isinstance(wait, dict) or wait.get("reason") not in RESEAT_REASONS:
+        return "unknown"
+    at = wait.get("at")
+    if (isinstance(at, bool) or not isinstance(at, (int, float))
+            or not isinstance(updated_at, (int, float))
+            # json renders the double with 15 significant digits
+            or abs(at - updated_at) >= 1e-3):
+        return "stale"
+    return wait["reason"]
+
+
+def pending_breakdown(db, now: float) -> dict:
+    """Pending deliveries in health's population, by why each waits.
+    ``total`` always equals the population count; every row lands in
+    exactly one reason, so the reasons add up to it."""
+    rows = db.execute(
+        "SELECT event_id,created_at,updated_at,progress FROM notify_outbox "
+        f"WHERE {OUTBOX_PENDING_WHERE}", (now,)).fetchall()
+    unknown_delivery = {r[0] for r in db.execute(
+        "SELECT ic.event_id FROM notification_intent_cards ic "
+        "JOIN notification_cards c ON c.card_id=ic.card_id "
+        "WHERE ic.state='pending' AND c.delivery_state='delivery_unknown'")}
+    by_reason: dict = {}
+    oldest = None
+    attention = 0
+    for event_id, created_at, updated_at, progress in rows:
+        reason = _pending_reason(progress, updated_at,
+                                 event_id in unknown_delivery)
+        age = (max(0.0, now - created_at)
+               if isinstance(created_at, (int, float)) else None)
+        slot = by_reason.setdefault(reason, {"count": 0, "oldest_age_s": None})
+        slot["count"] += 1
+        if age is not None:
+            slot["oldest_age_s"] = max(slot["oldest_age_s"] or 0.0, age)
+            oldest = max(oldest or 0.0, age)
+        if (reason in _ATTENTION_REASONS or reason.startswith("hold_reason:")
+                or (age is not None and age >= PENDING_ATTENTION_S)):
+            attention += 1
+    return {"total": len(rows), "oldest_age_s": oldest,
+            "by_reason": by_reason, "attention": attention}
+
+
+def _reseat(db, event_id, now, reason: str) -> None:
     """Push a still-pending card-owned intent's next re-examination out
-    by RESEAT_S so it does not stay due (and hog flush slots) forever."""
+    by RESEAT_S so it does not stay due (and hog flush slots) forever,
+    recording why (a RESEAT_REASONS code)."""
     db.execute(
-        "UPDATE notify_outbox SET next_try=?,updated_at=? "
-        "WHERE event_id=?", (now + RESEAT_S, now, event_id))
+        f"UPDATE notify_outbox SET next_try=?,{_WAIT_PROGRESS_SET},"
+        "updated_at=? WHERE event_id=?",
+        (now + RESEAT_S, reason, now, now, event_id))
 
 
 def _notice_spec(event_id, parts, cfg, scope, rev, transport) -> dict:
@@ -2198,7 +2297,13 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
             specs.extend(json.loads(r["spec_json"]) for r in live
                          if r["state"] == "queued" and r["spec_json"]
                          and not r["spec_published"])
-            _reseat(db, event_id, now)
+            _reseat(db, event_id, now,
+                    "notice_render_live" if live
+                    else "notice_interactive_off"
+                    if not interactive_enabled(cfg)
+                    else "notice_digest_unset"
+                    if notify_digest.settings(cfg) is None
+                    else "notice_superseded")
         elif _notice_failures(db, event_id) >= MAX_RESEND:
             db.execute("UPDATE notify_outbox SET state='failed',"
                        f"next_try=NULL,{HOLD_PROGRESS_SET},updated_at=? "
@@ -2254,7 +2359,7 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
                  event_id, now, now))
             _seed_parts(db, spec, now)
             specs.append(spec)
-            _reseat(db, event_id, now)
+            _reseat(db, event_id, now, "notice_render_issued")
         mark_snapshot_dirty(db)
     if specs:
         ensure_dirs(root)
@@ -2451,7 +2556,7 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
             if _notice_unsent(db, renders):
                 _close_notice(db, event_id, renders, now)
                 return {"suppressed": True}
-            _reseat(db, event_id, now)
+            _reseat(db, event_id, now, "alert_outcome_pending")
             return {"parked": "alert_outcome_pending"}
         scope = urgent_thread_target(ledger, row, cfg)
         if scope is None:
@@ -2476,7 +2581,7 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
         if live:
             specs.extend(json.loads(render["spec_json"]) for render in live
                          if render["state"] == "queued" and not render["spec_published"])
-            _reseat(db, event_id, now)
+            _reseat(db, event_id, now, "alert_render_live")
         elif _notice_failures(db, event_id) >= MAX_RESEND:
             db.execute("UPDATE notify_outbox SET state='failed',next_try=NULL," + HOLD_PROGRESS_SET +
                        ",updated_at=? WHERE event_id=?", ("resend_exhausted", now, event_id))
@@ -2502,7 +2607,7 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
             _seed_parts(db, spec, now)
             specs.append(spec)
             db.execute("UPDATE notify_outbox SET route='interactive',progress=NULL WHERE event_id=?", (event_id,))
-            _reseat(db, event_id, now)
+            _reseat(db, event_id, now, "alert_render_issued")
         mark_snapshot_dirty(db)
     if specs:
         root = data_root(ledger)
@@ -2550,7 +2655,7 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                 return {"suppressed": True}
             # sealed with signals off: re-examine hourly, never every
             # flush — a due-forever intent would starve outbox_due slots
-            _reseat(db, event_id, now)
+            _reseat(db, event_id, now, "signals_off_sealed")
             return {"skipped": True}
         if batch is not None:
             if interactive_enabled(cfg) and batch["transport"] != active_transport(cfg):
@@ -2569,7 +2674,7 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                 outcome["dispatched"] = bool(specs)
             # sealed already — a flush re-entry repairs + completes
             if _complete_intent(db, event_id, now) is None:
-                _reseat(db, event_id, now)
+                _reseat(db, event_id, now, "intent_cards_unsettled")
             specs.extend(
                 json.loads(r["spec_json"])
                 for r in db.execute(
@@ -2633,7 +2738,7 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                         "project_id": row["project_id"],
                         "payload": json.dumps({**frozen, "message_ids": sorted(covered)}),
                     }, now=now)
-                _reseat(db, event_id, now)
+                _reseat(db, event_id, now, "intent_cards_issued")
                 outcome.update(dispatched=True, cards=len(card_ids))
             else:
                 # nothing deliverable — suppress like a stale text send

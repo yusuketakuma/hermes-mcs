@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "送信待ちの通知に、待っている理由を記録して表示",
+  "summary": "カード化した通知が送信待ちのまま残るとき、その理由（カードの作成待ち、配信完了待ち、配信結果が不明、設定による保留など）を記録し、監視の警告で「送信待ちの通知があります」の行に内訳として表示するようにしました。長く進まない待ちと、配信結果が不明なものは「要確認」として数えます。",
+  "upgrade": "追加操作は不要です。警告を出す条件と回数は変わりません。更新前から待っている通知は、次の見直しまで「待ちの理由が未記録」と表示されます。",
+  "details": [
+    "notify_cards._reseat が、見直しを先送りする8つの経路それぞれで、progress の wait（reason と at）を既存の記録を保ったまま書き込む。",
+    "notify_cards.pending_breakdown は、監視の送信待ち件数と同じ母集団（OUTBOX_PENDING_WHERE）を理由ごとに数え、合計は常に件数と一致する。最後の更新より古い記録は stale、記録なしは unrecorded、読めない記録は unknown として数え、例外で止まらない。",
+    "health_watch は送信待ちの内訳・日次ローカルバックアップの状態・直近の中断理由を、欠けていても壊れていても判定を変えずに表示する。"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "mcs/ingest/health_watch.py",
+    "tests/notify/test_pending_wait_reasons.py",
+    "tests/ingest/test_health_watch_wait_reasons.py"
+  ]
+}
