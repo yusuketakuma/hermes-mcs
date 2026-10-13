@@ -14,8 +14,11 @@ from adapters.slack.delivery import SlackCardAdapter
 from adapters.slack.paths import ensure_dirs
 from notify_testkit import NOW, _add_request, _patient, _token_for
 from slack_testkit import SCOPE, SLACK
-from test_mcs_slack_actions import App, ack
+from slack_actions_testkit import App, ack
+from slack_actions_testkit import _no_modal_wait  # noqa: F401  (used via usefixtures)
 from test_notify_slack import _command, _drain, _slack_render
+
+pytestmark = pytest.mark.usefixtures("_no_modal_wait")
 
 
 async def _scenario(tmp_path, scope, expired):
@@ -102,7 +105,7 @@ def test_queued_aggregate_view_respects_the_current_scope(tmp_path, monkeypatch,
 
 def test_queued_digest_card_over_a_narrowed_scope_sends_no_blocks(tmp_path):
     from adapters.common.paths import safe_name
-    from test_mcs_slack_actions import click, command, fixture, result, submitted
+    from slack_actions_testkit import click, command, fixture, result, submitted
 
     async def scenario():
         actions, app, _reg, dirs = fixture(tmp_path, kind="digest")
