@@ -5,13 +5,10 @@ import pytest
 
 import notify_flush
 from common_testkit import ledger_fixture
+from notify_testkit import _row
 
 
 store = ledger_fixture(name="store")
-
-
-def _row(store, eid):
-    return store.db.execute("SELECT * FROM notify_outbox WHERE event_id=?", (eid,)).fetchone()
 
 
 @pytest.mark.parametrize("progress,expected", [

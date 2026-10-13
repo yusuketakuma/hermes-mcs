@@ -9,31 +9,16 @@ import pytest
 
 import drug_map
 import notify_cards
-import notify_cmds
 from notify_testkit import (
-    CFG, CLICKER, NOW, ORIGIN, _deliver, _dispatch, _extract, _intent, _llm_extract,
-    _seed_thread, _spec, _token_for, led, pinned_clock)
+    CFG, CLICKER, MED, NOW, ORIGIN, _deliver, _dispatch, _drug_card, _drug_click, _extract,
+    _intent, _llm_extract, _seed_thread, _spec, led, pinned_clock)
 from test_drug_map import DOCUMENT
 
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")
 
-MED = {"name": "キラナ", "dose": "5mg", "action": "start", "subject": "patient",
-       "status": "current", "negated": False, "unverified": False,
-       "evidence": "fictional quotation only"}
-
-
 def _ids(spec):
     return [b["id"] for row in spec["parts"]["action_rows"] for b in row]
-
-
-def _card(led, meds=(MED,), mid=101):
-    _seed_thread(led)
-    if meds is not None:
-        _llm_extract(led, mid, {"meds": list(meds)})
-    _dispatch(led, _intent(led))
-    _deliver(led)
-    return _spec(led)
 
 
 def _dictionary(tmp_path, led, *, activate=True):
@@ -47,27 +32,15 @@ def _dictionary(tmp_path, led, *, activate=True):
     return {**CFG, "drug_map": {"path": str(path), "sha256": sha}}
 
 
-def _click(led, spec, action, inputs=None, cfg=CFG, origin=None, token=None, actor=CLICKER):
-    tok = token or _token_for(spec, action)
-    req = {"version": 1, "op": "notification",
-           "command_id": f"{tok}:{hashlib.sha256(actor.encode()).hexdigest()[:16]}", "actor": actor,
-           "token": tok, "origin": origin or dict(ORIGIN, message_id="m-9")}
-    if inputs:
-        req["input"] = inputs
-        req["command_id"] = f"{tok}:{hashlib.sha256(json.dumps(inputs).encode()).hexdigest()[:16]}"
-    assert notify_cmds.validate_int(req) is None
-    return notify_cards.apply_notification(led, req, cfg, now=NOW)
-
-
 def test_no_medication_and_no_dictionary_emit_no_drug_buttons(led):
-    ids = _ids(_card(led, meds=None))
+    ids = _ids(_drug_card(led, meds=None))
     assert "meds" not in ids and "drugsearch" not in ids
 
 
 def test_meds_view_lists_the_posts_medication_without_dictionary(led):
-    spec = _card(led)
+    spec = _drug_card(led)
     assert "meds" in _ids(spec) and "drugsearch" not in _ids(spec)
-    r = _click(led, spec, "meds")
+    r = _drug_click(led, spec, "meds")
     assert (r["outcome"], r["action"]) == ("applied", "list")
     view = r["list"]
     assert view["title"].startswith("💊 ") and view["title"].endswith("選択した投稿の薬剤")
@@ -97,7 +70,7 @@ def test_meds_view_shows_the_active_candidate_and_offers_search(led, tmp_path):
     _deliver(led)
     spec = _spec(led)
     assert {"meds", "drugsearch"} <= set(_ids(spec))
-    view = _click(led, spec, "meds", cfg=cfg)["list"]
+    view = _drug_click(led, spec, "meds", cfg=cfg)["list"]
     assert view["head"][-1] == "辞書の候補はすべて未確認です"
     assert any(n.startswith("辞書 fictional-v1@") for n in view["notes"])
     texts = [i["text"] for i in view["items"]]
@@ -113,20 +86,20 @@ def test_drug_search_opens_modal_then_answers_reference_hits(led, tmp_path):
     _dispatch(led, _intent(led))
     _deliver(led)
     spec = _spec(led)
-    first = _click(led, spec, "drugsearch", cfg=cfg)
+    first = _drug_click(led, spec, "drugsearch", cfg=cfg)
     assert first["modal"] is True and first["action"] == "drugsearch"
-    view = _click(led, spec, "drugsearch", {"query": "ｷﾗﾅ"}, cfg=cfg)["list"]
+    view = _drug_click(led, spec, "drugsearch", {"query": "ｷﾗﾅ"}, cfg=cfg)["list"]
     # half-width kana folds; キラナタール (乙) is a substring hit too
     assert view["head"][0] == "2件（名称・別名・コードの部分一致）"
     assert [i["text"] for i in view["items"]] == [
         "・架空成分甲（成分・fiction-i1）\n　一致した別名: キラナ、別キラナ",
         "・架空成分乙（成分・fiction-i2）\n　一致した別名: キラナタール"]
-    none = _click(led, spec, "drugsearch", {"query": "存在しない薬"}, cfg=cfg)["list"]
+    none = _drug_click(led, spec, "drugsearch", {"query": "存在しない薬"}, cfg=cfg)["list"]
     assert none["items"] == [] and none["empty"].startswith("一致する候補はありません")
 
 
 def test_drug_search_refuses_a_dictionary_that_is_not_the_active_generation(led, tmp_path):
-    spec = _card(led)
+    spec = _drug_card(led)
     cfg = _dictionary(tmp_path, led, activate=False)
     assert drug_map.active_dictionary(led.db, cfg)[1] == "inactive"
     assert drug_map.active_dictionary(led.db, CFG)[1] == "unconfigured"
@@ -152,7 +125,7 @@ def test_thread_drug_views_require_this_cards_delivered_body(led, tmp_path, acti
                            (fault,))
     origin = dict(ORIGIN, thread_id="other-thread" if fault == "wrong_thread" else "synthetic-thread",
                   message_id="unknown-body" if fault == "unknown_post" else "r-body:0001")
-    answer = _click(led, spec, action, {"query": "キラナ"} if action == "drugsearch" else None,
+    answer = _drug_click(led, spec, action, {"query": "キラナ"} if action == "drugsearch" else None,
                     cfg=cfg, origin=origin)
     if fault:
         assert answer["error"] == "origin_mismatch"
@@ -161,10 +134,10 @@ def test_thread_drug_views_require_this_cards_delivered_body(led, tmp_path, acti
 
 
 def test_write_action_cannot_use_thread_drug_view_origin(led):
-    spec = _card(led)
+    spec = _drug_card(led)
     with led.db:
         led.db.execute("UPDATE notification_cards SET thread_id='synthetic-thread'")
-    answer = _click(led, spec, "ack",
+    answer = _drug_click(led, spec, "ack",
                     origin=dict(ORIGIN, thread_id="synthetic-thread", message_id="r-body:0001"))
     assert answer["error"] == "origin_mismatch"
     assert led.db.execute("SELECT COUNT(*) FROM notification_acknowledgements").fetchone()[0] == 0
@@ -172,7 +145,7 @@ def test_write_action_cannot_use_thread_drug_view_origin(led):
 
 def test_drug_thread_flag_is_rejected_by_an_old_worker(led, monkeypatch):
     from adapters.common import spec as contract
-    spec = _card(led)
+    spec = _drug_card(led)
     assert contract.validate(spec) is spec
     monkeypatch.setattr(contract, "PARTS_KEYS", contract.PARTS_KEYS - {"thread_drug_actions"})
     with pytest.raises(ValueError, match="unsupported_parts_key"):
@@ -182,14 +155,14 @@ def test_drug_thread_flag_is_rejected_by_an_old_worker(led, monkeypatch):
 @pytest.mark.parametrize("value", [False, 1, "true", None])
 def test_drug_thread_flag_is_strict(led, value):
     from adapters.common import spec as contract
-    spec = _card(led)
+    spec = _drug_card(led)
     spec["parts"]["thread_drug_actions"] = value
     with pytest.raises(ValueError, match="bad_thread_drug_actions"):
         contract.validate(spec)
 
 
 def test_dictionary_activation_refreshes_a_card_without_medication(led, tmp_path):
-    _card(led, meds=None)
+    _drug_card(led, meds=None)
     cfg = _dictionary(tmp_path, led)
     assert notify_cards.rerender_message_cards(led, cfg, 1, 100, now=NOW)
     assert "drugsearch" in _ids(_spec(led))
@@ -199,7 +172,7 @@ def test_dictionary_activation_refreshes_a_card_without_medication(led, tmp_path
                                          ("revoked", "card_revoked"),
                                          ("foreign_scope", "scope_mismatch")])
 def test_thread_drug_view_preserves_existing_gates(led, fault, error):
-    spec = _card(led)
+    spec = _drug_card(led)
     with led.db:
         led.db.execute("UPDATE notification_cards SET thread_id='synthetic-thread'")
         if fault == "expired":
@@ -209,11 +182,11 @@ def test_thread_drug_view_preserves_existing_gates(led, fault, error):
     origin = dict(ORIGIN, thread_id="synthetic-thread", message_id="r-body:0001")
     if fault == "foreign_scope":
         origin["channel_id"] = "another-channel"
-    assert _click(led, spec, "meds", origin=origin)["error"] == error
+    assert _drug_click(led, spec, "meds", origin=origin)["error"] == error
 
 
 def test_another_cards_delivered_body_cannot_open_drug_view(led):
-    spec = _card(led)
+    spec = _drug_card(led)
     _seed_thread(led, pid=2, root=200, mids=(200, 201))
     _dispatch(led, _intent(led, pid=2, payload={"message_ids": [200, 201]}))
     _deliver(led)
@@ -222,7 +195,7 @@ def test_another_cards_delivered_body_cannot_open_drug_view(led):
         led.db.execute("UPDATE notification_cards SET thread_id='synthetic-thread' WHERE card_id=1")
         led.db.execute("UPDATE notification_render_parts SET remote_id='foreign-body' "
                        "WHERE delivery_id=? AND part_id='body:0001'", (other["delivery_id"],))
-    answer = _click(led, spec, "meds",
+    answer = _drug_click(led, spec, "meds",
                     origin=dict(ORIGIN, thread_id="synthetic-thread", message_id="foreign-body"))
     assert answer["error"] == "origin_mismatch"
 
@@ -244,28 +217,28 @@ def test_all_medications_and_old_post_candidates_are_reachable_privately(led, tm
         led.db.execute("UPDATE notification_cards SET thread_id='synthetic-thread'")
     original = dict(ORIGIN, thread_id="synthetic-thread", message_id="r-body:0001")
     private = dict(original, message_id="private-answer")
-    first = _click(led, spec, "meds", cfg=cfg, origin=original)
+    first = _drug_click(led, spec, "meds", cfg=cfg, origin=original)
     current, seen = first, []
     for page in range(4):
         assert current["list"]["page"] == page and current["list"]["pages"] == 4
         assert len(current["list"]["items"]) <= 5 and current["list"]["more"] == 0
         seen.extend(row["text"] for row in current["list"]["items"])
         if page < 3:
-            current = _click(led, spec, "meds", cfg=cfg, origin=private,
+            current = _drug_click(led, spec, "meds", cfg=cfg, origin=private,
                              token=_navigation(current, "次の5件"))
     assert len(seen) == 16 and len(set(seen)) == 16
     assert all(any(f"合成薬{i:02}" in row for row in seen) for i in range(1, 17))
     rendered = "\n".join(value for value, _ in text.view_answer(current, lambda pid: pid == 1))
     assert "合成薬16" in rendered and "他1件" not in rendered
-    old = _click(led, spec, "meds", cfg=cfg, origin=private,
+    old = _drug_click(led, spec, "meds", cfg=cfg, origin=private,
                  token=_navigation(current, "古い投稿"))
     assert old["list"]["head"][0] == "薬剤記載のある投稿 2/2（新しい順）"
     assert "キラナ" in old["list"]["items"][0]["text"]
     assert "架空成分甲" in old["list"]["items"][0]["text"]
-    newer = _click(led, spec, "meds", cfg=cfg, origin=private,
+    newer = _drug_click(led, spec, "meds", cfg=cfg, origin=private,
                    token=_navigation(old, "新しい投稿"))
     assert newer["list"]["page"] == 0 and "合成薬01" in newer["list"]["items"][0]["text"]
-    wrong = _click(led, spec, "meds", cfg=cfg, origin=private,
+    wrong = _drug_click(led, spec, "meds", cfg=cfg, origin=private,
                    token=_navigation(first, "次の5件"), actor="discord:1002")
     assert wrong["error"] == "actor_mismatch"
     stored = [json.loads(row[0]) for row in led.db.execute("SELECT receipt_json FROM command_receipts")]
@@ -294,7 +267,7 @@ def test_slack_without_a_usable_thread_hides_drug_actions(led, tmp_path, state):
     ("foreign_channel", "card_not_found"), ("foreign_guild", "scope_mismatch"),
     ("revoked", "card_revoked")])
 def test_refresh_from_thread_requires_trusted_body_and_existing_scope(led, fault, error):
-    _card(led)
+    _drug_card(led)
     with led.db:
         led.db.execute("UPDATE notification_cards SET thread_id='synthetic-thread'")
         if fault == "unknown_delivery":
@@ -323,7 +296,7 @@ def test_drug_post_before_twenty_medication_free_replies_remains_available(led):
     _deliver(led)
     spec = _spec(led)
     assert "meds" in _ids(spec)
-    result = _click(led, spec, "meds")
+    result = _drug_click(led, spec, "meds")
     assert not result["list"]["head"][0].startswith("薬剤記載のある投稿")
     assert "キラナ" in result["list"]["items"][0]["text"]
 
@@ -334,6 +307,21 @@ def test_unverified_medication_says_unverified_without_a_source_label(led):
     _extract(led, 101, {"medications": [{"name": "ソラノ", "dose": "1錠"}]})
     _dispatch(led, _intent(led))
     _deliver(led)
-    view = _click(led, _spec(led), "meds")["list"]
+    view = _drug_click(led, _spec(led), "meds")["list"]
     firsts = [item["text"].split("\n", 1)[0] for item in view["items"]]
     assert firsts == ["・ソラノ 1錠（未確認）"]
+
+
+def test_identical_search_input_from_another_member_is_not_a_replay(led, tmp_path):
+    _seed_thread(led)
+    cfg = _dictionary(tmp_path, led)
+    _dispatch(led, _intent(led))
+    _deliver(led)
+    spec = _spec(led)
+    hits = _drug_click(led, spec, "drugsearch", {"query": "ｷﾗﾅ"}, cfg=cfg)
+    assert hits["list"]["items"]
+    # another member sending the same input is its own command, not a replay
+    # of the first member's stored receipt
+    other = _drug_click(led, spec, "drugsearch", {"query": "ｷﾗﾅ"}, cfg=cfg, actor="discord:2002")
+    assert other["command_id"] != hits["command_id"]
+    assert other["actor"] == "discord:2002" and hits["actor"] == CLICKER

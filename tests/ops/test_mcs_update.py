@@ -54,6 +54,7 @@ def test_standalone_precheck_does_not_require_hermes(updater, monkeypatch):
 
 def test_standalone_quiesce_and_restart_keep_the_host_alive(updater, monkeypatch):
     monkeypatch.setattr(updater, "load_config", lambda: {"runtime_mode": "standalone"})
+    (Path(updater.DATA).parent / "config.json").write_text('{"runtime_mode":"standalone"}')
     _standalone_heartbeat(updater, update_in_progress=True, children={"update": {"pid": os.getpid(), "kind": "core"}})
     monkeypatch.setattr(updater, "_run", lambda *a, **k: pytest.fail("native service must not be stopped"))
     assert updater.quiesce() == ["extract-0", "extract-2"]

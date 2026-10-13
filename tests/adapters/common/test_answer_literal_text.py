@@ -38,6 +38,14 @@ def test_discord_list_and_tasks_escape_items_not_markup():
         {"request_id": 1, "status": "open", "title": "[x](https://e.example)",
          "assignee": "**誰**"}]}, lambda pid: True)[0][0]
     assert tasks.endswith("#1 ［x］(https://e.example) — 担当: ＊＊誰＊＊")
+    done = {"outcome": "applied", "action": "task_status", "request_id": 7,
+            "status": "done", "title": "- [x](https://e.example) **至急**"}
+    assert text.view_answer(done, lambda pid: True)[0][0] == \
+        "タスク「－ ［x］(https://e.example) ＊＊至急＊＊」を「完了」にしました。"
+    assert text.view_answer(done, lambda pid: True, markdown=False)[0][0] == \
+        "タスク「- [x](https://e.example) **至急**」を「完了」にしました。"
+    assert text.view_answer({**done, "title": None}, lambda pid: True)[0][0] == \
+        "タスク「#7」を「完了」にしました。"
 
 
 def test_plain_dialects_are_unchanged():

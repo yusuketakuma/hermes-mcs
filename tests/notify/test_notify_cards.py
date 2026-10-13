@@ -19,12 +19,12 @@ from notify_testkit import (
     _settle_bodies,
     CFG, NOW, ORIGIN, SCOPE, _begin, _card, _dispatch, _extract, _intent,
     _latest_render, _msg, _notif, _patient, _receipt, _seed_thread,
-    _signal_row, _token_for, _uuid, led,
+    _signal_row, _token_for, _uuid, led, pinned_clock,
 )
 
-from test_signal_thread_hotfix import delivered_source
+from notify_testkit import delivered_source
 
-__all__ = ["led"]  # shared isolated-ledger fixture
+__all__ = ["led", "pinned_clock"]  # shared isolated-ledger fixture
 
 NO_THREAD_CFG = {"notify": {k: v for k, v in CFG["notify"].items()
                             if k != "card_thread"},
@@ -33,9 +33,7 @@ CFG_OFF = {"notify": {"interactive": "off", "route_epoch": 1,
                       "discord": CFG["notify"]["discord"]}}
 
 
-@pytest.fixture(autouse=True)
-def _pin_wall_clock(monkeypatch):
-    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
+pytestmark = pytest.mark.usefixtures("pinned_clock")
 
 
 # ---------- dispatch / seal / freeze (RC02, RC03) ----------
@@ -86,7 +84,7 @@ def test_dispatch_idempotent_reseal(led):
     ev = _intent(led)
     _dispatch(led, ev)
     out = _dispatch(led, ev)
-    assert out.get("resealed") or not out.get("dispatched")
+    assert out["resealed"] is True and out["dispatched"] is False
     assert led.db.execute(
         "SELECT COUNT(*) c FROM notification_cards").fetchone()["c"] == 1
     assert led.db.execute(
@@ -1045,7 +1043,7 @@ def test_cmd_int_rejects_card_resolve(led, tmp_path):
     path.write_text(json.dumps(req))
     result = {"errors": []}
     notify_cmds.drain_int_commands(led, result, CFG, str(root))
-    assert path.with_suffix(".json.invalid").exists() or not path.exists()
+    assert path.with_suffix(".json.invalid").exists() and not path.exists()
     assert led.db.execute(
         "SELECT COUNT(*) c FROM command_receipts").fetchone()["c"] == 0
 
@@ -1507,14 +1505,14 @@ def test_refresh_on_revoked_card_rejected(led, tmp_path):
     card, spec = _delivered_card(led, tmp_path)
     notify_cards.revoke_card(led.db, card["card_id"], NOW)
     led.db.commit()
+    before = dict(_latest_render(led))
     r = notify_cards.apply_refresh(led, {
         "version": 1, "op": "refresh", "command_id": _uuid(42),
         "actor": "nurse-1",
         "origin": dict(ORIGIN, message_id="m-9")}, CFG, now=NOW)
     assert r["outcome"] == "rejected" and r["error"] == "card_revoked"
-    # no fresh revoke render minted by the refresh itself
-    assert _latest_render(led)["op"] != "revoke" or \
-        _latest_render(led)["render_rev"] == 1
+    # no fresh render minted by the refresh itself
+    assert dict(_latest_render(led)) == before
 
 
 def test_request_and_dismiss_tokens_authorize_modal(led, tmp_path):

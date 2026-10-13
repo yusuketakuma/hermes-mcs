@@ -28,8 +28,8 @@ CHANGE_ACTIONS_SQL = ",".join(f"'{a}'" for a in CHANGE_ACTIONS)
 TRANSITION_EVENTS_SQL = "'discharge','transfer'"
 
 # a message (alias m) whose full body is stored and non-empty — the
-# extraction eligibility rule (extract_llm). run_check, read_model,
-# extract (v1) and semantic_observe still inline the same text.
+# extraction eligibility rule shared by writers, coverage and read models.
+# Job admission, retry timing and extraction generations are separate filters.
 ELIGIBLE_MESSAGE = ("m.body_text IS NOT NULL AND m.body_text != '' "
                     "AND (m.body_state IS NULL OR m.body_state='full')")
 

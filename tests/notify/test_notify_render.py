@@ -12,7 +12,7 @@ from notify_testkit import (
     _latest_render, _msg, _notif, _patient, _receipt, _seed_thread,
     _signal_row, _token_for, led,
 )
-from test_signal_thread_hotfix import delivered_source
+from notify_testkit import delivered_source
 
 __all__ = ["led"]  # shared isolated-ledger fixture
 

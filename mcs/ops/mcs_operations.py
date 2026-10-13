@@ -698,12 +698,14 @@ def _refstat_promotion(pending: str, approved: str, expected_hash: str):
         yield
     except BaseException:
         recovering = True
+        restored_dirs = []
         if promoted:
             if backup is not None:
                 os.replace(backup, approved)
                 backup = None
             else:
                 os.unlink(approved)
+            restored_dirs.append(os.path.dirname(approved))
         if claimed is not None:
             # A newer capture may already occupy pending. Never overwrite it.
             try:
@@ -713,6 +715,18 @@ def _refstat_promotion(pending: str, approved: str, expected_hash: str):
             else:
                 os.unlink(claimed)
                 claimed = None
+            restored_dirs.append(os.path.dirname(pending))
+        # Finish both logical restores before a directory sync can fail.
+        # A sync error must not strand the claimed pending input.
+        sync_error = None
+        for directory in restored_dirs:
+            try:
+                fsync_dir(directory, require_dir=False)
+            except OSError as error:
+                if sync_error is None:
+                    sync_error = error
+        if sync_error is not None:
+            raise sync_error
         raise
     finally:
         # Only private staging/recovery files are disposable. Cleanup errors

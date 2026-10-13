@@ -22,7 +22,8 @@ SCHEMA = "mcs-drug-map/1"
 SOURCE_SCHEMA = "mcs-drug-map/2"
 RESOLVER_VERSION = "mcs-drug-ref/1"
 KIND = "med_ref"
-# 20260930 whole master: 19,272 rows, 12,792 identities, ~5.43 MiB JSON.
+# 20261013 whole master: 19,286 rows, 12,195 entries, ~5.14 MB JSON
+# (20260930: 19,272 rows, 12,792 identities, ~5.43 MiB).
 MAX_BYTES = 8 * 1024 * 1024
 MAX_ENTRIES = 20000
 PROGRESS_KIND = "med_ref_progress"
@@ -36,6 +37,8 @@ class Source:
     url: str
     terms_checked_on: str
     approved_by: str
+    as_of: str | None = None
+    next_boundary_on: str | None = None
 
 
 @dataclass(frozen=True)
@@ -290,12 +293,19 @@ def load(path: str | Path, *, expected_sha256: str) -> DrugMap | None:
         return None
     except OSError as exc:
         raise ValueError("drug_map_file") from exc
-    with os.fdopen(fd, "rb") as stream:
-        info = os.fstat(stream.fileno())
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                or info.st_mode & 0o077 or info.st_size > MAX_BYTES):
-            raise ValueError("drug_map_private_or_size")
-        raw = stream.read(MAX_BYTES + 1)
+    try:
+        try:
+            # Keep FD ownership here even if wrapping the stream fails.
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                info = os.fstat(stream.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                        or info.st_mode & 0o077 or info.st_size > MAX_BYTES):
+                    raise ValueError("drug_map_private_or_size")
+                raw = stream.read(MAX_BYTES + 1)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise ValueError("drug_map_file") from exc
     if len(raw) > MAX_BYTES:
         raise ValueError("drug_map_size")
     sha = hashlib.sha256(raw).hexdigest()
@@ -316,9 +326,23 @@ def load(path: str | Path, *, expected_sha256: str) -> DrugMap | None:
             or not isinstance(entries, list) or len(entries) > MAX_ENTRIES):
         raise ValueError("drug_map_provenance_or_entries")
     try:
-        date.fromisoformat(source["terms_checked_on"])
+        terms_day = date.fromisoformat(source["terms_checked_on"])
     except ValueError as exc:
         raise ValueError("drug_map_terms_date") from exc
+    as_of, next_boundary = source.get("as_of"), source.get("next_boundary_on")
+    if ("as_of" in source) != ("next_boundary_on" in source):
+        raise ValueError("drug_map_source_dates")
+    if "as_of" in source:
+        try:
+            as_of_day = date.fromisoformat(as_of)
+            if as_of_day.isoformat() != as_of or as_of_day < terms_day:
+                raise ValueError("as_of")
+            if next_boundary is not None:
+                boundary_day = date.fromisoformat(next_boundary)
+                if boundary_day.isoformat() != next_boundary or boundary_day <= as_of_day:
+                    raise ValueError("next_boundary_on")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("drug_map_source_dates") from exc
     aliases = {}
     ids = set()
     for entry in entries:
@@ -350,7 +374,7 @@ def load(path: str | Path, *, expected_sha256: str) -> DrugMap | None:
                 raise ValueError("drug_map_empty_alias")
             aliases.setdefault(alias, []).append(candidate)
     provenance = Source(source["name"], source["url"], source["terms_checked_on"],
-                        source.get("approved_by", ""))
+                        source.get("approved_by", ""), as_of, next_boundary)
     return DrugMap(document["dict_id"], sha, provenance,
                    MappingProxyType({key: tuple(values)
                                      for key, values in aliases.items()}))
@@ -468,18 +492,16 @@ def current_refs(db: sqlite3.Connection, mid: int) -> list[Annotation]:
             or not isinstance(content.get("refs"), list)):
         return []
     try:
-        meds = json.loads(source[2]).get(
-            "medications" if source[1] == "extract_v1" else "meds", [])
-    except (ValueError, TypeError, RecursionError):
-        return []
-    if not isinstance(meds, list):
+        # Readers and derivation share the same source-name contract. A
+        # matching corrupt annotation must not bypass the derivation checks.
+        meds = dict(_source_meds(source))
+    except ValueError:
         return []
     refs = []
     for ref in content["refs"]:
         if (not isinstance(ref, dict) or type(ref.get("i")) is not int
-                or not 0 <= ref["i"] < len(meds)
-                or not isinstance(meds[ref["i"]], dict)
-                or ref.get("name") != meds[ref["i"]].get("name")
+                or ref["i"] not in meds
+                or ref.get("name") != meds[ref["i"]]
                 or ref.get("status") not in
                 ("resolved", "ambiguous", "unresolved", "generic")
                 or not isinstance(ref.get("cands"), list)):
@@ -560,6 +582,11 @@ def derive(ledger, dictionary: DrugMap | None, *,
     """
     usable = dictionary is not None and (dictionary.approved or synthetic)
     generation = [dictionary.dict_id, dictionary.sha256, synthetic, RESOLVER_VERSION] if usable else None
+    provenance = asdict(dictionary.source) if dictionary is not None else {}
+    if dictionary is not None and dictionary.source.as_of is None:
+        # Preserve legacy annotation bytes and avoid a metadata-only rewrite.
+        provenance.pop("as_of")
+        provenance.pop("next_boundary_on")
     progress = _progress(ledger.db)
     if progress is None and not usable and not ledger.db.execute(
             "SELECT 1 FROM artifacts WHERE kind=? LIMIT 1", (KIND,)).fetchone():
@@ -606,7 +633,7 @@ def derive(ledger, dictionary: DrugMap | None, *,
                     meta = {**_source_meta(source), "dict_id": dictionary.dict_id,
                         "dict_sha256": dictionary.sha256,
                         "resolver_version": RESOLVER_VERSION,
-                        "source": asdict(dictionary.source), "synthetic": synthetic}
+                        "source": provenance, "synthetic": synthetic}
                     pid = source[4]
                 except (ValueError, TypeError, AttributeError, RecursionError):
                     content = meta = None

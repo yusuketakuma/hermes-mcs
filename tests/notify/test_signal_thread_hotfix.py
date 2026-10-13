@@ -1,6 +1,5 @@
 """Patient signals use proven source threads and keep their existing controls."""
 import json
-import itertools
 
 import pytest
 
@@ -9,46 +8,10 @@ import notify_transport
 from adapters.common.spec import validate
 from notify_testkit import (CFG, NOW, _begin, _dispatch, _intent,
                             _latest_render, _receipt, _seed_thread,
-                            _settle_bodies, _signal_row, led)
+                            _settle_bodies, _signal, _signal_row,
+                            delivered_source, led)
 
 __all__ = ["led"]
-_SOURCE_SEQ = itertools.count(800001, 3)
-
-
-def delivered_source(led, *, card_id=1, mids=(100, 101), cfg=CFG):
-    """Real synthetic original-card grant, transport receipt and thread receipt."""
-    pid = led.db.execute("SELECT project_id FROM messages WHERE message_id=?", (mids[0],)).fetchone()[0]
-    serial = next(_SOURCE_SEQ)
-    source = _intent(led, pid=pid, payload={"message_ids": list(mids)})
-    _dispatch(led, source, cfg)
-    render = _latest_render(led, card_id)
-    scope = notify_cards.delivery_scope(cfg)
-    version = 2 if scope.get("transport") == "slack" else 1
-    root = "1790000000.000001" if version == 2 else "original-root"
-    thread = root if version == 2 else "original-thread"
-    from notify_testkit import _uuid
-    identity = {"version": version, **scope, "delivery_id": render["delivery_id"],
-                "render_rev": render["render_rev"], "payload_hash": render["payload_hash"],
-                "route_epoch": 1, "correlation": render["correlation"]}
-    assert notify_transport.apply_transport_begin(led, {
-        **identity, "op": "transport_begin", "command_id": _uuid(serial),
-        "attempt_id": f"{serial:016x}", "worker_id": "bb" * 8}, cfg, now=NOW)["granted"]
-    assert notify_transport.apply_transport_receipt(led, {
-        **identity, "op": "transport_receipt", "command_id": _uuid(serial + 1),
-        "attempt_id": f"{serial:016x}", "result": "delivered", "message_id": root}, cfg, now=NOW)["applied"]
-    assert notify_transport.apply_part_receipt(led, {
-        **identity, "op": "part_receipt", "command_id": _uuid(serial + 2),
-        "attempt_id": "p:" + render["delivery_id"].replace("-", "") + ":thread",
-        "part_id": "thread", "result": "delivered", "remote_id": thread}, cfg, now=NOW)["applied"]
-    _settle_bodies(led, render)
-    return source
-
-
-def _signal(led):
-    _signal_row(led, "synthetic-key", mids=[101])
-    event = _intent(led, "signal", payload={"signal_keys": ["synthetic-key"], "project_id": 1})
-    _dispatch(led, event)
-    return event, dict(led.db.execute("SELECT * FROM notification_cards WHERE kind='signal'").fetchone())
 
 
 def test_signal_reuses_origin_thread_and_keeps_controls(led):
@@ -99,11 +62,8 @@ def test_signal_without_a_provable_thread_goes_to_the_channel_after_the_hold(led
 @pytest.mark.parametrize("fault", ["deleted", "scope", "foreign", "partial"])
 def test_unproven_signal_target_holds_without_channel_spec(led, fault):
     _seed_thread(led)
-    if fault != "missing":
-        delivered_source(led)
+    delivered_source(led)
     with led.db:
-        if fault == "coverage":
-            led.db.execute("UPDATE notification_intent_cards SET coverage='[999]' ")
         if fault == "deleted":
             led.db.execute("UPDATE notification_cards SET thread_state='deleted'")
         if fault == "scope":

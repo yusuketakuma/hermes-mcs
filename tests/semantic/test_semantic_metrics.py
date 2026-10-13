@@ -2,14 +2,15 @@
 malformed rows, and current_quality classifies every scoped message.
 Synthetic ledger only."""
 import json
+import sqlite3
+from types import SimpleNamespace
 
 from ledger import Ledger
 import pytest
 import semantic
 import semantic_metrics
 from semantic_policy import KIND_AUDIT, KIND_SUMMARY
-from semantic_testkit import _cfg, _message
-from test_semantic_observe import _pair
+from semantic_testkit import _cfg, _message, _audit_pair as _pair
 
 
 @pytest.fixture
@@ -156,3 +157,45 @@ def test_current_quality_is_read_only(db):
     out = semantic_metrics.current_quality(db, cfg)
     assert out["complete"] == 1 and out["incomplete"] == 1
     assert db.db.total_changes == changes
+
+
+def test_audit_findings_loop_can_be_cancelled_without_returning_partial_counts(db):
+    _artifact(db, KIND_AUDIT, {"findings": [{"code": "dose"}] * 1000},
+              {"audit_status": "PASS"})
+    calls = 0
+
+    def deadline():
+        nonlocal calls
+        calls += 1
+        if calls == 20:
+            raise TimeoutError("synthetic deadline")
+
+    with pytest.raises(TimeoutError, match="synthetic deadline"):
+        semantic_metrics.audit_history(db, checkpoint=deadline)
+    assert calls == 20
+
+
+def test_current_quality_counts_same_members_during_concurrent_arrival(db, tmp_path):
+    db.db.execute("PRAGMA journal_mode=WAL")
+    db.save_messages([_message(1, parent=99)])
+    reader = sqlite3.connect(f"file:{tmp_path / 'ledger.db'}?mode=ro", uri=True)
+    reader.row_factory = sqlite3.Row
+
+    class ArrivalBetweenQueries:
+        inserted = False
+
+        def execute(self, sql, *args):
+            cursor = reader.execute(sql, *args)
+            if "FROM messages" in sql and not self.inserted:
+                self.inserted = True
+                db.save_messages([_message(2, parent=99)])
+            return cursor
+
+    try:
+        out = semantic_metrics.current_quality(
+            SimpleNamespace(db=ArrivalBetweenQueries()), _cfg())
+        assert out["denominator"] == out["scoped_messages"] == out["total_messages"] == 1
+        assert out["incomplete"] == sum(out["incomplete_reasons"].values()) == 1
+        assert db.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 2
+    finally:
+        reader.close()

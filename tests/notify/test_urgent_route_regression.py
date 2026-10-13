@@ -6,8 +6,7 @@ import pytest
 import notify_cards
 import notify_transport
 from notify_testkit import _uuid
-from test_alert_thread_hotfix import _alert
-from test_notify_urgent import led, world
+from notify_urgent_testkit import _alert, led, world
 
 __all__ = ["led", "world"]
 
