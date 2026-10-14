@@ -97,7 +97,7 @@ CodeRabbit CLI 0.9.0の初回は追加差分151テキストファイルを5分�
 | 一次仕様 | R08rec3は前回同一。R08rec1の改版と利用条件を取得し、医薬品節の変更区分・日付番兵・期限なし・一般名省略条件を確認 |
 | 実変換 | 全行をruntime converterへ通し、12,195 entries・約5.14MB（作成日metadata追加前の測定）。`terms_unconfirmed`で保留、容量上限内 |
 
-2026-10-14 05:47（JST、`checked_at` 2026-10-13T20:47:48Z）に同じ条件で公式yFileを再取得し、HTTP200・1,158,682 bytes・同じSHA256・member `y_20261013.csv`（6,083,884 bytes）で10/13の受入版と一致した。`check_drug_master_bundle.py`もok（19,286行・`R08rec3-medicine-42`・`activation:false`・人承認必須）。
+2026-10-14 05:47（JST、`checked_at` 2026-10-13T20:47:48Z）に同じ条件で公式yFileを再取得し、HTTP200・1,158,682 bytes・同じSHA256・member `y_20261013.csv`（6,083,884 bytes）で10/13の受入版と一致した。`check_drug_master_bundle.py`もok（19,286行・`R08rec3-medicine-42`・`activation:false`・人承認必須）。公開前の再確認として2026-10-14 09:45（JST、`checked_at` 2026-10-14T00:45:17Z）に同じ条件で公式menu（HTTP200）とyFileを取得し、HTTP200・1,158,682 bytes・同じSHA256・member `y_20261013.csv`（6,083,884 bytes）で同梱版と一致したため、更新なしとして既存bundleを配布する。
 
 旧20260930原本は保持。[manifest](../../../resources/drug-master/20261013/manifest.json)の`activation:false`と人承認必須を維持する。
 配布原本の検証であり、私有辞書の採用・承認・有効化・実データ再処理は行わない。公開原本の行をfixtureへ転用しない。
@@ -131,4 +131,4 @@ install・updater・CIの固定値を一致させ、従来の`6f35b1ed`を認識
 
 前版の全体監査と公開receiptを区別して再利用し、全追跡ファイル群の同一性、今回差分と共有経路を8領域へ対応づけた（final-audit-delta）。追加master修正・通知追補・生成文書のhashと採否を最終差分記録へ対応づけた。未知の依存条件や未確認の配布経路を「問題なし」にしない。
 
-READMEは機能・画面例・導入・安全・導線の5項目を照合済。Slack8画面のカードUIは今回変更せず、運用診断の説明図を別に準備した。画像の外部公開・Release実表示は未実施。2026-10-14、全ファイル見直しで追加した16件を含む全28変更記録を、生成器（`release_notes.py build`、版1.0.21・日付2026-10-14）で未公開の1.0.21へ集約し直した。既存の12件はarchiveから戻して同じ手順で再生成し、本文は利用者の目的ごとに13項目へまとめ、28件すべての仕様・根拠は技術詳細の折りたたみに残した。README要約は`readme_release.py`で再生成し、同じCHANGELOGからRelease本文をexportした。旧版本文・旧版archiveは変更していない。同日、リリース経路の監査で追加した変更記録`hermes-companion-supply`を、既存28件のarchiveを変えずに加え、全29件（本文14項目・技術詳細29件）とした。
+READMEは機能・画面例・導入・安全・導線の5項目を照合済。Slack8画面のカードUIは今回変更せず、運用診断の説明図を別に準備した。画像の外部公開・Release実表示は未実施。2026-10-14、全ファイル見直しで追加した16件を含む全28変更記録を、生成器（`release_notes.py build`、版1.0.21・日付2026-10-14）で未公開の1.0.21へ集約し直した。既存の12件はarchiveから戻して同じ手順で再生成し、本文は利用者の目的ごとに13項目へまとめ、28件すべての仕様・根拠は技術詳細の折りたたみに残した。README要約は`readme_release.py`で再生成し、同じCHANGELOGからRelease本文をexportした。旧版本文・旧版archiveは変更していない。同日、リリース経路の監査で追加した変更記録`hermes-companion-supply`を、既存28件のarchiveを変えずに加え、全29件（本文14項目・技術詳細29件）とした。merge後のレビュー（v1.0.20→main `f0646a3f`）で採用した修正はPR #55（`1dc65b03`、Codex独立受入・CodeRabbit承認・必須CI成功）で取り込み、その変更記録4件を既存29件のarchiveを変えずに加え、全33件（本文18項目・技術詳細33件）とした。
