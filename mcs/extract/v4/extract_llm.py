@@ -1692,6 +1692,9 @@ _RX_NOT_CURRENT = (_RX_VERB +
                    r"(?:ない|なく|なかっ|ません|せず|無し|なし|不要|予定|検討|見送|拒否|ありません"
                    # 中止していません, 中止されていない (not 開始しています: ongoing, current)
                    r"|て?い(?:ない|ません|なかっ)"
+                   # できる/出来る states no done change (中止できません, できるか確認中, できます,
+                   # できましたか, できたら) except its plain affirmative past (中止できました, できた)
+                   r"|(?:でき|出来)(?!ました(?!か)|た(?!か|ら|ろう))"
                    # a question asks nothing either: 開始しますか
                    r"|ますか|でしょうか|か[？?])")
 # 開始予定, 開始を検討: not done, but no denial either (a planned item may state it)
@@ -1746,7 +1749,9 @@ _RX_ACTOR = (r"(?:(?:主治医|医師|先生|看護師|薬剤師|訪問医|母|�
 _RX_ADVERB = (r"(?:(?:(?:本日|今日|昨日|今朝|明日|明後日|来週|来月|今後|次回|後日|翌日|今度|週明け)"
               r"(?:から|より|に)?|先ほど|先程|いったん|一旦|一時|再度|再び|すぐに?|直ちに"
               r"|既に|すでに|新たに|新規に)\s*)?")
-_RX_BETWEEN = _RX_ADMIN + _RX_ACTOR + _RX_ADVERB
+# Aは副作用のため中止, Aは発疹が出たので中止: the reason sits between the drug and its change
+_RX_CAUSE = r"(?:[^\s。！？、を]{1,12}?(?:のため|ため|ので)\s*、?\s*)?"
+_RX_BETWEEN = _RX_ADMIN + _RX_CAUSE + _RX_ACTOR + _RX_ADVERB
 # 2.5mgから5mgへ増量, 1日2回から1回へ減量: a regimen range between the drug and its word
 _RX_AMOUNT = r"(?:1日|一日)?\s*[0-9０-９.．]+\s*(?:mg|μg|mcg|g|mL|ml|錠|%|単位|回|包|枚|滴|カプセル)"
 _RX_RANGE = rf"(?:(?:{_RX_AMOUNT})\s*から\s*)?(?:{_RX_AMOUNT})\s*(?:へ|に|まで)?\s*"
@@ -1866,6 +1871,10 @@ def _rx_bindings(hints, names, body, *, every=False, ground=False):
     # The shared scope reads 時に in と同時に as a condition; for the change's own
     # scope it accompanies like と一緒に (same length, so positions hold)
     scoped = body.replace("と同時に", "と一緒に")
+    # 入院時に開始しました: an event time of a done change reads as a condition (時に) to the
+    # shared scope; it is the day of that event (same length, so positions hold)
+    scoped = re.sub(r"(?<=入院|退院|転院|来院|受診|往診|訪問|手術|診察)時に(?=[^。！？]*?(?:しました|した[。、]|しています))",
+                    "当日", scoped)
     carry = {}      # sentence head -> (end of its last change word, that change's drugs)
     for start, end, code, unknown in sorted(_rx_positions(hints, names, body)):
         if code == "no_change" and not every:
@@ -1882,8 +1891,13 @@ def _rx_bindings(hints, names, body, *, every=False, ground=False):
             joined = (re.search(_RX_DOSE + "から$", body[head:lead]) if code == "change" else None)
             joined = (joined if joined and body[head:head + joined.start()].endswith(tuple(names))
                       else re.search(f"(?:{_RX_AMOUNT}|{_RX_FUTURE}|{_RX_NOW})\\s*から$", body[head:lead])
-                      or re.search(_RX_DOSE + r"\s*[、，,]$", body[head:lead]))
-            if not joined or not (joined.group(0).endswith("から")
+                      or re.search(_RX_DOSE + r"\s*[、，,]$", body[head:lead])
+                      # 副作用のため中止: a reason followed directly by the change (an actor or
+                      # adverb at most) keeps the drug before it; an object after the reason
+                      # (架空薬Bを, 運動療法を) is that change's own
+                      or (re.search(r"(?:のため|ため|ので)\s*、?$", body[head:lead])
+                          if re.fullmatch(r"\s*" + _RX_ACTOR + _RX_ADVERB, body[lead:start]) else None))
+            if not joined or not (re.search(r"(?:から|ため|ので)\s*、?$", joined.group(0))
                                   or body[head:head + joined.start()].endswith(tuple(names))):
                 break
             previous = lead
@@ -1913,6 +1927,9 @@ def _rx_bindings(hints, names, body, *, every=False, ground=False):
         prior = list(re.finditer(_RX_ANY, body[lead:start]))
         base = lead + (prior[-1].end() if prior else 0)
         region = body[base:start]
+        if not every and re.search(r"の\s*" + _RX_SERVICE + _RX_PARTICLE + "$", region):
+            continue            # A5mgの服薬指導を開始: the service starts, not the drug (still counted,
+                                # so an extracted start of the drug finds no ground)
         along = list(re.finditer(_RX_ALONG, region))
         if along:
             base, region = base + along[-1].end(), region[along[-1].end():]
