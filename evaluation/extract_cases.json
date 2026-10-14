@@ -28,9 +28,9 @@
     {
       "id": "family-med-not-patient",
       "body": "ご家族から、お兄様が降圧薬を飲み忘れたと相談がありました。患者本人の服薬状況に変更はありません。",
-      "expect": {"urgency": "routine"},
+      "expect": {"meds": [{"name": "降圧薬", "subject": "family"}], "urgency": "routine"},
       "forbid": {
-        "meds": [{"name": "降圧薬"}]
+        "meds": [{"name": "降圧薬", "subject": "patient"}]
       }
     },
     {

@@ -8,6 +8,8 @@ mcs/extract/eval/extract_bench.py), from the same canned outputs:
       'import sys; sys.path.insert(0, "mcs/extract/eval"); ...'  # _variants() below
 
 ``run --mock-ok`` only validates expectations, so it is never a metric source.
+The family-medication label was corrected separately to require family ownership
+and reject patient ownership; the other 83 legacy cases retain their labels.
 """
 import argparse
 import copy
@@ -54,12 +56,13 @@ def _variants(case):
     yield "forbidden", _forbidden(case)
 
 
-GOLDEN = json.loads('''{"events": {"events": [0, 0, 12], "meds": [2, 0, 0], "requests": [1, 0, 0], "symptoms": [3, 0, 0], "urgency": [5, 0, 0]}, "failed": {"events": [0, 0, 12], "labs": [0, 0, 21], "meds": [0, 0, 8], "reply": [0, 0, 7], "requests": [0, 0, 14], "symptoms": [0, 0, 7], "urgency": [0, 0, 32], "vitals": [0, 0, 5]}, "forbidden": {"events": [12, 2, 0], "labs": [21, 16, 0], "meds": [8, 3, 0], "reply": [0, 8, 7], "requests": [14, 8, 0], "symptoms": [7, 5, 0], "urgency": [23, 9, 9], "vitals": [5, 0, 0]}, "labs": {"events": [0, 0, 0], "labs": [0, 0, 21], "meds": [0, 0, 0], "requests": [0, 0, 0], "symptoms": [0, 0, 0]}, "meds": {"events": [2, 0, 0], "meds": [0, 0, 8], "requests": [1, 0, 0], "symptoms": [3, 0, 0], "urgency": [5, 0, 0]}, "perfect": {"events": [12, 0, 0], "labs": [21, 0, 0], "meds": [8, 0, 0], "reply": [7, 0, 0], "requests": [14, 0, 0], "symptoms": [7, 0, 0], "urgency": [32, 0, 0], "vitals": [5, 0, 0]}, "reply": {"events": [0, 0, 0], "meds": [0, 0, 0], "reply": [0, 0, 7], "requests": [0, 0, 0], "symptoms": [0, 0, 0]}, "requests": {"events": [2, 0, 0], "meds": [1, 0, 0], "reply": [3, 0, 0], "requests": [0, 0, 14], "symptoms": [0, 0, 0], "urgency": [6, 0, 0], "vitals": [2, 0, 0]}, "symptoms": {"events": [2, 0, 0], "meds": [2, 0, 0], "requests": [0, 0, 0], "symptoms": [0, 0, 7], "urgency": [4, 0, 0]}, "urgency": {"events": [6, 0, 0], "meds": [6, 0, 0], "requests": [4, 0, 0], "symptoms": [5, 0, 0], "urgency": [0, 32, 32], "vitals": [1, 0, 0]}, "vitals": {"events": [0, 0, 0], "meds": [0, 0, 0], "requests": [0, 0, 0], "symptoms": [0, 0, 0], "urgency": [1, 0, 0], "vitals": [0, 0, 5]}}''')
+GOLDEN = json.loads('''{"events": {"events": [0, 0, 12], "meds": [2, 0, 0], "requests": [1, 0, 0], "symptoms": [3, 0, 0], "urgency": [5, 0, 0]}, "failed": {"events": [0, 0, 12], "labs": [0, 0, 21], "med_subject": [0, 0, 1], "meds": [0, 0, 9], "reply": [0, 0, 7], "requests": [0, 0, 14], "symptoms": [0, 0, 7], "urgency": [0, 0, 32], "vitals": [0, 0, 5]}, "forbidden": {"events": [12, 2, 0], "labs": [21, 16, 0], "med_subject": [1, 0, 0], "meds": [9, 3, 0], "reply": [0, 8, 7], "requests": [14, 8, 0], "symptoms": [7, 5, 0], "urgency": [23, 9, 9], "vitals": [5, 0, 0]}, "labs": {"events": [0, 0, 0], "labs": [0, 0, 21], "meds": [0, 0, 0], "requests": [0, 0, 0], "symptoms": [0, 0, 0]}, "meds": {"events": [2, 0, 0], "med_subject": [0, 0, 1], "meds": [0, 0, 9], "requests": [1, 0, 0], "symptoms": [3, 0, 0], "urgency": [6, 0, 0]}, "perfect": {"events": [12, 0, 0], "labs": [21, 0, 0], "med_subject": [1, 0, 0], "meds": [9, 0, 0], "reply": [7, 0, 0], "requests": [14, 0, 0], "symptoms": [7, 0, 0], "urgency": [32, 0, 0], "vitals": [5, 0, 0]}, "reply": {"events": [0, 0, 0], "meds": [0, 0, 0], "reply": [0, 0, 7], "requests": [0, 0, 0], "symptoms": [0, 0, 0]}, "requests": {"events": [2, 0, 0], "meds": [1, 0, 0], "reply": [3, 0, 0], "requests": [0, 0, 14], "symptoms": [0, 0, 0], "urgency": [6, 0, 0], "vitals": [2, 0, 0]}, "symptoms": {"events": [2, 0, 0], "meds": [2, 0, 0], "requests": [0, 0, 0], "symptoms": [0, 0, 7], "urgency": [4, 0, 0]}, "urgency": {"events": [6, 0, 0], "med_subject": [1, 0, 0], "meds": [7, 0, 0], "requests": [4, 0, 0], "symptoms": [5, 0, 0], "urgency": [0, 32, 32], "vitals": [1, 0, 0]}, "vitals": {"events": [0, 0, 0], "meds": [0, 0, 0], "requests": [0, 0, 0], "symptoms": [0, 0, 0], "urgency": [1, 0, 0], "vitals": [0, 0, 5]}}''')
 GOLDEN_FORBID = (51, "9101b98c1881d36237f2469440cabf74125ad2818e2df094cf03fb663f193afe")
 
 
 # The 84 cases the goldens were produced on; new cases are checked separately below,
-# so adding them never rewrites these constants.
+# so adding them never rewrites these constants. Only the documented correction
+# of the family-medication label changes the original golden counts.
 GOLDEN_CASE_IDS = frozenset({
     'admission-event', 'alias-got', 'confuse-ast-alt', 'confuse-crp-cr', 'dates-posting',
     'dates-two', 'exam-scheduled', 'family-med-not-patient', 'family-mother', 'family-value',
@@ -102,6 +105,20 @@ def test_existing_scores_are_unchanged_on_canned_outputs():
     violations = sorted(v for row in scores["forbidden"] for v in row["forbid_violations"])
     digest = hashlib.sha256(json.dumps(violations, ensure_ascii=False).encode()).hexdigest()
     assert (len(violations), digest) == GOLDEN_FORBID
+
+
+@pytest.mark.parametrize("subject,tp,fp,fn,violations", [
+    ("family", 1, 0, 0, []),
+    ("patient", 0, 1, 1, ["meds:降圧薬"]),
+    ("other", 0, 1, 1, []),
+    (None, 0, 0, 1, []),
+])
+def test_family_medication_gold_requires_family_and_forbids_patient_attribution(subject, tp, fp, fn, violations):
+    case = next(c for c in extract_bench._synthetic_cases() if c["id"] == "family-med-not-patient")
+    meds = [{"name": "降圧薬", "subject": subject}] if subject else []
+    score = extract_bench._score_case(case, {"meds": meds, "urgency": "routine"})
+    assert score["fields"]["meds"] == {"tp": tp, "fp": fp, "fn": fn}
+    assert score["forbid_violations"] == violations
 
 
 NEW_CLASS_PREFIXES = ("odp-", "storage-", "pinq-", "ichk-")
