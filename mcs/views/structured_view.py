@@ -140,7 +140,9 @@ EVT_LABEL = {"admission": "入院", "discharge": "退院", "exam": "受診/検�
              "visit": "訪問", "medication": "投薬", "adherence": "服薬",
              "care": "介護", "eol": "看取り", "media_ref": "添付",
              "transfer": "転院/移動", "fall": "転倒",
-             "family_contact": "家族連絡", "other": "その他"}
+             "family_contact": "家族連絡",
+             # the event covers both 疑義照会 and 処方提案, and never says it was done
+             "prescription_inquiry": "処方の照会・提案の記載", "other": "その他"}
 # schema v4 detail labels
 _SEVERITY_JP = {"mild": "軽度", "moderate": "中等度", "severe": "重度"}
 _ROUTE_JP = {"oral": "内服", "topical": "外用", "injection": "注射",
@@ -692,6 +694,35 @@ def medication_post_ids(db, mids):
 _REQ_KIND_PREFIX = {"self_plan": "予定:", "question": "確認依頼:"}
 
 
+# owner 2026-10-14: only these pharmacy details reach shared cards; every other
+# detail, 基本情報 and 連絡先 stay in the private summary and detail reads.
+_CARD_DETAIL_LABEL = {"storage_status": "保管状況", "storage_place": "保管場所",
+                      "medication_manager": "管理者", "inquiry_result": "照会・提案の結果",
+                      "interaction_check": "重複・相互作用の確認"}
+_CONTEXT_SUBJECT_JP = {"family": "家族", "other": "本人以外", "unspecified": "対象者の記載なし"}
+
+
+def _pharmacy_detail_lines(db, mid: int) -> list[str]:
+    """One short line per allowed detail, quoting only its own source value."""
+    from read_model import message_patient_context
+    row = db.execute("SELECT project_id,message_id,content_hash,body_state,body_text,posted_at_ts "
+                     "FROM messages WHERE message_id=?", (mid,)).fetchone()
+    if row is None:
+        return []
+    lines = []
+    for item in message_patient_context(db, dict(row)):
+        scope = _CONTEXT_SUBJECT_JP.get(item.get("subject"))
+        for detail in item.get("details") or []:
+            label = _CARD_DETAIL_LABEL.get(detail.get("key"))
+            if label is None:
+                continue
+            line = (f"服薬管理（{label}）: 「{str(detail['value'])[:40]}」"
+                    + (f"(対象:{scope})" if scope else ""))
+            if line not in lines:
+                lines.append(line)
+    return lines
+
+
 def _request_lines(llm: dict, v1: dict, *, multiline: bool = False) -> list[str]:
     reqs, cands = [], []
     for r in _items(llm, "requests"):
@@ -785,6 +816,8 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
         lines.append(line)
     lines.extend(_med_lines(llm, v1, _drug_refs(db, mid) if drug_candidates else (),
                             context=context, multiline=plain))
+    if db is not None:
+        lines.extend(_pharmacy_detail_lines(db, mid))
     lines.extend(_request_lines(llm, v1, multiline=plain))
     for mp in _items(v1, "med_periods"):
         if isinstance(mp, dict) and mp.get("start") and _item_scope(mp, context, mp.get("raw")) == "patient":
@@ -805,7 +838,7 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
 _SUMMARY_ORDER = (
     (0, ("🚨", "緊急度", "急ぎの確認依頼")),
     (2, ("依頼",)),
-    (3, ("薬剤", "服薬期間")),
+    (3, ("薬剤", "服薬期間", "服薬管理（")),
     (4, ("バイタル", "閾値超過", "検査", "症状")),
     (5, ("次回予定",)),
     (7, ("区分",)),

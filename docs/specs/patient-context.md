@@ -21,7 +21,7 @@ LLMのJSON grammar・項目検証・修復・chunk統合・batch・checkpointに
 
 `read_model --scope detail` は原文値・引用・出典を返す。`aggregate` は分類と件数だけを返し、原文値・引用・記入者名を含めない。`project_metadata` は連携サマリーの `reported` / `fetched_empty` / `not_fetched` / `unknown` を区別し、別の出典として保持する。旧schemaのkarte_id欠落は未確認として扱う。
 
-rollupの `patient_context` は `memo` と `chat` を別々に持つ。チャットの分類ごとに最新の報告投稿から全項目を集約するが、現在の確定した患者状態を意味しない。全文と以前の報告は詳細読取りに残る。本人限定の患者まとめには原記録の短い抜粋を追加し、基本情報・連絡先の分類は抜粋に出さない。共有カードに詳細を自動掲載しない。
+rollupの `patient_context` は `memo` と `chat` を別々に持つ。チャットの分類ごとに最新の報告投稿から全項目を集約するが、現在の確定した患者状態を意味しない。全文と以前の報告は詳細読取りに残る。本人限定の患者まとめには原記録の短い抜粋を追加し、基本情報・連絡先の分類は抜粋に出さない。共有カードには、所有者決定（2026-10-14）により服薬管理の `storage_status` / `storage_place` / `medication_manager` / `inquiry_result` / `interaction_check` だけを、現在の本文hashに一致する抽出から原文の値を短く引用した1行（本人以外は対象を併記）で載せる。同じ親項目の他の属性・基本情報・連絡先・服薬支援などは共有カードへ出さず、`events` の `prescription_inquiry` は区分「処方の照会・提案の記載」とし、照会の完了や結果の確定を表さない。
 
 連携サマリーは既存GET・認証・保存経路を使う。deep runは未取得を優先し、24時間経過したサマリーを再取得する。背景対象10件・段全体12GET・deadline余裕60秒・失敗後6時間の待機を維持し、保管済み患者は除外する。失敗しても最後の成功内容を保持する。
 
