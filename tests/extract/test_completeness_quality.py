@@ -1557,3 +1557,30 @@ def test_a_drugs_service_grounds_no_start_of_the_drug():
 def test_a_reason_followed_by_another_object_keeps_its_clause():
     text = "本人は架空薬A5mgを内服しているので運動療法を開始しました。"
     assert not _rx_gap(text, [_med("架空薬A", text, action="none", dose="5mg")])
+
+
+@pytest.mark.parametrize("text", ["本人の架空薬Aを中止しましたか？", "本人の架空薬Aを開始しましたか？"])
+def test_a_past_question_states_no_done_change(text):
+    assert not _rx_gap(text, [_med("架空薬A", text, action="none")])
+    action, status = ("stop", "past") if "中止" in text else ("start", "current")
+    assert _rx_gap(text, [_med("架空薬A", text, action=action, status=status)])
+
+
+@pytest.mark.parametrize("text", ["本人の架空薬Aを中止する予定はありません。", "本人の架空薬Aの中止を検討していません。"])
+def test_a_denied_plan_grounds_no_planned_change(text):
+    assert not _rx_gap(text, [_med("架空薬A", text, action="none")])
+    assert _rx_gap(text, [_med("架空薬A", text, action="stop", status="planned")])
+
+
+@pytest.mark.parametrize("repaired,state", [
+    ([_med("架空薬A", "本人の架空薬A5mgを中止しました", action="none", dose="5mg")], "unresolved"),
+    ([_med("架空薬A", "本人の架空薬A5mgを中止しました", action="stop", status="past", dose="5mg")], None)])
+def test_a_repair_after_an_invalid_answer_records_its_own_gaps(monkeypatch, repaired, state):
+    body = PREFIX + "本人の架空薬A5mgを中止しました。"
+    calls, meta = [], {}
+    monkeypatch.setattr(extract_llm, "_llm_call", lambda *args, **kwargs: calls.append(args) or copy.deepcopy(
+        {"meds": "broken"} if len(calls) == 1 else {**OBSERVATIONS, "meds": repaired}))
+    extract_llm.llm_extract(body, hints=hints(body), meta_out=meta)
+    assert len(calls) == 2
+    states = {e["state"] for e in (meta.get("completeness") or {}).values()}
+    assert states == ({state} if state else set())

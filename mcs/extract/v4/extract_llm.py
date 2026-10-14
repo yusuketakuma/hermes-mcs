@@ -1695,8 +1695,8 @@ _RX_NOT_CURRENT = (_RX_VERB +
                    # できる/出来る states no done change (中止できません, できるか確認中, できます,
                    # できましたか, できたら) except its plain affirmative past (中止できました, できた)
                    r"|(?:でき|出来)(?!ました(?!か)|た(?!か|ら|ろう))"
-                   # a question asks nothing either: 開始しますか
-                   r"|ますか|でしょうか|か[？?])")
+                   # a question asks nothing either: 開始しますか, 中止しましたか
+                   r"|ますか|ましたか|たか|でしょうか|か[？?])")
 # 開始予定, 開始を検討: not done, but no denial either (a planned item may state it)
 _RX_UNDECIDED = _RX_VERB + r"(?:予定|検討)"
 # A requested, consulted or not yet done change is checked as planned, never as done:
@@ -1908,7 +1908,11 @@ def _rx_bindings(hints, names, body, *, every=False, ground=False):
         # whose drug it is, is decided per drug below (本人のAと母のBを開始)
         clause_scope = extract.patient_source_scope(scoped, start, end)
         not_current = bool(re.match(_RX_NOT_CURRENT, body[end:close]))
-        undecided = bool(re.match(_RX_UNDECIDED, body[end:close]))
+        # 中止する予定はありません, 中止を検討していません: a denied plan is no plan
+        weighed = re.match(_RX_UNDECIDED, body[end:close])
+        undecided = bool(weighed) and not re.match(
+            r"\s*(?:は|も|が)?\s*(?:あり|し|して|され)?\s*(?:ない|ません|なし|無し|て?い(?:ない|ません|なかっ))",
+            body[end + weighed.end():close])
         denied = not_current and not undecided
         if ground and (denied or clause_scope in ("conditional", "unknown")):
             continue            # history and 予定 may support an item; a denial or condition not
@@ -2608,6 +2612,11 @@ def llm_extract(body: str, *, context: str | None = None,
                 if completeness:
                     quality_note("dispatch_unknown" if rd is _DEFERRED else
                                  "unresolved" if _completeness_issues(v, piece_hints, piece) else "hint_gaps_resolved")
+                elif rd is not None and rd is not _DEFERRED and v is not None and _completeness_issues(
+                        v, piece_hints, piece):
+                    # the first answer was unusable or only lossy: the repaired one's own gaps
+                    # are recorded, within the one repair already spent
+                    quality_note("unresolved")
         if v is None:
             return None
         return finish_piece(key, v, quality_record)
