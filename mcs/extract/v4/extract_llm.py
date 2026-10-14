@@ -1681,10 +1681,12 @@ _REQUEST_CUES = {
     kind: re.compile(rf"{stem}(?=(?:{_REQUEST_END}|(?:を|して|と|や|、|・|及び|および)"
                      rf"[^。！？!?;；\r\n]*{_REQUEST_END}))")
     for kind, stem in (("confirm", "確認"), ("contact", "連絡"))}
+# the rule hints' own ask phrasing, tracked per sentence like confirm/contact
+_REQUEST_CUES["ask"] = re.compile(r"教えて(?:ください|いただけ|欲しい)")
 
 
 def _request_cues(body):
-    """Every sentence's confirm/contact request, for the quality re-check only.
+    """Every sentence's confirm/contact/ask request, for the quality re-check only.
 
     The rule hints keep one entry per pattern, so a second kind in the same
     sentence (確認と…連絡をお願い) or a second sentence of one kind is not

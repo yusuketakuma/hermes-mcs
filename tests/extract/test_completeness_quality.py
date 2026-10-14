@@ -571,7 +571,15 @@ SECOND_CONFIRM = {"to": "不明", "kind": "request", "action": "検査値確認"
     # the rule hints keep one confirm; the second sentence's confirm is tracked too
     ("本人の記録を確認をお願いします。本人の検査値も確認してください。", [CONFIRM],
      [CONFIRM, SECOND_CONFIRM]),
-], ids=["confirm_missing_beside_contact", "second_sentence_same_kind"])
+    # the rule hints keep one ask; a second sentence's question is tracked too
+    ("本人の食事量を教えてください。本人の体温も教えてください。",
+     [{"to": "不明", "kind": "question", "action": "食事量の確認",
+       "evidence": "本人の食事量を教えてください"}],
+     [{"to": "不明", "kind": "question", "action": "食事量の確認",
+       "evidence": "本人の食事量を教えてください"},
+      {"to": "不明", "kind": "question", "action": "体温の確認",
+       "evidence": "本人の体温も教えてください"}]),
+], ids=["confirm_missing_beside_contact", "second_sentence_same_kind", "second_question"])
 def test_request_cues_cover_what_the_rule_hints_merge(monkeypatch, tail, first, repaired):
     body = PREFIX + tail
     calls = []
